@@ -6,7 +6,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Image, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { renderDiagram, detectRenderers, type DiagramFormat } from "./renderers.ts";
+import { type DiagramFormat, detectRenderers, renderDiagram } from "./renderers.ts";
 
 export function registerDiagramTool(pi: ExtensionAPI) {
 	const renderers = detectRenderers();
@@ -36,7 +36,10 @@ export function registerDiagramTool(pi: ExtensionAPI) {
 			return {
 				content: [
 					{ type: "image" as const, data: base64, mimeType: "image/png" as const },
-					{ type: "text" as const, text: `Rendered ${params.format} diagram${params.title ? `: ${params.title}` : ""}` },
+					{
+						type: "text" as const,
+						text: `Rendered ${params.format} diagram${params.title ? `: ${params.title}` : ""}`,
+					},
 				],
 				details: { source: params.source, format: params.format, title: params.title },
 			};
@@ -46,10 +49,15 @@ export function registerDiagramTool(pi: ExtensionAPI) {
 				| { type: "image"; data: string; mimeType: string }
 				| undefined;
 			if (img) {
-				return new Image(img.data, img.mimeType, { fallbackColor: theme.fg.bind(theme, "dim") }, {
-					maxWidthCells: 80,
-					maxHeightCells: 40,
-				});
+				return new Image(
+					img.data,
+					img.mimeType,
+					{ fallbackColor: theme.fg.bind(theme, "dim") },
+					{
+						maxWidthCells: 80,
+						maxHeightCells: 40,
+					},
+				);
 			}
 			const text = result.content?.find((c: { type: string }) => c.type === "text") as
 				| { type: "text"; text: string }

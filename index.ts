@@ -11,10 +11,10 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerTaskCompleteTool } from "./task-complete.ts";
 import { registerAutoContinue } from "./auto-continue.ts";
 import { registerDiagramTool } from "./diagram/diagram-tool.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
+import { registerTaskCompleteTool } from "./task-complete.ts";
 
 export default function scramjet(pi: ExtensionAPI) {
 	const state = { enabled: true };

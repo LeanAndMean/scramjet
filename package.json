@@ -1,0 +1,24 @@
+{
+	"name": "scramjet",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"pi": {
+		"extensions": ["./index.ts"],
+		"piTestedVersion": "0.74.0"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "vitest --run",
+		"lint": "biome check ."
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.5",
+		"@earendil-works/pi-coding-agent": "0.74.0",
+		"@earendil-works/pi-tui": "0.74.0",
+		"@types/node": "22.10.5",
+		"typebox": "1.1.24",
+		"typescript": "5.7.3",
+		"vitest": "3.2.4"
+	}
+}
