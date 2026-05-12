@@ -13,12 +13,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAutoContinue } from "./auto-continue.ts";
 import { registerDiagramTool } from "./diagram/diagram-tool.ts";
+import { registerProviderBridge } from "./provider-bridge.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
 import { registerTaskCompleteTool } from "./task-complete.ts";
 
 export default function scramjet(pi: ExtensionAPI) {
 	const state = { enabled: true };
 
+	registerProviderBridge(pi);
 	registerTaskCompleteTool(pi, state);
 	registerAutoContinue(pi, state);
 	registerDiagramTool(pi);

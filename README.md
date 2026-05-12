@@ -126,6 +126,47 @@ run the script once per target with `--target` or `$PI_CODING_AGENT_DIR`.
 Native Windows is detected by `uname -s`; the install script exits with a
 message pointing to WSL. There is no copy-mode fallback.
 
+## Provider bridge
+
+Pi pins `baseUrl: "https://api.anthropic.com"` on every Anthropic model
+entry, so the SDK's normal `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`
+fallback never engages. If you point Claude Code at a proxy like
+[tux](https://github.com/merckgroup/tux) or Foundry by sourcing an env
+file, Pi would otherwise ignore that env and call `api.anthropic.com`
+directly.
+
+Scramjet bridges the gap: at extension load, if `ANTHROPIC_BASE_URL` is
+set to anything other than `api.anthropic.com`, Scramjet calls
+`pi.registerProvider("anthropic", { baseUrl, apiKey? })` so Pi's
+Anthropic traffic flows through the same proxy as Claude Code's. No
+per-extension config required.
+
+| Env var                     | Effect                                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------------------- |
+| `ANTHROPIC_BASE_URL`        | When set and not pointing at `api.anthropic.com`, activates the bridge with this URL.    |
+| `ANTHROPIC_AUTH_TOKEN`      | Used as Pi's `apiKey` for the Anthropic provider. Preferred over `ANTHROPIC_API_KEY`.    |
+| `ANTHROPIC_API_KEY`         | Used as Pi's `apiKey` for the Anthropic provider if `ANTHROPIC_AUTH_TOKEN` is unset.     |
+| `SCRAMJET_PROVIDER_BRIDGE`  | Set to literal `0` to disable the bridge even with the above env vars set.               |
+
+Example: sourcing the tux env file then running Pi is all that's needed:
+
+```sh
+source ~/.claudecode_tux
+scramjet           # or `pi` — bridge is registered either way
+```
+
+To opt out in the same shell:
+
+```sh
+SCRAMJET_PROVIDER_BRIDGE=0 scramjet
+```
+
+Only the literal string `0` disables the bridge; other values (`false`,
+`off`, the empty string) leave it active. A malformed
+`ANTHROPIC_BASE_URL` raises at startup rather than silently disabling
+the bridge — the misconfiguration is visible immediately instead of
+manifesting as confusing direct-to-Anthropic traffic later.
+
 ## Versions
 
 Tested against **Pi `0.74.0`** (see `pi.piTestedVersion` in `package.json`).
