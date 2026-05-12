@@ -84,6 +84,15 @@ if [[ -n "$TARGET_ARG" && $LOCAL -eq 1 ]]; then
 	echo "Error: --target and --local are mutually exclusive." >&2
 	exit 2
 fi
+if [[ -n "$BIN_DIR_ARG" && $LOCAL -eq 1 ]]; then
+	echo "Error: --bin-dir and --local are mutually exclusive." >&2
+	exit 2
+fi
+
+# --- Repo root (canonicalized the same way as install.sh, so the symlink
+# targets we expect compare byte-for-byte against what install.sh wrote).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SHIM_SRC="$REPO_ROOT/bin/scramjet"
 
 # --- Extension target resolution (same precedence as install.sh)
 if [[ -n "$TARGET_ARG" ]]; then
@@ -118,19 +127,37 @@ else
 	SHIM_DEST="$HOME/.local/bin/scramjet"
 fi
 
-# --- Only remove symlinks; never touch real files or directories.
-# Remove shim first, then extension (reverse of install order).
+# --- Only remove symlinks that point where install.sh placed them.
+# Three skip cases (all return 0 so the other leg still runs):
+#   1. Path absent              -> "Nothing to remove" (idempotent re-run)
+#   2. Real file/directory      -> warn; do not touch user-owned content
+#   3. Symlink to unexpected src -> warn; not ours to remove
 remove_symlink() {
-	local DEST="$1"
-	if [[ ! -L "$DEST" ]]; then
+	local DEST="$1" EXPECTED_SRC="$2"
+	if [[ ! -L "$DEST" && ! -e "$DEST" ]]; then
 		echo "Nothing to remove at $DEST"
+		return 0
+	fi
+	if [[ ! -L "$DEST" ]]; then
+		local kind
+		if [[ -d "$DEST" ]]; then
+			kind="directory"
+		else
+			kind="file"
+		fi
+		echo "Warning: $DEST exists as a $kind, not a symlink; leaving untouched." >&2
 		return 0
 	fi
 	local LINK_TARGET
 	LINK_TARGET="$(readlink "$DEST")"
+	if [[ "$LINK_TARGET" != "$EXPECTED_SRC" ]]; then
+		echo "Warning: $DEST points to $LINK_TARGET (expected $EXPECTED_SRC); leaving untouched." >&2
+		return 0
+	fi
 	rm "$DEST"
 	echo "Removed symlink: $DEST -> $LINK_TARGET"
 }
 
-remove_symlink "$SHIM_DEST"
-remove_symlink "$DEST"
+# Remove shim first, then extension (reverse of install order).
+remove_symlink "$SHIM_DEST" "$SHIM_SRC"
+remove_symlink "$DEST" "$REPO_ROOT"

@@ -90,6 +90,10 @@ if [[ -n "$TARGET_ARG" && $LOCAL -eq 1 ]]; then
 	echo "Error: --target and --local are mutually exclusive." >&2
 	exit 2
 fi
+if [[ -n "$BIN_DIR_ARG" && $LOCAL -eq 1 ]]; then
+	echo "Error: --bin-dir and --local are mutually exclusive." >&2
+	exit 2
+fi
 
 # --- Repo root (canonicalized; follows a launcher symlink to install.sh itself)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
