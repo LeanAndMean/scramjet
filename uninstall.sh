@@ -5,20 +5,29 @@ usage() {
 	cat <<'EOF'
 Usage: ./uninstall.sh [options]
 
-Removes the scramjet symlink from a Pi agent extensions directory.
-Only symlinks are removed; if the target is a real file or directory,
-this script refuses to touch it.
+Removes the scramjet extension symlink from a Pi agent extensions directory
+and the scramjet launcher shim from its install location. Only symlinks
+are removed; if either target is a real file or directory, this script
+refuses to touch it.
 
 Options:
-  --target <path>   Uninstall from <path>/scramjet (tilde is expanded)
-  --local           Uninstall from ./.pi/extensions/scramjet (relative to CWD)
-  -h, --help        Show this help
+  --target <path>    Uninstall extension from <path>/scramjet (tilde is expanded)
+  --local            Uninstall extension from ./.pi/extensions/scramjet
+                     and shim from ./.pi/bin/scramjet (relative to CWD)
+  --bin-dir <path>   Uninstall shim from <path>/scramjet
+                     (tilde is expanded; default: $HOME/.local/bin)
+  -h, --help         Show this help
 
-Target resolution precedence (must match the original install):
+Extension target resolution precedence (must match the original install):
   1. --target <path>            -> <path>/scramjet
   2. --local                    -> <cwd>/.pi/extensions/scramjet
   3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR/extensions/scramjet
   4. Default                    -> $HOME/.pi/agent/extensions/scramjet
+
+Shim target resolution precedence (must match the original install):
+  1. --bin-dir <path>           -> <path>/scramjet
+  2. --local                    -> <cwd>/.pi/bin/scramjet
+  3. Default                    -> $HOME/.local/bin/scramjet
 
 Re-running after a successful uninstall is a no-op.
 EOF
@@ -35,6 +44,7 @@ esac
 
 # --- Flag parsing (intentionally duplicated with install.sh; no shared lib)
 TARGET_ARG=""
+BIN_DIR_ARG=""
 LOCAL=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -44,6 +54,14 @@ while [[ $# -gt 0 ]]; do
 				exit 2
 			fi
 			TARGET_ARG="$2"
+			shift 2
+			;;
+		--bin-dir)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --bin-dir requires a non-empty path argument." >&2
+				exit 2
+			fi
+			BIN_DIR_ARG="$2"
 			shift 2
 			;;
 		--local)
@@ -66,8 +84,17 @@ if [[ -n "$TARGET_ARG" && $LOCAL -eq 1 ]]; then
 	echo "Error: --target and --local are mutually exclusive." >&2
 	exit 2
 fi
+if [[ -n "$BIN_DIR_ARG" && $LOCAL -eq 1 ]]; then
+	echo "Error: --bin-dir and --local are mutually exclusive." >&2
+	exit 2
+fi
 
-# --- Target resolution (same precedence as install.sh)
+# --- Repo root (canonicalized the same way as install.sh, so the symlink
+# targets we expect compare byte-for-byte against what install.sh wrote).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SHIM_SRC="$REPO_ROOT/bin/scramjet"
+
+# --- Extension target resolution (same precedence as install.sh)
 if [[ -n "$TARGET_ARG" ]]; then
 	TARGET_EXPANDED="${TARGET_ARG/#\~/${HOME:-~}}"
 	DEST="$TARGET_EXPANDED/scramjet"
@@ -85,12 +112,52 @@ else
 	DEST="$HOME/.pi/agent/extensions/scramjet"
 fi
 
-# --- Only remove symlinks; never touch real files or directories
-if [[ ! -L "$DEST" ]]; then
-	echo "Nothing to remove at $DEST"
-	exit 0
+# --- Shim target resolution (same precedence as install.sh)
+if [[ -n "$BIN_DIR_ARG" ]]; then
+	BIN_DIR_EXPANDED="${BIN_DIR_ARG/#\~/${HOME:-~}}"
+	SHIM_DEST="$BIN_DIR_EXPANDED/scramjet"
+elif [[ $LOCAL -eq 1 ]]; then
+	SHIM_DEST="$(pwd -P)/.pi/bin/scramjet"
+else
+	if [[ -z "${HOME:-}" ]]; then
+		echo "Error: \$HOME is not set; cannot resolve the default shim uninstall dir." >&2
+		echo "Provide an explicit path with --bin-dir or --local." >&2
+		exit 1
+	fi
+	SHIM_DEST="$HOME/.local/bin/scramjet"
 fi
 
-LINK_TARGET="$(readlink "$DEST")"
-rm "$DEST"
-echo "Removed symlink: $DEST -> $LINK_TARGET"
+# --- Only remove symlinks that point where install.sh placed them.
+# Three skip cases (all return 0 so the other leg still runs):
+#   1. Path absent              -> "Nothing to remove" (idempotent re-run)
+#   2. Real file/directory      -> warn; do not touch user-owned content
+#   3. Symlink to unexpected src -> warn; not ours to remove
+remove_symlink() {
+	local DEST="$1" EXPECTED_SRC="$2"
+	if [[ ! -L "$DEST" && ! -e "$DEST" ]]; then
+		echo "Nothing to remove at $DEST"
+		return 0
+	fi
+	if [[ ! -L "$DEST" ]]; then
+		local kind
+		if [[ -d "$DEST" ]]; then
+			kind="directory"
+		else
+			kind="file"
+		fi
+		echo "Warning: $DEST exists as a $kind, not a symlink; leaving untouched." >&2
+		return 0
+	fi
+	local LINK_TARGET
+	LINK_TARGET="$(readlink "$DEST")"
+	if [[ "$LINK_TARGET" != "$EXPECTED_SRC" ]]; then
+		echo "Warning: $DEST points to $LINK_TARGET (expected $EXPECTED_SRC); leaving untouched." >&2
+		return 0
+	fi
+	rm "$DEST"
+	echo "Removed symlink: $DEST -> $LINK_TARGET"
+}
+
+# Remove shim first, then extension (reverse of install order).
+remove_symlink "$SHIM_DEST" "$SHIM_SRC"
+remove_symlink "$DEST" "$REPO_ROOT"
