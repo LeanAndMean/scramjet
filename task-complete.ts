@@ -7,7 +7,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { ScramjetState, CompletionSignal } from "./types.ts";
+import type { CompletionSignal, ScramjetState } from "./types.ts";
 
 const SYSTEM_PROMPT_SNIPPET = `
 
@@ -22,6 +22,28 @@ Rules:
 - Do NOT invent next steps — only include one if the task's instructions explicitly suggest it.
 - If the task has no suggested next step, omit the next_step field entirely.
 `;
+
+export interface TaskCompleteParams {
+	summary: string;
+	next_step?: {
+		command: string;
+		fresh_session: boolean;
+		reason?: string;
+	};
+}
+
+export function paramsToCompletionSignal(params: TaskCompleteParams): CompletionSignal {
+	return {
+		summary: params.summary,
+		nextStep: params.next_step
+			? {
+					command: params.next_step.command,
+					freshSession: params.next_step.fresh_session,
+					reason: params.next_step.reason,
+				}
+			: undefined,
+	};
+}
 
 let latestCompletion: CompletionSignal | null = null;
 
@@ -57,16 +79,7 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 			),
 		}),
 		async execute(_toolCallId, params) {
-			latestCompletion = {
-				summary: params.summary,
-				nextStep: params.next_step
-					? {
-							command: params.next_step.command,
-							freshSession: params.next_step.fresh_session,
-							reason: params.next_step.reason,
-						}
-					: undefined,
-			};
+			latestCompletion = paramsToCompletionSignal(params);
 
 			return {
 				content: [{ type: "text", text: "Task marked complete." }],
@@ -79,7 +92,7 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 	pi.on("before_agent_start", async (event) => {
 		if (!state.enabled) return;
 
-		latestCompletion = null;
+		clearLatestCompletion();
 
 		return {
 			systemPrompt: event.systemPrompt + SYSTEM_PROMPT_SNIPPET,

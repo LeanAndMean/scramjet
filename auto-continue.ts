@@ -8,8 +8,8 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { getLatestCompletion, clearLatestCompletion } from "./task-complete.ts";
-import type { ScramjetState, NextStep } from "./types.ts";
+import { clearLatestCompletion, getLatestCompletion } from "./task-complete.ts";
+import type { NextStep, ScramjetState } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
 const WIDGET_KEY = "scramjet-next";
@@ -17,7 +17,6 @@ const WIDGET_KEY = "scramjet-next";
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let countdownTimer: ReturnType<typeof setInterval> | null = null;
 	let unsubInput: (() => void) | null = null;
-	let pendingStep: NextStep | null = null;
 
 	function cancelCountdown(ctx: ExtensionContext) {
 		if (countdownTimer) {
@@ -28,7 +27,6 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			unsubInput();
 			unsubInput = null;
 		}
-		pendingStep = null;
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 	}
 
@@ -38,7 +36,6 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		pendingStep = step;
 		let remaining = COUNTDOWN_SECONDS;
 
 		const updateWidget = () => {

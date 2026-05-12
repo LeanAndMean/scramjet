@@ -1,0 +1,27 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.5/schema.json",
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"indentWidth": 3,
+		"lineWidth": 120
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"style": {
+				"noNonNullAssertion": "off",
+				"useNodejsImportProtocol": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noEmptyInterface": "off",
+				"noControlCharactersInRegex": "off"
+			}
+		}
+	},
+	"files": {
+		"includes": ["**/*.ts", "!node_modules"]
+	}
+}

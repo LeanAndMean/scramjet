@@ -2,10 +2,10 @@
  * Diagram renderer backends. Detects installed renderers and shells out to them.
  */
 
-import { execSync, execFileSync } from "node:child_process";
-import { writeFileSync, readFileSync, mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { execFileSync, execSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export type DiagramFormat = "mermaid" | "graphviz" | "plantuml";
 

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: piTestedVersion drift guard
+        run: |
+          TESTED=$(jq -r '.pi.piTestedVersion' package.json)
+          AGENT_PIN=$(jq -r '.devDependencies["@earendil-works/pi-coding-agent"]' package.json)
+          TUI_PIN=$(jq -r '.devDependencies["@earendil-works/pi-tui"]' package.json)
+          if [ "$TESTED" != "$AGENT_PIN" ] || [ "$TESTED" != "$TUI_PIN" ]; then
+            echo "Error: pi.piTestedVersion ($TESTED) does not match the pinned @earendil-works deps." >&2
+            echo "  pi-coding-agent: $AGENT_PIN" >&2
+            echo "  pi-tui:          $TUI_PIN" >&2
+            echo "Bump all three together so users have one source of truth." >&2
+            exit 1
+          fi
+          echo "OK: piTestedVersion ($TESTED) matches pinned pi-coding-agent and pi-tui."
+
+      - name: install.sh / uninstall.sh smoke test
+        run: |
+          ./install.sh --local
+          test -L .pi/extensions/scramjet
+          test -r .pi/extensions/scramjet/index.ts
+          ./install.sh --local
+          test -L .pi/extensions/scramjet
+          ./uninstall.sh --local
+          ! test -e .pi/extensions/scramjet
+          ./uninstall.sh --local
