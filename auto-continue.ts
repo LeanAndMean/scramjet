@@ -6,7 +6,7 @@
  * If cancelled, the widget disappears and they're back in normal Pi.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
 import { getLatestCompletion, clearLatestCompletion } from "./task-complete.ts";
 import type { ScramjetState, NextStep } from "./types.ts";
@@ -19,7 +19,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let unsubInput: (() => void) | null = null;
 	let pendingStep: NextStep | null = null;
 
-	function cancelCountdown(ctx: { ui: { setWidget: (key: string, lines: string[] | undefined) => void } }) {
+	function cancelCountdown(ctx: ExtensionContext) {
 		if (countdownTimer) {
 			clearInterval(countdownTimer);
 			countdownTimer = null;
@@ -32,18 +32,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 	}
 
-	function startCountdown(
-		step: NextStep,
-		ctx: {
-			hasUI: boolean;
-			isIdle: () => boolean;
-			ui: {
-				setWidget: (key: string, lines: string[] | undefined, options?: { placement: string }) => void;
-				onTerminalInput: (handler: (data: string) => { consume?: boolean } | void) => () => void;
-				notify: (msg: string, type: "info" | "warning" | "error") => void;
-			};
-		},
-	) {
+	function startCountdown(step: NextStep, ctx: ExtensionContext) {
 		if (!ctx.hasUI) {
 			executeStep(step);
 			return;
