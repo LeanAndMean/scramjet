@@ -50,7 +50,11 @@ jobs:
 
       - name: install.sh / uninstall.sh smoke test
         run: |
-          ./install.sh --local
+          # --local routes the shim into a dir not on PATH, so the
+          # PATH-warning branch must fire. grep -F: $ is regex end-of-line.
+          OUTPUT=$(./install.sh --local 2>&1)
+          echo "$OUTPUT" | grep -qF 'is not on your $PATH'
+          echo "$OUTPUT" | grep -qF 'export PATH='
           test -L .pi/extensions/scramjet
           test -r .pi/extensions/scramjet/index.ts
           test -L .pi/bin/scramjet
@@ -63,14 +67,76 @@ jobs:
           ! test -e .pi/bin/scramjet
           ./uninstall.sh --local
 
-      - name: scramjet shim smoke test
+      - name: install.sh PATH-warning suppression
+        run: |
+          # When --bin-dir points at a directory already on PATH, the warning
+          # must NOT fire.
+          tmp_bin=$(mktemp -d)
+          tmp_ext=$(mktemp -d)
+          OUTPUT=$(PATH="$tmp_bin:$PATH" ./install.sh --target "$tmp_ext" --bin-dir "$tmp_bin" 2>&1)
+          ! echo "$OUTPUT" | grep -qF 'is not on your $PATH'
+          ./uninstall.sh --target "$tmp_ext" --bin-dir "$tmp_bin"
+          rm -rf "$tmp_bin" "$tmp_ext"
+
+      - name: install.sh / uninstall.sh symlink-only safety
+        run: |
+          # Pre-create a real file at the shim destination. install.sh must
+          # refuse (without --force), leave the file untouched, and emit the
+          # F2 partial-install note. uninstall.sh must skip the real file.
+          mkdir -p .pi/bin
+          echo "user-shim" > .pi/bin/scramjet
+          chmod +x .pi/bin/scramjet
+          if OUTPUT=$(./install.sh --local 2>&1); then
+            echo "expected install to fail" >&2; exit 1
+          fi
+          test "$(cat .pi/bin/scramjet)" = "user-shim"
+          echo "$OUTPUT" | grep -q "shim install failed"
+          ./uninstall.sh --local
+          test -f .pi/bin/scramjet
+          test ! -L .pi/bin/scramjet
+          test "$(cat .pi/bin/scramjet)" = "user-shim"
+          rm -rf .pi
+
+          # Pre-create a real directory at the extension destination.
+          # install.sh must refuse at the extension leg (before the F2 trap
+          # is registered, so the partial-install note must NOT appear);
+          # uninstall.sh must leave the directory untouched.
+          mkdir -p .pi/extensions/scramjet
+          echo "user-content" > .pi/extensions/scramjet/marker
+          if OUTPUT=$(./install.sh --local 2>&1); then
+            echo "expected install to fail" >&2; exit 1
+          fi
+          ! echo "$OUTPUT" | grep -q "shim install failed"
+          test -d .pi/extensions/scramjet
+          test ! -L .pi/extensions/scramjet
+          test "$(cat .pi/extensions/scramjet/marker)" = "user-content"
+          ./uninstall.sh --local
+          test -d .pi/extensions/scramjet
+          test "$(cat .pi/extensions/scramjet/marker)" = "user-content"
+          rm -rf .pi
+
+      - name: scramjet shim absent-pi error
         run: |
           # Shim should exit non-zero with an actionable message when pi is absent.
-          # We invoke the shim directly (not the installed copy) so we don't need
-          # to install at all for this check.
-          set +e
-          OUTPUT=$(PATH=/usr/bin:/bin ./bin/scramjet 2>&1)
-          STATUS=$?
-          set -e
-          test "$STATUS" -ne 0
+          # We invoke the shim directly so installation isn't required.
+          if OUTPUT=$(PATH=/usr/bin:/bin ./bin/scramjet 2>&1); then
+            echo "expected shim to fail when pi absent" >&2; exit 1
+          fi
           echo "$OUTPUT" | grep -q "pi-mono"
+
+      - name: scramjet shim happy-path arg forwarding
+        run: |
+          # Stub pi on PATH that echoes its argv and exits with a sentinel code,
+          # verifying that the shim actually execs pi and forwards "$@" intact.
+          tmp=$(mktemp -d)
+          cat >"$tmp/pi" <<'STUB'
+          #!/usr/bin/env bash
+          echo "STUB pi argv: $*"
+          exit 42
+          STUB
+          chmod +x "$tmp/pi"
+          STATUS=0
+          OUTPUT=$(PATH="$tmp:$PATH" ./bin/scramjet --foo bar baz) || STATUS=$?
+          test "$STATUS" -eq 42
+          echo "$OUTPUT" | grep -q "STUB pi argv: --foo bar baz"
+          rm -rf "$tmp"

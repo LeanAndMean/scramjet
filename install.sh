@@ -147,6 +147,21 @@ fi
 install_symlink() {
 	local SRC="$1" DEST="$2"
 
+	# Refuse if SRC and DEST canonicalize to the same path; the rm -rf
+	# below would otherwise destroy the source (e.g. --bin-dir <repo>/bin
+	# with --force makes SHIM_DEST point at SHIM_SRC). Canonicalize parents
+	# with cd + pwd -P; portable since readlink -f is GNU-only.
+	local _src_canon _dest_canon
+	_src_canon="$(cd "$(dirname "$SRC")" && pwd -P)/$(basename "$SRC")"
+	if [[ -d "$(dirname "$DEST")" ]]; then
+		_dest_canon="$(cd "$(dirname "$DEST")" && pwd -P)/$(basename "$DEST")"
+		if [[ "$_src_canon" == "$_dest_canon" ]]; then
+			echo "Error: source and destination resolve to the same path: $_src_canon" >&2
+			echo "Refusing to install: this would destroy the source." >&2
+			exit 1
+		fi
+	fi
+
 	if [[ -L "$DEST" && "$(readlink "$DEST")" == "$SRC" ]]; then
 		RESULT=already
 		return 0
@@ -192,6 +207,21 @@ if [[ ! -r "$DEST/index.ts" ]]; then
 fi
 
 # --- Install the launcher shim
+# If the shim leg fails, an EXIT trap notes that the extension did install,
+# so the failure isn't read as a total no-op. EXT_DEST is captured because
+# install_symlink's `local DEST` dynamically shadows the outer DEST when
+# the trap fires from inside the function.
+EXT_DEST="$DEST"
+SHIM_OK=0
+_shim_exit_note() {
+	local rc=$?
+	if (( rc != 0 && SHIM_OK == 0 )); then
+		echo "" >&2
+		echo "Note: extension installed at $EXT_DEST, but shim install failed; see error above." >&2
+	fi
+}
+trap _shim_exit_note EXIT
+
 install_symlink "$SHIM_SRC" "$SHIM_DEST"
 if [[ "$RESULT" == "already" ]]; then
 	echo "Already installed shim: $SHIM_DEST -> $SHIM_SRC"
@@ -202,6 +232,8 @@ if [[ ! -x "$SHIM_DEST" ]]; then
 	echo "Error: $SHIM_DEST is not executable through the symlink." >&2
 	exit 1
 fi
+SHIM_OK=1
+trap - EXIT
 
 # --- PATH check for the shim's bin dir
 SHIM_BIN_DIR="$(dirname "$SHIM_DEST")"
@@ -215,7 +247,8 @@ case ":${PATH:-}:" in
 		;;
 esac
 
-# --- Matching uninstall invocation (string-built for bash 3.2 portability)
+# --- Matching uninstall invocation (single shell-quotable string so it
+# can be printed and copy-pasted as one line).
 UNINSTALL_CMD="$REPO_ROOT/uninstall.sh"
 if [[ -n "$TARGET_ARG" ]]; then
 	UNINSTALL_CMD="$UNINSTALL_CMD --target \"$TARGET_ARG\""
