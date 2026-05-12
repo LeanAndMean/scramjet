@@ -6,22 +6,31 @@ usage() {
 Usage: ./install.sh [options]
 
 Symlinks scramjet into a Pi agent extensions directory so the Pi binary
-can auto-discover and load this extension at runtime.
+can auto-discover and load this extension at runtime, and installs a
+`scramjet` launcher shim on your PATH that execs `pi`.
 
 Options:
-  --target <path>   Install into <path>/scramjet
-                    (<path> should be a Pi agent directory; tilde is expanded)
-  --local           Install into ./.pi/extensions/scramjet (relative to CWD)
-  --force           Overwrite an existing scramjet entry at the target
-  -h, --help        Show this help
+  --target <path>    Install extension into <path>/scramjet
+                     (<path> should be a Pi agent directory; tilde is expanded)
+  --local            Install extension into ./.pi/extensions/scramjet
+                     and shim into ./.pi/bin/scramjet (relative to CWD)
+  --bin-dir <path>   Install the scramjet launcher shim into <path>/scramjet
+                     (tilde is expanded; default: $HOME/.local/bin)
+  --force            Overwrite an existing scramjet entry at either target
+  -h, --help         Show this help
 
-Target resolution precedence (highest first):
+Extension target resolution precedence (highest first):
   1. --target <path>            -> <path>/scramjet
   2. --local                    -> <cwd>/.pi/extensions/scramjet
   3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR/extensions/scramjet
   4. Default                    -> $HOME/.pi/agent/extensions/scramjet
 
-Re-running with the same target is idempotent (no --force required).
+Shim target resolution precedence (highest first):
+  1. --bin-dir <path>           -> <path>/scramjet
+  2. --local                    -> <cwd>/.pi/bin/scramjet
+  3. Default                    -> $HOME/.local/bin/scramjet
+
+Re-running with the same targets is idempotent (no --force required).
 EOF
 }
 
@@ -36,6 +45,7 @@ esac
 
 # --- Flag parsing
 TARGET_ARG=""
+BIN_DIR_ARG=""
 LOCAL=0
 FORCE=0
 while [[ $# -gt 0 ]]; do
@@ -46,6 +56,14 @@ while [[ $# -gt 0 ]]; do
 				exit 2
 			fi
 			TARGET_ARG="$2"
+			shift 2
+			;;
+		--bin-dir)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --bin-dir requires a non-empty path argument." >&2
+				exit 2
+			fi
+			BIN_DIR_ARG="$2"
 			shift 2
 			;;
 		--local)
@@ -81,7 +99,13 @@ if [[ ! -r "$REPO_ROOT/index.ts" ]]; then
 	exit 1
 fi
 
-# --- Target resolution
+SHIM_SRC="$REPO_ROOT/bin/scramjet"
+if [[ ! -r "$SHIM_SRC" ]]; then
+	echo "Error: $SHIM_SRC not found; expected the launcher shim alongside install.sh." >&2
+	exit 1
+fi
+
+# --- Extension target resolution
 if [[ -n "$TARGET_ARG" ]]; then
 	# Expand a leading ~ inside a quoted arg (shells don't expand it in quotes)
 	TARGET_EXPANDED="${TARGET_ARG/#\~/${HOME:-~}}"
@@ -100,51 +124,109 @@ else
 	DEST="$HOME/.pi/agent/extensions/scramjet"
 fi
 
-# --- Idempotency: already a symlink pointing at this repo
-if [[ -L "$DEST" && "$(readlink "$DEST")" == "$REPO_ROOT" ]]; then
-	echo "Already installed: $DEST -> $REPO_ROOT"
-	exit 0
-fi
-
-# --- Clobber refusal (handles broken symlinks too via -L)
-if [[ -e "$DEST" || -L "$DEST" ]]; then
-	if [[ $FORCE -ne 1 ]]; then
-		if [[ -L "$DEST" ]]; then
-			existing="symlink -> $(readlink "$DEST")"
-		elif [[ -d "$DEST" ]]; then
-			existing="directory"
-		else
-			existing="file"
-		fi
-		echo "Error: $DEST already exists ($existing)." >&2
-		echo "Re-run with --force to overwrite." >&2
+# --- Shim target resolution
+if [[ -n "$BIN_DIR_ARG" ]]; then
+	BIN_DIR_EXPANDED="${BIN_DIR_ARG/#\~/${HOME:-~}}"
+	SHIM_DEST="$BIN_DIR_EXPANDED/scramjet"
+elif [[ $LOCAL -eq 1 ]]; then
+	SHIM_DEST="$(pwd -P)/.pi/bin/scramjet"
+else
+	if [[ -z "${HOME:-}" ]]; then
+		echo "Error: \$HOME is not set; cannot resolve the default shim install dir." >&2
+		echo "Provide an explicit path with --bin-dir or --local." >&2
 		exit 1
 	fi
-	rm -rf "$DEST"
+	SHIM_DEST="$HOME/.local/bin/scramjet"
 fi
 
-# --- Create parent dir and the symlink
-mkdir -p "$(dirname "$DEST")"
-ln -s "$REPO_ROOT" "$DEST"
+# --- Install a symlink at DEST pointing to SRC.
+# Sets RESULT to one of: "already" (already a correct symlink, no work done)
+# or "installed" (created or replaced). Refuses to clobber a non-matching
+# entry unless FORCE=1. Validates with bare readlink (NOT -f; that flag is
+# GNU-only and breaks on macOS).
+install_symlink() {
+	local SRC="$1" DEST="$2"
 
-# --- Validate: bare readlink (NOT -f; that flag is GNU-only and breaks on macOS)
-if [[ "$(readlink "$DEST")" != "$REPO_ROOT" ]]; then
-	echo "Error: symlink validation failed; readlink returned: $(readlink "$DEST")" >&2
-	exit 1
+	if [[ -L "$DEST" && "$(readlink "$DEST")" == "$SRC" ]]; then
+		RESULT=already
+		return 0
+	fi
+
+	if [[ -e "$DEST" || -L "$DEST" ]]; then
+		if [[ $FORCE -ne 1 ]]; then
+			local existing
+			if [[ -L "$DEST" ]]; then
+				existing="symlink -> $(readlink "$DEST")"
+			elif [[ -d "$DEST" ]]; then
+				existing="directory"
+			else
+				existing="file"
+			fi
+			echo "Error: $DEST already exists ($existing)." >&2
+			echo "Re-run with --force to overwrite." >&2
+			exit 1
+		fi
+		rm -rf "$DEST"
+	fi
+
+	mkdir -p "$(dirname "$DEST")"
+	ln -s "$SRC" "$DEST"
+
+	if [[ "$(readlink "$DEST")" != "$SRC" ]]; then
+		echo "Error: symlink validation failed at $DEST; readlink returned: $(readlink "$DEST")" >&2
+		exit 1
+	fi
+	RESULT=installed
+}
+
+# --- Install the extension symlink
+install_symlink "$REPO_ROOT" "$DEST"
+if [[ "$RESULT" == "already" ]]; then
+	echo "Already installed extension: $DEST -> $REPO_ROOT"
+else
+	echo "Installed extension: $DEST -> $REPO_ROOT"
 fi
 if [[ ! -r "$DEST/index.ts" ]]; then
 	echo "Error: $DEST/index.ts is not readable through the symlink." >&2
 	exit 1
 fi
 
-# --- Success: print resolved path + matching uninstall invocation
-echo "Installed: $DEST -> $REPO_ROOT"
-if [[ -n "$TARGET_ARG" ]]; then
-	echo "Uninstall: $REPO_ROOT/uninstall.sh --target \"$TARGET_ARG\""
-elif [[ $LOCAL -eq 1 ]]; then
-	echo "Uninstall: $REPO_ROOT/uninstall.sh --local"
-elif [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-	echo "Uninstall: PI_CODING_AGENT_DIR=\"$PI_CODING_AGENT_DIR\" $REPO_ROOT/uninstall.sh"
+# --- Install the launcher shim
+install_symlink "$SHIM_SRC" "$SHIM_DEST"
+if [[ "$RESULT" == "already" ]]; then
+	echo "Already installed shim: $SHIM_DEST -> $SHIM_SRC"
 else
-	echo "Uninstall: $REPO_ROOT/uninstall.sh"
+	echo "Installed shim: $SHIM_DEST -> $SHIM_SRC"
 fi
+if [[ ! -x "$SHIM_DEST" ]]; then
+	echo "Error: $SHIM_DEST is not executable through the symlink." >&2
+	exit 1
+fi
+
+# --- PATH check for the shim's bin dir
+SHIM_BIN_DIR="$(dirname "$SHIM_DEST")"
+case ":${PATH:-}:" in
+	*":$SHIM_BIN_DIR:"*) ;;
+	*)
+		echo
+		echo "Note: $SHIM_BIN_DIR is not on your \$PATH."
+		echo "Add this to your shell profile (e.g. ~/.bashrc, ~/.zshrc) to use the scramjet command:"
+		echo "  export PATH=\"$SHIM_BIN_DIR:\$PATH\""
+		;;
+esac
+
+# --- Matching uninstall invocation (string-built for bash 3.2 portability)
+UNINSTALL_CMD="$REPO_ROOT/uninstall.sh"
+if [[ -n "$TARGET_ARG" ]]; then
+	UNINSTALL_CMD="$UNINSTALL_CMD --target \"$TARGET_ARG\""
+elif [[ $LOCAL -eq 1 ]]; then
+	UNINSTALL_CMD="$UNINSTALL_CMD --local"
+elif [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
+	UNINSTALL_CMD="PI_CODING_AGENT_DIR=\"$PI_CODING_AGENT_DIR\" $UNINSTALL_CMD"
+fi
+if [[ -n "$BIN_DIR_ARG" ]]; then
+	UNINSTALL_CMD="$UNINSTALL_CMD --bin-dir \"$BIN_DIR_ARG\""
+fi
+
+echo
+echo "Uninstall: $UNINSTALL_CMD"

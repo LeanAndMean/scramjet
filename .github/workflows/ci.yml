@@ -53,8 +53,24 @@ jobs:
           ./install.sh --local
           test -L .pi/extensions/scramjet
           test -r .pi/extensions/scramjet/index.ts
+          test -L .pi/bin/scramjet
+          test -x .pi/bin/scramjet
           ./install.sh --local
           test -L .pi/extensions/scramjet
+          test -L .pi/bin/scramjet
           ./uninstall.sh --local
           ! test -e .pi/extensions/scramjet
+          ! test -e .pi/bin/scramjet
           ./uninstall.sh --local
+
+      - name: scramjet shim smoke test
+        run: |
+          # Shim should exit non-zero with an actionable message when pi is absent.
+          # We invoke the shim directly (not the installed copy) so we don't need
+          # to install at all for this check.
+          set +e
+          OUTPUT=$(PATH=/usr/bin:/bin ./bin/scramjet 2>&1)
+          STATUS=$?
+          set -e
+          test "$STATUS" -ne 0
+          echo "$OUTPUT" | grep -q "pi-mono"
