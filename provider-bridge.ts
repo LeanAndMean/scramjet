@@ -7,6 +7,9 @@
  * SDK's normal env-var fallback never engages. This bridge calls
  * pi.registerProvider("anthropic", ...) at load time to override the endpoint.
  *
+ * Also installs a `before_provider_request` hook that strips
+ * `tools[].eager_input_streaming` so Foundry's gateway accepts the payload.
+ *
  * Detection follows the Claude Code env-var convention so a single
  * `source ~/.claudecode_tux` configures both Claude Code and Pi.
  */
@@ -30,11 +33,10 @@ export function resolveProviderBridgeConfig(env: NodeJS.ProcessEnv): ProviderBri
 		throw new TypeError(`ANTHROPIC_BASE_URL has no authority: "${baseUrl}"`);
 	}
 
-	// Throws on malformed URL — intentional fail-fast so a misconfigured
-	// ANTHROPIC_BASE_URL surfaces loudly at startup rather than silently
-	// disabling the bridge. The all-dots hostname check catches degenerate
-	// inputs like `https://.` and `https://..` that parse successfully but
-	// have no real host.
+	// Throws on malformed URL; `registerProviderBridge` catches and logs,
+	// keeping this resolver pure while preserving the rest of the extension.
+	// The all-dots hostname check catches degenerate inputs like `https://.`
+	// and `https://..` that parse successfully but have no real host.
 	const parsed = new URL(baseUrl);
 	if (!parsed.hostname || parsed.hostname.replace(/\./g, "") === "") {
 		throw new TypeError(`ANTHROPIC_BASE_URL has no valid hostname: "${baseUrl}"`);
@@ -62,6 +64,12 @@ export function resolveProviderBridgeConfig(env: NodeJS.ProcessEnv): ProviderBri
  * equivalent per-model knob (`compat.supportsEagerToolInputStreaming: false`)
  * isn't reachable from `pi.registerProvider`, so the bridge instead removes
  * the field in-flight when active.
+ *
+ * The `before_provider_request` hook fires for ALL provider payloads (Pi's
+ * `onPayload` does not pass a provider discriminator), so this function is
+ * duck-typed for the Anthropic shape: payloads that don't carry a `tools[]`
+ * array fall through and return `undefined` (no change) without touching
+ * non-Anthropic providers.
  *
  * Returns the mutated payload when something was stripped, `undefined`
  * otherwise — matching Pi's contract that `undefined` means "no change".
@@ -96,12 +104,13 @@ export function stripEagerInputStreaming(payload: unknown): unknown {
  * resolves the bridge config, and — if active — calls `pi.registerProvider`
  * and installs the `before_provider_request` strip hook.
  *
- * Any failure (malformed URL, degenerate hostname, etc.) is logged to stderr
- * and the function returns without registering. The bridge is the first
- * registration in `index.ts`, so a throw here would tear down task-complete,
- * auto-continue, the diagram tool, and the `/scramjet` command via Pi's
- * factory-level try/catch in `loadExtension`. The bridge failing should not
- * disable the rest of the extension.
+ * Any failure (malformed URL, degenerate hostname, `pi.registerProvider`
+ * throwing, hook installation throwing, etc.) is logged to stderr and the
+ * function returns without re-throwing. The bridge is the first registration
+ * in `index.ts`, so a throw here would tear down task-complete, auto-continue,
+ * the diagram tool, and the `/scramjet` command via Pi's factory-level
+ * try/catch in `loadExtension`. The bridge failing should not disable the
+ * rest of the extension.
  */
 export function registerProviderBridge(pi: ExtensionAPI, env: NodeJS.ProcessEnv = process.env): void {
 	let config: ProviderBridgeConfig | null;
@@ -115,10 +124,29 @@ export function registerProviderBridge(pi: ExtensionAPI, env: NodeJS.ProcessEnv 
 
 	if (config === null) return;
 
-	const hostname = new URL(config.baseUrl).hostname;
-	const auth = config.apiKey !== undefined ? "present" : "absent";
-	console.warn(`scramjet: bridging anthropic provider to ${hostname} (apiKey ${auth})`);
+	// External-boundary calls below (URL re-parse, pi.registerProvider, pi.on)
+	// share the same blast-radius concern as the resolver throw: any escape
+	// tears down the rest of the extension via Pi's loadExtension factory
+	// catch. The `providerRegistered` flag distinguishes "registerProvider
+	// failed" (bridge fully disabled) from "hook registration failed after
+	// registerProvider succeeded" (bridge half-installed — provider rewired
+	// but the strip hook is absent, so every Foundry request would 400). The
+	// latter case needs a distinct log so operators can grep for it.
+	let providerRegistered = false;
+	try {
+		const hostname = new URL(config.baseUrl).hostname;
+		const auth = config.apiKey !== undefined ? "present" : "absent";
+		console.warn(`scramjet: bridging anthropic provider to ${hostname} (apiKey ${auth})`);
 
-	pi.registerProvider("anthropic", config);
-	pi.on("before_provider_request", async (event) => stripEagerInputStreaming(event.payload));
+		pi.registerProvider("anthropic", config);
+		providerRegistered = true;
+		pi.on("before_provider_request", async (event) => stripEagerInputStreaming(event.payload));
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		if (providerRegistered) {
+			console.warn(`scramjet: provider bridge partially installed (hook registration failed): ${message}`);
+		} else {
+			console.warn(`scramjet: provider bridge disabled: ${message}`);
+		}
+	}
 }

@@ -7,7 +7,7 @@
  *
  * Also provides a draw_diagram tool for inline Mermaid/Graphviz/PlantUML rendering.
  *
- * Install: symlink or copy to ~/.pi/agent/extensions/scramjet/
+ * See README's `## Install` section for installation instructions.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

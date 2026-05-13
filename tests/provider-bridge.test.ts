@@ -291,25 +291,28 @@ describe("registerProviderBridge", () => {
 		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 	});
 
-	it("makes no calls when env yields no config (unset)", () => {
+	it("makes no calls and does not warn when env yields no config (unset)", () => {
 		const { pi, calls } = makeMockPi();
 		registerProviderBridge(pi, {});
 		expect(calls).toEqual([]);
+		expect(warnSpy).not.toHaveBeenCalled();
 	});
 
-	it("makes no calls when env yields no config (stock Anthropic)", () => {
+	it("makes no calls and does not warn when env yields no config (stock Anthropic)", () => {
 		const { pi, calls } = makeMockPi();
 		registerProviderBridge(pi, { ANTHROPIC_BASE_URL: "https://api.anthropic.com" });
 		expect(calls).toEqual([]);
+		expect(warnSpy).not.toHaveBeenCalled();
 	});
 
-	it("makes no calls when SCRAMJET_PROVIDER_BRIDGE=0", () => {
+	it("makes no calls and does not warn when SCRAMJET_PROVIDER_BRIDGE=0 (silent kill-switch)", () => {
 		const { pi, calls } = makeMockPi();
 		registerProviderBridge(pi, {
 			SCRAMJET_PROVIDER_BRIDGE: "0",
 			ANTHROPIC_BASE_URL: "http://127.0.0.1:18080",
 		});
 		expect(calls).toEqual([]);
+		expect(warnSpy).not.toHaveBeenCalled();
 	});
 
 	it("registers provider and installs hook when config is active", () => {
@@ -330,12 +333,38 @@ describe("registerProviderBridge", () => {
 		expect(typeof calls[1][2]).toBe("function");
 	});
 
-	it("logs activation to stderr including the resolved hostname", () => {
+	it("omits apiKey on the registered ProviderConfig when no auth token is set", () => {
+		// F3: the resolver-level Object.hasOwn assertion does not cover the
+		// integration with pi.registerProvider. A refactor that introduced
+		// `{ ...config, apiKey: config.apiKey }` (adding explicit undefined)
+		// would pass every other test. Pin the wrapper-layer contract here.
+		const { pi, calls } = makeMockPi();
+		registerProviderBridge(pi, { ANTHROPIC_BASE_URL: "http://127.0.0.1:18080" });
+
+		expect(calls).toHaveLength(2);
+		const registerCall = calls[0] as RegisterCall;
+		expect(registerCall[0]).toBe("registerProvider");
+		expect(registerCall[2]).toEqual({ baseUrl: "http://127.0.0.1:18080" });
+		expect(Object.hasOwn(registerCall[2], "apiKey")).toBe(false);
+	});
+
+	it("logs activation with `apiKey present` when an auth token is set", () => {
 		const { pi } = makeMockPi();
 		registerProviderBridge(pi, {
 			ANTHROPIC_BASE_URL: "http://127.0.0.1:18080",
+			ANTHROPIC_AUTH_TOKEN: "managed-by-tux",
 		});
-		expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("bridging anthropic provider to 127.0.0.1"));
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringMatching(/^scramjet: bridging anthropic provider to 127\.0\.0\.1 \(apiKey present\)$/),
+		);
+	});
+
+	it("logs activation with `apiKey absent` when no auth token is set", () => {
+		const { pi } = makeMockPi();
+		registerProviderBridge(pi, { ANTHROPIC_BASE_URL: "http://127.0.0.1:18080" });
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringMatching(/^scramjet: bridging anthropic provider to 127\.0\.0\.1 \(apiKey absent\)$/),
+		);
 	});
 
 	it("does not throw on malformed URL — logs and skips registration", () => {
@@ -350,6 +379,53 @@ describe("registerProviderBridge", () => {
 		expect(() => registerProviderBridge(pi, { ANTHROPIC_BASE_URL: "https://.." })).not.toThrow();
 		expect(calls).toEqual([]);
 		expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/^scramjet: provider bridge disabled:/));
+	});
+
+	it("logs `partially installed` and swallows when pi.on throws after registerProvider succeeded", () => {
+		// F1: registerProvider has already rewired the Anthropic provider when
+		// `on` throws — the bridge is half-installed (proxy active, but the
+		// eager_input_streaming strip is missing, which would 400 at Foundry).
+		// The hook-failure path must NOT escape into Pi's loadExtension catch
+		// (which would tear down the rest of the extension) AND must be
+		// distinguishable from the "fully disabled" path so operators can grep
+		// for the half-install state.
+		const registerCalls: Array<["registerProvider", string, ProviderConfig]> = [];
+		const pi = {
+			registerProvider: (name: string, config: ProviderConfig) => {
+				registerCalls.push(["registerProvider", name, config]);
+			},
+			on: () => {
+				throw new Error("pi.on exploded");
+			},
+		} as unknown as ExtensionAPI;
+
+		expect(() => registerProviderBridge(pi, { ANTHROPIC_BASE_URL: "http://127.0.0.1:18080" })).not.toThrow();
+		expect(registerCalls).toHaveLength(1);
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringMatching(
+				/^scramjet: provider bridge partially installed \(hook registration failed\): pi\.on exploded$/,
+			),
+		);
+	});
+
+	it("logs `disabled` and swallows when pi.registerProvider throws", () => {
+		// F1: registerProvider throwing means the provider is NOT rewired —
+		// stock Anthropic stays in effect. This is the "fully disabled" path
+		// and must use the regular `disabled` log line, not `partially
+		// installed`. Must also swallow so the rest of the extension survives.
+		const pi = {
+			registerProvider: () => {
+				throw new Error("registerProvider exploded");
+			},
+			on: () => {
+				throw new Error("on should not be called when registerProvider fails");
+			},
+		} as unknown as ExtensionAPI;
+
+		expect(() => registerProviderBridge(pi, { ANTHROPIC_BASE_URL: "http://127.0.0.1:18080" })).not.toThrow();
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringMatching(/^scramjet: provider bridge disabled: registerProvider exploded$/),
+		);
 	});
 
 	it("registered hook returns the strip result for a payload with eager_input_streaming", async () => {
