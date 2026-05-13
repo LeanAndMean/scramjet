@@ -270,6 +270,72 @@ run the script once per target with `--target` or `$PI_CODING_AGENT_DIR`.
 Native Windows is detected by `uname -s`; the install script exits with a
 message pointing to WSL. There is no copy-mode fallback.
 
+## Routing pi through a proxy
+
+If you point Claude Code at a proxy like
+[tux](https://github.com/merckgroup/tux) or Foundry by sourcing an env
+file, pi by default still calls `api.anthropic.com` directly — its
+Anthropic provider pins `baseUrl: "https://api.anthropic.com"` and its
+SDK does not read `ANTHROPIC_BASE_URL` the way the Anthropic Python SDK
+does.
+
+When `ANTHROPIC_BASE_URL` is set to a non-stock host at install time,
+`install.sh` writes the following into `~/.pi/agent/models.json` so
+pi's Anthropic traffic flows through the same proxy:
+
+```json
+{
+  "providers": {
+    "anthropic": {
+      "baseUrl": "<your ANTHROPIC_BASE_URL>",
+      "compat": { "supportsEagerToolInputStreaming": false }
+    }
+  }
+}
+```
+
+The `compat.supportsEagerToolInputStreaming: false` opt-out is required
+for Foundry's Anthropic gateway — without it, every request fails with
+`INVALID_ARGUMENT: unrecognizedProperty=eager_input_streaming`. Stock
+Anthropic accepts the field, so this opt-out is harmless if you ever
+switch back, but the file only gets written when the env points at a
+non-`api.anthropic.com` host.
+
+Existing keys in `models.json` (other providers, an `apiKey` you set
+yourself) are preserved — `install.sh` deep-merges and refuses to
+overwrite an invalid-JSON file.
+
+### Authentication
+
+Pi reads `ANTHROPIC_API_KEY` natively but **not**
+`ANTHROPIC_AUTH_TOKEN`. If your tux env file only sets the latter (which
+is the default for SDK-style proxies), add an alias line so pi can pick
+up the token:
+
+```sh
+export ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"
+```
+
+Alternatively, set `apiKey` directly inside `providers.anthropic` in
+`models.json`. The trade-off is that the token then lives in plaintext
+on disk; the env-alias approach keeps it ephemeral.
+
+### Disabling
+
+To undo just the `models.json` change without touching the extension
+symlink or shim, re-run:
+
+```sh
+./uninstall.sh --clear-models-json
+```
+
+It surgically deletes the `baseUrl` and
+`compat.supportsEagerToolInputStreaming` keys, drops `providers.anthropic`
+if it ends up empty, and removes the whole file if nothing is left.
+Other providers and other keys you added are not touched.
+
+To re-apply (e.g. after the env var changes), re-run `./install.sh`.
+
 ## Versions
 
 Tested against **Pi `0.74.0`** (see `pi.piTestedVersion` in `package.json`).

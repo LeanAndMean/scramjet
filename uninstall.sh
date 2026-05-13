@@ -11,12 +11,17 @@ are removed; if either target is a real file or directory, this script
 refuses to touch it.
 
 Options:
-  --target <path>    Uninstall extension from <path>/scramjet (tilde is expanded)
-  --local            Uninstall extension from ./.pi/extensions/scramjet
-                     and shim from ./.pi/bin/scramjet (relative to CWD)
-  --bin-dir <path>   Uninstall shim from <path>/scramjet
-                     (tilde is expanded; default: $HOME/.local/bin)
-  -h, --help         Show this help
+  --target <path>          Uninstall extension from <path>/scramjet (tilde is expanded)
+  --local                  Uninstall extension from ./.pi/extensions/scramjet
+                           and shim from ./.pi/bin/scramjet (relative to CWD)
+  --bin-dir <path>         Uninstall shim from <path>/scramjet
+                           (tilde is expanded; default: $HOME/.local/bin)
+  --clear-models-json      Also remove the providers.anthropic baseUrl and
+                           compat.supportsEagerToolInputStreaming entries
+                           that install.sh seeded into ~/.pi/agent/models.json.
+                           Leaves any other keys (e.g. apiKey, other providers)
+                           intact. No-op when nothing scramjet-shaped is present.
+  -h, --help               Show this help
 
 Extension target resolution precedence (must match the original install):
   1. --target <path>            -> <path>/scramjet
@@ -46,6 +51,7 @@ esac
 TARGET_ARG=""
 BIN_DIR_ARG=""
 LOCAL=0
+CLEAR_MODELS_JSON=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--target)
@@ -66,6 +72,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--local)
 			LOCAL=1
+			shift
+			;;
+		--clear-models-json)
+			CLEAR_MODELS_JSON=1
 			shift
 			;;
 		-h|--help)
@@ -161,3 +171,71 @@ remove_symlink() {
 # Remove shim first, then extension (reverse of install order).
 remove_symlink "$SHIM_DEST" "$SHIM_SRC"
 remove_symlink "$DEST" "$REPO_ROOT"
+
+# --- Optional: clear the providers.anthropic entries that install.sh wrote
+# into ~/.pi/agent/models.json. Mirrors install_symlink's contract: only
+# touches keys that match the shape install.sh writes. Other keys (apiKey
+# the user added, other providers, etc.) are preserved. Skipped without
+# --clear-models-json so the default uninstall is symlink-only.
+clear_models_json() {
+	local agent_dir
+	if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
+		agent_dir="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
+	elif [[ -n "${HOME:-}" ]]; then
+		agent_dir="$HOME/.pi/agent"
+	else
+		echo "Note: cannot resolve pi agent dir; skipping models.json cleanup." >&2
+		return 0
+	fi
+	local models_path="$agent_dir/models.json"
+	if [[ ! -f "$models_path" ]]; then
+		echo "Nothing to clear at $models_path"
+		return 0
+	fi
+
+	node - "$models_path" <<'NODE'
+const fs = require("node:fs");
+const path = process.argv[2];
+
+let cfg;
+try {
+	cfg = JSON.parse(fs.readFileSync(path, "utf8"));
+} catch (e) {
+	console.error(`Note: ${path} is not valid JSON; leaving untouched.`);
+	process.exit(0);
+}
+
+const anthropic = cfg?.providers?.anthropic;
+if (!anthropic) {
+	console.log(`No providers.anthropic entry in ${path}; nothing to clear.`);
+	process.exit(0);
+}
+
+delete anthropic.baseUrl;
+if (anthropic.compat && typeof anthropic.compat === "object") {
+	delete anthropic.compat.supportsEagerToolInputStreaming;
+	if (Object.keys(anthropic.compat).length === 0) {
+		delete anthropic.compat;
+	}
+}
+
+if (Object.keys(anthropic).length === 0) {
+	delete cfg.providers.anthropic;
+}
+if (cfg.providers && Object.keys(cfg.providers).length === 0) {
+	delete cfg.providers;
+}
+
+if (Object.keys(cfg).length === 0) {
+	fs.unlinkSync(path);
+	console.log(`Removed empty ${path}`);
+} else {
+	fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+	console.log(`Cleared scramjet entries from ${path}`);
+}
+NODE
+}
+
+if [[ $CLEAR_MODELS_JSON -eq 1 ]]; then
+	clear_models_json
+fi
