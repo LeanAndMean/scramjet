@@ -143,7 +143,7 @@ per-extension config required.
 
 | Env var                     | Effect                                                                                   |
 | --------------------------- | ---------------------------------------------------------------------------------------- |
-| `ANTHROPIC_BASE_URL`        | When set and not pointing at `api.anthropic.com`, activates the bridge with this URL.    |
+| `ANTHROPIC_BASE_URL`        | Activates the bridge when set and its **hostname** is not exactly `api.anthropic.com` (a trailing FQDN dot is treated as equivalent). Port, path, and scheme are ignored by the gate. |
 | `ANTHROPIC_AUTH_TOKEN`      | Used as Pi's `apiKey` for the Anthropic provider. Preferred over `ANTHROPIC_API_KEY`.    |
 | `ANTHROPIC_API_KEY`         | Used as Pi's `apiKey` for the Anthropic provider if `ANTHROPIC_AUTH_TOKEN` is unset.     |
 | `SCRAMJET_PROVIDER_BRIDGE`  | Set to literal `0` to disable the bridge even with the above env vars set.               |
@@ -163,9 +163,12 @@ SCRAMJET_PROVIDER_BRIDGE=0 scramjet
 
 Only the literal string `0` disables the bridge; other values (`false`,
 `off`, the empty string) leave it active. A malformed
-`ANTHROPIC_BASE_URL` raises at startup rather than silently disabling
-the bridge — the misconfiguration is visible immediately instead of
-manifesting as confusing direct-to-Anthropic traffic later.
+`ANTHROPIC_BASE_URL` logs a `scramjet: provider bridge disabled: …`
+warning to stderr and skips registering the bridge — the rest of the
+extension (task-complete, auto-continue, diagram tool, `/scramjet`
+command) still loads. On successful activation Scramjet also logs
+`scramjet: bridging anthropic provider to <hostname> (apiKey
+present|absent)` so the redirect is discoverable.
 
 When the bridge is active, Scramjet also strips per-tool
 `eager_input_streaming: true` from outgoing Anthropic request payloads.
@@ -175,7 +178,7 @@ Pi's equivalent per-model knob
 (`compat.supportsEagerToolInputStreaming: false`) is not reachable from
 the runtime `pi.registerProvider` API, so the bridge removes the field
 in-flight via a `before_provider_request` hook. Stock Anthropic accepts
-the field, so this fallback is a no-op when the bridge is inactive.
+the field, so the hook is not installed when the bridge is inactive.
 
 ## Versions
 
