@@ -167,6 +167,16 @@ Only the literal string `0` disables the bridge; other values (`false`,
 the bridge — the misconfiguration is visible immediately instead of
 manifesting as confusing direct-to-Anthropic traffic later.
 
+When the bridge is active, Scramjet also strips per-tool
+`eager_input_streaming: true` from outgoing Anthropic request payloads.
+Pi sends this field by default, and Foundry's Anthropic gateway rejects
+it with `INVALID_ARGUMENT: unrecognizedProperty=eager_input_streaming`.
+Pi's equivalent per-model knob
+(`compat.supportsEagerToolInputStreaming: false`) is not reachable from
+the runtime `pi.registerProvider` API, so the bridge removes the field
+in-flight via a `before_provider_request` hook. Stock Anthropic accepts
+the field, so this fallback is a no-op when the bridge is inactive.
+
 ## Versions
 
 Tested against **Pi `0.74.0`** (see `pi.piTestedVersion` in `package.json`).

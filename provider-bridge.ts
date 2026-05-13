@@ -43,8 +43,36 @@ export function resolveProviderBridgeConfig(env: NodeJS.ProcessEnv): ProviderBri
 	return apiKey !== undefined ? { baseUrl, apiKey } : { baseUrl };
 }
 
+/**
+ * Strip `tools[].eager_input_streaming` from an Anthropic-shape request
+ * payload. Foundry's Anthropic-API gateway rejects this field with
+ * `INVALID_ARGUMENT: unrecognizedProperty=eager_input_streaming`. The
+ * equivalent per-model knob (`compat.supportsEagerToolInputStreaming: false`)
+ * isn't reachable from `pi.registerProvider`, so the bridge instead removes
+ * the field in-flight when active. Non-Anthropic payloads don't carry the
+ * field, so the strip is a no-op for them.
+ *
+ * Returns the mutated payload when something was stripped, `undefined`
+ * otherwise — matching Pi's contract that `undefined` means "no change".
+ */
+export function stripEagerInputStreaming(payload: unknown): unknown {
+	if (!payload || typeof payload !== "object") return undefined;
+	const tools = (payload as { tools?: unknown }).tools;
+	if (!Array.isArray(tools)) return undefined;
+
+	let modified = false;
+	for (const tool of tools) {
+		if (tool && typeof tool === "object" && "eager_input_streaming" in tool) {
+			delete (tool as Record<string, unknown>).eager_input_streaming;
+			modified = true;
+		}
+	}
+	return modified ? payload : undefined;
+}
+
 export function registerProviderBridge(pi: ExtensionAPI): void {
 	const config = resolveProviderBridgeConfig(process.env);
 	if (config === null) return;
 	pi.registerProvider("anthropic", config);
+	pi.on("before_provider_request", async (event) => stripEagerInputStreaming(event.payload));
 }

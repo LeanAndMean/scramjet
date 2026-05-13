@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveProviderBridgeConfig } from "../provider-bridge.ts";
+import { resolveProviderBridgeConfig, stripEagerInputStreaming } from "../provider-bridge.ts";
 
 describe("resolveProviderBridgeConfig", () => {
 	it("returns null when ANTHROPIC_BASE_URL is unset", () => {
@@ -120,5 +120,57 @@ describe("resolveProviderBridgeConfig", () => {
 				ANTHROPIC_BASE_URL: "https://.",
 			}),
 		).toThrow();
+	});
+});
+
+describe("stripEagerInputStreaming", () => {
+	it("removes eager_input_streaming from each tool and returns the mutated payload", () => {
+		const payload = {
+			model: "claude-opus-4-6",
+			tools: [
+				{ name: "read", eager_input_streaming: true },
+				{ name: "write", eager_input_streaming: true },
+			],
+		};
+		const result = stripEagerInputStreaming(payload);
+		expect(result).toBe(payload);
+		expect(payload.tools[0]).toEqual({ name: "read" });
+		expect(payload.tools[1]).toEqual({ name: "write" });
+	});
+
+	it("removes the field only from tools that have it, leaving others untouched", () => {
+		const payload = {
+			tools: [{ name: "read", eager_input_streaming: true }, { name: "write" }],
+		};
+		const result = stripEagerInputStreaming(payload);
+		expect(result).toBe(payload);
+		expect(payload.tools).toEqual([{ name: "read" }, { name: "write" }]);
+	});
+
+	it("returns undefined when no tool carries the field (no change)", () => {
+		const payload = { tools: [{ name: "read" }, { name: "write" }] };
+		expect(stripEagerInputStreaming(payload)).toBeUndefined();
+	});
+
+	it("returns undefined when the payload has no tools array", () => {
+		expect(stripEagerInputStreaming({ model: "claude-opus-4-6" })).toBeUndefined();
+	});
+
+	it("returns undefined when tools is not an array", () => {
+		expect(stripEagerInputStreaming({ tools: "not-an-array" })).toBeUndefined();
+	});
+
+	it("returns undefined for null, undefined, or non-object payloads", () => {
+		expect(stripEagerInputStreaming(null)).toBeUndefined();
+		expect(stripEagerInputStreaming(undefined)).toBeUndefined();
+		expect(stripEagerInputStreaming("string")).toBeUndefined();
+		expect(stripEagerInputStreaming(42)).toBeUndefined();
+	});
+
+	it("ignores non-object tool entries", () => {
+		const payload = { tools: [null, "string", 42, { name: "ok", eager_input_streaming: true }] };
+		const result = stripEagerInputStreaming(payload);
+		expect(result).toBe(payload);
+		expect(payload.tools[3]).toEqual({ name: "ok" });
 	});
 });
