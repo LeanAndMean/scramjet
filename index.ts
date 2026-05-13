@@ -6,8 +6,8 @@
  * Scramjet doesn't know about workflows. Each command independently
  * defines its own next step in its own instructions; the workflow is
  * whatever emerges from following those edges. No queue, no DAG, no
- * resumable state. When a command has nothing to suggest, scramjet
- * produces zero output.
+ * resumable state. Scramjet is invisible when it has nothing to
+ * suggest.
  *
  * Pi extension entry point. Pi loads this file directly via jiti and
  * calls the default export with its ExtensionAPI. The function below
