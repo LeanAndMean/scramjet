@@ -115,6 +115,58 @@ jobs:
           test "$(cat .pi/extensions/scramjet/marker)" = "user-content"
           rm -rf .pi
 
+      - name: install.sh / uninstall.sh models.json round trip
+        run: |
+          # Verify install.sh's merge logic against a pre-seeded models.json
+          # with a user-set apiKey and an unrelated `openai` provider:
+          #   1. install must add providers.anthropic.baseUrl + compat
+          #      without disturbing the apiKey or the openai block.
+          #   2. --clear-models-json must remove only what install wrote,
+          #      preserving the apiKey and the openai block.
+          tmp_agent=$(mktemp -d)
+          tmp_ext=$(mktemp -d)
+          tmp_bin=$(mktemp -d)
+          printf '%s\n' '{"providers":{"anthropic":{"apiKey":"user-supplied"},"openai":{"baseUrl":"https://api.openai.com"}}}' > "$tmp_agent/models.json"
+          PI_CODING_AGENT_DIR="$tmp_agent" \
+            ANTHROPIC_BASE_URL="https://proxy.test/anthropic" \
+            ./install.sh --target "$tmp_ext" --bin-dir "$tmp_bin"
+          node -e '
+            const cfg = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const a = cfg.providers.anthropic;
+            if (a.baseUrl !== "https://proxy.test/anthropic") { console.error("baseUrl not set"); process.exit(1); }
+            if (a.compat.supportsEagerToolInputStreaming !== false) { console.error("compat not set"); process.exit(1); }
+            if (a.apiKey !== "user-supplied") { console.error("apiKey clobbered"); process.exit(1); }
+            if (cfg.providers.openai.baseUrl !== "https://api.openai.com") { console.error("openai clobbered"); process.exit(1); }
+          ' "$tmp_agent/models.json"
+          PI_CODING_AGENT_DIR="$tmp_agent" \
+            ./uninstall.sh --target "$tmp_ext" --bin-dir "$tmp_bin" --clear-models-json
+          node -e '
+            const cfg = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const a = cfg.providers.anthropic || {};
+            if ("baseUrl" in a) { console.error("baseUrl not cleared"); process.exit(1); }
+            if ("compat" in a) { console.error("compat not cleared"); process.exit(1); }
+            if (a.apiKey !== "user-supplied") { console.error("apiKey lost during clear"); process.exit(1); }
+            if (cfg.providers.openai.baseUrl !== "https://api.openai.com") { console.error("openai lost during clear"); process.exit(1); }
+          ' "$tmp_agent/models.json"
+          rm -rf "$tmp_agent" "$tmp_ext" "$tmp_bin"
+
+      - name: install.sh refuses invalid existing models.json
+        run: |
+          # F1: a malformed models.json must abort install with non-zero exit.
+          tmp_agent=$(mktemp -d)
+          tmp_ext=$(mktemp -d)
+          tmp_bin=$(mktemp -d)
+          printf '%s' '{ not json' > "$tmp_agent/models.json"
+          STATUS=0
+          OUTPUT=$(PI_CODING_AGENT_DIR="$tmp_agent" \
+            ANTHROPIC_BASE_URL="https://proxy.test/anthropic" \
+            ./install.sh --target "$tmp_ext" --bin-dir "$tmp_bin" 2>&1) || STATUS=$?
+          test "$STATUS" -ne 0
+          echo "$OUTPUT" | grep -qF 'refusing to overwrite'
+          # The malformed file must be left exactly as-is.
+          test "$(cat "$tmp_agent/models.json")" = '{ not json'
+          rm -rf "$tmp_agent" "$tmp_ext" "$tmp_bin"
+
       - name: scramjet shim absent-pi error
         run: |
           # Shim should exit non-zero with an actionable message when pi is absent.

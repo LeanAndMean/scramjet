@@ -1,13 +1,25 @@
 /**
- * Scramjet - Smart auto-continuation for Pi
+ * Scramjet — smart auto-continuation for Pi. When a command finishes
+ * and knows what should come next, scramjet just does it — unless you
+ * stop it.
  *
- * When a command completes and suggests a next step, Scramjet shows a
- * countdown and auto-runs it. The user can press Escape or type anything
- * to cancel. Invisible when there's nothing to suggest.
+ * Scramjet doesn't know about workflows. Each command independently
+ * defines its own next step in its own instructions; the workflow is
+ * whatever emerges from following those edges. No queue, no DAG, no
+ * resumable state. Scramjet is invisible when it has nothing to
+ * suggest.
  *
- * Also provides a draw_diagram tool for inline Mermaid/Graphviz/PlantUML rendering.
+ * Pi extension entry point. Pi loads this file directly via jiti and
+ * calls the default export with its ExtensionAPI. The function below
+ * registers task_complete (the tool a command calls to signal
+ * completion + optional next_step), the agent_end listener (drives
+ * the countdown widget), draw_diagram (inline Mermaid/Graphviz/
+ * PlantUML rendering), and the /scramjet on|off toggle. Install-time
+ * concerns — the symlinks, the launcher shim, and the optional
+ * pi-through-proxy models.json seed — live in install.sh.
  *
- * Install: symlink or copy to ~/.pi/agent/extensions/scramjet/
+ * See README.md for the full pitch and CLAUDE.md for the design
+ * principles that constrain what gets added here.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

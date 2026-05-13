@@ -251,6 +251,88 @@ case ":${PATH:-}:" in
 		;;
 esac
 
+# --- Optional: seed ~/.pi/agent/models.json with a proxy entry for the
+# Anthropic provider when ANTHROPIC_BASE_URL points at a non-stock host.
+# This is how scramjet integrates with tux/Foundry-style proxies: pi reads
+# providers.anthropic.{baseUrl,compat} natively, so a one-shot config write
+# at install time replaces the need for a runtime extension. No-op when:
+#   - the env var is unset
+#   - the URL is malformed or has no host (e.g. file:///, data:)
+#   - the host is api.anthropic.com (stock; FQDN trailing dot normalized)
+#   - node is not on PATH
+#   - both HOME and PI_CODING_AGENT_DIR are unset (cannot resolve agent dir)
+# Fails loud (exit 2) when an existing models.json is present but not valid JSON.
+update_models_json() {
+	local url="${ANTHROPIC_BASE_URL:-}"
+	[[ -z "$url" ]] && return 0
+
+	if ! command -v node >/dev/null 2>&1; then
+		echo
+		echo "Note: node is not on \$PATH; skipping models.json update." >&2
+		echo "      (pi requires node; once it is installed and on PATH, re-run ./install.sh.)" >&2
+		return 0
+	fi
+
+	local hostname
+	hostname="$(node -e 'try { const h = new URL(process.argv[1]).hostname.replace(/\.$/,""); if (!h) process.exit(2); process.stdout.write(h); } catch (e) { process.exit(2); }' "$url" 2>/dev/null)" || {
+		echo
+		echo "Note: ANTHROPIC_BASE_URL=$url is not a valid URL (or has no host); skipping models.json update." >&2
+		return 0
+	}
+	if [[ "$hostname" == "api.anthropic.com" ]]; then
+		return 0
+	fi
+
+	local agent_dir
+	if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
+		agent_dir="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
+	elif [[ -n "${HOME:-}" ]]; then
+		agent_dir="$HOME/.pi/agent"
+	else
+		echo
+		echo "Note: cannot resolve pi agent dir (HOME unset and PI_CODING_AGENT_DIR unset); skipping models.json update." >&2
+		return 0
+	fi
+	mkdir -p "$agent_dir"
+	local models_path="$agent_dir/models.json"
+
+	node - "$models_path" "$url" <<'NODE'
+const fs = require("node:fs");
+const path = process.argv[2];
+const baseUrl = process.argv[3];
+
+let cfg = { providers: {} };
+if (fs.existsSync(path)) {
+	const raw = fs.readFileSync(path, "utf8");
+	try {
+		cfg = JSON.parse(raw);
+	} catch (e) {
+		console.error(`Error: existing ${path} is not valid JSON; refusing to overwrite.`);
+		console.error(`       Fix or remove the file, then re-run ./install.sh.`);
+		process.exit(2);
+	}
+}
+
+cfg.providers = cfg.providers || {};
+const existing = cfg.providers.anthropic || {};
+const existingCompat = existing.compat || {};
+cfg.providers.anthropic = {
+	...existing,
+	baseUrl,
+	compat: { ...existingCompat, supportsEagerToolInputStreaming: false },
+};
+
+fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
+console.log(`Updated ${path}: routed anthropic provider to ${baseUrl}`);
+NODE
+
+	echo "Note: pi reads ANTHROPIC_API_KEY natively but not ANTHROPIC_AUTH_TOKEN."
+	echo "      If your env file sets ANTHROPIC_AUTH_TOKEN, also export:"
+	echo "        export ANTHROPIC_API_KEY=\"\$ANTHROPIC_AUTH_TOKEN\""
+	echo "To undo just this models.json change later, run uninstall.sh with --clear-models-json."
+}
+update_models_json
+
 # --- Matching uninstall invocation (single shell-quotable string so it
 # can be printed and copy-pasted as one line).
 UNINSTALL_CMD="$REPO_ROOT/uninstall.sh"
