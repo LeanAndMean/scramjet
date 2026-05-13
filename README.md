@@ -302,8 +302,11 @@ switch back, but the file only gets written when the env points at a
 non-`api.anthropic.com` host.
 
 Existing keys in `models.json` (other providers, an `apiKey` you set
-yourself) are preserved — `install.sh` deep-merges and refuses to
-overwrite an invalid-JSON file.
+yourself) are preserved — `install.sh` only overwrites `baseUrl` and
+`compat.supportsEagerToolInputStreaming` under `providers.anthropic`,
+leaving everything else byte-for-byte. If the existing file is not
+valid JSON, `install.sh` aborts with a non-zero exit instead of
+clobbering it; fix or remove the file and re-run.
 
 ### Authentication
 
@@ -333,6 +336,14 @@ It surgically deletes the `baseUrl` and
 `compat.supportsEagerToolInputStreaming` keys, drops `providers.anthropic`
 if it ends up empty, and removes the whole file if nothing is left.
 Other providers and other keys you added are not touched.
+
+Earlier drafts of this feature
+([issue #6](https://github.com/LeanAndMean/scramjet/issues/6)) included a
+`SCRAMJET_PROVIDER_BRIDGE=0` env-var opt-out for runtime disabling. The
+install-time `models.json` design supersedes that mechanism: the override
+lives on disk and pi reads it at startup, so unsetting or zeroing an env
+var in the current shell has no effect on routing. `./uninstall.sh
+--clear-models-json` is the supported way to revert.
 
 To re-apply (e.g. after the env var changes), re-run `./install.sh`.
 

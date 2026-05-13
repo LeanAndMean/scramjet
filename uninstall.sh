@@ -20,7 +20,10 @@ Options:
                            compat.supportsEagerToolInputStreaming entries
                            that install.sh seeded into ~/.pi/agent/models.json.
                            Leaves any other keys (e.g. apiKey, other providers)
-                           intact. No-op when nothing scramjet-shaped is present.
+                           intact. Prunes empty parent objects (compat,
+                           providers.anthropic, providers) and removes the
+                           models.json file itself if it ends up empty.
+                           No-op when nothing scramjet-shaped is present.
   -h, --help               Show this help
 
 Extension target resolution precedence (must match the original install):

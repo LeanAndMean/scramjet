@@ -255,16 +255,28 @@ esac
 # Anthropic provider when ANTHROPIC_BASE_URL points at a non-stock host.
 # This is how scramjet integrates with tux/Foundry-style proxies: pi reads
 # providers.anthropic.{baseUrl,compat} natively, so a one-shot config write
-# at install time replaces the need for a runtime extension. No-op when the
-# env var is unset, malformed, or points at api.anthropic.com.
+# at install time replaces the need for a runtime extension. No-op when:
+#   - the env var is unset
+#   - the URL is malformed or has no host (e.g. file:///, data:)
+#   - the host is api.anthropic.com (stock; FQDN trailing dot normalized)
+#   - node is not on PATH
+#   - both HOME and PI_CODING_AGENT_DIR are unset (cannot resolve agent dir)
+# Fails loud (exit 2) when an existing models.json is present but not valid JSON.
 update_models_json() {
 	local url="${ANTHROPIC_BASE_URL:-}"
 	[[ -z "$url" ]] && return 0
 
-	local hostname
-	hostname="$(node -e 'try { const h = new URL(process.argv[1]).hostname.replace(/\.$/,""); process.stdout.write(h); } catch (e) { process.exit(2); }' "$url" 2>/dev/null)" || {
+	if ! command -v node >/dev/null 2>&1; then
 		echo
-		echo "Note: ANTHROPIC_BASE_URL=$url is not a valid URL; skipping models.json update." >&2
+		echo "Note: node is not on \$PATH; skipping models.json update." >&2
+		echo "      (pi requires node; once it is installed and on PATH, re-run ./install.sh.)" >&2
+		return 0
+	fi
+
+	local hostname
+	hostname="$(node -e 'try { const h = new URL(process.argv[1]).hostname.replace(/\.$/,""); if (!h) process.exit(2); process.stdout.write(h); } catch (e) { process.exit(2); }' "$url" 2>/dev/null)" || {
+		echo
+		echo "Note: ANTHROPIC_BASE_URL=$url is not a valid URL (or has no host); skipping models.json update." >&2
 		return 0
 	}
 	if [[ "$hostname" == "api.anthropic.com" ]]; then
@@ -295,8 +307,9 @@ if (fs.existsSync(path)) {
 	try {
 		cfg = JSON.parse(raw);
 	} catch (e) {
-		console.error(`Note: existing ${path} is not valid JSON; leaving untouched.`);
-		process.exit(0);
+		console.error(`Error: existing ${path} is not valid JSON; refusing to overwrite.`);
+		console.error(`       Fix or remove the file, then re-run ./install.sh.`);
+		process.exit(2);
 	}
 }
 
