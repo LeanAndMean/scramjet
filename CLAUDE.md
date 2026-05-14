@@ -29,6 +29,12 @@ The extension registers one tool (`task_complete`), one event listener (`agent_e
 
 The diagram tool (`diagram/`) is independent — it detects installed renderers (`mmdc`, `dot`, `plantuml`) and registers `draw_diagram` only if at least one is available.
 
+Plugin wiring is install-time, not runtime. `install.sh` symlinks Pi's bundled subagent example (`node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent`) into the agent dir unchanged — not forked — and clones the Mach 10 and Anthropic marketplace plugins into `$HOME/.local/share/scramjet/`.
+
+For each plugin, command files are symlinked into `<agent-dir>/prompts/<plugin>:<basename>.md`, while agent files are transformed copies under `<agent-dir>/agents/<plugin>:<basename>.md` (strip `model: inherit`, convert `tools:` YAML arrays to comma-strings). The originals in `$HOME/.local/share/scramjet/` are never modified.
+
+`src/tool-aliases/` registers PascalCase Claude Code tool names (`Read`, `Bash`, `Edit`, `Write`, `Grep`, `Glob`, `LS`) as wrappers around Pi's native lowercase tools so plugin agents' `tools:` restrictions function natively. A `.scramjet-manifest` file in the agent dir tracks every installed plugin path for clean uninstall via `./uninstall.sh --clear-manifest`.
+
 ## Design philosophy
 
 These principles override default instincts. Do not add complexity that violates them.

@@ -34,6 +34,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Shellcheck install.sh / uninstall.sh
+        run: shellcheck -s bash install.sh uninstall.sh
+
       - name: piTestedVersion drift guard
         run: |
           TESTED=$(jq -r '.pi.piTestedVersion' package.json)
@@ -52,20 +55,311 @@ jobs:
         run: |
           # --local routes the shim into a dir not on PATH, so the
           # PATH-warning branch must fire. grep -F: $ is regex end-of-line.
-          OUTPUT=$(./install.sh --local 2>&1)
+          # --no-plugins skips plugin clones; hermetic plugin coverage lives
+          # in the dedicated steps below.
+          OUTPUT=$(./install.sh --local --no-plugins 2>&1)
           echo "$OUTPUT" | grep -qF 'is not on your $PATH'
           echo "$OUTPUT" | grep -qF 'export PATH='
           test -L .pi/extensions/scramjet
           test -r .pi/extensions/scramjet/index.ts
           test -L .pi/bin/scramjet
           test -x .pi/bin/scramjet
-          ./install.sh --local
+          ./install.sh --local --no-plugins
           test -L .pi/extensions/scramjet
           test -L .pi/bin/scramjet
-          ./uninstall.sh --local
+          ./uninstall.sh --local --clear-manifest
           ! test -e .pi/extensions/scramjet
           ! test -e .pi/bin/scramjet
-          ./uninstall.sh --local
+          ! test -e .pi/extensions/subagent
+          ! test -e .pi/.scramjet-manifest
+          ./uninstall.sh --local --clear-manifest
+          rm -rf .pi
+
+      - name: Pi subagent example path stability guard
+        run: |
+          # If Pi renames or restructures the bundled subagent example,
+          # install.sh's symlink target breaks. Catch that drift here rather
+          # than at a user's install time.
+          SUBAGENT=node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent
+          test -d "$SUBAGENT"
+          test -f "$SUBAGENT/index.ts"
+          grep -qF "pi.registerTool" "$SUBAGENT/index.ts"
+          grep -qF "export default function" "$SUBAGENT/index.ts"
+
+      - name: install.sh / uninstall.sh hermetic plugin wiring
+        run: |
+          # Hermetic end-to-end test of plugin wiring with file:// fixtures.
+          # Verifies the agent-file transform (model: inherit strip, tools:
+          # array conversion), command symlinking, manifest contents,
+          # idempotent re-run, and clean uninstall via --clear-manifest.
+          rm -rf .pi
+          work=$(mktemp -d)
+          trap "rm -rf $work .pi" EXIT
+
+          # --- mach10 fixture: agent with `model: inherit` + YAML-array
+          # tools, plus a command file. Tagged v1.0.0 for the semver path.
+          mkdir -p "$work/mach10-src/agents" "$work/mach10-src/commands"
+          cat >"$work/mach10-src/agents/inherit-agent.md" <<'AGENT'
+          ---
+          name: inherit-agent
+          description: Test agent with model inherit
+          model: inherit
+          tools: ["Read", "Bash"]
+          ---
+          inherit-agent body
+          AGENT
+          cat >"$work/mach10-src/commands/test-cmd.md" <<'CMD'
+          ---
+          description: Test command
+          ---
+          test-cmd body
+          CMD
+          git -C "$work/mach10-src" init -q
+          git -C "$work/mach10-src" config user.email "ci@example.com"
+          git -C "$work/mach10-src" config user.name "CI"
+          git -C "$work/mach10-src" add -A
+          git -C "$work/mach10-src" commit -q -m init
+          git -C "$work/mach10-src" tag v1.0.0
+          git clone --bare --quiet "$work/mach10-src" "$work/mach10.git"
+
+          # --- marketplace fixture: feature-dev with model: sonnet,
+          # pr-review-toolkit with model: opus (neither should be stripped).
+          mkdir -p "$work/marketplace-src/plugins/feature-dev/agents"
+          mkdir -p "$work/marketplace-src/plugins/pr-review-toolkit/agents"
+          cat >"$work/marketplace-src/plugins/feature-dev/agents/sonnet-agent.md" <<'AGENT'
+          ---
+          name: sonnet-agent
+          description: Test agent with model sonnet
+          model: sonnet
+          ---
+          sonnet-agent body
+          AGENT
+          # Block-sequence tools: variant exercises the other transform path.
+          cat >"$work/marketplace-src/plugins/feature-dev/agents/block-tools-agent.md" <<'AGENT'
+          ---
+          name: block-tools-agent
+          description: Test block-sequence tools array
+          tools:
+            - Read
+            - Write
+          ---
+          block-tools-agent body
+          AGENT
+          cat >"$work/marketplace-src/plugins/pr-review-toolkit/agents/opus-agent.md" <<'AGENT'
+          ---
+          name: opus-agent
+          description: Test agent with model opus
+          model: opus
+          ---
+          opus-agent body
+          AGENT
+          git -C "$work/marketplace-src" init -q
+          git -C "$work/marketplace-src" config user.email "ci@example.com"
+          git -C "$work/marketplace-src" config user.name "CI"
+          git -C "$work/marketplace-src" add -A
+          git -C "$work/marketplace-src" commit -q -m init
+          git clone --bare --quiet "$work/marketplace-src" "$work/marketplace.git"
+
+          # --- Install with hermetic clones.
+          SCRAMJET_CACHE="$work/cache" \
+            MACH10_REPO="file://$work/mach10.git" \
+            MARKETPLACE_REPO="file://$work/marketplace.git" \
+            ./install.sh --local
+
+          # --- Transform assertions: model: inherit stripped, sonnet/opus
+          # preserved, tools YAML array converted to comma-string.
+          INHERIT=.pi/agents/mach10:inherit-agent.md
+          test -f "$INHERIT"
+          ! grep -q '^model:' "$INHERIT"
+          grep -qF 'tools: Read, Bash' "$INHERIT"
+          grep -qF 'inherit-agent body' "$INHERIT"
+
+          SONNET=.pi/agents/feature-dev:sonnet-agent.md
+          test -f "$SONNET"
+          grep -qF 'model: sonnet' "$SONNET"
+
+          # Block-sequence tools: must convert to comma-string form.
+          BLOCK=.pi/agents/feature-dev:block-tools-agent.md
+          test -f "$BLOCK"
+          grep -qF 'tools: Read, Write' "$BLOCK"
+          ! grep -qE '^\s*-\s+Read' "$BLOCK"
+
+          OPUS=.pi/agents/pr-review-toolkit:opus-agent.md
+          test -f "$OPUS"
+          grep -qF 'model: opus' "$OPUS"
+
+          # --- Command file is a symlink, not a transformed copy.
+          CMD=.pi/prompts/mach10:test-cmd.md
+          test -L "$CMD"
+          test "$(readlink "$CMD")" = "$work/cache/mach10/commands/test-cmd.md"
+
+          # --- Subagent extension symlink lands.
+          test -L .pi/extensions/subagent
+
+          # --- Manifest sentinel + entries.
+          MANIFEST=.pi/.scramjet-manifest
+          test -f "$MANIFEST"
+          head -n1 "$MANIFEST" | grep -qF '# scramjet manifest v1'
+          grep -qxF "$PWD/.pi/agents/mach10:inherit-agent.md" "$MANIFEST"
+          grep -qxF "$PWD/.pi/agents/feature-dev:sonnet-agent.md" "$MANIFEST"
+          grep -qxF "$PWD/.pi/agents/feature-dev:block-tools-agent.md" "$MANIFEST"
+          grep -qxF "$PWD/.pi/agents/pr-review-toolkit:opus-agent.md" "$MANIFEST"
+          grep -qxF "$PWD/.pi/prompts/mach10:test-cmd.md" "$MANIFEST"
+          grep -qxF "$PWD/.pi/extensions/subagent" "$MANIFEST"
+
+          # --- Idempotent re-run: same manifest contents.
+          MANIFEST_BEFORE=$(sort "$MANIFEST")
+          SCRAMJET_CACHE="$work/cache" \
+            MACH10_REPO="file://$work/mach10.git" \
+            MARKETPLACE_REPO="file://$work/marketplace.git" \
+            ./install.sh --local
+          MANIFEST_AFTER=$(sort "$MANIFEST")
+          test "$MANIFEST_BEFORE" = "$MANIFEST_AFTER"
+          test -f "$INHERIT"
+          test -f "$SONNET"
+
+          # --- Uninstall with --clear-manifest removes everything.
+          ./uninstall.sh --local --clear-manifest
+          ! test -e "$INHERIT"
+          ! test -e "$SONNET"
+          ! test -e "$BLOCK"
+          ! test -e "$OPUS"
+          ! test -e "$CMD"
+          ! test -e .pi/extensions/subagent
+          ! test -e "$MANIFEST"
+          ! test -e .pi/extensions/scramjet
+          ! test -e .pi/bin/scramjet
+
+      - name: install.sh override-flag happy path
+        run: |
+          # --mach10 / --feature-dev / --pr-review-toolkit all override the
+          # managed clone path. With all three present, git is not required
+          # and no network access happens. Source dirs must be untouched.
+          rm -rf .pi
+          work=$(mktemp -d)
+          trap "rm -rf $work .pi" EXIT
+
+          mkdir -p "$work/m10/agents" "$work/m10/commands"
+          cat >"$work/m10/agents/a.md" <<'AGENT'
+          ---
+          name: a
+          description: m10 agent
+          ---
+          m10 a body
+          AGENT
+          cat >"$work/m10/commands/c.md" <<'CMD'
+          ---
+          description: m10 command
+          ---
+          m10 c body
+          CMD
+
+          mkdir -p "$work/fd/agents"
+          cat >"$work/fd/agents/b.md" <<'AGENT'
+          ---
+          name: b
+          description: fd agent
+          ---
+          fd b body
+          AGENT
+
+          mkdir -p "$work/prt/agents"
+          cat >"$work/prt/agents/d.md" <<'AGENT'
+          ---
+          name: d
+          description: prt agent
+          ---
+          prt d body
+          AGENT
+
+          # Snapshot inputs so we can prove the install side never mutates them.
+          M10_AGENT_BEFORE=$(cat "$work/m10/agents/a.md")
+          FD_AGENT_BEFORE=$(cat "$work/fd/agents/b.md")
+          PRT_AGENT_BEFORE=$(cat "$work/prt/agents/d.md")
+
+          SCRAMJET_CACHE="$work/cache" \
+            ./install.sh --local \
+            --mach10 "$work/m10" \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt"
+
+          # Installed copies / symlinks exist where wire_plugin places them.
+          test -f .pi/agents/mach10:a.md
+          test -L .pi/prompts/mach10:c.md
+          test "$(readlink .pi/prompts/mach10:c.md)" = "$work/m10/commands/c.md"
+          test -f .pi/agents/feature-dev:b.md
+          test -f .pi/agents/pr-review-toolkit:d.md
+
+          # Override source files are byte-for-byte unchanged.
+          test "$(cat "$work/m10/agents/a.md")" = "$M10_AGENT_BEFORE"
+          test "$(cat "$work/fd/agents/b.md")" = "$FD_AGENT_BEFORE"
+          test "$(cat "$work/prt/agents/d.md")" = "$PRT_AGENT_BEFORE"
+
+          # No managed clones happened (override flags suppress them).
+          # SCRAMJET_CACHE pin makes this assertion meaningful: install.sh
+          # would clone into $work/cache, not the default $HOME path.
+          ! test -d "$work/cache"
+
+          ./uninstall.sh --local --clear-manifest
+
+      - name: install.sh refuses dirty managed clone
+        run: |
+          # First install populates $SCRAMJET_CACHE with a managed mach10
+          # clone. Touching an untracked file inside makes the next install
+          # exit non-zero with an actionable message pointing at the
+          # override-flag escape hatch. Only the mach10 managed clone is
+          # exercised here; feature-dev and pr-review-toolkit use empty
+          # override dirs to skip the marketplace clone entirely.
+          rm -rf .pi
+          work=$(mktemp -d)
+          trap "rm -rf $work .pi" EXIT
+
+          # Minimal mach10 fixture (single agent) tagged v1.0.0 for semver.
+          mkdir -p "$work/mach10-src/agents"
+          cat >"$work/mach10-src/agents/x.md" <<'AGENT'
+          ---
+          name: x
+          description: minimal
+          ---
+          x body
+          AGENT
+          git -C "$work/mach10-src" init -q
+          git -C "$work/mach10-src" config user.email "ci@example.com"
+          git -C "$work/mach10-src" config user.name "CI"
+          git -C "$work/mach10-src" add -A
+          git -C "$work/mach10-src" commit -q -m init
+          git -C "$work/mach10-src" tag v1.0.0
+          git clone --bare --quiet "$work/mach10-src" "$work/mach10.git"
+
+          # Empty override dirs for feature-dev and pr-review-toolkit.
+          # wire_plugin's loops are no-ops on dirs without agents/ or commands/.
+          mkdir -p "$work/fd" "$work/prt"
+
+          # First install seeds the managed mach10 clone.
+          SCRAMJET_CACHE="$work/cache" \
+            MACH10_REPO="file://$work/mach10.git" \
+            ./install.sh --local \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt"
+
+          # Dirty the managed mach10 clone.
+          touch "$work/cache/mach10/UNTRACKED-FILE"
+
+          # Re-run must refuse; capture stderr/stdout and exit code.
+          STATUS=0
+          OUTPUT=$(SCRAMJET_CACHE="$work/cache" \
+            MACH10_REPO="file://$work/mach10.git" \
+            ./install.sh --local \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt" 2>&1) || STATUS=$?
+          test "$STATUS" -ne 0
+          echo "$OUTPUT" | grep -qF "uncommitted changes"
+          echo "$OUTPUT" | grep -qF -- "--mach10"
+
+          # Untracked file must still be there (no destructive cleanup).
+          test -f "$work/cache/mach10/UNTRACKED-FILE"
+
+          ./uninstall.sh --local --clear-manifest
 
       - name: install.sh PATH-warning suppression
         run: |
