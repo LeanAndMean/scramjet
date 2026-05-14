@@ -11,7 +11,10 @@ are removed; if either target is a real file or directory, this script
 refuses to touch it.
 
 Options:
-  --target <path>          Uninstall extension from <path>/scramjet (tilde is expanded)
+  --target <path>          Uninstall extension from <path>/scramjet and
+                           treat <path> as the agent dir for Stage 3
+                           teardown when --clear-manifest is set (tilde
+                           is expanded)
   --local                  Uninstall extension from ./.pi/extensions/scramjet
                            and shim from ./.pi/bin/scramjet (relative to CWD)
   --bin-dir <path>         Uninstall shim from <path>/scramjet
@@ -24,13 +27,19 @@ Options:
                            providers.anthropic, providers) and removes the
                            models.json file itself if it ends up empty.
                            No-op when nothing scramjet-shaped is present.
+  --clear-manifest         Also remove every path recorded in
+                           <agent-dir>/.scramjet-manifest (subagent
+                           extension symlink, plugin agent file copies,
+                           plugin command symlinks), then remove the
+                           manifest file itself. Skipped by default so a
+                           plain uninstall stays symlink-only.
   -h, --help               Show this help
 
-Extension target resolution precedence (must match the original install):
-  1. --target <path>            -> <path>/scramjet
-  2. --local                    -> <cwd>/.pi/extensions/scramjet
-  3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR/extensions/scramjet
-  4. Default                    -> $HOME/.pi/agent/extensions/scramjet
+Agent directory resolution precedence (must match the original install):
+  1. --target <path>            -> <path>
+  2. --local                    -> <cwd>/.pi
+  3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR
+  4. Default                    -> $HOME/.pi/agent
 
 Shim target resolution precedence (must match the original install):
   1. --bin-dir <path>           -> <path>/scramjet
@@ -55,6 +64,7 @@ TARGET_ARG=""
 BIN_DIR_ARG=""
 LOCAL=0
 CLEAR_MODELS_JSON=0
+CLEAR_MANIFEST=0
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--target)
@@ -79,6 +89,10 @@ while [[ $# -gt 0 ]]; do
 			;;
 		--clear-models-json)
 			CLEAR_MODELS_JSON=1
+			shift
+			;;
+		--clear-manifest)
+			CLEAR_MANIFEST=1
 			shift
 			;;
 		-h|--help)
@@ -107,23 +121,23 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SHIM_SRC="$REPO_ROOT/bin/scramjet"
 
-# --- Extension target resolution (same precedence as install.sh)
+# --- Agent directory resolution (same precedence as install.sh)
 if [[ -n "$TARGET_ARG" ]]; then
-	TARGET_EXPANDED="${TARGET_ARG/#\~/${HOME:-~}}"
-	DEST="$TARGET_EXPANDED/scramjet"
+	AGENT_DIR="${TARGET_ARG/#\~/${HOME:-~}}"
 elif [[ $LOCAL -eq 1 ]]; then
-	DEST="$(pwd -P)/.pi/extensions/scramjet"
+	AGENT_DIR="$(pwd -P)/.pi"
 elif [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
 	AGENT_DIR="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
-	DEST="$AGENT_DIR/extensions/scramjet"
 else
 	if [[ -z "${HOME:-}" ]]; then
 		echo "Error: \$HOME is not set; cannot resolve the default uninstall target." >&2
 		echo "Provide an explicit path with --target, --local, or set PI_CODING_AGENT_DIR." >&2
 		exit 1
 	fi
-	DEST="$HOME/.pi/agent/extensions/scramjet"
+	AGENT_DIR="$HOME/.pi/agent"
 fi
+DEST="$AGENT_DIR/extensions/scramjet"
+MANIFEST="$AGENT_DIR/.scramjet-manifest"
 
 # --- Shim target resolution (same precedence as install.sh)
 if [[ -n "$BIN_DIR_ARG" ]]; then
@@ -174,6 +188,34 @@ remove_symlink() {
 # Remove shim first, then extension (reverse of install order).
 remove_symlink "$SHIM_DEST" "$SHIM_SRC"
 remove_symlink "$DEST" "$REPO_ROOT"
+
+# --- Manifest-driven removal of Stage 3 artifacts. Mirrors install.sh's
+# manifest write: every path the install added (subagent ext symlink,
+# plugin agent file copies, plugin command symlinks) is removed here, then
+# the manifest file itself is removed. Skipped without --clear-manifest so
+# a plain uninstall stays symlink-only and predictable.
+clear_manifest() {
+	if [[ ! -f "$MANIFEST" ]]; then
+		echo "Nothing to remove at $MANIFEST"
+		return 0
+	fi
+	while IFS= read -r line; do
+		# Strip header and blank lines.
+		[[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+		if [[ -L "$line" || -f "$line" ]]; then
+			rm -f "$line"
+			echo "Removed manifest entry: $line"
+		else
+			echo "Note: manifest entry already absent: $line"
+		fi
+	done < "$MANIFEST"
+	rm -f "$MANIFEST"
+	echo "Removed manifest: $MANIFEST"
+}
+
+if [[ $CLEAR_MANIFEST -eq 1 ]]; then
+	clear_manifest
+fi
 
 # --- Optional: clear the providers.anthropic entries that install.sh wrote
 # into ~/.pi/agent/models.json. Mirrors install_symlink's contract: only

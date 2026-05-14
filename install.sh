@@ -6,29 +6,61 @@ usage() {
 Usage: ./install.sh [options]
 
 Symlinks scramjet into a Pi agent extensions directory so the Pi binary
-can auto-discover and load this extension at runtime, and installs a
-`scramjet` launcher shim on your PATH that execs `pi`.
+can auto-discover and load this extension at runtime, installs a
+`scramjet` launcher shim on your PATH that execs `pi`, and wires
+Pi's bundled subagent extension plus a curated set of Claude Code
+plugins (mach10, feature-dev, pr-review-toolkit) into the same agent
+directory.
 
 Options:
-  --target <path>    Install extension into <path>/scramjet
-                     (<path> should be a Pi agent directory; tilde is expanded)
-  --local            Install extension into ./.pi/extensions/scramjet
-                     and shim into ./.pi/bin/scramjet (relative to CWD)
-  --bin-dir <path>   Install the scramjet launcher shim into <path>/scramjet
-                     (tilde is expanded; default: $HOME/.local/bin)
-  --force            Overwrite an existing scramjet entry at either target
-  -h, --help         Show this help
+  --target <path>           Use <path> as the Pi agent directory; install
+                            extension into <path>/scramjet and place all
+                            Stage 3 artifacts (subagent extension, plugin
+                            agents, plugin commands, manifest) under
+                            <path>. Tilde is expanded.
+  --local                   Use <cwd>/.pi as the agent directory; install
+                            extension into ./.pi/extensions/scramjet,
+                            shim into ./.pi/bin/scramjet, plugins under
+                            ./.pi.
+  --bin-dir <path>          Install the scramjet launcher shim into
+                            <path>/scramjet (tilde is expanded; default:
+                            $HOME/.local/bin). Independent of agent dir.
+  --force                   Overwrite an existing scramjet entry at any
+                            target.
+  --no-plugins              Skip plugin cloning and wiring entirely. The
+                            subagent extension is still installed.
+  --mach10 <path>           Use the directory at <path> as the mach10
+                            plugin source instead of cloning. Mutually
+                            exclusive with --no-plugins.
+  --feature-dev <path>      Use the directory at <path> as the feature-dev
+                            plugin source instead of using the marketplace
+                            clone. Mutually exclusive with --no-plugins.
+  --pr-review-toolkit <path>
+                            Use the directory at <path> as the
+                            pr-review-toolkit plugin source instead of
+                            using the marketplace clone. Mutually
+                            exclusive with --no-plugins.
+  -h, --help                Show this help
 
-Extension target resolution precedence (highest first):
-  1. --target <path>            -> <path>/scramjet
-  2. --local                    -> <cwd>/.pi/extensions/scramjet
-  3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR/extensions/scramjet
-  4. Default                    -> $HOME/.pi/agent/extensions/scramjet
+Agent directory resolution precedence (highest first):
+  1. --target <path>            -> <path>
+  2. --local                    -> <cwd>/.pi
+  3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR
+  4. Default                    -> $HOME/.pi/agent
 
 Shim target resolution precedence (highest first):
   1. --bin-dir <path>           -> <path>/scramjet
   2. --local                    -> <cwd>/.pi/bin/scramjet
   3. Default                    -> $HOME/.local/bin/scramjet
+
+Environment variables (advanced):
+  MACH10_REPO                   Clone URL for mach10 (default:
+                                https://github.com/LeanAndMean/mach10).
+                                Accepts file:// URLs for hermetic tests.
+  MARKETPLACE_REPO              Clone URL for the marketplace that
+                                contains feature-dev and pr-review-toolkit
+                                (default:
+                                https://github.com/anthropics/claude-plugins-official).
 
 Re-running with the same targets is idempotent (no --force required).
 EOF
@@ -48,6 +80,10 @@ TARGET_ARG=""
 BIN_DIR_ARG=""
 LOCAL=0
 FORCE=0
+NO_PLUGINS=0
+MACH10_ARG=""
+FEATURE_DEV_ARG=""
+PR_REVIEW_TOOLKIT_ARG=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--target)
@@ -74,6 +110,34 @@ while [[ $# -gt 0 ]]; do
 			FORCE=1
 			shift
 			;;
+		--no-plugins)
+			NO_PLUGINS=1
+			shift
+			;;
+		--mach10)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --mach10 requires a non-empty path argument." >&2
+				exit 2
+			fi
+			MACH10_ARG="$2"
+			shift 2
+			;;
+		--feature-dev)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --feature-dev requires a non-empty path argument." >&2
+				exit 2
+			fi
+			FEATURE_DEV_ARG="$2"
+			shift 2
+			;;
+		--pr-review-toolkit)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --pr-review-toolkit requires a non-empty path argument." >&2
+				exit 2
+			fi
+			PR_REVIEW_TOOLKIT_ARG="$2"
+			shift 2
+			;;
 		-h|--help)
 			usage
 			exit 0
@@ -94,6 +158,20 @@ if [[ -n "$BIN_DIR_ARG" && $LOCAL -eq 1 ]]; then
 	echo "Error: --bin-dir and --local are mutually exclusive." >&2
 	exit 2
 fi
+if [[ $NO_PLUGINS -eq 1 ]]; then
+	if [[ -n "$MACH10_ARG" ]]; then
+		echo "Error: --no-plugins and --mach10 are mutually exclusive." >&2
+		exit 2
+	fi
+	if [[ -n "$FEATURE_DEV_ARG" ]]; then
+		echo "Error: --no-plugins and --feature-dev are mutually exclusive." >&2
+		exit 2
+	fi
+	if [[ -n "$PR_REVIEW_TOOLKIT_ARG" ]]; then
+		echo "Error: --no-plugins and --pr-review-toolkit are mutually exclusive." >&2
+		exit 2
+	fi
+fi
 
 # --- Repo root (canonicalized; follows a launcher symlink to install.sh itself)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -109,24 +187,48 @@ if [[ ! -r "$SHIM_SRC" ]]; then
 	exit 1
 fi
 
-# --- Extension target resolution
+# --- Subagent extension source (must exist after `npm ci`)
+SUBAGENT_SRC="$REPO_ROOT/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent"
+if [[ ! -d "$SUBAGENT_SRC" ]]; then
+	echo "Error: $SUBAGENT_SRC not found." >&2
+	echo "Run 'npm ci' from $REPO_ROOT first; install.sh symlinks Pi's bundled subagent example." >&2
+	exit 1
+fi
+
+# --- Required tooling for Stage 3 work (agent-file transform, plugin clones).
+if ! command -v node >/dev/null 2>&1; then
+	echo "Error: node is not on \$PATH; required for agent-file transforms." >&2
+	exit 1
+fi
+if [[ $NO_PLUGINS -ne 1 ]] && ! command -v git >/dev/null 2>&1; then
+	# git is only needed for the managed clones; if any of the three plugins
+	# is missing a `--<plugin>` override flag, we'll need to clone for that
+	# plugin and so git is required.
+	if [[ -z "$MACH10_ARG" || -z "$FEATURE_DEV_ARG" || -z "$PR_REVIEW_TOOLKIT_ARG" ]]; then
+		echo "Error: git is not on \$PATH; required to clone bundled plugins." >&2
+		echo "       Pass --no-plugins to skip plugin wiring entirely." >&2
+		exit 1
+	fi
+fi
+
+# --- Agent directory resolution (single var; governs all Stage 3 placements)
 if [[ -n "$TARGET_ARG" ]]; then
 	# Expand a leading ~ inside a quoted arg (shells don't expand it in quotes)
-	TARGET_EXPANDED="${TARGET_ARG/#\~/${HOME:-~}}"
-	DEST="$TARGET_EXPANDED/scramjet"
+	AGENT_DIR="${TARGET_ARG/#\~/${HOME:-~}}"
 elif [[ $LOCAL -eq 1 ]]; then
-	DEST="$(pwd -P)/.pi/extensions/scramjet"
+	AGENT_DIR="$(pwd -P)/.pi"
 elif [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
 	AGENT_DIR="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
-	DEST="$AGENT_DIR/extensions/scramjet"
 else
 	if [[ -z "${HOME:-}" ]]; then
 		echo "Error: \$HOME is not set; cannot resolve the default install target." >&2
 		echo "Provide an explicit path with --target, --local, or set PI_CODING_AGENT_DIR." >&2
 		exit 1
 	fi
-	DEST="$HOME/.pi/agent/extensions/scramjet"
+	AGENT_DIR="$HOME/.pi/agent"
 fi
+DEST="$AGENT_DIR/extensions/scramjet"
+MANIFEST="$AGENT_DIR/.scramjet-manifest"
 
 # --- Shim target resolution
 if [[ -n "$BIN_DIR_ARG" ]]; then
@@ -142,6 +244,21 @@ else
 	fi
 	SHIM_DEST="$HOME/.local/bin/scramjet"
 fi
+
+# --- Validate plugin override paths early (avoid partial install).
+validate_override_path() {
+	local flag="$1" val="$2"
+	if [[ -n "$val" ]]; then
+		local expanded="${val/#\~/${HOME:-~}}"
+		if [[ ! -d "$expanded" ]]; then
+			echo "Error: $flag path does not exist or is not a directory: $val" >&2
+			exit 1
+		fi
+	fi
+}
+validate_override_path --mach10 "$MACH10_ARG"
+validate_override_path --feature-dev "$FEATURE_DEV_ARG"
+validate_override_path --pr-review-toolkit "$PR_REVIEW_TOOLKIT_ARG"
 
 # --- Install a symlink at DEST pointing to SRC.
 # Sets RESULT to one of: "already" (already a correct symlink, no work done)
@@ -238,6 +355,311 @@ if [[ ! -x "$SHIM_DEST" ]]; then
 fi
 SHIM_OK=1
 trap - EXIT
+
+# --- Migration guard: a prior scramjet version may have created
+# <AGENT_DIR>/commands/ instead of Pi's expected <AGENT_DIR>/prompts/.
+# If only commands/ exists, rename it. If both exist, abort: we cannot
+# safely merge two directories we don't fully control. If only prompts/
+# exists (or neither), nothing to do.
+if [[ -d "$AGENT_DIR/commands" ]]; then
+	if [[ -d "$AGENT_DIR/prompts" ]]; then
+		echo "Error: both $AGENT_DIR/commands and $AGENT_DIR/prompts exist." >&2
+		echo "       Cannot safely merge; remove or move one before re-running." >&2
+		exit 1
+	fi
+	echo "Migrating $AGENT_DIR/commands -> $AGENT_DIR/prompts"
+	mv "$AGENT_DIR/commands" "$AGENT_DIR/prompts"
+fi
+
+# --- Manifest accounting. BEFORE_LIST is the existing manifest (one path
+# per line, header/blank lines stripped); AFTER_LIST is appended to as we
+# install. Newline-delimited strings rather than associative arrays so the
+# script stays bash 3.2-compatible (macOS system bash).
+BEFORE_LIST=""
+AFTER_LIST=""
+if [[ -f "$MANIFEST" ]]; then
+	BEFORE_LIST="$(grep -Ev '^[[:space:]]*(#|$)' "$MANIFEST" || true)"
+fi
+
+manifest_add() {
+	AFTER_LIST="${AFTER_LIST}$1
+"
+}
+
+# --- transform_and_install_agent SRC DEST
+# Writes a regular-file copy of SRC to DEST with two YAML frontmatter edits:
+#   1. Remove any `model: inherit` line (other model values pass through).
+#   2. Convert `tools: [a, b, c]` inline arrays and `tools:\n  - a\n  - b`
+#      block sequences to comma-string form `tools: a, b, c`.
+# Frontmatter is detected as the leading region between two `---` lines on
+# their own. Unsupported YAML array shapes (e.g. nested arrays) cause the
+# file to be skipped with a warning. Records DEST in the manifest AFTER set.
+transform_and_install_agent() {
+	local SRC="$1" DEST="$2"
+	mkdir -p "$(dirname "$DEST")"
+	local tmp
+	tmp="$(mktemp "$DEST.scramjet.XXXXXX.tmp")"
+
+	if ! node - "$SRC" "$tmp" <<'NODE'
+const fs = require("node:fs");
+const src = process.argv[2];
+const dest = process.argv[3];
+const raw = fs.readFileSync(src, "utf8");
+
+// Detect frontmatter: leading `---\n...\n---\n`.
+const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+if (!fmMatch) {
+	// No frontmatter: copy as-is, normalizing line endings to LF.
+	fs.writeFileSync(dest, raw.replace(/\r\n/g, "\n"));
+	process.exit(0);
+}
+const fm = fmMatch[1];
+const body = raw.slice(fmMatch[0].length).replace(/\r\n/g, "\n");
+
+// Returns true if a tools-array item value contains a nested array/object
+// or any other shape the simple transform can't safely round-trip.
+const isComplexValue = v => /[\[\]{}]/.test(v);
+
+const lines = fm.split(/\r?\n/);
+const out = [];
+let i = 0;
+while (i < lines.length) {
+	const line = lines[i];
+	// 1. Strip `model: inherit` (exact match, ignoring leading/trailing whitespace).
+	if (/^\s*model:\s*inherit\s*$/.test(line)) {
+		i += 1;
+		continue;
+	}
+	// 2a. Inline array: `tools: [a, b, c]` -> `tools: a, b, c`.
+	// Strict shape: no nested brackets or braces inside the array.
+	const inlineMatch = line.match(/^(\s*tools:\s*)\[([^\[\]{}]*)\]\s*$/);
+	if (inlineMatch) {
+		const inner = inlineMatch[2]
+			.split(",")
+			.map(s => s.trim().replace(/^["']|["']$/g, ""))
+			.filter(Boolean);
+		out.push(`${inlineMatch[1]}${inner.join(", ")}`);
+		i += 1;
+		continue;
+	}
+	// `tools: [...]` or `tools: {...}` that didn't match the strict shape
+	// above is a nested or flow-map form the simple transform can't safely
+	// round-trip. Skip the whole file rather than emit malformed YAML.
+	if (/^\s*tools:\s*[\[{]/.test(line)) {
+		console.error(`unsupported tools array shape: ${line.trim()}`);
+		process.exit(1);
+	}
+	// 2b. Block sequence: `tools:` followed by `<indent>  - a` lines. Items
+	// must be strictly more indented than the `tools:` key itself.
+	const blockMatch = line.match(/^(\s*)tools:\s*$/);
+	if (blockMatch) {
+		const indent = blockMatch[1];
+		const items = [];
+		let j = i + 1;
+		const itemRe = /^(\s+)-\s+(.*\S)\s*$/;
+		while (j < lines.length) {
+			const m = lines[j].match(itemRe);
+			if (!m) break;
+			if (m[1].length <= indent.length) break;
+			if (isComplexValue(m[2])) {
+				console.error(`unsupported nested block-sequence item: ${lines[j].trim()}`);
+				process.exit(1);
+			}
+			items.push(m[2].replace(/^["']|["']$/g, ""));
+			j += 1;
+		}
+		if (items.length > 0) {
+			out.push(`${indent}tools: ${items.join(", ")}`);
+			i = j;
+			continue;
+		}
+		// Empty `tools:` with no block items - leave as-is.
+	}
+	out.push(line);
+	i += 1;
+}
+
+fs.writeFileSync(dest, "---\n" + out.join("\n") + "\n---\n" + body);
+NODE
+	then
+		rm -f "$tmp"
+		echo "Warning: transform failed for $SRC; skipping." >&2
+		return 0
+	fi
+
+	mv "$tmp" "$DEST"
+	manifest_add "$DEST"
+}
+
+# --- install_symlink_tracked SRC DEST
+# Wraps install_symlink and records DEST in the manifest AFTER set.
+install_symlink_tracked() {
+	install_symlink "$1" "$2"
+	manifest_add "$2"
+}
+
+# --- wire_plugin PLUGIN_NAME PLUGIN_DIR
+# Iterates <PLUGIN_DIR>/agents/*.md -> <AGENT_DIR>/agents/<PLUGIN_NAME>:<basename>
+# (transformed copy). Iterates <PLUGIN_DIR>/commands/*.md ->
+# <AGENT_DIR>/prompts/<PLUGIN_NAME>:<basename> (symlink).
+wire_plugin() {
+	local PLUGIN_NAME="$1" PLUGIN_DIR="$2"
+	local f base dest
+	if [[ -d "$PLUGIN_DIR/agents" ]]; then
+		for f in "$PLUGIN_DIR/agents"/*.md; do
+			[[ -e "$f" ]] || continue
+			base="$(basename "$f")"
+			dest="$AGENT_DIR/agents/${PLUGIN_NAME}:${base}"
+			transform_and_install_agent "$f" "$dest"
+		done
+	fi
+	if [[ -d "$PLUGIN_DIR/commands" ]]; then
+		for f in "$PLUGIN_DIR/commands"/*.md; do
+			[[ -e "$f" ]] || continue
+			base="$(basename "$f")"
+			dest="$AGENT_DIR/prompts/${PLUGIN_NAME}:${base}"
+			install_symlink_tracked "$f" "$dest"
+		done
+	fi
+}
+
+# --- Install the subagent extension symlink (always, even with --no-plugins;
+# subagent is what plugin agents are dispatched through).
+install_symlink_tracked "$SUBAGENT_SRC" "$AGENT_DIR/extensions/subagent"
+if [[ "$RESULT" == "already" ]]; then
+	echo "Already installed subagent: $AGENT_DIR/extensions/subagent -> $SUBAGENT_SRC"
+else
+	echo "Installed subagent: $AGENT_DIR/extensions/subagent -> $SUBAGENT_SRC"
+fi
+
+# --- Clone helpers (only used when plugin wiring is active).
+SCRAMJET_CACHE="${SCRAMJET_CACHE:-${HOME:-/tmp}/.local/share/scramjet}"
+
+resolve_latest_semver_tag() {
+	local repo_dir="$1"
+	# List tags, keep only stable semver (vMAJOR.MINOR.PATCH with no prerelease).
+	# Sort by version (GNU sort -V; macOS BSD sort -V exists since 10.12).
+	git -C "$repo_dir" tag --list 'v[0-9]*' 2>/dev/null \
+		| grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+		| sort -V \
+		| tail -n 1
+}
+
+# ensure_git_clone REPO_URL REPO_DIR REF_KIND
+# REF_KIND is "semver" (checkout latest stable tag) or "head" (default branch).
+ensure_git_clone() {
+	local repo_url="$1" repo_dir="$2" ref_kind="$3"
+	if [[ -d "$repo_dir/.git" ]]; then
+		# Refuse to touch a clone with uncommitted changes; the user may be
+		# iterating locally and we'd lose their work.
+		local dirty
+		dirty="$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)"
+		if [[ -n "$dirty" ]]; then
+			echo "Error: $repo_dir has uncommitted changes; refusing to update." >&2
+			echo "       Commit, stash, or remove the directory, or pass the matching" >&2
+			echo "       --mach10/--feature-dev/--pr-review-toolkit override flag." >&2
+			exit 1
+		fi
+		git -C "$repo_dir" fetch --tags --quiet origin
+	else
+		mkdir -p "$(dirname "$repo_dir")"
+		git clone --quiet "$repo_url" "$repo_dir"
+	fi
+
+	local ref
+	if [[ "$ref_kind" == "semver" ]]; then
+		ref="$(resolve_latest_semver_tag "$repo_dir")"
+		if [[ -z "$ref" ]]; then
+			echo "Error: no stable semver tags found in $repo_dir." >&2
+			exit 1
+		fi
+	else
+		# default-branch HEAD
+		ref="$(git -C "$repo_dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+		if [[ -z "$ref" ]]; then
+			# Fallback: ask the remote.
+			local default_branch
+			default_branch="$(git -C "$repo_dir" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')"
+			if [[ -n "$default_branch" ]]; then
+				ref="origin/$default_branch"
+			fi
+		fi
+		if [[ -z "$ref" ]]; then
+			echo "Error: could not determine default branch for $repo_dir." >&2
+			exit 1
+		fi
+	fi
+
+	git -C "$repo_dir" -c advice.detachedHead=false checkout --quiet "$ref"
+	if ! git -C "$repo_dir" rev-parse --quiet --verify HEAD >/dev/null; then
+		echo "Error: $repo_dir has no valid HEAD after checkout." >&2
+		exit 1
+	fi
+	echo "Synced $repo_dir at $ref"
+}
+
+# --- Plugin wiring (skipped with --no-plugins).
+if [[ $NO_PLUGINS -ne 1 ]]; then
+	MACH10_REPO_URL="${MACH10_REPO:-https://github.com/LeanAndMean/mach10}"
+	MARKETPLACE_REPO_URL="${MARKETPLACE_REPO:-https://github.com/anthropics/claude-plugins-official}"
+
+	# Resolve mach10 source: --mach10 override, or managed clone.
+	if [[ -n "$MACH10_ARG" ]]; then
+		MACH10_DIR="${MACH10_ARG/#\~/${HOME:-~}}"
+	else
+		MACH10_DIR="$SCRAMJET_CACHE/mach10"
+		ensure_git_clone "$MACH10_REPO_URL" "$MACH10_DIR" semver
+	fi
+	wire_plugin mach10 "$MACH10_DIR"
+
+	# feature-dev and pr-review-toolkit both live inside the marketplace repo.
+	# Clone the marketplace only if at least one is not overridden by a flag.
+	NEED_MARKETPLACE=0
+	[[ -z "$FEATURE_DEV_ARG" ]] && NEED_MARKETPLACE=1
+	[[ -z "$PR_REVIEW_TOOLKIT_ARG" ]] && NEED_MARKETPLACE=1
+	if [[ $NEED_MARKETPLACE -eq 1 ]]; then
+		MARKETPLACE_DIR="$SCRAMJET_CACHE/claude-plugins-official"
+		ensure_git_clone "$MARKETPLACE_REPO_URL" "$MARKETPLACE_DIR" head
+	fi
+
+	if [[ -n "$FEATURE_DEV_ARG" ]]; then
+		FEATURE_DEV_DIR="${FEATURE_DEV_ARG/#\~/${HOME:-~}}"
+	else
+		FEATURE_DEV_DIR="$MARKETPLACE_DIR/plugins/feature-dev"
+	fi
+	wire_plugin feature-dev "$FEATURE_DEV_DIR"
+
+	if [[ -n "$PR_REVIEW_TOOLKIT_ARG" ]]; then
+		PR_REVIEW_TOOLKIT_DIR="${PR_REVIEW_TOOLKIT_ARG/#\~/${HOME:-~}}"
+	else
+		PR_REVIEW_TOOLKIT_DIR="$MARKETPLACE_DIR/plugins/pr-review-toolkit"
+	fi
+	wire_plugin pr-review-toolkit "$PR_REVIEW_TOOLKIT_DIR"
+fi
+
+# --- Reconcile manifest: remove paths that were in BEFORE but not in AFTER
+# (stale entries from a prior install that this run did not re-create).
+AFTER_SORTED="$(printf '%s' "$AFTER_LIST" | grep -v '^$' | sort -u || true)"
+if [[ -n "$BEFORE_LIST" ]]; then
+	while IFS= read -r path; do
+		[[ -z "$path" ]] && continue
+		if ! printf '%s\n' "$AFTER_SORTED" | grep -qxF "$path"; then
+			if [[ -L "$path" || -f "$path" ]]; then
+				rm -f "$path"
+				echo "Removed stale: $path"
+			fi
+		fi
+	done <<< "$BEFORE_LIST"
+fi
+
+# Write the new manifest atomically.
+mkdir -p "$AGENT_DIR"
+MANIFEST_TMP="$MANIFEST.tmp.$$"
+{
+	echo "# scramjet manifest v1"
+	printf '%s\n' "$AFTER_SORTED"
+} > "$MANIFEST_TMP"
+mv "$MANIFEST_TMP" "$MANIFEST"
 
 # --- PATH check for the shim's bin dir
 SHIM_BIN_DIR="$(dirname "$SHIM_DEST")"
@@ -346,6 +768,7 @@ fi
 if [[ -n "$BIN_DIR_ARG" ]]; then
 	UNINSTALL_CMD="$UNINSTALL_CMD --bin-dir \"$BIN_DIR_ARG\""
 fi
+UNINSTALL_CMD="$UNINSTALL_CMD --clear-manifest"
 
 echo
 echo "Uninstall: $UNINSTALL_CMD"
