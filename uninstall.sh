@@ -12,7 +12,7 @@ refuses to touch it.
 
 Options:
   --target <path>          Uninstall extension from <path>/scramjet and
-                           treat <path> as the agent dir for Stage 3
+                           treat <path> as the agent dir for manifest
                            teardown when --clear-manifest is set (tilde
                            is expanded)
   --local                  Uninstall extension from ./.pi/extensions/scramjet
@@ -189,27 +189,79 @@ remove_symlink() {
 remove_symlink "$SHIM_DEST" "$SHIM_SRC"
 remove_symlink "$DEST" "$REPO_ROOT"
 
-# --- Manifest-driven removal of Stage 3 artifacts. Mirrors install.sh's
+# --- Manifest-driven removal of plugin wiring artifacts. Mirrors install.sh's
 # manifest write: every path the install added (subagent ext symlink,
 # plugin agent file copies, plugin command symlinks) is removed here, then
 # the manifest file itself is removed. Skipped without --clear-manifest so
 # a plain uninstall stays symlink-only and predictable.
+#
+# Discipline mirrors remove_symlink: no -f swallowing, containment check
+# refuses paths that escape $AGENT_DIR, and any failure preserves the
+# manifest so the next --clear-manifest can retry.
 clear_manifest() {
 	if [[ ! -f "$MANIFEST" ]]; then
 		echo "Nothing to remove at $MANIFEST"
 		return 0
 	fi
+
+	# Canonicalize $AGENT_DIR up front so the containment check below can
+	# refuse a tampered manifest pointing at out-of-tree paths.
+	local AGENT_DIR_CANON
+	if ! AGENT_DIR_CANON="$(cd "$AGENT_DIR" && pwd -P)"; then
+		echo "Error: cannot canonicalize $AGENT_DIR; refusing manifest sweep." >&2
+		return 1
+	fi
+
+	local failures=0
 	while IFS= read -r line; do
 		# Strip header and blank lines.
 		[[ -z "$line" || "${line:0:1}" == "#" ]] && continue
+
+		# Containment: refuse any entry that does not resolve under
+		# $AGENT_DIR_CANON. Canonicalize the parent so a "$AGENT_DIR/../etc/x"
+		# tamper cannot escape.
+		local line_dir line_base line_canon
+		line_dir="$(dirname "$line")"
+		line_base="$(basename "$line")"
+		if [[ -d "$line_dir" ]]; then
+			line_canon="$(cd "$line_dir" && pwd -P)/$line_base"
+		else
+			line_canon="$line"
+		fi
+		if [[ "$line_canon" != "$AGENT_DIR_CANON/"* ]]; then
+			echo "Error: manifest entry resolves outside $AGENT_DIR_CANON: $line" >&2
+			echo "       Refusing to remove; preserving manifest." >&2
+			failures=$((failures + 1))
+			continue
+		fi
+
+		# Symlink (subagent ext, plugin command files) and regular file
+		# (plugin agent transformed copies) are both shapes install.sh
+		# writes. rm runs without -f so EACCES/EBUSY surfaces. Anything
+		# else (directory, special file) warns and counts as a failure.
 		if [[ -L "$line" || -f "$line" ]]; then
-			rm -f "$line"
+			if ! rm "$line"; then
+				echo "Error: failed to remove manifest entry: $line" >&2
+				failures=$((failures + 1))
+				continue
+			fi
 			echo "Removed manifest entry: $line"
+		elif [[ -e "$line" ]]; then
+			echo "Warning: manifest entry is not a file or symlink: $line; leaving untouched." >&2
+			failures=$((failures + 1))
 		else
 			echo "Note: manifest entry already absent: $line"
 		fi
 	done < "$MANIFEST"
-	rm -f "$MANIFEST"
+
+	if [[ $failures -gt 0 ]]; then
+		echo "Error: $failures manifest entry/entries could not be removed; preserving $MANIFEST." >&2
+		return 1
+	fi
+	if ! rm "$MANIFEST"; then
+		echo "Error: failed to remove manifest: $MANIFEST" >&2
+		return 1
+	fi
 	echo "Removed manifest: $MANIFEST"
 }
 
@@ -246,8 +298,9 @@ let cfg;
 try {
 	cfg = JSON.parse(fs.readFileSync(path, "utf8"));
 } catch (e) {
-	console.error(`Note: ${path} is not valid JSON; leaving untouched.`);
-	process.exit(0);
+	console.error(`Error: existing ${path} is not valid JSON; refusing to modify.`);
+	console.error(`       Fix or remove the file, then re-run ./uninstall.sh --clear-models-json.`);
+	process.exit(2);
 }
 
 const anthropic = cfg?.providers?.anthropic;

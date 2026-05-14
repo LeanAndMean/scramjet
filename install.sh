@@ -14,9 +14,9 @@ directory.
 
 Options:
   --target <path>           Use <path> as the Pi agent directory; install
-                            extension into <path>/scramjet and place all
-                            Stage 3 artifacts (subagent extension, plugin
-                            agents, plugin commands, manifest) under
+                            extension into <path>/scramjet and place the
+                            subagent extension, plugin agent copies,
+                            plugin command symlinks, and manifest under
                             <path>. Tilde is expanded.
   --local                   Use <cwd>/.pi as the agent directory; install
                             extension into ./.pi/extensions/scramjet,
@@ -195,7 +195,7 @@ if [[ ! -d "$SUBAGENT_SRC" ]]; then
 	exit 1
 fi
 
-# --- Required tooling for Stage 3 work (agent-file transform, plugin clones).
+# --- Required tooling for plugin wiring (agent-file transform, plugin clones).
 if ! command -v node >/dev/null 2>&1; then
 	echo "Error: node is not on \$PATH; required for agent-file transforms." >&2
 	exit 1
@@ -211,7 +211,8 @@ if [[ $NO_PLUGINS -ne 1 ]] && ! command -v git >/dev/null 2>&1; then
 	fi
 fi
 
-# --- Agent directory resolution (single var; governs all Stage 3 placements)
+# --- Agent directory resolution (single var; governs subagent extension,
+# plugin agent copies, plugin command symlinks, and manifest placement).
 if [[ -n "$TARGET_ARG" ]]; then
 	# Expand a leading ~ inside a quoted arg (shells don't expand it in quotes)
 	AGENT_DIR="${TARGET_ARG/#\~/${HOME:-~}}"
@@ -402,6 +403,27 @@ manifest_add() {
 # transform.
 transform_and_install_agent() {
 	local SRC="$1" DEST="$2"
+
+	# Clobber discipline parallel to install_symlink: refuse to overwrite a
+	# pre-existing $DEST unless FORCE=1 or the path was in the prior install
+	# manifest (BEFORE_LIST). Lets idempotent re-installs proceed while
+	# protecting user-placed files at one of our destinations.
+	if [[ -e "$DEST" || -L "$DEST" ]]; then
+		if [[ $FORCE -ne 1 ]] && ! printf '%s\n' "$BEFORE_LIST" | grep -qxF "$DEST"; then
+			local existing
+			if [[ -L "$DEST" ]]; then
+				existing="symlink -> $(readlink "$DEST")"
+			elif [[ -d "$DEST" ]]; then
+				existing="directory"
+			else
+				existing="file"
+			fi
+			echo "Error: $DEST already exists ($existing) and was not installed by scramjet." >&2
+			echo "Re-run with --force to overwrite." >&2
+			exit 1
+		fi
+	fi
+
 	mkdir -p "$(dirname "$DEST")"
 	local tmp
 	tmp="$(mktemp "$DEST.scramjet.XXXXXX.tmp")"
@@ -610,9 +632,17 @@ ensure_git_clone() {
 	local repo_url="$1" repo_dir="$2" ref_kind="$3"
 	if [[ -d "$repo_dir/.git" ]]; then
 		# Refuse to touch a clone with uncommitted changes; the user may be
-		# iterating locally and we'd lose their work.
+		# iterating locally and we'd lose their work. Surface git failures
+		# (`if !` bypasses set -e on the substitution, which command
+		# substitution does not propagate by default in bash 3.2) so a
+		# corrupt clone is not silently treated as a clean tree.
 		local dirty
-		dirty="$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)"
+		if ! dirty="$(git -C "$repo_dir" status --porcelain)"; then
+			echo "Error: git status failed in $repo_dir; the clone may be corrupt or unreadable." >&2
+			echo "       Remove $repo_dir and re-run, or pass the matching" >&2
+			echo "       --mach10/--feature-dev/--pr-review-toolkit override flag." >&2
+			exit 1
+		fi
 		if [[ -n "$dirty" ]]; then
 			echo "Error: $repo_dir has uncommitted changes; refusing to update." >&2
 			echo "       Commit, stash, or remove the directory, or pass the matching" >&2
@@ -698,17 +728,36 @@ fi
 
 # --- Reconcile manifest: remove paths that were in BEFORE but not in AFTER
 # (stale entries from a prior install that this run did not re-create).
+# rm runs without -f so EACCES/EBUSY surfaces; unexpected entry shapes
+# (directories, sockets, ...) warn loudly. Any failure preserves the old
+# manifest so the next install can retry instead of permanently orphaning
+# the entry.
 AFTER_SORTED="$(printf '%s' "$AFTER_LIST" | grep -v '^$' | sort -u || true)"
+RECONCILE_FAILURES=0
 if [[ -n "$BEFORE_LIST" ]]; then
 	while IFS= read -r path; do
 		[[ -z "$path" ]] && continue
-		if ! printf '%s\n' "$AFTER_SORTED" | grep -qxF "$path"; then
-			if [[ -L "$path" || -f "$path" ]]; then
-				rm -f "$path"
-				echo "Removed stale: $path"
-			fi
+		if printf '%s\n' "$AFTER_SORTED" | grep -qxF "$path"; then
+			continue
 		fi
+		if [[ -L "$path" || -f "$path" ]]; then
+			if ! rm "$path"; then
+				echo "Error: failed to remove stale manifest entry: $path" >&2
+				RECONCILE_FAILURES=$((RECONCILE_FAILURES + 1))
+				continue
+			fi
+			echo "Removed stale: $path"
+		elif [[ -e "$path" ]]; then
+			echo "Warning: stale manifest entry is not a file or symlink: $path; leaving in place." >&2
+			RECONCILE_FAILURES=$((RECONCILE_FAILURES + 1))
+		fi
+		# else: path already absent; fine to drop from the new manifest.
 	done <<< "$BEFORE_LIST"
+fi
+
+if [[ $RECONCILE_FAILURES -gt 0 ]]; then
+	echo "Error: $RECONCILE_FAILURES stale manifest entry/entries could not be reconciled; preserving $MANIFEST." >&2
+	exit 1
 fi
 
 # Write the new manifest atomically.
