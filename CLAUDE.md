@@ -38,6 +38,7 @@ These principles override default instincts. Do not add complexity that violates
 - **Invisible when idle.** If Scramjet has nothing to suggest, it produces zero output — no widgets, no prompts, no status messages.
 - **Commands own their edges.** The next step comes from Claude reading a command's instructions, not from Scramjet. Don't move flow logic into Scramjet.
 - **Simplicity is the feature.** Resist adding configuration, options, or abstraction layers. The entire system is one tool, one event listener, one widget.
+- **Preserve Claude Code plugin compatibility.** Scramjet wires plugins authored for Claude Code CLI (Mach 10, feature-dev, pr-review-toolkit, …). Plugin files must keep working under Claude Code: fix cross-harness gaps on the scramjet side. Upstream changes to those plugins are limited to pure prose tweaks; don't strip frontmatter fields, restructure agents, or rename constructs.
 
 ## Version pinning
 
