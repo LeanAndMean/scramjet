@@ -69,6 +69,18 @@ Rules that govern the block:
 - **Distinguish wiring from capability.** Re-pointing an existing client, swapping an auth source, or aliasing a name are wiring problems and almost always have config-tier answers. New code is justified only when the *shape* of the integration (protocol, auth flow, data model) is genuinely new.
 - **Evidence, not verdicts.** Each candidate bullet must cite something concrete — a file path read, a config key, a doc section, a command tried. Bullets that read "not viable, skipping" or "N/A" with no evidence are a defect: they mean the tier was dismissed without investigation, which is the exact failure mode this block exists to prevent. If a tier genuinely doesn't apply, say *why* in terms of something you checked.
 - **Watch for ritual decay.** If you notice the block becoming a formality — same shape every time, lower tiers always dismissed in one line, evidence getting thinner — flag it to the user rather than continuing to emit empty structure. A degraded block is worse than no block, because it launders unconsidered choices as considered ones.
+- **Probe, don't only read.** Documentation describes intended behavior; it routinely omits edge cases, version skew, and how features interact. When a candidate's viability hinges on "does X actually behave like Y?", a five-minute throwaway script that exercises X is usually faster and more conclusive than another half hour of reading docs or tracing code. Reach for an empirical probe when:
+  - The doc is silent or ambiguous on the exact case you need.
+  - You're inferring behavior from analogy to a similar API rather than from a direct statement.
+  - The plan depends on a specific ordering, return shape, error mode, or side effect.
+  - You catch yourself building a multi-step plan on top of an unverified assumption.
+
+  Mechanics:
+  - **Put probes in a temp directory** (`mktemp -d`, `/tmp/...`), never in the repo or a committed path. They are disposable by design. Keeping them serves no purpose: a probe that mattered enough to keep belongs in `tests/` as a real test, and any other probe can be trivially recreated from the snippet in your response if its claim is ever questioned. Retained probes are pure clutter — dead code that future readers must evaluate ("is this still accurate? still relevant? safe to delete?") for no benefit.
+  - **Don't refer to the script by name in your response.** It won't exist after the session, so a filename is a dead reference. Instead, **inline the relevant code snippet** alongside the observed output. The snippet *is* the evidence.
+  - **Frame the evidence as an action you took, not a thing that happened to you.** "A test revealed Y" is unconvincing and unfalsifiable. "I ran <snippet> and got <output>, which shows Y" is reproducible and reviewable. The user (or a future agent) must be able to re-run your probe from the snippet alone.
+
+  Probes count as first-class evidence in the candidate bullets above. A confirmed probe result outranks a doc quote, because the doc describes the contract and the probe describes the implementation. When they disagree, the probe wins for planning purposes, and the disagreement itself is worth surfacing to the user.
 
 ## Version pinning
 
