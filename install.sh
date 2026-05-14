@@ -392,8 +392,14 @@ manifest_add() {
 #   2. Convert `tools: [a, b, c]` inline arrays and `tools:\n  - a\n  - b`
 #      block sequences to comma-string form `tools: a, b, c`.
 # Frontmatter is detected as the leading region between two `---` lines on
-# their own. Unsupported YAML array shapes (e.g. nested arrays) cause the
-# file to be skipped with a warning. Records DEST in the manifest AFTER set.
+# their own. The inline splitter is paren-aware, so `Bash(npm:*, git:*)`
+# survives intact. Unrepresentable or unsupported shapes (nested arrays,
+# flow maps, an empty `tools: []` -- Pi has no way to express "no tools
+# allowed" -- comments inside a block sequence) cause node to print a
+# source-path-tagged error and exit non-zero; the bash wrapper propagates
+# the failure so the install aborts rather than silently dropping the
+# `tools:` restriction. Records DEST in the manifest AFTER a successful
+# transform.
 transform_and_install_agent() {
 	local SRC="$1" DEST="$2"
 	mkdir -p "$(dirname "$DEST")"
@@ -420,6 +426,28 @@ const body = raw.slice(fmMatch[0].length).replace(/\r\n/g, "\n");
 // or any other shape the simple transform can't safely round-trip.
 const isComplexValue = v => /[\[\]{}]/.test(v);
 
+// Split on commas at paren depth 0, so Claude Code's documented
+// `Bash(npm:*, git:*)` allowlist syntax survives instead of being mangled
+// into three malformed entries.
+function splitTopLevelCommas(s) {
+	const out = [];
+	let cur = "";
+	let depth = 0;
+	for (let k = 0; k < s.length; k++) {
+		const c = s[k];
+		if (c === "(") depth += 1;
+		else if (c === ")") depth -= 1;
+		else if (c === "," && depth === 0) {
+			out.push(cur);
+			cur = "";
+			continue;
+		}
+		cur += c;
+	}
+	if (cur.length > 0) out.push(cur);
+	return out;
+}
+
 const lines = fm.split(/\r?\n/);
 const out = [];
 let i = 0;
@@ -434,19 +462,29 @@ while (i < lines.length) {
 	// Strict shape: no nested brackets or braces inside the array.
 	const inlineMatch = line.match(/^(\s*tools:\s*)\[([^\[\]{}]*)\]\s*$/);
 	if (inlineMatch) {
-		const inner = inlineMatch[2]
-			.split(",")
+		const inner = splitTopLevelCommas(inlineMatch[2])
 			.map(s => s.trim().replace(/^["']|["']$/g, ""))
 			.filter(Boolean);
+		if (inner.length === 0) {
+			// `tools: []` literally means "no tools allowed" in Claude Code.
+			// Pi parses tools as a comma-list and treats empty as "no
+			// restriction" (all tools allowed), so the semantic cannot be
+			// round-tripped. Refuse rather than silently invert.
+			console.error(
+				`${src}: tools: [] cannot be represented in Pi (no way to express "no tools allowed"). ` +
+					`Remove the tools: line or specify at least one tool.`
+			);
+			process.exit(1);
+		}
 		out.push(`${inlineMatch[1]}${inner.join(", ")}`);
 		i += 1;
 		continue;
 	}
 	// `tools: [...]` or `tools: {...}` that didn't match the strict shape
 	// above is a nested or flow-map form the simple transform can't safely
-	// round-trip. Skip the whole file rather than emit malformed YAML.
+	// round-trip. Fail loud rather than emit malformed YAML.
 	if (/^\s*tools:\s*[\[{]/.test(line)) {
-		console.error(`unsupported tools array shape: ${line.trim()}`);
+		console.error(`${src}: unsupported tools array shape: ${line.trim()}`);
 		process.exit(1);
 	}
 	// 2b. Block sequence: `tools:` followed by `<indent>  - a` lines. Items
@@ -458,22 +496,43 @@ while (i < lines.length) {
 		let j = i + 1;
 		const itemRe = /^(\s+)-\s+(.*\S)\s*$/;
 		while (j < lines.length) {
-			const m = lines[j].match(itemRe);
+			const cur = lines[j];
+			// Blank line ends the block.
+			if (/^\s*$/.test(cur)) break;
+			// A comment between `tools:` and its items, or interleaved with
+			// items, makes the boundaries of the sequence ambiguous. Refuse
+			// rather than silently drop items.
+			if (/^\s*#/.test(cur)) {
+				console.error(
+					`${src}: comment line inside tools: block sequence at line ${j + 1}: ${cur.trim()}. ` +
+						`Comments inside the sequence are not supported; remove the comment or rewrite as inline 'tools: a, b'.`
+				);
+				process.exit(1);
+			}
+			const m = cur.match(itemRe);
 			if (!m) break;
 			if (m[1].length <= indent.length) break;
 			if (isComplexValue(m[2])) {
-				console.error(`unsupported nested block-sequence item: ${lines[j].trim()}`);
+				console.error(`${src}: unsupported nested block-sequence item at line ${j + 1}: ${cur.trim()}`);
 				process.exit(1);
 			}
 			items.push(m[2].replace(/^["']|["']$/g, ""));
 			j += 1;
 		}
-		if (items.length > 0) {
-			out.push(`${indent}tools: ${items.join(", ")}`);
-			i = j;
-			continue;
+		if (items.length === 0) {
+			// `tools:` with nothing usable underneath: either the source meant
+			// "no tools" (not expressible in Pi) or the parser failed to find
+			// items. Either way, emitting `tools:` (null) would silently grant
+			// all tools.
+			console.error(
+				`${src}: tools: block sequence at line ${i + 1} has no items. ` +
+					`Either remove the line or list at least one item under it.`
+			);
+			process.exit(1);
 		}
-		// Empty `tools:` with no block items - leave as-is.
+		out.push(`${indent}tools: ${items.join(", ")}`);
+		i = j;
+		continue;
 	}
 	out.push(line);
 	i += 1;
@@ -483,8 +542,8 @@ fs.writeFileSync(dest, "---\n" + out.join("\n") + "\n---\n" + body);
 NODE
 	then
 		rm -f "$tmp"
-		echo "Warning: transform failed for $SRC; skipping." >&2
-		return 0
+		echo "Error: agent transform failed for $SRC (see message above); refusing to continue partial install." >&2
+		return 1
 	fi
 
 	mv "$tmp" "$DEST"
