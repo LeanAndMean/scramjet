@@ -75,13 +75,17 @@ This means command authors control the flow. If a review command's instructions 
 
 ### Simplicity is the feature
 
-Scramjet is ~450 lines of TypeScript. It registers one tool, listens to one event, and shows one widget. The entire auto-continuation mechanism is:
+Scramjet is a small TypeScript extension. The auto-continuation
+mechanism at its core is one tool, one widget, and three steps:
 
 1. Claude calls `task_complete` when done (tool with optional `next_step` field)
 2. Scramjet shows a countdown widget if there's a next step
 3. Countdown expires → run the next command (with a fresh session if specified)
 
-That's the whole system. There's nothing else to learn, configure, or debug.
+That's the whole system. There's nothing else to learn, configure, or
+debug. The diagram tool, the Claude Code tool-name aliases, and the
+install-time plugin wiring are independent — each can be inspected,
+modified, or removed on its own.
 
 ## How it works
 
@@ -151,21 +155,30 @@ Only renderers that are actually installed are registered as tool options. The d
 
 ## Install
 
-The install script does two things: it symlinks the repo into a Pi
+The install script does three things: it symlinks the repo into a Pi
 agent's `extensions/` directory (Pi auto-discovers `index.ts` at next
-startup), and it installs a `scramjet` launcher shim on your `PATH` that
-execs `pi`.
+startup), installs a `scramjet` launcher shim on your `PATH` that execs
+`pi`, and wires Pi's bundled subagent extension plus a curated set of
+Claude Code plugins (mach10, feature-dev, pr-review-toolkit) into the
+same agent directory. See [Plugin wiring](#plugin-wiring) below for
+details on what the script clones, transforms, and symlinks for plugins.
 
 ```sh
 git clone https://github.com/<user>/scramjet.git
 cd scramjet
+npm ci
 ./install.sh
 ```
+
+`npm ci` is required before `./install.sh` so that the subagent extension
+the install script symlinks (`node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent`)
+is on disk. `install.sh` fails fast if it isn't.
 
 Default targets:
 
 - Extension: `$HOME/.pi/agent/extensions/scramjet`
 - Shim: `$HOME/.local/bin/scramjet`
+- Plugin clones: `$HOME/.local/share/scramjet/`
 
 If the shim's bin directory is not on `$PATH`, the script prints a one-
 liner to add to your shell profile and continues; the extension still
@@ -173,13 +186,17 @@ works whether or not you use the shim.
 
 Flags:
 
-| Flag              | Effect                                                                       |
-| ----------------- | ---------------------------------------------------------------------------- |
-| `--target <dir>`  | Install extension into `<dir>/scramjet`. `<dir>` is a Pi agent directory.    |
-| `--local`         | Install extension into `<cwd>/.pi/extensions/scramjet` and shim into `<cwd>/.pi/bin/scramjet` (handy for in-tree dev). |
-| `--bin-dir <dir>` | Install the launcher shim into `<dir>/scramjet`.                             |
-| `--force`         | Overwrite an existing `scramjet` entry at either target.                     |
-| `-h`, `--help`    | Show usage.                                                                  |
+| Flag                          | Effect                                                                       |
+| ----------------------------- | ---------------------------------------------------------------------------- |
+| `--target <dir>`              | Install extension into `<dir>/scramjet`. `<dir>` is a Pi agent directory.    |
+| `--local`                     | Install extension into `<cwd>/.pi/extensions/scramjet` and shim into `<cwd>/.pi/bin/scramjet` (handy for in-tree dev). |
+| `--bin-dir <dir>`             | Install the launcher shim into `<dir>/scramjet`.                             |
+| `--force`                     | Overwrite an existing `scramjet` entry at either target.                     |
+| `--no-plugins`                | Skip plugin cloning and wiring. The subagent extension is still installed.   |
+| `--mach10 <dir>`              | Use `<dir>` as the mach10 source instead of cloning. See [Plugin wiring](#plugin-wiring). |
+| `--feature-dev <dir>`         | Use `<dir>` as the feature-dev source instead of cloning.                    |
+| `--pr-review-toolkit <dir>`   | Use `<dir>` as the pr-review-toolkit source instead of cloning.              |
+| `-h`, `--help`                | Show usage.                                                                  |
 
 Extension target resolution precedence (highest first):
 
@@ -198,8 +215,118 @@ Re-running the script against the same targets is a no-op; it will not
 clobber an unrelated entry without `--force`.
 
 If you already have the `pi` CLI, `pi install git:github.com/<user>/scramjet`
-is an alternative path for the extension (it does not install the
-launcher shim).
+is an alternative path for the extension. It installs only the
+extension — no launcher shim, no plugin wiring.
+
+## Plugin wiring
+
+Plugin wiring is **install-time, not runtime** — `install.sh` writes
+symlinks and transformed copies once, and Pi at runtime doesn't know
+scramjet was involved. Cost at every Pi launch is zero: plugins appear
+as ordinary entries under `<agent-dir>/agents/` and `<agent-dir>/prompts/`.
+
+`install.sh` wires Pi's bundled subagent extension and three Claude
+Code plugins (`mach10`, `feature-dev`, `pr-review-toolkit`) into the same
+agent directory. After install you can invoke their commands directly,
+e.g. `/mach10:issue-plan`, `/feature-dev:feature-dev`,
+`/pr-review-toolkit:review-pr`. Pass `--no-plugins` to skip this entirely.
+
+> **Restart pi** after `./install.sh`: Pi loads extensions and plugins
+> at session start. A running `pi` session won't pick up newly installed
+> wiring until you exit and relaunch (e.g. `scramjet` or `pi` again).
+
+### What gets wired
+
+- **Pi's subagent extension** — symlinked from
+  `node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent`
+  into `<agent-dir>/extensions/subagent`. Pi loads it at next startup and
+  registers the `subagent` tool, which plugin commands use to delegate
+  to specialized agents. The example is symlinked, not forked. Installed
+  even with `--no-plugins`, since it is what plugins are dispatched
+  through.
+- **mach10** — cloned to `$HOME/.local/share/scramjet/mach10/` at the
+  latest stable semver tag.
+- **feature-dev** and **pr-review-toolkit** — both live inside
+  `anthropics/claude-plugins-official`, cloned to
+  `$HOME/.local/share/scramjet/claude-plugins-official/` at default-branch
+  HEAD.
+
+For each plugin, command files (`<plugin-source>/commands/*.md`) are
+symlinked into `<agent-dir>/prompts/<plugin>:<basename>.md`. Agent files
+(`<plugin-source>/agents/*.md`) are written as transformed copies into
+`<agent-dir>/agents/<plugin>:<basename>.md` (see below).
+
+### Install-time agent-file transform
+
+Two YAML frontmatter edits keep Claude Code-authored agents working under
+Pi:
+
+- **`model: inherit`** is removed so plugin agents fall back to Pi's
+  default model rather than carrying a value Pi has no mapping for.
+  Other model values (`sonnet`, `opus`, `haiku`, `claude-sonnet-4-5`,
+  …) pass through to Pi unchanged; how Pi itself resolves those strings
+  to concrete API model IDs is an internal detail and may evolve
+  independently.
+- **`tools: [a, b, c]`** YAML arrays (and block-sequence variants) are
+  converted to comma-string form `tools: a, b, c`. Pi's subagent example
+  parses the comma form. Unrepresentable shapes — `tools: []` (no way
+  to express "no tools allowed" in Pi), nested arrays, flow maps,
+  comments interleaved in a block sequence — cause `transform.mjs` to
+  print a source-path-tagged error and exit non-zero, and `install.sh`
+  aborts the install rather than silently emitting `tools:` (null),
+  which would grant the agent every tool.
+
+The original plugin files in `$HOME/.local/share/scramjet/` are never
+modified — only the installed copies under `<agent-dir>/agents/` are
+transformed.
+
+### Claude Code tool-name aliases
+
+Scramjet registers PascalCase Claude Code tool names — `Read`, `Bash`,
+`Edit`, `Write`, `Grep`, `Glob`, `LS` — as thin wrappers around Pi's
+native lowercase tools. Plugin agents' `tools:` restrictions function
+natively without rewriting agent files.
+
+### Environment variables
+
+| Variable           | Effect                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `SCRAMJET_CACHE`   | Root for managed plugin clones. Default: `$HOME/.local/share/scramjet`.               |
+| `MACH10_REPO`      | Clone URL for mach10. Default: `https://github.com/LeanAndMean/mach10`. Accepts `file://` URLs for hermetic tests. |
+| `MARKETPLACE_REPO` | Clone URL for the marketplace containing feature-dev and pr-review-toolkit. Default: `https://github.com/anthropics/claude-plugins-official`. |
+
+### Manifest
+
+`install.sh` writes a manifest of every plugin-related path it created
+at `<agent-dir>/.scramjet-manifest` (one absolute path per line, sorted,
+with a `# scramjet manifest v1` sentinel on the first line). On re-run,
+the manifest is reconciled — stale entries from a prior install that
+the current run did not re-create are removed. `uninstall.sh
+--clear-manifest` reads the manifest back to remove plugin artifacts
+cleanly.
+
+### Failure modes
+
+- **`npm ci` not run before install** — `install.sh` exits early because
+  the subagent extension source isn't present in `node_modules/`.
+- **Dirty managed clone** — if you have uncommitted changes inside
+  `$SCRAMJET_CACHE/mach10/` or `$SCRAMJET_CACHE/claude-plugins-official/`,
+  `install.sh` refuses to update. Commit, stash, remove the directory,
+  or pass the matching `--<plugin>` override.
+- **No stable semver tags** — the mach10 clone is checked out at the
+  latest stable semver tag. A repo without any matching tags fails fast.
+- **Missing `--<plugin>` override path** — the path must exist as a
+  directory.
+- **`commands/` and `prompts/` both exist** — a prior scramjet version
+  may have created `<agent-dir>/commands/`. `install.sh` migrates it to
+  `prompts/` automatically. If both already exist, it refuses (cannot
+  safely merge).
+
+### Cross-harness coexistence
+
+Claude Code keeps reading `~/.claude/plugins/` independently. The same
+plugins can be installed via Claude Code's own plugin mechanism and via
+scramjet at the same time; they don't share state and don't conflict.
 
 ## Usage
 
@@ -229,15 +356,24 @@ Toggle auto-continuation on and off:
 ## Uninstall
 
 ```sh
-./uninstall.sh                       # default targets
-./uninstall.sh --local               # mirrors --local install
-./uninstall.sh --target <dir>        # mirrors --target install
-./uninstall.sh --bin-dir <dir>       # mirrors --bin-dir install
+./uninstall.sh                                    # default targets
+./uninstall.sh --local                            # mirrors --local install
+./uninstall.sh --target <dir>                     # mirrors --target install
+./uninstall.sh --bin-dir <dir>                    # mirrors --bin-dir install
+./uninstall.sh --clear-manifest                   # also remove plugin wiring
 ```
 
 `uninstall.sh` removes both the extension symlink and the launcher shim,
 each independently. It only removes symlinks; if either target is a real
 file or directory, the script refuses to touch it.
+
+Pass `--clear-manifest` to also remove every plugin path recorded in
+`<agent-dir>/.scramjet-manifest` (the subagent extension symlink, plugin
+agent file copies, plugin command symlinks) and the manifest file
+itself. Without `--clear-manifest`, a plain uninstall stays
+symlink-only and leaves plugin wiring in place. The managed clones
+under `$HOME/.local/share/scramjet/` are never removed — `rm -rf` them
+by hand to reclaim disk.
 
 ## Compatibility
 
@@ -372,11 +508,18 @@ scramjet/
   diagram/
     diagram-tool.ts     — draw_diagram tool registration
     renderers.ts        — renderer detection and execution
+  src/
+    install/
+      transform.mjs     — agent-file frontmatter transform (model strip, tools array)
+    tool-aliases/
+      index.ts          — Claude Code tool-name aliases (Read, Bash, …)
   bin/
     scramjet            — launcher shim (execs pi)
   tests/
     task-complete.test.ts
-  install.sh            — extension symlink + shim installer
+    tool-aliases.test.ts
+    install-transform.test.ts
+  install.sh            — extension symlink, shim, plugin wiring
   uninstall.sh          — reverses install.sh
 ```
 

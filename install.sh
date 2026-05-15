@@ -6,29 +6,61 @@ usage() {
 Usage: ./install.sh [options]
 
 Symlinks scramjet into a Pi agent extensions directory so the Pi binary
-can auto-discover and load this extension at runtime, and installs a
-`scramjet` launcher shim on your PATH that execs `pi`.
+can auto-discover and load this extension at runtime, installs a
+`scramjet` launcher shim on your PATH that execs `pi`, and wires
+Pi's bundled subagent extension plus a curated set of Claude Code
+plugins (mach10, feature-dev, pr-review-toolkit) into the same agent
+directory.
 
 Options:
-  --target <path>    Install extension into <path>/scramjet
-                     (<path> should be a Pi agent directory; tilde is expanded)
-  --local            Install extension into ./.pi/extensions/scramjet
-                     and shim into ./.pi/bin/scramjet (relative to CWD)
-  --bin-dir <path>   Install the scramjet launcher shim into <path>/scramjet
-                     (tilde is expanded; default: $HOME/.local/bin)
-  --force            Overwrite an existing scramjet entry at either target
-  -h, --help         Show this help
+  --target <path>           Use <path> as the Pi agent directory; install
+                            extension into <path>/scramjet and place the
+                            subagent extension, plugin agent copies,
+                            plugin command symlinks, and manifest under
+                            <path>. Tilde is expanded.
+  --local                   Use <cwd>/.pi as the agent directory; install
+                            extension into ./.pi/extensions/scramjet,
+                            shim into ./.pi/bin/scramjet, plugins under
+                            ./.pi.
+  --bin-dir <path>          Install the scramjet launcher shim into
+                            <path>/scramjet (tilde is expanded; default:
+                            $HOME/.local/bin). Independent of agent dir.
+  --force                   Overwrite an existing scramjet entry at any
+                            target.
+  --no-plugins              Skip plugin cloning and wiring entirely. The
+                            subagent extension is still installed.
+  --mach10 <path>           Use the directory at <path> as the mach10
+                            plugin source instead of cloning. Mutually
+                            exclusive with --no-plugins.
+  --feature-dev <path>      Use the directory at <path> as the feature-dev
+                            plugin source instead of using the marketplace
+                            clone. Mutually exclusive with --no-plugins.
+  --pr-review-toolkit <path>
+                            Use the directory at <path> as the
+                            pr-review-toolkit plugin source instead of
+                            using the marketplace clone. Mutually
+                            exclusive with --no-plugins.
+  -h, --help                Show this help
 
-Extension target resolution precedence (highest first):
-  1. --target <path>            -> <path>/scramjet
-  2. --local                    -> <cwd>/.pi/extensions/scramjet
-  3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR/extensions/scramjet
-  4. Default                    -> $HOME/.pi/agent/extensions/scramjet
+Agent directory resolution precedence (highest first):
+  1. --target <path>            -> <path>
+  2. --local                    -> <cwd>/.pi
+  3. $PI_CODING_AGENT_DIR set   -> $PI_CODING_AGENT_DIR
+  4. Default                    -> $HOME/.pi/agent
 
 Shim target resolution precedence (highest first):
   1. --bin-dir <path>           -> <path>/scramjet
   2. --local                    -> <cwd>/.pi/bin/scramjet
   3. Default                    -> $HOME/.local/bin/scramjet
+
+Environment variables (advanced):
+  MACH10_REPO                   Clone URL for mach10 (default:
+                                https://github.com/LeanAndMean/mach10).
+                                Accepts file:// URLs for hermetic tests.
+  MARKETPLACE_REPO              Clone URL for the marketplace that
+                                contains feature-dev and pr-review-toolkit
+                                (default:
+                                https://github.com/anthropics/claude-plugins-official).
 
 Re-running with the same targets is idempotent (no --force required).
 EOF
@@ -48,6 +80,10 @@ TARGET_ARG=""
 BIN_DIR_ARG=""
 LOCAL=0
 FORCE=0
+NO_PLUGINS=0
+MACH10_ARG=""
+FEATURE_DEV_ARG=""
+PR_REVIEW_TOOLKIT_ARG=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--target)
@@ -74,6 +110,34 @@ while [[ $# -gt 0 ]]; do
 			FORCE=1
 			shift
 			;;
+		--no-plugins)
+			NO_PLUGINS=1
+			shift
+			;;
+		--mach10)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --mach10 requires a non-empty path argument." >&2
+				exit 2
+			fi
+			MACH10_ARG="$2"
+			shift 2
+			;;
+		--feature-dev)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --feature-dev requires a non-empty path argument." >&2
+				exit 2
+			fi
+			FEATURE_DEV_ARG="$2"
+			shift 2
+			;;
+		--pr-review-toolkit)
+			if [[ $# -lt 2 || -z "$2" ]]; then
+				echo "Error: --pr-review-toolkit requires a non-empty path argument." >&2
+				exit 2
+			fi
+			PR_REVIEW_TOOLKIT_ARG="$2"
+			shift 2
+			;;
 		-h|--help)
 			usage
 			exit 0
@@ -94,6 +158,52 @@ if [[ -n "$BIN_DIR_ARG" && $LOCAL -eq 1 ]]; then
 	echo "Error: --bin-dir and --local are mutually exclusive." >&2
 	exit 2
 fi
+if [[ $NO_PLUGINS -eq 1 ]]; then
+	if [[ -n "$MACH10_ARG" ]]; then
+		echo "Error: --no-plugins and --mach10 are mutually exclusive." >&2
+		exit 2
+	fi
+	if [[ -n "$FEATURE_DEV_ARG" ]]; then
+		echo "Error: --no-plugins and --feature-dev are mutually exclusive." >&2
+		exit 2
+	fi
+	if [[ -n "$PR_REVIEW_TOOLKIT_ARG" ]]; then
+		echo "Error: --no-plugins and --pr-review-toolkit are mutually exclusive." >&2
+		exit 2
+	fi
+fi
+
+# --- expand_tilde FLAG_NAME VALUE
+# Echoes VALUE with a leading `~` expanded to $HOME. If VALUE starts with `~`
+# and $HOME is unset, exits 1 with a targeted message rather than silently
+# producing a literal-tilde path (which downstream `mkdir`/`ln` would create
+# under a directory called `~` in the current working dir). Empty VALUE echoes
+# empty. Callers MUST capture the result: `expanded=$(expand_tilde --foo "$arg")`.
+expand_tilde() {
+	local flag="$1" val="$2"
+	if [[ -z "$val" ]]; then
+		printf '%s' ""
+		return 0
+	fi
+	if [[ "$val" == "~"* && -z "${HOME:-}" ]]; then
+		echo "Error: $flag value starts with '~' but \$HOME is not set; cannot expand '$val'." >&2
+		echo "       Set HOME or pass an absolute path." >&2
+		exit 1
+	fi
+	printf '%s' "${val/#\~/$HOME}"
+}
+
+# --- safe_mkdir SUBSYSTEM PATH
+# Wraps mkdir -p with a subsystem-tagged error so EACCES/ENOSPC/EROFS
+# surface with context (which install leg failed) rather than just
+# `mkdir: cannot create...` followed by an unrelated trap message.
+safe_mkdir() {
+	local subsystem="$1" path="$2"
+	if ! mkdir -p "$path"; then
+		echo "Error: $subsystem: failed to create directory $path (see mkdir message above)." >&2
+		exit 1
+	fi
+}
 
 # --- Repo root (canonicalized; follows a launcher symlink to install.sh itself)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -109,28 +219,63 @@ if [[ ! -r "$SHIM_SRC" ]]; then
 	exit 1
 fi
 
-# --- Extension target resolution
+# --- Subagent extension source (must exist after `npm ci`)
+SUBAGENT_SRC="$REPO_ROOT/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent"
+if [[ ! -d "$SUBAGENT_SRC" ]]; then
+	echo "Error: $SUBAGENT_SRC not found." >&2
+	echo "Run 'npm ci' from $REPO_ROOT first; install.sh symlinks Pi's bundled subagent example." >&2
+	exit 1
+fi
+
+# --- Agent-file transform module (ships with install.sh in the repo).
+TRANSFORM_SRC="$REPO_ROOT/src/install/transform.mjs"
+if [[ ! -f "$TRANSFORM_SRC" ]]; then
+	echo "Error: $TRANSFORM_SRC not found." >&2
+	echo "       The transform module ships alongside install.sh; the repo may be incomplete." >&2
+	exit 1
+fi
+
+# --- Required tooling for plugin wiring (agent-file transform, plugin clones).
+if ! command -v node >/dev/null 2>&1; then
+	echo "Error: node is not on \$PATH; required for agent-file transforms." >&2
+	exit 1
+fi
+if [[ $NO_PLUGINS -ne 1 ]] && ! command -v git >/dev/null 2>&1; then
+	# git is only needed for the managed clones; if any of the three plugins
+	# is missing a `--<plugin>` override flag, we'll need to clone for that
+	# plugin and so git is required.
+	if [[ -z "$MACH10_ARG" || -z "$FEATURE_DEV_ARG" || -z "$PR_REVIEW_TOOLKIT_ARG" ]]; then
+		echo "Error: git is not on \$PATH; required to clone bundled plugins." >&2
+		echo "       Pass --no-plugins to skip plugin wiring entirely." >&2
+		exit 1
+	fi
+fi
+
+# --- Agent directory resolution (single var; governs subagent extension,
+# plugin agent copies, plugin command symlinks, and manifest placement).
 if [[ -n "$TARGET_ARG" ]]; then
-	# Expand a leading ~ inside a quoted arg (shells don't expand it in quotes)
-	TARGET_EXPANDED="${TARGET_ARG/#\~/${HOME:-~}}"
-	DEST="$TARGET_EXPANDED/scramjet"
+	# Expand a leading ~ inside a quoted arg (shells don't expand it in quotes).
+	# expand_tilde fails loud if HOME is unset, rather than producing a literal
+	# `~/foo` path that downstream mkdir would silently materialize.
+	AGENT_DIR="$(expand_tilde --target "$TARGET_ARG")"
 elif [[ $LOCAL -eq 1 ]]; then
-	DEST="$(pwd -P)/.pi/extensions/scramjet"
+	AGENT_DIR="$(pwd -P)/.pi"
 elif [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-	AGENT_DIR="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
-	DEST="$AGENT_DIR/extensions/scramjet"
+	AGENT_DIR="$(expand_tilde PI_CODING_AGENT_DIR "$PI_CODING_AGENT_DIR")"
 else
 	if [[ -z "${HOME:-}" ]]; then
 		echo "Error: \$HOME is not set; cannot resolve the default install target." >&2
 		echo "Provide an explicit path with --target, --local, or set PI_CODING_AGENT_DIR." >&2
 		exit 1
 	fi
-	DEST="$HOME/.pi/agent/extensions/scramjet"
+	AGENT_DIR="$HOME/.pi/agent"
 fi
+DEST="$AGENT_DIR/extensions/scramjet"
+MANIFEST="$AGENT_DIR/.scramjet-manifest"
 
 # --- Shim target resolution
 if [[ -n "$BIN_DIR_ARG" ]]; then
-	BIN_DIR_EXPANDED="${BIN_DIR_ARG/#\~/${HOME:-~}}"
+	BIN_DIR_EXPANDED="$(expand_tilde --bin-dir "$BIN_DIR_ARG")"
 	SHIM_DEST="$BIN_DIR_EXPANDED/scramjet"
 elif [[ $LOCAL -eq 1 ]]; then
 	SHIM_DEST="$(pwd -P)/.pi/bin/scramjet"
@@ -142,6 +287,22 @@ else
 	fi
 	SHIM_DEST="$HOME/.local/bin/scramjet"
 fi
+
+# --- Validate plugin override paths early (avoid partial install).
+validate_override_path() {
+	local flag="$1" val="$2"
+	if [[ -n "$val" ]]; then
+		local expanded
+		expanded="$(expand_tilde "$flag" "$val")"
+		if [[ ! -d "$expanded" ]]; then
+			echo "Error: $flag path does not exist or is not a directory: $val" >&2
+			exit 1
+		fi
+	fi
+}
+validate_override_path --mach10 "$MACH10_ARG"
+validate_override_path --feature-dev "$FEATURE_DEV_ARG"
+validate_override_path --pr-review-toolkit "$PR_REVIEW_TOOLKIT_ARG"
 
 # --- Install a symlink at DEST pointing to SRC.
 # Sets RESULT to one of: "already" (already a correct symlink, no work done)
@@ -188,8 +349,11 @@ install_symlink() {
 		rm -rf "$DEST"
 	fi
 
-	mkdir -p "$(dirname "$DEST")"
-	ln -s "$SRC" "$DEST"
+	safe_mkdir install_symlink "$(dirname "$DEST")"
+	if ! ln -s "$SRC" "$DEST"; then
+		echo "Error: failed to create symlink $DEST -> $SRC (see ln message above)." >&2
+		exit 1
+	fi
 
 	if [[ "$(readlink "$DEST")" != "$SRC" ]]; then
 		echo "Error: symlink validation failed at $DEST; readlink returned: $(readlink "$DEST")" >&2
@@ -213,8 +377,10 @@ fi
 # --- Install the launcher shim
 # If the shim leg fails, an EXIT trap notes that the extension did install,
 # so the failure isn't read as a total no-op. EXT_DEST is captured because
-# install_symlink's `local DEST` dynamically shadows the outer DEST when
-# the trap fires from inside the function.
+# install_symlink's `local DEST` shadows the outer DEST when the trap fires
+# while a `local DEST` is still on the call stack — bash uses dynamic
+# scoping for `local`, so a function-local variable is visible to anything
+# the function transitively calls (including the EXIT trap).
 EXT_DEST="$DEST"
 SHIM_OK=0
 _shim_exit_note() {
@@ -239,6 +405,389 @@ fi
 SHIM_OK=1
 trap - EXIT
 
+# --- Migration guard: a prior scramjet version may have created
+# <AGENT_DIR>/commands/ instead of Pi's expected <AGENT_DIR>/prompts/.
+# If only commands/ exists, rename it. If both exist, abort: we cannot
+# safely merge two directories we don't fully control. If only prompts/
+# exists (or neither), nothing to do.
+if [[ -d "$AGENT_DIR/commands" ]]; then
+	if [[ -d "$AGENT_DIR/prompts" ]]; then
+		echo "Error: both $AGENT_DIR/commands and $AGENT_DIR/prompts exist." >&2
+		echo "       Cannot safely merge; remove or move one before re-running." >&2
+		exit 1
+	fi
+	echo "Migrating $AGENT_DIR/commands -> $AGENT_DIR/prompts"
+	mv "$AGENT_DIR/commands" "$AGENT_DIR/prompts"
+fi
+
+# --- Manifest accounting. BEFORE_LIST is the existing manifest (one path
+# per line, header/blank lines stripped); AFTER_LIST is appended to as we
+# install. Newline-delimited strings rather than associative arrays so the
+# script stays bash 3.2-compatible (macOS system bash).
+BEFORE_LIST=""
+AFTER_LIST=""
+if [[ -f "$MANIFEST" ]]; then
+	# Distinguish grep exit 1 (no matching lines = empty manifest, expected)
+	# from exit >=2 (EACCES, broken pipe, etc.) so a real read error fails
+	# loud rather than producing a silent empty BEFORE_LIST that orphans
+	# every previously-tracked path.
+	local_grep_status=0
+	BEFORE_LIST="$(grep -Ev '^[[:space:]]*(#|$)' "$MANIFEST")" || local_grep_status=$?
+	if [[ $local_grep_status -ge 2 ]]; then
+		echo "Error: failed to read manifest $MANIFEST (grep exit $local_grep_status); see message above." >&2
+		exit 1
+	fi
+fi
+
+# Initialize the on-disk manifest as a write-ahead journal: write the
+# header and replay BEFORE_LIST entries so a mid-loop abort leaves the
+# next run able to reconcile every previously-tracked path. From this
+# point forward, manifest_add appends to the on-disk journal IMMEDIATELY
+# (not just to the in-memory AFTER_LIST) so a wire_plugin loop failure
+# halfway through still leaves the manifest covering everything that
+# successfully landed on disk. The final atomic rewrite at the end of
+# the install collapses the journal into the canonical sorted form.
+safe_mkdir "manifest setup" "$AGENT_DIR"
+{
+	echo "# scramjet manifest v1"
+	if [[ -n "$BEFORE_LIST" ]]; then
+		printf '%s\n' "$BEFORE_LIST"
+	fi
+} > "$MANIFEST"
+
+manifest_add() {
+	AFTER_LIST="${AFTER_LIST}$1
+"
+	printf '%s\n' "$1" >> "$MANIFEST"
+}
+
+# --- transform_and_install_agent SRC DEST
+# Writes a regular-file copy of SRC to DEST with two YAML frontmatter edits
+# applied by src/install/transform.mjs:
+#   1. Remove any `model: inherit` line (other model values pass through).
+#   2. Convert `tools: [a, b, c]` inline arrays and `tools:\n  - a\n  - b`
+#      block sequences to comma-string form `tools: a, b, c`.
+# Unrepresentable or unsupported shapes (nested arrays, flow maps, an empty
+# `tools: []` -- Pi has no way to express "no tools allowed" -- comments
+# inside a block sequence) cause the transform module to print a source-
+# path-tagged error and exit non-zero; the bash wrapper propagates the
+# failure so the install aborts rather than silently dropping the `tools:`
+# restriction. Records DEST in the manifest AFTER a successful transform.
+transform_and_install_agent() {
+	local SRC="$1" DEST="$2"
+
+	# Clobber discipline parallel to install_symlink: refuse to overwrite a
+	# pre-existing $DEST unless FORCE=1 or the path was in the prior install
+	# manifest (BEFORE_LIST). Lets idempotent re-installs proceed while
+	# protecting user-placed files at one of our destinations.
+	if [[ -e "$DEST" || -L "$DEST" ]]; then
+		if [[ $FORCE -ne 1 ]] && ! printf '%s\n' "$BEFORE_LIST" | grep -qxF "$DEST"; then
+			local existing
+			if [[ -L "$DEST" ]]; then
+				existing="symlink -> $(readlink "$DEST")"
+			elif [[ -d "$DEST" ]]; then
+				existing="directory"
+			else
+				existing="file"
+			fi
+			echo "Error: $DEST already exists ($existing) and was not installed by scramjet." >&2
+			echo "Re-run with --force to overwrite." >&2
+			exit 1
+		fi
+	fi
+
+	safe_mkdir "agent transform ($SRC)" "$(dirname "$DEST")"
+	local tmp
+	# Trailing X's only: BSD/macOS mktemp ignores X's followed by a literal
+	# suffix and either errors out or produces a literal `XXXXXX.tmp` name.
+	# GNU mktemp accepts both, which is why the BSD failure mode was masked
+	# on Linux CI.
+	tmp="$(mktemp "$DEST.scramjet.XXXXXX")"
+
+	# TRANSFORM_SRC is resolved at script load time relative to install.sh
+	# (REPO_ROOT/src/install/transform.mjs) so install.sh keeps working
+	# whether invoked from the repo root, a subdirectory, or an absolute path.
+	if ! node "$TRANSFORM_SRC" "$SRC" "$tmp"; then
+		rm -f "$tmp"
+		echo "Error: agent transform failed for $SRC (see message above); refusing to continue partial install." >&2
+		return 1
+	fi
+
+	mv "$tmp" "$DEST"
+	manifest_add "$DEST"
+}
+
+# --- install_symlink_tracked SRC DEST
+# Wraps install_symlink and records DEST in the manifest AFTER set.
+install_symlink_tracked() {
+	install_symlink "$1" "$2"
+	manifest_add "$2"
+}
+
+# --- wire_plugin PLUGIN_NAME PLUGIN_DIR
+# Iterates <PLUGIN_DIR>/agents/*.md -> <AGENT_DIR>/agents/<PLUGIN_NAME>:<basename>
+# (transformed copy). Iterates <PLUGIN_DIR>/commands/*.md ->
+# <AGENT_DIR>/prompts/<PLUGIN_NAME>:<basename> (symlink).
+#
+# Warns loudly when a plugin directory is misconfigured: neither agents/ nor
+# commands/ present (F13), or one of them present but contains zero .md files
+# (F14). Warnings are stderr-only and do not abort — override flags (--mach10
+# etc.) can legitimately point at empty fixtures for hermetic tests.
+wire_plugin() {
+	local PLUGIN_NAME="$1" PLUGIN_DIR="$2"
+	local f base dest agent_count cmd_count
+	local has_agents=0 has_cmds=0
+
+	if [[ -d "$PLUGIN_DIR/agents" ]]; then
+		has_agents=1
+		agent_count=0
+		for f in "$PLUGIN_DIR/agents"/*.md; do
+			[[ -e "$f" ]] || continue
+			agent_count=$((agent_count + 1))
+			base="$(basename "$f")"
+			dest="$AGENT_DIR/agents/${PLUGIN_NAME}:${base}"
+			transform_and_install_agent "$f" "$dest"
+		done
+		if [[ $agent_count -eq 0 ]]; then
+			echo "Warning: $PLUGIN_NAME: $PLUGIN_DIR/agents/ has no .md files; no agents wired." >&2
+		fi
+	fi
+
+	if [[ -d "$PLUGIN_DIR/commands" ]]; then
+		has_cmds=1
+		cmd_count=0
+		for f in "$PLUGIN_DIR/commands"/*.md; do
+			[[ -e "$f" ]] || continue
+			cmd_count=$((cmd_count + 1))
+			base="$(basename "$f")"
+			dest="$AGENT_DIR/prompts/${PLUGIN_NAME}:${base}"
+			install_symlink_tracked "$f" "$dest"
+		done
+		if [[ $cmd_count -eq 0 ]]; then
+			echo "Warning: $PLUGIN_NAME: $PLUGIN_DIR/commands/ has no .md files; no commands wired." >&2
+		fi
+	fi
+
+	if [[ $has_agents -eq 0 && $has_cmds -eq 0 ]]; then
+		echo "Warning: $PLUGIN_NAME: $PLUGIN_DIR has neither agents/ nor commands/; nothing to wire." >&2
+		echo "         (Check the plugin source; an empty install will appear to succeed but invocations will fail.)" >&2
+	fi
+}
+
+# --- Install the subagent extension symlink (always, even with --no-plugins;
+# subagent is what plugin agents are dispatched through).
+#
+# Targeted collision check (F26): Pi's own README documents installing the
+# bundled subagent example by hand. A user who followed that guidance will
+# already have a real directory (not a symlink) at the destination; the
+# generic install_symlink error ("already exists; re-run with --force")
+# does not explain that scramjet would do the same wiring for them. Detect
+# the specific shape and emit an actionable message before falling through.
+SUBAGENT_DEST_PATH="$AGENT_DIR/extensions/subagent"
+if [[ -d "$SUBAGENT_DEST_PATH" && ! -L "$SUBAGENT_DEST_PATH" && $FORCE -ne 1 ]]; then
+	echo "Error: $SUBAGENT_DEST_PATH exists as a real directory (not a scramjet-managed symlink)." >&2
+	echo "       This usually means you previously installed Pi's bundled subagent example by hand," >&2
+	echo "       following https://github.com/earendil-works/pi-mono Pi README guidance. scramjet" >&2
+	echo "       wires the same example as a symlink under the manifest, so the manual copy is" >&2
+	echo "       no longer needed." >&2
+	echo "       Resolve: remove $SUBAGENT_DEST_PATH and re-run, or re-run with --force." >&2
+	exit 1
+fi
+install_symlink_tracked "$SUBAGENT_SRC" "$SUBAGENT_DEST_PATH"
+if [[ "$RESULT" == "already" ]]; then
+	echo "Already installed subagent: $AGENT_DIR/extensions/subagent -> $SUBAGENT_SRC"
+else
+	echo "Installed subagent: $AGENT_DIR/extensions/subagent -> $SUBAGENT_SRC"
+fi
+
+# --- Clone helpers (only used when plugin wiring is active).
+SCRAMJET_CACHE="${SCRAMJET_CACHE:-${HOME:-/tmp}/.local/share/scramjet}"
+
+resolve_latest_semver_tag() {
+	local repo_dir="$1"
+	# List tags, keep only stable semver (vMAJOR.MINOR.PATCH with no prerelease).
+	# Sort by version (GNU sort -V; macOS BSD sort -V exists since 10.12).
+	#
+	# Capture git output explicitly rather than piping inline so a `git tag`
+	# failure (corrupt repo, EACCES on .git/refs) is surfaced as an error
+	# instead of being indistinguishable from "no matching tags". git's own
+	# stderr is no longer redirected; it surfaces directly to the user.
+	local tags
+	if ! tags="$(git -C "$repo_dir" tag --list 'v[0-9]*')"; then
+		echo "Error: 'git tag' failed in $repo_dir; the clone may be corrupt or unreadable." >&2
+		exit 1
+	fi
+	printf '%s\n' "$tags" \
+		| grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+		| sort -V \
+		| tail -n 1
+}
+
+# ensure_git_clone REPO_URL REPO_DIR REF_KIND
+# REF_KIND is "semver" (checkout latest stable tag) or "head" (default branch).
+ensure_git_clone() {
+	local repo_url="$1" repo_dir="$2" ref_kind="$3"
+	if [[ -d "$repo_dir/.git" ]]; then
+		# Refuse to touch a clone with uncommitted changes; the user may be
+		# iterating locally and we'd lose their work. Surface git failures
+		# (`if !` bypasses set -e on the substitution, which command
+		# substitution does not propagate by default in bash 3.2) so a
+		# corrupt clone is not silently treated as a clean tree.
+		local dirty
+		if ! dirty="$(git -C "$repo_dir" status --porcelain)"; then
+			echo "Error: git status failed in $repo_dir; the clone may be corrupt or unreadable." >&2
+			echo "       Remove $repo_dir and re-run, or pass the matching" >&2
+			echo "       --mach10/--feature-dev/--pr-review-toolkit override flag." >&2
+			exit 1
+		fi
+		if [[ -n "$dirty" ]]; then
+			echo "Error: $repo_dir has uncommitted changes; refusing to update." >&2
+			echo "       Commit, stash, or remove the directory, or pass the matching" >&2
+			echo "       --mach10/--feature-dev/--pr-review-toolkit override flag." >&2
+			exit 1
+		fi
+		# --quiet is intentionally dropped from both fetch and clone so
+		# network/auth diagnostics surface to the user instead of producing
+		# a bare `set -e` exit with no context.
+		git -C "$repo_dir" fetch --tags origin
+	else
+		safe_mkdir "plugin clone ($repo_url)" "$(dirname "$repo_dir")"
+		git clone "$repo_url" "$repo_dir"
+	fi
+
+	local ref
+	if [[ "$ref_kind" == "semver" ]]; then
+		ref="$(resolve_latest_semver_tag "$repo_dir")"
+		if [[ -z "$ref" ]]; then
+			echo "Error: no stable semver tags found in $repo_dir." >&2
+			exit 1
+		fi
+	else
+		# default-branch HEAD. symbolic-ref's stderr stays muted because
+		# "ref does not exist" is a legitimate fallback trigger; if BOTH it
+		# AND `git remote show origin` fail, the remote-show stderr is
+		# surfaced (that's where the actionable diagnostic lives).
+		ref="$(git -C "$repo_dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+		if [[ -z "$ref" ]]; then
+			# Fallback: ask the remote. Capture stderr so a network/auth
+			# failure (remote unreachable) is reported distinctly from
+			# "remote responded but has no HEAD branch defined".
+			local remote_err remote_out remote_status=0
+			remote_err="$(mktemp)"
+			remote_out="$(git -C "$repo_dir" remote show origin 2>"$remote_err")" || remote_status=$?
+			if [[ $remote_status -ne 0 ]]; then
+				echo "Error: 'git remote show origin' failed for $repo_dir (exit $remote_status); the remote may be unreachable." >&2
+				if [[ -s "$remote_err" ]]; then
+					sed 's/^/       /' "$remote_err" >&2
+				fi
+				rm -f "$remote_err"
+				exit 1
+			fi
+			rm -f "$remote_err"
+			local default_branch
+			default_branch="$(echo "$remote_out" | awk '/HEAD branch/ {print $NF}')"
+			if [[ -n "$default_branch" && "$default_branch" != "(unknown)" ]]; then
+				ref="origin/$default_branch"
+			fi
+		fi
+		if [[ -z "$ref" ]]; then
+			echo "Error: no default branch defined for $repo_dir (origin/HEAD unset and 'git remote show origin' did not report one)." >&2
+			exit 1
+		fi
+	fi
+
+	git -C "$repo_dir" -c advice.detachedHead=false checkout --quiet "$ref"
+	if ! git -C "$repo_dir" rev-parse --quiet --verify HEAD >/dev/null; then
+		echo "Error: $repo_dir has no valid HEAD after checkout." >&2
+		exit 1
+	fi
+	echo "Synced $repo_dir at $ref"
+}
+
+# --- Plugin wiring (skipped with --no-plugins).
+if [[ $NO_PLUGINS -ne 1 ]]; then
+	MACH10_REPO_URL="${MACH10_REPO:-https://github.com/LeanAndMean/mach10}"
+	MARKETPLACE_REPO_URL="${MARKETPLACE_REPO:-https://github.com/anthropics/claude-plugins-official}"
+
+	# Resolve mach10 source: --mach10 override, or managed clone.
+	if [[ -n "$MACH10_ARG" ]]; then
+		MACH10_DIR="$(expand_tilde --mach10 "$MACH10_ARG")"
+	else
+		MACH10_DIR="$SCRAMJET_CACHE/mach10"
+		ensure_git_clone "$MACH10_REPO_URL" "$MACH10_DIR" semver
+	fi
+	wire_plugin mach10 "$MACH10_DIR"
+
+	# feature-dev and pr-review-toolkit both live inside the marketplace repo.
+	# Clone the marketplace only if at least one is not overridden by a flag.
+	NEED_MARKETPLACE=0
+	[[ -z "$FEATURE_DEV_ARG" ]] && NEED_MARKETPLACE=1
+	[[ -z "$PR_REVIEW_TOOLKIT_ARG" ]] && NEED_MARKETPLACE=1
+	if [[ $NEED_MARKETPLACE -eq 1 ]]; then
+		MARKETPLACE_DIR="$SCRAMJET_CACHE/claude-plugins-official"
+		ensure_git_clone "$MARKETPLACE_REPO_URL" "$MARKETPLACE_DIR" head
+	fi
+
+	if [[ -n "$FEATURE_DEV_ARG" ]]; then
+		FEATURE_DEV_DIR="$(expand_tilde --feature-dev "$FEATURE_DEV_ARG")"
+	else
+		FEATURE_DEV_DIR="$MARKETPLACE_DIR/plugins/feature-dev"
+	fi
+	wire_plugin feature-dev "$FEATURE_DEV_DIR"
+
+	if [[ -n "$PR_REVIEW_TOOLKIT_ARG" ]]; then
+		PR_REVIEW_TOOLKIT_DIR="$(expand_tilde --pr-review-toolkit "$PR_REVIEW_TOOLKIT_ARG")"
+	else
+		PR_REVIEW_TOOLKIT_DIR="$MARKETPLACE_DIR/plugins/pr-review-toolkit"
+	fi
+	wire_plugin pr-review-toolkit "$PR_REVIEW_TOOLKIT_DIR"
+fi
+
+# --- Reconcile manifest: remove paths that were in BEFORE but not in AFTER
+# (stale entries from a prior install that this run did not re-create).
+# rm runs without -f so EACCES/EBUSY surfaces; unexpected entry shapes
+# (directories, sockets, ...) warn loudly. Any failure leaves the journal
+# form of the manifest on disk (header + BEFORE replay + new entries) so
+# the next install can retry instead of permanently orphaning the entry.
+AFTER_SORTED="$(printf '%s' "$AFTER_LIST" | grep -v '^$' | sort -u || true)"
+RECONCILE_FAILURES=0
+if [[ -n "$BEFORE_LIST" ]]; then
+	while IFS= read -r path; do
+		[[ -z "$path" ]] && continue
+		if printf '%s\n' "$AFTER_SORTED" | grep -qxF "$path"; then
+			continue
+		fi
+		if [[ -L "$path" || -f "$path" ]]; then
+			if ! rm "$path"; then
+				echo "Error: failed to remove stale manifest entry: $path" >&2
+				RECONCILE_FAILURES=$((RECONCILE_FAILURES + 1))
+				continue
+			fi
+			echo "Removed stale: $path"
+		elif [[ -e "$path" ]]; then
+			echo "Warning: stale manifest entry is not a file or symlink: $path; leaving in place." >&2
+			RECONCILE_FAILURES=$((RECONCILE_FAILURES + 1))
+		fi
+		# else: path already absent; fine to drop from the new manifest.
+	done <<< "$BEFORE_LIST"
+fi
+
+if [[ $RECONCILE_FAILURES -gt 0 ]]; then
+	echo "Error: $RECONCILE_FAILURES stale manifest entry/entries could not be reconciled; $MANIFEST kept in journal form for the next install to retry." >&2
+	exit 1
+fi
+
+# Collapse the journal into the canonical sorted form atomically. Up to
+# this point $MANIFEST has been written incrementally (every successful
+# install appended a line); the rename here replaces the journal with the
+# clean sorted/deduped manifest in one filesystem operation.
+MANIFEST_TMP="$MANIFEST.tmp.$$"
+{
+	echo "# scramjet manifest v1"
+	printf '%s\n' "$AFTER_SORTED"
+} > "$MANIFEST_TMP"
+mv "$MANIFEST_TMP" "$MANIFEST"
+
 # --- PATH check for the shim's bin dir
 SHIM_BIN_DIR="$(dirname "$SHIM_DEST")"
 case ":${PATH:-}:" in
@@ -259,33 +808,36 @@ esac
 #   - the env var is unset
 #   - the URL is malformed or has no host (e.g. file:///, data:)
 #   - the host is api.anthropic.com (stock; FQDN trailing dot normalized)
-#   - node is not on PATH
 #   - both HOME and PI_CODING_AGENT_DIR are unset (cannot resolve agent dir)
 # Fails loud (exit 2) when an existing models.json is present but not valid JSON.
+# Note: node is hard-required at script start (the agent transform needs it),
+# so there is no defensive "is node on PATH?" check here.
 update_models_json() {
 	local url="${ANTHROPIC_BASE_URL:-}"
 	[[ -z "$url" ]] && return 0
 
-	if ! command -v node >/dev/null 2>&1; then
-		echo
-		echo "Note: node is not on \$PATH; skipping models.json update." >&2
-		echo "      (pi requires node; once it is installed and on PATH, re-run ./install.sh.)" >&2
-		return 0
-	fi
-
-	local hostname
-	hostname="$(node -e 'try { const h = new URL(process.argv[1]).hostname.replace(/\.$/,""); if (!h) process.exit(2); process.stdout.write(h); } catch (e) { process.exit(2); }' "$url" 2>/dev/null)" || {
+	# Inline JS uses exit code 2 deliberately for "URL invalid or has no
+	# host"; any other non-zero (uncaught throw, OOM, signal) is a real
+	# failure and must surface rather than be silently masked as "not a
+	# valid URL". stderr is no longer redirected so node crashes are visible.
+	local hostname url_status=0
+	hostname="$(node -e 'try { const h = new URL(process.argv[1]).hostname.replace(/\.$/,""); if (!h) process.exit(2); process.stdout.write(h); } catch (e) { process.exit(2); }' "$url")" || url_status=$?
+	if [[ $url_status -eq 2 ]]; then
 		echo
 		echo "Note: ANTHROPIC_BASE_URL=$url is not a valid URL (or has no host); skipping models.json update." >&2
 		return 0
-	}
+	fi
+	if [[ $url_status -ne 0 ]]; then
+		echo "Error: node URL parser failed unexpectedly (exit $url_status); see message above." >&2
+		exit 1
+	fi
 	if [[ "$hostname" == "api.anthropic.com" ]]; then
 		return 0
 	fi
 
 	local agent_dir
 	if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-		agent_dir="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
+		agent_dir="$(expand_tilde PI_CODING_AGENT_DIR "$PI_CODING_AGENT_DIR")"
 	elif [[ -n "${HOME:-}" ]]; then
 		agent_dir="$HOME/.pi/agent"
 	else
@@ -293,7 +845,7 @@ update_models_json() {
 		echo "Note: cannot resolve pi agent dir (HOME unset and PI_CODING_AGENT_DIR unset); skipping models.json update." >&2
 		return 0
 	fi
-	mkdir -p "$agent_dir"
+	safe_mkdir "models.json setup" "$agent_dir"
 	local models_path="$agent_dir/models.json"
 
 	node - "$models_path" "$url" <<'NODE'
@@ -346,6 +898,7 @@ fi
 if [[ -n "$BIN_DIR_ARG" ]]; then
 	UNINSTALL_CMD="$UNINSTALL_CMD --bin-dir \"$BIN_DIR_ARG\""
 fi
+UNINSTALL_CMD="$UNINSTALL_CMD --clear-manifest"
 
 echo
 echo "Uninstall: $UNINSTALL_CMD"
