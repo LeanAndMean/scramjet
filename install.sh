@@ -195,6 +195,14 @@ if [[ ! -d "$SUBAGENT_SRC" ]]; then
 	exit 1
 fi
 
+# --- Agent-file transform module (ships with install.sh in the repo).
+TRANSFORM_SRC="$REPO_ROOT/src/install/transform.mjs"
+if [[ ! -f "$TRANSFORM_SRC" ]]; then
+	echo "Error: $TRANSFORM_SRC not found." >&2
+	echo "       The transform module ships alongside install.sh; the repo may be incomplete." >&2
+	exit 1
+fi
+
 # --- Required tooling for plugin wiring (agent-file transform, plugin clones).
 if ! command -v node >/dev/null 2>&1; then
 	echo "Error: node is not on \$PATH; required for agent-file transforms." >&2
@@ -388,19 +396,17 @@ manifest_add() {
 }
 
 # --- transform_and_install_agent SRC DEST
-# Writes a regular-file copy of SRC to DEST with two YAML frontmatter edits:
+# Writes a regular-file copy of SRC to DEST with two YAML frontmatter edits
+# applied by src/install/transform.mjs:
 #   1. Remove any `model: inherit` line (other model values pass through).
 #   2. Convert `tools: [a, b, c]` inline arrays and `tools:\n  - a\n  - b`
 #      block sequences to comma-string form `tools: a, b, c`.
-# Frontmatter is detected as the leading region between two `---` lines on
-# their own. The inline splitter is paren-aware, so `Bash(npm:*, git:*)`
-# survives intact. Unrepresentable or unsupported shapes (nested arrays,
-# flow maps, an empty `tools: []` -- Pi has no way to express "no tools
-# allowed" -- comments inside a block sequence) cause node to print a
-# source-path-tagged error and exit non-zero; the bash wrapper propagates
-# the failure so the install aborts rather than silently dropping the
-# `tools:` restriction. Records DEST in the manifest AFTER a successful
-# transform.
+# Unrepresentable or unsupported shapes (nested arrays, flow maps, an empty
+# `tools: []` -- Pi has no way to express "no tools allowed" -- comments
+# inside a block sequence) cause the transform module to print a source-
+# path-tagged error and exit non-zero; the bash wrapper propagates the
+# failure so the install aborts rather than silently dropping the `tools:`
+# restriction. Records DEST in the manifest AFTER a successful transform.
 transform_and_install_agent() {
 	local SRC="$1" DEST="$2"
 
@@ -428,141 +434,10 @@ transform_and_install_agent() {
 	local tmp
 	tmp="$(mktemp "$DEST.scramjet.XXXXXX.tmp")"
 
-	if ! node - "$SRC" "$tmp" <<'NODE'
-const fs = require("node:fs");
-const src = process.argv[2];
-const dest = process.argv[3];
-const raw = fs.readFileSync(src, "utf8");
-
-// Detect frontmatter: leading `---\n...\n---\n`.
-const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
-if (!fmMatch) {
-	// No frontmatter: copy as-is, normalizing line endings to LF.
-	fs.writeFileSync(dest, raw.replace(/\r\n/g, "\n"));
-	process.exit(0);
-}
-const fm = fmMatch[1];
-const body = raw.slice(fmMatch[0].length).replace(/\r\n/g, "\n");
-
-// Returns true if a tools-array item value contains a nested array/object
-// or any other shape the simple transform can't safely round-trip.
-const isComplexValue = v => /[\[\]{}]/.test(v);
-
-// Split on commas at paren depth 0, so Claude Code's documented
-// `Bash(npm:*, git:*)` allowlist syntax survives instead of being mangled
-// into three malformed entries.
-function splitTopLevelCommas(s) {
-	const out = [];
-	let cur = "";
-	let depth = 0;
-	for (let k = 0; k < s.length; k++) {
-		const c = s[k];
-		if (c === "(") depth += 1;
-		else if (c === ")") depth -= 1;
-		else if (c === "," && depth === 0) {
-			out.push(cur);
-			cur = "";
-			continue;
-		}
-		cur += c;
-	}
-	if (cur.length > 0) out.push(cur);
-	return out;
-}
-
-const lines = fm.split(/\r?\n/);
-const out = [];
-let i = 0;
-while (i < lines.length) {
-	const line = lines[i];
-	// 1. Strip `model: inherit` (exact match, ignoring leading/trailing whitespace).
-	if (/^\s*model:\s*inherit\s*$/.test(line)) {
-		i += 1;
-		continue;
-	}
-	// 2a. Inline array: `tools: [a, b, c]` -> `tools: a, b, c`.
-	// Strict shape: no nested brackets or braces inside the array.
-	const inlineMatch = line.match(/^(\s*tools:\s*)\[([^\[\]{}]*)\]\s*$/);
-	if (inlineMatch) {
-		const inner = splitTopLevelCommas(inlineMatch[2])
-			.map(s => s.trim().replace(/^["']|["']$/g, ""))
-			.filter(Boolean);
-		if (inner.length === 0) {
-			// `tools: []` literally means "no tools allowed" in Claude Code.
-			// Pi parses tools as a comma-list and treats empty as "no
-			// restriction" (all tools allowed), so the semantic cannot be
-			// round-tripped. Refuse rather than silently invert.
-			console.error(
-				`${src}: tools: [] cannot be represented in Pi (no way to express "no tools allowed"). ` +
-					`Remove the tools: line or specify at least one tool.`
-			);
-			process.exit(1);
-		}
-		out.push(`${inlineMatch[1]}${inner.join(", ")}`);
-		i += 1;
-		continue;
-	}
-	// `tools: [...]` or `tools: {...}` that didn't match the strict shape
-	// above is a nested or flow-map form the simple transform can't safely
-	// round-trip. Fail loud rather than emit malformed YAML.
-	if (/^\s*tools:\s*[\[{]/.test(line)) {
-		console.error(`${src}: unsupported tools array shape: ${line.trim()}`);
-		process.exit(1);
-	}
-	// 2b. Block sequence: `tools:` followed by `<indent>  - a` lines. Items
-	// must be strictly more indented than the `tools:` key itself.
-	const blockMatch = line.match(/^(\s*)tools:\s*$/);
-	if (blockMatch) {
-		const indent = blockMatch[1];
-		const items = [];
-		let j = i + 1;
-		const itemRe = /^(\s+)-\s+(.*\S)\s*$/;
-		while (j < lines.length) {
-			const cur = lines[j];
-			// Blank line ends the block.
-			if (/^\s*$/.test(cur)) break;
-			// A comment between `tools:` and its items, or interleaved with
-			// items, makes the boundaries of the sequence ambiguous. Refuse
-			// rather than silently drop items.
-			if (/^\s*#/.test(cur)) {
-				console.error(
-					`${src}: comment line inside tools: block sequence at line ${j + 1}: ${cur.trim()}. ` +
-						`Comments inside the sequence are not supported; remove the comment or rewrite as inline 'tools: a, b'.`
-				);
-				process.exit(1);
-			}
-			const m = cur.match(itemRe);
-			if (!m) break;
-			if (m[1].length <= indent.length) break;
-			if (isComplexValue(m[2])) {
-				console.error(`${src}: unsupported nested block-sequence item at line ${j + 1}: ${cur.trim()}`);
-				process.exit(1);
-			}
-			items.push(m[2].replace(/^["']|["']$/g, ""));
-			j += 1;
-		}
-		if (items.length === 0) {
-			// `tools:` with nothing usable underneath: either the source meant
-			// "no tools" (not expressible in Pi) or the parser failed to find
-			// items. Either way, emitting `tools:` (null) would silently grant
-			// all tools.
-			console.error(
-				`${src}: tools: block sequence at line ${i + 1} has no items. ` +
-					`Either remove the line or list at least one item under it.`
-			);
-			process.exit(1);
-		}
-		out.push(`${indent}tools: ${items.join(", ")}`);
-		i = j;
-		continue;
-	}
-	out.push(line);
-	i += 1;
-}
-
-fs.writeFileSync(dest, "---\n" + out.join("\n") + "\n---\n" + body);
-NODE
-	then
+	# TRANSFORM_SRC is resolved at script load time relative to install.sh
+	# (REPO_ROOT/src/install/transform.mjs) so install.sh keeps working
+	# whether invoked from the repo root, a subdirectory, or an absolute path.
+	if ! node "$TRANSFORM_SRC" "$SRC" "$tmp"; then
 		rm -f "$tmp"
 		echo "Error: agent transform failed for $SRC (see message above); refusing to continue partial install." >&2
 		return 1

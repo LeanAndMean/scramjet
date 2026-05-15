@@ -25,6 +25,15 @@ import {
 	createWriteToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
+// Shape every alias factory must satisfy. The ToolDefinition generics are
+// pinned at `<any, any>` (not the narrower `<TSchema, unknown>` default)
+// because Pi's ToolDefinition has callback fields -- `renderCall(args:
+// Static<TParams>)`, `renderResult(result: AgentToolResult<TDetails>)` --
+// that read TParams/TDetails in contravariant positions. Tightening either
+// breaks assignment of the per-factory concrete shapes (e.g.
+// `ToolDefinition<TObject<{ pattern, path, ... }>, FindToolDetails>`)
+// under --strictFunctionTypes. `any` is bivariant and sidesteps the
+// variance check.
 type Factory = (cwd: string) => ToolDefinition<any, any>;
 
 export const CLAUDE_CODE_TOOL_NAMES = ["Read", "Bash", "Edit", "Write", "Grep", "Glob", "LS"] as const;
@@ -34,7 +43,7 @@ export type ClaudeCodeToolName = (typeof CLAUDE_CODE_TOOL_NAMES)[number];
 // `Record<ClaudeCodeToolName, Factory>` annotation forces every name in
 // CLAUDE_CODE_TOOL_NAMES to have a factory; adding a name without a factory
 // (or vice versa) is a compile error.
-const ALIAS_FACTORIES: Record<ClaudeCodeToolName, Factory> = {
+export const ALIAS_FACTORIES: Record<ClaudeCodeToolName, Factory> = {
 	Read: createReadToolDefinition,
 	Bash: createBashToolDefinition,
 	Edit: createEditToolDefinition,

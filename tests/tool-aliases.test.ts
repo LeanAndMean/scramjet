@@ -26,7 +26,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
 	};
 });
 
-import { CLAUDE_CODE_TOOL_NAMES, registerToolAliases } from "../src/tool-aliases/index.ts";
+import { ALIAS_FACTORIES, CLAUDE_CODE_TOOL_NAMES, registerToolAliases } from "../src/tool-aliases/index.ts";
 
 function recordingPi() {
 	const registered: any[] = [];
@@ -41,6 +41,19 @@ function recordingPi() {
 describe("CLAUDE_CODE_TOOL_NAMES", () => {
 	it("exposes the seven Claude Code tool names in stable order", () => {
 		expect(CLAUDE_CODE_TOOL_NAMES).toEqual(["Read", "Bash", "Edit", "Write", "Grep", "Glob", "LS"]);
+	});
+});
+
+describe("ALIAS_FACTORIES", () => {
+	// The Record<ClaudeCodeToolName, Factory> annotation makes a missing key
+	// a compile error today. This runtime test locks the invariant against a
+	// future weakening of the annotation (e.g. `Partial<Record<...>>`), which
+	// would silently let an alias name go unwired.
+	it("has a factory for every CLAUDE_CODE_TOOL_NAMES entry", () => {
+		for (const name of CLAUDE_CODE_TOOL_NAMES) {
+			expect(typeof ALIAS_FACTORIES[name]).toBe("function");
+		}
+		expect(Object.keys(ALIAS_FACTORIES).sort()).toEqual([...CLAUDE_CODE_TOOL_NAMES].sort());
 	});
 });
 

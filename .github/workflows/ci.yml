@@ -64,6 +64,14 @@ jobs:
           test -r .pi/extensions/scramjet/index.ts
           test -L .pi/bin/scramjet
           test -x .pi/bin/scramjet
+          # --no-plugins manifest content: only the subagent extension was
+          # tracked (no plugin agents, no plugin command symlinks). Strip
+          # comments and blank lines, then assert the entry list is exactly
+          # the subagent symlink path.
+          test -f .pi/.scramjet-manifest
+          subagent_path="$(cd .pi/extensions && pwd -P)/subagent"
+          entries=$(grep -Ev '^[[:space:]]*(#|$)' .pi/.scramjet-manifest)
+          test "$entries" = "$subagent_path"
           ./install.sh --local --no-plugins
           test -L .pi/extensions/scramjet
           test -L .pi/bin/scramjet
@@ -85,6 +93,15 @@ jobs:
           test -f "$SUBAGENT/index.ts"
           grep -qF "pi.registerTool" "$SUBAGENT/index.ts"
           grep -qF "export default function" "$SUBAGENT/index.ts"
+
+      - name: registerToolAliases invocation stability guard
+        run: |
+          # A refactor that drops the registerToolAliases(pi) call from
+          # index.ts would silently ship plugin agents without their tool-
+          # name restrictions wired up. Catch that drift the same way we
+          # catch subagent-path drift.
+          test -f index.ts
+          grep -qF "registerToolAliases(pi)" index.ts
 
       - name: install.sh / uninstall.sh hermetic plugin wiring
         run: |
@@ -360,6 +377,78 @@ jobs:
           test -f "$work/cache/mach10/UNTRACKED-FILE"
 
           ./uninstall.sh --local --clear-manifest
+
+      - name: install.sh aborts on mid-plugin transform failure
+        run: |
+          # An agent file with `tools: []` is unrepresentable in Pi: the
+          # transform must fail loud and the install must abort with a
+          # non-zero exit code rather than silently dropping the agent. The
+          # malformed agent must never land in <AGENT_DIR>/agents/ and must
+          # never be recorded in the manifest, so a future /mach10:<cmd>
+          # delegation cannot bind to a half-installed subagent.
+          #
+          # Two agents are placed in the fixture so the loop has a chance to
+          # transform one before tripping over the bad one. Whether the good
+          # agent lands before the failure is glob-order-dependent (a.md vs
+          # bad-z.md) and not asserted; what IS asserted is that the bad
+          # agent is absent from both the agent dir and the manifest.
+          rm -rf .pi
+          work=$(mktemp -d)
+          trap "rm -rf $work .pi" EXIT
+
+          mkdir -p "$work/m10/agents"
+          cat >"$work/m10/agents/a.md" <<'AGENT'
+          ---
+          name: a
+          description: valid agent
+          tools: [Read]
+          ---
+          a body
+          AGENT
+          # tools: [] is the "no tools allowed" shape Pi cannot express, so
+          # the transform module exits 1 and the bash wrapper aborts.
+          cat >"$work/m10/agents/bad-z.md" <<'AGENT'
+          ---
+          name: bad-z
+          description: malformed agent (tools: [])
+          tools: []
+          ---
+          bad body
+          AGENT
+
+          mkdir -p "$work/fd" "$work/prt"
+
+          STATUS=0
+          OUTPUT=$(SCRAMJET_CACHE="$work/cache" \
+            ./install.sh --local \
+            --mach10 "$work/m10" \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt" 2>&1) || STATUS=$?
+          test "$STATUS" -ne 0
+
+          # Error message identifies the offending source path and the
+          # specific failure mode (silent privilege escalation otherwise).
+          echo "$OUTPUT" | grep -qF "bad-z.md"
+          echo "$OUTPUT" | grep -qF "tools: []"
+          echo "$OUTPUT" | grep -qF "refusing to continue partial install"
+
+          # The malformed agent never landed.
+          ! test -e .pi/agents/mach10:bad-z.md
+
+          # If a manifest was written, it must not list the bad agent.
+          # (Manifest write may have happened on a prior partial-install
+          # attempt or not at all; either way, the bad path is unwelcome.)
+          if [ -f .pi/.scramjet-manifest ]; then
+            ! grep -qF ":bad-z.md" .pi/.scramjet-manifest
+          fi
+
+          # Override source files are byte-for-byte unchanged.
+          test -f "$work/m10/agents/a.md"
+          test -f "$work/m10/agents/bad-z.md"
+          grep -qF "tools: []" "$work/m10/agents/bad-z.md"
+
+          ./uninstall.sh --local --clear-manifest 2>/dev/null || true
+          rm -rf .pi
 
       - name: install.sh PATH-warning suppression
         run: |
