@@ -81,9 +81,16 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 		async execute(_toolCallId, params) {
 			latestCompletion = paramsToCompletionSignal(params);
 
+			// Result text differs by case for transcript readability:
+			// - With next_step: forward-looking pointer (matches the countdown widget,
+			//   useful when reviewing a session after the widget is gone).
+			// - Without next_step: just the summary, no completion ceremony — the
+			//   `task_complete` call header already signals "this was the end."
+			const text = params.next_step ? `→ ${params.next_step.command}` : `Task Summary: ${params.summary}`;
+
 			return {
-				content: [{ type: "text", text: "Task marked complete." }],
-				details: { summary: params.summary },
+				content: [{ type: "text", text }],
+				details: { summary: params.summary, ...(params.next_step ?? {}) },
 				terminate: true,
 			};
 		},
