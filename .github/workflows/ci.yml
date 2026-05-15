@@ -554,6 +554,153 @@ jobs:
           test "$(cat "$tmp_agent/models.json")" = '{ not json'
           rm -rf "$tmp_agent" "$tmp_ext" "$tmp_bin"
 
+      - name: install.sh ANTHROPIC_BASE_URL hostname normalization
+        run: |
+          # F12: install.sh's URL parser must normalize the hostname (lowercase
+          # + strip explicit port) before comparing to api.anthropic.com. A
+          # URL like https://API.Anthropic.com:443/v1 resolves to api.anthropic.com
+          # and must NOT trigger a models.json write -- otherwise stock users
+          # whose env happens to carry an unusual cased/ported URL would have
+          # baseUrl written for the canonical host.
+          tmp_agent=$(mktemp -d)
+          tmp_ext=$(mktemp -d)
+          tmp_bin=$(mktemp -d)
+          PI_CODING_AGENT_DIR="$tmp_agent" \
+            ANTHROPIC_BASE_URL="https://API.Anthropic.com:443/v1" \
+            ./install.sh --target "$tmp_ext" --bin-dir "$tmp_bin"
+          # No models.json must have been written (the install short-circuits
+          # before mkdir on the agent dir for the models.json setup).
+          ! test -f "$tmp_agent/models.json"
+          rm -rf "$tmp_agent" "$tmp_ext" "$tmp_bin"
+
+      - name: uninstall.sh refuses tampered out-of-tree manifest entry
+        run: |
+          # S9: a manifest with an entry outside $AGENT_DIR must be refused
+          # by --clear-manifest. The out-of-tree path must remain untouched
+          # and the manifest file itself must be preserved so the operator
+          # can inspect it.
+          tmp_agent=$(mktemp -d)
+          tmp_ext=$(mktemp -d)
+          tmp_bin=$(mktemp -d)
+          tmp_decoy=$(mktemp -d)
+          # Install minimally so AGENT_DIR exists; --no-plugins keeps the
+          # manifest small. We'll rewrite it by hand.
+          PI_CODING_AGENT_DIR="$tmp_agent" \
+            ./install.sh --target "$tmp_ext" --bin-dir "$tmp_bin" --no-plugins
+          # Pre-create a sentinel file outside AGENT_DIR.
+          echo "must-survive" > "$tmp_decoy/should-not-be-deleted"
+          # Append a tampered entry to the manifest.
+          printf '%s\n' "$tmp_decoy/should-not-be-deleted" >> "$tmp_ext/.scramjet-manifest"
+          STATUS=0
+          OUTPUT=$(PI_CODING_AGENT_DIR="$tmp_agent" \
+            ./uninstall.sh --target "$tmp_ext" --bin-dir "$tmp_bin" --clear-manifest 2>&1) || STATUS=$?
+          test "$STATUS" -ne 0
+          # The decoy file must still exist with original content.
+          test "$(cat "$tmp_decoy/should-not-be-deleted")" = "must-survive"
+          # The manifest must still exist.
+          test -f "$tmp_ext/.scramjet-manifest"
+          # The error message must call out the manifest-entry-out-of-tree case.
+          echo "$OUTPUT" | grep -qF "resolves outside"
+          # Clean up: drop the tampered line so the standard uninstall succeeds.
+          grep -vF "should-not-be-deleted" "$tmp_ext/.scramjet-manifest" > "$tmp_ext/.scramjet-manifest.new"
+          mv "$tmp_ext/.scramjet-manifest.new" "$tmp_ext/.scramjet-manifest"
+          PI_CODING_AGENT_DIR="$tmp_agent" \
+            ./uninstall.sh --target "$tmp_ext" --bin-dir "$tmp_bin" --clear-manifest
+          rm -rf "$tmp_agent" "$tmp_ext" "$tmp_bin" "$tmp_decoy"
+
+      - name: install.sh --force overwrites a transformed agent file
+        run: |
+          # S10: clobber-discipline for transformed agent files is well-covered
+          # on the refuse-without-force branch (symlink-only safety test). The
+          # actually-overwrite case (--force on a real file that's NOT in the
+          # prior manifest) was uncovered. Lock it in: a pre-existing real
+          # file at the transformed-agent destination must be overwritten when
+          # --force is passed.
+          rm -rf .pi
+          work=$(mktemp -d)
+          trap "rm -rf $work .pi" EXIT
+          mkdir -p "$work/m10/agents" "$work/fd" "$work/prt"
+          cat >"$work/m10/agents/a.md" <<'AGENT'
+          ---
+          name: a
+          description: fixture agent
+          tools: [Read]
+          ---
+          a body
+          AGENT
+          # Pre-create the destination as a real file with sentinel content,
+          # BEFORE installing. install.sh without --force must refuse.
+          mkdir -p .pi/agents
+          echo "user-content-do-not-clobber" > .pi/agents/mach10:a.md
+          STATUS=0
+          OUTPUT=$(SCRAMJET_CACHE="$work/cache" \
+            ./install.sh --local \
+            --mach10 "$work/m10" \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt" 2>&1) || STATUS=$?
+          test "$STATUS" -ne 0
+          # Sentinel content must still be there (refuse-without-force).
+          test "$(cat .pi/agents/mach10:a.md)" = "user-content-do-not-clobber"
+          # Now re-run with --force; the file MUST be overwritten with the
+          # transformed-agent contents (no "user-content-..." trace).
+          SCRAMJET_CACHE="$work/cache" \
+            ./install.sh --local --force \
+            --mach10 "$work/m10" \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt"
+          ! grep -q "user-content" .pi/agents/mach10:a.md
+          grep -qF "a body" .pi/agents/mach10:a.md
+          ./uninstall.sh --local --clear-manifest
+
+      - name: install.sh manifest reconcile surfaces unwritable stale entry
+        run: |
+          # S8: the RECONCILE_FAILURES branch in install.sh's manifest sweep
+          # is the rm-failed path for a previously-tracked file the current
+          # run didn't re-create. Coverage was indirect; this step exercises
+          # it explicitly by chmod-locking the parent directory so rm fails.
+          # Skipped on root (rm bypasses dir perms) and on macOS sip paths,
+          # but the standard CI runner is fine.
+          if [ "$(id -u)" = "0" ]; then
+            echo "skipping: running as root, rm cannot be blocked by perms"
+            exit 0
+          fi
+          rm -rf .pi
+          work=$(mktemp -d)
+          trap 'chmod -R u+w "$work" .pi 2>/dev/null || true; rm -rf "$work" .pi' EXIT
+          # First install: place a tracked plugin file under a sub-directory
+          # we can later chmod-lock so its rm fails.
+          mkdir -p "$work/m10/agents"
+          cat >"$work/m10/agents/stale.md" <<'AGENT'
+          ---
+          name: stale
+          description: will be removed from source before second install
+          ---
+          stale body
+          AGENT
+          mkdir -p "$work/fd" "$work/prt"
+          SCRAMJET_CACHE="$work/cache" \
+            ./install.sh --local \
+            --mach10 "$work/m10" \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt"
+          # Now delete the source so the second install will try to reconcile
+          # (rm) the previously-tracked .pi/agents/mach10:stale.md.
+          rm "$work/m10/agents/stale.md"
+          # Lock the parent so rm fails (the parent directory's write+execute
+          # bits gate file removal under POSIX).
+          chmod 0500 .pi/agents
+          STATUS=0
+          OUTPUT=$(SCRAMJET_CACHE="$work/cache" \
+            ./install.sh --local \
+            --mach10 "$work/m10" \
+            --feature-dev "$work/fd" \
+            --pr-review-toolkit "$work/prt" 2>&1) || STATUS=$?
+          # Restore write perms so the trap can clean up.
+          chmod 0700 .pi/agents
+          test "$STATUS" -ne 0
+          echo "$OUTPUT" | grep -qF "stale manifest entry"
+          ./uninstall.sh --local --clear-manifest
+
       - name: scramjet shim absent-pi error
         run: |
           # Shim should exit non-zero with an actionable message when pi is absent.

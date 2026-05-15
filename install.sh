@@ -173,6 +173,38 @@ if [[ $NO_PLUGINS -eq 1 ]]; then
 	fi
 fi
 
+# --- expand_tilde FLAG_NAME VALUE
+# Echoes VALUE with a leading `~` expanded to $HOME. If VALUE starts with `~`
+# and $HOME is unset, exits 1 with a targeted message rather than silently
+# producing a literal-tilde path (which downstream `mkdir`/`ln` would create
+# under a directory called `~` in the current working dir). Empty VALUE echoes
+# empty. Callers MUST capture the result: `expanded=$(expand_tilde --foo "$arg")`.
+expand_tilde() {
+	local flag="$1" val="$2"
+	if [[ -z "$val" ]]; then
+		printf '%s' ""
+		return 0
+	fi
+	if [[ "$val" == "~"* && -z "${HOME:-}" ]]; then
+		echo "Error: $flag value starts with '~' but \$HOME is not set; cannot expand '$val'." >&2
+		echo "       Set HOME or pass an absolute path." >&2
+		exit 1
+	fi
+	printf '%s' "${val/#\~/$HOME}"
+}
+
+# --- safe_mkdir SUBSYSTEM PATH
+# Wraps mkdir -p with a subsystem-tagged error so EACCES/ENOSPC/EROFS
+# surface with context (which install leg failed) rather than just
+# `mkdir: cannot create...` followed by an unrelated trap message.
+safe_mkdir() {
+	local subsystem="$1" path="$2"
+	if ! mkdir -p "$path"; then
+		echo "Error: $subsystem: failed to create directory $path (see mkdir message above)." >&2
+		exit 1
+	fi
+}
+
 # --- Repo root (canonicalized; follows a launcher symlink to install.sh itself)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
@@ -222,12 +254,14 @@ fi
 # --- Agent directory resolution (single var; governs subagent extension,
 # plugin agent copies, plugin command symlinks, and manifest placement).
 if [[ -n "$TARGET_ARG" ]]; then
-	# Expand a leading ~ inside a quoted arg (shells don't expand it in quotes)
-	AGENT_DIR="${TARGET_ARG/#\~/${HOME:-~}}"
+	# Expand a leading ~ inside a quoted arg (shells don't expand it in quotes).
+	# expand_tilde fails loud if HOME is unset, rather than producing a literal
+	# `~/foo` path that downstream mkdir would silently materialize.
+	AGENT_DIR="$(expand_tilde --target "$TARGET_ARG")"
 elif [[ $LOCAL -eq 1 ]]; then
 	AGENT_DIR="$(pwd -P)/.pi"
 elif [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-	AGENT_DIR="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
+	AGENT_DIR="$(expand_tilde PI_CODING_AGENT_DIR "$PI_CODING_AGENT_DIR")"
 else
 	if [[ -z "${HOME:-}" ]]; then
 		echo "Error: \$HOME is not set; cannot resolve the default install target." >&2
@@ -241,7 +275,7 @@ MANIFEST="$AGENT_DIR/.scramjet-manifest"
 
 # --- Shim target resolution
 if [[ -n "$BIN_DIR_ARG" ]]; then
-	BIN_DIR_EXPANDED="${BIN_DIR_ARG/#\~/${HOME:-~}}"
+	BIN_DIR_EXPANDED="$(expand_tilde --bin-dir "$BIN_DIR_ARG")"
 	SHIM_DEST="$BIN_DIR_EXPANDED/scramjet"
 elif [[ $LOCAL -eq 1 ]]; then
 	SHIM_DEST="$(pwd -P)/.pi/bin/scramjet"
@@ -258,7 +292,8 @@ fi
 validate_override_path() {
 	local flag="$1" val="$2"
 	if [[ -n "$val" ]]; then
-		local expanded="${val/#\~/${HOME:-~}}"
+		local expanded
+		expanded="$(expand_tilde "$flag" "$val")"
 		if [[ ! -d "$expanded" ]]; then
 			echo "Error: $flag path does not exist or is not a directory: $val" >&2
 			exit 1
@@ -314,8 +349,11 @@ install_symlink() {
 		rm -rf "$DEST"
 	fi
 
-	mkdir -p "$(dirname "$DEST")"
-	ln -s "$SRC" "$DEST"
+	safe_mkdir install_symlink "$(dirname "$DEST")"
+	if ! ln -s "$SRC" "$DEST"; then
+		echo "Error: failed to create symlink $DEST -> $SRC (see ln message above)." >&2
+		exit 1
+	fi
 
 	if [[ "$(readlink "$DEST")" != "$SRC" ]]; then
 		echo "Error: symlink validation failed at $DEST; readlink returned: $(readlink "$DEST")" >&2
@@ -339,8 +377,10 @@ fi
 # --- Install the launcher shim
 # If the shim leg fails, an EXIT trap notes that the extension did install,
 # so the failure isn't read as a total no-op. EXT_DEST is captured because
-# install_symlink's `local DEST` dynamically shadows the outer DEST when
-# the trap fires from inside the function.
+# install_symlink's `local DEST` shadows the outer DEST when the trap fires
+# while a `local DEST` is still on the call stack — bash uses dynamic
+# scoping for `local`, so a function-local variable is visible to anything
+# the function transitively calls (including the EXIT trap).
 EXT_DEST="$DEST"
 SHIM_OK=0
 _shim_exit_note() {
@@ -407,7 +447,7 @@ fi
 # halfway through still leaves the manifest covering everything that
 # successfully landed on disk. The final atomic rewrite at the end of
 # the install collapses the journal into the canonical sorted form.
-mkdir -p "$AGENT_DIR"
+safe_mkdir "manifest setup" "$AGENT_DIR"
 {
 	echo "# scramjet manifest v1"
 	if [[ -n "$BEFORE_LIST" ]]; then
@@ -456,7 +496,7 @@ transform_and_install_agent() {
 		fi
 	fi
 
-	mkdir -p "$(dirname "$DEST")"
+	safe_mkdir "agent transform ($SRC)" "$(dirname "$DEST")"
 	local tmp
 	# Trailing X's only: BSD/macOS mktemp ignores X's followed by a literal
 	# suffix and either errors out or produces a literal `XXXXXX.tmp` name.
@@ -488,30 +528,72 @@ install_symlink_tracked() {
 # Iterates <PLUGIN_DIR>/agents/*.md -> <AGENT_DIR>/agents/<PLUGIN_NAME>:<basename>
 # (transformed copy). Iterates <PLUGIN_DIR>/commands/*.md ->
 # <AGENT_DIR>/prompts/<PLUGIN_NAME>:<basename> (symlink).
+#
+# Warns loudly when a plugin directory is misconfigured: neither agents/ nor
+# commands/ present (F13), or one of them present but contains zero .md files
+# (F14). Warnings are stderr-only and do not abort — override flags (--mach10
+# etc.) can legitimately point at empty fixtures for hermetic tests.
 wire_plugin() {
 	local PLUGIN_NAME="$1" PLUGIN_DIR="$2"
-	local f base dest
+	local f base dest agent_count cmd_count
+	local has_agents=0 has_cmds=0
+
 	if [[ -d "$PLUGIN_DIR/agents" ]]; then
+		has_agents=1
+		agent_count=0
 		for f in "$PLUGIN_DIR/agents"/*.md; do
 			[[ -e "$f" ]] || continue
+			agent_count=$((agent_count + 1))
 			base="$(basename "$f")"
 			dest="$AGENT_DIR/agents/${PLUGIN_NAME}:${base}"
 			transform_and_install_agent "$f" "$dest"
 		done
+		if [[ $agent_count -eq 0 ]]; then
+			echo "Warning: $PLUGIN_NAME: $PLUGIN_DIR/agents/ has no .md files; no agents wired." >&2
+		fi
 	fi
+
 	if [[ -d "$PLUGIN_DIR/commands" ]]; then
+		has_cmds=1
+		cmd_count=0
 		for f in "$PLUGIN_DIR/commands"/*.md; do
 			[[ -e "$f" ]] || continue
+			cmd_count=$((cmd_count + 1))
 			base="$(basename "$f")"
 			dest="$AGENT_DIR/prompts/${PLUGIN_NAME}:${base}"
 			install_symlink_tracked "$f" "$dest"
 		done
+		if [[ $cmd_count -eq 0 ]]; then
+			echo "Warning: $PLUGIN_NAME: $PLUGIN_DIR/commands/ has no .md files; no commands wired." >&2
+		fi
+	fi
+
+	if [[ $has_agents -eq 0 && $has_cmds -eq 0 ]]; then
+		echo "Warning: $PLUGIN_NAME: $PLUGIN_DIR has neither agents/ nor commands/; nothing to wire." >&2
+		echo "         (Check the plugin source; an empty install will appear to succeed but invocations will fail.)" >&2
 	fi
 }
 
 # --- Install the subagent extension symlink (always, even with --no-plugins;
 # subagent is what plugin agents are dispatched through).
-install_symlink_tracked "$SUBAGENT_SRC" "$AGENT_DIR/extensions/subagent"
+#
+# Targeted collision check (F26): Pi's own README documents installing the
+# bundled subagent example by hand. A user who followed that guidance will
+# already have a real directory (not a symlink) at the destination; the
+# generic install_symlink error ("already exists; re-run with --force")
+# does not explain that scramjet would do the same wiring for them. Detect
+# the specific shape and emit an actionable message before falling through.
+SUBAGENT_DEST_PATH="$AGENT_DIR/extensions/subagent"
+if [[ -d "$SUBAGENT_DEST_PATH" && ! -L "$SUBAGENT_DEST_PATH" && $FORCE -ne 1 ]]; then
+	echo "Error: $SUBAGENT_DEST_PATH exists as a real directory (not a scramjet-managed symlink)." >&2
+	echo "       This usually means you previously installed Pi's bundled subagent example by hand," >&2
+	echo "       following https://github.com/earendil-works/pi-mono Pi README guidance. scramjet" >&2
+	echo "       wires the same example as a symlink under the manifest, so the manual copy is" >&2
+	echo "       no longer needed." >&2
+	echo "       Resolve: remove $SUBAGENT_DEST_PATH and re-run, or re-run with --force." >&2
+	exit 1
+fi
+install_symlink_tracked "$SUBAGENT_SRC" "$SUBAGENT_DEST_PATH"
 if [[ "$RESULT" == "already" ]]; then
 	echo "Already installed subagent: $AGENT_DIR/extensions/subagent -> $SUBAGENT_SRC"
 else
@@ -569,7 +651,7 @@ ensure_git_clone() {
 		# a bare `set -e` exit with no context.
 		git -C "$repo_dir" fetch --tags origin
 	else
-		mkdir -p "$(dirname "$repo_dir")"
+		safe_mkdir "plugin clone ($repo_url)" "$(dirname "$repo_dir")"
 		git clone "$repo_url" "$repo_dir"
 	fi
 
@@ -629,7 +711,7 @@ if [[ $NO_PLUGINS -ne 1 ]]; then
 
 	# Resolve mach10 source: --mach10 override, or managed clone.
 	if [[ -n "$MACH10_ARG" ]]; then
-		MACH10_DIR="${MACH10_ARG/#\~/${HOME:-~}}"
+		MACH10_DIR="$(expand_tilde --mach10 "$MACH10_ARG")"
 	else
 		MACH10_DIR="$SCRAMJET_CACHE/mach10"
 		ensure_git_clone "$MACH10_REPO_URL" "$MACH10_DIR" semver
@@ -647,14 +729,14 @@ if [[ $NO_PLUGINS -ne 1 ]]; then
 	fi
 
 	if [[ -n "$FEATURE_DEV_ARG" ]]; then
-		FEATURE_DEV_DIR="${FEATURE_DEV_ARG/#\~/${HOME:-~}}"
+		FEATURE_DEV_DIR="$(expand_tilde --feature-dev "$FEATURE_DEV_ARG")"
 	else
 		FEATURE_DEV_DIR="$MARKETPLACE_DIR/plugins/feature-dev"
 	fi
 	wire_plugin feature-dev "$FEATURE_DEV_DIR"
 
 	if [[ -n "$PR_REVIEW_TOOLKIT_ARG" ]]; then
-		PR_REVIEW_TOOLKIT_DIR="${PR_REVIEW_TOOLKIT_ARG/#\~/${HOME:-~}}"
+		PR_REVIEW_TOOLKIT_DIR="$(expand_tilde --pr-review-toolkit "$PR_REVIEW_TOOLKIT_ARG")"
 	else
 		PR_REVIEW_TOOLKIT_DIR="$MARKETPLACE_DIR/plugins/pr-review-toolkit"
 	fi
@@ -726,19 +808,13 @@ esac
 #   - the env var is unset
 #   - the URL is malformed or has no host (e.g. file:///, data:)
 #   - the host is api.anthropic.com (stock; FQDN trailing dot normalized)
-#   - node is not on PATH
 #   - both HOME and PI_CODING_AGENT_DIR are unset (cannot resolve agent dir)
 # Fails loud (exit 2) when an existing models.json is present but not valid JSON.
+# Note: node is hard-required at script start (the agent transform needs it),
+# so there is no defensive "is node on PATH?" check here.
 update_models_json() {
 	local url="${ANTHROPIC_BASE_URL:-}"
 	[[ -z "$url" ]] && return 0
-
-	if ! command -v node >/dev/null 2>&1; then
-		echo
-		echo "Note: node is not on \$PATH; skipping models.json update." >&2
-		echo "      (pi requires node; once it is installed and on PATH, re-run ./install.sh.)" >&2
-		return 0
-	fi
 
 	# Inline JS uses exit code 2 deliberately for "URL invalid or has no
 	# host"; any other non-zero (uncaught throw, OOM, signal) is a real
@@ -761,7 +837,7 @@ update_models_json() {
 
 	local agent_dir
 	if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-		agent_dir="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
+		agent_dir="$(expand_tilde PI_CODING_AGENT_DIR "$PI_CODING_AGENT_DIR")"
 	elif [[ -n "${HOME:-}" ]]; then
 		agent_dir="$HOME/.pi/agent"
 	else
@@ -769,7 +845,7 @@ update_models_json() {
 		echo "Note: cannot resolve pi agent dir (HOME unset and PI_CODING_AGENT_DIR unset); skipping models.json update." >&2
 		return 0
 	fi
-	mkdir -p "$agent_dir"
+	safe_mkdir "models.json setup" "$agent_dir"
 	local models_path="$agent_dir/models.json"
 
 	node - "$models_path" "$url" <<'NODE'

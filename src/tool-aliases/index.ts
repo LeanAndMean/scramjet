@@ -60,13 +60,36 @@ export function registerToolAliases(pi: ExtensionAPI): void {
 		// renderCall, renderResult). The template's execute is discarded: it
 		// would bake in process.cwd() at registration time, but Pi's session
 		// cwd can move (e.g. on `cd`), so we rebuild per call against ctx.cwd.
-		const template = factory(process.cwd());
+		//
+		// Wrap both factory calls (template-time and per-call) so a Pi-side
+		// regression that throws from a factory surfaces with the alias name
+		// instead of an opaque stack trace. Without this, a single misbehaving
+		// factory would crash registerToolAliases mid-loop and Pi would print
+		// the raw error with no hint which alias caused it.
+		let template: ToolDefinition<any, any>;
+		try {
+			template = factory(process.cwd());
+		} catch (err) {
+			throw new Error(
+				`Failed to build alias template for ${aliasName}: ${err instanceof Error ? err.message : String(err)}`,
+				{ cause: err },
+			);
+		}
 		pi.registerTool({
 			...template,
 			name: aliasName,
 			label: aliasName,
 			async execute(toolCallId, params, signal, onUpdate, ctx) {
-				return factory(ctx.cwd).execute(toolCallId, params, signal, onUpdate, ctx);
+				let live: ToolDefinition<any, any>;
+				try {
+					live = factory(ctx.cwd);
+				} catch (err) {
+					throw new Error(
+						`Failed to build alias instance for ${aliasName} at cwd=${ctx.cwd}: ${err instanceof Error ? err.message : String(err)}`,
+						{ cause: err },
+					);
+				}
+				return live.execute(toolCallId, params, signal, onUpdate, ctx);
 			},
 		});
 	}

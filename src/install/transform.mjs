@@ -21,8 +21,8 @@
 //   in full or not at all (the bash wrapper writes to a temp path).
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { argv } from "node:process";
+import { fileURLToPath } from "node:url";
 
 export class TransformError extends Error {
 	constructor(message) {
@@ -34,7 +34,7 @@ export class TransformError extends Error {
 // Returns true if a tools-array item value contains a nested array/object
 // or any other shape the simple transform can't safely round-trip.
 function isComplexValue(v) {
-	return /[\[\]{}]/.test(v);
+	return /[[\]{}]/.test(v);
 }
 
 // Split on commas at paren depth 0, so Claude Code's documented
@@ -90,7 +90,7 @@ export function transformAgentSource(raw, srcLabel) {
 		}
 		// Strict inline shape: any nested brackets or braces fall through to
 		// the flow-map / nested-array branch below and fail loud.
-		const inlineMatch = line.match(/^(\s*tools:\s*)\[([^\[\]{}]*)\]\s*$/);
+		const inlineMatch = line.match(/^(\s*tools:\s*)\[([^[\]{}]*)\]\s*$/);
 		if (inlineMatch) {
 			const inner = splitTopLevelCommas(inlineMatch[2])
 				.map((s) => s.trim().replace(/^["']|["']$/g, ""))
@@ -111,7 +111,7 @@ export function transformAgentSource(raw, srcLabel) {
 		}
 		// Nested array or flow-map shape that the simple transform can't
 		// safely round-trip. Fail loud rather than emit malformed YAML.
-		if (/^\s*tools:\s*[\[{]/.test(line)) {
+		if (/^\s*tools:\s*[[{]/.test(line)) {
 			throw new TransformError(`${srcLabel}: unsupported tools array shape: ${line.trim()}`);
 		}
 		// Block sequence: items must be strictly more indented than the

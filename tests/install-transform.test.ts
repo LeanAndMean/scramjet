@@ -28,6 +28,16 @@ describe("transformAgentSource — happy paths", () => {
 		expect(output).toContain("tools: Read, Bash(npm:*, git:*), Write");
 	});
 
+	it("paren-aware splitter handles mixed quotes around paren-syntax items", () => {
+		// Locks the combined contract: a single-quoted Bash(...) entry next to
+		// an unquoted bare name must round-trip without internal comma-mangling.
+		// A future regression that splits on commas before walking parens would
+		// emit `Bash(npm:*` `*)` and turn this case into invalid YAML.
+		const input = "---\nname: a\ntools: ['Bash(npm:*)', Read]\n---\nbody\n";
+		const output = transformAgentSource(input, "fixture") as string;
+		expect(output).toContain("tools: Bash(npm:*), Read");
+	});
+
 	it("strips surrounding quotes from inline items", () => {
 		const input = `---\nname: a\ntools: ['Read', "Bash"]\n---\nbody\n`;
 		const output = transformAgentSource(input, "fixture") as string;
@@ -75,6 +85,38 @@ describe("transformAgentSource — idempotency", () => {
 			const twice = transformAgentSource(once, "fixture") as string;
 			expect(twice).toBe(once);
 		}
+	});
+});
+
+describe("transformAgentSource — frontmatter detection edges", () => {
+	it("file ending exactly `tools: [Read]\\n---` (no trailing newline) is not treated as frontmatter and passes through unchanged", () => {
+		// The frontmatter regex requires a newline before the closing `---` and
+		// optionally one after. A file that ends right at the closing `---`
+		// with no trailing newline (and that has no leading `---\n` opener) is
+		// not a real frontmatter block. Locking this in stops a future regex
+		// loosening from accidentally accepting half-frontmatter and emitting
+		// `tools:` (null) on a body that happens to look like a key.
+		const input = "tools: [Read]\n---";
+		const output = transformAgentSource(input, "fixture") as string;
+		// No frontmatter opener -> body path: CRLF normalization only.
+		expect(output).toBe("tools: [Read]\n---");
+	});
+
+	it("rewrites every `tools:` array in a malformed file with multiple tools keys", () => {
+		// Locks the current line-by-line behavior. The transform was never
+		// designed to handle two tools: keys in the same frontmatter block
+		// (that itself violates YAML, since the second silently overrides
+		// the first), but the line walker rewrites each occurrence
+		// independently. If a future refactor swaps to a global single-shot
+		// match, this test should fail and force an explicit decision about
+		// whether to fail loud on the duplicate-key case (probably the
+		// right move) or preserve the current "rewrite all" behavior.
+		const input = "---\nname: a\ntools: [Read]\ntools: [Bash]\n---\nbody\n";
+		const output = transformAgentSource(input, "fixture") as string;
+		expect(output).toContain("tools: Read");
+		expect(output).toContain("tools: Bash");
+		// Neither line still carries the YAML-array brackets.
+		expect(output).not.toMatch(/tools: \[/);
 	});
 });
 

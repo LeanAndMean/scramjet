@@ -82,6 +82,26 @@ describe("registerToolAliases", () => {
 		expect(result.factoryCwd).not.toBe(process.cwd());
 	});
 
+	it("rebuilds the factory on every call (no closure capture of the first ctx.cwd)", async () => {
+		// A regression that caches `factory(ctx.cwd)` on first invocation would
+		// pass the single-call test above; this test fails fast on that case
+		// by invoking the SAME alias twice with two different cwds and asserting
+		// each invocation produces its own cwd. The previous test would still
+		// pass even if `factoryCwd` was frozen on first invocation.
+		const { pi, registered } = recordingPi();
+		registerToolAliases(pi);
+		const readAlias = registered.find((t) => t.name === "Read");
+		const first = await readAlias.execute("call-1", { path: "a" }, undefined, undefined, {
+			cwd: "/cwd/first",
+		});
+		const second = await readAlias.execute("call-2", { path: "b" }, undefined, undefined, {
+			cwd: "/cwd/second",
+		});
+		expect(first.factoryCwd).toBe("/cwd/first");
+		expect(second.factoryCwd).toBe("/cwd/second");
+		expect(first.factoryCwd).not.toBe(second.factoryCwd);
+	});
+
 	it("forwards toolCallId, params, signal, onUpdate, ctx unchanged to the underlying factory", async () => {
 		const { pi, registered } = recordingPi();
 		registerToolAliases(pi);

@@ -220,11 +220,20 @@ extension — no launcher shim, no plugin wiring.
 
 ## Plugin wiring
 
-`install.sh` also wires Pi's bundled subagent extension and three Claude
+Plugin wiring is **install-time, not runtime** — `install.sh` writes
+symlinks and transformed copies once, and Pi at runtime doesn't know
+scramjet was involved. Cost at every Pi launch is zero: plugins appear
+as ordinary entries under `<agent-dir>/agents/` and `<agent-dir>/prompts/`.
+
+`install.sh` wires Pi's bundled subagent extension and three Claude
 Code plugins (`mach10`, `feature-dev`, `pr-review-toolkit`) into the same
 agent directory. After install you can invoke their commands directly,
 e.g. `/mach10:issue-plan`, `/feature-dev:feature-dev`,
 `/pr-review-toolkit:review-pr`. Pass `--no-plugins` to skip this entirely.
+
+> **Restart pi** after `./install.sh`: Pi loads extensions and plugins
+> at session start. A running `pi` session won't pick up newly installed
+> wiring until you exit and relaunch (e.g. `scramjet` or `pi` again).
 
 ### What gets wired
 
@@ -252,10 +261,12 @@ symlinked into `<agent-dir>/prompts/<plugin>:<basename>.md`. Agent files
 Two YAML frontmatter edits keep Claude Code-authored agents working under
 Pi:
 
-- **`model: inherit`** is removed. Pi has no `inherit` model, so the
-  child uses Pi's default. Other model values (`sonnet`, `opus`, `haiku`,
-  `claude-sonnet-4-5`, …) pass through unchanged — Pi's resolver matches
-  them by substring.
+- **`model: inherit`** is removed so plugin agents fall back to Pi's
+  default model rather than carrying a value Pi has no mapping for.
+  Other model values (`sonnet`, `opus`, `haiku`, `claude-sonnet-4-5`,
+  …) pass through to Pi unchanged; how Pi itself resolves those strings
+  to concrete API model IDs is an internal detail and may evolve
+  independently.
 - **`tools: [a, b, c]`** YAML arrays (and block-sequence variants) are
   converted to comma-string form `tools: a, b, c`. Pi's subagent example
   parses the comma form. Unrepresentable shapes — `tools: []` (no way

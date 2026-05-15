@@ -116,6 +116,24 @@ if [[ -n "$BIN_DIR_ARG" && $LOCAL -eq 1 ]]; then
 	exit 2
 fi
 
+# --- expand_tilde FLAG_NAME VALUE
+# Same contract as install.sh: expand a leading ~ to $HOME, error loudly if
+# HOME is unset and the value starts with ~. Avoids the silent literal-tilde
+# path bug described in S2 of the PR review.
+expand_tilde() {
+	local flag="$1" val="$2"
+	if [[ -z "$val" ]]; then
+		printf '%s' ""
+		return 0
+	fi
+	if [[ "$val" == "~"* && -z "${HOME:-}" ]]; then
+		echo "Error: $flag value starts with '~' but \$HOME is not set; cannot expand '$val'." >&2
+		echo "       Set HOME or pass an absolute path." >&2
+		exit 1
+	fi
+	printf '%s' "${val/#\~/$HOME}"
+}
+
 # --- Repo root (canonicalized the same way as install.sh, so the symlink
 # targets we expect compare byte-for-byte against what install.sh wrote).
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -123,11 +141,11 @@ SHIM_SRC="$REPO_ROOT/bin/scramjet"
 
 # --- Agent directory resolution (same precedence as install.sh)
 if [[ -n "$TARGET_ARG" ]]; then
-	AGENT_DIR="${TARGET_ARG/#\~/${HOME:-~}}"
+	AGENT_DIR="$(expand_tilde --target "$TARGET_ARG")"
 elif [[ $LOCAL -eq 1 ]]; then
 	AGENT_DIR="$(pwd -P)/.pi"
 elif [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-	AGENT_DIR="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
+	AGENT_DIR="$(expand_tilde PI_CODING_AGENT_DIR "$PI_CODING_AGENT_DIR")"
 else
 	if [[ -z "${HOME:-}" ]]; then
 		echo "Error: \$HOME is not set; cannot resolve the default uninstall target." >&2
@@ -141,7 +159,7 @@ MANIFEST="$AGENT_DIR/.scramjet-manifest"
 
 # --- Shim target resolution (same precedence as install.sh)
 if [[ -n "$BIN_DIR_ARG" ]]; then
-	BIN_DIR_EXPANDED="${BIN_DIR_ARG/#\~/${HOME:-~}}"
+	BIN_DIR_EXPANDED="$(expand_tilde --bin-dir "$BIN_DIR_ARG")"
 	SHIM_DEST="$BIN_DIR_EXPANDED/scramjet"
 elif [[ $LOCAL -eq 1 ]]; then
 	SHIM_DEST="$(pwd -P)/.pi/bin/scramjet"
@@ -283,7 +301,7 @@ fi
 clear_models_json() {
 	local agent_dir
 	if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-		agent_dir="${PI_CODING_AGENT_DIR/#\~/${HOME:-~}}"
+		agent_dir="$(expand_tilde PI_CODING_AGENT_DIR "$PI_CODING_AGENT_DIR")"
 	elif [[ -n "${HOME:-}" ]]; then
 		agent_dir="$HOME/.pi/agent"
 	else
@@ -296,7 +314,12 @@ clear_models_json() {
 		return 0
 	fi
 
-	node - "$models_path" <<'NODE'
+	# Mirror install.sh's update_models_json wrapping: capture the node exit
+	# code so a write failure (EACCES on writeFile, EACCES on unlinkSync, OOM,
+	# inline-JS syntax error) surfaces with context rather than vanishing into
+	# `set -e` with only the raw node error and no scope information.
+	local node_status=0
+	node - "$models_path" <<'NODE' || node_status=$?
 const fs = require("node:fs");
 const path = process.argv[2];
 
@@ -338,6 +361,10 @@ if (Object.keys(cfg).length === 0) {
 	console.log(`Cleared scramjet entries from ${path}`);
 }
 NODE
+	if [[ $node_status -ne 0 ]]; then
+		echo "Error: clear_models_json: node helper exited $node_status; $models_path may be unchanged or partially written." >&2
+		return 1
+	fi
 }
 
 if [[ $CLEAR_MODELS_JSON -eq 1 ]]; then
