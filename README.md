@@ -75,13 +75,17 @@ This means command authors control the flow. If a review command's instructions 
 
 ### Simplicity is the feature
 
-Scramjet is ~450 lines of TypeScript. It registers one tool, listens to one event, and shows one widget. The entire auto-continuation mechanism is:
+Scramjet is a small TypeScript extension. The auto-continuation
+mechanism at its core is one tool, one widget, and three steps:
 
 1. Claude calls `task_complete` when done (tool with optional `next_step` field)
 2. Scramjet shows a countdown widget if there's a next step
 3. Countdown expires → run the next command (with a fresh session if specified)
 
-That's the whole system. There's nothing else to learn, configure, or debug.
+That's the whole system. There's nothing else to learn, configure, or
+debug. The diagram tool, the Claude Code tool-name aliases, and the
+install-time plugin wiring are independent — each can be inspected,
+modified, or removed on its own.
 
 ## How it works
 
@@ -254,8 +258,12 @@ Pi:
   them by substring.
 - **`tools: [a, b, c]`** YAML arrays (and block-sequence variants) are
   converted to comma-string form `tools: a, b, c`. Pi's subagent example
-  parses the comma form. Nested arrays cause the file to be skipped with
-  a warning.
+  parses the comma form. Unrepresentable shapes — `tools: []` (no way
+  to express "no tools allowed" in Pi), nested arrays, flow maps,
+  comments interleaved in a block sequence — cause `transform.mjs` to
+  print a source-path-tagged error and exit non-zero, and `install.sh`
+  aborts the install rather than silently emitting `tools:` (null),
+  which would grant the agent every tool.
 
 The original plugin files in `$HOME/.local/share/scramjet/` are never
 modified — only the installed copies under `<agent-dir>/agents/` are
@@ -490,14 +498,16 @@ scramjet/
     diagram-tool.ts     — draw_diagram tool registration
     renderers.ts        — renderer detection and execution
   src/
+    install/
+      transform.mjs     — agent-file frontmatter transform (model strip, tools array)
     tool-aliases/
       index.ts          — Claude Code tool-name aliases (Read, Bash, …)
-      mapping.ts        — pure Claude Code → Pi name mapping
   bin/
     scramjet            — launcher shim (execs pi)
   tests/
     task-complete.test.ts
     tool-aliases.test.ts
+    install-transform.test.ts
   install.sh            — extension symlink, shim, plugin wiring
   uninstall.sh          — reverses install.sh
 ```

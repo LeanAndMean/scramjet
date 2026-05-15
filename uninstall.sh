@@ -219,15 +219,21 @@ clear_manifest() {
 
 		# Containment: refuse any entry that does not resolve under
 		# $AGENT_DIR_CANON. Canonicalize the parent so a "$AGENT_DIR/../etc/x"
-		# tamper cannot escape.
+		# tamper cannot escape. If the parent does not exist we cannot
+		# canonicalize, and falling back to the raw line would let a
+		# tampered manifest entry like "$AGENT_DIR/no-such/../../etc/passwd"
+		# pass a literal-prefix check while rm resolves outside AGENT_DIR.
+		# Refuse rather than fall through.
 		local line_dir line_base line_canon
 		line_dir="$(dirname "$line")"
 		line_base="$(basename "$line")"
-		if [[ -d "$line_dir" ]]; then
-			line_canon="$(cd "$line_dir" && pwd -P)/$line_base"
-		else
-			line_canon="$line"
+		if [[ ! -d "$line_dir" ]]; then
+			echo "Error: cannot canonicalize manifest entry parent dir: $line_dir" >&2
+			echo "       Refusing to remove $line; preserving manifest." >&2
+			failures=$((failures + 1))
+			continue
 		fi
+		line_canon="$(cd "$line_dir" && pwd -P)/$line_base"
 		if [[ "$line_canon" != "$AGENT_DIR_CANON/"* ]]; then
 			echo "Error: manifest entry resolves outside $AGENT_DIR_CANON: $line" >&2
 			echo "       Refusing to remove; preserving manifest." >&2

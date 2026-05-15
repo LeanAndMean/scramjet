@@ -19,9 +19,9 @@ Biome: tabs, indent width 3, line width 120. Run `npx biome check --write .` to 
 
 ## Architecture
 
-Scramjet is a Pi extension (~450 lines). Pi loads `index.ts` directly via jiti — no compilation step. The imports `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are virtual modules provided by Pi at runtime; they exist in `devDependencies` only for type checking.
+Scramjet is a compact Pi extension. Pi loads `index.ts` directly via jiti — no compilation step. The imports `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are virtual modules provided by Pi at runtime; they exist in `devDependencies` only for type checking.
 
-The extension registers one tool (`task_complete`), one event listener (`agent_end`), and one command (`/scramjet`). The auto-continuation flow is:
+The auto-continuation core is one tool (`task_complete`) plus an `agent_end` listener that drives the countdown widget; the rest of the extension (the `/scramjet` toggle, the `/clear` alias, the diagram tool, the Claude Code tool-name aliases) is independent and can be reasoned about in isolation. The auto-continuation flow is:
 
 1. `task-complete.ts` injects a system prompt snippet (via `before_agent_start`) telling the agent to call `task_complete` when done, with an optional `next_step` if the command's instructions suggest one. The tool sets `terminate: true` to end the agent loop and stores the completion signal.
 2. `auto-continue.ts` listens to `agent_end`. If the stored signal has a `next_step`, it shows a countdown widget. Any keypress cancels. Countdown expiry sends the next command as a user message (optionally in a fresh session via the internal `/scramjet-exec-fresh` command).

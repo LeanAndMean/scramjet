@@ -387,12 +387,38 @@ fi
 BEFORE_LIST=""
 AFTER_LIST=""
 if [[ -f "$MANIFEST" ]]; then
-	BEFORE_LIST="$(grep -Ev '^[[:space:]]*(#|$)' "$MANIFEST" || true)"
+	# Distinguish grep exit 1 (no matching lines = empty manifest, expected)
+	# from exit >=2 (EACCES, broken pipe, etc.) so a real read error fails
+	# loud rather than producing a silent empty BEFORE_LIST that orphans
+	# every previously-tracked path.
+	local_grep_status=0
+	BEFORE_LIST="$(grep -Ev '^[[:space:]]*(#|$)' "$MANIFEST")" || local_grep_status=$?
+	if [[ $local_grep_status -ge 2 ]]; then
+		echo "Error: failed to read manifest $MANIFEST (grep exit $local_grep_status); see message above." >&2
+		exit 1
+	fi
 fi
+
+# Initialize the on-disk manifest as a write-ahead journal: write the
+# header and replay BEFORE_LIST entries so a mid-loop abort leaves the
+# next run able to reconcile every previously-tracked path. From this
+# point forward, manifest_add appends to the on-disk journal IMMEDIATELY
+# (not just to the in-memory AFTER_LIST) so a wire_plugin loop failure
+# halfway through still leaves the manifest covering everything that
+# successfully landed on disk. The final atomic rewrite at the end of
+# the install collapses the journal into the canonical sorted form.
+mkdir -p "$AGENT_DIR"
+{
+	echo "# scramjet manifest v1"
+	if [[ -n "$BEFORE_LIST" ]]; then
+		printf '%s\n' "$BEFORE_LIST"
+	fi
+} > "$MANIFEST"
 
 manifest_add() {
 	AFTER_LIST="${AFTER_LIST}$1
 "
+	printf '%s\n' "$1" >> "$MANIFEST"
 }
 
 # --- transform_and_install_agent SRC DEST
@@ -432,7 +458,11 @@ transform_and_install_agent() {
 
 	mkdir -p "$(dirname "$DEST")"
 	local tmp
-	tmp="$(mktemp "$DEST.scramjet.XXXXXX.tmp")"
+	# Trailing X's only: BSD/macOS mktemp ignores X's followed by a literal
+	# suffix and either errors out or produces a literal `XXXXXX.tmp` name.
+	# GNU mktemp accepts both, which is why the BSD failure mode was masked
+	# on Linux CI.
+	tmp="$(mktemp "$DEST.scramjet.XXXXXX")"
 
 	# TRANSFORM_SRC is resolved at script load time relative to install.sh
 	# (REPO_ROOT/src/install/transform.mjs) so install.sh keeps working
@@ -495,7 +525,17 @@ resolve_latest_semver_tag() {
 	local repo_dir="$1"
 	# List tags, keep only stable semver (vMAJOR.MINOR.PATCH with no prerelease).
 	# Sort by version (GNU sort -V; macOS BSD sort -V exists since 10.12).
-	git -C "$repo_dir" tag --list 'v[0-9]*' 2>/dev/null \
+	#
+	# Capture git output explicitly rather than piping inline so a `git tag`
+	# failure (corrupt repo, EACCES on .git/refs) is surfaced as an error
+	# instead of being indistinguishable from "no matching tags". git's own
+	# stderr is no longer redirected; it surfaces directly to the user.
+	local tags
+	if ! tags="$(git -C "$repo_dir" tag --list 'v[0-9]*')"; then
+		echo "Error: 'git tag' failed in $repo_dir; the clone may be corrupt or unreadable." >&2
+		exit 1
+	fi
+	printf '%s\n' "$tags" \
 		| grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
 		| sort -V \
 		| tail -n 1
@@ -524,10 +564,13 @@ ensure_git_clone() {
 			echo "       --mach10/--feature-dev/--pr-review-toolkit override flag." >&2
 			exit 1
 		fi
-		git -C "$repo_dir" fetch --tags --quiet origin
+		# --quiet is intentionally dropped from both fetch and clone so
+		# network/auth diagnostics surface to the user instead of producing
+		# a bare `set -e` exit with no context.
+		git -C "$repo_dir" fetch --tags origin
 	else
 		mkdir -p "$(dirname "$repo_dir")"
-		git clone --quiet "$repo_url" "$repo_dir"
+		git clone "$repo_url" "$repo_dir"
 	fi
 
 	local ref
@@ -538,18 +581,35 @@ ensure_git_clone() {
 			exit 1
 		fi
 	else
-		# default-branch HEAD
+		# default-branch HEAD. symbolic-ref's stderr stays muted because
+		# "ref does not exist" is a legitimate fallback trigger; if BOTH it
+		# AND `git remote show origin` fail, the remote-show stderr is
+		# surfaced (that's where the actionable diagnostic lives).
 		ref="$(git -C "$repo_dir" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null || true)"
 		if [[ -z "$ref" ]]; then
-			# Fallback: ask the remote.
+			# Fallback: ask the remote. Capture stderr so a network/auth
+			# failure (remote unreachable) is reported distinctly from
+			# "remote responded but has no HEAD branch defined".
+			local remote_err remote_out remote_status=0
+			remote_err="$(mktemp)"
+			remote_out="$(git -C "$repo_dir" remote show origin 2>"$remote_err")" || remote_status=$?
+			if [[ $remote_status -ne 0 ]]; then
+				echo "Error: 'git remote show origin' failed for $repo_dir (exit $remote_status); the remote may be unreachable." >&2
+				if [[ -s "$remote_err" ]]; then
+					sed 's/^/       /' "$remote_err" >&2
+				fi
+				rm -f "$remote_err"
+				exit 1
+			fi
+			rm -f "$remote_err"
 			local default_branch
-			default_branch="$(git -C "$repo_dir" remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}')"
-			if [[ -n "$default_branch" ]]; then
+			default_branch="$(echo "$remote_out" | awk '/HEAD branch/ {print $NF}')"
+			if [[ -n "$default_branch" && "$default_branch" != "(unknown)" ]]; then
 				ref="origin/$default_branch"
 			fi
 		fi
 		if [[ -z "$ref" ]]; then
-			echo "Error: could not determine default branch for $repo_dir." >&2
+			echo "Error: no default branch defined for $repo_dir (origin/HEAD unset and 'git remote show origin' did not report one)." >&2
 			exit 1
 		fi
 	fi
@@ -604,9 +664,9 @@ fi
 # --- Reconcile manifest: remove paths that were in BEFORE but not in AFTER
 # (stale entries from a prior install that this run did not re-create).
 # rm runs without -f so EACCES/EBUSY surfaces; unexpected entry shapes
-# (directories, sockets, ...) warn loudly. Any failure preserves the old
-# manifest so the next install can retry instead of permanently orphaning
-# the entry.
+# (directories, sockets, ...) warn loudly. Any failure leaves the journal
+# form of the manifest on disk (header + BEFORE replay + new entries) so
+# the next install can retry instead of permanently orphaning the entry.
 AFTER_SORTED="$(printf '%s' "$AFTER_LIST" | grep -v '^$' | sort -u || true)"
 RECONCILE_FAILURES=0
 if [[ -n "$BEFORE_LIST" ]]; then
@@ -631,12 +691,14 @@ if [[ -n "$BEFORE_LIST" ]]; then
 fi
 
 if [[ $RECONCILE_FAILURES -gt 0 ]]; then
-	echo "Error: $RECONCILE_FAILURES stale manifest entry/entries could not be reconciled; preserving $MANIFEST." >&2
+	echo "Error: $RECONCILE_FAILURES stale manifest entry/entries could not be reconciled; $MANIFEST kept in journal form for the next install to retry." >&2
 	exit 1
 fi
 
-# Write the new manifest atomically.
-mkdir -p "$AGENT_DIR"
+# Collapse the journal into the canonical sorted form atomically. Up to
+# this point $MANIFEST has been written incrementally (every successful
+# install appended a line); the rename here replaces the journal with the
+# clean sorted/deduped manifest in one filesystem operation.
 MANIFEST_TMP="$MANIFEST.tmp.$$"
 {
 	echo "# scramjet manifest v1"
@@ -678,12 +740,21 @@ update_models_json() {
 		return 0
 	fi
 
-	local hostname
-	hostname="$(node -e 'try { const h = new URL(process.argv[1]).hostname.replace(/\.$/,""); if (!h) process.exit(2); process.stdout.write(h); } catch (e) { process.exit(2); }' "$url" 2>/dev/null)" || {
+	# Inline JS uses exit code 2 deliberately for "URL invalid or has no
+	# host"; any other non-zero (uncaught throw, OOM, signal) is a real
+	# failure and must surface rather than be silently masked as "not a
+	# valid URL". stderr is no longer redirected so node crashes are visible.
+	local hostname url_status=0
+	hostname="$(node -e 'try { const h = new URL(process.argv[1]).hostname.replace(/\.$/,""); if (!h) process.exit(2); process.stdout.write(h); } catch (e) { process.exit(2); }' "$url")" || url_status=$?
+	if [[ $url_status -eq 2 ]]; then
 		echo
 		echo "Note: ANTHROPIC_BASE_URL=$url is not a valid URL (or has no host); skipping models.json update." >&2
 		return 0
-	}
+	fi
+	if [[ $url_status -ne 0 ]]; then
+		echo "Error: node URL parser failed unexpectedly (exit $url_status); see message above." >&2
+		exit 1
+	fi
 	if [[ "$hostname" == "api.anthropic.com" ]]; then
 		return 0
 	fi

@@ -34,6 +34,10 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Install shellcheck (macOS)
+        if: runner.os == 'macOS'
+        run: brew install shellcheck
+
       - name: Shellcheck install.sh / uninstall.sh
         run: shellcheck -s bash install.sh uninstall.sh
 
