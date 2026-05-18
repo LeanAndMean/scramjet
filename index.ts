@@ -26,10 +26,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAutoContinue } from "./auto-continue.ts";
 import { registerClearAlias } from "./clear-alias.ts";
 import { registerCommandLoader } from "./commands/index.ts";
+import { registerDelegateTool } from "./delegate.ts";
 import { registerDiagramTool } from "./diagram/diagram-tool.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
 import { registerToolAliases } from "./src/tool-aliases/index.ts";
 import { registerTaskCompleteTool } from "./task-complete.ts";
+import { registerToolCallAdvisor } from "./tool-scope-advisory.ts";
 import type { ScramjetState } from "./types.ts";
 
 export default function scramjet(pi: ExtensionAPI) {
@@ -42,6 +44,8 @@ export default function scramjet(pi: ExtensionAPI) {
 	};
 
 	registerTaskCompleteTool(pi, state);
+	registerDelegateTool(pi, state);
+	registerToolCallAdvisor(pi, state);
 	registerAutoContinue(pi, state);
 	registerDiagramTool(pi);
 	registerToolAliases(pi);
