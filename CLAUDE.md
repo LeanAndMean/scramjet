@@ -35,6 +35,17 @@ For each plugin, command files are symlinked into `<agent-dir>/prompts/<plugin>:
 
 `src/tool-aliases/` registers PascalCase Claude Code tool names (`Read`, `Bash`, `Edit`, `Write`, `Grep`, `Glob`, `LS`) as wrappers around Pi's native lowercase tools so plugin agents' `tools:` restrictions function natively. A `.scramjet-manifest` file in the agent dir tracks every installed plugin path for clean uninstall via `./uninstall.sh --clear-manifest`.
 
+## Project direction
+
+The architecture section above describes the **current** shape of the code. The **target** shape is laid out in `docs/scramjet-vision.md`, which is the source-of-truth design document for the next major rewrite (the "vision MVP"). Consult the vision doc when:
+
+- Planning work that introduces, removes, or reshapes a harness capability (command sets, next-step declarations, delegation, the `/scramjet on/off` flag, history journaling).
+- Deciding what is in scope vs. deferred for the MVP. The vision doc carries the MVP-vs-post-MVP boundaries and the per-section deferrals (sidebar UI, hard tool-scoping enforcement, authoring loop).
+- Resolving "should we add X?" questions about the harness — the vision doc states the non-goals as well as the goals, and several common asks (workflow DAG, conditional next-step DSL, prose-replacement abstractions) are explicit non-goals.
+- Reviewing a design decision and wanting to know what was already considered and rejected, and why.
+
+The MVP buildout is tracked under GitHub issue 23 (umbrella) with one staged implementation plan in its comments. Subissues 24-33 carry the individual stages; the umbrella's `<!-- mach10-plan -->` comment is the current execution plan. The CLAUDE.md design-philosophy section below has been rewritten to match the vision (commands declare their edges, the plugin compat layer is time-bounded, MVP-specific rationales are explicit); when those bullets reference design decisions you don't recognize, the vision doc is where the long-form reasoning lives.
+
 ## Design philosophy
 
 These principles override default instincts. Do not add complexity that violates them.
@@ -42,9 +53,17 @@ These principles override default instincts. Do not add complexity that violates
 - **Emergent over prescribed.** Workflows emerge from edges in each command's instructions, not from centralized definitions. Don't add workflow registries, DAG configs, or state machines.
 - **Zero lock-in.** The user can press Escape at any transition and be back in normal Pi. No workflow state persists. Don't add resumable state, queues, or progress tracking across sessions.
 - **Invisible when idle.** If Scramjet has nothing to suggest, it produces zero output — no widgets, no prompts, no status messages.
-- **Commands own their edges.** The next step comes from Claude reading a command's instructions, not from Scramjet. Don't move flow logic into Scramjet.
-- **Simplicity is the feature.** Resist adding configuration, options, or abstraction layers. The entire system is one tool, one event listener, one widget.
-- **Preserve Claude Code plugin compatibility.** Scramjet wires plugins authored for Claude Code CLI (Mach 10, feature-dev, pr-review-toolkit, …). Plugin files must keep working under Claude Code: fix cross-harness gaps on the scramjet side. Upstream changes to those plugins are limited to pure prose tweaks; don't strip frontmatter fields, restructure agents, or rename constructs.
+- **Commands declare their edges; the harness enforces.** Each command declares its next-step policy (`forced` / `closed` / `open` / `ask`) in YAML frontmatter; the harness reads the declaration, validates the agent's pick (or the forced target), and dispatches. The harness does NOT own routing logic — there is no central workflow registry, DAG, or state machine. This replaces the older "the LLM reads prose and Scramjet only watches for `task_complete`" mechanism; the motivation (emergent workflows, user control, simplicity) is preserved, the mechanism is not.
+- **Simplicity is the feature.** Resist adding configuration, options, or abstraction layers. Scramjet stays small: one extension, a handful of hooks, the delegate tool, the next-step block, the history log.
+- **Plugin compat layer is kept through Stage 7, removed at Stage 8.** Scramjet wires plugins authored for Claude Code CLI (Mach 10, feature-dev, pr-review-toolkit, …) while Mach 12 is being built. Plugin files must keep working under Claude Code during the MVP build; upstream changes to those plugins are limited to pure prose tweaks. Once Mach 12 is feature-complete at the end of Stage 7, Stage 8 tears the compat layer out and switches Scramjet to an npm-distributed CLI that embeds Pi via its library API. Mach 10 plugins keep functioning in users' existing setups; they are no longer cloned or wired by Scramjet itself.
+
+### MVP design rationales
+
+These are project-specific commitments for the scramjet vision MVP. They are not timeless principles; they are decisions taken during MVP planning that future planning sessions should not re-litigate without explicit cause.
+
+- **`forced` fires under `/scramjet off`.** `/off` gates *decisions* — `closed`/`open` agent-pick, `ask` user-pick. `forced` has no decision and fires immediately regardless of the flag. The user implicitly chose to chain by invoking the command that declares `forced` next-step; the harness should honor that. The alternative considered and rejected was a binary `isAutoActive()` (the gsd-2 analog), which treats `/off` as off-means-off and would surface every `forced` transition as a manual step. That misframes what `/off` is for: user control over decisions, not user control over deterministic transitions.
+- **Tool-scoping is advisory in MVP.** The harness logs warnings on out-of-scope tool calls but does NOT block them. Hard enforcement (rejecting tool calls outside the active frame's `allowed-tools`) is deferred to a post-MVP issue that also lands multi-turn save/restore so the caller's broader scope is restored after a delegated frame returns. Rationale: latched-only enforcement (once narrowed, scope stays narrowed for the rest of the turn) is a hidden authoring trap. gsd-2's nearest analog (`write-gate.ts`, ~1,053 LOC) has a documented bug history even with full engineering; landing it partial in scramjet's MVP is the worse failure mode.
+- **Per-command `allowed-tools` enforcement is harness-bound, not prose-trusted.** When hard enforcement lands post-MVP, the gate is at the `tool_call` event hook, not in prose. LLMs cannot be trusted to follow instruction-level "restrict yourself to X, Y, Z" constraints — the harness must intercept and reject. Advisory logging in the MVP is a half-measure that documents the intent and makes the eventual hard cut a flip rather than a redesign.
 
 ## Solution Assessment (for assessment and planning work)
 
