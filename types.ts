@@ -1,7 +1,3 @@
-export interface ScramjetState {
-	enabled: boolean;
-}
-
 export interface NextStep {
 	command: string;
 	freshSession: boolean;
@@ -11,4 +7,47 @@ export interface NextStep {
 export interface CompletionSignal {
 	summary: string;
 	nextStep?: NextStep;
+}
+
+export interface Candidate {
+	name: string;
+	hint?: string;
+}
+
+export type NextStepPolicy =
+	| { mode: "forced"; target: string }
+	| { mode: "closed"; candidates: Candidate[] }
+	| { mode: "open"; candidates: Candidate[]; blacklist?: string[] }
+	| { mode: "ask"; hint?: string };
+
+export interface CommandDef {
+	name: string;
+	filePath: string;
+	body: string;
+	description?: string;
+	allowedTools?: string[];
+	next?: NextStepPolicy;
+}
+
+export type CommandRegistry = Map<string, CommandDef>;
+
+export interface DelegateFrame {
+	commandName: string;
+	effectiveAllowedTools?: string[];
+	depth: number;
+}
+
+export interface SidebarEntry {
+	command: string;
+	origin: "user" | "agent" | "forced";
+	depth: number;
+	timestamp: number;
+}
+
+export interface ScramjetState {
+	enabled: boolean;
+	registry: CommandRegistry;
+	activeTopLevelCommand: string | null;
+	sidebarLog: SidebarEntry[];
+	delegateStack: DelegateFrame[];
 }

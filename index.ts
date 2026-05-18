@@ -29,9 +29,16 @@ import { registerDiagramTool } from "./diagram/diagram-tool.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
 import { registerToolAliases } from "./src/tool-aliases/index.ts";
 import { registerTaskCompleteTool } from "./task-complete.ts";
+import type { ScramjetState } from "./types.ts";
 
 export default function scramjet(pi: ExtensionAPI) {
-	const state = { enabled: true };
+	const state: ScramjetState = {
+		enabled: false,
+		registry: new Map(),
+		activeTopLevelCommand: null,
+		sidebarLog: [],
+		delegateStack: [],
+	};
 
 	registerTaskCompleteTool(pi, state);
 	registerAutoContinue(pi, state);
