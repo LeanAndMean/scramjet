@@ -1,4 +1,4 @@
-# Mach 12 — Vision
+# Scramjet — Vision
 
 > Working name for a hypothetical successor to Mach 10, authored as a
 > **command set for `scramjet`** rather than a Claude Code CLI plugin.
