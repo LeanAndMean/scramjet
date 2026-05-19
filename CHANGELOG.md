@@ -27,6 +27,15 @@ command set. The Claude Code plugin compat layer is gone.
   `~/.pi/agent/models.json` and add the `providers.anthropic.baseUrl` and
   `providers.anthropic.compat.supportsEagerToolInputStreaming: false`
   keys yourself if you route Pi through a proxy.
+- Pi's "new Pi version available" startup banner is suppressed
+  (`PI_SKIP_VERSION_CHECK=1` is set inside the scramjet bin). Scramjet
+  pins Pi at `pi.piTestedVersion`; the upstream `pi update` flow would
+  not update the embedded copy and following the prompt would only
+  cause confusion. The TUI banner continues to read `pi vX.Y.Z` —
+  Pi's `piConfig.name` rebrand path is coupled to package-asset
+  resolution (themes, prompt templates) and cannot be applied without
+  shipping or symlinking those assets, which is out of scope for this
+  release.
 
 ### Migration from a bash-installed scramjet
 
