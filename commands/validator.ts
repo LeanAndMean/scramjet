@@ -1,9 +1,8 @@
 import type { NextStepPolicy } from "../types.ts";
 
-export interface ValidationResult {
-	valid: boolean;
-	reason?: string;
-}
+// Discriminated union: when valid is false a reason is required, so consumers
+// can read `result.reason` after narrowing without optional-chaining.
+export type ValidationResult = { valid: true } | { valid: false; reason: string };
 
 type DecidedPolicy = Exclude<NextStepPolicy, { mode: "forced" }>;
 

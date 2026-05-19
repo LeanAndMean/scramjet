@@ -16,6 +16,7 @@
 		"history.ts",
 		"next-step.ts",
 		"scramjet-command.ts",
+		"subagent-output-advisor.ts",
 		"task-complete.ts",
 		"tool-scope-advisory.ts",
 		"commands/**/*.ts",

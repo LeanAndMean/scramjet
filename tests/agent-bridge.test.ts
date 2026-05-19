@@ -6,9 +6,9 @@ import { ensureAgentBridge } from "../commands/agent-bridge.ts";
 import type { AgentRegistry } from "../types.ts";
 
 function makeAgent(name: string, filePath: string) {
-	const reg: AgentRegistry = new Map();
+	const reg = new Map<string, { name: string; filePath: string }>();
 	reg.set(name, { name, filePath });
-	return reg;
+	return reg as AgentRegistry;
 }
 
 describe("ensureAgentBridge", () => {

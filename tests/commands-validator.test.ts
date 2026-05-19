@@ -13,7 +13,7 @@ describe("validateNextStep — closed mode", () => {
 
 	it("rejects a pick outside the candidate list", () => {
 		const result = validateNextStep("mach12:pr-merge", policy);
-		expect(result.valid).toBe(false);
+		if (result.valid) throw new Error("expected invalid");
 		expect(result.reason).toContain("mach12:pr-merge");
 		expect(result.reason).toContain("mach12:pr-review-fix");
 	});
@@ -41,7 +41,7 @@ describe("validateNextStep — open mode", () => {
 			blacklist: ["mach12:pr-merge"],
 		};
 		const result = validateNextStep("mach12:pr-merge", policy);
-		expect(result.valid).toBe(false);
+		if (result.valid) throw new Error("expected invalid");
 		expect(result.reason).toContain("blacklisted");
 	});
 
@@ -64,7 +64,7 @@ describe("validateNextStep — ask mode", () => {
 
 	it("rejects any agent pick", () => {
 		const result = validateNextStep("mach12:pr-merge", policy);
-		expect(result.valid).toBe(false);
+		if (result.valid) throw new Error("expected invalid");
 		expect(result.reason).toContain("ask");
 	});
 });

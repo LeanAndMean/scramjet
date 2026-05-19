@@ -3,11 +3,16 @@ import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import type { AgentDef, AgentRegistry, CommandDef, CommandRegistry } from "../types.ts";
 import { parseNextStepPolicy } from "./parse-next-step.ts";
 
+// Source of a discovered command/agent file. Currently used only to
+// disambiguate same-name warnings; reserved for future precedence rules
+// (project entries shadowing global entries with the same name).
+export type FileScope = "global" | "project";
+
 export interface FileEntry {
 	filePath: string;
 	content: string;
 	setName: string;
-	scope: "global" | "project";
+	scope: FileScope;
 }
 
 export type LoadResult = { ok: true; def: CommandDef; warnings?: string[] } | { ok: false; error: string };
@@ -84,7 +89,7 @@ export function parseCommandFile(filePath: string, content: string, setName: str
 }
 
 export function buildRegistry(entries: FileEntry[]): RegistryBuildResult {
-	const registry: CommandRegistry = new Map();
+	const registry = new Map<string, CommandDef>();
 	const warnings: string[] = [];
 	for (const entry of entries) {
 		const result = parseCommandFile(entry.filePath, entry.content, entry.setName);
@@ -144,7 +149,7 @@ export function parseAgentFile(filePath: string, content: string, setName: strin
 }
 
 export function buildAgentRegistry(entries: AgentFileEntry[]): AgentRegistryBuildResult {
-	const agentRegistry: AgentRegistry = new Map();
+	const agentRegistry = new Map<string, AgentDef>();
 	const warnings: string[] = [];
 	for (const entry of entries) {
 		const result = parseAgentFile(entry.filePath, entry.content, entry.setName);

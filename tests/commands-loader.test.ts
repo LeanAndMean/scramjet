@@ -13,6 +13,7 @@ import {
 	parseAllowedTools,
 	parseCommandFile,
 } from "../commands/loader.ts";
+import type { AgentDef, CommandDef } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -297,7 +298,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "startup" });
 		const firstSize = state.registry.size;
-		state.registry.set("ghost:command", {
+		(state.registry as Map<string, CommandDef>).set("ghost:command", {
 			name: "ghost:command",
 			filePath: "/nope",
 			body: "",
@@ -570,7 +571,7 @@ describe("registerCommandLoader — agent discovery integration", () => {
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "startup" });
 		const firstSize = state.agentRegistry.size;
-		state.agentRegistry.set("ghost:agent", { name: "ghost:agent", filePath: "/nope" });
+		(state.agentRegistry as Map<string, AgentDef>).set("ghost:agent", { name: "ghost:agent", filePath: "/nope" });
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "reload" });
 		expect(state.agentRegistry.size).toBe(firstSize);
 		expect(state.agentRegistry.has("ghost:agent")).toBe(false);

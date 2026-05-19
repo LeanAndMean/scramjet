@@ -29,7 +29,7 @@ export interface CommandDef {
 	next?: NextStepPolicy;
 }
 
-export type CommandRegistry = Map<string, CommandDef>;
+export type CommandRegistry = ReadonlyMap<string, CommandDef>;
 
 export interface AgentDef {
 	name: string;
@@ -37,7 +37,7 @@ export interface AgentDef {
 	description?: string;
 }
 
-export type AgentRegistry = Map<string, AgentDef>;
+export type AgentRegistry = ReadonlyMap<string, AgentDef>;
 
 export interface DelegateFrame {
 	commandName: string;
