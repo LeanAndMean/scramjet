@@ -235,6 +235,14 @@ if [[ ! -f "$TRANSFORM_SRC" ]]; then
 	exit 1
 fi
 
+# --- Bundled Mach 12 command set (ships with install.sh in the repo).
+MACH12_SRC="$REPO_ROOT/mach12"
+if [[ ! -d "$MACH12_SRC" ]]; then
+	echo "Error: $MACH12_SRC not found." >&2
+	echo "       The bundled Mach 12 command set ships alongside install.sh; the repo may be incomplete." >&2
+	exit 1
+fi
+
 # --- Required tooling for plugin wiring (agent-file transform, plugin clones).
 if ! command -v node >/dev/null 2>&1; then
 	echo "Error: node is not on \$PATH; required for agent-file transforms." >&2
@@ -602,6 +610,30 @@ fi
 
 # --- Clone helpers (only used when plugin wiring is active).
 SCRAMJET_CACHE="${SCRAMJET_CACHE:-${HOME:-/tmp}/.local/share/scramjet}"
+
+# --- Seed bundled Mach 12 command set on first install. Mach 12 lives at
+# $SCRAMJET_CACHE/mach12/; the command-set loader reads it from there at
+# runtime. Idempotent; not tracked in the manifest (which scopes to
+# $AGENT_DIR, not $SCRAMJET_CACHE). Independent of plugin wiring, so it
+# runs unconditionally regardless of --no-plugins. Stage 8 replaces this
+# block with a package.json postinstall script.
+MACH12_DEST="$SCRAMJET_CACHE/mach12"
+if [[ ! -d "$MACH12_DEST" ]]; then
+	safe_mkdir "Mach 12 seed parent" "$(dirname "$MACH12_DEST")"
+	# A bare `cp -R` that fails after creating $MACH12_DEST leaves a partial
+	# tree; the next install run would see the directory exist and skip the
+	# seed, leaving a broken Mach 12 install. Catch failure, remove the
+	# partial state, and exit loudly.
+	if ! cp -R "$MACH12_SRC" "$MACH12_DEST"; then
+		rm -rf "$MACH12_DEST"
+		echo "Error: failed to seed Mach 12 command set to $MACH12_DEST" >&2
+		echo "       The partial destination has been removed; re-run install.sh." >&2
+		exit 1
+	fi
+	echo "Installed Mach 12 command set: $MACH12_DEST"
+else
+	echo "Mach 12 command set already present: $MACH12_DEST"
+fi
 
 resolve_latest_semver_tag() {
 	local repo_dir="$1"

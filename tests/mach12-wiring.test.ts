@@ -1,0 +1,113 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { parseCommandFile } from "../commands/loader.ts";
+import type { NextStepPolicy } from "../types.ts";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
+const SET_NAME = "mach12";
+
+interface WiringRow {
+	basename: string;
+	expected: NextStepPolicy | null;
+}
+
+// Hints are intentionally not pinned: modes, targets, candidate names, and
+// blacklists carry semantic load; hint text is editorial and can drift.
+const WIRING: WiringRow[] = [
+	{
+		basename: "issue-create",
+		expected: { mode: "open", candidates: [{ name: "mach12:issue-plan" }] },
+	},
+	{
+		basename: "issue-plan",
+		expected: {
+			mode: "open",
+			candidates: [{ name: "mach12:issue-review" }, { name: "mach12:issue-implement" }],
+		},
+	},
+	{
+		basename: "issue-review",
+		expected: { mode: "ask" },
+	},
+	{
+		basename: "issue-implement",
+		expected: { mode: "open", candidates: [{ name: "mach12:pr-create" }] },
+	},
+	{
+		basename: "pr-create",
+		expected: { mode: "open", candidates: [{ name: "mach12:pr-review" }] },
+	},
+	{
+		basename: "pr-review",
+		expected: { mode: "forced", target: "mach12:pr-review-assessment" },
+	},
+	{
+		basename: "pr-review-assessment",
+		expected: {
+			mode: "closed",
+			candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
+		},
+	},
+	{
+		basename: "pr-review-fix",
+		expected: {
+			mode: "closed",
+			candidates: [{ name: "mach12:pr-review" }, { name: "mach12:pr-pre-merge" }],
+		},
+	},
+	{
+		basename: "pr-pre-merge",
+		expected: { mode: "ask" },
+	},
+	{
+		basename: "pr-merge",
+		expected: { mode: "open", candidates: [] },
+	},
+];
+
+// Strip hint strings from a policy so the wiring test compares modes, targets,
+// candidate names, and blacklists -- not editorial hint text.
+function stripHints(policy: NextStepPolicy | null): NextStepPolicy | null {
+	if (policy === null) return null;
+	switch (policy.mode) {
+		case "forced":
+			return { mode: "forced", target: policy.target };
+		case "closed":
+			return { mode: "closed", candidates: policy.candidates.map((c) => ({ name: c.name })) };
+		case "open": {
+			const stripped: NextStepPolicy = {
+				mode: "open",
+				candidates: policy.candidates.map((c) => ({ name: c.name })),
+			};
+			if (policy.blacklist !== undefined) stripped.blacklist = policy.blacklist;
+			return stripped;
+		}
+		case "ask":
+			return { mode: "ask" };
+	}
+}
+
+describe("mach12 wiring — bundled command set", () => {
+	it("ships exactly the expected 10 top-level command files", () => {
+		const found = readdirSync(MACH12_COMMANDS_DIR)
+			.filter((f) => f.endsWith(".md"))
+			.sort();
+		const expected = WIRING.map((row) => `${SET_NAME}:${row.basename}.md`).sort();
+		expect(found).toEqual(expected);
+	});
+
+	it.each(WIRING)("parses $basename via Stage 1 parser and wires it correctly", ({ basename, expected }) => {
+		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
+		const content = readFileSync(filePath, "utf-8");
+		const result = parseCommandFile(filePath, content, SET_NAME);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		expect(result.def.name).toBe(`${SET_NAME}:${basename}`);
+		expect(stripHints(result.def.next ?? null)).toEqual(expected);
+	});
+});
