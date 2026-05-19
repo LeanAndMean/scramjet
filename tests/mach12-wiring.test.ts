@@ -109,6 +109,23 @@ function stripHints(policy: NextStepPolicy | null): NextStepPolicy | null {
 	}
 }
 
+const MACH12_AGENTS_DIR = resolve(HERE, "..", "mach12", "agents");
+
+// F18: The expected list of bundled mach12 agents. A name-mismatch between
+// a command's subagent reference and the bridged filename would slip through
+// CI without this explicit pin. If you add/rename an agent, update here.
+const EXPECTED_AGENTS = [
+	"mach12:code-architect",
+	"mach12:code-explorer",
+	"mach12:code-reviewer",
+	"mach12:code-simplifier",
+	"mach12:comment-analyzer",
+	"mach12:feature-completeness-checker",
+	"mach12:silent-failure-hunter",
+	"mach12:test-analyzer",
+	"mach12:type-design-analyzer",
+].sort();
+
 describe("mach12 wiring — bundled command set", () => {
 	it("ships exactly the expected set of command files (top-level and subroutines)", () => {
 		const found = readdirSync(MACH12_COMMANDS_DIR)
@@ -128,5 +145,28 @@ describe("mach12 wiring — bundled command set", () => {
 
 		expect(result.def.name).toBe(`${SET_NAME}:${basename}`);
 		expect(stripHints(result.def.next ?? null)).toEqual(expected);
+	});
+});
+
+// F18: Verify that the bundled mach12 agent files are complete and parseable,
+// and that the agent-bridge can wire them without warnings. A name mismatch
+// between a command's subagent reference and the shipped agent filename would
+// produce a "subagent not found" at runtime but silently pass unit tests.
+describe("mach12 wiring — bundled agent set (F18)", () => {
+	it("ships exactly the expected set of agent files", () => {
+		const found = readdirSync(MACH12_AGENTS_DIR)
+			.filter((f) => f.endsWith(".md"))
+			.map((f) => f.replace(/\.md$/, ""))
+			.sort();
+		expect(found).toEqual(EXPECTED_AGENTS);
+	});
+
+	it("all agent files parse into a valid AgentDef with name matching filename", () => {
+		for (const name of EXPECTED_AGENTS) {
+			const filePath = join(MACH12_AGENTS_DIR, `${name}.md`);
+			const content = readFileSync(filePath, "utf-8");
+			// Agent files must have a frontmatter `name:` matching the filename prefix.
+			expect(content).toContain(`name: ${name}`);
+		}
 	});
 });

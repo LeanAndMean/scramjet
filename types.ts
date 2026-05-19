@@ -1,5 +1,13 @@
 export interface NextStep {
-	command: string;
+	// Bare command name (no leading slash, no args). Matches against
+	// candidate names for closed/open validation. The dispatcher in
+	// auto-continue.ts owns the slash prefix and the args join, so the same
+	// `name` value is what the validator sees and what the wire payload is
+	// built from. (F15)
+	name: string;
+	// Optional space-prefixed args. Carried verbatim into the wire payload
+	// after the slash + name; never inspected by the validator.
+	args?: string;
 	freshSession: boolean;
 	reason?: string;
 }

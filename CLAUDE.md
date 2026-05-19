@@ -105,7 +105,7 @@ These are project-specific commitments for the scramjet vision MVP. They are not
 
 ## Solution Assessment (for assessment and planning work)
 
-Applies when the deliverable is a recommendation, plan, or assessment rather than the change itself — e.g., `/mach10:issue-assessment`, `/mach10:issue-plan`, `/mach10:issue-plan-review`, or any user request that asks "how should we do X?" / "what's the right way to add Y?" rather than "do X." When you are executing an already-decided plan, this section does not apply.
+Applies when the deliverable is a recommendation, plan, or assessment rather than the change itself — e.g., `/mach12:issue-plan`, `/mach12:issue-review`, `/mach12:pr-review-assessment`, or any user request that asks "how should we do X?" / "what's the right way to add Y?" rather than "do X." When you are executing an already-decided plan, this section does not apply.
 
 In scope: emit a **Solution Assessment** block in your reply. This is a required visible artifact, not an internal step. Skipping it is a defect.
 

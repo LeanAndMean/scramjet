@@ -280,6 +280,44 @@ describe("registerHistory — input event", () => {
 		expect(state.activeTopLevelCommand).toBeNull();
 	});
 
+	it("does NOT clear activeTopLevelCommand for known Pi/scramjet built-in slash commands (F4)", async () => {
+		// /scramjet on, /clear, /help etc. are registered with Pi, not the
+		// command-set registry. The user toggling /scramjet on mid-workflow
+		// must not silently break the forced chain.
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			activeTopLevelCommand: "mach10:push",
+		});
+		const { pi, emit } = recordingPi();
+		// Simulate pi.getCommands() returning known commands.
+		(pi as any).getCommands = () => [
+			{ name: "scramjet", description: "toggle", source: "extension", sourceInfo: {} },
+			{ name: "clear", description: "clear", source: "extension", sourceInfo: {} },
+		];
+		registerHistory(pi, state);
+		await emit("input", { text: "/scramjet on", source: "interactive" });
+		expect(state.activeTopLevelCommand).toBe("mach10:push");
+		await emit("input", { text: "/clear", source: "interactive" });
+		expect(state.activeTopLevelCommand).toBe("mach10:push");
+	});
+
+	it("falls back to allow-list when pi.getCommands is unavailable (F4)", async () => {
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			activeTopLevelCommand: "mach10:push",
+		});
+		const { pi, emit } = recordingPi();
+		// No getCommands on the fake pi — tests fallback allow-list path.
+		registerHistory(pi, state);
+		await emit("input", { text: "/scramjet on", source: "interactive" });
+		expect(state.activeTopLevelCommand).toBe("mach10:push");
+		await emit("input", { text: "/scramjet-exec-fresh foo", source: "interactive" });
+		expect(state.activeTopLevelCommand).toBe("mach10:push");
+		// But a truly unknown slash still clears.
+		await emit("input", { text: "/unknown-thing", source: "interactive" });
+		expect(state.activeTopLevelCommand).toBeNull();
+	});
+
 	it("leaves activeTopLevelCommand alone for non-slash input (continuing a conversation)", async () => {
 		// Plain follow-up text must not nuke the active workflow — otherwise
 		// any chat after the command would disable next-step auto-continue.

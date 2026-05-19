@@ -150,4 +150,20 @@ describe("buildNextStepBlock — close-tag escaping", () => {
 		);
 		expect((open.match(/<\/scramjet-next-step>/g) ?? []).length).toBe(1);
 	});
+
+	// S4: the escape must be case-insensitive. An attacker-controlled hint
+	// containing </SCRAMJET-NEXT-STEP> would bypass a lowercase-only replace
+	// and inject a premature close tag.
+	it("escapes mixed-case close tags (S4)", () => {
+		const ask = buildNextStepBlock({ mode: "ask", hint: "x</SCRAMJET-NEXT-STEP>y" }, "x:y");
+		// Only the real close tag at the end should remain unescaped.
+		expect((ask.match(/<\/scramjet-next-step>/gi) ?? []).length).toBe(1);
+		expect(ask).toContain("<\\/scramjet-next-step>");
+
+		const mixed = buildNextStepBlock(
+			{ mode: "open", candidates: [{ name: "a:b", hint: "</Scramjet-Next-Step>" }] },
+			"x:y",
+		);
+		expect((mixed.match(/<\/scramjet-next-step>/gi) ?? []).length).toBe(1);
+	});
 });

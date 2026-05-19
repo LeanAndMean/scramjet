@@ -135,7 +135,7 @@ Each fix session should be **fresh** to maximize available context.
 
 When calling `task_complete`, choose the next step using this order:
 
-1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, set `next_step.command` to rerun this command with the same PR/comment arguments and the next stage label, and set `next_step.fresh_session` to `true`.
+1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, set `next_step.name` to `mach12:pr-review-fix` and set `next_step.args` to the same PR/comment arguments plus the next stage label, and set `next_step.fresh_session` to `true`.
    - Example: `mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`
 2. **After the final planned fix stage, choose the verification path.** Pick `mach12:pr-review` if the fixes were substantive enough that another full review may find issues. Pick `mach12:pr-pre-merge` if the fixes were narrow and confidence is high.
 3. **If the next stage is unclear, stop.** Omit `next_step` rather than guessing.

@@ -69,7 +69,13 @@ function collectEntries(rootDir: string, scope: "global" | "project", subdir: st
 }
 
 function globalRoot(): string {
-	return process.env.SCRAMJET_CACHE ?? join(homedir(), ".local", "share", "scramjet");
+	// Mirror scripts/postinstall.js: honor SCRAMJET_CACHE (explicit override),
+	// else XDG_DATA_HOME (XDG spec), else ~/.local/share/scramjet. If the
+	// seeder and the loader disagree on this path, every postinstall write
+	// lands somewhere the runtime can't see. (F3)
+	return (
+		process.env.SCRAMJET_CACHE ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "scramjet")
+	);
 }
 
 export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): void {

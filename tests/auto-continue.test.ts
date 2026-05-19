@@ -129,11 +129,15 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 	});
 
 	describe("forced mode", () => {
+		// Helper: forced tests always need the target registered (F6 — the
+		// dispatcher now refuses to fire when the target is missing).
+		const targetDef: CommandDef = defWithPolicy("b:target", undefined);
+
 		it("fires the target via sendUserMessage and sets pendingForcedDispatch, regardless of enabled=false", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({
 				enabled: false,
-				registry: registryWith(def),
+				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag } = bootstrap(state);
@@ -150,7 +154,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({
 				enabled: true,
-				registry: registryWith(def),
+				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag } = bootstrap(state);
@@ -164,7 +168,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({
 				enabled: true,
-				registry: registryWith(def),
+				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag } = bootstrap(state);
@@ -179,7 +183,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({
 				enabled: true,
-				registry: registryWith(def),
+				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag } = bootstrap(state);
@@ -187,6 +191,29 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			expect(state.activeTopLevelCommand).toBe("b:target");
+		});
+
+		// F6: symmetric guard to F11's active-command check. A forced target that
+		// dropped out of the registry (rename, removed command, partial reload)
+		// would silently dispatch /dead-command and set activeTopLevelCommand to
+		// a non-registry name; now we warn once and skip.
+		it("warns and does NOT dispatch when forced target is missing from registry (F6)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:missing" });
+			const state = freshState({
+				enabled: true,
+				registry: registryWith(def), // b:missing intentionally absent
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(bag.sentMessages).toEqual([]);
+			expect(state.pendingForcedDispatch).toBeNull();
+			expect(state.activeTopLevelCommand).toBe("a:cmd"); // unchanged
+			expect(ctxBag.notifications).toHaveLength(1);
+			expect(ctxBag.notifications[0].type).toBe("warning");
+			expect(ctxBag.notifications[0].message).toContain("b:missing");
 		});
 	});
 
@@ -204,7 +231,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -221,7 +248,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -241,7 +268,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: true } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: true } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -258,7 +285,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
 			await setCompletion({
 				summary: "s",
-				next_step: { command: "z:not-in-list", fresh_session: false },
+				next_step: { name: "z:not-in-list", fresh_session: false },
 			});
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
@@ -304,7 +331,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
 			await setCompletion({
 				summary: "s",
-				next_step: { command: "danger:cmd", fresh_session: false },
+				next_step: { name: "danger:cmd", fresh_session: false },
 			});
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
@@ -328,7 +355,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
 			await setCompletion({
 				summary: "s",
-				next_step: { command: "anything:goes", fresh_session: false },
+				next_step: { name: "anything:goes", fresh_session: false },
 			});
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
@@ -347,7 +374,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "x:y", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "x:y", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -383,7 +410,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "next", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "next", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -398,7 +425,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "next", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "next", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -410,7 +437,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 		it("activeTopLevelCommand is null → legacy path applies; enabled=true + agent pick still countdowns", async () => {
 			const state = freshState({ enabled: true, activeTopLevelCommand: null });
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "next", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "next", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -430,7 +457,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: "a:missing",
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:next", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:next", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -450,12 +477,12 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
 
-			await setCompletion({ summary: "s", next_step: { command: "b:next", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:next", fresh_session: false } });
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			expect(ctxBag.notifications).toHaveLength(1);
 
 			// Second turn: active is now null, so we land on the legacy path.
-			await setCompletion({ summary: "s", next_step: { command: "c:next", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "c:next", fresh_session: false } });
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			expect(ctxBag.notifications).toHaveLength(1); // unchanged
 			expect(ctxBag.widgets.length).toBeGreaterThan(0); // legacy countdown
@@ -472,12 +499,12 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: false } });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			expect(ctxBag.widgets).toEqual([]);
-			expect(bag.sentMessages).toEqual([{ content: "b:ok", options: { deliverAs: "followUp" } }]);
+			expect(bag.sentMessages).toEqual([{ content: "/b:ok", options: { deliverAs: "followUp" } }]);
 		});
 	});
 
@@ -503,7 +530,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			vi.useFakeTimers();
 			const { state } = primedClosed();
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: false } });
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			// Initial render: widget shown, nothing sent yet, input handler installed.
@@ -519,7 +546,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 
 			// Crossing the final tick fires sendUserMessage and tears the widget down.
 			vi.advanceTimersByTime(1000);
-			expect(bag.sentMessages).toEqual([{ content: "b:ok", options: { deliverAs: "followUp" } }]);
+			expect(bag.sentMessages).toEqual([{ content: "/b:ok", options: { deliverAs: "followUp" } }]);
 			// Final setWidget call clears the widget (content = undefined).
 			const last = ctxBag.widgets[ctxBag.widgets.length - 1];
 			expect(last.key).toBe("scramjet-next");
@@ -533,7 +560,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			vi.useFakeTimers();
 			const { state } = primedClosed();
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: false } });
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			const handler = ctxBag.inputHandler;
@@ -553,7 +580,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			vi.useFakeTimers();
 			const { state } = primedClosed();
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: false } });
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			const handler = ctxBag.inputHandler;
@@ -592,7 +619,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			vi.useFakeTimers();
 			const { state } = primedClosed();
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: false } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: false } });
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			expect(ctxBag.inputHandler).not.toBeNull();
 
@@ -692,11 +719,11 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
-			await setCompletion({ summary: "s", next_step: { command: "b:ok", fresh_session: true } });
+			await setCompletion({ summary: "s", next_step: { name: "b:ok", fresh_session: true } });
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			expect(bag.sentMessages).toEqual([
-				{ content: "/scramjet-exec-fresh b:ok", options: { deliverAs: "followUp" } },
+				{ content: "/scramjet-exec-fresh /b:ok", options: { deliverAs: "followUp" } },
 			]);
 		});
 	});
@@ -736,7 +763,9 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			expect(appended).toHaveLength(1);
 		});
 
-		it("forced target missing from registry → flag persists past input, then before_agent_start clears it (F18)", async () => {
+		// F6: forced target missing from registry is now caught before dispatch.
+		// The dispatcher warns and skips; no sendUserMessage, no flag set.
+		it("forced target missing from registry → warns, does not dispatch, pendingForcedDispatch stays null (F6)", async () => {
 			const originDef = defWithPolicy("a:cmd", { mode: "forced", target: "b:missing" });
 			const state = freshState({
 				enabled: true,
@@ -747,16 +776,13 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			registerHistory(bag.pi, state);
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.pendingForcedDispatch).toBe("b:missing");
 
-			// Input fires for /b:missing but parseSlashCommand returns null (not in
-			// registry), so the input handler can't clear the flag.
-			await bag.emit("input", { text: "/b:missing", source: "followUp" }, ctxBag.ctx);
-			expect(state.pendingForcedDispatch).toBe("b:missing");
-
-			// Turn-boundary reset: before_agent_start is the last-chance clear.
-			await bag.emit("before_agent_start", { systemPrompt: "" }, ctxBag.ctx);
+			// F6 guard fires: no dispatch, no flag, warning emitted.
 			expect(state.pendingForcedDispatch).toBeNull();
+			expect(bag.sentMessages).toEqual([]);
+			expect(ctxBag.notifications).toHaveLength(1);
+			expect(ctxBag.notifications[0].type).toBe("warning");
+			expect(ctxBag.notifications[0].message).toContain("b:missing");
 		});
 	});
 });

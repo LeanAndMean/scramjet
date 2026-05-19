@@ -31,6 +31,15 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
 	}
 
+	function wireFor(step: NextStep): string {
+		// Reconstruct the slash-form wire payload from the structured NextStep.
+		// The agent supplies bare `name` (matched against bare candidate names
+		// by the validator) and optional `args`; the dispatcher owns the slash
+		// prefix and the join. Keeping the two responsibilities split prevents
+		// the F15 "is the leading slash part of the name?" ambiguity. (F15)
+		return `/${step.name}${step.args ? ` ${step.args}` : ""}`;
+	}
+
 	function startCountdown(step: NextStep, ctx: ExtensionContext) {
 		if (!ctx.hasUI) {
 			executeStep(step);
@@ -38,15 +47,14 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 
 		let remaining = COUNTDOWN_SECONDS;
+		const wire = wireFor(step);
 
 		const updateWidget = () => {
 			const sessionLabel = step.freshSession ? " (fresh session)" : "";
 			const dots = ".".repeat(remaining);
-			ctx.ui.setWidget(
-				WIDGET_KEY,
-				[`  Next: ${step.command}${sessionLabel}    ${remaining}s${dots}    [Esc] cancel  `],
-				{ placement: "belowEditor" },
-			);
+			ctx.ui.setWidget(WIDGET_KEY, [`  Next: ${wire}${sessionLabel}    ${remaining}s${dots}    [Esc] cancel  `], {
+				placement: "belowEditor",
+			});
 		};
 
 		updateWidget();
@@ -83,10 +91,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	function executeStep(step: NextStep) {
+		const wire = wireFor(step);
 		if (step.freshSession) {
-			pi.sendUserMessage(`/scramjet-exec-fresh ${step.command}`, { deliverAs: "followUp" });
+			pi.sendUserMessage(`/scramjet-exec-fresh ${wire}`, { deliverAs: "followUp" });
 		} else {
-			pi.sendUserMessage(step.command, { deliverAs: "followUp" });
+			pi.sendUserMessage(wire, { deliverAs: "followUp" });
 		}
 	}
 
@@ -110,7 +119,17 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		},
 	});
 
-	function dispatchForced(target: string) {
+	function dispatchForced(target: string, ctx: ExtensionContext): boolean {
+		// F6: symmetric to the F11 "active command missing from registry" guard
+		// at the top of agent_end. A `forced` target that dropped out of the
+		// registry (rename, removed command, partial reload) would otherwise
+		// silently dispatch `/dead-command` and set activeTopLevelCommand to a
+		// non-registry name; the next agent_end would then fall back to the
+		// legacy path with no signal that the forced chain went off the rails.
+		if (!state.registry.has(target)) {
+			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
+			return false;
+		}
 		// Flag history's input handler to mark the resulting sidebar entry
 		// origin: "forced". Cleared by that handler once it matches. The flag
 		// value is the bare command name (no slash) because parseSlashCommand
@@ -119,6 +138,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		state.pendingForcedDispatch = target;
 		state.activeTopLevelCommand = target;
 		pi.sendUserMessage(`/${target}`, { deliverAs: "followUp" });
+		return true;
 	}
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -145,7 +165,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		// implicitly chose to chain by invoking the command that declares forced.
 		if (policy?.mode === "forced") {
 			clearLatestCompletion();
-			dispatchForced(policy.target);
+			dispatchForced(policy.target, ctx);
 			return;
 		}
 
@@ -154,7 +174,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		clearLatestCompletion();
 
 		if (policy) {
-			const proposed = completion.nextStep?.command;
+			const proposed = completion.nextStep?.name;
 			const result = validateNextStep(proposed, policy);
 
 			if (policy.mode === "ask") {
@@ -177,11 +197,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			if (state.enabled) {
 				startCountdown(completion.nextStep, ctx);
 			} else {
+				const wire = wireFor(completion.nextStep);
 				const fresh = completion.nextStep.freshSession ? " (fresh session)" : "";
-				ctx.ui.notify(
-					`scramjet: next would be ${completion.nextStep.command}${fresh}; /scramjet on to chain`,
-					"info",
-				);
+				ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
 			}
 			return;
 		}

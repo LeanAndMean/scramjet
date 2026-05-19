@@ -5,6 +5,37 @@ export const COMMAND_START_TYPE = "scramjet:command-start";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
 
+// Pi built-ins and scramjet internals that the F25 clear-on-unknown-slash
+// path must NOT treat as a workflow exit. Used only when pi.getCommands()
+// is unavailable (older Pi, test fakes that don't stub it); the normal
+// path consults the live command list. (F4)
+const FALLBACK_KNOWN_SLASH = new Set<string>(["scramjet", "scramjet-exec-fresh", "clear"]);
+
+function extractSlashName(text: string): string | null {
+	if (!text.startsWith("/")) return null;
+	const rest = text.slice(1);
+	const space = rest.search(/\s/);
+	const name = space === -1 ? rest : rest.slice(0, space);
+	return name || null;
+}
+
+function isKnownSlashCommand(text: string, pi: ExtensionAPI): boolean {
+	const name = extractSlashName(text);
+	if (!name) return false;
+	const getCommands = (pi as unknown as { getCommands?: () => Array<{ name: string }> }).getCommands;
+	if (typeof getCommands === "function") {
+		try {
+			for (const cmd of getCommands()) {
+				if (cmd.name === name) return true;
+			}
+			return false;
+		} catch {
+			// fall through to fallback set
+		}
+	}
+	return FALLBACK_KNOWN_SLASH.has(name);
+}
+
 export interface EnabledToggleData {
 	enabled: boolean;
 }
@@ -101,8 +132,16 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// has moved on from any active workflow. Clear activeTopLevelCommand
 			// so the next agent_end doesn't apply the *previous* command's
 			// next-step policy to whatever the agent does in response. (F25)
+			//
+			// Exception: a slash command that *is* registered with Pi (built-ins
+			// like /scramjet, /clear, /help, plus other extensions' commands) is
+			// not a workflow exit — the user toggling /scramjet on mid-chain or
+			// checking /help should not silently break a forced next-step. Only
+			// truly unrecognized slashes (typos, removed commands) clear. (F4)
 			if (event.text.startsWith("/") && state.activeTopLevelCommand !== null) {
-				state.activeTopLevelCommand = null;
+				if (!isKnownSlashCommand(event.text, pi)) {
+					state.activeTopLevelCommand = null;
+				}
 			}
 			return;
 		}

@@ -1,10 +1,20 @@
+/**
+ * Renders the <scramjet-next-step> instruction block injected into the
+ * agent's first user message by task-complete.ts when the active command
+ * declares a `next:` policy. Pure function: one branch per policy mode.
+ * The close-tag escape is case-insensitive (S4) so an attacker-controlled
+ * hint cannot smuggle a literal close tag in a different case.
+ */
 import type { Candidate, NextStepPolicy } from "./types.ts";
 
-const CLOSE_TAG = "</scramjet-next-step>";
 const ESCAPED_CLOSE_TAG = "<\\/scramjet-next-step>";
+// Match any case of </scramjet-next-step>. S4: an earlier version did a
+// literal lowercase split, which left </SCRAMJET-NEXT-STEP> (or any mixed
+// case) unescaped — trivial prompt-injection bypass.
+const CLOSE_TAG_RE = /<\/scramjet-next-step>/gi;
 
 function safe(s: string): string {
-	return s.split(CLOSE_TAG).join(ESCAPED_CLOSE_TAG);
+	return s.replace(CLOSE_TAG_RE, ESCAPED_CLOSE_TAG);
 }
 
 function formatHint(hint: string | undefined): string {
@@ -28,7 +38,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 		case "closed":
 			body =
 				`The command \`${id}\` declares a \`closed\` next-step policy.\n` +
-				`When you call task_complete, pick one of these candidates for next_step.command:\n` +
+				`When you call task_complete, pick one of these candidates for next_step.name (bare, no leading slash):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
 				`If none apply, omit next_step entirely to stop the chain.`;
 			break;
@@ -38,7 +48,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 				: "";
 			body =
 				`The command \`${id}\` declares an \`open\` next-step policy.\n` +
-				`Suggested candidates for next_step.command:\n` +
+				`Suggested candidates for next_step.name (bare, no leading slash):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
 				`You may also pick any other slash command if it fits the work.${blacklistLine}\n` +
 				`Omit next_step entirely to stop the chain.`;

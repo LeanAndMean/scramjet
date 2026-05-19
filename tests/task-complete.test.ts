@@ -26,7 +26,7 @@ describe("paramsToCompletionSignal", () => {
 		const params: TaskCompleteParams = {
 			summary: "Implemented feature X",
 			next_step: {
-				command: "/run-tests",
+				name: "run-tests",
 				fresh_session: true,
 				reason: "Verify the change",
 			},
@@ -35,7 +35,8 @@ describe("paramsToCompletionSignal", () => {
 		expect(paramsToCompletionSignal(params)).toEqual({
 			summary: "Implemented feature X",
 			nextStep: {
-				command: "/run-tests",
+				name: "run-tests",
+				args: undefined,
 				freshSession: true,
 				reason: "Verify the change",
 			},
@@ -53,18 +54,20 @@ describe("paramsToCompletionSignal", () => {
 		});
 	});
 
-	it("preserves command and freshSession when reason is omitted", () => {
+	it("preserves name + args + freshSession when reason is omitted", () => {
 		const params: TaskCompleteParams = {
 			summary: "Stage 1 complete",
 			next_step: {
-				command: "/mach10:issue-implement 1 2",
+				name: "mach12:issue-implement",
+				args: "1 2",
 				fresh_session: false,
 			},
 		};
 
 		const signal = paramsToCompletionSignal(params);
 		expect(signal.nextStep).toEqual({
-			command: "/mach10:issue-implement 1 2",
+			name: "mach12:issue-implement",
+			args: "1 2",
 			freshSession: false,
 			reason: undefined,
 		});
