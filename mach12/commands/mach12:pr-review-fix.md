@@ -10,18 +10,23 @@ allowed-tools:
   - write
   - delegate
 next:
-  mode: closed
+  mode: open
   candidates:
+    - name: mach12:pr-review-fix
+      hint: |
+        Pick when this session fixed Stage N from a staged assessment
+        plan and Stage N+1 remains. Re-run this command in a fresh
+        session with the same PR/comment arguments and the next stage
+        label.
     - name: mach12:pr-review
       hint: |
-        Pick when the fixes were substantive enough to warrant a full
-        re-review (new code paths, structural changes, multi-file
-        refactor). Verifies the changes before merge.
+        Pick after the final planned fix stage when the fixes were
+        substantive enough to warrant a full re-review (new code paths,
+        structural changes, multi-file refactor).
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when the fixes were narrow and confidence is high that no
-        new findings would emerge. Skips re-review and moves to the
-        merge checklist.
+        Pick after the final planned fix stage when confidence is high
+        that a subsequent review is unlikely to find anything new.
 ---
 
 # Fix Review Issues
@@ -116,7 +121,7 @@ Fix only the findings listed above. Do not fix other findings in the review comm
 
 If a fix is out of scope or would require significant refactoring, recommend deferring it to a new GitHub issue rather than fixing it inline. Offer to create the issue with `/mach12:issue-create`.
 
-## Step 5: Commit and document
+## Step 5: Commit, document, and choose the next step
 
 Once the fixes are complete, commit, push, and post a progress comment on the PR by delegating to:
 
@@ -127,3 +132,10 @@ Once the fixes are complete, commit, push, and post a progress comment on the PR
 Pass a brief summary of the findings addressed as `$ARGUMENTS` so the commit message and PR progress comment speak specifically to the fixes.
 
 Each fix session should be **fresh** to maximize available context.
+
+When calling `task_complete`, choose the next step using this order:
+
+1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, set `next_step.command` to rerun this command with the same PR/comment arguments and the next stage label, and set `next_step.fresh_session` to `true`.
+   - Example: `mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`
+2. **After the final planned fix stage, choose the verification path.** Pick `mach12:pr-review` if the fixes were substantive enough that another full review may find issues. Pick `mach12:pr-pre-merge` if the fixes were narrow and confidence is high.
+3. **If the next stage is unclear, stop.** Omit `next_step` rather than guessing.

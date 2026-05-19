@@ -59,8 +59,12 @@ const WIRING: WiringRow[] = [
 	{
 		basename: "pr-review-fix",
 		expected: {
-			mode: "closed",
-			candidates: [{ name: "mach12:pr-review" }, { name: "mach12:pr-pre-merge" }],
+			mode: "open",
+			candidates: [
+				{ name: "mach12:pr-review-fix" },
+				{ name: "mach12:pr-review" },
+				{ name: "mach12:pr-pre-merge" },
+			],
 		},
 	},
 	{
