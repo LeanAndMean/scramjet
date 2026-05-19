@@ -10,7 +10,7 @@ export interface FileEntry {
 	scope: "global" | "project";
 }
 
-export type LoadResult = { ok: true; def: CommandDef } | { ok: false; error: string };
+export type LoadResult = { ok: true; def: CommandDef; warnings?: string[] } | { ok: false; error: string };
 
 interface RegistryBuildResult {
 	registry: CommandRegistry;
@@ -64,7 +64,23 @@ export function parseCommandFile(filePath: string, content: string, setName: str
 	const allowedTools = parseAllowedTools(parsed.frontmatter["allowed-tools"]);
 	if (allowedTools !== undefined) def.allowedTools = allowedTools;
 	if (nextResult.policy !== null) def.next = nextResult.policy;
-	return { ok: true, def };
+	// S8: parseAllowedTools silently drops non-string array entries. Detect
+	// them here and surface a load warning so a typo'd YAML list (e.g. an
+	// unquoted `42`, a stray `null`) is visible at startup rather than
+	// shrinking the caller's tool scope without explanation.
+	const toolWarnings: string[] = [];
+	const rawTools = parsed.frontmatter["allowed-tools"];
+	if (Array.isArray(rawTools)) {
+		const nonStrings = rawTools.filter((x) => typeof x !== "string");
+		if (nonStrings.length > 0) {
+			toolWarnings.push(
+				`${fileName}: "allowed-tools" contains ${nonStrings.length} non-string entr${nonStrings.length === 1 ? "y" : "ies"} (ignored: ${JSON.stringify(nonStrings)})`,
+			);
+		}
+	}
+	const result: LoadResult = { ok: true, def };
+	if (toolWarnings.length > 0) result.warnings = toolWarnings;
+	return result;
 }
 
 export function buildRegistry(entries: FileEntry[]): RegistryBuildResult {
@@ -75,6 +91,9 @@ export function buildRegistry(entries: FileEntry[]): RegistryBuildResult {
 		if (!result.ok) {
 			warnings.push(`skipping ${entry.filePath}: ${result.error}`);
 			continue;
+		}
+		if (result.warnings) {
+			for (const w of result.warnings) warnings.push(w);
 		}
 		const existing = registry.get(result.def.name);
 		if (existing) {

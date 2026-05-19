@@ -45,7 +45,15 @@ try {
 	renameSync(tmp, dest);
 	console.log(`[scramjet] Seeded Mach 12 command set at ${dest}`);
 } catch (err) {
-	rmSync(tmp, { recursive: true, force: true });
+	// F26: nest the cleanup so a failing rmSync (e.g. EBUSY on Windows-ish
+	// filesystems mounted into WSL) cannot mask the original failure that
+	// brought us into the catch.
+	try {
+		rmSync(tmp, { recursive: true, force: true });
+	} catch (cleanupErr) {
+		const cleanupMessage = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
+		console.warn(`[scramjet] Mach 12 seed cleanup failed for ${tmp}: ${cleanupMessage}`);
+	}
 	const message = err instanceof Error ? err.message : String(err);
 	console.warn(`[scramjet] Mach 12 seed failed: ${message}`);
 	console.warn(`[scramjet] Continuing install; copy mach12/ manually to ${dest} if needed.`);

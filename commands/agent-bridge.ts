@@ -71,10 +71,21 @@ export function ensureAgentBridge(registry: AgentRegistry, ownershipRoots: reado
 		const linkPath = join(targetDir, `${def.name}.md`);
 		const desired = resolve(def.filePath);
 
+		// F9: ENOENT means "link does not exist" → fall into the create path.
+		// Other errors (EACCES, EIO, …) cannot safely be classified as absent;
+		// surface them as a warning and skip this entry so we don't end up
+		// overwriting whatever is actually there.
 		let stat: ReturnType<typeof lstatSync> | null = null;
 		try {
 			stat = lstatSync(linkPath);
-		} catch {
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT") {
+				result.warnings.push(
+					`agent bridge: could not lstat ${linkPath} (${code ?? "unknown"}: ${(err as Error).message}); skipping`,
+				);
+				continue;
+			}
 			stat = null;
 		}
 
@@ -128,10 +139,18 @@ export function ensureAgentBridge(registry: AgentRegistry, ownershipRoots: reado
 	for (const entry of entries) {
 		if (!entry.endsWith(".md")) continue;
 		const linkPath = join(targetDir, entry);
+		// F9: ENOENT is fine (entry vanished mid-scan); non-ENOENT means we
+		// can't classify and should not silently skip.
 		let stat: ReturnType<typeof lstatSync>;
 		try {
 			stat = lstatSync(linkPath);
-		} catch {
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT") {
+				result.warnings.push(
+					`agent bridge: could not lstat ${linkPath} during prune (${code ?? "unknown"}: ${(err as Error).message})`,
+				);
+			}
 			continue;
 		}
 		if (!stat.isSymbolicLink()) continue;

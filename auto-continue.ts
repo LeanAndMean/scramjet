@@ -60,12 +60,24 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		});
 
 		countdownTimer = setInterval(() => {
-			remaining--;
-			if (remaining <= 0) {
+			// S10: error boundary. setInterval callbacks that throw become
+			// unhandledException in Node — worse, the interval keeps firing.
+			// Catch, surface, and tear the countdown down cleanly so a bad
+			// tick doesn't trap the user in a runaway widget.
+			try {
+				remaining--;
+				if (remaining <= 0) {
+					cancelCountdown(ctx);
+					executeStep(step);
+				} else {
+					updateWidget();
+				}
+			} catch (err) {
 				cancelCountdown(ctx);
-				executeStep(step);
-			} else {
-				updateWidget();
+				ctx.ui.notify(
+					`scramjet: countdown aborted (${(err as Error).message}); press the next-step command manually if you still want to chain`,
+					"warning",
+				);
 			}
 		}, 1000);
 	}

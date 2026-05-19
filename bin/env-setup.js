@@ -13,8 +13,26 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// F17: raw JSON.parse on package.json crashes startup with a cryptic
+// SyntaxError if the file is corrupt. npm manages these files so it's
+// extraordinarily rare, but a clearer message saves an avoidable
+// debugging session when it does happen.
+function readPackageJson(path) {
+	let content;
+	try {
+		content = readFileSync(path, "utf-8");
+	} catch (err) {
+		throw new Error(`[scramjet/env-setup] could not read ${path}: ${err.message}`);
+	}
+	try {
+		return JSON.parse(content);
+	} catch (err) {
+		throw new Error(`[scramjet/env-setup] ${path} is not valid JSON: ${err.message}`);
+	}
+}
+
 const scramjetRoot = fileURLToPath(new URL("..", import.meta.url));
-const scramjetPkg = JSON.parse(readFileSync(join(scramjetRoot, "package.json"), "utf-8"));
+const scramjetPkg = readPackageJson(join(scramjetRoot, "package.json"));
 
 // Pi's package.json restricts subpath access via `exports`, so we can't
 // just resolve `@earendil-works/pi-coding-agent/package.json`. Resolve
@@ -25,7 +43,7 @@ let piRoot = dirname(fileURLToPath(piEntryUrl));
 while (true) {
 	const candidate = join(piRoot, "package.json");
 	if (existsSync(candidate)) {
-		const candidatePkg = JSON.parse(readFileSync(candidate, "utf-8"));
+		const candidatePkg = readPackageJson(candidate);
 		if (candidatePkg.name === "@earendil-works/pi-coding-agent") {
 			break;
 		}
@@ -36,7 +54,7 @@ while (true) {
 	}
 	piRoot = parent;
 }
-const piPkg = JSON.parse(readFileSync(join(piRoot, "package.json"), "utf-8"));
+const piPkg = readPackageJson(join(piRoot, "package.json"));
 
 // Cache the shim per (scramjet version, pi version) so upgrades to either
 // side bust it automatically. The old version-keyed directories remain on
@@ -66,7 +84,17 @@ if (!existsSync(shimDir)) {
 		for (const subpath of ["dist", "examples"]) {
 			const piPath = join(piRoot, subpath);
 			if (existsSync(piPath)) {
-				symlinkSync(piPath, join(tmp, subpath));
+				// S11: per-symlink try wrapper. Without this, a single bad
+				// symlinkSync (e.g. EACCES on the cache dir, EEXIST against a
+				// stray file) aborts the whole shim build with a stack that
+				// doesn't name *which* link tripped it.
+				try {
+					symlinkSync(piPath, join(tmp, subpath));
+				} catch (err) {
+					throw new Error(
+						`[scramjet/env-setup] could not symlink ${piPath} -> ${join(tmp, subpath)}: ${err.message}`,
+					);
+				}
 			}
 		}
 		// Scramjet-owned user-facing docs. `pi docs`, the changelog
@@ -74,7 +102,13 @@ if (!existsSync(shimDir)) {
 		for (const file of ["README.md", "CHANGELOG.md", "docs"]) {
 			const src = join(scramjetRoot, file);
 			if (existsSync(src)) {
-				symlinkSync(src, join(tmp, file));
+				try {
+					symlinkSync(src, join(tmp, file));
+				} catch (err) {
+					throw new Error(
+						`[scramjet/env-setup] could not symlink ${src} -> ${join(tmp, file)}: ${err.message}`,
+					);
+				}
 			}
 		}
 		renameSync(tmp, shimDir);
@@ -86,6 +120,12 @@ if (!existsSync(shimDir)) {
 		if (!existsSync(shimDir)) {
 			throw err;
 		}
+		// F16: the race-recovery path used to be silent, which makes
+		// debugging concurrent-scramjet weirdness harder than it needs to
+		// be. Log once so the recovered race is visible in stderr.
+		console.warn(
+			`[scramjet/env-setup] shim build at ${shimDir} lost a race with a concurrent scramjet; recovered (${err.message})`,
+		);
 	}
 }
 
