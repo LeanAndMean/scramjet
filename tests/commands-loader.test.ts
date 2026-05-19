@@ -3,20 +3,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCommandLoader } from "../commands/index.ts";
 import { buildRegistry, type FileEntry, parseAllowedTools, parseCommandFile } from "../commands/loader.ts";
-import type { ScramjetState } from "../types.ts";
+import { freshState } from "./helpers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = resolve(HERE, "fixtures");
-
-function freshState(): ScramjetState {
-	return {
-		enabled: false,
-		registry: new Map(),
-		activeTopLevelCommand: null,
-		sidebarLog: [],
-		delegateStack: [],
-	};
-}
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
 

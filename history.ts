@@ -71,9 +71,16 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("input", async (event) => {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) return;
+		let origin: SidebarEntry["origin"];
+		if (state.pendingForcedDispatch === name) {
+			origin = "forced";
+			state.pendingForcedDispatch = null;
+		} else {
+			origin = event.source === "interactive" ? "user" : "agent";
+		}
 		const entry: SidebarEntry = {
 			command: name,
-			origin: event.source === "interactive" ? "user" : "agent",
+			origin,
 			depth: 0,
 			timestamp: Date.now(),
 		};

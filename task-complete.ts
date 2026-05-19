@@ -7,7 +7,10 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { buildNextStepBlock } from "./next-step.ts";
 import type { CompletionSignal, ScramjetState } from "./types.ts";
+
+export const NEXT_STEP_MESSAGE_TYPE = "scramjet-next-step";
 
 const SYSTEM_PROMPT_SNIPPET = `
 
@@ -97,10 +100,28 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 	});
 
 	pi.on("before_agent_start", async (event) => {
+		const def = state.activeTopLevelCommand ? state.registry.get(state.activeTopLevelCommand) : undefined;
+		const policy = def?.next;
+
+		// When the active command declares a policy, surface it to the agent
+		// regardless of state.enabled. /off gates dispatch decisions, not the
+		// agent's awareness of what the policy is — the agent's pick is still
+		// needed for the notify-hint path under /off.
+		if (policy) {
+			clearLatestCompletion();
+			return {
+				systemPrompt: event.systemPrompt + SYSTEM_PROMPT_SNIPPET,
+				message: {
+					customType: NEXT_STEP_MESSAGE_TYPE,
+					content: buildNextStepBlock(policy, def.name),
+					display: false,
+				},
+			};
+		}
+
+		// Legacy path: no declared policy, snippet only when enabled.
 		if (!state.enabled) return;
-
 		clearLatestCompletion();
-
 		return {
 			systemPrompt: event.systemPrompt + SYSTEM_PROMPT_SNIPPET,
 		};

@@ -8,6 +8,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
+import { validateNextStep } from "./commands/validator.ts";
 import { clearLatestCompletion, getLatestCompletion } from "./task-complete.ts";
 import type { NextStep, ScramjetState } from "./types.ts";
 
@@ -97,13 +98,69 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		},
 	});
 
+	function dispatchForced(target: string) {
+		// Flag history's input handler to mark the resulting sidebar entry
+		// origin: "forced". Cleared by that handler once it matches. The flag
+		// value is the bare command name (no slash) because parseSlashCommand
+		// strips the slash before returning. The wire message needs the slash
+		// so Pi routes it as a slash command, not as plain user text.
+		state.pendingForcedDispatch = target;
+		state.activeTopLevelCommand = target;
+		pi.sendUserMessage(`/${target}`, { deliverAs: "followUp" });
+	}
+
 	pi.on("agent_end", async (_event, ctx) => {
-		if (!state.enabled) return;
+		const def = state.activeTopLevelCommand ? state.registry.get(state.activeTopLevelCommand) : undefined;
+		const policy = def?.next;
+
+		// Forced fires the target unconditionally — regardless of state.enabled,
+		// regardless of whether the agent called task_complete. The user
+		// implicitly chose to chain by invoking the command that declares forced.
+		if (policy?.mode === "forced") {
+			clearLatestCompletion();
+			dispatchForced(policy.target);
+			return;
+		}
 
 		const completion = getLatestCompletion();
-		if (!completion?.nextStep) return;
-
+		if (!completion) return;
 		clearLatestCompletion();
+
+		if (policy) {
+			const proposed = completion.nextStep?.command;
+			const result = validateNextStep(proposed, policy);
+
+			if (policy.mode === "ask") {
+				if (proposed) {
+					ctx.ui.notify(
+						`scramjet: ask-mode command; agent proposed "${proposed}" — ignored, waiting for user`,
+						"warning",
+					);
+				}
+				return;
+			}
+
+			if (!result.valid) {
+				ctx.ui.notify(`scramjet: ${result.reason}`, "warning");
+				return;
+			}
+
+			if (!completion.nextStep) return;
+
+			if (state.enabled) {
+				startCountdown(completion.nextStep, ctx);
+			} else {
+				const fresh = completion.nextStep.freshSession ? " (fresh session)" : "";
+				ctx.ui.notify(
+					`scramjet: next would be ${completion.nextStep.command}${fresh}; /scramjet on to chain`,
+					"info",
+				);
+			}
+			return;
+		}
+
+		if (!state.enabled) return;
+		if (!completion.nextStep) return;
 		startCountdown(completion.nextStep, ctx);
 	});
 

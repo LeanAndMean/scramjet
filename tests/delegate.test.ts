@@ -7,17 +7,7 @@ import {
 	substituteArguments,
 } from "../delegate.ts";
 import type { CommandDef, DelegateFrame, ScramjetState } from "../types.ts";
-
-function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
-	return {
-		enabled: false,
-		registry: new Map(),
-		activeTopLevelCommand: null,
-		sidebarLog: [],
-		delegateStack: [],
-		...overrides,
-	};
-}
+import { freshState } from "./helpers.ts";
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
 

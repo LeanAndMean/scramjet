@@ -10,17 +10,7 @@ import {
 	SIDEBAR_MAX,
 } from "../history.ts";
 import type { CommandDef, CommandRegistry, ScramjetState, SidebarEntry } from "../types.ts";
-
-function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
-	return {
-		enabled: false,
-		registry: new Map(),
-		activeTopLevelCommand: null,
-		sidebarLog: [],
-		delegateStack: [],
-		...overrides,
-	};
-}
+import { freshState } from "./helpers.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -232,6 +222,35 @@ describe("registerHistory — input event", () => {
 		const unknown = await fire({ text: "/not-registered foo", source: "interactive" });
 		expect(unknown.state.sidebarLog).toHaveLength(0);
 		expect(unknown.appended).toHaveLength(0);
+	});
+
+	it("labels origin 'forced' and clears state.pendingForcedDispatch when the dispatched command matches", async () => {
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			pendingForcedDispatch: "mach10:push",
+		});
+		const { pi, appended, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("input", { text: "/mach10:push", source: "extension" });
+
+		expect(state.sidebarLog[0].origin).toBe("forced");
+		expect((appended[0].data as SidebarEntry).origin).toBe("forced");
+		expect(state.pendingForcedDispatch).toBeNull();
+	});
+
+	it("does not consume the forced flag when the dispatched name differs", async () => {
+		const state = freshState({
+			registry: registryOf(["mach10:push", "mach10:other"]),
+			pendingForcedDispatch: "mach10:push",
+		});
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("input", { text: "/mach10:other", source: "extension" });
+
+		// Different command — labeled per source, flag preserved for the
+		// still-pending forced dispatch.
+		expect(state.sidebarLog[0].origin).toBe("agent");
+		expect(state.pendingForcedDispatch).toBe("mach10:push");
 	});
 });
 
