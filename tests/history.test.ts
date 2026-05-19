@@ -183,6 +183,31 @@ describe("replayHistory", () => {
 		expect(result.activeTopLevelCommand).toBe("first");
 	});
 
+	it("ignores enabled-toggle entries with missing or malformed data (F36)", () => {
+		// Symmetric to the F10 command-start malformed-data filter: a corrupt
+		// toggle entry (undefined data, missing `enabled`, non-boolean) must
+		// not overwrite state.enabled. We assert by interleaving a valid toggle
+		// after the malformed ones — if the filter let any of them through,
+		// `enabled` would end up undefined-cast-to-null or the wrong boolean.
+		const entries: SessionEntry[] = [
+			customEntry(ENABLED_TOGGLE_TYPE, undefined),
+			customEntry(ENABLED_TOGGLE_TYPE, {}),
+			customEntry(ENABLED_TOGGLE_TYPE, { enabled: "yes" }),
+			customEntry(ENABLED_TOGGLE_TYPE, { enabled: 1 }),
+			customEntry(ENABLED_TOGGLE_TYPE, { enabled: true }),
+		];
+		const result = replayHistory(entries);
+		expect(result.enabled).toBe(true);
+	});
+
+	it("returns null enabled when every toggle entry is malformed (caller preserves prior value)", () => {
+		const entries: SessionEntry[] = [
+			customEntry(ENABLED_TOGGLE_TYPE, undefined),
+			customEntry(ENABLED_TOGGLE_TYPE, { enabled: null }),
+		];
+		expect(replayHistory(entries).enabled).toBeNull();
+	});
+
 	it("trims a replayed log of more than SIDEBAR_MAX entries", () => {
 		const entries: SessionEntry[] = [];
 		for (let i = 0; i < SIDEBAR_MAX + 5; i++) entries.push(cmdStart(`c-${i}`));

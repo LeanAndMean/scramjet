@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -17,6 +17,7 @@ describe("ensureAgentBridge", () => {
 	let piAgentDir: string;
 	let targetDir: string;
 	let originalAgentDir: string | undefined;
+	let originalScramjetAgentDir: string | undefined;
 
 	beforeEach(() => {
 		sandbox = mkdtempSync(join(tmpdir(), "scramjet-bridge-"));
@@ -25,12 +26,21 @@ describe("ensureAgentBridge", () => {
 		targetDir = join(piAgentDir, "agents");
 		mkdirSync(scramjetRoot, { recursive: true });
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		originalScramjetAgentDir = process.env.SCRAMJET_CODING_AGENT_DIR;
+		// pi-coding-agent's getAgentDir() reads either PI_CODING_AGENT_DIR or
+		// SCRAMJET_CODING_AGENT_DIR depending on the APP_NAME computed at
+		// module init (driven by PI_PACKAGE_DIR pointing at scramjet's shim).
+		// Setting both covers dev shells where the shim is preloaded and CI
+		// shells where it isn't.
 		process.env.PI_CODING_AGENT_DIR = piAgentDir;
+		process.env.SCRAMJET_CODING_AGENT_DIR = piAgentDir;
 	});
 
 	afterEach(() => {
 		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		if (originalScramjetAgentDir === undefined) delete process.env.SCRAMJET_CODING_AGENT_DIR;
+		else process.env.SCRAMJET_CODING_AGENT_DIR = originalScramjetAgentDir;
 		rmSync(sandbox, { recursive: true, force: true });
 	});
 
@@ -171,5 +181,63 @@ describe("ensureAgentBridge", () => {
 
 		expect(result.created).toEqual(["mach12:proj"]);
 		expect(readlinkSync(join(targetDir, "mach12:proj.md"))).toBe(projectAgent);
+	});
+
+	it("warns and bails when the agent dir cannot be created (mkdirSync fails) (F34)", () => {
+		// Force PI_CODING_AGENT_DIR to a path under an existing regular file.
+		// `mkdirSync(file/agents, {recursive: true})` returns ENOTDIR, which
+		// the bridge must surface as a warning without throwing or pretending
+		// the bridge succeeded.
+		const blocker = join(sandbox, "blocker-file");
+		writeFileSync(blocker, "this is a regular file");
+		process.env.PI_CODING_AGENT_DIR = blocker;
+		process.env.SCRAMJET_CODING_AGENT_DIR = blocker;
+
+		const agentFile = join(scramjetRoot, "mach12:scout.md");
+		writeFileSync(agentFile, "body");
+		const reg = makeAgent("mach12:scout", agentFile);
+
+		const result = ensureAgentBridge(reg, [scramjetRoot]);
+
+		expect(result.skipped).toBe(false);
+		expect(result.created).toEqual([]);
+		expect(result.warnings).toHaveLength(1);
+		expect(result.warnings[0]).toMatch(/cannot create/);
+		expect(result.warnings[0]).toMatch(/agents/);
+	});
+
+	it("warns and skips prune when statSync(target) returns EACCES, leaving the symlink in place (F33)", () => {
+		// EACCES on the target (parent dir chmod 000) means we can't tell
+		// whether the file is live or gone. Pruning would destroy a possibly-
+		// live link, so the bridge must skip + warn rather than guess. The
+		// existing test for outside-roots dangling symlinks covers the
+		// classification branch; this one covers the inaccessible-target branch.
+		if (typeof process.getuid === "function" && process.getuid() === 0) return; // root bypasses EACCES
+
+		const lockdown = join(scramjetRoot, "locked");
+		mkdirSync(lockdown, { recursive: true });
+		const inaccessibleTarget = join(lockdown, "mach12:scout.md");
+		writeFileSync(inaccessibleTarget, "body");
+
+		mkdirSync(targetDir, { recursive: true });
+		const linkPath = join(targetDir, "mach12:vanished.md");
+		symlinkSync(inaccessibleTarget, linkPath);
+
+		// Empty registry forces the entry to be considered for prune. The
+		// symlink target falls under scramjetRoot so isUnder() returns true.
+		const reg: AgentRegistry = new Map();
+
+		chmodSync(lockdown, 0o000);
+		let result: ReturnType<typeof ensureAgentBridge>;
+		try {
+			result = ensureAgentBridge(reg, [scramjetRoot]);
+		} finally {
+			chmodSync(lockdown, 0o755);
+		}
+
+		expect(result.pruned).toEqual([]);
+		expect(result.warnings.some((w) => /could not stat/.test(w) && /skipping prune/.test(w))).toBe(true);
+		// Live link preserved — we couldn't classify, so we didn't unlink.
+		expect(readlinkSync(linkPath)).toBe(inaccessibleTarget);
 	});
 });

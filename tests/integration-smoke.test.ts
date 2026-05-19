@@ -2,10 +2,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerAutoContinue } from "../auto-continue.ts";
 import { parseCommandFile } from "../commands/loader.ts";
 import { registerDelegateTool } from "../delegate.ts";
+import { registerHistory } from "../history.ts";
+import { registerScramjetCommand } from "../scramjet-command.ts";
+import { clearLatestCompletion, registerTaskCompleteTool } from "../task-complete.ts";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
-import type { CommandDef, ScramjetState } from "../types.ts";
+import type { CommandDef, NextStepPolicy, ScramjetState } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -158,5 +162,132 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		await toolCallHandler({ type: "tool_call", toolCallId: "x", toolName: "bash", input: {} });
 
 		expect(warnSpy).not.toHaveBeenCalled();
+	});
+});
+
+// S21: end-to-end chain smoke under /scramjet on. Exercises every harness
+// module that participates in the dispatch loop — scramjet-command,
+// history, task-complete, auto-continue — against a synthetic two-command
+// registry. The point isn't to re-test each module in isolation (every
+// one already has its own suite) but to assert they compose: the toggle
+// writer flips state.enabled, the input handler records origin and
+// activeTopLevelCommand, the task tool latches a completion, and
+// auto-continue's forced-mode dispatch fires the next slash that the
+// input handler then records as origin: "forced".
+describe("integration smoke — end-to-end chain under /scramjet on (S21)", () => {
+	beforeEach(() => clearLatestCompletion());
+	afterEach(() => {
+		vi.useRealTimers();
+		clearLatestCompletion();
+	});
+
+	interface RegisteredCommand {
+		name: string;
+		spec: { description?: string; handler: (args: string, ctx: unknown) => unknown };
+	}
+
+	function bigRecordingPi() {
+		const handlers = new Map<string, ((event: unknown, ctx?: unknown) => unknown)[]>();
+		const tools: any[] = [];
+		const commands: RegisteredCommand[] = [];
+		const appended: { type: string; data: unknown }[] = [];
+		const sent: { content: string; options?: any }[] = [];
+		const pi: any = {
+			on(event: string, handler: any) {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			registerTool(tool: any) {
+				tools.push(tool);
+			},
+			registerCommand(name: string, spec: RegisteredCommand["spec"]) {
+				commands.push({ name, spec });
+			},
+			appendEntry(type: string, data: unknown) {
+				appended.push({ type, data });
+			},
+			sendUserMessage(content: string, options?: any) {
+				sent.push({ content, options });
+			},
+		};
+		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
+			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+		}
+		return { pi, handlers, tools, commands, appended, sent, emit };
+	}
+
+	function fakeCtx() {
+		const notifications: { message: string; type?: string }[] = [];
+		return {
+			hasUI: false, // skip countdown widget so forced and closed both fire immediately
+			ui: { notify: (m: string, t?: string) => notifications.push({ message: m, type: t }) },
+			notifications,
+		};
+	}
+
+	it("toggle on → user slash → forced agent_end → next slash recorded as origin: forced", async () => {
+		const origin: CommandDef = {
+			name: "int:start",
+			filePath: "/fake/int:start.md",
+			body: "",
+			next: { mode: "forced", target: "int:next" } as NextStepPolicy,
+		};
+		const target: CommandDef = { name: "int:next", filePath: "/fake/int:next.md", body: "" };
+		const state: ScramjetState = freshState({
+			registry: new Map([
+				[origin.name, origin],
+				[target.name, target],
+			]),
+			enabled: false, // user will flip this via /scramjet on
+		});
+
+		const bag = bigRecordingPi();
+		const ctx: any = fakeCtx();
+
+		// Wire every harness module that participates in a real dispatch.
+		registerScramjetCommand(bag.pi, state);
+		registerHistory(bag.pi, state);
+		registerTaskCompleteTool(bag.pi, state);
+		registerAutoContinue(bag.pi, state);
+		registerDelegateTool(bag.pi, state);
+		registerToolCallAdvisor(bag.pi, state);
+
+		// 1. User toggles /scramjet on — not a slash-command input event, that's
+		//    Pi's command-handler path. We invoke the registered handler directly.
+		const toggle = bag.commands.find((c) => c.name === "scramjet");
+		expect(toggle).toBeDefined();
+		await toggle?.spec.handler("on", ctx);
+		expect(state.enabled).toBe(true);
+
+		// 2. User types /int:start — the input handler records it as origin: "user"
+		//    and sets activeTopLevelCommand.
+		await bag.emit("input", { text: "/int:start", source: "interactive" }, ctx);
+		expect(state.activeTopLevelCommand).toBe("int:start");
+		expect(state.sidebarLog).toHaveLength(1);
+		expect(state.sidebarLog[0].command).toBe("int:start");
+		expect(state.sidebarLog[0].origin).toBe("user");
+
+		// 3. The agent finishes its turn. int:start declares forced → int:next, so
+		//    auto-continue fires /int:next via sendUserMessage and sets the
+		//    pendingForcedDispatch flag. No task_complete was called — forced
+		//    mode fires regardless.
+		await bag.emit("agent_end", {}, ctx);
+		expect(bag.sent).toEqual([{ content: "/int:next", options: { deliverAs: "followUp" } }]);
+		expect(state.pendingForcedDispatch).toBe("int:next");
+
+		// 4. Pi delivers the forced slash through the input event. History sees
+		//    pendingForcedDispatch === parsed name and tags origin: "forced".
+		await bag.emit("input", { text: "/int:next", source: "followUp" }, ctx);
+		expect(state.pendingForcedDispatch).toBeNull();
+		expect(state.activeTopLevelCommand).toBe("int:next");
+		expect(state.sidebarLog).toHaveLength(2);
+		expect(state.sidebarLog[1].command).toBe("int:next");
+		expect(state.sidebarLog[1].origin).toBe("forced");
+
+		// 5. Journal entries reflect both transitions; the toggle entry also landed.
+		const types = bag.appended.map((e) => e.type);
+		expect(types).toContain("scramjet:enabled-toggle");
+		expect(types.filter((t) => t === "scramjet:command-start")).toHaveLength(2);
 	});
 });

@@ -223,6 +223,56 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(state.delegateStack).toHaveLength(1);
 	});
 
+	it("detects a multi-frame cycle a -> b -> a and reports the full chain (F37/S6)", async () => {
+		// Single-self-loop is the easy case; the latched-stack design means a
+		// non-trivial chain (top -> sub -> top) is the more realistic shape of
+		// any future authoring error. The chain string in the error must list
+		// every frame so the agent can see *where* the loop closes, not just
+		// that one exists.
+		const { state, execute } = setupWithRegistry([def("a", "body-a"), def("b", "body-b")]);
+		await execute({ command: "a", args: "" });
+		await execute({ command: "b", args: "" });
+		expect(state.delegateStack.map((f) => f.commandName)).toEqual(["a", "b"]);
+
+		const result = await execute({ command: "a", args: "" });
+		expect(result.details.error).toBe("cycle");
+		expect(result.details.chain).toBe("a -> b -> a");
+		expect(result.content[0].text).toContain("a -> b -> a");
+		// No third frame pushed; latched stack stays at depth 2.
+		expect(state.delegateStack).toHaveLength(2);
+	});
+
+	it("allows nested delegation (a -> b -> c) when no name repeats (S18)", async () => {
+		// Mirror of the cycle test on the happy path: distinct names should
+		// stack monotonically without tripping cycle detection, and each frame
+		// records its 0-indexed depth so tool-scope-advisory's depth= label
+		// reflects the real call nesting.
+		const { state, execute } = setupWithRegistry([
+			def("a", "body-a", ["Read", "Bash"]),
+			def("b", "body-b"),
+			def("c", "body-c", ["Bash"]),
+		]);
+
+		const r1 = await execute({ command: "a", args: "" });
+		expect(r1.details.error).toBeUndefined();
+		expect(r1.details.depth).toBe(0);
+
+		const r2 = await execute({ command: "b", args: "" });
+		expect(r2.details.error).toBeUndefined();
+		expect(r2.details.depth).toBe(1);
+
+		const r3 = await execute({ command: "c", args: "" });
+		expect(r3.details.error).toBeUndefined();
+		expect(r3.details.depth).toBe(2);
+
+		expect(state.delegateStack.map((f) => f.commandName)).toEqual(["a", "b", "c"]);
+		// Latched intersection narrows as we descend: a=[Read,Bash], b unrestricted
+		// inherits [Read,Bash], c=[Bash] further intersects to [Bash].
+		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["Read", "Bash"]);
+		expect(state.delegateStack[1].effectiveAllowedTools).toEqual(["Read", "Bash"]);
+		expect(state.delegateStack[2].effectiveAllowedTools).toEqual(["Bash"]);
+	});
+
 	it("clears the stack on before_agent_start so each turn starts fresh", async () => {
 		const state = freshState({ registry: new Map([["a", def("a", "body-a")]]) });
 		state.delegateStack.push({ commandName: "leftover", depth: 0 });

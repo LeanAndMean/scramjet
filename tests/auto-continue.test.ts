@@ -567,6 +567,27 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			expect(last.content).toBeUndefined();
 		});
 
+		// F32: session_shutdown's cancelCountdown must be safe to call when no
+		// countdown is in flight (no widget shown, no input handler installed).
+		// The structural risk if cancelCountdown weren't idempotent here would be
+		// a crash on every clean shutdown that happened to follow an `ask`-mode
+		// turn or a declined next-step.
+		it("session_shutdown is safe (and idempotent) when no countdown is active", async () => {
+			const { state } = primedClosed();
+			const { bag, ctxBag } = bootstrap(state);
+			// No setCompletion / agent_end — nothing primed a countdown. The handler
+			// must not throw, must not dispatch, and (idempotent setWidget aside)
+			// must leave the input-handler slot empty.
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			expect(bag.sentMessages).toEqual([]);
+			expect(ctxBag.inputHandler).toBeNull();
+			expect(ctxBag.inputUnsubCalls).toBe(0);
+			// cancelCountdown unconditionally clears the widget slot; the call is
+			// cheap and the cleared-widget signal is harmless when nothing was
+			// shown. Assert that's all that happened (no spurious renders).
+			expect(ctxBag.widgets.every((w) => w.content === undefined)).toBe(true);
+		});
+
 		it("session_shutdown also tears down an in-flight countdown", async () => {
 			vi.useFakeTimers();
 			const { state } = primedClosed();
