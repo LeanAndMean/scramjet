@@ -110,7 +110,22 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	pi.on("agent_end", async (_event, ctx) => {
-		const def = state.activeTopLevelCommand ? state.registry.get(state.activeTopLevelCommand) : undefined;
+		const activeName = state.activeTopLevelCommand;
+		const def = activeName ? state.registry.get(activeName) : undefined;
+
+		// F11: activeTopLevelCommand is set but the registry has no matching
+		// entry. This used to silently fall through to the legacy auto-continue
+		// path, which means a `forced` chain whose target dropped out of the
+		// registry (e.g. a renamed command, a partial reload) became silently
+		// un-forced. Notify the user and bail; clear the stale name so the
+		// warning fires once instead of on every subsequent agent_end.
+		if (activeName && !def) {
+			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
+			state.activeTopLevelCommand = null;
+			clearLatestCompletion();
+			return;
+		}
+
 		const policy = def?.next;
 
 		// Forced fires the target unconditionally — regardless of state.enabled,

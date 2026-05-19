@@ -167,6 +167,22 @@ describe("replayHistory", () => {
 		expect(result.sidebarLog.map((e) => e.command)).toEqual(["ok"]);
 	});
 
+	it("ignores command-start entries with non-string or empty command field (F10)", () => {
+		// A corrupt journal entry where data.command is undefined/null/empty
+		// would otherwise set activeTopLevelCommand to a bogus value and break
+		// subsequent policy lookups. The TS cast at the read site otherwise
+		// hides this from the compiler.
+		const entries: SessionEntry[] = [
+			cmdStart("first"),
+			customEntry(COMMAND_START_TYPE, { origin: "user", depth: 0, timestamp: 0 }),
+			customEntry(COMMAND_START_TYPE, { command: "", origin: "user", depth: 0, timestamp: 0 }),
+			customEntry(COMMAND_START_TYPE, { command: 42, origin: "user", depth: 0, timestamp: 0 }),
+		];
+		const result = replayHistory(entries);
+		expect(result.sidebarLog.map((e) => e.command)).toEqual(["first"]);
+		expect(result.activeTopLevelCommand).toBe("first");
+	});
+
 	it("trims a replayed log of more than SIDEBAR_MAX entries", () => {
 		const entries: SessionEntry[] = [];
 		for (let i = 0; i < SIDEBAR_MAX + 5; i++) entries.push(cmdStart(`c-${i}`));
@@ -177,12 +193,13 @@ describe("replayHistory", () => {
 });
 
 describe("registerHistory — handler registration", () => {
-	it("registers handlers for input, session_start, and session_tree", () => {
+	it("registers handlers for input, session_start, session_tree, and before_agent_start", () => {
 		const { pi, handlers } = recordingPi();
 		registerHistory(pi, freshState());
 		expect(handlers.get("input")).toHaveLength(1);
 		expect(handlers.get("session_start")).toHaveLength(1);
 		expect(handlers.get("session_tree")).toHaveLength(1);
+		expect(handlers.get("before_agent_start")).toHaveLength(1);
 	});
 });
 
@@ -222,6 +239,33 @@ describe("registerHistory — input event", () => {
 		const unknown = await fire({ text: "/not-registered foo", source: "interactive" });
 		expect(unknown.state.sidebarLog).toHaveLength(0);
 		expect(unknown.appended).toHaveLength(0);
+	});
+
+	it("clears activeTopLevelCommand when the user types an unregistered slash command (F25)", async () => {
+		// If the user types a typo or removed-command slash, the previous
+		// workflow's next-step policy must not silently apply to whatever
+		// the agent produces next.
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			activeTopLevelCommand: "mach10:push",
+		});
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("input", { text: "/typo-or-removed", source: "interactive" });
+		expect(state.activeTopLevelCommand).toBeNull();
+	});
+
+	it("leaves activeTopLevelCommand alone for non-slash input (continuing a conversation)", async () => {
+		// Plain follow-up text must not nuke the active workflow — otherwise
+		// any chat after the command would disable next-step auto-continue.
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			activeTopLevelCommand: "mach10:push",
+		});
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("input", { text: "plain follow-up", source: "interactive" });
+		expect(state.activeTopLevelCommand).toBe("mach10:push");
 	});
 
 	it("labels origin 'forced' and clears state.pendingForcedDispatch when the dispatched command matches", async () => {
@@ -293,5 +337,27 @@ describe("registerHistory — replay on session events", () => {
 		const { state, emit, ctx } = setup([cmdStart("a")], { enabled: true });
 		await emit("session_start", {}, ctx);
 		expect(state.enabled).toBe(true);
+	});
+
+	it("clears pendingForcedDispatch on session rebuild (F18 defense)", async () => {
+		// Transient runtime flag; meaningless after navigation/resume. A stale
+		// value could mislabel a later user-typed slash as origin: "forced".
+		const { state, emit, ctx } = setup([cmdStart("a")], { pendingForcedDispatch: "stale:target" });
+		await emit("session_start", {}, ctx);
+		expect(state.pendingForcedDispatch).toBeNull();
+	});
+});
+
+describe("registerHistory — before_agent_start turn boundary", () => {
+	it("clears pendingForcedDispatch at the next agent turn (F18 turn boundary)", async () => {
+		// If the forced target wasn't in the registry, the input handler can't
+		// consume the flag (parseSlashCommand returns null). The before_agent_start
+		// of the resulting turn is the latest moment we can guarantee the flag
+		// is stale; clearing here keeps the flag's lifetime bounded to one turn.
+		const state = freshState({ pendingForcedDispatch: "orphan:target" });
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("before_agent_start", {}, {});
+		expect(state.pendingForcedDispatch).toBeNull();
 	});
 });

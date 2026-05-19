@@ -389,6 +389,50 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 		});
 	});
 
+	describe("active command missing from registry (F11)", () => {
+		it("notifies a warning, clears activeTopLevelCommand, and does not dispatch", async () => {
+			// A `forced`-chain target that dropped out of the registry (rename,
+			// partial reload) used to silently fall through to the legacy
+			// auto-continue path — the forced chain became un-forced with no
+			// indication. Now we warn once and bail.
+			const state = freshState({
+				enabled: true,
+				registry: new Map(), // empty: active name won't resolve
+				activeTopLevelCommand: "a:missing",
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state);
+			await setCompletion({ summary: "s", next_step: { command: "b:next", fresh_session: false } });
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(bag.sentMessages).toEqual([]);
+			expect(ctxBag.widgets).toEqual([]);
+			expect(ctxBag.notifications).toHaveLength(1);
+			expect(ctxBag.notifications[0].type).toBe("warning");
+			expect(ctxBag.notifications[0].message).toContain("a:missing");
+			expect(state.activeTopLevelCommand).toBeNull();
+		});
+
+		it("a second agent_end after the warning falls through to the legacy path (warning fires once)", async () => {
+			const state = freshState({
+				enabled: true,
+				registry: new Map(),
+				activeTopLevelCommand: "a:missing",
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state);
+
+			await setCompletion({ summary: "s", next_step: { command: "b:next", fresh_session: false } });
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(ctxBag.notifications).toHaveLength(1);
+
+			// Second turn: active is now null, so we land on the legacy path.
+			await setCompletion({ summary: "s", next_step: { command: "c:next", fresh_session: false } });
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(ctxBag.notifications).toHaveLength(1); // unchanged
+			expect(ctxBag.widgets.length).toBeGreaterThan(0); // legacy countdown
+		});
+	});
+
 	describe("no-UI (hasUI=false)", () => {
 		it("closed valid + enabled=true fires immediately without countdown widget", async () => {
 			const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
