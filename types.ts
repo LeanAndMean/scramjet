@@ -31,6 +31,14 @@ export interface CommandDef {
 
 export type CommandRegistry = Map<string, CommandDef>;
 
+export interface AgentDef {
+	name: string;
+	filePath: string;
+	description?: string;
+}
+
+export type AgentRegistry = Map<string, AgentDef>;
+
 export interface DelegateFrame {
 	commandName: string;
 	effectiveAllowedTools?: string[];
@@ -47,6 +55,7 @@ export interface SidebarEntry {
 export interface ScramjetState {
 	enabled: boolean;
 	registry: CommandRegistry;
+	agentRegistry: AgentRegistry;
 	activeTopLevelCommand: string | null;
 	sidebarLog: SidebarEntry[];
 	delegateStack: DelegateFrame[];

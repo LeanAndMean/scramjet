@@ -635,6 +635,36 @@ else
 	echo "Mach 12 command set already present: $MACH12_DEST"
 fi
 
+# --- Mach 12 bundled subagents ---
+# Copy agent files from the seeded Mach 12 set into Pi's user-level agent
+# directory so the subagent extension discovers them at runtime. Unlike plugin
+# agents, these are authored Pi-natively and need no transform. Idempotent:
+# overwrites are safe because these are scramjet-managed (manifest-tracked).
+MACH12_AGENTS_SRC="$MACH12_DEST/agents"
+if [[ -d "$MACH12_AGENTS_SRC" ]]; then
+	safe_mkdir "Mach 12 agents" "$AGENT_DIR/agents"
+	for f in "$MACH12_AGENTS_SRC"/*.md; do
+		[[ -e "$f" ]] || continue
+		base="$(basename "$f")"
+		dest="$AGENT_DIR/agents/$base"
+		if [[ -e "$dest" || -L "$dest" ]]; then
+			if [[ $FORCE -ne 1 ]] && ! printf '%s\n' "$BEFORE_LIST" | grep -qxF "$dest"; then
+				echo "Warning: $dest exists and was not installed by scramjet; skipping (use --force to overwrite)." >&2
+				continue
+			fi
+		fi
+		tmp="$(mktemp "$dest.scramjet.XXXXXX")"
+		if ! cp "$f" "$tmp"; then
+			rm -f "$tmp"
+			echo "Error: failed to copy Mach 12 agent $f to $dest" >&2
+			exit 1
+		fi
+		mv "$tmp" "$dest"
+		manifest_add "$dest"
+	done
+	echo "Installed Mach 12 agents to: $AGENT_DIR/agents/"
+fi
+
 resolve_latest_semver_tag() {
 	local repo_dir="$1"
 	# List tags, keep only stable semver (vMAJOR.MINOR.PATCH with no prerelease).

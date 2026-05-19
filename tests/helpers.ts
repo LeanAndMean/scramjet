@@ -4,6 +4,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 	return {
 		enabled: false,
 		registry: new Map(),
+		agentRegistry: new Map(),
 		activeTopLevelCommand: null,
 		sidebarLog: [],
 		delegateStack: [],

@@ -2,7 +2,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCommandLoader } from "../commands/index.ts";
-import { buildRegistry, type FileEntry, parseAllowedTools, parseCommandFile } from "../commands/loader.ts";
+import {
+	type AgentFileEntry,
+	buildAgentRegistry,
+	buildRegistry,
+	type FileEntry,
+	parseAgentFile,
+	parseAllowedTools,
+	parseCommandFile,
+} from "../commands/loader.ts";
 import { freshState } from "./helpers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -312,5 +320,247 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		}) as { promptPaths: string[] };
 		expect(state.registry.has("mach12:issue-plan")).toBe(true);
 		expect(result.promptPaths.length).toBeGreaterThan(0);
+	});
+});
+
+describe("parseAgentFile — happy paths", () => {
+	const SET = "mach12";
+
+	it("parses a valid agent file into an AgentDef", () => {
+		const content = `---
+name: mach12:code-explorer
+description: A codebase exploration agent
+tools: read, grep, find
+---
+You are an explorer.`;
+		const result = parseAgentFile("/abs/mach12:code-explorer.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def).toEqual({
+			name: "mach12:code-explorer",
+			filePath: "/abs/mach12:code-explorer.md",
+			description: "A codebase exploration agent",
+		});
+	});
+
+	it("leaves description unset when absent", () => {
+		const content = "---\nname: mach12:bare\n---\nBody.";
+		const result = parseAgentFile("/abs/mach12:bare.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.description).toBeUndefined();
+	});
+
+	it("trims whitespace from name and description", () => {
+		const content = "---\nname: '  mach12:padded  '\ndescription: '  padded desc  '\n---\nBody.";
+		const result = parseAgentFile("/abs/mach12:padded.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.name).toBe("mach12:padded");
+		expect(result.def.description).toBe("padded desc");
+	});
+
+	it("strips a leading UTF-8 BOM before parsing frontmatter", () => {
+		const content = "﻿---\nname: mach12:bom\ndescription: BOM test\n---\nBody.";
+		const result = parseAgentFile("/abs/mach12:bom.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.name).toBe("mach12:bom");
+	});
+
+	it("rejects files whose basename does not start with the set prefix", () => {
+		const content = "---\nname: wrong\n---\nBody.";
+		const result = parseAgentFile("/abs/wrong.md", content, SET);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error).toContain("mach12:");
+	});
+
+	it("rejects files that are not markdown", () => {
+		const content = "---\nname: mach12:x\n---\nBody.";
+		const result = parseAgentFile("/abs/mach12:x.txt", content, SET);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error).toContain("markdown");
+	});
+
+	it("rejects files with missing name field", () => {
+		const content = "---\ndescription: No name\n---\nBody.";
+		const result = parseAgentFile("/abs/mach12:no-name.md", content, SET);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error).toContain("name");
+	});
+
+	it("rejects files with empty-string name", () => {
+		const content = "---\nname: ''\n---\nBody.";
+		const result = parseAgentFile("/abs/mach12:empty.md", content, SET);
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error).toContain("name");
+	});
+
+	it("ignores an empty-string description", () => {
+		const content = "---\nname: mach12:x\ndescription: ''\n---\nBody.";
+		const result = parseAgentFile("/abs/mach12:x.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.description).toBeUndefined();
+	});
+});
+
+describe("buildAgentRegistry — collision and skip semantics", () => {
+	function agentEntry(
+		setName: string,
+		file: string,
+		content: string,
+		scope: "global" | "project" = "global",
+	): AgentFileEntry {
+		return { filePath: `/fake/${setName}/${file}`, content, setName, scope };
+	}
+
+	const minimal = "---\nname: mach12:test\n---\nBody.";
+
+	it("returns an empty registry and no warnings for empty input", () => {
+		const out = buildAgentRegistry([]);
+		expect(out.agentRegistry.size).toBe(0);
+		expect(out.warnings).toEqual([]);
+	});
+
+	it("registers a single valid agent", () => {
+		const out = buildAgentRegistry([agentEntry("mach12", "mach12:test.md", minimal)]);
+		expect(out.agentRegistry.size).toBe(1);
+		expect(out.agentRegistry.has("mach12:test")).toBe(true);
+	});
+
+	it("registers multiple non-colliding agents", () => {
+		const out = buildAgentRegistry([
+			agentEntry("mach12", "mach12:a.md", "---\nname: mach12:a\n---\nBody."),
+			agentEntry("mach12", "mach12:b.md", "---\nname: mach12:b\n---\nBody."),
+		]);
+		expect(out.agentRegistry.size).toBe(2);
+	});
+
+	it("global wins when project-local name collides", () => {
+		const out = buildAgentRegistry([
+			agentEntry("mach12", "mach12:test.md", minimal, "global"),
+			agentEntry("mach12", "mach12:test.md", minimal, "project"),
+		]);
+		expect(out.agentRegistry.size).toBe(1);
+		const def = out.agentRegistry.get("mach12:test");
+		expect(def?.filePath).toBe("/fake/mach12/mach12:test.md");
+		expect(out.warnings).toHaveLength(1);
+		expect(out.warnings[0]).toContain("project");
+	});
+
+	it("logs and skips malformed agents but keeps valid ones", () => {
+		const out = buildAgentRegistry([
+			agentEntry("mach12", "mach12:good.md", "---\nname: mach12:good\n---\nBody."),
+			agentEntry("mach12", "mach12:bad.md", "---\ndescription: no name\n---\nBody."),
+			agentEntry("mach12", "mach12:also-good.md", "---\nname: mach12:also-good\n---\nBody."),
+		]);
+		expect(out.agentRegistry.size).toBe(2);
+		expect(out.agentRegistry.has("mach12:good")).toBe(true);
+		expect(out.agentRegistry.has("mach12:also-good")).toBe(true);
+		expect(out.warnings).toHaveLength(1);
+	});
+});
+
+describe("registerCommandLoader — agent discovery integration", () => {
+	let originalCache: string | undefined;
+	let warnSpy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		originalCache = process.env.SCRAMJET_CACHE;
+		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		if (originalCache === undefined) delete process.env.SCRAMJET_CACHE;
+		else process.env.SCRAMJET_CACHE = originalCache;
+		warnSpy.mockRestore();
+	});
+
+	it("populates state.agentRegistry from global + project fixtures", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "loader-project"),
+			reason: "startup",
+		});
+
+		expect(state.agentRegistry.has("mach12:test-explorer")).toBe(true);
+		expect(state.agentRegistry.has("mach12:test-reviewer")).toBe(true);
+
+		const explorer = state.agentRegistry.get("mach12:test-explorer");
+		expect(explorer?.filePath).toContain("loader-global");
+		expect(explorer?.description).toBe("A test agent for codebase exploration");
+	});
+
+	it("skips malformed agents and logs warnings", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+
+		const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+		expect(warnings.some((m) => m.includes("broken-agent") && m.includes("name"))).toBe(true);
+		expect(warnings.some((m) => m.includes("wrong-prefix") && m.includes("mach12:"))).toBe(true);
+	});
+
+	it("global agents win over project-local on name collision", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "loader-project"),
+			reason: "startup",
+		});
+
+		const explorer = state.agentRegistry.get("mach12:test-explorer");
+		expect(explorer?.filePath).toContain("loader-global");
+		const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+		expect(warnings.some((m) => m.includes("project") && m.includes("mach12:test-explorer"))).toBe(true);
+	});
+
+	it("rebuilds agent registry on each handler invocation", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "startup" });
+		const firstSize = state.agentRegistry.size;
+		state.agentRegistry.set("ghost:agent", { name: "ghost:agent", filePath: "/nope" });
+		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "reload" });
+		expect(state.agentRegistry.size).toBe(firstSize);
+		expect(state.agentRegistry.has("ghost:agent")).toBe(false);
+	});
+
+	it("handles missing agents directory gracefully", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "does-not-exist");
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+		expect(state.agentRegistry.size).toBe(0);
 	});
 });

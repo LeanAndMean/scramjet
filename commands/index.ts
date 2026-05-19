@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ScramjetState } from "../types.ts";
-import { buildRegistry, type FileEntry } from "./loader.ts";
+import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.ts";
 
 function safeReaddir(dir: string): { name: string; isDirectory: boolean }[] {
 	try {
@@ -23,16 +23,16 @@ function safeReaddir(dir: string): { name: string; isDirectory: boolean }[] {
 	}
 }
 
-function collectEntries(rootDir: string, scope: "global" | "project"): FileEntry[] {
+function collectEntries(rootDir: string, scope: "global" | "project", subdir: string): FileEntry[] {
 	const entries: FileEntry[] = [];
 	for (const setEntry of safeReaddir(rootDir)) {
 		if (!setEntry.isDirectory) continue;
 		const setName = setEntry.name;
-		const commandsDir = join(rootDir, setName, "commands");
-		for (const fileEntry of safeReaddir(commandsDir)) {
+		const dir = join(rootDir, setName, subdir);
+		for (const fileEntry of safeReaddir(dir)) {
 			if (fileEntry.isDirectory) continue;
 			if (!fileEntry.name.endsWith(".md")) continue;
-			const filePath = join(commandsDir, fileEntry.name);
+			const filePath = join(dir, fileEntry.name);
 			let content: string;
 			try {
 				content = readFileSync(filePath, "utf-8");
@@ -51,11 +51,23 @@ function globalRoot(): string {
 
 export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("resources_discover", (event) => {
-		const globalEntries = collectEntries(globalRoot(), "global");
-		const projectEntries = collectEntries(join(event.cwd, ".scramjet"), "project");
+		const globalDir = globalRoot();
+		const projectDir = join(event.cwd, ".scramjet");
+
+		const globalEntries = collectEntries(globalDir, "global", "commands");
+		const projectEntries = collectEntries(projectDir, "project", "commands");
 		const { registry, warnings } = buildRegistry([...globalEntries, ...projectEntries]);
 		state.registry = registry;
-		for (const warning of warnings) console.warn(`[scramjet] ${warning}`);
+
+		const globalAgentEntries = collectEntries(globalDir, "global", "agents");
+		const projectAgentEntries = collectEntries(projectDir, "project", "agents");
+		const { agentRegistry, warnings: agentWarnings } = buildAgentRegistry([
+			...globalAgentEntries,
+			...projectAgentEntries,
+		]);
+		state.agentRegistry = agentRegistry;
+
+		for (const warning of [...warnings, ...agentWarnings]) console.warn(`[scramjet] ${warning}`);
 		const promptPaths: string[] = [];
 		for (const def of registry.values()) promptPaths.push(def.filePath);
 		return { promptPaths };

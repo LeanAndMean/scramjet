@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import type { CommandDef, CommandRegistry } from "../types.ts";
+import type { AgentDef, AgentRegistry, CommandDef, CommandRegistry } from "../types.ts";
 import { parseNextStepPolicy } from "./parse-next-step.ts";
 
 export interface FileEntry {
@@ -86,4 +86,61 @@ export function buildRegistry(entries: FileEntry[]): RegistryBuildResult {
 		registry.set(result.def.name, result.def);
 	}
 	return { registry, warnings };
+}
+
+export type AgentFileEntry = FileEntry;
+
+export type AgentLoadResult = { ok: true; def: AgentDef } | { ok: false; error: string };
+
+interface AgentRegistryBuildResult {
+	agentRegistry: AgentRegistry;
+	warnings: string[];
+}
+
+export function parseAgentFile(filePath: string, content: string, setName: string): AgentLoadResult {
+	const fileName = basename(filePath);
+	if (!fileName.endsWith(".md")) {
+		return { ok: false, error: `${fileName}: not a markdown file` };
+	}
+	const expectedPrefix = `${setName}:`;
+	if (!fileName.slice(0, -".md".length).startsWith(expectedPrefix)) {
+		return { ok: false, error: `${fileName}: filename must start with "${expectedPrefix}"` };
+	}
+	const normalized = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+	let parsed: { frontmatter: Record<string, unknown>; body: string };
+	try {
+		parsed = parseFrontmatter(normalized);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: `${fileName}: malformed frontmatter — ${message}` };
+	}
+	const name = parsed.frontmatter.name;
+	if (typeof name !== "string" || name.trim() === "") {
+		return { ok: false, error: `${fileName}: missing required "name" field in frontmatter` };
+	}
+	const def: AgentDef = { name: name.trim(), filePath };
+	const description = parsed.frontmatter.description;
+	if (typeof description === "string" && description.trim() !== "") def.description = description.trim();
+	return { ok: true, def };
+}
+
+export function buildAgentRegistry(entries: AgentFileEntry[]): AgentRegistryBuildResult {
+	const agentRegistry: AgentRegistry = new Map();
+	const warnings: string[] = [];
+	for (const entry of entries) {
+		const result = parseAgentFile(entry.filePath, entry.content, entry.setName);
+		if (!result.ok) {
+			warnings.push(`skipping agent ${entry.filePath}: ${result.error}`);
+			continue;
+		}
+		const existing = agentRegistry.get(result.def.name);
+		if (existing) {
+			warnings.push(
+				`skipping ${entry.scope} agent ${result.def.name} at ${entry.filePath}: name already registered from ${existing.filePath}`,
+			);
+			continue;
+		}
+		agentRegistry.set(result.def.name, result.def);
+	}
+	return { agentRegistry, warnings };
 }

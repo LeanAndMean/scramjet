@@ -39,6 +39,7 @@ export default function scramjet(pi: ExtensionAPI) {
 	const state: ScramjetState = {
 		enabled: false,
 		registry: new Map(),
+		agentRegistry: new Map(),
 		activeTopLevelCommand: null,
 		sidebarLog: [],
 		delegateStack: [],
