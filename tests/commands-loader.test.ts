@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -213,17 +215,30 @@ describe("buildRegistry — collision and skip semantics", () => {
 
 describe("registerCommandLoader — fixture-backed integration", () => {
 	let originalCache: string | undefined;
+	let originalAgentDir: string | undefined;
+	let agentDirSandbox: string;
 	let warnSpy: ReturnType<typeof vi.spyOn>;
+	let logSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
 		originalCache = process.env.SCRAMJET_CACHE;
+		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		// Isolate the agent bridge's symlink writes into a per-test tmp dir so
+		// fixture-backed runs never touch the user's real ~/.pi/agent/agents/.
+		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-loader-agentdir-"));
+		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
 		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 	});
 
 	afterEach(() => {
 		if (originalCache === undefined) delete process.env.SCRAMJET_CACHE;
 		else process.env.SCRAMJET_CACHE = originalCache;
+		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		rmSync(agentDirSandbox, { recursive: true, force: true });
 		warnSpy.mockRestore();
+		logSpy.mockRestore();
 	});
 
 	it("registers exactly one resources_discover handler", () => {
@@ -468,17 +483,28 @@ describe("buildAgentRegistry — collision and skip semantics", () => {
 
 describe("registerCommandLoader — agent discovery integration", () => {
 	let originalCache: string | undefined;
+	let originalAgentDir: string | undefined;
+	let agentDirSandbox: string;
 	let warnSpy: ReturnType<typeof vi.spyOn>;
+	let logSpy: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
 		originalCache = process.env.SCRAMJET_CACHE;
+		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-agent-discovery-"));
+		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
 		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 	});
 
 	afterEach(() => {
 		if (originalCache === undefined) delete process.env.SCRAMJET_CACHE;
 		else process.env.SCRAMJET_CACHE = originalCache;
+		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		rmSync(agentDirSandbox, { recursive: true, force: true });
 		warnSpy.mockRestore();
+		logSpy.mockRestore();
 	});
 
 	it("populates state.agentRegistry from global + project fixtures", () => {

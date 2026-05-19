@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ScramjetState } from "../types.ts";
+import { ensureAgentBridge } from "./agent-bridge.ts";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.ts";
 
 function safeReaddir(dir: string): { name: string; isDirectory: boolean }[] {
@@ -67,7 +68,17 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 		]);
 		state.agentRegistry = agentRegistry;
 
-		for (const warning of [...warnings, ...agentWarnings]) console.warn(`[scramjet] ${warning}`);
+		const bridge = ensureAgentBridge(agentRegistry, [globalDir, projectDir]);
+		if (bridge.created.length > 0 && bridge.targetDir !== null) {
+			console.log(`[scramjet] bridged ${bridge.created.length} agent(s) into ${bridge.targetDir}`);
+		}
+		if (bridge.pruned.length > 0 && bridge.targetDir !== null) {
+			console.log(`[scramjet] pruned ${bridge.pruned.length} stale agent symlink(s) from ${bridge.targetDir}`);
+		}
+
+		for (const warning of [...warnings, ...agentWarnings, ...bridge.warnings]) {
+			console.warn(`[scramjet] ${warning}`);
+		}
 		const promptPaths: string[] = [];
 		for (const def of registry.values()) promptPaths.push(def.filePath);
 		return { promptPaths };
