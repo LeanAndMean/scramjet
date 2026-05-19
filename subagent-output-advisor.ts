@@ -1,8 +1,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SIDEBAR_MAX } from "./history.ts";
 import type { ScramjetState, SidebarEntry } from "./types.ts";
 
 const NO_OUTPUT_TEXT = "(no output)";
-const SIDEBAR_MAX = 50;
 
 // Watches `tool_result` for the upstream subagent example tool returning a
 // literal `(no output)` payload on its success path (single mode and chain
