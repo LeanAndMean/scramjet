@@ -237,4 +237,37 @@ describe("registerDelegateTool — execute paths", () => {
 		const result = await execute({ command: "a", args: '"one two" three' });
 		expect(result.content[0].text).toBe("first=one two second=three");
 	});
+
+	it("prepends an empty-scope warning to the body when intersected allowed-tools is empty", async () => {
+		// F20: a delegated frame whose effective scope is [] cannot use any
+		// tools; the substituted body must surface that up-front rather than
+		// letting the agent discover it via per-tool advisory warnings.
+		const state = freshState({
+			registry: new Map([
+				["caller", def("caller", "caller-body", ["Read"])],
+				["callee", def("callee", "callee-body", ["Bash"])],
+			]),
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+		const tool = tools[0];
+
+		await tool.execute("call-1", { command: "caller", args: "" }, undefined, undefined, { cwd: "/" });
+		const result = await tool.execute("call-2", { command: "callee", args: "" }, undefined, undefined, { cwd: "/" });
+
+		expect(state.delegateStack[1].effectiveAllowedTools).toEqual([]);
+		expect(result.content[0].text).toMatch(
+			/\[scramjet\/delegate\] WARNING: effective allowed-tools scope for 'callee' is empty/,
+		);
+		expect(result.content[0].text).toContain("callee-body");
+		expect(result.details.effectiveAllowedTools).toEqual([]);
+	});
+
+	it("does not prepend the empty-scope warning when allowed-tools is undefined or non-empty", async () => {
+		const { execute } = setupWithRegistry([def("unrestricted", "body-u"), def("restricted", "body-r", ["Read"])]);
+		const r1 = await execute({ command: "unrestricted", args: "" });
+		expect(r1.content[0].text).toBe("body-u");
+		const r2 = await execute({ command: "restricted", args: "" });
+		expect(r2.content[0].text).toBe("body-r");
+	});
 });

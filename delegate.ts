@@ -134,10 +134,20 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 
 			const parsedArgs = parseDelegateArgs(params.args);
 			const body = substituteArguments(def.body, parsedArgs);
+			// When the caller/callee allowed-tools intersection is empty, the
+			// delegated frame is fully locked: no tool calls will pass the
+			// advisory check. Prepend a visible warning so the agent reading
+			// the substituted body knows up-front rather than discovering it
+			// one denied tool call at a time. Empty array is distinct from
+			// undefined ("no restriction"); see intersectTools above.
+			const bodyText =
+				effectiveAllowedTools !== undefined && effectiveAllowedTools.length === 0
+					? `[scramjet/delegate] WARNING: effective allowed-tools scope for '${params.command}' is empty (caller and callee declare disjoint allowed-tools). This delegated frame cannot use any tools; consider widening the caller's scope or aborting the delegation.\n\n${body}`
+					: body;
 			const details: DelegateDetails = { command: params.command, depth: frame.depth };
 			if (effectiveAllowedTools !== undefined) details.effectiveAllowedTools = effectiveAllowedTools;
 			return {
-				content: [{ type: "text", text: body }],
+				content: [{ type: "text", text: bodyText }],
 				details,
 			};
 		},
