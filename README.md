@@ -302,9 +302,43 @@ npm test             # vitest --run
 npm run lint         # biome check .
 ```
 
-In-tree iteration: edit source files, run `npm run build`, then `node
-bin/scramjet.js --help` (or `npm link` once and run `scramjet`). A
-watch loop is `tsc -p tsconfig.build.json --watch`.
+### In-tree iteration
+
+The `scramjet` bin on `PATH` runs the compiled `dist/index.js`, not the
+TypeScript source. After cloning and installing, run this once:
+
+```sh
+npm run build          # produce dist/ so the bin has something to import
+npm link               # install `scramjet` globally as a symlink to this tree
+ln -sfn "$(pwd)/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
+                       # so edits to mach12/*.md are picked up live
+```
+
+The `mach12/` symlink replaces the postinstall's static seed; without
+it, edits to `mach12/commands/*.md` or `mach12/agents/*.md` in the repo
+are invisible to the running scramjet because the command-set loader
+reads from `~/.local/share/scramjet/mach12/`, not from your working
+tree.
+
+Then while iterating:
+
+- Edited a `.ts` file → `npm run build` (or `tsc -p tsconfig.build.json
+  --watch` in another terminal). The linked bin imports the compiled
+  output, so changes are not picked up until you build.
+- Edited `mach12/*.md` → no rebuild needed (with the symlink in place).
+- Edited `bin/scramjet.js` or `scripts/postinstall.js` → no rebuild
+  needed; they run as-is.
+
+If `which scramjet` returns nothing or points outside this repo:
+
+```sh
+readlink -f "$(which scramjet)"
+```
+
+should resolve into your working tree. If it doesn't — or if you have
+dangling symlinks at `~/.local/bin/scramjet` or
+`~/.pi/agent/extensions/scramjet` from a pre-Stage-8 `./install.sh` —
+remove those leftovers and re-run `npm link`.
 
 To skip the postinstall during dev (avoid seeding while iterating), use
 `npm ci --ignore-scripts`.

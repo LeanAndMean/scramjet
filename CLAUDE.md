@@ -14,6 +14,28 @@ npx vitest run tests/task-complete.test.ts   # single test file
 
 CI runs typecheck, build, test, lint, an `npm pack` round-trip smoke (installs the produced tarball globally and probes `scramjet --help`), and a postinstall smoke (against a temporary `XDG_DATA_HOME`) on ubuntu and macos.
 
+## Local development
+
+Scramjet ships as an npm package since Stage 8. The `scramjet` bin on PATH runs the compiled `dist/index.js`, NOT the TypeScript source. That introduces two staleness traps; both have one-time setups to avoid them.
+
+**One-time dev setup (after `npm install`):**
+
+```sh
+npm run build          # produce dist/ so the bin has something to import
+npm link               # install `scramjet` globally as a symlink to this tree
+ln -sfn "$(pwd)/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
+                       # so edits to mach12/*.md files are picked up live
+```
+
+If you previously ran the (now-deleted) `./install.sh`, you may have dangling symlinks at `~/.local/bin/scramjet` (target gone) and `~/.pi/agent/extensions/scramjet` (would double-load on top of `npm link`). Remove both before `npm link`.
+
+**Iteration:**
+
+- **Edited a `.ts` file under the source tree** → `npm run build` (or run `tsc -p tsconfig.build.json --watch` in a separate terminal). **This is the most common "am I testing my changes?" confusion** — if you edit, run `scramjet`, and see old behavior, suspect a stale `dist/` before suspecting anything else.
+- **Edited `mach12/*.md`** → no rebuild needed if the mach12 symlink is in place (loader reads .md at every Pi startup).
+- **Edited `bin/scramjet.js` or `scripts/postinstall.js`** → no rebuild needed; they're `.js` and run as-is.
+- **To verify which scramjet is on PATH:** `readlink -f "$(which scramjet)"` should resolve into this repo's working tree (via npm's global `lib/node_modules/@leanandmean/scramjet/bin/scramjet.js`). If it resolves elsewhere, you're running an old or published copy.
+
 ## Formatting
 
 Biome: tabs, indent width 3, line width 120. Run `npx biome check --write .` to auto-fix.
