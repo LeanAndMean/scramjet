@@ -1,9 +1,9 @@
 /**
- * Auto-continuation: after task_complete fires with a next_step,
- * show a countdown widget and auto-run the next command.
- *
- * The user can cancel by pressing Escape or typing anything.
- * If cancelled, the widget disappears and they're back in normal Pi.
+ * Auto-continuation: on agent_end, read the active command's next-step
+ * policy, show a 3s countdown widget (cancellable by Escape or any
+ * keypress), then dispatch the chosen command via sendUserMessage or
+ * /scramjet-exec-fresh. `forced` fires unconditionally; the rest defer
+ * to /scramjet on|off. See CLAUDE.md "MVP design rationales" for why.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";

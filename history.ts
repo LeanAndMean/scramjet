@@ -75,6 +75,11 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		if (result.enabled !== null) state.enabled = result.enabled;
 	};
 
+	// Pi exposes two navigation events: session_start (fresh load or resume)
+	// and session_tree (branch switch within a session). The MVP plan
+	// originally also named a `session_switch` event, but upstream Pi never
+	// shipped it (and an older draft was removed); session_start +
+	// session_tree together cover every restore path scramjet cares about.
 	pi.on("session_start", rebuild);
 	pi.on("session_tree", rebuild);
 

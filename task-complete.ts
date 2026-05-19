@@ -1,8 +1,9 @@
 /**
- * The task_complete tool and system prompt injection.
- *
- * When a command's instructions suggest a next step, Claude reports it
- * via this tool in a structured form Scramjet can act on.
+ * task_complete tool: structured channel for the agent's next-step pick.
+ * The execute() result is stashed in a module-level singleton that
+ * auto-continue.ts reads on agent_end. The `next:` policy block is
+ * injected into the user message via before_agent_start so the agent
+ * sees the allowed candidates before it composes its reply.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

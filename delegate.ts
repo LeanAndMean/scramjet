@@ -161,6 +161,9 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 	// inheriting from the top-level scope. This is the MVP "latched scoping"
 	// tradeoff CLAUDE.md names; true push/pop semantics need a per-frame
 	// "delegated body consumed" signal Pi does not currently provide.
+	// The advisory warnings that fire when a tool call falls outside the
+	// frame's effectiveAllowedTools live in tool-scope-advisory.ts — that's
+	// the user-visible surface of this latching.
 	// Tracked for post-MVP redesign in issue #34.
 	pi.on("before_agent_start", async () => {
 		state.delegateStack = [];

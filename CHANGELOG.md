@@ -33,18 +33,13 @@ command set. The Claude Code plugin compat layer is gone.
   not update the embedded copy and following the prompt would only
   cause confusion.
 - The TUI banner is rebranded from `pi vX.Y.Z` to `scramjet vX.Y.Z`.
-  Pi's `piConfig.name` override is coupled to package-asset resolution
-  (themes, prompt templates) so a naive `PI_PACKAGE_DIR` redirect makes
-  Pi unable to find its own theme JSON. The scramjet bin builds a
-  per-version shim package directory at
-  `${XDG_CACHE_HOME:-$HOME/.cache}/scramjet/pi-shim-<scramjetVer>-pi-<piVer>/`
-  on first launch: a synthesized `package.json` carrying scramjet's
-  identity and `piConfig.name`, plus symlinks back to Pi's `dist/` and
-  `examples/` and to scramjet's `README.md` / `CHANGELOG.md` / `docs/`.
-  Pi sees scramjet for its banner, title, agent-dir env var, docs path
-  and changelog, while continuing to resolve themes and assets from the
-  Pi package. Old shim directories from previous versions remain on
-  disk as orphans; remove `~/.cache/scramjet/` if you want them cleared.
+  The scramjet bin builds a per-version shim package directory under
+  `${XDG_CACHE_HOME:-$HOME/.cache}/scramjet/` on first launch so Pi
+  sees scramjet's identity for the banner, title, agent-dir env var,
+  docs path, and changelog while still resolving its own bundled
+  themes and assets. Old shim directories from previous versions
+  remain on disk as orphans; remove `~/.cache/scramjet/` to clear
+  them. See `bin/env-setup.js` for the mechanism.
 - The OS-level agent-dir / session-dir env var names change in lockstep
   with the rebrand: `PI_CODING_AGENT_DIR` becomes
   `SCRAMJET_CODING_AGENT_DIR`; the same for `PI_CODING_AGENT_SESSION_DIR`.

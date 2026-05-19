@@ -1,6 +1,5 @@
-/**
- * /scramjet command for toggling auto-continuation on/off.
- */
+/** /scramjet on|off — gates `closed`/`open`/`ask` decisions. `forced`
+ *  fires regardless; see CLAUDE.md "MVP design rationales". */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.ts";
