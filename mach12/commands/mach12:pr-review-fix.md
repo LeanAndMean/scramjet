@@ -49,29 +49,23 @@ Extract the PR number. Parse `--review-comment` and `--assessment-comment` flags
 
 ## Step 2: Gather PR and review context
 
-Read the PR title and description:
-
-```
-gh pr view <pr-number>
-```
-
 ### Locate the review comment
 
-**If `--review-comment` was provided:** Fetch the specific comment by ID:
+**If `--review-comment` was provided:** Fetch the specific comment by ID, then fetch the PR context for additional grounding.
 
 ```
 gh api repos/:owner/:repo/issues/comments/<review-comment-id>
 ```
 
-Extract the `body` field from the JSON response. This is the review comment content.
+Extract the `body` field from the JSON response. This is the review comment content. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments.
 
-**If `--review-comment` was NOT provided (fallback):** Fetch all comments as JSON and find the review heuristically:
+**If `--review-comment` was NOT provided (fallback):** Delegate to:
 
 ```
-gh pr view <pr-number> --json comments
+/mach12:gh-pr-read <pr-number> --marker mach12-review
 ```
 
-Parse the JSON array and search from the END (most recent first) for the first comment whose body contains the HTML marker `<!-- mach12-review -->`. If no comment contains the marker, fall back to finding the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
+The subroutine returns the PR title, body, comments array, and the matched review comment body and numeric ID (most recent marker match). If no comment contains the marker, the subroutine reports that and the caller falls back to the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
 
 ### Locate the assessment comment (optional)
 

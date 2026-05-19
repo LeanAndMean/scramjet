@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - delegate
 next:
   mode: open
   candidates:
@@ -66,35 +67,31 @@ For complex changes, read specific modified files and understand the changes in 
 
 **Issue resolution:**
 
-1. If an issue number was provided in $ARGUMENTS, read it:
+1. If an issue number was provided in $ARGUMENTS, delegate to:
+
    ```
-   gh issue view <issue-number>
+   /mach12:gh-issue-read <issue-number>
    ```
-   If this fails (issue not found, permission denied, etc.), report the error to the user. Do NOT proceed without the issue when the user explicitly provided an issue number.
-   Then read all comments (`--comments` returns only comments and drops the title and body, so both calls are required):
-   ```
-   gh issue view <issue-number> --comments
-   ```
+
+   The subroutine returns the issue title, body, and full comments stream. If the call fails (issue not found, permission denied, etc.), report the error to the user. Do NOT proceed without the issue when the user explicitly provided an issue number.
+
    Comment content (implementation plans, decisions, assessment findings, progress notes) should inform the Summary bullets and Test plan when drafting the PR, but should not be copy-pasted verbatim into the PR body.
-2. If no issue number was provided, try to infer one from the branch name (e.g., `feature/issue-55-*`, `fix/issue-23-*`, or `55-some-description`). If found, read that issue and its comments using the same two-call approach as above.
+2. If no issue number was provided, try to infer one from the branch name (e.g., `feature/issue-55-*`, `fix/issue-23-*`, or `55-some-description`). If found, delegate to `/mach12:gh-issue-read <inferred-issue-number>` to read it and its comments.
 3. If no issue can be identified, proceed without one.
 
 **Sub-issue detection:**
 
 If an issue was identified, detect any sub-issues so closing keywords can be included for them in the PR body. Skip this block entirely if no issue was identified.
 
-1. **Strategy A (API):** First resolve the repository identifier, then query the GitHub sub-issues API:
-   ```
-   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-   gh api --paginate repos/$REPO/issues/<issue-number>/sub_issues --jq '.[] | {number, state}'
-   ```
-   - If the API call **succeeds and returns one or more results**, use them as the confirmed sub-issue list (each entry includes both the issue number and its state).
-   - If the API call **succeeds but returns no results** (empty array), the issue has no sub-issues. Do NOT fall through to Strategy B -- treat the sub-issue list as empty.
-   - If the API call **fails** (e.g., 404, permission error, network timeout), proceed to Strategy B.
+Delegate to:
 
-2. **Strategy B (body-parse fallback):** This strategy runs only when the API call in Strategy A failed. Scan the issue body for sub-issue references. Match `#<number>` references that appear on GitHub task list lines. Exclude any `#<number>` preceded by relational keywords ("Related to", "Blocked by", "See also", "Depends on"). Collect the matched issue numbers, excluding the parent issue number itself. Use these as candidate sub-issues. Note: this fallback is less reliable than the API -- flag these as candidates when presenting the draft. After collecting the candidate list, query each sub-issue's state individually: `gh issue view <N> --json state --jq .state`. If the state query fails for a sub-issue, treat it as open.
+```
+/mach12:gh-sub-issues <issue-number> --with-state
+```
 
-3. If Strategy A returned an empty result or Strategy B yielded no matches, the sub-issue list is empty.
+The subroutine returns each sub-issue with its number and state, plus which strategy produced the list (`api` or `body-parse`). State is needed for the closing-keywords rule below.
+
+If the sub-issue list came from the body-parse fallback, flag it to the user when presenting the PR draft -- the fallback is less reliable than the API.
 
 ## Step 3: Draft PR and get approval
 

@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - delegate
 next:
   mode: forced
   target: mach12:pr-review-assessment
@@ -56,29 +57,23 @@ Do NOT attempt to fix any issues -- this command is for review only. Fixes happe
 
 ## Step 4: Post review comment
 
-After the review completes, post the full review results as a reply comment on the PR:
-
-```
-gh pr comment <pr-number> --body "..."
-```
-
-The comment must include:
-- `<!-- mach12-review -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions)
-- The complete review findings (Critical, Important, Suggestions, Strengths), including any findings from supplementary lenses merged into the appropriate severity categories with inline source attribution (e.g., "per skill reviewer")
-- F/S identifiers on every finding -- Critical and Important findings use `F<n>` numbered sequentially across both sections, Suggestions use `S<n>` with a separate counter (e.g., `**F1:** ...`, `**F2:** ...`, `**S1:** ...`)
-- Model attribution at the bottom -- identify yourself by your actual model name (e.g., "Reviewed by <model name>")
-- A note that this is an automated review
+Prepare the review comment body. It must include:
+- `<!-- mach12-review -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
+- The complete review findings (Critical, Important, Suggestions, Strengths), including any findings from supplementary lenses merged into the appropriate severity categories with inline source attribution (e.g., "per skill reviewer").
+- F/S identifiers on every finding -- Critical and Important findings use `F<n>` numbered sequentially across both sections, Suggestions use `S<n>` with a separate counter (e.g., `**F1:** ...`, `**F2:** ...`, `**S1:** ...`).
+- Model attribution at the bottom -- identify yourself by your actual model name (e.g., "Reviewed by <model name>").
+- A note that this is an automated review.
 
 Format the comment as a well-structured markdown document that can serve as input to a future `/mach12:pr-review-fix` session.
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
 
-After posting, retrieve the URL of the review comment:
+Post the prepared body by delegating to:
 
 ```
-gh pr view <pr-number> --json comments --jq '.comments[-1].url'
+/mach12:gh-comment pr <pr-number>
 ```
 
-Note the full URL and extract the numeric comment ID from it -- the number after `issuecomment-` in the URL (e.g., if the URL ends with `#issuecomment-1234567890`, the comment ID is `1234567890`). Record this numeric ID; the next-step assessment command consumes it.
+The subroutine posts the body and returns the comment URL and numeric ID. Record the numeric ID -- the next-step assessment command consumes it.
 
 Do NOT fix any issues in this command. Fixes belong to `/mach12:pr-review-fix`, downstream of the assessment.

@@ -106,13 +106,13 @@ Handle results based on similarity:
   - **Create anyway**: Create the new issue despite the potential duplicate.
   - **Skip**: Do not create an issue.
 
-  If the user picks "Link to existing", post a comment on the existing issue referencing the new context, then skip creation. Report the existing issue number, URL, and the comment URL to the user.
+  If the user picks "Link to existing", prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
 
   ```
-  gh issue comment <existing-issue-number> --body "Related context: <summary of the new finding or context that prompted this issue>."
+  /mach12:gh-comment issue <existing-issue-number>
   ```
 
-  Capture the comment URL after posting (parse it from `gh issue comment` output or retrieve via `gh api`).
+  The subroutine posts the prepared body and returns the comment URL and numeric ID. Report the existing issue number, URL, and the comment URL to the user, then skip creation.
 
   If the user picks "Create anyway", proceed to Step 5. If the user picks "Skip", proceed directly to Step 6 and report that issue creation was skipped.
 
@@ -124,11 +124,13 @@ Handle results based on similarity:
   - **Link**: Add this finding as a comment on one of the listed issues.
   - **Skip**: Do not create an issue.
 
-  If the user picks "Link" and multiple matches were shown, ask which existing issue to link to. Post a comment on the chosen issue referencing the new context, then skip creation. Report the existing issue number, URL, and the comment URL to the user.
+  If the user picks "Link" and multiple matches were shown, ask which existing issue to link to. Prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
 
   ```
-  gh issue comment <chosen-issue-number> --body "Related context: <summary of the new finding or context that prompted this issue>."
+  /mach12:gh-comment issue <chosen-issue-number>
   ```
+
+  Report the existing issue number, URL, and the comment URL to the user, then skip creation.
 
   If the user picks "Skip", proceed directly to Step 6 and report that issue creation was skipped.
 

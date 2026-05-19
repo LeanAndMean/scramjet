@@ -46,19 +46,13 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue
 
-Read the issue title and body:
+Delegate to:
 
 ```
-gh issue view <issue-number>
+/mach12:gh-issue-read <issue-number>
 ```
 
-Then read all comments (`--comments` returns only comments and drops the title and body, so both calls are required):
-
-```
-gh issue view <issue-number> --comments
-```
-
-Parse and understand:
+The subroutine returns the issue title, body, and the full comments stream. Parse and understand:
 - The problem statement
 - Any constraints or requirements mentioned
 - Prior discussion or decisions in the comments
@@ -161,59 +155,45 @@ If the user requests changes, discuss their feedback, revise the plan, and prese
 
 After the user approves the plan:
 
-1. **Post the plan as a reply comment on the issue** using `gh issue comment <issue-number> --body "..."`. Format the comment so it serves as input to future sessions. Include:
-   - `<!-- mach12-plan -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions)
-   - The full implementation plan
-   - The staged breakdown
+1. **Post the plan as a reply comment on the issue.** Format the body so it serves as input to future sessions. Include:
+   - `<!-- mach12-plan -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
+   - The full implementation plan.
+   - The staged breakdown.
    - A `## Decision Log` section appended after the staged breakdown. This section captures the reasoning behind key decisions made during planning:
      - **Clarifying Questions (Step 5):** For each question asked and answered, include the question and a synthesized answer. Only include exchanges where the answer changed or constrained the plan. Omit exchanges where the user confirmed a default or said "whatever you think is best."
      - **Architecture Choice (Step 6):** The selected approach, the rationale for choosing it, and the alternatives considered with brief reasons for rejection.
      - **Omission condition:** Skip the Decision Log section entirely if Step 5 produced no questions AND Step 6 had no meaningful differentiation between approaches.
-   - A note that this comment will guide staged implementation
+   - A note that this comment will guide staged implementation.
+
+   Then delegate to:
+
+   ```
+   /mach12:gh-comment issue <issue-number>
+   ```
+
+   The subroutine posts the prepared body and returns the comment URL and numeric ID.
 
 2. **Create a feature branch**:
-   - Derive a short slug from the issue title (lowercase, hyphens, 3-5 words max)
-   - Branch name format: `feature/issue-<issue-number>-<slug>`
-   - Example: `feature/issue-55-fix-analytics-url`
-   - Push the branch to remote with `-u` flag
+   - Derive a short slug from the issue title (lowercase, hyphens, 3-5 words max).
+   - Branch name format: `feature/issue-<issue-number>-<slug>`.
+   - Example: `feature/issue-55-fix-analytics-url`.
+   - Push the branch to remote with `-u` flag.
 
-3. **Assign the issue** to the current user:
-   - Check existing assignees: `gh issue view <issue-number> --json assignees --jq '[.assignees[].login] | join(",")'`
-   - Check current user: `gh api user --jq .login`
-   - If the current user is already assigned, skip silently.
-   - If there are no assignees, run `gh issue edit <issue-number> --add-assignee @me`.
-   - If other assignees exist (not including the current user), warn the user and ask how to proceed:
-     - **Add me**: add yourself as an additional assignee -- run `gh issue edit <issue-number> --add-assignee @me`
-     - **Skip**: leave the current assignee(s) unchanged
-     - **Replace**: remove existing assignee(s) and assign only yourself -- run `gh issue edit <issue-number> --remove-assignee <existing-logins> --add-assignee @me`
-   - If the assignment command fails, warn the user in CLI output and continue -- assignment failure must not block the workflow.
+3. **Detect sub-issues** for the assignment step below. Delegate to:
 
-4. **Assign sub-issues** to the current user:
+   ```
+   /mach12:gh-sub-issues <issue-number>
+   ```
 
-   Detect sub-issues using the two-strategy approach:
+   The subroutine returns the list of sub-issue numbers (possibly empty) and which strategy produced them.
 
-   - **Strategy A (API):** First resolve the repository identifier, then query the GitHub sub-issues API:
-     ```
-     REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-     gh api --paginate repos/$REPO/issues/<issue-number>/sub_issues --jq '.[].number'
-     ```
-     - If the API call **succeeds and returns one or more numbers**, use them as the confirmed sub-issue list.
-     - If the API call **succeeds but returns no results** (empty array), the issue has no sub-issues. Do NOT fall through to Strategy B -- treat the sub-issue list as empty.
-     - If the API call **fails** (e.g., 404, permission error, network timeout), proceed to Strategy B.
+4. **Assign the issue and any sub-issues** to the current user. Delegate to:
 
-   - **Strategy B (body-parse fallback):** This strategy runs only when Strategy A **failed**. Scan the issue body for sub-issue references. Match `#<number>` references that appear on GitHub task list lines -- lines beginning with optional whitespace followed by a list marker (`-`, `*`, or `+`) and a checkbox (`[ ]`, `[x]`, or `[X]`). Exclude any `#<number>` preceded by relational keywords: "Related to", "Blocked by", "See also", or "Depends on". Collect the matched issue numbers, excluding the parent issue number itself.
+   ```
+   /mach12:gh-assign <issue-number> [<sub-issue-number> ...]
+   ```
 
-   If sub-issues are found, get the current user login via `gh api user --jq .login`. For each sub-issue, check assignees via `gh issue view <sub-issue> --json assignees --jq '[.assignees[].login] | join(",")'`. Three paths:
-   - Current user already assigned: skip silently.
-   - No assignees: auto-assign with `gh issue edit <sub-issue> --add-assignee @me`.
-   - Other assignees exist: collect into a "conflicting" list.
-
-   If the conflicting list is non-empty, ask the user how to proceed with a single bulk decision:
-   - **Add me**: add yourself as an additional assignee on all conflicting sub-issues.
-   - **Skip**: leave the current assignee(s) unchanged on all sub-issues.
-   - **Replace**: remove existing assignee(s) and assign only yourself on all sub-issues.
-
-   Assignment failures are non-blocking (warn and continue).
+   Pass the parent issue number followed by every sub-issue number detected in step 3. The subroutine resolves the current user, classifies each issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt at the end (Add me / Skip / Replace). Assignment failures are non-blocking.
 
 When referring to numbered items (findings, suggestions, stages) in the comment body, use plain words like "finding 3" or "suggestion 3" -- not `#<number>` notation, which GitHub auto-links to issues/PRs.
 

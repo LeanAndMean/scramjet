@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - delegate
 next:
   mode: closed
   candidates:
@@ -38,23 +39,23 @@ Extract the PR number and the `--review-comment` ID if present. If the input is 
 
 ## Step 2: Gather PR and review context
 
-First, fetch the PR title, body, and all existing comments so the assessment can account for prior discussion:
-
-```
-gh pr view <pr-number> --json title,body,comments
-```
-
 ### Locate the review comment
 
-**If `--review-comment` was provided:** Fetch the specific comment by ID:
+**If `--review-comment` was provided:** Fetch the specific comment by ID, then fetch the PR title, body, and all comments for context.
 
 ```
 gh api repos/:owner/:repo/issues/comments/<review-comment-id>
 ```
 
-Extract the `body` field from the JSON response.
+Extract the `body` field from the JSON response. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) to fetch the PR context separately.
 
-**If `--review-comment` was NOT provided (fallback):** Parse the comments JSON from `gh pr view` and search from the END (most recent first) for the first comment whose body contains the HTML marker `<!-- mach12-review -->`. If no comment contains the marker, fall back to finding the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
+**If `--review-comment` was NOT provided:** Delegate to:
+
+```
+/mach12:gh-pr-read <pr-number> --marker mach12-review
+```
+
+The subroutine returns the PR title, body, full comments array, and the matched review comment body and numeric ID (using the most recent marker match). If no comment contains the marker, the subroutine reports that and the caller falls back to the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
 
 Save the review comment content and its numeric comment ID for later steps.
 
@@ -81,26 +82,22 @@ The brief should instruct the assessor to:
 
 ## Step 4: Post assessment comment
 
-Post the assessment immediately as a reply comment on the PR -- do not ask the user for approval first. The comment must include:
-- `<!-- mach12-assessment -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions)
-- Reference the review comment it is assessing (link to the specific comment URL recorded in Step 2)
-- List each finding with its classification and reasoning
-- End with the staged implementation plan
-- Include model attribution at the bottom -- identify yourself by your actual model name (e.g., "Assessed by <model name>")
-
-```
-gh pr comment <pr-number> --body "..."
-```
-
-After posting, retrieve the URL of the assessment comment:
-
-```
-gh pr view <pr-number> --json comments --jq '.comments[-1].url'
-```
-
-Extract the numeric comment ID from the URL (the number after `issuecomment-`). Record this ID.
+Prepare the assessment body. It must include:
+- `<!-- mach12-assessment -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
+- A reference to the review comment it is assessing (link to the specific comment URL recorded in Step 2).
+- Each finding with its classification and reasoning.
+- The staged implementation plan at the end.
+- Model attribution at the bottom -- identify yourself by your actual model name (e.g., "Assessed by <model name>").
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
+
+Post the body immediately -- do not ask the user for approval first. Delegate to:
+
+```
+/mach12:gh-comment pr <pr-number>
+```
+
+The subroutine posts the body and returns the comment URL and numeric ID. Record the numeric ID.
 
 ## Step 5: Present CLI summary
 
@@ -141,11 +138,13 @@ For each deferred item, check for existing issues before creating a new one:
    - **No results**: proceed to create the issue.
    - **Clear duplicate**: if an existing **open** issue's title is nearly identical, skip creation and post a comment on the existing issue linking the new finding. If the near-identical match is a closed issue, treat it as an ambiguous match instead (a previously-closed issue should not block creation).
 
+     Prepare a comment body of the form: `Related finding from PR <pr-number> review: <summary of the deferred finding>.` Then delegate to:
+
      ```
-     gh issue comment <existing-issue-number> --body "Related finding from PR #<pr-number> review: <summary of the deferred finding>."
+     /mach12:gh-comment issue <existing-issue-number>
      ```
 
-     Capture the comment URL after posting for use in the summary block.
+     The subroutine posts the body and returns the comment URL. Use the URL in the summary block below.
 
    - **Ambiguous match**: if results are related but not clearly duplicates, still create the issue but add a "Potentially related" note at the end of the issue body listing the matched issue numbers, titles, and states.
 
@@ -211,19 +210,19 @@ No issues created, no reclassification. Skip the decision comment entirely.
 
 ### Persist Deferred-Item Decisions
 
-After displaying the summary block (Options 1 and 3 only, and only when at least one item remained deferred), post a decision comment on the PR to record the disposition of each deferred item for future sessions:
-
-```
-gh pr comment <pr-number> --body "..."
-```
-
-Comment format:
+After displaying the summary block (Options 1 and 3 only, and only when at least one item remained deferred), post a decision comment on the PR to record the disposition of each deferred item for future sessions. Prepare a body with this shape:
 - First line: `<!-- mach12-decisions -->`
-- A note that deferred findings were processed after the review
-- One line per deferred item showing its disposition (Created as issue / Created as issue with overlap note / Skipped as duplicate / Skipped (not selected) / Reclassified as genuine)
-- Keep the entire comment body under 20 lines
+- A note that deferred findings were processed after the review.
+- One line per deferred item showing its disposition (Created as issue / Created as issue with overlap note / Skipped as duplicate / Skipped (not selected) / Reclassified as genuine).
+- Keep the entire comment body under 20 lines.
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
+
+Then delegate to:
+
+```
+/mach12:gh-comment pr <pr-number>
+```
 
 ## Step 7: Surface comment IDs for the next step
 

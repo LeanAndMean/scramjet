@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - delegate
 next:
   mode: ask
   hint: |
@@ -31,24 +32,20 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue and locate the plan
 
-Read the issue title and body:
+Delegate to:
 
 ```
-gh issue view <issue-number>
+/mach12:gh-issue-read <issue-number> --marker mach12-plan
 ```
 
-Then read all comments (`--comments` returns only comments and drops the title and body, so both calls are required):
-
-```
-gh issue view <issue-number> --comments
-```
+The subroutine returns the issue title, body, full comments stream, and the body of the comment tagged with `<!-- mach12-plan -->` (using the last match if multiple exist).
 
 Understand:
-- The original problem statement and requirements
-- The implementation plan (typically posted as a comment)
-- Any discussion, decisions, or clarifications in the comment thread
+- The original problem statement and requirements.
+- The implementation plan (typically posted as a comment).
+- Any discussion, decisions, or clarifications in the comment thread.
 
-Locate the implementation plan comment by searching all issue comments for the `<!-- mach12-plan -->` HTML marker. If multiple comments contain the marker, use the last one (the most recent revision). If no comment contains the marker, fall back to identifying the most recent substantive comment that contains a staged implementation plan. If no plan exists at all, inform the user and suggest running `/mach12:issue-plan <issue-number>` first, then stop.
+If the marker comment was not found, fall back to identifying the most recent substantive comment that contains a staged implementation plan in the returned comments stream. If no plan exists at all, inform the user and suggest running `/mach12:issue-plan <issue-number>` first, then stop.
 
 ## Step 3: Read contribution guidelines
 
@@ -122,33 +119,33 @@ If the user picks "Update the plan", draft a revised plan incorporating the find
 
 If the user picks "Discuss findings", walk through the specific findings they want to explore, then ask again how to proceed. This step remains active across all discussion iterations until the user picks a terminal option (Update, Proceed, or Cancel).
 
-If the user picks "Proceed as-is" and at least one Critical or Important finding exists, post a decision comment on the issue to record the user's choice:
-
-```
-gh issue comment <issue-number> --body "..."
-```
-
-Comment format:
+If the user picks "Proceed as-is" and at least one Critical or Important finding exists, post a decision comment on the issue to record the user's choice. Prepare a body with this shape:
 - First line: `<!-- mach12-decisions -->`
 - A note that a plan review was conducted and the user chose to proceed without changes
 - Each Critical and Important finding on its own line (one sentence each)
 - Keep the entire comment body under 15 lines
+
+Then delegate to:
+
+```
+/mach12:gh-comment issue <issue-number>
+```
 
 If the user picks "Proceed as-is" and all findings are Suggestions only, do NOT post a decision comment -- proceeding past suggestions is the expected path.
 
 If the user picks "Cancel":
 
 1. Confirm that no changes were made to the plan.
-2. Post a lightweight decision comment on the issue:
-
-   ```
-   gh issue comment <issue-number> --body "..."
-   ```
-
-   Comment format:
+2. Post a lightweight decision comment on the issue. Prepare a body with this shape:
    - First line: `<!-- mach12-decisions -->`
    - A note that a plan review was conducted and the session ended without updating or proceeding
    - Finding counts by severity (e.g., "2 Critical, 1 Important, 3 Suggestions")
    - Keep the entire comment body to 5 lines or fewer
+
+   Then delegate to:
+
+   ```
+   /mach12:gh-comment issue <issue-number>
+   ```
 
 When referring to numbered items (findings, suggestions, stages) in any comment body, use plain words like "finding 3" or "suggestion 3" -- not `#<number>` notation, which GitHub auto-links to issues/PRs.

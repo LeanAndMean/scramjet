@@ -89,64 +89,37 @@ gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
 
 After the branch is confirmed (whether by checkout, silent match, or user confirmation), check for uncommitted changes with `git status --porcelain`. If the working tree is dirty, stop and tell the user to commit or stash their changes before proceeding.
 
-### Assign the issue
+### Detect sub-issues
 
-After the branch is confirmed and the working tree is clean, assign the current user to the issue:
+After the branch is confirmed and the working tree is clean, detect any sub-issues so they can be assigned alongside the parent. Delegate to:
 
-1. Check existing assignees: `gh issue view <issue-number> --json assignees --jq '[.assignees[].login] | join(",")'`
-2. Check current user: `gh api user --jq .login`
-3. If the current user is already assigned, skip silently. This is the expected case when returning for subsequent stages after `issue-plan` already assigned the user.
-4. If there are no assignees, run `gh issue edit <issue-number> --add-assignee @me`.
-5. If other assignees exist (not including the current user), warn the user and ask how to proceed:
-   - **Add me**: add yourself as an additional assignee -- run `gh issue edit <issue-number> --add-assignee @me`.
-   - **Skip**: leave the current assignee(s) unchanged.
-   - **Replace**: remove existing assignee(s) and assign only yourself -- run `gh issue edit <issue-number> --remove-assignee <existing-logins> --add-assignee @me`.
-6. If the assignment command fails (e.g., insufficient permissions), warn the user in CLI output and continue -- assignment failure must not block the workflow.
+```
+/mach12:gh-sub-issues <issue-number>
+```
 
-### Assign sub-issues
+The subroutine returns the list of sub-issue numbers (possibly empty) and which strategy produced them.
 
-After the parent issue assignment, assign sub-issues to the current user:
+### Assign the issue and sub-issues
 
-1. Detect sub-issues using the two-strategy approach:
+Delegate to:
 
-   - **Strategy A (API):** First resolve the repository identifier, then query the GitHub sub-issues API:
-     ```
-     REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-     gh api --paginate repos/$REPO/issues/<issue-number>/sub_issues --jq '.[].number'
-     ```
-     - If the API call **succeeds and returns one or more numbers**, use them as the confirmed sub-issue list.
-     - If the API call **succeeds but returns no results** (empty array), the issue has no sub-issues. Do NOT fall through to Strategy B -- treat the sub-issue list as empty.
-     - If the API call **fails** (e.g., 404, permission error, network timeout), proceed to Strategy B.
+```
+/mach12:gh-assign <issue-number> [<sub-issue-number> ...]
+```
 
-   - **Strategy B (body-parse fallback):** This strategy runs only when Strategy A **failed**. Scan the issue body for sub-issue references. Match `#<number>` references that appear on GitHub task list lines -- lines beginning with optional whitespace followed by a list marker (`-`, `*`, or `+`) and a checkbox (`[ ]`, `[x]`, or `[X]`). Exclude any `#<number>` preceded by relational keywords: "Related to", "Blocked by", "See also", or "Depends on". Collect the matched issue numbers, excluding the parent issue number itself.
-
-2. If sub-issues are found, get the current user login via `gh api user --jq .login` (reuse the value from the parent assignment step if already retrieved). For each sub-issue, check assignees via `gh issue view <sub-issue> --json assignees --jq '[.assignees[].login] | join(",")'`. Three paths:
-   - Current user already assigned: skip silently.
-   - No assignees: auto-assign with `gh issue edit <sub-issue> --add-assignee @me`.
-   - Other assignees exist: collect into a "conflicting" list.
-
-3. If the conflicting list is non-empty, ask the user how to proceed with a single bulk decision:
-   - **Add me**: add yourself as an additional assignee on all conflicting sub-issues.
-   - **Skip**: leave the current assignee(s) unchanged on all sub-issues.
-   - **Replace**: remove existing assignee(s) and assign only yourself on all sub-issues.
-
-4. Assignment failures are non-blocking (warn and continue).
+Pass the parent issue number followed by every sub-issue number from the previous step. The subroutine handles the three-way classification per issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt (Add me / Skip / Replace). Already-assigned is the expected case when returning for subsequent stages after `issue-plan` already assigned the user. Assignment failures are non-blocking.
 
 ## Step 3: Gather Context
 
-Read the issue title and body:
+Read the issue and locate the implementation plan. Delegate to:
 
 ```
-gh issue view <issue-number>
+/mach12:gh-issue-read <issue-number> --marker mach12-plan
 ```
 
-Then read all comments to find the implementation plan (`--comments` returns only comments and drops the title and body, so both calls are required):
+The subroutine returns the issue title, body, full comments stream, and the body of the comment tagged with `<!-- mach12-plan -->` (using the last match if multiple exist).
 
-```
-gh issue view <issue-number> --comments
-```
-
-Locate the implementation plan comment by searching all issue comments for the `<!-- mach12-plan -->` HTML marker. If multiple comments contain the marker, use the last one (the most recent revision). If no comment contains the marker, fall back to identifying the most recent substantive comment that contains a staged implementation plan. Identify the requested stage(s).
+If the marker comment was not found, fall back to identifying the most recent substantive comment that contains a staged implementation plan in the returned comments stream. Identify the requested stage(s).
 
 ## Step 4: Implement the Stage
 

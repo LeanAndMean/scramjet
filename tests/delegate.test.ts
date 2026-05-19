@@ -7,28 +7,7 @@ import {
 	substituteArguments,
 } from "../delegate.ts";
 import type { CommandDef, DelegateFrame, ScramjetState } from "../types.ts";
-import { freshState } from "./helpers.ts";
-
-type Handler = (event: unknown, ctx?: unknown) => unknown;
-
-function recordingPi() {
-	const tools: any[] = [];
-	const handlers = new Map<string, Handler[]>();
-	const pi: any = {
-		registerTool(tool: any) {
-			tools.push(tool);
-		},
-		on(event: string, handler: Handler) {
-			const list = handlers.get(event) ?? [];
-			list.push(handler);
-			handlers.set(event, list);
-		},
-	};
-	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-		for (const h of handlers.get(event) ?? []) await h(payload, ctx);
-	}
-	return { pi, tools, handlers, emit };
-}
+import { freshState, recordingPi } from "./helpers.ts";
 
 function def(name: string, body: string, allowedTools?: string[]): CommandDef {
 	const d: CommandDef = { name, filePath: `/fake/${name}.md`, body };

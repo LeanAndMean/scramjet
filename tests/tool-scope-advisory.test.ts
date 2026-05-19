@@ -1,25 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
-import { freshState } from "./helpers.ts";
-
-type Handler = (event: unknown, ctx?: unknown) => unknown;
-
-function recordingPi() {
-	const handlers = new Map<string, Handler[]>();
-	const pi: any = {
-		on(event: string, handler: Handler) {
-			const list = handlers.get(event) ?? [];
-			list.push(handler);
-			handlers.set(event, list);
-		},
-	};
-	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-		const results: unknown[] = [];
-		for (const h of handlers.get(event) ?? []) results.push(await h(payload, ctx));
-		return results;
-	}
-	return { pi, handlers, emit };
-}
+import { freshState, recordingPi } from "./helpers.ts";
 
 describe("registerToolCallAdvisor — registration", () => {
 	it("registers exactly one tool_call handler", () => {

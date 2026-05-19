@@ -21,19 +21,38 @@ Biome: tabs, indent width 3, line width 120. Run `npx biome check --write .` to 
 
 Scramjet is a compact Pi extension. Pi loads `index.ts` directly via jiti — no compilation step. The imports `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are virtual modules provided by Pi at runtime; they exist in `devDependencies` only for type checking.
 
-The auto-continuation core is one tool (`task_complete`) plus an `agent_end` listener that drives the countdown widget; the rest of the extension (the `/scramjet` toggle, the `/clear` alias, the diagram tool, the Claude Code tool-name aliases) is independent and can be reasoned about in isolation. The auto-continuation flow is:
+`index.ts` constructs a single `ScramjetState` (registry, delegate stack, sidebar log, `/scramjet on/off` flag, pending forced dispatch — see `types.ts`) and threads it through every register-call. Each capability is its own file; nothing in the harness imports anything outside `types.ts` and Pi's API.
 
-1. `task-complete.ts` injects a system prompt snippet (via `before_agent_start`) telling the agent to call `task_complete` when done, with an optional `next_step` if the command's instructions suggest one. The tool sets `terminate: true` to end the agent loop and stores the completion signal.
-2. `auto-continue.ts` listens to `agent_end`. If the stored signal has a `next_step`, it shows a countdown widget. Any keypress cancels. Countdown expiry sends the next command as a user message (optionally in a fresh session via the internal `/scramjet-exec-fresh` command).
-3. If no `task_complete` was called, nothing happens. Scramjet is invisible.
+**Vision MVP harness modules** (issue 23 buildout):
 
-The diagram tool (`diagram/`) is independent — it detects installed renderers (`mmdc`, `dot`, `plantuml`) and registers `draw_diagram` only if at least one is available.
+- `commands/loader.ts` + `commands/parse-next-step.ts` + `commands/validator.ts` — pure-function parser, next-step policy reader, and pre-dispatch validator. `commands/index.ts` wires them into the `resources_discover` hook so Pi treats the registered command files as prompts.
+- `delegate.ts` — registers the `delegate` tool. The tool looks up a command in the registry, intersects `allowed-tools` with the caller frame, pushes a frame onto the delegate stack (latched scoping; frames never pop within a turn), and returns the substituted command body as tool result content. Detects cycles. Resets the stack on `before_agent_start`.
+- `next-step.ts` — reads the active top-level command's `next:` policy at `agent_end` and dispatches: `forced` fires unconditionally (even under `/scramjet off`); `closed`/`open` honor the agent's pick when `/scramjet on`; `ask` always pauses for the user.
+- `history.ts` — appends sidebar entries (`▸` user, `●` agent, `■` forced) to the persistent history journal and replays the journal at `session_start` so `/scramjet on/off`, the active top-level command, and the log survive `pi --resume`.
+- `tool-scope-advisory.ts` — `tool_call` hook that emits `console.warn` when the active frame's `effectiveAllowedTools` excludes the called tool. Advisory only; never blocks. Hard enforcement is deferred (see "Design philosophy" below).
+
+**Legacy auto-continuation core** (predates the vision MVP; still active):
+
+- `task-complete.ts` + `auto-continue.ts` — the original mechanism, kept while plugins authored for the older "LLM reads prose, calls `task_complete`" model are still in use. `task-complete.ts` injects a system prompt snippet via `before_agent_start` and stores the completion signal when the tool fires. `auto-continue.ts` listens on `agent_end`; if the stored signal carries a `next_step`, it shows a countdown widget that any keypress cancels.
+
+**Independent capabilities:**
+
+- `scramjet-command.ts` — the `/scramjet on|off` slash command.
+- `clear-alias.ts` — `/clear` alias.
+- `diagram/` — detects `mmdc` / `dot` / `plantuml` at startup and registers `draw_diagram` only if at least one renderer is installed.
+- `src/tool-aliases/` — registers PascalCase Claude Code tool names (`Read`, `Bash`, `Edit`, `Write`, `Grep`, `Glob`, `LS`) as wrappers around Pi's native lowercase tools so plugin agents' `tools:` restrictions function natively. Removed at Stage 8 alongside the plugin compat layer.
+
+**Bundled Mach 12 command set** (`mach12/`):
+
+The tenant of the harness — `mach12/commands/*.md` are command files using the new next-step declarations and delegation. Ten top-level commands (`mach12:issue-create`, `mach12:issue-plan`, …, `mach12:pr-merge`) with `next:` blocks declaring `forced`/`closed`/`open`/`ask` policies, plus seven delegate-only subroutines (`mach12:push`, `mach12:find-contribution-guidelines`, `mach12:gh-issue-read`, `mach12:gh-pr-read`, `mach12:gh-sub-issues`, `mach12:gh-assign`, `mach12:gh-comment`) invoked via `delegate` from the top-level commands. Subroutines have no `next:` block — the caller's `next:` controls chaining. `install.sh` `cp -R`s the whole `mach12/` tree into `$SCRAMJET_CACHE/mach12/` on first install; the command-set loader picks it up at runtime via `resources_discover`. `gh-*` subroutines are flagged in their prose as forge-swap points for the deferred `glab-*` family.
+
+**Plugin compat layer** (kept through Stage 7, removed at Stage 8):
 
 Plugin wiring is install-time, not runtime. `install.sh` symlinks Pi's bundled subagent example (`node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent`) into the agent dir unchanged — not forked — and clones the Mach 10 and Anthropic marketplace plugins into `$HOME/.local/share/scramjet/`.
 
 For each plugin, command files are symlinked into `<agent-dir>/prompts/<plugin>:<basename>.md`, while agent files are transformed copies under `<agent-dir>/agents/<plugin>:<basename>.md` (strip `model: inherit`, convert `tools:` YAML arrays to comma-strings). The originals in `$HOME/.local/share/scramjet/` are never modified.
 
-`src/tool-aliases/` registers PascalCase Claude Code tool names (`Read`, `Bash`, `Edit`, `Write`, `Grep`, `Glob`, `LS`) as wrappers around Pi's native lowercase tools so plugin agents' `tools:` restrictions function natively. A `.scramjet-manifest` file in the agent dir tracks every installed plugin path for clean uninstall via `./uninstall.sh --clear-manifest`.
+A `.scramjet-manifest` file in the agent dir tracks every installed plugin path for clean uninstall via `./uninstall.sh --clear-manifest`.
 
 ## Project direction
 

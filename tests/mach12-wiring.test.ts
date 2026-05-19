@@ -16,6 +16,11 @@ interface WiringRow {
 
 // Hints are intentionally not pinned: modes, targets, candidate names, and
 // blacklists carry semantic load; hint text is editorial and can drift.
+//
+// Subroutines (delegate-only) declare no `next:` block — they are dispatched
+// via the `delegate` tool from within a calling command's turn and the
+// caller's `next:` controls chaining. `expected: null` pins that property:
+// the file must parse and must NOT carry a next-step policy.
 const WIRING: WiringRow[] = [
 	{
 		basename: "issue-create",
@@ -66,6 +71,14 @@ const WIRING: WiringRow[] = [
 		basename: "pr-merge",
 		expected: { mode: "open", candidates: [] },
 	},
+	// Subroutines.
+	{ basename: "push", expected: null },
+	{ basename: "find-contribution-guidelines", expected: null },
+	{ basename: "gh-issue-read", expected: null },
+	{ basename: "gh-pr-read", expected: null },
+	{ basename: "gh-sub-issues", expected: null },
+	{ basename: "gh-assign", expected: null },
+	{ basename: "gh-comment", expected: null },
 ];
 
 // Strip hint strings from a policy so the wiring test compares modes, targets,
@@ -91,7 +104,7 @@ function stripHints(policy: NextStepPolicy | null): NextStepPolicy | null {
 }
 
 describe("mach12 wiring — bundled command set", () => {
-	it("ships exactly the expected 10 top-level command files", () => {
+	it("ships exactly the expected set of command files (top-level and subroutines)", () => {
 		const found = readdirSync(MACH12_COMMANDS_DIR)
 			.filter((f) => f.endsWith(".md"))
 			.sort();
