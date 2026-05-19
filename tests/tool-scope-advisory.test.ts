@@ -13,14 +13,23 @@ function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
 	};
 }
 
+type Handler = (event: unknown, ctx?: unknown) => unknown;
+
 function recordingPi() {
-	const handlers = new Map<string, (event: unknown) => unknown>();
+	const handlers = new Map<string, Handler[]>();
 	const pi: any = {
-		on(event: string, handler: (event: unknown) => unknown) {
-			handlers.set(event, handler);
+		on(event: string, handler: Handler) {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
 		},
 	};
-	return { pi, handlers };
+	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
+		const results: unknown[] = [];
+		for (const h of handlers.get(event) ?? []) results.push(await h(payload, ctx));
+		return results;
+	}
+	return { pi, handlers, emit };
 }
 
 describe("registerToolCallAdvisor — registration", () => {
@@ -46,7 +55,7 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 	it("does not warn and does not block when the stack is empty", async () => {
 		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, freshState());
-		const handler = handlers.get("tool_call") as any;
+		const handler = handlers.get("tool_call")![0] as any;
 		const result = await handler({ type: "tool_call", toolCallId: "x", toolName: "bash", input: {} });
 		expect(warnSpy).not.toHaveBeenCalled();
 		expect(result).toBeUndefined();
@@ -58,7 +67,7 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 		});
 		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
-		const handler = handlers.get("tool_call") as any;
+		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "anything", input: {} });
 		expect(warnSpy).not.toHaveBeenCalled();
 	});
@@ -69,7 +78,7 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 		});
 		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
-		const handler = handlers.get("tool_call") as any;
+		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "Read", input: {} });
 		await handler({ type: "tool_call", toolCallId: "y", toolName: "Bash", input: {} });
 		expect(warnSpy).not.toHaveBeenCalled();
@@ -81,7 +90,7 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 		});
 		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
-		const handler = handlers.get("tool_call") as any;
+		const handler = handlers.get("tool_call")![0] as any;
 		const result = await handler({ type: "tool_call", toolCallId: "x", toolName: "Bash", input: {} });
 		expect(warnSpy).toHaveBeenCalledTimes(1);
 		const message = String(warnSpy.mock.calls[0][0]);
@@ -104,7 +113,7 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 		});
 		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
-		const handler = handlers.get("tool_call") as any;
+		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "Bash", input: {} });
 		expect(warnSpy).toHaveBeenCalledTimes(1);
 		const message = String(warnSpy.mock.calls[0][0]);
@@ -118,7 +127,7 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 		});
 		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
-		const handler = handlers.get("tool_call") as any;
+		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "delegate", input: {} });
 		expect(warnSpy).not.toHaveBeenCalled();
 	});
@@ -131,7 +140,7 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 		});
 		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
-		const handler = handlers.get("tool_call") as any;
+		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "Read", input: {} });
 		expect(warnSpy).toHaveBeenCalledTimes(1);
 	});

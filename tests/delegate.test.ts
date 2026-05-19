@@ -19,18 +19,25 @@ function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
 	};
 }
 
+type Handler = (event: unknown, ctx?: unknown) => unknown;
+
 function recordingPi() {
 	const tools: any[] = [];
-	const handlers = new Map<string, (event: unknown) => unknown>();
+	const handlers = new Map<string, Handler[]>();
 	const pi: any = {
 		registerTool(tool: any) {
 			tools.push(tool);
 		},
-		on(event: string, handler: (event: unknown) => unknown) {
-			handlers.set(event, handler);
+		on(event: string, handler: Handler) {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
 		},
 	};
-	return { pi, tools, handlers };
+	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
+		for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+	}
+	return { pi, tools, handlers, emit };
 }
 
 function def(name: string, body: string, allowedTools?: string[]): CommandDef {
@@ -250,9 +257,9 @@ describe("registerDelegateTool — execute paths", () => {
 	it("clears the stack on before_agent_start so each turn starts fresh", async () => {
 		const state = freshState({ registry: new Map([["a", def("a", "body-a")]]) });
 		state.delegateStack.push({ commandName: "leftover", depth: 0 });
-		const { pi, handlers } = recordingPi();
+		const { pi, emit } = recordingPi();
 		registerDelegateTool(pi, state);
-		await (handlers.get("before_agent_start") as any)({});
+		await emit("before_agent_start");
 		expect(state.delegateStack).toHaveLength(0);
 	});
 

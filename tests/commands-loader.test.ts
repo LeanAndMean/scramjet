@@ -18,11 +18,15 @@ function freshState(): ScramjetState {
 	};
 }
 
+type Handler = (event: unknown, ctx?: unknown) => unknown;
+
 function recordingPi() {
-	const handlers = new Map<string, (event: unknown) => unknown>();
+	const handlers = new Map<string, Handler[]>();
 	const pi: any = {
-		on(event: string, handler: (event: unknown) => unknown) {
-			handlers.set(event, handler);
+		on(event: string, handler: Handler) {
+			const list = handlers.get(event) ?? [];
+			list.push(handler);
+			handlers.set(event, list);
 		},
 	};
 	return { pi, handlers };
@@ -236,7 +240,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshState();
 		registerCommandLoader(pi, state);
-		const handler = handlers.get("resources_discover");
+		const handler = handlers.get("resources_discover")![0];
 		expect(handler).toBeDefined();
 		const result = handler?.({
 			type: "resources_discover",
@@ -277,7 +281,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshState();
 		registerCommandLoader(pi, state);
-		const handler = handlers.get("resources_discover");
+		const handler = handlers.get("resources_discover")![0];
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "startup" });
 		const firstSize = state.registry.size;
 		state.registry.set("ghost:command", {
@@ -295,7 +299,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshState();
 		registerCommandLoader(pi, state);
-		const handler = handlers.get("resources_discover");
+		const handler = handlers.get("resources_discover")![0];
 		const result = handler?.({
 			type: "resources_discover",
 			cwd: join(FIXTURES, "loader-project"),
@@ -310,7 +314,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshState();
 		registerCommandLoader(pi, state);
-		const handler = handlers.get("resources_discover");
+		const handler = handlers.get("resources_discover")![0];
 		const result = handler?.({
 			type: "resources_discover",
 			cwd: join(FIXTURES, "does-not-exist"),
