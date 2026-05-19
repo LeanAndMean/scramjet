@@ -27,16 +27,16 @@ This ceremony breaks flow state. The machine already knows what to do; it's just
 Scramjet removes the ceremony. When a command declares its next step (via YAML frontmatter), Scramjet validates the agent's pick, shows what's about to happen, and auto-continues after a brief countdown. Press Escape (or type anything) to cancel.
 
 ```
-> /mach12:issue-assessment 55
-  [agent works, asks you questions, you answer, assessment posted]
-
-  ┌─ Next: /mach12:issue-plan 55 (fresh session)    3s...    [Esc] cancel ─┐
-  └────────────────────────────────────────────────────────────────────────-─┘
-
-  [auto-clears, runs issue-plan]
+> /mach12:issue-plan 55
   [agent works, asks you about architecture, you pick an approach, plan posted]
 
-  ┌─ Next: /mach12:issue-plan-review 55 (fresh session)    3s...            ┐
+  ┌─ Next: /mach12:issue-review 55 (fresh session)    3s...    [Esc] cancel ─┐
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  [auto-clears, runs issue-review]
+  [agent works, asks you questions, you answer, review posted]
+
+  ┌─ Next: /mach12:issue-implement 55 (fresh session)    3s...              ┐
   └─────────────────────────────────────────────────────────────────────────-┘
 
   [continues through the entire methodology...]
@@ -162,7 +162,7 @@ allowed-tools: bash, read, write, edit, delegate
 next:
   mode: closed
   candidates:
-    - name: issue-plan-review
+    - name: issue-review
       hint: when the plan needs validation before implementing
     - name: issue-implement
       hint: when the plan is straightforward enough to execute directly

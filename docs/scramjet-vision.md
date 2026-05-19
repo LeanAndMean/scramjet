@@ -56,15 +56,17 @@ Once a few related commands exist, two patterns appear:
 
 ### Relationship to existing `scramjet` (deliberate break)
 
-Today's running `scramjet` code follows the principle that **commands
-own their edges** — the LLM reads the command's prose and the harness
-only watches for a `task_complete` signal. That principle exists
-because today's `scramjet` must remain compatible with Claude Code CLI
-plugins, which cannot encode anything richer than prose. (CLAUDE.md has
-already been amended to commit to the new principle below; the code
-catches up over the staged MVP buildout.)
+Pre-MVP `scramjet` followed the principle that **commands own their
+edges** — the LLM read the command's prose and the harness only watched
+for a `task_complete` signal. That principle existed because pre-MVP
+`scramjet` had to remain compatible with Claude Code CLI plugins, which
+cannot encode anything richer than prose. The MVP buildout (issue 23)
+completed the cutover: declared `next:` policies and the `delegate` tool
+are now the mechanism, the plugin compat layer was removed in Stage 8,
+and CLAUDE.md has been brought into line with the new principle.
 
-The Mach 12-era `scramjet` **deliberately breaks this constraint.** Once
+The Mach 12-era `scramjet` **deliberately breaks the prose-only
+constraint.** Once
 cross-harness portability is dropped, declared next-step policies and
 declared delegation are strictly more expressive than prose-only edges,
 and they make the chain visible to the harness itself (which is necessary
@@ -398,7 +400,7 @@ appropriate in the MVP window.
 What ships in the MVP is the **underlying data model and persistence**:
 the sidebar log entries (slash invocation, origin marker, delegation
 depth, timestamp) are journaled via `appendEntry` and rebuilt on
-`session_start` / `session_switch` / `session_tree`. This is enough for
+`session_start` / `session_tree`. This is enough for
 forward compat (so when a UI lands, no data has been thrown away) and is
 load-bearing for any future `/scramjet:rewire`-style command that needs
 to read observed run history.
