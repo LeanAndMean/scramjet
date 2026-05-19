@@ -66,14 +66,16 @@ jobs:
           export PREFIX
           npm install --prefix "$PREFIX" -g "./$TARBALL"
           # Inspect tarball contents to confirm we shipped what we expect.
-          tar -tzf "$TARBALL" | grep -qF 'package/dist/index.js'
-          tar -tzf "$TARBALL" | grep -qF 'package/bin/scramjet.js'
-          tar -tzf "$TARBALL" | grep -qF 'package/scripts/postinstall.js'
-          tar -tzf "$TARBALL" | grep -qF 'package/mach12/commands/issue-create.md'
-          tar -tzf "$TARBALL" | grep -qF 'package/mach12/agents/code-explorer.md'
+          TARBALL_CONTENTS=$(mktemp)
+          tar -tzf "$TARBALL" > "$TARBALL_CONTENTS"
+          grep -qF 'package/dist/index.js' "$TARBALL_CONTENTS"
+          grep -qF 'package/bin/scramjet.js' "$TARBALL_CONTENTS"
+          grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
+          grep -qF 'package/mach12/commands/mach12:issue-create.md' "$TARBALL_CONTENTS"
+          grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
           # Run the installed bin in non-interactive --help mode.
           "$PREFIX/bin/scramjet" --help >/dev/null
-          rm -rf "$PREFIX" "$TARBALL"
+          rm -rf "$PREFIX" "$TARBALL" "$TARBALL_CONTENTS"
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary
