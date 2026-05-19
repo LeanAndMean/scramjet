@@ -22,6 +22,6 @@
 		}
 	},
 	"files": {
-		"includes": ["**/*.ts", "**/*.mjs", "!node_modules"]
+		"includes": ["**/*.ts", "**/*.mjs", "**/*.js", "!node_modules", "!dist", "!**/*.tgz"]
 	}
 }

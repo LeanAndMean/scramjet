@@ -1,25 +1,23 @@
 /**
- * Scramjet — smart auto-continuation for Pi. When a command finishes
- * and knows what should come next, scramjet just does it — unless you
- * stop it.
+ * Scramjet — smart auto-continuation and command-set harness for Pi.
  *
  * Scramjet doesn't know about workflows. Each command independently
- * defines its own next step in its own instructions; the workflow is
+ * declares its own next step in YAML frontmatter; the workflow is
  * whatever emerges from following those edges. No queue, no DAG, no
  * resumable state. Scramjet is invisible when it has nothing to
  * suggest.
  *
- * Pi extension entry point. Pi loads this file directly via jiti and
- * calls the default export with its ExtensionAPI. The function below
- * registers task_complete (the tool a command calls to signal
- * completion + optional next_step), the agent_end listener (drives
- * the countdown widget), draw_diagram (inline Mermaid/Graphviz/
- * PlantUML rendering), and the /scramjet on|off toggle. Install-time
- * concerns — the symlinks, the launcher shim, and the optional
- * pi-through-proxy models.json seed — live in install.sh.
+ * Pi extension entry point. Distributed as an npm package
+ * (@leanandmean/scramjet); bin/scramjet.js imports the default export
+ * below and hands it to Pi via main()'s extensionFactories option. The
+ * function registers task_complete + delegate (the two tools the
+ * harness owns), the agent_end listener (drives the countdown widget
+ * and next-step dispatch), command-set discovery, history journaling,
+ * advisory tool-scope warnings, draw_diagram, and the /scramjet on|off
+ * toggle.
  *
- * See README.md for the full pitch and CLAUDE.md for the design
- * principles that constrain what gets added here.
+ * See README.md for the pitch and CLAUDE.md for the design principles
+ * that constrain what gets added here.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -30,7 +28,6 @@ import { registerDelegateTool } from "./delegate.ts";
 import { registerDiagramTool } from "./diagram/diagram-tool.ts";
 import { registerHistory } from "./history.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
-import { registerToolAliases } from "./src/tool-aliases/index.ts";
 import { registerTaskCompleteTool } from "./task-complete.ts";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.ts";
 import type { ScramjetState } from "./types.ts";
@@ -51,7 +48,6 @@ export default function scramjet(pi: ExtensionAPI) {
 	registerToolCallAdvisor(pi, state);
 	registerAutoContinue(pi, state);
 	registerDiagramTool(pi);
-	registerToolAliases(pi);
 	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);
 	registerCommandLoader(pi, state);

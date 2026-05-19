@@ -6,12 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```sh
 npm run typecheck    # tsc --noEmit
+npm run build        # tsc -p tsconfig.build.json -> dist/
 npm test             # vitest --run
 npm run lint         # biome check .
 npx vitest run tests/task-complete.test.ts   # single test file
 ```
 
-CI runs typecheck, test, lint, and install/uninstall smoke tests on ubuntu and macos.
+CI runs typecheck, build, test, lint, an `npm pack` round-trip smoke (installs the produced tarball globally and probes `scramjet --help`), and a postinstall smoke (against a temporary `XDG_DATA_HOME`) on ubuntu and macos.
 
 ## Formatting
 
@@ -19,9 +20,9 @@ Biome: tabs, indent width 3, line width 120. Run `npx biome check --write .` to 
 
 ## Architecture
 
-Scramjet is a compact Pi extension. Pi loads `index.ts` directly via jiti — no compilation step. The imports `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox` are virtual modules provided by Pi at runtime; they exist in `devDependencies` only for type checking.
+Scramjet is a compact Pi extension distributed as the npm package `@leanandmean/scramjet`. The `bin/scramjet.js` entry point calls Pi's library `main(argv, { extensionFactories: [scramjetExtension] })`; Pi instantiates scramjet alongside any disk-discoverable extensions in the user's Pi agent dir. The package ships compiled output in `dist/` produced by `tsconfig.build.json` (vanilla `tsc` with `--rewriteRelativeImportExtensions` to rewrite the source's `.ts` import extensions to `.js` in the emit).
 
-`index.ts` constructs a single `ScramjetState` (registry, delegate stack, sidebar log, `/scramjet on/off` flag, pending forced dispatch — see `types.ts`) and threads it through every register-call. Each capability is its own file; nothing in the harness imports anything outside `types.ts` and Pi's API.
+`index.ts` constructs a single `ScramjetState` (registry, agent registry, delegate stack, sidebar log, `/scramjet on/off` flag, pending forced dispatch — see `types.ts`) and threads it through every register-call. Each capability is its own file; nothing in the harness imports anything outside `types.ts` and Pi's API.
 
 **Vision MVP harness modules** (issue 23 buildout):
 
@@ -31,28 +32,23 @@ Scramjet is a compact Pi extension. Pi loads `index.ts` directly via jiti — no
 - `history.ts` — appends sidebar entries (`▸` user, `●` agent, `■` forced) to the persistent history journal and replays the journal at `session_start` so `/scramjet on/off`, the active top-level command, and the log survive `pi --resume`.
 - `tool-scope-advisory.ts` — `tool_call` hook that emits `console.warn` when the active frame's `effectiveAllowedTools` excludes the called tool. Advisory only; never blocks. Hard enforcement is deferred (see "Design philosophy" below).
 
-**Legacy auto-continuation core** (predates the vision MVP; still active):
+**Auto-continuation core** (originated pre-MVP, extended by Stage 5):
 
-- `task-complete.ts` + `auto-continue.ts` — the original mechanism, kept while plugins authored for the older "LLM reads prose, calls `task_complete`" model are still in use. `task-complete.ts` injects a system prompt snippet via `before_agent_start` and stores the completion signal when the tool fires. `auto-continue.ts` listens on `agent_end`; if the stored signal carries a `next_step`, it shows a countdown widget that any keypress cancels.
+- `task-complete.ts` + `auto-continue.ts` — the harness mechanism that drives next-step dispatch. `task-complete.ts` registers the `task_complete` tool and (when the active command declares a `next:` policy) injects the `<scramjet-next-step>` block into the user message via `before_agent_start.message`. `auto-continue.ts` listens on `agent_end`, validates the agent's pick via the policy, and dispatches mode-by-mode: `forced` fires unconditionally; `closed`/`open` honor the pick when `/scramjet on`; `ask` always pauses.
 
 **Independent capabilities:**
 
 - `scramjet-command.ts` — the `/scramjet on|off` slash command.
 - `clear-alias.ts` — `/clear` alias.
 - `diagram/` — detects `mmdc` / `dot` / `plantuml` at startup and registers `draw_diagram` only if at least one renderer is installed.
-- `src/tool-aliases/` — registers PascalCase Claude Code tool names (`Read`, `Bash`, `Edit`, `Write`, `Grep`, `Glob`, `LS`) as wrappers around Pi's native lowercase tools so plugin agents' `tools:` restrictions function natively. Removed at Stage 8 alongside the plugin compat layer.
 
 **Bundled Mach 12 command set** (`mach12/`):
 
-The tenant of the harness — `mach12/commands/*.md` are command files using the new next-step declarations and delegation. Ten top-level commands (`mach12:issue-create`, `mach12:issue-plan`, …, `mach12:pr-merge`) with `next:` blocks declaring `forced`/`closed`/`open`/`ask` policies, plus seven delegate-only subroutines (`mach12:push`, `mach12:find-contribution-guidelines`, `mach12:gh-issue-read`, `mach12:gh-pr-read`, `mach12:gh-sub-issues`, `mach12:gh-assign`, `mach12:gh-comment`) invoked via `delegate` from the top-level commands. Subroutines have no `next:` block — the caller's `next:` controls chaining. `install.sh` `cp -R`s the whole `mach12/` tree into `$SCRAMJET_CACHE/mach12/` on first install; the command-set loader picks it up at runtime via `resources_discover`. `gh-*` subroutines are flagged in their prose as forge-swap points for the deferred `glab-*` family.
+The tenant of the harness — `mach12/commands/*.md` are command files using the next-step declarations and delegation. Ten top-level commands (`mach12:issue-create`, `mach12:issue-plan`, …, `mach12:pr-merge`) with `next:` blocks declaring `forced`/`closed`/`open`/`ask` policies, plus seven delegate-only subroutines (`mach12:push`, `mach12:find-contribution-guidelines`, `mach12:gh-issue-read`, `mach12:gh-pr-read`, `mach12:gh-sub-issues`, `mach12:gh-assign`, `mach12:gh-comment`) invoked via `delegate` from the top-level commands. Subroutines have no `next:` block — the caller's `next:` controls chaining. `mach12/agents/*.md` ships nine bundled subagents (exploration, architecture, code review, comment analysis, test analysis, silent-failure analysis, type-design analysis, feature-completeness checking, code simplification) that the multi-lens commands dispatch to. The npm `postinstall` script seeds the whole `mach12/` tree into `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12/` on install; the command-set loader picks it up at runtime via `resources_discover`. `gh-*` subroutines are flagged in their prose as forge-swap points for the deferred `glab-*` family.
 
-**Plugin compat layer** (kept through Stage 7, removed at Stage 8):
+**Distribution:**
 
-Plugin wiring is install-time, not runtime. `install.sh` symlinks Pi's bundled subagent example (`node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent`) into the agent dir unchanged — not forked — and clones the Mach 10 and Anthropic marketplace plugins into `$HOME/.local/share/scramjet/`.
-
-For each plugin, command files are symlinked into `<agent-dir>/prompts/<plugin>:<basename>.md`, while agent files are transformed copies under `<agent-dir>/agents/<plugin>:<basename>.md` (strip `model: inherit`, convert `tools:` YAML arrays to comma-strings). The originals in `$HOME/.local/share/scramjet/` are never modified.
-
-A `.scramjet-manifest` file in the agent dir tracks every installed plugin path for clean uninstall via `./uninstall.sh --clear-manifest`.
+`bin/scramjet.js` is a small Node entry that imports the compiled `dist/index.js` default export and calls Pi's `main(argv, { extensionFactories: [scramjetExtension] })`. `scripts/postinstall.js` runs on `npm install` and idempotently seeds the bundled Mach 12 tree (skipped on native Windows with a notice; failure prints a warning but never blocks the install). The previous bash-shim distribution (`install.sh`, `uninstall.sh`, `bin/scramjet`) and the Claude Code plugin compat layer (`src/install/transform.mjs`, `src/tool-aliases/`) were removed at Stage 8 of the vision MVP.
 
 ## Project direction
 
@@ -63,7 +59,7 @@ The architecture section above describes the **current** shape of the code. The 
 - Resolving "should we add X?" questions about the harness — the vision doc states the non-goals as well as the goals, and several common asks (workflow DAG, conditional next-step DSL, prose-replacement abstractions) are explicit non-goals.
 - Reviewing a design decision and wanting to know what was already considered and rejected, and why.
 
-The MVP buildout is tracked under GitHub issue 23 (umbrella) with one staged implementation plan in its comments. Subissues 24-33 carry the individual stages; the umbrella's `<!-- mach10-plan -->` comment is the current execution plan. The CLAUDE.md design-philosophy section below has been rewritten to match the vision (commands declare their edges, the plugin compat layer is time-bounded, MVP-specific rationales are explicit); when those bullets reference design decisions you don't recognize, the vision doc is where the long-form reasoning lives.
+The MVP buildout shipped under GitHub issue 23 (umbrella). Subissues 24-33 carried the individual stages; the staged plan and per-stage progress comments live on issue 23 for the historical record. Post-MVP work (sidebar UI, hard tool-scoping enforcement, authoring loop) is tracked as separate issues — consult the vision doc for the deferred-scope catalog. The CLAUDE.md design-philosophy section below was rewritten to match the vision (commands declare their edges, MVP-specific rationales are explicit); when those bullets reference design decisions you don't recognize, the vision doc is where the long-form reasoning lives.
 
 ## Design philosophy
 
@@ -74,7 +70,6 @@ These principles override default instincts. Do not add complexity that violates
 - **Invisible when idle.** If Scramjet has nothing to suggest, it produces zero output — no widgets, no prompts, no status messages.
 - **Commands declare their edges; the harness enforces.** Each command declares its next-step policy (`forced` / `closed` / `open` / `ask`) in YAML frontmatter; the harness reads the declaration, validates the agent's pick (or the forced target), and dispatches. The harness does NOT own routing logic — there is no central workflow registry, DAG, or state machine. This replaces the older "the LLM reads prose and Scramjet only watches for `task_complete`" mechanism; the motivation (emergent workflows, user control, simplicity) is preserved, the mechanism is not.
 - **Simplicity is the feature.** Resist adding configuration, options, or abstraction layers. Scramjet stays small: one extension, a handful of hooks, the delegate tool, the next-step block, the history log.
-- **Plugin compat layer is kept through Stage 7, removed at Stage 8.** Scramjet wires plugins authored for Claude Code CLI (Mach 10, feature-dev, pr-review-toolkit, …) while Mach 12 is being built. Plugin files must keep working under Claude Code during the MVP build; upstream changes to those plugins are limited to pure prose tweaks. Once Mach 12 is feature-complete at the end of Stage 7, Stage 8 tears the compat layer out and switches Scramjet to an npm-distributed CLI that embeds Pi via its library API. Mach 10 plugins keep functioning in users' existing setups; they are no longer cloned or wired by Scramjet itself.
 
 ### MVP design rationales
 
@@ -128,4 +123,4 @@ Rules that govern the block:
 
 ## Version pinning
 
-`pi.piTestedVersion` in `package.json` must match the pinned versions of `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` in `devDependencies`. CI enforces this — bump all three together.
+`pi.piTestedVersion` in `package.json` must match the pinned versions of `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` in `dependencies` (both became runtime deps at Stage 8). CI enforces this — bump all three together.
