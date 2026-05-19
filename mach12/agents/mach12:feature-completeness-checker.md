@@ -24,7 +24,7 @@ Determine what this PR is supposed to deliver:
 - If found, read the issue body and all comments
 
 **Locate the implementation plan (if any):**
-- Read all issue comments from start to finish. Plans may be revised, so there can be multiple comments containing a `<!-- mach-\d+-plan -->` HTML marker (matching any mach version number). Scan every comment — do not stop early.
+- Read all issue comments from start to finish. Plans may be revised, so there can be multiple comments containing a `<!-- mach\d+-plan -->` HTML marker (matching any mach version number). Scan every comment — do not stop early.
 - If multiple plan comments exist, use only the last one (the most recent revision).
 - Extract the staged implementation plan with its per-stage goals, files, and deliverables
 - Note which specific stage(s) this PR targets
