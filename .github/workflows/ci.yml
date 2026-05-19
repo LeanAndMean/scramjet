@@ -86,7 +86,7 @@ jobs:
           XDG_DATA_HOME="$TMP" node scripts/postinstall.js
           test -d "$TMP/scramjet/mach12/commands"
           test -d "$TMP/scramjet/mach12/agents"
-          test -f "$TMP/scramjet/mach12/commands/issue-create.md"
+          test -f "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
           # Second run: idempotent (no-op, preserves user edits).
           echo "user edit" > "$TMP/scramjet/mach12/USER-MARKER"
           XDG_DATA_HOME="$TMP" node scripts/postinstall.js
