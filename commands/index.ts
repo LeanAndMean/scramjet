@@ -12,19 +12,14 @@ import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.ts";
 // surface them via `console.warn` (or, for a hook-level crash, a single
 // "[scramjet/discovery] failed" message). ENOENT is still treated as
 // "absent and fine" — only unexpected errors (EACCES, EIO, …) are reported.
-function safeReaddir(
-	dir: string,
-	warnings: string[],
-): { name: string; isDirectory: boolean }[] {
+function safeReaddir(dir: string, warnings: string[]): { name: string; isDirectory: boolean }[] {
 	let raw: ReturnType<typeof readdirSync>;
 	try {
 		raw = readdirSync(dir, { withFileTypes: true });
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
 		if (code !== "ENOENT") {
-			warnings.push(
-				`[scramjet/discovery] could not scan ${dir} (${code ?? "unknown"}: ${(err as Error).message})`,
-			);
+			warnings.push(`[scramjet/discovery] could not scan ${dir} (${code ?? "unknown"}: ${(err as Error).message})`);
 		}
 		return [];
 	}
@@ -47,12 +42,7 @@ function safeReaddir(
 	});
 }
 
-function collectEntries(
-	rootDir: string,
-	scope: "global" | "project",
-	subdir: string,
-	warnings: string[],
-): FileEntry[] {
+function collectEntries(rootDir: string, scope: "global" | "project", subdir: string, warnings: string[]): FileEntry[] {
 	const entries: FileEntry[] = [];
 	for (const setEntry of safeReaddir(rootDir, warnings)) {
 		if (!setEntry.isDirectory) continue;

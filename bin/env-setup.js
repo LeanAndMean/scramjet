@@ -50,7 +50,7 @@ while (true) {
 	}
 	const parent = dirname(piRoot);
 	if (parent === piRoot) {
-		throw new Error("Could not locate @earendil-works/pi-coding-agent package root from " + piEntryUrl);
+		throw new Error(`Could not locate @earendil-works/pi-coding-agent package root from ${piEntryUrl}`);
 	}
 	piRoot = parent;
 }
@@ -105,9 +105,7 @@ if (!existsSync(shimDir)) {
 				try {
 					symlinkSync(src, join(tmp, file));
 				} catch (err) {
-					throw new Error(
-						`[scramjet/env-setup] could not symlink ${src} -> ${join(tmp, file)}: ${err.message}`,
-					);
+					throw new Error(`[scramjet/env-setup] could not symlink ${src} -> ${join(tmp, file)}: ${err.message}`);
 				}
 			}
 		}
