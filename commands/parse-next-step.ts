@@ -18,6 +18,9 @@ function parseCandidates(raw: unknown): { ok: true; candidates: Candidate[] } | 
 		if (entry.hint !== undefined && typeof entry.hint !== "string") {
 			return { ok: false, error: `candidates[${i}].hint must be a string when set` };
 		}
+		if (typeof entry.hint === "string" && entry.hint.trim() === "") {
+			return { ok: false, error: `candidates[${i}].hint must be a non-empty string when set` };
+		}
 		candidates.push(entry.hint === undefined ? { name: entry.name } : { name: entry.name, hint: entry.hint });
 	}
 	return { ok: true, candidates };
@@ -72,6 +75,9 @@ export function parseNextStepPolicy(frontmatter: Record<string, unknown>): Parse
 		case "ask": {
 			if (raw.hint === undefined) return { ok: true, policy: { mode: "ask" } };
 			if (typeof raw.hint !== "string") return { ok: false, error: "next.hint must be a string when set" };
+			if (raw.hint.trim() === "") {
+				return { ok: false, error: "next.hint must be a non-empty string when set" };
+			}
 			return { ok: true, policy: { mode: "ask", hint: raw.hint } };
 		}
 		default:

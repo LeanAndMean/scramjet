@@ -80,6 +80,14 @@ describe("parseNextStepPolicy — closed mode", () => {
 		if (!result.ok) expect(result.error).toContain("name");
 	});
 
+	it("rejects candidate entries with an empty-string hint", () => {
+		const result = parseNextStepPolicy({
+			next: { mode: "closed", candidates: [{ name: "mach12:x", hint: "" }] },
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("hint");
+	});
+
 	it("rejects an empty candidates list (agent would have nothing to pick from)", () => {
 		const result = parseNextStepPolicy({ next: { mode: "closed", candidates: [] } });
 		expect(result.ok).toBe(false);
@@ -143,6 +151,12 @@ describe("parseNextStepPolicy — ask mode", () => {
 	it("rejects ask with a non-string hint", () => {
 		const result = parseNextStepPolicy({ next: { mode: "ask", hint: 42 } });
 		expect(result.ok).toBe(false);
+	});
+
+	it("rejects ask with an empty-string hint", () => {
+		const result = parseNextStepPolicy({ next: { mode: "ask", hint: "" } });
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("hint");
 	});
 });
 
