@@ -117,12 +117,16 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 	function executeStep(step: NextStep, ctx: ExtensionContext) {
 		if (step.freshSession) {
-			// Fresh-session dispatch is structurally broken on two layers:
-			// `/scramjet-exec-fresh ${wire}` is sent via sendUserMessage (which
-			// won't expand it — outer F1), and the registered handler then uses
-			// a captured `pi` after ctx.newSession invalidates it (F2). Stage 2
-			// will untangle both together; leaving the slash send in place keeps
-			// the surface intact for that refactor.
+			// Fresh-session dispatch is structurally non-functional in this
+			// build. pi.sendUserMessage uses expandPromptTemplates: false, so
+			// the slash below never invokes the registered scramjet-exec-fresh
+			// handler — it lands at the LLM as literal user text. Even if the
+			// handler were reached (by the user manually typing the slash),
+			// the original post-newSession dispatch site captured a stale pi.
+			// The manual-continue dropdown redesign (issue #41) replaces this
+			// surface; the literal slash send below is left as a placeholder
+			// until that lands. The handler itself short-circuits with a
+			// "deferred" notify so curiosity-typing is harmless.
 			pi.sendUserMessage(`/scramjet-exec-fresh ${wireFor(step)}`, { deliverAs: "followUp" });
 			return;
 		}
@@ -140,23 +144,25 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		dispatchExpanded(def, step.name, step.args, "agent");
 	}
 
-	// Internal command to handle fresh session transitions.
-	// Tools can't call ctx.newSession(), but commands can.
+	// scramjet-exec-fresh was the original auto-continue entry for
+	// fresh-session next steps — only registered commands can call
+	// ctx.newSession(). The path is non-functional in this build:
+	// pi.sendUserMessage doesn't expand slash payloads, so executeStep
+	// can't actually invoke this handler, and a post-newSession dispatch
+	// using the outer pi would crash on a stale extension API. Issue #41
+	// carries the manual-continue dropdown redesign that replaces this
+	// surface. Until then the handler is a guarded stub: a curiosity-typed
+	// `/scramjet-exec-fresh /foo` surfaces a clear "deferred" notify
+	// instead of attempting (and failing) the broken flow.
 	pi.registerCommand("scramjet-exec-fresh", {
-		description: "Internal: execute a command in a fresh session",
+		description: "Internal: execute a command in a fresh session (deferred, see issue #41)",
 		handler: async (args, ctx) => {
 			const command = args.trim();
 			if (!command) return;
-
-			const result = await ctx.newSession({
-				withSession: async (newCtx) => {
-					newCtx.ui.notify(`Scramjet: starting ${command}`, "info");
-				},
-			});
-
-			if (!result.cancelled) {
-				pi.sendUserMessage(command);
-			}
+			ctx.ui.notify(
+				`scramjet: fresh-session continuation is deferred to the manual-continue redesign (issue #41); start "${command}" yourself in a new session`,
+				"warning",
+			);
 		},
 	});
 

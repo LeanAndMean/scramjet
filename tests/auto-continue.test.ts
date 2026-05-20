@@ -672,11 +672,14 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 		});
 	});
 
-	// /scramjet-exec-fresh is the only way auto-continue can ask Pi to start a
-	// fresh session — tools can't call ctx.newSession() directly. The earlier
-	// recordingPi swallowed registerCommand, leaving the handler untested
-	// despite being on the hot path for every fresh_session: true completion.
-	// (F28, F29)
+	// scramjet-exec-fresh was the auto-continue entry for fresh-session
+	// next steps. The path is non-functional today: pi.sendUserMessage
+	// doesn't expand slash payloads, and the post-newSession dispatch
+	// site would have crashed on a stale outer pi (F2). Issue #41 carries
+	// the manual-continue dropdown redesign that supersedes this surface.
+	// Until then the handler is a guarded stub that surfaces a "deferred"
+	// notify so curiosity-typing produces a clear message instead of an
+	// attempted (and broken) fresh-session flow.
 	describe("/scramjet-exec-fresh handler", () => {
 		function grabFreshHandler(bag: PiBag) {
 			const entry = bag.commands.find((c) => c.name === "scramjet-exec-fresh");
@@ -684,74 +687,70 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			return entry.spec.handler;
 		}
 
-		it("is registered with a description", () => {
+		it("is registered with a description that flags the deferral", () => {
 			const { bag } = bootstrap(freshState());
 			const entry = bag.commands.find((c) => c.name === "scramjet-exec-fresh");
 			expect(entry).toBeDefined();
 			expect(entry?.spec.description).toBeTruthy();
+			// The description should signal that the surface is not the path
+			// to use right now, so anyone discovering the command via /help
+			// gets a hint without having to read the source.
+			expect(entry?.spec.description).toMatch(/deferred|issue #41/i);
 		});
 
-		it("calls ctx.newSession exactly once and dispatches the command on the result", async () => {
+		it("does not call ctx.newSession; surfaces a deferred-notify with the command", async () => {
 			const { bag } = bootstrap(freshState());
 			const handler = grabFreshHandler(bag);
 
-			const newSessionCalls: unknown[] = [];
-			const innerNotifies: { message: string; type?: string }[] = [];
-			const fakeNewSessionCtx: any = {
-				ui: { notify: (m: string, t?: string) => innerNotifies.push({ message: m, type: t }) },
-			};
-			const ctx: any = {
-				newSession: async (opts: any) => {
-					newSessionCalls.push(opts);
-					if (opts?.withSession) await opts.withSession(fakeNewSessionCtx);
-					return { cancelled: false };
-				},
-			};
-
-			await handler("mach12:issue-plan 99", ctx);
-
-			expect(newSessionCalls).toHaveLength(1);
-			// withSession callback runs against the fresh session's ctx and notifies.
-			expect(innerNotifies).toHaveLength(1);
-			expect(innerNotifies[0].message).toContain("mach12:issue-plan 99");
-			// On a non-cancelled result, the command is forwarded to the new session.
-			expect(bag.sentMessages).toEqual([{ content: "mach12:issue-plan 99", options: undefined }]);
-		});
-
-		it("does NOT dispatch when the new session was cancelled", async () => {
-			const { bag } = bootstrap(freshState());
-			const handler = grabFreshHandler(bag);
-
-			const ctx: any = {
-				newSession: async (opts: any) => {
-					if (opts?.withSession) await opts.withSession({ ui: { notify: () => {} } });
-					return { cancelled: true };
-				},
-			};
-
-			await handler("b:next", ctx);
-			expect(bag.sentMessages).toEqual([]);
-		});
-
-		it("is a no-op when args are empty (no newSession, no dispatch)", async () => {
-			const { bag } = bootstrap(freshState());
-			const handler = grabFreshHandler(bag);
 			let newSessionCalled = false;
+			const notifies: { message: string; type?: string }[] = [];
 			const ctx: any = {
 				newSession: async () => {
 					newSessionCalled = true;
 					return { cancelled: false };
 				},
+				ui: { notify: (m: string, t?: string) => notifies.push({ message: m, type: t }) },
+			};
+
+			await handler("mach12:issue-plan 99", ctx);
+
+			// The guard short-circuits before any newSession / dispatch work,
+			// which is what prevents the stale-pi crash (F2) from ever being
+			// reachable. Issue #41 will replace this stub with the redesign.
+			expect(newSessionCalled).toBe(false);
+			expect(bag.sentMessages).toEqual([]);
+			expect(notifies).toHaveLength(1);
+			expect(notifies[0].type).toBe("warning");
+			expect(notifies[0].message).toContain("mach12:issue-plan 99");
+			expect(notifies[0].message).toMatch(/issue #41|deferred/i);
+		});
+
+		it("is silent on empty args (no notify, no newSession, no dispatch)", async () => {
+			const { bag } = bootstrap(freshState());
+			const handler = grabFreshHandler(bag);
+			let newSessionCalled = false;
+			const notifies: { message: string; type?: string }[] = [];
+			const ctx: any = {
+				newSession: async () => {
+					newSessionCalled = true;
+					return { cancelled: false };
+				},
+				ui: { notify: (m: string, t?: string) => notifies.push({ message: m, type: t }) },
 			};
 			await handler("   ", ctx);
 			expect(newSessionCalled).toBe(false);
 			expect(bag.sentMessages).toEqual([]);
+			expect(notifies).toEqual([]);
 		});
 
-		it("executeStep with freshSession=true wires through to /scramjet-exec-fresh", async () => {
-			// This is the wire assertion at the auto-continue → handler boundary:
-			// in no-UI mode the countdown is skipped and executeStep fires
-			// immediately, so the message we observe is what executeStep produces.
+		it("executeStep with freshSession=true still emits the placeholder slash", async () => {
+			// The outer entry path is deliberately left as a placeholder until
+			// issue #41 lands the redesign. In no-UI mode the countdown is
+			// skipped and executeStep fires immediately, so the message we
+			// observe is the placeholder slash. The downstream handler short-
+			// circuits with a deferred notify rather than attempting the
+			// broken flow, so end users see a clean failure mode instead of
+			// a crash.
 			const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
 			const def = defWithPolicy("a:cmd", policy);
 			const state = freshState({
