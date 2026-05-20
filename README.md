@@ -1,398 +1,129 @@
 # Scramjet
 
-Smart auto-continuation for [Pi](https://github.com/earendil-works/pi-mono). When a command finishes and knows what should come next, Scramjet just does it — unless you stop it.
+Smart auto-continuation and command-set harness for [Pi](https://github.com/earendil-works/pi-mono). When a command finishes and knows what should come next, Scramjet just does it — unless you stop it.
 
 Also bundled:
 
-- `draw_diagram` tool: render Mermaid, Graphviz, or PlantUML source as an
-  inline image via Pi's terminal image support.
-- `/scramjet on|off` command: toggle auto-continuation without unloading
-  the extension.
+- The **Mach 12 command set**: ten top-level commands (`issue-create`, `issue-plan`, `issue-review`, `issue-implement`, `pr-create`, `pr-review`, `pr-review-assessment`, `pr-review-fix`, `pr-pre-merge`, `pr-merge`) plus seven delegated subroutines and nine bundled agents. Vendor-neutral prose; declared next-step edges in YAML frontmatter.
+- **`draw_diagram`**: inline Mermaid, Graphviz, or PlantUML rendering via Pi's terminal image support.
+- **`/scramjet on|off`**: toggle auto-continuation without unloading the extension.
 
 ## The problem
 
 Coding harnesses like Pi let you build multi-step methodologies as sets of commands. A code review workflow might be: assess the issue, plan the implementation, review the plan, implement each stage, create a PR, review it, fix findings, and merge. Each step is its own command with its own instructions.
 
-The commands already know what comes next. Each one ends with something like *"Next: `/clear` then `/issue-plan 55`"*. But today, after every step, you have to:
+The commands already know what comes next. But today, after every step, you have to:
 
-1. Read what Claude suggests
+1. Read what the agent suggests
 2. Type `/clear`
 3. Type the next command with the right arguments
 4. Wait for it to finish
 5. Repeat 10-15 times
 
-This ceremony breaks flow state. You're not making decisions — you're copying and pasting. The machine already knows what to do; it's just waiting for you to type it.
+This ceremony breaks flow state. The machine already knows what to do; it's just waiting for you to type it.
 
 ## The solution
 
-Scramjet removes the ceremony. When a command completes and suggests a next step, Scramjet shows what's about to happen and auto-continues after a brief countdown. Press Escape (or type anything) to cancel and take manual control.
+Scramjet removes the ceremony. When a command declares its next step (via YAML frontmatter), Scramjet validates the agent's pick, shows what's about to happen, and auto-continues after a brief countdown. Press Escape (or type anything) to cancel.
 
 ```
-> /mach10:issue-assessment 55
-  [Claude works, asks you questions, you answer, assessment posted]
+> /mach12:issue-plan 55
+  [agent works, asks you about architecture, you pick an approach, plan posted]
 
-  ┌─ Next: /mach10:issue-plan 55 (fresh session)    3s...    [Esc] cancel ─┐
-  └────────────────────────────────────────────────────────────────────────-─┘
+  ┌─ Next: /mach12:issue-review 55 (fresh session)    3s...    [Esc] cancel ─┐
+  └──────────────────────────────────────────────────────────────────────────┘
 
-  [auto-clears, runs issue-plan]
-  [Claude works, asks you about architecture, you pick an approach, plan posted]
+  [auto-clears, runs issue-review]
+  [agent works, asks you questions, you answer, review posted]
 
-  ┌─ Next: /mach10:issue-plan-review 55 (fresh session)    3s...            ┐
+  ┌─ Next: /mach12:issue-implement 55 (fresh session)    3s...              ┐
   └─────────────────────────────────────────────────────────────────────────-┘
 
   [continues through the entire methodology...]
 ```
 
-That's it. No workflow engine, no queue, no DAG definition files, no state machine, no configuration.
+That's it. No workflow engine, no queue, no DAG, no state machine.
 
 ## Design philosophy
 
 ### Workflows are emergent, not prescribed
 
-Scramjet doesn't define workflows. It doesn't even know about them. Each command independently defines its own "next step" in its instructions — an edge, not a graph. The workflow emerges from following those edges. This means:
+Scramjet doesn't define workflows. Each command independently declares its own next step in YAML frontmatter — an edge, not a graph. The workflow emerges from following those edges. This means:
 
-- Any set of commands with next-step instructions is automatically a workflow
+- Any set of commands with next-step declarations is automatically a workflow
 - You don't register workflows, create config files, or maintain a separate DAG
-- Different methodologies coexist without knowing about each other
-- Adding a step to a workflow means editing one command's instructions
+- Different command sets coexist without knowing about each other
+- Adding a step means editing one command's frontmatter
 
 ### The user is never locked in
 
 Scramjet is an autopilot, not a conveyor belt. At any transition:
 
 - **Escape** cancels the countdown — you're back in normal Pi
-- **Any keypress** cancels too — your typing takes priority
+- **Any keypress** cancels — your typing takes priority
 - **Run a different command** — Scramjet doesn't interfere
 - **Close the terminal** — no workflow state to corrupt
 
-There is no "workflow mode." There is no state to resume, pause, or abort. You're always just using Pi. Scramjet is invisible when it has nothing to suggest.
+There is no "workflow mode" to enter or exit. You're always just using Pi. Scramjet is invisible when it has nothing to suggest.
 
-### Commands own their edges
+### Commands declare their edges; the harness enforces
 
-The next step isn't determined by Scramjet or by some external workflow definition. It comes from Claude reading the command's own instructions — the same instructions that already tell Claude what to suggest as text. Scramjet just captures that suggestion in a structured form it can act on.
+Each command's YAML frontmatter declares one of four next-step policies:
 
-This means command authors control the flow. If a review command's instructions say *"if there are genuine issues, suggest pr-review-fix; otherwise suggest pr-pre-merge"* — that conditional logic lives in the command, not in Scramjet. Claude evaluates it in context, with full knowledge of what just happened.
+- `forced` — single named command runs unconditionally
+- `closed` — agent picks from a bounded candidate list
+- `open` — agent picks from candidates or any other command minus a blacklist
+- `ask` — chain pauses for user decision
+
+Scramjet reads the declaration, validates the agent's pick (or the forced target), and dispatches. The harness does not own routing logic — there is no central workflow registry.
 
 ### Simplicity is the feature
 
-Scramjet is a small TypeScript extension. The auto-continuation
-mechanism at its core is one tool, one widget, and three steps:
-
-1. Claude calls `task_complete` when done (tool with optional `next_step` field)
-2. Scramjet shows a countdown widget if there's a next step
-3. Countdown expires → run the next command (with a fresh session if specified)
-
-That's the whole system. There's nothing else to learn, configure, or
-debug. The diagram tool, the Claude Code tool-name aliases, and the
-install-time plugin wiring are independent — each can be inspected,
-modified, or removed on its own.
+Scramjet is a small TypeScript extension. The auto-continuation mechanism at its core is one tool (`task_complete`), one widget (the countdown), and a parser/validator/dispatcher reading the next-step frontmatter.
 
 ## How it works
 
 ### The `task_complete` tool
 
-Scramjet registers a tool called `task_complete` and injects a system prompt snippet (via Pi's `before_agent_start` hook) that tells the agent when and how to call it:
+Scramjet registers a tool called `task_complete` and injects a `<scramjet-next-step>` block into the user message via Pi's `before_agent_start` hook. The block lists candidate commands when the active command's frontmatter declared `closed` or `open`.
 
-- Call it when all work is done and all user questions are resolved
-- Include a `next_step` if the command's instructions suggest one
-- Set `fresh_session: true` if the instructions say "/clear then ..." 
-- Don't call it mid-task. Don't invent next steps.
+The agent calls `task_complete({ summary, next_step })` when done. The tool returns `terminate: true`, cleanly stopping the agent loop.
 
-The tool returns `terminate: true`, which cleanly stops the agent loop. The completion signal (summary + optional next step) is stored for the auto-continuation logic to read.
+### Validation and dispatch
 
-### Auto-continuation
+After the agent settles, Scramjet validates the pick against the active command's declared policy. Mode-by-mode behavior:
 
-After the agent settles, Scramjet checks for a stored completion signal. If there's a `next_step`:
+- **`forced`** — fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent.
+- **`closed` / `open`** under `/scramjet on` — valid pick → countdown then dispatch; invalid pick → stop with a notification.
+- **`closed` / `open`** under `/scramjet off` — surface the hint via the UI only; no auto-continuation.
+- **`ask`** — pause regardless of the flag.
 
-- **Interactive mode**: Show a countdown widget below the editor. Any keypress cancels. Countdown expires → execute.
-- **Non-interactive mode** (RPC/print): Execute immediately. No countdown, no UI — the next step just runs.
+Executing a step means either dispatching the slash command directly, or creating a fresh session first and then dispatching.
 
-Executing a step means:
-- If `fresh_session: true` → create a new session first (via an internal `/scramjet-exec-fresh` command)
-- Send the command as a user message
+### Delegation
 
-### When nothing happens
-
-If the agent stops without calling `task_complete` — because the model didn't follow the instruction, or because the command has no next-step suggestion — Scramjet does nothing. No prompt, no widget, no fallback. You're in normal Pi and Scramjet is invisible.
-
-## Writing commands that work with Scramjet
-
-Any Pi skill or command works with Scramjet if its instructions tell Claude what to suggest next. You don't need to import Scramjet, depend on it, or even know it exists.
-
-In your command's instructions (a SKILL.md file or command markdown), add a line like:
-
-```markdown
-When the task is complete, suggest next step: `/clear` then `/my-next-command ${issue}`
-```
-
-Or for commands that should continue in the same session:
-
-```markdown
-When done, suggest next step: `/my-followup-command` (same session, no /clear)
-```
-
-Or with conditions:
-
-```markdown
-If issues were found, suggest: `/fix-issues ${pr}`
-If no issues, suggest: `/clear` then `/pre-merge ${pr}`
-```
-
-Claude reads these, evaluates the conditions in context, and reports the result via `task_complete`. Scramjet takes it from there.
-
-Commands without next-step instructions work fine — Claude just calls `task_complete` without a `next_step` field, and Scramjet does nothing.
-
-## Diagram tool
-
-Scramjet also registers a `draw_diagram` tool for inline diagram rendering. When you ask Claude to draw a flowchart, architecture diagram, or sequence diagram, it renders as an actual image in the terminal instead of ASCII art.
-
-Supported formats:
-- **Mermaid** (requires `mmdc` — `npm install -g @mermaid-js/mermaid-cli`)
-- **Graphviz** (requires `dot` — `apt install graphviz` or `brew install graphviz`)
-- **PlantUML** (requires `plantuml` — `apt install plantuml` or `brew install plantuml`)
-
-Only renderers that are actually installed are registered as tool options. The diagram tool requires a terminal with image support (Kitty, iTerm2, WezTerm, or Ghostty).
+Commands invoke other commands as subroutines via the `delegate` tool. Delegated commands run in the same agent turn, with their own declared `allowed-tools` (advisory in this MVP — out-of-scope calls log a warning but proceed). Delegated commands' own `next:` declarations are ignored; only the caller's `next:` controls chaining.
 
 ## Install
 
-The install script does three things: it symlinks the repo into a Pi
-agent's `extensions/` directory (Pi auto-discovers `index.ts` at next
-startup), installs a `scramjet` launcher shim on your `PATH` that execs
-`pi`, and wires Pi's bundled subagent extension plus a curated set of
-Claude Code plugins (mach10, feature-dev, pr-review-toolkit) into the
-same agent directory. See [Plugin wiring](#plugin-wiring) below for
-details on what the script clones, transforms, and symlinks for plugins.
-
 ```sh
-git clone https://github.com/<user>/scramjet.git
-cd scramjet
-npm ci
-./install.sh
+npm install -g @leanandmean/scramjet
 ```
 
-`npm ci` is required before `./install.sh` so that the subagent extension
-the install script symlinks (`node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent`)
-is on disk. `install.sh` fails fast if it isn't.
-
-Default targets:
-
-- Extension: `$HOME/.pi/agent/extensions/scramjet`
-- Shim: `$HOME/.local/bin/scramjet`
-- Plugin clones: `$HOME/.local/share/scramjet/`
-
-If the shim's bin directory is not on `$PATH`, the script prints a one-
-liner to add to your shell profile and continues; the extension still
-works whether or not you use the shim.
-
-Flags:
-
-| Flag                          | Effect                                                                       |
-| ----------------------------- | ---------------------------------------------------------------------------- |
-| `--target <dir>`              | Install extension into `<dir>/scramjet`. `<dir>` is a Pi agent directory.    |
-| `--local`                     | Install extension into `<cwd>/.pi/extensions/scramjet` and shim into `<cwd>/.pi/bin/scramjet` (handy for in-tree dev). |
-| `--bin-dir <dir>`             | Install the launcher shim into `<dir>/scramjet`.                             |
-| `--force`                     | Overwrite an existing `scramjet` entry at either target.                     |
-| `--no-plugins`                | Skip plugin cloning and wiring. The subagent extension is still installed.   |
-| `--mach10 <dir>`              | Use `<dir>` as the mach10 source instead of cloning. See [Plugin wiring](#plugin-wiring). |
-| `--feature-dev <dir>`         | Use `<dir>` as the feature-dev source instead of cloning.                    |
-| `--pr-review-toolkit <dir>`   | Use `<dir>` as the pr-review-toolkit source instead of cloning.              |
-| `-h`, `--help`                | Show usage.                                                                  |
-
-Extension target resolution precedence (highest first):
-
-1. `--target <path>`
-2. `--local`
-3. `$PI_CODING_AGENT_DIR/extensions/scramjet` (if the env var is set)
-4. `$HOME/.pi/agent/extensions/scramjet` (default)
-
-Shim target resolution precedence (highest first):
-
-1. `--bin-dir <path>`
-2. `--local` (→ `<cwd>/.pi/bin/scramjet`)
-3. `$HOME/.local/bin/scramjet` (default)
-
-Re-running the script against the same targets is a no-op; it will not
-clobber an unrelated entry without `--force`.
-
-If you already have the `pi` CLI, `pi install git:github.com/<user>/scramjet`
-is an alternative path for the extension. It installs only the
-extension — no launcher shim, no plugin wiring.
-
-## Plugin wiring
-
-Plugin wiring is **install-time, not runtime** — `install.sh` writes
-symlinks and transformed copies once, and Pi at runtime doesn't know
-scramjet was involved. Cost at every Pi launch is zero: plugins appear
-as ordinary entries under `<agent-dir>/agents/` and `<agent-dir>/prompts/`.
-
-`install.sh` wires Pi's bundled subagent extension and three Claude
-Code plugins (`mach10`, `feature-dev`, `pr-review-toolkit`) into the same
-agent directory. After install you can invoke their commands directly,
-e.g. `/mach10:issue-plan`, `/feature-dev:feature-dev`,
-`/pr-review-toolkit:review-pr`. Pass `--no-plugins` to skip this entirely.
-
-> **Restart pi** after `./install.sh`: Pi loads extensions and plugins
-> at session start. A running `pi` session won't pick up newly installed
-> wiring until you exit and relaunch (e.g. `scramjet` or `pi` again).
-
-### What gets wired
-
-- **Pi's subagent extension** — symlinked from
-  `node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent`
-  into `<agent-dir>/extensions/subagent`. Pi loads it at next startup and
-  registers the `subagent` tool, which plugin commands use to delegate
-  to specialized agents. The example is symlinked, not forked. Installed
-  even with `--no-plugins`, since it is what plugins are dispatched
-  through.
-- **mach10** — cloned to `$HOME/.local/share/scramjet/mach10/` at the
-  latest stable semver tag.
-- **feature-dev** and **pr-review-toolkit** — both live inside
-  `anthropics/claude-plugins-official`, cloned to
-  `$HOME/.local/share/scramjet/claude-plugins-official/` at default-branch
-  HEAD.
-
-For each plugin, command files (`<plugin-source>/commands/*.md`) are
-symlinked into `<agent-dir>/prompts/<plugin>:<basename>.md`. Agent files
-(`<plugin-source>/agents/*.md`) are written as transformed copies into
-`<agent-dir>/agents/<plugin>:<basename>.md` (see below).
-
-### Install-time agent-file transform
-
-Two YAML frontmatter edits keep Claude Code-authored agents working under
-Pi:
-
-- **`model: inherit`** is removed so plugin agents fall back to Pi's
-  default model rather than carrying a value Pi has no mapping for.
-  Other model values (`sonnet`, `opus`, `haiku`, `claude-sonnet-4-5`,
-  …) pass through to Pi unchanged; how Pi itself resolves those strings
-  to concrete API model IDs is an internal detail and may evolve
-  independently.
-- **`tools: [a, b, c]`** YAML arrays (and block-sequence variants) are
-  converted to comma-string form `tools: a, b, c`. Pi's subagent example
-  parses the comma form. Unrepresentable shapes — `tools: []` (no way
-  to express "no tools allowed" in Pi), nested arrays, flow maps,
-  comments interleaved in a block sequence — cause `transform.mjs` to
-  print a source-path-tagged error and exit non-zero, and `install.sh`
-  aborts the install rather than silently emitting `tools:` (null),
-  which would grant the agent every tool.
-
-The original plugin files in `$HOME/.local/share/scramjet/` are never
-modified — only the installed copies under `<agent-dir>/agents/` are
-transformed.
-
-### Claude Code tool-name aliases
-
-Scramjet registers PascalCase Claude Code tool names — `Read`, `Bash`,
-`Edit`, `Write`, `Grep`, `Glob`, `LS` — as thin wrappers around Pi's
-native lowercase tools. Plugin agents' `tools:` restrictions function
-natively without rewriting agent files.
-
-### Environment variables
-
-| Variable           | Effect                                                                                |
-| ------------------ | ------------------------------------------------------------------------------------- |
-| `SCRAMJET_CACHE`   | Root for managed plugin clones. Default: `$HOME/.local/share/scramjet`.               |
-| `MACH10_REPO`      | Clone URL for mach10. Default: `https://github.com/LeanAndMean/mach10`. Accepts `file://` URLs for hermetic tests. |
-| `MARKETPLACE_REPO` | Clone URL for the marketplace containing feature-dev and pr-review-toolkit. Default: `https://github.com/anthropics/claude-plugins-official`. |
-
-### Manifest
-
-`install.sh` writes a manifest of every plugin-related path it created
-at `<agent-dir>/.scramjet-manifest` (one absolute path per line, sorted,
-with a `# scramjet manifest v1` sentinel on the first line). On re-run,
-the manifest is reconciled — stale entries from a prior install that
-the current run did not re-create are removed. `uninstall.sh
---clear-manifest` reads the manifest back to remove plugin artifacts
-cleanly.
-
-### Failure modes
-
-- **`npm ci` not run before install** — `install.sh` exits early because
-  the subagent extension source isn't present in `node_modules/`.
-- **Dirty managed clone** — if you have uncommitted changes inside
-  `$SCRAMJET_CACHE/mach10/` or `$SCRAMJET_CACHE/claude-plugins-official/`,
-  `install.sh` refuses to update. Commit, stash, remove the directory,
-  or pass the matching `--<plugin>` override.
-- **No stable semver tags** — the mach10 clone is checked out at the
-  latest stable semver tag. A repo without any matching tags fails fast.
-- **Missing `--<plugin>` override path** — the path must exist as a
-  directory.
-- **`commands/` and `prompts/` both exist** — a prior scramjet version
-  may have created `<agent-dir>/commands/`. `install.sh` migrates it to
-  `prompts/` automatically. If both already exist, it refuses (cannot
-  safely merge).
-
-### Cross-harness coexistence
-
-Claude Code keeps reading `~/.claude/plugins/` independently. The same
-plugins can be installed via Claude Code's own plugin mechanism and via
-scramjet at the same time; they don't share state and don't conflict.
-
-## Usage
-
-After installing, launch a session with:
+The postinstall step seeds the Mach 12 command set at
+`${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12/` if it doesn't
+already exist. Scramjet's command-set loader discovers it on next
+startup. To start a Pi session with Scramjet loaded:
 
 ```sh
 scramjet
 ```
 
-The shim is a thin wrapper that execs `pi`, forwarding all arguments and
-the current environment. `scramjet --help`, `scramjet new`, and any
-other invocation behave identically to the corresponding `pi` command.
-Launching with `pi` directly continues to work unchanged; the shim only
-exists so users who installed "scramjet" have a matching command name.
-
-If `pi` is not on `$PATH`, the shim exits with a message pointing at
-[the Pi install instructions](https://github.com/earendil-works/pi-mono).
-
-Toggle auto-continuation on and off:
-
-```
-/scramjet off       # disable auto-continuation
-/scramjet on        # re-enable
-/scramjet           # show current status
-```
-
-## Uninstall
-
-```sh
-./uninstall.sh                                    # default targets
-./uninstall.sh --local                            # mirrors --local install
-./uninstall.sh --target <dir>                     # mirrors --target install
-./uninstall.sh --bin-dir <dir>                    # mirrors --bin-dir install
-./uninstall.sh --clear-manifest                   # also remove plugin wiring
-```
-
-`uninstall.sh` removes both the extension symlink and the launcher shim,
-each independently. It only removes symlinks; if either target is a real
-file or directory, the script refuses to touch it.
-
-Pass `--clear-manifest` to also remove every plugin path recorded in
-`<agent-dir>/.scramjet-manifest` (the subagent extension symlink, plugin
-agent file copies, plugin command symlinks) and the manifest file
-itself. Without `--clear-manifest`, a plain uninstall stays
-symlink-only and leaves plugin wiring in place. The managed clones
-under `$HOME/.local/share/scramjet/` are never removed — `rm -rf` them
-by hand to reclaim disk.
-
-## Compatibility
-
-Scramjet imports `@earendil-works/pi-coding-agent` and
-`@earendil-works/pi-tui`, which are resolved at runtime via the harness's
-virtual module system. It works with:
-
-- The reference `pi` binary.
-- Thin custom harnesses built from `pi-mono` that preserve the
-  `@earendil-works/*` virtual module namespace.
-
-It does **not** work with hard forks that rename that namespace (e.g.
-`dreb` rebranded to `@dreb/*`). The imports fail at load time.
-
-### Multiple harnesses
-
-The install script targets one extensions directory at a time. If you
-want Scramjet in two compatible harnesses (`~/.pi/`, `~/.mypi/`, ...),
-run the script once per target with `--target` or `$PI_CODING_AGENT_DIR`.
+This launches Pi with Scramjet registered as an extension factory.
+`scramjet --help`, `scramjet --print`, and every other Pi flag are
+forwarded unchanged. Running plain `pi` continues to work; the
+`scramjet` bin is just a convenience wrapper that registers the
+extension at startup.
 
 ### Platform support
 
@@ -403,27 +134,107 @@ run the script once per target with `--target` or `$PI_CODING_AGENT_DIR`.
 | Windows (WSL)         | yes       |
 | Windows (native)      | no        |
 
-Native Windows is detected by `uname -s`; the install script exits with a
-message pointing to WSL. There is no copy-mode fallback.
+`npm install` succeeds on native Windows but the postinstall prints a
+notice and skips the Mach 12 seed. Install inside WSL for full
+functionality.
+
+### Uninstall
+
+```sh
+npm uninstall -g @leanandmean/scramjet
+```
+
+`npm uninstall` removes the package and the `scramjet` bin. The seeded
+Mach 12 directory at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/`
+is left in place so user edits to commands or agents are not destroyed.
+Remove it manually if you want a clean state.
+
+## Writing commands
+
+A command is a Markdown file with YAML frontmatter. The frontmatter
+declares the next-step policy and the command's allowed tool set; the
+body is the prompt sent to the agent.
+
+```markdown
+---
+description: Plan implementation of a GitHub issue
+allowed-tools: bash, read, write, edit, delegate
+next:
+  mode: closed
+  candidates:
+    - name: issue-review
+      hint: when the plan needs validation before implementing
+    - name: issue-implement
+      hint: when the plan is straightforward enough to execute directly
+    - name: stop
+      hint: when the user wants to pause for review
+---
+
+You are planning implementation of issue $ARGUMENTS. ...
+```
+
+The four policies (`forced`, `closed`, `open`, `ask`) are documented in
+`docs/scramjet-vision.md`.
+
+## Delegation
+
+Subroutine commands are invoked from a calling command's body via the
+`delegate` tool:
+
+```markdown
+Before posting the assessment, fetch the contribution guidelines:
+call `delegate({ command: "mach12:find-contribution-guidelines", args: "" })`.
+```
+
+The subroutine runs in the same agent turn. Its frontmatter declares
+its own `allowed-tools`; `next:` declarations on subroutines are
+ignored.
+
+## Bundled Mach 12 command set
+
+Ten top-level commands implement the Mach 12 methodology:
+
+- `mach12:issue-create`, `mach12:issue-plan`, `mach12:issue-review`, `mach12:issue-implement`
+- `mach12:pr-create`, `mach12:pr-review`, `mach12:pr-review-assessment`, `mach12:pr-review-fix`, `mach12:pr-pre-merge`, `mach12:pr-merge`
+
+Plus seven delegated subroutines (`push`, `find-contribution-guidelines`,
+`gh-issue-read`, `gh-pr-read`, `gh-sub-issues`, `gh-assign`,
+`gh-comment`) and nine bundled agents covering exploration, architecture,
+code review, comment analysis, test analysis, silent-failure analysis,
+type-design analysis, feature-completeness checking, and code
+simplification.
+
+## Diagram tool
+
+When you ask the agent to draw a flowchart, architecture diagram, or
+sequence diagram, scramjet's `draw_diagram` tool renders it as an
+actual image in the terminal instead of ASCII art.
+
+Supported formats:
+
+- **Mermaid** (requires `mmdc` — `npm install -g @mermaid-js/mermaid-cli`)
+- **Graphviz** (requires `dot` — `apt install graphviz` or `brew install graphviz`)
+- **PlantUML** (requires `plantuml` — `apt install plantuml` or `brew install plantuml`)
+
+Only renderers that are actually installed are registered as tool
+options. The diagram tool requires a terminal with image support
+(Kitty, iTerm2, WezTerm, or Ghostty).
 
 ## Routing pi through a proxy
 
-If you point Claude Code at a proxy like
+If you point Anthropic-compatible tooling at a proxy like
 [tux](https://github.com/merckgroup/tux) or Foundry by sourcing an env
-file, pi by default still calls `api.anthropic.com` directly — its
+file, Pi by default still calls `api.anthropic.com` directly — its
 Anthropic provider pins `baseUrl: "https://api.anthropic.com"` and its
-SDK does not read `ANTHROPIC_BASE_URL` the way the Anthropic Python SDK
-does.
+SDK does not read `ANTHROPIC_BASE_URL`.
 
-When `ANTHROPIC_BASE_URL` is set to a non-stock host at install time,
-`install.sh` writes the following into `~/.pi/agent/models.json` so
-pi's Anthropic traffic flows through the same proxy:
+To route Pi through the same proxy, edit `~/.pi/agent/models.json`:
 
 ```json
 {
   "providers": {
     "anthropic": {
-      "baseUrl": "<your ANTHROPIC_BASE_URL>",
+      "baseUrl": "<your-proxy-base-url>",
       "compat": { "supportsEagerToolInputStreaming": false }
     }
   }
@@ -433,111 +244,104 @@ pi's Anthropic traffic flows through the same proxy:
 The `compat.supportsEagerToolInputStreaming: false` opt-out is required
 for Foundry's Anthropic gateway — without it, every request fails with
 `INVALID_ARGUMENT: unrecognizedProperty=eager_input_streaming`. Stock
-Anthropic accepts the field, so this opt-out is harmless if you ever
-switch back, but the file only gets written when the env points at a
-non-`api.anthropic.com` host.
-
-Existing keys in `models.json` (other providers, an `apiKey` you set
-yourself) are preserved — `install.sh` only overwrites `baseUrl` and
-`compat.supportsEagerToolInputStreaming` under `providers.anthropic`,
-leaving everything else byte-for-byte. If the existing file is not
-valid JSON, `install.sh` aborts with a non-zero exit instead of
-clobbering it; fix or remove the file and re-run.
+Anthropic accepts the field, so the opt-out is harmless if you switch
+back.
 
 ### Authentication
 
 Pi reads `ANTHROPIC_API_KEY` natively but **not**
-`ANTHROPIC_AUTH_TOKEN`. If your tux env file only sets the latter (which
-is the default for SDK-style proxies), add an alias line so pi can pick
-up the token:
+`ANTHROPIC_AUTH_TOKEN`. If your env file only sets the latter, add an
+alias line:
 
 ```sh
 export ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"
 ```
 
 Alternatively, set `apiKey` directly inside `providers.anthropic` in
-`models.json`. The trade-off is that the token then lives in plaintext
-on disk; the env-alias approach keeps it ephemeral.
-
-### Disabling
-
-To undo just the `models.json` change without touching the extension
-symlink or shim, re-run:
-
-```sh
-./uninstall.sh --clear-models-json
-```
-
-It surgically deletes the `baseUrl` and
-`compat.supportsEagerToolInputStreaming` keys, drops `providers.anthropic`
-if it ends up empty, and removes the whole file if nothing is left.
-Other providers and other keys you added are not touched.
-
-Earlier drafts of this feature
-([issue #6](https://github.com/LeanAndMean/scramjet/issues/6)) included a
-`SCRAMJET_PROVIDER_BRIDGE=0` env-var opt-out for runtime disabling. The
-install-time `models.json` design supersedes that mechanism: the override
-lives on disk and pi reads it at startup, so unsetting or zeroing an env
-var in the current shell has no effect on routing. `./uninstall.sh
---clear-models-json` is the supported way to revert.
-
-To re-apply (e.g. after the env var changes), re-run `./install.sh`.
+`models.json`. The trade-off is plaintext on disk.
 
 ## Versions
 
-Tested against **Pi `0.74.0`** (see `pi.piTestedVersion` in `package.json`).
-
-The `devDependencies` for `@earendil-works/pi-coding-agent` and
-`@earendil-works/pi-tui` are pinned to the same version so contributors
-can type-check against an exact target. CI fails if `pi.piTestedVersion`
-and the pinned dep version drift apart.
-
-If a newer Pi release breaks Scramjet, the tested version is your
-diagnostic data point: roll back to it, or open an issue against the
-extension. Scramjet is not currently version-gated at runtime.
+Tested against **Pi `0.74.0`** (see `pi.piTestedVersion` in
+`package.json`). The runtime dependencies on
+`@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` are
+pinned to the same version. CI fails if `pi.piTestedVersion` and either
+pin drift apart.
 
 ## File structure
 
 ```
 scramjet/
-  index.ts              — entry point
-  types.ts              — ScramjetState, NextStep, CompletionSignal
-  task-complete.ts      — task_complete tool + system prompt injection
-  auto-continue.ts      — countdown widget, cancellation, session management
+  index.ts              — entry point (extension factory)
+  types.ts              — ScramjetState and shared types
+  task-complete.ts      — task_complete tool + next-step block injection
+  auto-continue.ts      — agent_end listener: validate, dispatch, countdown
+  delegate.ts           — delegate tool + frame stack
+  next-step.ts          — <scramjet-next-step> block builder
+  history.ts            — sidebar journal + replay
   scramjet-command.ts   — /scramjet on|off toggle
-  diagram/
-    diagram-tool.ts     — draw_diagram tool registration
-    renderers.ts        — renderer detection and execution
-  src/
-    install/
-      transform.mjs     — agent-file frontmatter transform (model strip, tools array)
-    tool-aliases/
-      index.ts          — Claude Code tool-name aliases (Read, Bash, …)
+  clear-alias.ts        — /clear alias
+  tool-scope-advisory.ts — advisory tool-scope warnings
+  commands/             — command-set loader + parser + validator
+  diagram/              — draw_diagram tool + renderers
+  mach12/               — bundled command set (commands + agents)
   bin/
-    scramjet            — launcher shim (execs pi)
-  tests/
-    task-complete.test.ts
-    tool-aliases.test.ts
-    install-transform.test.ts
-  install.sh            — extension symlink, shim, plugin wiring
-  uninstall.sh          — reverses install.sh
+    scramjet.js         — Node entrypoint that calls Pi main()
+  scripts/
+    postinstall.js      — Mach 12 seed on npm install
+  tests/                — vitest suites
 ```
 
 ## Develop
 
 ```sh
-npm install          # one-time
+npm install          # installs deps and runs postinstall (seeds mach12)
 npm run typecheck    # tsc --noEmit
+npm run build        # tsc -p tsconfig.build.json -> dist/
 npm test             # vitest --run
 npm run lint         # biome check .
 ```
 
-The diagram tool detects and uses whatever renderers are installed; none
-are bundled. To enable the relevant formats, install one or more of:
+### In-tree iteration
 
-- Mermaid: `npm install -g @mermaid-js/mermaid-cli` (provides `mmdc`)
-- Graphviz: `apt install graphviz` (or `brew install graphviz`)
-- PlantUML: `apt install plantuml` (or `brew install plantuml`)
+The `scramjet` bin on `PATH` runs the compiled `dist/index.js`, not the
+TypeScript source. After cloning and installing, run this once:
+
+```sh
+npm run build          # produce dist/ so the bin has something to import
+npm link               # install `scramjet` globally as a symlink to this tree
+ln -sfn "$(pwd)/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
+                       # so edits to mach12/*.md are picked up live
+```
+
+The `mach12/` symlink replaces the postinstall's static seed; without
+it, edits to `mach12/commands/*.md` or `mach12/agents/*.md` in the repo
+are invisible to the running scramjet because the command-set loader
+reads from `~/.local/share/scramjet/mach12/`, not from your working
+tree.
+
+Then while iterating:
+
+- Edited a `.ts` file → `npm run build` (or `tsc -p tsconfig.build.json
+  --watch` in another terminal). The linked bin imports the compiled
+  output, so changes are not picked up until you build.
+- Edited `mach12/*.md` → no rebuild needed (with the symlink in place).
+- Edited `bin/scramjet.js` or `scripts/postinstall.js` → no rebuild
+  needed; they run as-is.
+
+If `which scramjet` returns nothing or points outside this repo:
+
+```sh
+readlink -f "$(which scramjet)"
+```
+
+should resolve into your working tree. If it doesn't — or if you have
+dangling symlinks at `~/.local/bin/scramjet` or
+`~/.pi/agent/extensions/scramjet` from a pre-Stage-8 `./install.sh` —
+remove those leftovers and re-run `npm link`.
+
+To skip the postinstall during dev (avoid seeding while iterating), use
+`npm ci --ignore-scripts`.
 
 ## License
 

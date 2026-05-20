@@ -1,8 +1,8 @@
-/**
- * /scramjet command for toggling auto-continuation on/off.
- */
+/** /scramjet on|off — gates `closed`/`open`/`ask` decisions. `forced`
+ *  fires regardless; see CLAUDE.md "MVP design rationales". */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.ts";
 import type { ScramjetState } from "./types.ts";
 
 export function registerScramjetCommand(pi: ExtensionAPI, state: ScramjetState) {
@@ -18,9 +18,13 @@ export function registerScramjetCommand(pi: ExtensionAPI, state: ScramjetState) 
 
 			if (arg === "on") {
 				state.enabled = true;
+				const payload: EnabledToggleData = { enabled: true };
+				pi.appendEntry(ENABLED_TOGGLE_TYPE, payload);
 				ctx.ui.notify("Scramjet auto-continuation enabled", "info");
 			} else if (arg === "off") {
 				state.enabled = false;
+				const payload: EnabledToggleData = { enabled: false };
+				pi.appendEntry(ENABLED_TOGGLE_TYPE, payload);
 				ctx.ui.notify("Scramjet auto-continuation disabled", "info");
 			} else if (arg === "" || arg === "status") {
 				ctx.ui.notify(`Scramjet is ${state.enabled ? "on" : "off"}`, "info");

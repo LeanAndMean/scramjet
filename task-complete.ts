@@ -1,13 +1,17 @@
 /**
- * The task_complete tool and system prompt injection.
- *
- * When a command's instructions suggest a next step, Claude reports it
- * via this tool in a structured form Scramjet can act on.
+ * task_complete tool: structured channel for the agent's next-step pick.
+ * The execute() result is stashed in a module-level singleton that
+ * auto-continue.ts reads on agent_end. The `next:` policy block is
+ * injected into the user message via before_agent_start so the agent
+ * sees the allowed candidates before it composes its reply.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { buildNextStepBlock } from "./next-step.ts";
 import type { CompletionSignal, ScramjetState } from "./types.ts";
+
+export const NEXT_STEP_MESSAGE_TYPE = "scramjet-next-step";
 
 const SYSTEM_PROMPT_SNIPPET = `
 
@@ -26,7 +30,8 @@ Rules:
 export interface TaskCompleteParams {
 	summary: string;
 	next_step?: {
-		command: string;
+		name: string;
+		args?: string;
 		fresh_session: boolean;
 		reason?: string;
 	};
@@ -37,7 +42,8 @@ export function paramsToCompletionSignal(params: TaskCompleteParams): Completion
 		summary: params.summary,
 		nextStep: params.next_step
 			? {
-					command: params.next_step.command,
+					name: params.next_step.name,
+					args: params.next_step.args,
 					freshSession: params.next_step.fresh_session,
 					reason: params.next_step.reason,
 				}
@@ -65,9 +71,16 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 			summary: Type.String({ description: "Brief summary of what was accomplished" }),
 			next_step: Type.Optional(
 				Type.Object({
-					command: Type.String({
-						description: "The next command to run, e.g. '/mach10:issue-plan 55'",
+					name: Type.String({
+						description:
+							"Bare command name (no leading slash, no arguments) to run next, e.g. 'mach12:issue-plan'. Must match one of the listed candidates when the active command declares a closed next-step policy.",
 					}),
+					args: Type.Optional(
+						Type.String({
+							description:
+								"Optional argument string passed to the next command verbatim (no leading space), e.g. '55' or '36 --review-comment 12345'.",
+						}),
+					),
 					fresh_session: Type.Boolean({
 						description:
 							"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session')",
@@ -86,7 +99,9 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 			//   useful when reviewing a session after the widget is gone).
 			// - Without next_step: just the summary, no completion ceremony — the
 			//   `task_complete` call header already signals "this was the end."
-			const text = params.next_step ? `→ ${params.next_step.command}` : `Task Summary: ${params.summary}`;
+			const text = params.next_step
+				? `→ /${params.next_step.name}${params.next_step.args ? ` ${params.next_step.args}` : ""}`
+				: `Task Summary: ${params.summary}`;
 
 			return {
 				content: [{ type: "text", text }],
@@ -97,10 +112,28 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 	});
 
 	pi.on("before_agent_start", async (event) => {
+		const def = state.activeTopLevelCommand ? state.registry.get(state.activeTopLevelCommand) : undefined;
+		const policy = def?.next;
+
+		// When the active command declares a policy, surface it to the agent
+		// regardless of state.enabled. /off gates dispatch decisions, not the
+		// agent's awareness of what the policy is — the agent's pick is still
+		// needed for the notify-hint path under /off.
+		if (policy) {
+			clearLatestCompletion();
+			return {
+				systemPrompt: event.systemPrompt + SYSTEM_PROMPT_SNIPPET,
+				message: {
+					customType: NEXT_STEP_MESSAGE_TYPE,
+					content: buildNextStepBlock(policy, def.name),
+					display: false,
+				},
+			};
+		}
+
+		// Legacy path: no declared policy, snippet only when enabled.
 		if (!state.enabled) return;
-
 		clearLatestCompletion();
-
 		return {
 			systemPrompt: event.systemPrompt + SYSTEM_PROMPT_SNIPPET,
 		};

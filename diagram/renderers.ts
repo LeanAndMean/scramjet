@@ -61,7 +61,11 @@ export function renderDiagram(source: string, format: DiagramFormat, signal?: Ab
 	try {
 		const extensions: Record<DiagramFormat, string> = { mermaid: ".mmd", graphviz: ".dot", plantuml: ".puml" };
 		const inputFile = join(tmp, `input${extensions[format]}`);
-		const outputFile = join(tmp, "output.png");
+		// PlantUML writes <basename>.png alongside the input (it has no `-o <file>`
+		// form like mmdc/dot — `-o <dir>` only changes the output directory). For
+		// mmdc/dot we name the output `output.png`; for plantuml the output is
+		// derived from the input filename. (F1)
+		const outputFile = format === "plantuml" ? join(tmp, "input.png") : join(tmp, "output.png");
 
 		writeFileSync(inputFile, source);
 
@@ -81,7 +85,10 @@ export function renderDiagram(source: string, format: DiagramFormat, signal?: Ab
 				});
 				break;
 			case "plantuml":
-				execFileSync("plantuml", ["-tpng", inputFile], {
+				// `-o tmp` pins the output dir (resolved relative to the input's dir);
+				// the filename is still `input.png`. Without this, plantuml's default
+				// output location can vary by version.
+				execFileSync("plantuml", ["-tpng", "-o", tmp, inputFile], {
 					timeout: 30_000,
 					stdio: "ignore",
 				});

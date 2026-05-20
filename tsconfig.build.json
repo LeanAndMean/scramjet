@@ -1,0 +1,32 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": false,
+		"outDir": "dist",
+		"allowImportingTsExtensions": false,
+		"rewriteRelativeImportExtensions": true,
+		"declaration": true
+	},
+	"include": [
+		"index.ts",
+		"types.ts",
+		"auto-continue.ts",
+		"clear-alias.ts",
+		"delegate.ts",
+		"history.ts",
+		"next-step.ts",
+		"scramjet-command.ts",
+		"subagent-output-advisor.ts",
+		"task-complete.ts",
+		"tool-scope-advisory.ts",
+		"commands/**/*.ts",
+		"diagram/**/*.ts"
+	],
+	"exclude": [
+		"tests/**",
+		"node_modules",
+		"dist",
+		"scripts",
+		"mach12"
+	]
+}

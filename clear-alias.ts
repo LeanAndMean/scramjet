@@ -1,9 +1,4 @@
-/**
- * /clear — alias for /new, for muscle memory from Claude Code CLI.
- *
- * Pi calls it /new; Claude Code calls it /clear. Both audiences land
- * in the same place: a fresh session.
- */
+/** /clear — muscle-memory alias for Pi's /new. */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 

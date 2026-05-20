@@ -1,4 +1,4 @@
-# Mach 12 — Vision
+# Scramjet — Vision
 
 > Working name for a hypothetical successor to Mach 10, authored as a
 > **command set for `scramjet`** rather than a Claude Code CLI plugin.
@@ -56,13 +56,17 @@ Once a few related commands exist, two patterns appear:
 
 ### Relationship to existing `scramjet` (deliberate break)
 
-Today's `scramjet` follows the principle, stated in `CLAUDE.md`, that
-**commands own their edges** — the LLM reads the command's prose and the
-harness only watches for a `task_complete` signal. That principle exists
-because today's `scramjet` must remain compatible with Claude Code CLI
-plugins, which cannot encode anything richer than prose.
+Pre-MVP `scramjet` followed the principle that **commands own their
+edges** — the LLM read the command's prose and the harness only watched
+for a `task_complete` signal. That principle existed because pre-MVP
+`scramjet` had to remain compatible with Claude Code CLI plugins, which
+cannot encode anything richer than prose. The MVP buildout (issue 23)
+completed the cutover: declared `next:` policies and the `delegate` tool
+are now the mechanism, the plugin compat layer was removed in Stage 8,
+and CLAUDE.md has been brought into line with the new principle.
 
-The Mach 12-era `scramjet` **deliberately breaks this constraint.** Once
+The Mach 12-era `scramjet` **deliberately breaks the prose-only
+constraint.** Once
 cross-harness portability is dropped, declared next-step policies and
 declared delegation are strictly more expressive than prose-only edges,
 and they make the chain visible to the harness itself (which is necessary
@@ -199,6 +203,38 @@ A command can invoke another command as a subroutine mid-execution.
 Delegation is the *composability* primitive (subroutine call); next-step
 modes are the *chaining* primitive (what runs after this command).
 
+##### Dispatch mechanism
+
+**`delegate` is a tool that returns the substituted command body as
+tool-result content.** The agent calls `delegate({ command, args })`;
+the harness looks the command up in the registry, substitutes
+`$ARGUMENTS` (and `$1`, `$@`, etc. per Pi convention) inside the
+delegated command's body, pushes a frame onto a per-turn call stack, and
+returns the substituted body as text in the tool result. The agent
+reads the result and follows its instructions inside the same
+conversation context. No subprocess, no prompt swap, no separate
+context window — just one tool round-trip that lands the delegated
+command's prose in the agent's input as actionable instruction.
+
+Two consequences fall out of this choice:
+
+- **`$ARGUMENTS` is decided at invocation time, by the agent.** The
+  agent has the conversation context to construct the right framing for
+  each delegated call; the caller's prose coaches the agent on what to
+  pass but does not pre-render `$ARGUMENTS` at template-expansion time.
+- **Same agent context throughout the delegation.** Cycle detection,
+  nesting depth, and per-frame `allowed-tools` metadata all live in an
+  in-memory call stack on the harness side; the agent's transcript
+  contains the delegated body verbatim as a tool result.
+
+The two prior subprocess-based assessments on the design issue (Opus 4.6
+and Opus 4.7 second-opinion) are superseded by this decision. Their
+analysis of why session-wide `setActiveTools` cannot scope tools
+per-delegation remains valid; this design accepts that constraint and
+addresses tool-scoping via a separate `tool_call` event-hook gate (see
+*Tool-scoping enforcement* below) rather than by spawning child
+processes.
+
 ##### Author-facing syntax
 
 Delegation is written **directly in the command's prompt body** as a
@@ -208,21 +244,22 @@ slash invocation with arguments:
 /mach12:push commit-message-context-here
 ```
 
-`scramjet` parses these invocations when the command's prompt is rendered
-and arranges for the agent to hand off via a tool call (`delegate` or
-similar) before resuming the calling command. The text after the command
-name becomes the delegated command's `$ARGUMENTS` field — the same
-pattern Mach 10 already uses, so the calling command coaches the agent
-on how to construct the context to pass.
+The calling command's prose shapes how the agent constructs `$ARGUMENTS`
+for the call — the same pattern Mach 10 already uses — but the actual
+invocation happens via the `delegate` tool, not via a parser pass on the
+prompt body. (Author convention: writing the slash invocation inline
+documents the call site for readers; the agent calls `delegate` to
+execute it.)
 
 ##### Semantics
 
 - **Tool access** is declared per-command (in YAML frontmatter,
-  `allowed-tools:`). The delegated command runs with *its* declared tool
-  set, not the caller's. (A future extension may let the caller override
-  this; out of scope for the initial design.)
+  `allowed-tools:`). The delegated frame's effective tool set is the
+  intersection of the caller's effective tools and the callee's
+  declared `allowed-tools` — no escalation is possible.
 - **Nested delegation** is allowed. A delegated command can itself
-  delegate to another.
+  delegate to another. Each call pushes a frame onto the call stack;
+  cycle detection rejects A → B → A within the same turn.
 - **History appearance:** delegated commands are shown in the sidebar
   **indented under the caller**. Top-level (chained) commands are at the
   outer indent level. This visually distinguishes "command finished, the
@@ -238,29 +275,70 @@ on how to construct the context to pass.
 - **`next` on a delegated command is ignored.** Next-step policy applies
   only at the top level. Delegated commands return to their caller; the
   caller's `next` controls what (if anything) chains afterward.
-- **Output visibility:** open question. Two reasonable defaults — show
-  delegated output inline in the transcript (transparent), or collapse
-  it under a fold (clean). To be decided during implementation.
+- **Output visibility:** the delegated body is materialized into the
+  transcript as a tool result, so it is visible by construction. There
+  is no separate "collapsed" vs "inline" decision — the agent sees what
+  it acted on.
+
+##### Tool-scoping enforcement (advisory in MVP)
+
+The intent is that delegated commands run with the intersection of
+caller and callee `allowed-tools`. The intended enforcement point is
+the `tool_call` event hook, where the harness can validate each tool
+call against the active frame's allowed set and reject out-of-scope
+calls with an error result the agent reads back.
+
+**For the MVP, this enforcement is advisory only**: the harness logs a
+warning on out-of-scope tool calls but does not block them. Hard
+enforcement is deferred to a post-MVP issue that also lands multi-turn
+save/restore so the caller's broader scope is restored after a
+delegated frame returns. Latched-only enforcement (once narrowed by a
+delegate, scope stays narrowed for the rest of the turn) is a hidden
+authoring trap: authors would have to remember that broad-tool work
+must happen before any delegation, with no language-level cue. Better
+to log advisory warnings in the MVP and ship hard enforcement once it
+can be done correctly.
+
+The deeper principle this defers but does not abandon: **LLMs cannot be
+trusted with prose-only constraints.** "Restrict yourself to tools X,
+Y, Z" in a system prompt is not enforcement; it is hope. When hard
+enforcement lands, the harness gates at the event level, not at the
+prose level.
 
 #### 4. `/scramjet on` / `/scramjet off`
 
-When **off** (default), the harness behaves like a standard coding agent
-between top-level commands. After each top-level command finishes, the
-chain pauses regardless of mode and the user types whatever they want
-next. Hint text from `next.candidates` is displayed (in the sidebar or
-status area) but not auto-followed. Delegated and `forced` calls still
-happen — they are part of the command's *own* execution, not chaining
-decisions.
+When **off** (default), the harness pauses after each top-level
+command's `closed`, `open`, or `ask` next-step. Hint text from
+`next.candidates` is displayed (in the sidebar or status area) but the
+agent's pick (under `closed` / `open`) is not auto-followed and the
+user types whatever they want next. Delegated and `forced` calls
+**still happen** — they are part of the command's *own* execution, not
+chaining decisions.
 
-When **on**, the harness honors the `next` mode of each top-level
-command:
-
-- `forced` runs the target.
-- `closed` and `open` ask the agent to pick (using the candidate hints
-  as guidance).
-- `ask` always pauses for the user.
+When **on**, the harness also auto-follows `closed` / `open` agent
+picks (after validating them against the candidate list / blacklist) and
+auto-dispatches after a brief countdown widget. `ask` still pauses for
+the user regardless of the flag.
 
 In both modes, Esc at any point returns to plain Pi.
+
+##### Why `forced` fires under `/off`
+
+`/off` gates *decisions*: `closed` / `open` agent-picks and `ask`
+user-picks. `forced` has no decision — it is a deterministic transition
+the command author wired in. The user implicitly chose to chain by
+invoking the command that declares `forced` next-step; surfacing every
+`forced` transition as a manual step would be ritualistic, not
+empowering.
+
+This rule is project-specific. An alternative considered and rejected
+was the binary "off-means-off" model (the gsd-2 analog's
+`isAutoActive()` flag, which gates *every* automatic transition
+including deterministic ones). That model treats `/off` as a master kill
+switch, which is conceptually clean but in practice forces the user to
+re-type the obvious next step on every `forced` edge. scramjet's choice
+is that `/off` is about user control over decisions, not user control
+over deterministic transitions.
 
 #### 5. Process history sidebar
 
@@ -311,7 +389,39 @@ UI/UX refinements (set color-coding, expand-on-focus, click-to-jump,
 filtering, multi-line entries) are deferred. The MVP is "show the last
 10 with origin and indent."
 
+##### MVP deferral: UI is out, data model is in
+
+The **visualization is deferred entirely for the MVP**. pi-tui's
+`WidgetPlacement` is `aboveEditor | belowEditor` and its row-based layout
+has no right-side panel primitive. Building one means either forking
+pi-tui or waiting for upstream to add the affordance; neither is
+appropriate in the MVP window.
+
+What ships in the MVP is the **underlying data model and persistence**:
+the sidebar log entries (slash invocation, origin marker, delegation
+depth, timestamp) are journaled via `appendEntry` and rebuilt on
+`session_start` / `session_tree`. This is enough for
+forward compat (so when a UI lands, no data has been thrown away) and is
+load-bearing for any future `/scramjet:rewire`-style command that needs
+to read observed run history.
+
+Note: the eventual visualization may not need to be a sidebar
+specifically — a transcript-inline log, an expandable panel, or a
+post-hoc viewer are all plausible. What is deferred is the rendering,
+not the data.
+
 #### 6. Authoring loop
+
+> **MVP status:** the authoring loop is **deferred to a post-MVP issue**.
+> The MVP ships without `/scramjet:new-command`, `/scramjet:edit-command`,
+> `/scramjet:rewire`, and `/scramjet:new-set`. Demand for these is not
+> yet validated by usage, and `/scramjet:rewire` in particular has no
+> known analog in adjacent Pi-consumer projects (gsd-2 etc.) and needs a
+> concrete spec — what does an actionable suggestion look like? how is
+> it presented? — before it is worth building. The data model for
+> `/scramjet:rewire` (sidebar history journal) lands in the MVP per §5,
+> so a future authoring loop has the data it needs. The vision below is
+> retained as the intended shape.
 
 `scramjet` ships harness-level commands for managing command sets:
 
@@ -351,14 +461,18 @@ is universal.
   descriptions of processes. `scramjet` provides connective tissue and
   visibility around those descriptions; it does not interpret them.
 
-### Trust model and namespace conflicts (deferred)
+### Trust model and namespace conflicts
 
-How project-local command sets are trusted (vs. user-global), and what
-happens when both define a set with the same namespace, are real
-questions deferred until the core functionality works. Best-guess
-defaults for the MVP: load both, project-local overrides user-global on
-namespace collision, and project-local sets are visually marked. To be
-revisited.
+How project-local command sets are trusted (vs. user-global) is deferred
+until the core functionality works. **Namespace collisions are settled:
+global wins.** This matches Pi's actual `loadPromptTemplates` behavior
+(globals are pushed into the template list before project-local entries,
+and `dedupePrompts` is first-seen-wins; see
+`prompt-templates.js:205-208`). Project-local command sets that collide
+with a user-global namespace are surfaced as a startup diagnostic;
+project authors must pick a distinct name. The earlier draft of this
+section said the opposite (project-local overrides user-global); that was
+inconsistent with the runtime and has been corrected.
 
 ---
 
@@ -501,22 +615,36 @@ edges, and stays out of the way.
 
 ### `scramjet`-level
 
-- **Agent-picks-next mechanism under `/scramjet on`.** Two viable shapes:
-  a structured `select_next_step` tool with the candidate list as an enum
-  (cleanest enforcement of `closed` and `open`'s blacklist), or
-  prose-driven `task_complete`-style selection. To be settled during
-  implementation, possibly via a multi-agent design pass.
-- **Delegation dispatch mechanism.** Tool-call hand-off (agent calls a
-  `delegate` tool that swaps the active prompt and resumes on return) vs.
-  inline expansion (the calling command's prompt is rebuilt to include
-  the delegated command's prose at parse time). Each has different
-  implications for context size, cancellation behavior, and how
-  delegated commands appear in the history sidebar.
-- **Output visibility of delegated commands.** Inline in the transcript
-  (transparent, but noisy) vs. collapsed/folded (clean, but harder to
-  audit). Probably want a default plus a toggle.
-- **Trust model and namespace collisions for project-local sets.**
-  Deferred (see §Trust model).
+- **Trust model for project-local sets.** Namespace collisions are
+  settled (global wins; see §Trust model). Trust beyond
+  same-name-collision — what permissions a project-local set has, how
+  it is sandboxed — is deferred until core functionality works.
+- **Hard tool-scoping enforcement.** Deferred to a post-MVP issue (see
+  §3 *Tool-scoping enforcement*). The MVP ships advisory logging; hard
+  enforcement requires multi-turn save/restore of the active tool set
+  and is not in scope for the initial build.
+- **History sidebar UI.** Deferred entirely (see §5). The data model
+  ships in the MVP; the rendering primitive does not yet exist in
+  pi-tui.
+
+#### Resolved
+
+- **Agent-picks-next mechanism.** Resolved: prose-driven extension of
+  `task_complete`. The candidate list is prefixed to the user message
+  as a `<scramjet-next-step>` block (not the system prompt, to preserve
+  prompt-cache hit rates). `task_complete.next_step.command` stays a
+  free-form string; the harness validates the agent's pick in
+  `agent_end` against the active command's policy.
+- **Delegation dispatch mechanism.** Resolved: same-context tool-result
+  delegation (see §3 *Dispatch mechanism*). The `delegate` tool returns
+  the substituted command body as text in the tool result; the agent
+  reads it and follows its instructions in the same conversation
+  context. Subprocess-based dispatch was considered (and prior
+  assessments recommended it) but is superseded.
+- **Output visibility of delegated commands.** Resolved by the dispatch
+  decision: the delegated body materializes in the transcript as a
+  tool result and is visible by construction. No separate
+  "collapsed-vs-inline" knob.
 
 ### Mach 12-level
 

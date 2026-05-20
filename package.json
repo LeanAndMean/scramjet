@@ -1,23 +1,53 @@
 {
-	"name": "scramjet",
-	"version": "0.4.0",
-	"private": true,
+	"name": "@leanandmean/scramjet",
+	"version": "0.5.0",
+	"description": "Smart auto-continuation and command-set harness for Pi",
+	"license": "MIT",
+	"repository": "github:LeanAndMean/scramjet",
 	"type": "module",
+	"bin": {
+		"scramjet": "./bin/scramjet.js"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"bin/",
+		"dist/",
+		"mach12/",
+		"scripts/",
+		"CHANGELOG.md",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=20"
+	},
 	"pi": {
-		"extensions": ["./index.ts"],
 		"piTestedVersion": "0.74.0"
+	},
+	"publishConfig": {
+		"access": "public"
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest --run",
-		"lint": "biome check ."
+		"lint": "biome check .",
+		"postinstall": "node scripts/postinstall.js",
+		"prepack": "npm run build"
+	},
+	"dependencies": {
+		"@earendil-works/pi-coding-agent": "0.74.0",
+		"@earendil-works/pi-tui": "0.74.0",
+		"typebox": "1.1.24"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",
-		"@earendil-works/pi-coding-agent": "0.74.0",
-		"@earendil-works/pi-tui": "0.74.0",
 		"@types/node": "22.10.5",
-		"typebox": "1.1.24",
 		"typescript": "5.7.3",
 		"vitest": "3.2.4"
 	}
