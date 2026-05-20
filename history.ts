@@ -58,6 +58,28 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 	return next.length > SIDEBAR_MAX ? next.slice(-SIDEBAR_MAX) : next;
 }
 
+// Single chokepoint for "a depth-0 top-level command just started." Updates
+// activeTopLevelCommand, pushes a sidebar entry, and persists it to the
+// journal so resume can replay it. Called from the input-event handler
+// below (user-typed slashes) and from auto-continue's dispatchExpanded
+// (next-step body dispatch); identical effects.
+export function recordCommandStart(
+	pi: ExtensionAPI,
+	state: ScramjetState,
+	name: string,
+	origin: SidebarEntry["origin"],
+): void {
+	const entry: SidebarEntry = {
+		command: name,
+		origin,
+		depth: 0,
+		timestamp: Date.now(),
+	};
+	state.activeTopLevelCommand = name;
+	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
+	pi.appendEntry(COMMAND_START_TYPE, entry);
+}
+
 export interface ReplayResult {
 	sidebarLog: SidebarEntry[];
 	// null when no toggle entry was found on the replayed branch — caller
@@ -152,14 +174,6 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		} else {
 			origin = event.source === "interactive" ? "user" : "agent";
 		}
-		const entry: SidebarEntry = {
-			command: name,
-			origin,
-			depth: 0,
-			timestamp: Date.now(),
-		};
-		state.activeTopLevelCommand = name;
-		state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
-		pi.appendEntry(COMMAND_START_TYPE, entry);
+		recordCommandStart(pi, state, name, origin);
 	});
 }

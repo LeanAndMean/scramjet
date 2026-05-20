@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-	detectCycle,
-	intersectTools,
-	parseDelegateArgs,
-	registerDelegateTool,
-	substituteArguments,
-} from "../delegate.ts";
+import { parseDelegateArgs, substituteArguments } from "../commands/substitute.ts";
+import { detectCycle, intersectTools, registerDelegateTool } from "../delegate.ts";
 import type { CommandDef, DelegateFrame, ScramjetState } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 

@@ -226,14 +226,15 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		};
 	}
 
-	it("toggle on → user slash → forced agent_end → next slash recorded as origin: forced", async () => {
+	it("toggle on → user slash → forced agent_end → next step recorded as origin: forced (expanded body, not slash)", async () => {
+		const TARGET_BODY = "Run int:next now.";
 		const origin: CommandDef = {
 			name: "int:start",
 			filePath: "/fake/int:start.md",
 			body: "",
 			next: { mode: "forced", target: "int:next" } as NextStepPolicy,
 		};
-		const target: CommandDef = { name: "int:next", filePath: "/fake/int:next.md", body: "" };
+		const target: CommandDef = { name: "int:next", filePath: "/fake/int:next.md", body: TARGET_BODY };
 		const state: ScramjetState = freshState({
 			registry: new Map([
 				[origin.name, origin],
@@ -268,18 +269,28 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		expect(state.sidebarLog[0].command).toBe("int:start");
 		expect(state.sidebarLog[0].origin).toBe("user");
 
-		// 3. The agent finishes its turn. int:start declares forced → int:next, so
-		//    auto-continue fires /int:next via sendUserMessage and sets the
-		//    pendingForcedDispatch flag. No task_complete was called — forced
-		//    mode fires regardless.
+		// 3. The agent finishes its turn. int:start declares forced → int:next.
+		//    The dispatcher expands int:next's registered body locally and sends
+		//    the expansion via sendUserMessage (Pi 0.74.0's sendUserMessage uses
+		//    expandPromptTemplates: false, so a slash payload would land at the
+		//    LLM as literal text — F1). It also writes the sidebar entry and
+		//    journal entry directly with origin: "forced" because the input
+		//    handler is a no-op for the non-slash body text.
 		await bag.emit("agent_end", {}, ctx);
-		expect(bag.sent).toEqual([{ content: "/int:next", options: { deliverAs: "followUp" } }]);
-		expect(state.pendingForcedDispatch).toBe("int:next");
-
-		// 4. Pi delivers the forced slash through the input event. History sees
-		//    pendingForcedDispatch === parsed name and tags origin: "forced".
-		await bag.emit("input", { text: "/int:next", source: "followUp" }, ctx);
+		expect(bag.sent).toEqual([{ content: TARGET_BODY, options: { deliverAs: "followUp" } }]);
+		// S1 regression guard at the integration boundary: a slash regression
+		// would surface here as `bag.sent[0].content` starting with "/".
+		expect(bag.sent[0].content.startsWith("/")).toBe(false);
+		// pendingForcedDispatch is intentionally not set by the expand-locally
+		// path — see the rationale comment in dispatchForced.
 		expect(state.pendingForcedDispatch).toBeNull();
+
+		// 4. After the dispatcher fires, the sidebar/journal already reflect the
+		//    forced transition — the dispatcher wrote them directly. The
+		//    "Pi delivers /int:next through the input event" step that earlier
+		//    versions of this test simulated is no longer part of the flow:
+		//    sendUserMessage receives non-slash body text, and history.ts's
+		//    input matcher returns null for it.
 		expect(state.activeTopLevelCommand).toBe("int:next");
 		expect(state.sidebarLog).toHaveLength(2);
 		expect(state.sidebarLog[1].command).toBe("int:next");

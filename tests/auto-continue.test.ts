@@ -7,8 +7,8 @@ import { freshState } from "./helpers.ts";
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
 
-function defWithPolicy(name: string, policy: NextStepPolicy | undefined): CommandDef {
-	const def: CommandDef = { name, filePath: `/fake/${name}.md`, body: "" };
+function defWithPolicy(name: string, policy: NextStepPolicy | undefined, body = ""): CommandDef {
+	const def: CommandDef = { name, filePath: `/fake/${name}.md`, body };
 	if (policy) def.next = policy;
 	return def;
 }
@@ -130,10 +130,14 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 
 	describe("forced mode", () => {
 		// Helper: forced tests always need the target registered (F6 — the
-		// dispatcher now refuses to fire when the target is missing).
-		const targetDef: CommandDef = defWithPolicy("b:target", undefined);
+		// dispatcher refuses to fire when the target is missing). After the F1
+		// expand-locally refactor the target's body is also load-bearing — the
+		// dispatcher substitutes args into it and sends the result, so an empty
+		// body would produce empty-string sent payloads and bury the assertion.
+		const TARGET_BODY = "Run b:target.\nargs=$ARGUMENTS";
+		const targetDef: CommandDef = defWithPolicy("b:target", undefined, TARGET_BODY);
 
-		it("fires the target via sendUserMessage and sets pendingForcedDispatch, regardless of enabled=false", async () => {
+		it("dispatches the expanded body (not a slash) regardless of enabled=false", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({
 				enabled: false,
@@ -144,8 +148,14 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
-			expect(bag.sentMessages).toEqual([{ content: "/b:target", options: { deliverAs: "followUp" } }]);
-			expect(state.pendingForcedDispatch).toBe("b:target");
+			// F1: dispatched payload is the substituted body, NOT `/b:target`.
+			// Pi's sendUserMessage uses expandPromptTemplates: false, so a
+			// slash payload would land as literal text at the LLM.
+			expect(bag.sentMessages).toEqual([{ content: "Run b:target.\nargs=", options: { deliverAs: "followUp" } }]);
+			// pendingForcedDispatch is intentionally NOT set by the new
+			// expand-locally dispatch (no slash goes out, so no input handler
+			// would consume it; setting it would only open a race window).
+			expect(state.pendingForcedDispatch).toBeNull();
 			expect(ctxBag.widgets).toEqual([]); // no countdown
 			expect(ctxBag.notifications).toEqual([]);
 		});
@@ -161,7 +171,7 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
-			expect(bag.sentMessages).toEqual([{ content: "/b:target", options: { deliverAs: "followUp" } }]);
+			expect(bag.sentMessages).toEqual([{ content: "Run b:target.\nargs=", options: { deliverAs: "followUp" } }]);
 		});
 
 		it("fires under enabled=true the same way as enabled=false", async () => {
@@ -176,7 +186,6 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			expect(bag.sentMessages).toHaveLength(1);
-			expect(state.pendingForcedDispatch).toBe("b:target");
 		});
 
 		it("eagerly updates state.activeTopLevelCommand to the target before the input event arrives", async () => {
@@ -490,12 +499,16 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 	});
 
 	describe("no-UI (hasUI=false)", () => {
-		it("closed valid + enabled=true fires immediately without countdown widget", async () => {
+		it("closed valid + enabled=true fires immediately without countdown widget (dispatches expanded body)", async () => {
 			const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
 			const def = defWithPolicy("a:cmd", policy);
+			// F1: target must be in the registry — the dispatcher expands the
+			// registered body and sends the result. Without a real def the
+			// closed-mode pick would warn-and-skip (no body to expand).
+			const targetDef = defWithPolicy("b:ok", undefined, "Body of b:ok");
 			const state = freshState({
 				enabled: true,
-				registry: registryWith(def),
+				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
 			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
@@ -504,7 +517,31 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			expect(ctxBag.widgets).toEqual([]);
-			expect(bag.sentMessages).toEqual([{ content: "/b:ok", options: { deliverAs: "followUp" } }]);
+			expect(bag.sentMessages).toEqual([{ content: "Body of b:ok", options: { deliverAs: "followUp" } }]);
+		});
+
+		// F1: open-mode allows the agent to pick any name. If that pick is not
+		// in scramjet's registry, we cannot expand a body and Pi's
+		// sendUserMessage cannot route the slash either — warn and stop the
+		// chain rather than emit literal slash text the LLM will see verbatim.
+		it("closed/open pick not in registry → warn and skip dispatch (no literal-slash fallback)", async () => {
+			const policy: NextStepPolicy = { mode: "open", candidates: [{ name: "b:hint" }] };
+			const def = defWithPolicy("a:cmd", policy);
+			const state = freshState({
+				enabled: true,
+				registry: registryWith(def), // pick "external:cmd" intentionally absent
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
+			await setCompletion({ summary: "s", next_step: { name: "external:cmd", fresh_session: false } });
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(bag.sentMessages).toEqual([]);
+			expect(ctxBag.notifications).toHaveLength(1);
+			expect(ctxBag.notifications[0].type).toBe("warning");
+			expect(ctxBag.notifications[0].message).toContain("external:cmd");
+			expect(ctxBag.notifications[0].message).toContain("not in registry");
 		});
 	});
 
@@ -515,15 +552,18 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 	// cancel paths execute. (F27, F38, S3)
 	describe("countdown lifecycle (fake timers)", () => {
 		const CLOSED: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
+		const TARGET_BODY = "Body of b:ok";
 
 		function primedClosed() {
 			const def = defWithPolicy("a:cmd", CLOSED);
+			// F1: target def carries the body the dispatcher will expand and send.
+			const targetDef = defWithPolicy("b:ok", undefined, TARGET_BODY);
 			const state = freshState({
 				enabled: true,
-				registry: registryWith(def),
+				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
-			return { def, state };
+			return { def, targetDef, state };
 		}
 
 		it("fires sendUserMessage after COUNTDOWN_SECONDS elapse and tears down the widget", async () => {
@@ -544,9 +584,10 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			expect(bag.sentMessages).toEqual([]);
 			expect(ctxBag.widgets.length).toBeGreaterThan(1);
 
-			// Crossing the final tick fires sendUserMessage and tears the widget down.
+			// Crossing the final tick fires sendUserMessage with the EXPANDED body
+			// (not a slash) and tears the widget down.
 			vi.advanceTimersByTime(1000);
-			expect(bag.sentMessages).toEqual([{ content: "/b:ok", options: { deliverAs: "followUp" } }]);
+			expect(bag.sentMessages).toEqual([{ content: TARGET_BODY, options: { deliverAs: "followUp" } }]);
 			// Final setWidget call clears the widget (content = undefined).
 			const last = ctxBag.widgets[ctxBag.widgets.length - 1];
 			expect(last.key).toBe("scramjet-next");
@@ -728,39 +769,46 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 		});
 	});
 
-	// End-to-end: forced policy → auto-continue dispatches → history's input
-	// handler resolves the slash + clears pendingForcedDispatch + records the
-	// sidebar entry with origin: "forced". This is the contract S5 calls out;
-	// it exercises auto-continue.ts + history.ts together rather than mocking
-	// the interaction surface between them. (S5, exercises F18 happy path.)
+	// End-to-end: forced policy → auto-continue dispatches the expanded body
+	// AND directly writes the sidebar entry / journal entry / activeTopLevelCommand
+	// with origin: "forced". Before the F1 fix this test simulated Pi delivering
+	// the /target slash through the input event and let history.ts's input
+	// handler write the entry; that simulation no longer matches production
+	// flow because the dispatcher sends the body (not a slash) and Pi's input
+	// handler is a no-op for non-slash text. (S5)
 	describe("forced-dispatch end-to-end (auto-continue + history)", () => {
-		it("forced agent_end → /target sent → input handler tags origin: forced and clears flag", async () => {
+		it("forced agent_end → dispatcher writes the forced sidebar entry directly and sends expanded body", async () => {
+			const TARGET_BODY = "Body of b:target";
 			const origin = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
-			const target = defWithPolicy("b:target", undefined);
+			const target = defWithPolicy("b:target", undefined, TARGET_BODY);
 			const state = freshState({
 				enabled: true,
 				registry: registryWith(origin, target),
 				activeTopLevelCommand: origin.name,
 			});
 			const { bag, ctxBag } = bootstrap(state);
-			// History is what carries the pendingForcedDispatch contract: it owns
-			// the input handler that interprets the flag set by auto-continue.
+			// Register history too — its before_agent_start cleanup of the
+			// pendingForcedDispatch flag still applies, and the input handler
+			// must be a benign no-op for the body text that gets dispatched.
 			registerHistory(bag.pi, state);
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.pendingForcedDispatch).toBe("b:target");
-			expect(bag.sentMessages).toEqual([{ content: "/b:target", options: { deliverAs: "followUp" } }]);
 
-			// Now simulate Pi delivering the forwarded message through the input event.
-			await bag.emit("input", { text: "/b:target", source: "followUp" }, ctxBag.ctx);
-
-			expect(state.pendingForcedDispatch).toBeNull();
+			// Dispatched payload is the expanded body, NOT a slash.
+			expect(bag.sentMessages).toEqual([{ content: TARGET_BODY, options: { deliverAs: "followUp" } }]);
+			expect(bag.sentMessages[0].content.startsWith("/")).toBe(false);
+			// The dispatcher writes the sidebar entry and journal entry itself.
+			expect(state.activeTopLevelCommand).toBe("b:target");
 			expect(state.sidebarLog).toHaveLength(1);
 			expect(state.sidebarLog[0].command).toBe("b:target");
 			expect(state.sidebarLog[0].origin).toBe("forced");
-			expect(state.activeTopLevelCommand).toBe("b:target");
 			const appended = bag.appendedEntries.filter((e) => e.type === "scramjet:command-start");
 			expect(appended).toHaveLength(1);
+			// pendingForcedDispatch is NOT set on the expand-locally path: the
+			// flag was the slash-routed signal to history.ts, and we no longer
+			// send a slash. (history.ts's input handler still consumes the
+			// flag if some other path sets it; this branch just doesn't.)
+			expect(state.pendingForcedDispatch).toBeNull();
 		});
 
 		// F6: forced target missing from registry is now caught before dispatch.
@@ -783,6 +831,82 @@ describe("registerAutoContinue — agent_end dispatch", () => {
 			expect(ctxBag.notifications).toHaveLength(1);
 			expect(ctxBag.notifications[0].type).toBe("warning");
 			expect(ctxBag.notifications[0].message).toContain("b:missing");
+		});
+	});
+
+	// S1 regression: Pi 0.74.0's sendUserMessage calls prompt with
+	// expandPromptTemplates: false (agent-session.js:1018), so a slash payload
+	// from auto-continue would land at the LLM as literal text rather than
+	// running the registered command/template. The fix expands the body in
+	// scramjet and sends the expansion. These tests assert the dispatcher's
+	// payload is the expanded body — and crucially does NOT start with "/" —
+	// so a regression that reverted to literal-slash dispatch would fail
+	// here rather than only when running against real Pi. (F1, S1)
+	describe("F1/S1 regression: dispatched payload is the expanded body, not a slash string", () => {
+		it("forced dispatch: substitutes $ARGUMENTS even though forced carries no args", async () => {
+			const targetBody = "Run the next step.\nargs=[$ARGUMENTS]";
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined, targetBody);
+			const state = freshState({
+				enabled: true,
+				registry: registryWith(def, target),
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(bag.sentMessages).toHaveLength(1);
+			// Forced has no args; $ARGUMENTS substitutes to empty.
+			expect(bag.sentMessages[0].content).toBe("Run the next step.\nargs=[]");
+			// The literal-slash regression would produce "/b:target"; assert
+			// directly that the wire payload does not start with "/".
+			expect(bag.sentMessages[0].content.startsWith("/")).toBe(false);
+		});
+
+		it("closed pick with args: $1 and $ARGUMENTS substitute into the target body", async () => {
+			const targetBody = "Process $1.\nfull=$ARGUMENTS";
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const target = defWithPolicy("b:ok", undefined, targetBody);
+			const state = freshState({
+				enabled: true,
+				registry: registryWith(def, target),
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
+			await setCompletion({
+				summary: "s",
+				next_step: { name: "b:ok", args: "alpha beta", fresh_session: false },
+			});
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(bag.sentMessages).toEqual([
+				{ content: "Process alpha.\nfull=alpha beta", options: { deliverAs: "followUp" } },
+			]);
+			expect(bag.sentMessages[0].content.startsWith("/")).toBe(false);
+		});
+
+		it("quoted args in next_step.args are bash-split before substitution (integration with parseDelegateArgs)", async () => {
+			const targetBody = "first=$1\nsecond=$2";
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const target = defWithPolicy("b:ok", undefined, targetBody);
+			const state = freshState({
+				enabled: true,
+				registry: registryWith(def, target),
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
+			await setCompletion({
+				summary: "s",
+				next_step: { name: "b:ok", args: '"a b c" tail', fresh_session: false },
+			});
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(bag.sentMessages).toEqual([
+				{ content: "first=a b c\nsecond=tail", options: { deliverAs: "followUp" } },
+			]);
 		});
 	});
 });
