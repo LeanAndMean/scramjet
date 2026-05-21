@@ -65,7 +65,14 @@ describe("buildNextStepBlock — open mode", () => {
 			"mach12:issue-plan",
 		);
 		expect(block).toContain("mach12:issue-review");
-		expect(block).toContain("any other slash command");
+		expect(block).toContain("any slash command");
+		expect(block).toContain("stop the chain");
+	});
+
+	it("renders empty candidates as open/free-form rather than a terminus", () => {
+		const block = buildNextStepBlock({ mode: "open", candidates: [] }, "mach12:pr-merge");
+		expect(block).toContain("No suggested candidates");
+		expect(block).toContain("any slash command");
 		expect(block).toContain("stop the chain");
 	});
 

@@ -106,6 +106,11 @@ describe("parseNextStepPolicy — open mode", () => {
 		});
 	});
 
+	it("parses an empty candidates list as open/free-form", () => {
+		const result = parseNextStepPolicy({ next: { mode: "open", candidates: [] } });
+		expect(result).toEqual({ ok: true, policy: { mode: "open", candidates: [] } });
+	});
+
 	it("parses with a blacklist", () => {
 		const result = parseNextStepPolicy({
 			next: {

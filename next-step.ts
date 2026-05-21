@@ -32,8 +32,8 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 		case "forced":
 			body =
 				`The command \`${id}\` declares a \`forced\` next-step: ` +
-				`\`${safe(policy.target)}\` will run unconditionally after this turn. ` +
-				`You do not need to set next_step on task_complete.`;
+				`\`${safe(policy.target)}\` will run after you call task_complete. ` +
+				`Do not set next_step on task_complete; the harness already knows the target.`;
 			break;
 		case "closed":
 			body =
@@ -46,11 +46,13 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 			const blacklistLine = policy.blacklist?.length
 				? `\nDo not pick: ${policy.blacklist.map(safe).join(", ")}.`
 				: "";
+			const candidatesLine = policy.candidates.length
+				? `Suggested candidates for next_step.name (bare, no leading slash):\n${formatCandidates(policy.candidates)}\n`
+				: "No suggested candidates are listed for next_step.name.\n";
 			body =
 				`The command \`${id}\` declares an \`open\` next-step policy.\n` +
-				`Suggested candidates for next_step.name (bare, no leading slash):\n` +
-				`${formatCandidates(policy.candidates)}\n` +
-				`You may also pick any other slash command if it fits the work.${blacklistLine}\n` +
+				candidatesLine +
+				`You may pick any slash command if it fits the work.${blacklistLine}\n` +
 				`Omit next_step entirely to stop the chain.`;
 			break;
 		}

@@ -123,7 +123,7 @@ Modes:
 
 | Mode      | Who decides    | Behavior                                                                                |
 |-----------|----------------|-----------------------------------------------------------------------------------------|
-| `forced`  | Nobody         | Single named command runs unconditionally. No decision exists.                          |
+| `forced`  | Nobody         | After the command signals completion, a single named command runs unconditionally. No decision exists. |
 | `closed`  | Agent          | Agent must pick one of the listed candidates (or stop — see §2.1).                      |
 | `open`    | Agent          | Agent picks from the listed candidates *or* any other slash command, minus a blacklist. |
 | `ask`     | Human          | Chain pauses. User picks the next command (or types something else, or stops).          |
@@ -195,7 +195,17 @@ encouraged but optional.
   `pr-merge`) without forcing every author to enumerate every legal
   follow-up. The blacklist is consulted *after* the agent's choice; a
   blacklisted pick is treated as a stop.
-- **No `next` declared.** Equivalent to `mode: ask` with no hint.
+- **`open` with no candidates.** Still open/free-form. The agent may pick
+  any non-blacklisted slash command. Use no `next` (or `mode: ask`) for a
+  terminus, not an empty `open` list.
+- **`forced` completion gate.** The forced target runs only after the
+  command signals completion with `task_complete`. It does not require an
+  agent-picked `next_step`, and it still ignores `/scramjet off`; the
+  completion signal only prevents chaining after clarification, error, or
+  an otherwise unfinished turn.
+- **No `next` declared.** Equivalent to `mode: ask` with no hint. The
+  harness does not inject a next-step instruction block and does not
+  auto-follow a legacy/free-form agent proposal.
 
 #### 3. Command delegation (sub-command calls)
 
@@ -308,17 +318,17 @@ prose level.
 #### 4. `/scramjet on` / `/scramjet off`
 
 When **off** (default), the harness pauses after each top-level
-command's `closed`, `open`, or `ask` next-step. Hint text from
+command's `closed`, `open`, `ask`, or absent next-step. Hint text from
 `next.candidates` is displayed (in the sidebar or status area) but the
 agent's pick (under `closed` / `open`) is not auto-followed and the
-user types whatever they want next. Delegated and `forced` calls
-**still happen** — they are part of the command's *own* execution, not
-chaining decisions.
+user types whatever they want next. Delegated calls and completed
+`forced` transitions **still happen** — they are part of the command's
+*own* execution, not chaining decisions.
 
 When **on**, the harness also auto-follows `closed` / `open` agent
 picks (after validating them against the candidate list / blacklist) and
-auto-dispatches after a brief countdown widget. `ask` still pauses for
-the user regardless of the flag.
+auto-dispatches after a brief countdown widget. `ask` and absent `next`
+still pause for the user regardless of the flag.
 
 In both modes, Esc at any point returns to plain Pi.
 
@@ -326,8 +336,10 @@ In both modes, Esc at any point returns to plain Pi.
 
 `/off` gates *decisions*: `closed` / `open` agent-picks and `ask`
 user-picks. `forced` has no decision — it is a deterministic transition
-the command author wired in. The user implicitly chose to chain by
-invoking the command that declares `forced` next-step; surfacing every
+the command author wired in. The transition still waits for the command's
+`task_complete` signal so clarification, error, or unfinished turns do
+not accidentally advance. The user implicitly chose to chain by invoking
+the command that declares `forced` next-step; surfacing every completed
 `forced` transition as a manual step would be ritualistic, not
 empowering.
 
@@ -544,7 +556,7 @@ every step Mach 10 has eventually grown.
 | `pr-review-assessment`   | `closed`| `pr-review-fix`, `pr-pre-merge`                     | —                                  |
 | `pr-review-fix`          | `closed`| `pr-review`, `pr-pre-merge`                         | `push`                             |
 | `pr-pre-merge`           | `ask`   | (user: merge / fix more / hold)                     | `find-contribution-guidelines`     |
-| `pr-merge`               | `open`  | (cross-set; e.g. `release:announce`)                | —                                  |
+| `pr-merge`               | n/a     | (terminus — no `next`)                              | —                                  |
 | `push`                   | n/a     | (delegation target — no top-level `next`)           | (gh comment subroutines)           |
 
 Notes:
@@ -568,9 +580,11 @@ Notes:
   human call. The `hint` field on the `ask` declaration spells this out.
 - **`pr-pre-merge` → `ask`** for the same reason: the merge decision
   itself is human-owned even when the checks pass.
-- **`pr-merge` → `open`** is where cross-set edges naturally appear
-  (e.g. a user's `release:announce` command). Concrete candidate names
-  go in the YAML; pattern matching is not part of the schema.
+- **`pr-merge` has no `next`** because merge is the natural terminus of
+  the default Mach 12 lifecycle. If a user has a post-merge process
+  (e.g. `release:announce`), they should add an explicit `next` policy in
+  their local command set; an empty `open` list is not a terminus
+  convention.
 
 ### Subroutine extraction
 

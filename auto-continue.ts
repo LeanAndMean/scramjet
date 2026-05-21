@@ -1,9 +1,9 @@
 /**
  * Auto-continuation: on agent_end, read the active command's next-step
  * policy, show a 3s countdown widget (cancellable by Escape or any
- * keypress), then dispatch the chosen command. `forced` fires
- * unconditionally; the rest defer to /scramjet on|off. See CLAUDE.md
- * "MVP design rationales" for why.
+ * keypress), then dispatch the chosen command. `forced` fires after the
+ * agent signals completion; the rest defer to /scramjet on|off. See
+ * CLAUDE.md "MVP design rationales" for why.
  *
  * Dispatch uses Pi's experimental dispatchUserInput primitive so slash
  * commands, skills, and prompt templates run through Pi's normal input
@@ -99,8 +99,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		// at the top of agent_end. A `forced` target that dropped out of the
 		// registry (rename, removed command, partial reload) would otherwise
 		// silently dispatch the wrong command and set activeTopLevelCommand to
-		// a non-registry name; the next agent_end would then fall back to the
-		// legacy path with no signal that the forced chain went off the rails.
+		// a non-registry name; the next agent_end would then warn late, after the
+		// forced chain already went off the rails.
 		const def = state.registry.get(target);
 		if (!def) {
 			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
@@ -115,11 +115,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const def = activeName ? state.registry.get(activeName) : undefined;
 
 		// F11: activeTopLevelCommand is set but the registry has no matching
-		// entry. This used to silently fall through to the legacy auto-continue
-		// path, which means a `forced` chain whose target dropped out of the
-		// registry (e.g. a renamed command, a partial reload) became silently
-		// un-forced. Notify the user and bail; clear the stale name so the
-		// warning fires once instead of on every subsequent agent_end.
+		// entry. Without this guard, a `forced` chain whose target dropped out of
+		// the registry (e.g. a renamed command, a partial reload) would be hard to
+		// diagnose. Notify the user and bail; clear the stale name so the warning
+		// fires once instead of on every subsequent agent_end.
 		if (activeName && !def) {
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
 			state.activeTopLevelCommand = null;
@@ -128,19 +127,18 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 
 		const policy = def?.next;
-
-		// Forced fires the target unconditionally — regardless of state.enabled,
-		// regardless of whether the agent called task_complete. The user
-		// implicitly chose to chain by invoking the command that declares forced.
-		if (policy?.mode === "forced") {
-			clearLatestCompletion();
-			dispatchForced(policy.target, ctx);
-			return;
-		}
-
 		const completion = getLatestCompletion();
 		if (!completion) return;
 		clearLatestCompletion();
+
+		// Forced fires the target after the agent explicitly signals that the
+		// command completed. It still ignores state.enabled because no decision is
+		// being delegated to the agent or user; task_complete is only the safety
+		// gate that distinguishes successful completion from clarification/error.
+		if (policy?.mode === "forced") {
+			dispatchForced(policy.target, ctx);
+			return;
+		}
 
 		if (policy) {
 			const proposed = completion.nextStep?.name;
@@ -173,9 +171,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		if (!state.enabled) return;
-		if (!completion.nextStep) return;
-		startCountdown(completion.nextStep, ctx);
+		// No declared next-step policy is equivalent to ask-with-no-hint: the
+		// chain pauses, even if an agent supplied a legacy/free-form next_step.
+		return;
 	});
 
 	// Clean up on session shutdown

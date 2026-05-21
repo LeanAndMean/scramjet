@@ -69,13 +69,10 @@ const WIRING: WiringRow[] = [
 	},
 	{
 		basename: "pr-merge",
-		// Intentional terminus: `open` with empty `candidates` means "chain ends
-		// here; the agent may not propose a follow-up". Validator's "is in open
-		// candidates" check trivially rejects every pick, so the only way past
-		// pr-merge is the user typing the next slash command themselves. This is
-		// the natural end of a feature lifecycle. See mach12:pr-merge.md for the
-		// rationale and the seam left for downstream command sets to extend.
-		expected: { mode: "open", candidates: [] },
+		// Intentional terminus: no `next:` is equivalent to ask-with-no-hint, so
+		// Scramjet pauses after merge instead of treating an empty open policy as
+		// a hidden stop convention.
+		expected: null,
 	},
 	// Subroutines.
 	{ basename: "push", expected: null },
