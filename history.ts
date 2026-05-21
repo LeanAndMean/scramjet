@@ -5,11 +5,11 @@ export const COMMAND_START_TYPE = "scramjet:command-start";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
 
-// Pi built-ins and scramjet internals that the F25 clear-on-unknown-slash
-// path must NOT treat as a workflow exit. Used only when pi.getCommands()
-// is unavailable (older Pi, test fakes that don't stub it); the normal
-// path consults the live command list. (F4)
-const FALLBACK_KNOWN_SLASH = new Set<string>(["scramjet", "scramjet-exec-fresh", "clear"]);
+// Pi built-ins that the F25 clear-on-unknown-slash path must NOT treat as
+// a workflow exit. Used only when pi.getCommands() is unavailable (older Pi,
+// test fakes that don't stub it); the normal path consults the live command
+// list. (F4)
+const FALLBACK_KNOWN_SLASH = new Set<string>(["scramjet", "clear"]);
 
 function extractSlashName(text: string): string | null {
 	if (!text.startsWith("/")) return null;
@@ -61,8 +61,8 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 // Single chokepoint for "a depth-0 top-level command just started." Updates
 // activeTopLevelCommand, pushes a sidebar entry, and persists it to the
 // journal so resume can replay it. Called from the input-event handler
-// below (user-typed slashes) and from auto-continue's dispatchExpanded
-// (next-step body dispatch); identical effects.
+// below for typed/extension-dispatched slash commands; Pi input dispatch
+// makes auto-continued Scramjet commands flow through that same handler.
 export function recordCommandStart(
 	pi: ExtensionAPI,
 	state: ScramjetState,

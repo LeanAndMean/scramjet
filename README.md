@@ -33,7 +33,7 @@ Scramjet removes the ceremony. When a command declares its next step (via YAML f
   ┌─ Next: /mach12:issue-review 55 (fresh session)    3s...    [Esc] cancel ─┐
   └──────────────────────────────────────────────────────────────────────────┘
 
-  [auto-clears, runs issue-review]
+  [fresh session starts, runs issue-review]
   [agent works, asks you questions, you answer, review posted]
 
   ┌─ Next: /mach12:issue-implement 55 (fresh session)    3s...              ┐
@@ -262,11 +262,21 @@ Alternatively, set `apiKey` directly inside `providers.anthropic` in
 
 ## Versions
 
-Tested against **Pi `0.74.0`** (see `pi.piTestedVersion` in
-`package.json`). The runtime dependencies on
-`@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` are
-pinned to the same version. CI fails if `pi.piTestedVersion` and either
-pin drift apart.
+Tested against **Pi `0.74.0-scramjet.1`** (see `pi.piTestedVersion` in
+`package.json`). Scramjet uses a LeanAndMean-patched Pi coding-agent
+package based on upstream Pi `0.74.0`; the patch flavor is
+`scramjet.1`.
+
+The dependency key remains `@earendil-works/pi-coding-agent`, but it is
+intentionally installed via npm alias:
+
+```json
+"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.1"
+```
+
+`@earendil-works/pi-tui` remains the upstream `0.74.0` package. CI fails
+if the Pi base version, Scramjet patch flavor, coding-agent alias, tested
+version, or pi-tui pin drift apart.
 
 ## File structure
 
@@ -276,6 +286,7 @@ scramjet/
   types.ts              — ScramjetState and shared types
   task-complete.ts      — task_complete tool + next-step block injection
   auto-continue.ts      — agent_end listener: validate, dispatch, countdown
+  next-step-dispatch.ts — Pi input-dispatch helper for next steps
   delegate.ts           — delegate tool + frame stack
   next-step.ts          — <scramjet-next-step> block builder
   history.ts            — sidebar journal + replay

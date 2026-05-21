@@ -37,20 +37,25 @@ const scramjetPkg = readPackageJson(join(scramjetRoot, "package.json"));
 // Pi's package.json restricts subpath access via `exports`, so we can't
 // just resolve `@earendil-works/pi-coding-agent/package.json`. Resolve
 // the main entry instead and walk up until we find the package's own
-// package.json (recognized by its `name` field).
+// package.json (recognized by its `name` field). npm aliasing installs
+// the LeanAndMean-patched package at this import path while preserving the
+// package's own published `name`, so keep this allow-list narrow.
 const piEntryUrl = import.meta.resolve("@earendil-works/pi-coding-agent");
+const acceptedPiPackageNames = new Set(["@earendil-works/pi-coding-agent", "@leanandmean/pi-coding-agent"]);
 let piRoot = dirname(fileURLToPath(piEntryUrl));
 while (true) {
 	const candidate = join(piRoot, "package.json");
 	if (existsSync(candidate)) {
 		const candidatePkg = readPackageJson(candidate);
-		if (candidatePkg.name === "@earendil-works/pi-coding-agent") {
+		if (acceptedPiPackageNames.has(candidatePkg.name)) {
 			break;
 		}
 	}
 	const parent = dirname(piRoot);
 	if (parent === piRoot) {
-		throw new Error(`Could not locate @earendil-works/pi-coding-agent package root from ${piEntryUrl}`);
+		throw new Error(
+			`Could not locate @earendil-works/pi-coding-agent package root from ${piEntryUrl}; expected package name ${Array.from(acceptedPiPackageNames).join(" or ")}`,
+		);
 	}
 	piRoot = parent;
 }

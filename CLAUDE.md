@@ -147,4 +147,10 @@ Rules that govern the block:
 
 ## Version pinning
 
-`pi.piTestedVersion` in `package.json` must match the pinned versions of `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` in `dependencies` (both became runtime deps at Stage 8). CI enforces this — bump all three together.
+Scramjet intentionally consumes a LeanAndMean-patched Pi coding-agent package through an npm alias:
+
+```json
+"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.1"
+```
+
+The alias preserves existing imports while installing the patched package at the upstream dependency key. The patched package is based on upstream Pi `pi.piBaseVersion` with Scramjet patch flavor `pi.piPatchFlavor`; `pi.piTestedVersion` is the combined `${piBaseVersion}-${piPatchFlavor}`. `@earendil-works/pi-tui` remains the upstream `pi.piBaseVersion` package. CI enforces that all of these fields stay in sync — bump the base version, patch flavor/tested version, coding-agent alias, and pi-tui pin together.
