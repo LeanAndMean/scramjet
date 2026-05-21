@@ -274,10 +274,13 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		expect(state.sidebarLog[0].command).toBe("int:start");
 		expect(state.sidebarLog[0].origin).toBe("user");
 
-		// 3. The agent finishes its turn. int:start declares forced → int:next.
-		//    Scramjet dispatches the slash wire through Pi's normal input path;
-		//    history observes Pi's extension-source input event and labels it
-		//    origin: "forced" via state.pendingForcedDispatch.
+		// 3. The agent signals completion, then its turn ends. int:start declares
+		//    forced → int:next. Scramjet dispatches the slash wire through Pi's
+		//    normal input path; history observes Pi's extension-source input event
+		//    and labels it origin: "forced" via state.pendingForcedDispatch.
+		const taskComplete = bag.tools.find((tool) => tool.name === "task_complete");
+		expect(taskComplete).toBeDefined();
+		await taskComplete.execute("completion", { summary: "start complete" });
 		await bag.emit("agent_end", {}, ctx);
 		expect(bag.dispatched).toEqual([{ input: "/int:next", options: { deliverAs: "followUp" } }]);
 		expect(bag.sent).toEqual([]);

@@ -143,14 +143,15 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 	describe("forced mode", () => {
 		const targetDef = defWithPolicy("b:target", undefined, "Body is routed by Pi now, not Scramjet");
 
-		it("dispatches slash input regardless of enabled=false and marks pending forced origin", async () => {
+		it("dispatches slash input after task_complete regardless of enabled=false and marks pending forced origin", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({
 				enabled: false,
 				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
-			const { bag, ctxBag } = bootstrap(state);
+			const { bag, ctxBag, setCompletion } = bootstrap(state);
+			await setCompletion({ summary: "done" });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -163,7 +164,7 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 			expect(ctxBag.notifications).toEqual([]);
 		});
 
-		it("fires even when the agent never called task_complete", async () => {
+		it("does not fire when the agent never called task_complete", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({
 				enabled: true,
@@ -174,13 +175,15 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
-			expect(ctxBag.dispatched.map((d) => d.input)).toEqual(["/b:target"]);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(state.pendingForcedDispatch).toBeNull();
 		});
 
 		it("warns and does not dispatch when forced target is missing from registry", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:missing" });
 			const state = freshState({ enabled: true, registry: registryWith(def), activeTopLevelCommand: def.name });
-			const { bag, ctxBag } = bootstrap(state);
+			const { bag, ctxBag, setCompletion } = bootstrap(state);
+			await setCompletion({ summary: "done" });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
@@ -198,8 +201,9 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 				registry: registryWith(def, targetDef),
 				activeTopLevelCommand: def.name,
 			});
-			const { bag, ctxBag } = bootstrap(state);
+			const { bag, ctxBag, setCompletion } = bootstrap(state);
 			ctxBag.rejectDispatchWith = new Error("boom");
+			await setCompletion({ summary: "done" });
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			await flushMicrotasks();
@@ -351,8 +355,8 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 		});
 	});
 
-	describe("legacy/no-policy and guard paths", () => {
-		it("no policy + enabled=true preserves legacy free-pick countdown behavior", async () => {
+	describe("no-policy and guard paths", () => {
+		it("no policy + enabled=true ignores legacy free-form next_step and pauses", async () => {
 			const def = defWithPolicy("legacy:cmd", undefined);
 			const state = freshState({ enabled: true, registry: registryWith(def), activeTopLevelCommand: def.name });
 			const { bag, ctxBag, setCompletion } = bootstrap(state);
@@ -360,7 +364,22 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
-			expect(ctxBag.widgets.length).toBeGreaterThan(0);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.widgets).toEqual([]);
+			expect(ctxBag.notifications).toEqual([]);
+		});
+
+		it("no policy + enabled=false ignores legacy free-form next_step and pauses", async () => {
+			const def = defWithPolicy("legacy:cmd", undefined);
+			const state = freshState({ enabled: false, registry: registryWith(def), activeTopLevelCommand: def.name });
+			const { bag, ctxBag, setCompletion } = bootstrap(state);
+			await setCompletion({ summary: "s", next_step: { name: "next", fresh_session: false } });
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.widgets).toEqual([]);
+			expect(ctxBag.notifications).toEqual([]);
 		});
 
 		it("active command missing warns once and clears activeTopLevelCommand", async () => {
@@ -444,8 +463,9 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 				registry: registryWith(origin, target),
 				activeTopLevelCommand: origin.name,
 			});
-			const { bag, ctxBag } = bootstrap(state);
+			const { bag, ctxBag, setCompletion } = bootstrap(state);
 			registerHistory(bag.pi, state);
+			await setCompletion({ summary: "done" });
 			ctxBag.ctx.dispatchUserInput = vi.fn(async (input: string, options?: unknown) => {
 				ctxBag.dispatched.push({ input, options, session: "current" });
 				await bag.emit("input", { text: input, source: "extension" }, ctxBag.ctx);

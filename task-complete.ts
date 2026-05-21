@@ -114,13 +114,13 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 	pi.on("before_agent_start", async (event) => {
 		const def = state.activeTopLevelCommand ? state.registry.get(state.activeTopLevelCommand) : undefined;
 		const policy = def?.next;
+		clearLatestCompletion();
 
 		// When the active command declares a policy, surface it to the agent
 		// regardless of state.enabled. /off gates dispatch decisions, not the
 		// agent's awareness of what the policy is — the agent's pick is still
 		// needed for the notify-hint path under /off.
 		if (policy) {
-			clearLatestCompletion();
 			return {
 				systemPrompt: event.systemPrompt + SYSTEM_PROMPT_SNIPPET,
 				message: {
@@ -131,11 +131,9 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 			};
 		}
 
-		// Legacy path: no declared policy, snippet only when enabled.
-		if (!state.enabled) return;
-		clearLatestCompletion();
-		return {
-			systemPrompt: event.systemPrompt + SYSTEM_PROMPT_SNIPPET,
-		};
+		// No declared policy is equivalent to ask-with-no-hint. Do not inject the
+		// completion/next-step instructions: there is no Scramjet continuation to
+		// drive, and idle Scramjet should stay invisible.
+		return;
 	});
 }

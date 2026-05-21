@@ -70,10 +70,12 @@ There is no "workflow mode" to enter or exit. You're always just using Pi. Scram
 
 Each command's YAML frontmatter declares one of four next-step policies:
 
-- `forced` — single named command runs unconditionally
+- `forced` — after the command signals completion, a single named command runs unconditionally
 - `closed` — agent picks from a bounded candidate list
 - `open` — agent picks from candidates or any other command minus a blacklist
 - `ask` — chain pauses for user decision
+
+Omitting `next:` is equivalent to `ask` with no hint: Scramjet does not auto-follow an agent-proposed next step.
 
 Scramjet reads the declaration, validates the agent's pick (or the forced target), and dispatches. The harness does not own routing logic — there is no central workflow registry.
 
@@ -87,16 +89,16 @@ Scramjet is a small TypeScript extension. The auto-continuation mechanism at its
 
 Scramjet registers a tool called `task_complete` and injects a `<scramjet-next-step>` block into the user message via Pi's `before_agent_start` hook. The block lists candidate commands when the active command's frontmatter declared `closed` or `open`.
 
-The agent calls `task_complete({ summary, next_step })` when done. The tool returns `terminate: true`, cleanly stopping the agent loop.
+The agent calls `task_complete({ summary, next_step })` when done. For `forced` policies it omits `next_step`; the completion signal is still required before the forced target runs. The tool returns `terminate: true`, cleanly stopping the agent loop.
 
 ### Validation and dispatch
 
 After the agent settles, Scramjet validates the pick against the active command's declared policy. Mode-by-mode behavior:
 
-- **`forced`** — fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent.
+- **`forced`** — after `task_complete`, fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent; `task_complete` is the safety gate that distinguishes successful completion from clarification or error.
 - **`closed` / `open`** under `/scramjet on` — valid pick → countdown then dispatch; invalid pick → stop with a notification.
 - **`closed` / `open`** under `/scramjet off` — surface the hint via the UI only; no auto-continuation.
-- **`ask`** — pause regardless of the flag.
+- **`ask` / no `next:`** — pause regardless of the flag.
 
 Executing a step means either dispatching the slash command directly, or creating a fresh session first and then dispatching.
 

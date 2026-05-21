@@ -6,9 +6,6 @@ allowed-tools:
   - read
   - grep
   - glob
-next:
-  mode: open
-  candidates: []
 ---
 
 # Merge and Release
@@ -17,7 +14,7 @@ You are merging a PR that has passed review and the pre-merge checklist, then op
 
 **User input:** $ARGUMENTS
 
-This command's next-step policy is `open` with no Mach 12 candidates -- merge is the natural terminus of a feature lifecycle. Project-local or other command sets may declare follow-up commands here (e.g., a `release:announce` step) by extending the wiring in a downstream set. By default, the chain stops after a successful merge.
+This command intentionally declares no next-step policy. Merge is the natural terminus of a feature lifecycle, so Scramjet pauses after a successful merge. If your process has a post-merge follow-up (e.g., a `release:announce` step), add an explicit next-step policy in your local command set.
 
 ## Step 1: Parse input
 

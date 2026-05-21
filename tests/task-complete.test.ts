@@ -158,17 +158,13 @@ describe("registerTaskCompleteTool — before_agent_start", () => {
 		expect(rA.systemPrompt).toBe(rB.systemPrompt);
 	});
 
-	it("returns systemPrompt only (no message) when no policy and enabled=true (legacy path)", async () => {
+	it("returns undefined (no-op) when no policy and enabled=true", async () => {
 		const state = freshState({ enabled: true });
 		const { pi, emit } = recordingPi();
 		registerTaskCompleteTool(pi, state);
 
-		const [result] = (await emit("before_agent_start", { systemPrompt: "BASE" })) as Array<{
-			systemPrompt: string;
-			message?: unknown;
-		}>;
-		expect(result.systemPrompt.startsWith("BASE")).toBe(true);
-		expect(result.message).toBeUndefined();
+		const [result] = (await emit("before_agent_start", { systemPrompt: "BASE" })) as unknown[];
+		expect(result).toBeUndefined();
 	});
 
 	it("returns undefined (no-op) when no policy and enabled=false", async () => {
@@ -189,8 +185,8 @@ describe("registerTaskCompleteTool — before_agent_start", () => {
 		expect(result).toBeUndefined();
 	});
 
-	it("returns systemPrompt only when activeTopLevelCommand is in registry but def has no policy (enabled=true)", async () => {
-		const def: CommandDef = { name: "legacy:cmd", filePath: "/fake/legacy:cmd.md", body: "" };
+	it("returns undefined when activeTopLevelCommand is in registry but def has no policy (enabled=true)", async () => {
+		const def: CommandDef = { name: "terminus:cmd", filePath: "/fake/terminus:cmd.md", body: "" };
 		const state = freshState({
 			enabled: true,
 			registry: registryWith(def),
@@ -199,12 +195,8 @@ describe("registerTaskCompleteTool — before_agent_start", () => {
 		const { pi, emit } = recordingPi();
 		registerTaskCompleteTool(pi, state);
 
-		const [result] = (await emit("before_agent_start", { systemPrompt: "BASE" })) as Array<{
-			systemPrompt: string;
-			message?: unknown;
-		}>;
-		expect(result.systemPrompt.startsWith("BASE")).toBe(true);
-		expect(result.message).toBeUndefined();
+		const [result] = (await emit("before_agent_start", { systemPrompt: "BASE" })) as unknown[];
+		expect(result).toBeUndefined();
 	});
 
 	it("clears latestCompletion when injecting (so stale completions don't fire on next agent_end)", async () => {
