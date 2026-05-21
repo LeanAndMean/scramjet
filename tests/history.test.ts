@@ -5,6 +5,7 @@ import {
 	COMMAND_START_TYPE,
 	ENABLED_TOGGLE_TYPE,
 	parseSlashCommand,
+	recordCommandInvocation,
 	registerHistory,
 	replayHistory,
 	SIDEBAR_MAX,
@@ -214,6 +215,31 @@ describe("replayHistory", () => {
 		const result = replayHistory(entries);
 		expect(result.sidebarLog).toHaveLength(SIDEBAR_MAX);
 		expect(result.sidebarLog[0].command).toBe("c-5");
+	});
+});
+
+describe("recordCommandInvocation", () => {
+	it("records depth-0 starts as active top-level commands", () => {
+		const state = freshState();
+		const { pi, appended } = recordingPi();
+
+		recordCommandInvocation(pi, state, "top", "user", 0);
+
+		expect(state.activeTopLevelCommand).toBe("top");
+		expect(state.sidebarLog[0]).toMatchObject({ command: "top", origin: "user", depth: 0 });
+		expect((appended[0].data as SidebarEntry).depth).toBe(0);
+	});
+
+	it("records delegated depth entries without replacing activeTopLevelCommand", () => {
+		const state = freshState({ activeTopLevelCommand: "top" });
+		const { pi, appended } = recordingPi();
+
+		recordCommandInvocation(pi, state, "delegate", "agent", 1);
+
+		expect(state.activeTopLevelCommand).toBe("top");
+		expect(state.sidebarLog[0]).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
+		expect(appended[0].customType).toBe(COMMAND_START_TYPE);
+		expect(appended[0].data as SidebarEntry).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
 	});
 });
 

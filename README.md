@@ -104,7 +104,7 @@ Executing a step means either dispatching the slash command directly, or creatin
 
 ### Delegation
 
-Commands invoke other commands as subroutines via the `delegate` tool. Delegated commands run in the same agent turn, with their own declared `allowed-tools` (advisory in this MVP — out-of-scope calls log a warning but proceed). Delegated commands' own `next:` declarations are ignored; only the caller's `next:` controls chaining.
+Commands invoke other commands as subroutines via the `delegate` tool. Delegated commands run in the same agent turn. Their effective `allowed-tools` are the intersection of the active top-level command/caller scope and the delegated command's own declaration, so delegation cannot widen the top-level scope. Enforcement is advisory in this MVP — out-of-scope calls log a warning but proceed. Delegated invocations are journaled at indented history depths with `agent` origin, and delegated commands' own `next:` declarations are ignored; only the caller's `next:` controls chaining.
 
 ## Install
 
@@ -189,8 +189,12 @@ call `delegate({ command: "mach12:find-contribution-guidelines", args: "" })`.
 ```
 
 The subroutine runs in the same agent turn. Its frontmatter declares
-its own `allowed-tools`; `next:` declarations on subroutines are
-ignored.
+its own `allowed-tools`, intersected with the active top-level/caller
+scope; `next:` declarations on subroutines are ignored. MVP delegation
+frames are latched until the next agent turn, so repeated calls to the
+same subroutine in one turn are treated as cycles and sequential sibling
+delegations inherit prior narrowing rather than true push/pop return
+semantics.
 
 ## Bundled Mach 12 command set
 

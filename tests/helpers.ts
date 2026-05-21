@@ -31,6 +31,7 @@ export function recordingPi(): RecordingPi {
 	const tools: any[] = [];
 	const handlers = new Map<string, Handler[]>();
 	const pi: any = {
+		appended: [] as { customType: string; data: unknown }[],
 		registerTool(tool: any) {
 			tools.push(tool);
 		},
@@ -38,6 +39,9 @@ export function recordingPi(): RecordingPi {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
 			handlers.set(event, list);
+		},
+		appendEntry(customType: string, data: unknown) {
+			pi.appended.push({ customType, data });
 		},
 	};
 	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseDelegateArgs, substituteArguments } from "../commands/substitute.ts";
 import { detectCycle, intersectTools, registerDelegateTool } from "../delegate.ts";
-import type { CommandDef, DelegateFrame, ScramjetState } from "../types.ts";
+import { COMMAND_START_TYPE } from "../history.ts";
+import type { CommandDef, DelegateFrame, ScramjetState, SidebarEntry } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
 function def(name: string, body: string, allowedTools?: string[]): CommandDef {
@@ -173,7 +174,103 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(result.content[0].text).toBe("Run with: ship it");
 		expect(state.delegateStack).toHaveLength(1);
 		expect(state.delegateStack[0].commandName).toBe("mach12:push");
-		expect(state.delegateStack[0].depth).toBe(0);
+		expect(state.delegateStack[0].depth).toBe(1);
+		expect(state.sidebarLog).toHaveLength(1);
+		expect(state.sidebarLog[0]).toMatchObject({ command: "mach12:push", origin: "agent", depth: 1 });
+	});
+
+	it("journals delegated command starts without changing activeTopLevelCommand", async () => {
+		const state = freshState({
+			registry: new Map([["mach12:push", def("mach12:push", "body")]]),
+			activeTopLevelCommand: "mach12:issue-plan",
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+
+		await tools[0].execute("call-1", { command: "mach12:push", args: "" }, undefined, undefined, { cwd: "/" });
+
+		expect(state.activeTopLevelCommand).toBe("mach12:issue-plan");
+		expect(state.sidebarLog[0]).toMatchObject({ command: "mach12:push", origin: "agent", depth: 1 });
+		expect(pi.appended).toHaveLength(1);
+		expect(pi.appended[0].customType).toBe(COMMAND_START_TYPE);
+		expect(pi.appended[0].data as SidebarEntry).toMatchObject({
+			command: "mach12:push",
+			origin: "agent",
+			depth: 1,
+		});
+	});
+
+	it("uses the active top-level command as the first delegate caller scope", async () => {
+		const state = freshState({
+			registry: new Map([
+				["top", def("top", "top-body", ["Read"])],
+				["callee", def("callee", "callee-body", ["Read", "Bash"])],
+			]),
+			activeTopLevelCommand: "top",
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+
+		const result = await tools[0].execute("call-1", { command: "callee", args: "" }, undefined, undefined, {
+			cwd: "/",
+		});
+
+		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["Read"]);
+		expect(result.details.effectiveAllowedTools).toEqual(["Read"]);
+	});
+
+	it("applies the callee restriction when the active top-level command is unrestricted", async () => {
+		const state = freshState({
+			registry: new Map([
+				["top", def("top", "top-body")],
+				["callee", def("callee", "callee-body", ["Bash"])],
+			]),
+			activeTopLevelCommand: "top",
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+
+		await tools[0].execute("call-1", { command: "callee", args: "" }, undefined, undefined, { cwd: "/" });
+
+		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["Bash"]);
+	});
+
+	it("applies the top-level restriction when the first callee is unrestricted", async () => {
+		const state = freshState({
+			registry: new Map([
+				["top", def("top", "top-body", ["Read", "Edit"])],
+				["callee", def("callee", "callee-body")],
+			]),
+			activeTopLevelCommand: "top",
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+
+		await tools[0].execute("call-1", { command: "callee", args: "" }, undefined, undefined, { cwd: "/" });
+
+		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["Read", "Edit"]);
+	});
+
+	it("prepends the empty-scope warning when top-level and first callee scopes are disjoint", async () => {
+		const state = freshState({
+			registry: new Map([
+				["top", def("top", "top-body", ["Read"])],
+				["callee", def("callee", "callee-body", ["Bash"])],
+			]),
+			activeTopLevelCommand: "top",
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+
+		const result = await tools[0].execute("call-1", { command: "callee", args: "" }, undefined, undefined, {
+			cwd: "/",
+		});
+
+		expect(state.delegateStack[0].effectiveAllowedTools).toEqual([]);
+		expect(result.details.effectiveAllowedTools).toEqual([]);
+		expect(result.content[0].text).toMatch(
+			/\[scramjet\/delegate\] WARNING: effective allowed-tools scope for 'callee' is empty/,
+		);
 	});
 
 	it("narrows effectiveAllowedTools monotonically across the latched stack on sequential calls", async () => {
@@ -197,7 +294,8 @@ describe("registerDelegateTool — execute paths", () => {
 
 		await tool.execute("call-2", { command: "b", args: "" }, undefined, undefined, { cwd: "/" });
 		expect(state.delegateStack[1].effectiveAllowedTools).toEqual(["Bash"]);
-		expect(state.delegateStack[1].depth).toBe(1);
+		expect(state.delegateStack[1].depth).toBe(2);
+		expect(state.sidebarLog.map((entry) => entry.depth)).toEqual([1, 2]);
 	});
 
 	it("leaves effectiveAllowedTools undefined when neither caller nor callee restrict", async () => {
@@ -240,8 +338,8 @@ describe("registerDelegateTool — execute paths", () => {
 	it("allows nested delegation (a -> b -> c) when no name repeats (S18)", async () => {
 		// Mirror of the cycle test on the happy path: distinct names should
 		// stack monotonically without tripping cycle detection, and each frame
-		// records its 0-indexed depth so tool-scope-advisory's depth= label
-		// reflects the real call nesting.
+		// records sidebar depth relative to the active top-level command
+		// (top-level is 0, first delegate is 1).
 		const { state, execute } = setupWithRegistry([
 			def("a", "body-a", ["Read", "Bash"]),
 			def("b", "body-b"),
@@ -250,15 +348,15 @@ describe("registerDelegateTool — execute paths", () => {
 
 		const r1 = await execute({ command: "a", args: "" });
 		expect(r1.details.error).toBeUndefined();
-		expect(r1.details.depth).toBe(0);
+		expect(r1.details.depth).toBe(1);
 
 		const r2 = await execute({ command: "b", args: "" });
 		expect(r2.details.error).toBeUndefined();
-		expect(r2.details.depth).toBe(1);
+		expect(r2.details.depth).toBe(2);
 
 		const r3 = await execute({ command: "c", args: "" });
 		expect(r3.details.error).toBeUndefined();
-		expect(r3.details.depth).toBe(2);
+		expect(r3.details.depth).toBe(3);
 
 		expect(state.delegateStack.map((f) => f.commandName)).toEqual(["a", "b", "c"]);
 		// Latched intersection narrows as we descend: a=[Read,Bash], b unrestricted
@@ -266,6 +364,7 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["Read", "Bash"]);
 		expect(state.delegateStack[1].effectiveAllowedTools).toEqual(["Read", "Bash"]);
 		expect(state.delegateStack[2].effectiveAllowedTools).toEqual(["Bash"]);
+		expect(state.sidebarLog.map((entry) => entry.depth)).toEqual([1, 2, 3]);
 	});
 
 	it("clears the stack on before_agent_start so each turn starts fresh", async () => {
