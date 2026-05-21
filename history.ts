@@ -58,26 +58,39 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 	return next.length > SIDEBAR_MAX ? next.slice(-SIDEBAR_MAX) : next;
 }
 
-// Single chokepoint for "a depth-0 top-level command just started." Updates
-// activeTopLevelCommand, pushes a sidebar entry, and persists it to the
-// journal so resume can replay it. Called from the input-event handler
-// below for typed/extension-dispatched slash commands; Pi input dispatch
-// makes auto-continued Scramjet commands flow through that same handler.
+// Single chokepoint for "a command was invoked." Pushes a sidebar entry and
+// persists it to the journal so resume can replay it. Depth-0 entries are
+// top-level command starts and update activeTopLevelCommand; depth > 0 entries
+// are delegated subroutine invocations and must not replace the active top-level
+// command whose next-step policy controls the turn.
+export function recordCommandInvocation(
+	pi: ExtensionAPI,
+	state: ScramjetState,
+	name: string,
+	origin: SidebarEntry["origin"],
+	depth: number,
+): void {
+	const entry: SidebarEntry = {
+		command: name,
+		origin,
+		depth,
+		timestamp: Date.now(),
+	};
+	if (depth === 0) state.activeTopLevelCommand = name;
+	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
+	pi.appendEntry(COMMAND_START_TYPE, entry);
+}
+
+// Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
+// Pi input dispatch makes auto-continued Scramjet commands flow through the
+// same input-event handler as user-typed commands.
 export function recordCommandStart(
 	pi: ExtensionAPI,
 	state: ScramjetState,
 	name: string,
 	origin: SidebarEntry["origin"],
 ): void {
-	const entry: SidebarEntry = {
-		command: name,
-		origin,
-		depth: 0,
-		timestamp: Date.now(),
-	};
-	state.activeTopLevelCommand = name;
-	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
-	pi.appendEntry(COMMAND_START_TYPE, entry);
+	recordCommandInvocation(pi, state, name, origin, 0);
 }
 
 export interface ReplayResult {

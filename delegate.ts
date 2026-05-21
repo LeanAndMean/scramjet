@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { parseDelegateArgs, substituteArguments } from "./commands/substitute.ts";
+import { recordCommandInvocation } from "./history.ts";
 import type { DelegateFrame, ScramjetState } from "./types.ts";
 
 interface DelegateDetails {
@@ -72,14 +73,21 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 			const callerTools =
 				state.delegateStack.length > 0
 					? state.delegateStack[state.delegateStack.length - 1].effectiveAllowedTools
-					: undefined;
+					: state.activeTopLevelCommand !== null
+						? state.registry.get(state.activeTopLevelCommand)?.allowedTools
+						: undefined;
 			const effectiveAllowedTools = intersectTools(callerTools, def.allowedTools);
 			const frame: DelegateFrame = {
 				commandName: params.command,
-				depth: state.delegateStack.length,
+				// Depth is relative to the top-level command shown at depth 0, so the
+				// first delegated subroutine is depth 1. Because frames are latched,
+				// sequential sibling delegations in one turn still appear at increasing
+				// depths until before_agent_start resets the stack.
+				depth: state.delegateStack.length + 1,
 			};
 			if (effectiveAllowedTools !== undefined) frame.effectiveAllowedTools = effectiveAllowedTools;
 			state.delegateStack.push(frame);
+			recordCommandInvocation(pi, state, params.command, "agent", frame.depth);
 
 			const parsedArgs = parseDelegateArgs(params.args);
 			const body = substituteArguments(def.body, parsedArgs);
@@ -106,10 +114,11 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 	// call and never popped within a turn; the next turn starts with a fresh
 	// empty stack regardless of /scramjet on/off. Consequence: a second call
 	// to the same command in one turn is reported as a cycle, and sequential
-	// sibling calls narrow effective tools monotonically rather than each
-	// inheriting from the top-level scope. This is the MVP "latched scoping"
-	// tradeoff CLAUDE.md names; true push/pop semantics need a per-frame
-	// "delegated body consumed" signal Pi does not currently provide.
+	// sibling calls narrow effective tools and increase history depth
+	// monotonically rather than each inheriting from the top-level scope. This is
+	// the MVP "latched scoping" tradeoff CLAUDE.md names; true push/pop
+	// semantics need a per-frame "delegated body consumed" signal Pi does not
+	// currently provide.
 	// The advisory warnings that fire when a tool call falls outside the
 	// frame's effectiveAllowedTools live in tool-scope-advisory.ts — that's
 	// the user-visible surface of this latching.

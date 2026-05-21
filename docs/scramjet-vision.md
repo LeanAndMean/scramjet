@@ -264,16 +264,23 @@ execute it.)
 ##### Semantics
 
 - **Tool access** is declared per-command (in YAML frontmatter,
-  `allowed-tools:`). The delegated frame's effective tool set is the
-  intersection of the caller's effective tools and the callee's
-  declared `allowed-tools` — no escalation is possible.
+  `allowed-tools:`). The first delegated frame's caller scope is the
+  active top-level command's `allowed-tools`; nested delegated frames
+  inherit from the active delegated caller frame. The delegated frame's
+  effective tool set is the intersection of the caller's effective tools
+  and the callee's declared `allowed-tools` — no escalation is possible.
 - **Nested delegation** is allowed. A delegated command can itself
   delegate to another. Each call pushes a frame onto the call stack;
-  cycle detection rejects A → B → A within the same turn.
+  cycle detection rejects A → B → A within the same turn. MVP frames are
+  latched until the next agent turn (no true push/pop return signal), so
+  repeated calls to the same delegated command in one turn are cycles and
+  sequential sibling delegations inherit prior narrowing/depth.
 - **History appearance:** delegated commands are shown in the sidebar
   **indented under the caller**. Top-level (chained) commands are at the
   outer indent level. This visually distinguishes "command finished, the
-  next one started" from "command called another and resumed."
+  next one started" from "command called another and resumed." The MVP
+  journal stores delegated entries with `origin: "agent"` and `depth > 0`;
+  eventual UI may suppress the origin marker for indented entries.
 - **Context inheritance:** the caller writes the context explicitly via
   `$ARGUMENTS`. There is no implicit context handoff beyond the running
   conversation history. The delegated command's prompt is responsible
@@ -412,10 +419,12 @@ appropriate in the MVP window.
 What ships in the MVP is the **underlying data model and persistence**:
 the sidebar log entries (slash invocation, origin marker, delegation
 depth, timestamp) are journaled via `appendEntry` and rebuilt on
-`session_start` / `session_tree`. This is enough for
-forward compat (so when a UI lands, no data has been thrown away) and is
-load-bearing for any future `/scramjet:rewire`-style command that needs
-to read observed run history.
+`session_start` / `session_tree`. Depth-0 entries restore the active
+top-level command; delegated entries (`depth > 0`, currently
+`origin: "agent"`) remain visible in the log but do not replace the active
+top-level command. This is enough for forward compat (so when a UI lands,
+no data has been thrown away) and is load-bearing for any future
+`/scramjet:rewire`-style command that needs to read observed run history.
 
 Note: the eventual visualization may not need to be a sidebar
 specifically — a transcript-inline log, an expandable panel, or a

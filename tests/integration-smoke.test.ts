@@ -143,7 +143,7 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		expect(message).toContain("advisory");
 		expect(message).toContain("Edit");
 		expect(message).toContain("mach12:gh-issue-read");
-		expect(message).toContain("depth=0");
+		expect(message).toContain("depth=1");
 		expect(message).toContain("bash");
 	});
 
