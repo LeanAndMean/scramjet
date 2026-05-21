@@ -192,6 +192,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		const commands: RegisteredCommand[] = [];
 		const appended: { type: string; data: unknown }[] = [];
 		const sent: { content: string; options?: any }[] = [];
+		const dispatched: { input: string; options?: any }[] = [];
 		const pi: any = {
 			on(event: string, handler: any) {
 				const list = handlers.get(event) ?? [];
@@ -214,7 +215,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
 			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
 		}
-		return { pi, handlers, tools, commands, appended, sent, emit };
+		return { pi, handlers, tools, commands, appended, sent, dispatched, emit };
 	}
 
 	function fakeCtx() {
@@ -226,7 +227,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		};
 	}
 
-	it("toggle on → user slash → forced agent_end → next step recorded as origin: forced (expanded body, not slash)", async () => {
+	it("toggle on → user slash → forced agent_end → Pi input event records next step as origin: forced", async () => {
 		const TARGET_BODY = "Run int:next now.";
 		const origin: CommandDef = {
 			name: "int:start",
@@ -245,6 +246,10 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 
 		const bag = bigRecordingPi();
 		const ctx: any = fakeCtx();
+		ctx.dispatchUserInput = async (input: string, options?: any) => {
+			bag.dispatched.push({ input, options });
+			await bag.emit("input", { text: input, source: "extension" }, ctx);
+		};
 
 		// Wire every harness module that participates in a real dispatch.
 		registerScramjetCommand(bag.pi, state);
@@ -270,27 +275,15 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		expect(state.sidebarLog[0].origin).toBe("user");
 
 		// 3. The agent finishes its turn. int:start declares forced → int:next.
-		//    The dispatcher expands int:next's registered body locally and sends
-		//    the expansion via sendUserMessage (Pi 0.74.0's sendUserMessage uses
-		//    expandPromptTemplates: false, so a slash payload would land at the
-		//    LLM as literal text — F1). It also writes the sidebar entry and
-		//    journal entry directly with origin: "forced" because the input
-		//    handler is a no-op for the non-slash body text.
+		//    Scramjet dispatches the slash wire through Pi's normal input path;
+		//    history observes Pi's extension-source input event and labels it
+		//    origin: "forced" via state.pendingForcedDispatch.
 		await bag.emit("agent_end", {}, ctx);
-		expect(bag.sent).toEqual([{ content: TARGET_BODY, options: { deliverAs: "followUp" } }]);
-		// S1 regression guard at the integration boundary: a slash regression
-		// would surface here as `bag.sent[0].content` starting with "/".
-		expect(bag.sent[0].content.startsWith("/")).toBe(false);
-		// pendingForcedDispatch is intentionally not set by the expand-locally
-		// path — see the rationale comment in dispatchForced.
+		expect(bag.dispatched).toEqual([{ input: "/int:next", options: { deliverAs: "followUp" } }]);
+		expect(bag.sent).toEqual([]);
 		expect(state.pendingForcedDispatch).toBeNull();
 
-		// 4. After the dispatcher fires, the sidebar/journal already reflect the
-		//    forced transition — the dispatcher wrote them directly. The
-		//    "Pi delivers /int:next through the input event" step that earlier
-		//    versions of this test simulated is no longer part of the flow:
-		//    sendUserMessage receives non-slash body text, and history.ts's
-		//    input matcher returns null for it.
+		// 4. The input event records the forced transition.
 		expect(state.activeTopLevelCommand).toBe("int:next");
 		expect(state.sidebarLog).toHaveLength(2);
 		expect(state.sidebarLog[1].command).toBe("int:next");

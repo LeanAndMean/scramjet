@@ -5,20 +5,17 @@
  * unconditionally; the rest defer to /scramjet on|off. See CLAUDE.md
  * "MVP design rationales" for why.
  *
- * Non-fresh dispatch expands the registered command body locally and
- * sends the expansion via sendUserMessage, because Pi's
- * `sendUserMessage` passes `expandPromptTemplates: false` to its
- * internal `prompt()` and a slash payload would land at the LLM as
- * literal text. (F1)
+ * Dispatch uses Pi's experimental dispatchUserInput primitive so slash
+ * commands, skills, and prompt templates run through Pi's normal input
+ * pipeline instead of Scramjet expanding command bodies locally.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { parseDelegateArgs, substituteArguments } from "./commands/substitute.ts";
 import { validateNextStep } from "./commands/validator.ts";
-import { recordCommandStart } from "./history.ts";
+import { buildNextStepWire, dispatchNextStep } from "./next-step-dispatch.ts";
 import { clearLatestCompletion, getLatestCompletion } from "./task-complete.ts";
-import type { CommandDef, NextStep, ScramjetState } from "./types.ts";
+import type { NextStep, ScramjetState } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
 const WIDGET_KEY = "scramjet-next";
@@ -40,12 +37,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	function wireFor(step: NextStep): string {
-		// Reconstruct the slash-form wire payload from the structured NextStep.
-		// The agent supplies bare `name` (matched against bare candidate names
-		// by the validator) and optional `args`; the dispatcher owns the slash
-		// prefix and the join. Keeping the two responsibilities split prevents
-		// the F15 "is the leading slash part of the name?" ambiguity. (F15)
-		return `/${step.name}${step.args ? ` ${step.args}` : ""}`;
+		return buildNextStepWire(step);
 	}
 
 	function startCountdown(step: NextStep, ctx: ExtensionContext) {
@@ -98,73 +90,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}, 1000);
 	}
 
-	// Body expansion + journaling for non-fresh dispatch. The input event
-	// fires synchronously inside sendUserMessage, but with non-slash body
-	// text history.ts's input handler is a no-op for it — so we journal
-	// the sidebar entry and set activeTopLevelCommand here (via
-	// recordCommandStart) rather than letting the input handler do it.
-	function dispatchExpanded(
-		def: CommandDef,
-		name: string,
-		argsString: string | undefined,
-		origin: "agent" | "forced",
-	) {
-		const args = parseDelegateArgs(argsString ?? "");
-		const body = substituteArguments(def.body, args);
-		recordCommandStart(pi, state, name, origin);
-		pi.sendUserMessage(body, { deliverAs: "followUp" });
-	}
-
 	function executeStep(step: NextStep, ctx: ExtensionContext) {
-		if (step.freshSession) {
-			// Fresh-session dispatch is structurally non-functional in this
-			// build. pi.sendUserMessage uses expandPromptTemplates: false, so
-			// the slash below never invokes the registered scramjet-exec-fresh
-			// handler — it lands at the LLM as literal user text. Even if the
-			// handler were reached (by the user manually typing the slash),
-			// the original post-newSession dispatch site captured a stale pi.
-			// The manual-continue dropdown redesign (issue #41) replaces this
-			// surface; the literal slash send below is left as a placeholder
-			// until that lands. The handler itself short-circuits with a
-			// "deferred" notify so curiosity-typing is harmless.
-			pi.sendUserMessage(`/scramjet-exec-fresh ${wireFor(step)}`, { deliverAs: "followUp" });
-			return;
-		}
-
-		// Non-fresh: expand the registered body and dispatch the expansion. If
-		// the pick is not in scramjet's registry (open-mode free pick of a Pi
-		// built-in or another extension's command), we cannot expand a body and
-		// pi.sendUserMessage cannot route the slash either — warn and stop the
-		// chain rather than emit literal slash text that Pi will not execute.
-		const def = state.registry.get(step.name);
-		if (!def) {
-			ctx.ui.notify(`scramjet: next-step target "${step.name}" not in registry; auto-continue stopped`, "warning");
-			return;
-		}
-		dispatchExpanded(def, step.name, step.args, "agent");
+		dispatchNextStep(ctx, state, step, { origin: "agent" });
 	}
-
-	// scramjet-exec-fresh was the original auto-continue entry for
-	// fresh-session next steps — only registered commands can call
-	// ctx.newSession(). The path is non-functional in this build:
-	// pi.sendUserMessage doesn't expand slash payloads, so executeStep
-	// can't actually invoke this handler, and a post-newSession dispatch
-	// using the outer pi would crash on a stale extension API. Issue #41
-	// carries the manual-continue dropdown redesign that replaces this
-	// surface. Until then the handler is a guarded stub: a curiosity-typed
-	// `/scramjet-exec-fresh /foo` surfaces a clear "deferred" notify
-	// instead of attempting (and failing) the broken flow.
-	pi.registerCommand("scramjet-exec-fresh", {
-		description: "Internal: execute a command in a fresh session (deferred, see issue #41)",
-		handler: async (args, ctx) => {
-			const command = args.trim();
-			if (!command) return;
-			ctx.ui.notify(
-				`scramjet: fresh-session continuation is deferred to the manual-continue redesign (issue #41); start "${command}" yourself in a new session`,
-				"warning",
-			);
-		},
-	});
 
 	function dispatchForced(target: string, ctx: ExtensionContext): boolean {
 		// F6: symmetric to the F11 "active command missing from registry" guard
@@ -178,17 +106,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
 			return false;
 		}
-		// state.pendingForcedDispatch is intentionally NOT set here. It used to
-		// be the slash-routed signal to history.ts's input handler ("the next
-		// /target slash you see should be tagged forced"). After the F1
-		// expand-locally refactor we dispatch the body (not a slash), so
-		// history's input handler is a no-op for our send and would never
-		// consume the flag. Setting it would persist until the next
-		// before_agent_start clears it — a race window in which a coincidental
-		// user-typed slash matching `target` would be mislabeled forced.
-		// dispatchExpanded writes the sidebar entry with origin: "forced"
-		// directly; no flag is needed.
-		dispatchExpanded(def, target, undefined, "forced");
+		dispatchNextStep(ctx, state, { name: target, freshSession: false }, { origin: "forced" });
 		return true;
 	}
 

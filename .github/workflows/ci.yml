@@ -38,19 +38,26 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: piTestedVersion drift guard
+      - name: Pi dependency metadata drift guard
         run: |
+          BASE=$(jq -r '.pi.piBaseVersion' package.json)
+          FLAVOR=$(jq -r '.pi.piPatchFlavor' package.json)
           TESTED=$(jq -r '.pi.piTestedVersion' package.json)
           AGENT_PIN=$(jq -r '.dependencies["@earendil-works/pi-coding-agent"]' package.json)
           TUI_PIN=$(jq -r '.dependencies["@earendil-works/pi-tui"]' package.json)
-          if [ "$TESTED" != "$AGENT_PIN" ] || [ "$TESTED" != "$TUI_PIN" ]; then
-            echo "Error: pi.piTestedVersion ($TESTED) does not match the pinned @earendil-works deps." >&2
-            echo "  pi-coding-agent: $AGENT_PIN" >&2
-            echo "  pi-tui:          $TUI_PIN" >&2
-            echo "Bump all three together so users have one source of truth." >&2
+          EXPECTED_AGENT="npm:@leanandmean/pi-coding-agent@${BASE}-${FLAVOR}"
+          EXPECTED_TESTED="${BASE}-${FLAVOR}"
+          if [ "$TESTED" != "$EXPECTED_TESTED" ] || [ "$AGENT_PIN" != "$EXPECTED_AGENT" ] || [ "$TUI_PIN" != "$BASE" ]; then
+            echo "Error: Pi dependency metadata drifted." >&2
+            echo "  pi.piBaseVersion:                         $BASE" >&2
+            echo "  pi.piPatchFlavor:                         $FLAVOR" >&2
+            echo "  pi.piTestedVersion:                       $TESTED (expected $EXPECTED_TESTED)" >&2
+            echo "  dependencies[@earendil-works/pi-coding-agent]: $AGENT_PIN (expected $EXPECTED_AGENT)" >&2
+            echo "  dependencies[@earendil-works/pi-tui]:          $TUI_PIN (expected $BASE)" >&2
+            echo "Keep the Pi base version, Scramjet patch flavor, npm alias, and upstream pi-tui pin in sync." >&2
             exit 1
           fi
-          echo "OK: piTestedVersion ($TESTED) matches pinned pi-coding-agent and pi-tui."
+          echo "OK: Pi dependency metadata matches patched coding-agent alias $EXPECTED_AGENT and upstream pi-tui $BASE."
 
       - name: npm pack round-trip smoke
         # Pack the package, install the resulting tarball globally, verify

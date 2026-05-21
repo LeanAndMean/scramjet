@@ -311,10 +311,10 @@ describe("registerHistory — input event", () => {
 		registerHistory(pi, state);
 		await emit("input", { text: "/scramjet on", source: "interactive" });
 		expect(state.activeTopLevelCommand).toBe("mach10:push");
-		await emit("input", { text: "/scramjet-exec-fresh foo", source: "interactive" });
+		await emit("input", { text: "/clear", source: "interactive" });
 		expect(state.activeTopLevelCommand).toBe("mach10:push");
-		// But a truly unknown slash still clears.
-		await emit("input", { text: "/unknown-thing", source: "interactive" });
+		// Removed/internal or unknown slashes are not allow-listed.
+		await emit("input", { text: "/scramjet-exec-fresh foo", source: "interactive" });
 		expect(state.activeTopLevelCommand).toBeNull();
 	});
 
@@ -343,6 +343,21 @@ describe("registerHistory — input event", () => {
 		expect(state.sidebarLog[0].origin).toBe("forced");
 		expect((appended[0].data as SidebarEntry).origin).toBe("forced");
 		expect(state.pendingForcedDispatch).toBeNull();
+	});
+
+	it("does not set activeTopLevelCommand for a known non-Scramjet slash command", async () => {
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			activeTopLevelCommand: "mach10:push",
+		});
+		const { pi, emit } = recordingPi();
+		(pi as any).getCommands = () => [{ name: "other-extension:cmd" }];
+		registerHistory(pi, state);
+
+		await emit("input", { text: "/other-extension:cmd --flag", source: "extension" });
+
+		expect(state.activeTopLevelCommand).toBe("mach10:push");
+		expect(state.sidebarLog).toEqual([]);
 	});
 
 	it("does not consume the forced flag when the dispatched name differs", async () => {

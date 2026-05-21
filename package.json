@@ -27,7 +27,9 @@
 		"node": ">=20"
 	},
 	"pi": {
-		"piTestedVersion": "0.74.0"
+		"piBaseVersion": "0.74.0",
+		"piPatchFlavor": "scramjet.1",
+		"piTestedVersion": "0.74.0-scramjet.1"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -41,7 +43,7 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "0.74.0",
+		"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.1",
 		"@earendil-works/pi-tui": "0.74.0",
 		"typebox": "1.1.24"
 	},

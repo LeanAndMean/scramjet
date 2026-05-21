@@ -67,8 +67,8 @@ export interface ScramjetState {
 	activeTopLevelCommand: string | null;
 	sidebarLog: SidebarEntry[];
 	delegateStack: DelegateFrame[];
-	// Set by the next-step dispatcher just before sendUserMessage when firing
-	// a forced transition, so history's input handler can label the resulting
-	// entry as origin: "forced" instead of "agent".
+	// Set by the next-step dispatcher just before slash-input dispatch when
+	// firing a forced transition, so history's input handler can label the
+	// resulting entry as origin: "forced" instead of "agent".
 	pendingForcedDispatch: string | null;
 }

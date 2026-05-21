@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Scramjet now consumes the published LeanAndMean-patched Pi coding-agent
+  package via npm alias:
+  `@earendil-works/pi-coding-agent -> @leanandmean/pi-coding-agent@0.74.0-scramjet.1`.
+  The patch is based on upstream Pi `0.74.0`; `@earendil-works/pi-tui`
+  remains upstream `0.74.0`.
+
 ## 0.5.0 — Stage 8 cutover
 
 Scramjet is now distributed as an npm package and ships its own Mach 12
