@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - subagent
   - delegate
 next:
   mode: ask
@@ -78,7 +79,7 @@ Each exploration should return a list of key files and observations. After explo
 
 ## Step 5: Review the plan
 
-If the user provided context in Step 1, weight the review toward the areas they emphasized -- surface findings on those areas even at Suggestions-level severity, and note in Step 6 how the user's focus shaped the findings (e.g., "User emphasized testing strategy; this raised three suggestions in that area that would otherwise be borderline."). Apply this weighting across all six axes below; do not let it crowd out coverage of the other axes.
+If the user provided context in Step 1, weight the review toward the areas they emphasized -- surface findings on those areas even at Suggestions-level severity, and note in Step 7 how the user's focus shaped the findings (e.g., "User emphasized testing strategy; this raised three suggestions in that area that would otherwise be borderline."). Apply this weighting across all six axes below; do not let it crowd out coverage of the other axes.
 
 For each stage in the plan, assess:
 
@@ -96,17 +97,53 @@ Also assess the plan holistically:
 - **Project-layer coverage**: Does the plan address all project layers discovered during codebase exploration or specified in the project review criteria recorded in Step 3? Flag any affected layer that no stage covers.
 - **Test coverage planning**: If the project has an existing test suite or the project review criteria specify testing expectations, does each stage that introduces or modifies behavior include adequate test planning (what to test, test types, behaviors to cover)? If the project has no testable runtime code, verify the plan notes this rather than omitting test planning silently.
 
-## Step 6: Present findings and execute decision
+Create an initial findings list with stable identifiers:
+
+- Label each Critical and Important finding with a sequential F-prefixed identifier (`F1`, `F2`, `F3`, ...) numbered continuously across both sections.
+- Label each Suggestion with a sequential S-prefixed identifier (`S1`, `S2`, `S3`, ...).
+- Use bold prefixes, e.g. `**F1:** Missing migration stage`, `**S1:** Clarify test fixture naming`.
+- Keep each finding specific enough that a plan author can revise the plan without re-running the whole review.
+
+## Step 6: Independently assess the findings
+
+Before presenting findings to the user, run an independent assessment pass. Use a general-purpose subagent or a clearly separate self-review pass that has not seen only the initial conclusion. Provide it with:
+
+- The issue title/body and full comment stream.
+- The current implementation plan.
+- The project review criteria from Step 3.
+- The key codebase evidence from Step 4.
+- The initial F/S findings from Step 5.
+
+For each F/S item, verify against the issue, plan, comments, and relevant code. Classify it as one of:
+
+- **Genuine blocker** -- the plan is likely to fail or produce incorrect results unless this is fixed.
+- **Genuine issue** -- the plan has a significant gap or risk that should be addressed before implementation.
+- **Useful suggestion** -- the plan would be better with this change, but it is not required before implementation.
+- **Nitpick** -- low-value preference or wording issue; do not block implementation on it.
+- **False positive** -- the initial review finding is not actually supported by the plan/code evidence.
+- **Deferred/out of scope** -- real concern, but not part of this issue's implementation plan.
+
+Use the assessment to filter and reclassify the review output:
+
+- Critical findings should only include genuine blockers.
+- Important findings should include genuine issues that should be addressed before implementation.
+- Suggestions should include useful suggestions and clearly labeled deferred/out-of-scope concerns.
+- False positives and nitpicks should not appear as blocking findings; mention them only briefly if useful for transparency.
+- Preserve the original F/S identifiers when reclassifying so later discussion can reference stable items.
+
+## Step 7: Present findings and execute decision
 
 Present your review to the user, organized as:
 
 1. **Plan summary**: Brief restatement of what the plan proposes.
 2. **Strengths**: What the plan gets right.
-3. **Issues**: Problems found, classified by severity:
-   - **Critical**: Will cause the implementation to fail or produce incorrect results.
-   - **Important**: Significant gaps or risks that should be addressed before implementation.
-   - **Suggestions**: Improvements that would make the plan better but are not blockers.
-4. **Questions**: Any clarifying questions that came up during your review.
+3. **Assessment summary**: Counts by classification (e.g., genuine blockers, genuine issues, useful suggestions, nitpicks, false positives, deferred/out-of-scope).
+4. **Issues**: Problems found, classified by severity and labeled with stable identifiers:
+   - **Critical**: Genuine blockers that will cause the implementation to fail or produce incorrect results.
+   - **Important**: Genuine issues or significant risks that should be addressed before implementation.
+   - **Suggestions**: Useful improvements or explicitly deferred/out-of-scope concerns that are not blockers.
+5. **Questions**: Any clarifying questions that came up during your review.
+6. **Recommendation**: State whether the plan should be approved, revised, discussed further, or abandoned.
 
 Ask the user how they want to proceed:
 
