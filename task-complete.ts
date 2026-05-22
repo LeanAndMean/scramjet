@@ -73,7 +73,7 @@ export function registerTaskCompleteTool(pi: ExtensionAPI, state: ScramjetState)
 				Type.Object({
 					name: Type.String({
 						description:
-							"Bare command name (no leading slash, no arguments) to run next, e.g. 'mach12:issue-plan'. Must match one of the listed candidates when the active command declares a closed next-step policy.",
+							"Bare command name (no leading slash, no arguments) to run next, e.g. 'mach12:issue-plan'. Must match the declared target for forced policies and one of the listed candidates for closed policies.",
 					}),
 					args: Type.Optional(
 						Type.String({

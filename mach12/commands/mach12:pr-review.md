@@ -76,4 +76,10 @@ Post the prepared body by delegating to:
 
 The subroutine posts the body and returns the comment URL and numeric ID. Record the numeric ID -- the next-step assessment command consumes it.
 
+When you call `task_complete`, include the forced next-step handoff so the assessment command receives the runtime context:
+
+- `next_step.name`: `mach12:pr-review-assessment`
+- `next_step.args`: `<pr-number> --review-comment <comment-id>`
+- `next_step.fresh_session`: `false`
+
 Do NOT fix any issues in this command. Fixes belong to `/mach12:pr-review-fix`, downstream of the assessment.

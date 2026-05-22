@@ -94,7 +94,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		dispatchNextStep(ctx, state, step, { origin: "agent" });
 	}
 
-	function dispatchForced(target: string, ctx: ExtensionContext): boolean {
+	function dispatchForced(target: string, handoff: NextStep | undefined, ctx: ExtensionContext): boolean {
 		// F6: symmetric to the F11 "active command missing from registry" guard
 		// at the top of agent_end. A `forced` target that dropped out of the
 		// registry (rename, removed command, partial reload) would otherwise
@@ -106,7 +106,20 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
 			return false;
 		}
-		dispatchNextStep(ctx, state, { name: target, freshSession: false }, { origin: "forced" });
+
+		let step: NextStep = { name: target, freshSession: false };
+		if (handoff) {
+			if (handoff.name === target) {
+				step = { ...handoff, name: target };
+			} else {
+				ctx.ui.notify(
+					`scramjet: forced target is "${target}"; agent supplied next_step.name "${handoff.name}" — ignoring supplied forced handoff`,
+					"warning",
+				);
+			}
+		}
+
+		dispatchNextStep(ctx, state, step, { origin: "forced" });
 		return true;
 	}
 
@@ -136,7 +149,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		// being delegated to the agent or user; task_complete is only the safety
 		// gate that distinguishes successful completion from clarification/error.
 		if (policy?.mode === "forced") {
-			dispatchForced(policy.target, ctx);
+			dispatchForced(policy.target, completion.nextStep, ctx);
 			return;
 		}
 

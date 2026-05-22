@@ -25,6 +25,8 @@ describe("buildNextStepBlock — forced mode", () => {
 		expect(block).toContain("mach12:pr-review-assessment");
 		expect(block).toContain("mach12:pr-review");
 		expect(block).toContain("forced");
+		expect(block).toContain("pass args");
+		expect(block).toContain("next_step.name must be `mach12:pr-review-assessment`");
 	});
 });
 
