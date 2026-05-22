@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - subagent
   - delegate
 next:
   mode: open
@@ -26,10 +27,26 @@ You are creating a structured GitHub issue. This may be invoked at any point in 
 
 If context was provided ($ARGUMENTS), parse it for two kinds of input and act on each:
 
-- **Descriptive content** (problem statement, feature description, observed behavior, motivation): Use as the starting point for drafting the issue body in Step 2.
+- **Descriptive content** (problem statement, feature description, observed behavior, motivation): Use as the starting point for understanding the issue.
 - **Meta-directives about the issue itself** (e.g., "use the bug template", "tag as priority-high", "assign me", "make this a tracking issue"): Note these for the appropriate downstream step. Template choice steers the template selection later in this step. Labels and assignees are applied via `gh issue create` / `gh issue edit` flags in Step 5. Honor meta-directives explicitly -- do not fold them into the issue body as descriptive text.
 
+Classify the descriptive content before drafting:
+
+- **Bug report**: observed behavior differs from expected behavior.
+- **Feature request**: new user-visible capability or workflow.
+- **Refactor/internal task**: maintainability or architecture work whose value may not be directly user-visible.
+- **Documentation/test task**: docs, tests, examples, or validation coverage.
+- **Vague problem statement**: the user describes pain or a goal but not enough current/desired behavior.
+- **Structured artifact**: output from another Mach 12 command, identifiable by F/S identifiers, `<!-- mach12-* -->` markers, assessment/review sections, or step-reference formatting.
+
 If no context was provided, ask the user what the issue is about.
+
+Before drafting, gather enough context to write a useful issue:
+
+- If the input is already a structured artifact from another Mach 12 command, preserve its intent and use it as the authoritative source; do not reframe away important finding/stage identifiers.
+- If the request is a bug report, vague problem statement, code-linked feature, error report, or current-behavior complaint, inspect relevant repository context before drafting. Use `read`, `grep`, `glob`, and, when code context is non-trivial, dispatch `mach12:code-explorer` to identify current behavior, affected surfaces, similar features, related files, and constraints.
+- If desired behavior, reproduction, user impact, scope, or constraints are unclear after context gathering, ask a small set of concrete clarifying questions before creating the issue. Do not guess implementation details to fill gaps.
+- If the user supplied a fully specified request with clear current/desired behavior and acceptance criteria, avoid ceremonial exploration; verify only the context needed to avoid a misleading issue.
 
 Look up the project's contribution guidelines so the issue is shaped to match repo conventions. Delegate to:
 
@@ -49,6 +66,8 @@ If templates exist, read them and select the most appropriate one. If no templat
 
 ## Step 2: Draft the Issue
 
+Draft a structured issue from the gathered context. The issue should be useful to a future planning/implementation session without forcing a particular implementation prematurely.
+
 Draft a structured issue with these sections:
 
 ### Title
@@ -56,12 +75,12 @@ Draft a structured issue with these sections:
 - Use imperative form (e.g., "Add validation for bulk solvent inputs")
 
 ### Body
-- **Summary**: 2-3 sentences describing the problem or feature
-- **Current Behavior** (for bugs/improvements): What happens now
-- **Proposed Behavior**: What should happen -- describe desired outcomes rather than implementation steps. If the issue's subject is a command definition, agent definition, or workflow specification, naming the specific file and section as the target of a behavioral change is appropriate here; move to Technical Notes only when describing the mechanism of the change (algorithm, control flow, data structure choices).
+- **Summary**: 2-3 sentences describing the problem, user need, or feature.
+- **Current Behavior / Problem**: What happens now, what pain exists, or what context prompted the issue. For new features with no current behavior, describe the current limitation.
+- **Desired Behavior**: What should be true from the user's or maintainer's perspective. Describe observable outcomes, workflow behavior, or artifact qualities -- not the implementation mechanism. If the issue's subject is a command definition, agent definition, or workflow specification, naming the specific file and section as the target of a behavioral change is appropriate here; move to Technical Notes only when describing the mechanism of the change (algorithm, control flow, data structure choices).
 - **Acceptance Criteria**: Bullet list of verifiable end-state conditions that define "done", independent of implementation approach. Exception: when the artifact being changed is itself a specification (command definitions, config schemas, workflow files, documentation), implementation-specific criteria are appropriate because the spec IS the implementation.
-- **Context** (optional): Links to related PRs, issues, or discussions
-- **Technical Notes** (optional): Implementation hints, relevant files, architectural considerations
+- **Relevant Context** (optional): Links to related PRs, issues, discussions, review findings, assessment comments, or code areas discovered during due diligence.
+- **Technical Notes** (optional): Non-binding implementation hints, relevant files, architectural considerations, risks, or suspected approaches.
 
 ### Drafting notes
 
@@ -74,6 +93,15 @@ When the input ($ARGUMENTS or user response) is structured output from another M
 **Proposed Behavior boundary**: Outcome vs. implementation decision test -- if a sentence describes a specific implementation mechanism (algorithm, data structure, control flow decision, code pattern), it belongs in Technical Notes. Naming a specific file or section as the target of a behavioral change is Proposed Behavior, not implementation detail.
 
 **Acceptance Criteria constraint**: Observable end-state framing. Each criterion should be confirmable regardless of implementation path. Exception for specification artifacts (command definitions, config schemas, workflow files, documentation) where the spec is the deliverable -- in those cases, implementation-specific criteria are appropriate.
+
+**Final issue-quality self-check before presenting the draft**:
+
+- Did you gather enough context to avoid a misleading or shallow issue?
+- Does Desired Behavior describe the end state or behavior, not merely an implementation mechanism?
+- Are implementation ideas clearly labeled as Technical Notes and non-binding unless the artifact being changed is itself the specification?
+- Are acceptance criteria observable and testable?
+- If the request came from a structured review/assessment artifact, did you preserve the relevant F/S identifiers, markers, or stage references?
+- If important reproduction steps, desired behavior, or scope are still missing, ask the user before proceeding.
 
 ## Step 3: Review
 
@@ -161,3 +189,11 @@ gh issue edit <number> --add-assignee "..."
 Report to the user:
 - Issue number and URL
 - Whether issue creation was completed or skipped (and why, if skipped)
+
+When you call `task_complete`, include a next-step handoff if the new issue is ready for planning:
+
+- `next_step.name`: `mach12:issue-plan`
+- `next_step.args`: `<new-issue-number>`
+- `next_step.fresh_session`: `false`
+
+Omit `next_step` if issue creation was skipped, the issue is only a tracking/reference artifact, or the user asked not to continue to planning.
