@@ -1,12 +1,31 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — Vision-alignment continuation semantics
 
-- Scramjet now consumes the published LeanAndMean-patched Pi coding-agent
-  package via npm alias:
-  `@earendil-works/pi-coding-agent -> @leanandmean/pi-coding-agent@0.74.0-scramjet.1`.
-  The patch is based on upstream Pi `0.74.0`; `@earendil-works/pi-tui`
-  remains upstream `0.74.0`.
+Scramjet's command chaining now runs through Pi's normal slash/input pipeline, with fresh-session continuation, policy semantics, delegation scope, and history behavior aligned to the vision document.
+
+### Added
+
+- Next-step dispatch now uses Pi input dispatch instead of Scramjet locally expanding command bodies. Current-session continuations submit slash input through Pi, and fresh-session continuations use `ctx.newSession({ withSession })` plus replacement-context dispatch.
+- Open-mode next steps can now target non-Scramjet slash commands; Scramjet passes them to Pi instead of requiring a Scramjet registry match.
+- Added a focused `next-step-dispatch.ts` helper for current/fresh next-step dispatch and forced-origin cleanup.
+- Delegated command invocations are now journaled with `depth > 0`, so persisted history contains both top-level and delegated command entries.
+- First-level delegation now inherits the active top-level command's `allowed-tools` before intersecting with the callee's tool scope, preventing delegate escalation.
+
+### Changed
+
+- Scramjet now consumes the published LeanAndMean-patched Pi coding-agent package via npm alias: `@earendil-works/pi-coding-agent -> @leanandmean/pi-coding-agent@0.74.0-scramjet.1`. The patch is based on upstream Pi `0.74.0`; `@earendil-works/pi-tui` remains upstream `0.74.0`.
+- The CI Pi-version drift guard now understands the patched dependency model (`piBaseVersion`, `piPatchFlavor`, and `piTestedVersion`).
+- No declared `next:` now pauses like `ask` with no hint; the legacy no-policy free-form auto-follow path is removed.
+- `forced` next steps now require the agent to call `task_complete` before Scramjet dispatches the forced target. Completed forced transitions still run under `/scramjet off`.
+- `open` with `candidates: []` remains truly open/free-form and is no longer used as a terminus convention.
+- Mach 12 `pr-merge` is now a terminus by omitting `next:` rather than declaring empty-open.
+- Delegation's latched stack semantics are now explicitly documented and tested as the MVP behavior: frames do not pop within a turn, repeated same-subroutine calls are cycles, and sibling delegations inherit prior narrowing.
+
+### Removed
+
+- Removed the exposed internal `/scramjet-exec-fresh` command. Fresh-session continuation now uses Pi replacement-session dispatch directly.
+- Removed local next-step command-body expansion from auto-continuation; body substitution remains only where intended for same-context delegation.
 
 ## 0.5.0 — Stage 8 cutover
 
