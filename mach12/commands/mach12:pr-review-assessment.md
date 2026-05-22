@@ -233,3 +233,9 @@ Display the comment IDs for reference -- the next-step command (`pr-review-fix` 
 If genuine issues remain (including any reclassified items), the natural next step is `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>` (e.g., `F1 F3 S2` -- all genuine issues, interleaved in F/S identifier order).
 
 If all findings are nitpicks/false positives, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
+
+When you call `task_complete`, pass the selected follow-up's runtime arguments explicitly:
+
+- For fixes: set `next_step.name` to `mach12:pr-review-fix`, `next_step.args` to `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>`, and choose whether a fresh session is useful for the fix work.
+- For pre-merge: set `next_step.name` to `mach12:pr-pre-merge`, `next_step.args` to `<pr-number>`, and choose whether a fresh session is useful for the checklist.
+- Omit `next_step` if the user needs to decide before continuing.

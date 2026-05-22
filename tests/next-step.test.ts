@@ -47,6 +47,7 @@ describe("buildNextStepBlock — closed mode", () => {
 		expect(block).toContain("mach12:pr-pre-merge");
 		expect(block).toContain("Pick when ready to merge");
 		expect(block).toContain("closed");
+		expect(block).toContain("next_step.args");
 		expect(block).toContain("stop the chain");
 	});
 
@@ -68,6 +69,7 @@ describe("buildNextStepBlock — open mode", () => {
 		);
 		expect(block).toContain("mach12:issue-review");
 		expect(block).toContain("any slash command");
+		expect(block).toContain("next_step.args");
 		expect(block).toContain("stop the chain");
 	});
 

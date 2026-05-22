@@ -42,6 +42,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 				`The command \`${id}\` declares a \`closed\` next-step policy.\n` +
 				`When you call task_complete, pick one of these candidates for next_step.name (bare, no leading slash):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
+				`Set next_step.args when the selected command needs runtime identifiers or other arguments.\n` +
 				`If none apply, omit next_step entirely to stop the chain.`;
 			break;
 		case "open": {
@@ -55,6 +56,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 				`The command \`${id}\` declares an \`open\` next-step policy.\n` +
 				candidatesLine +
 				`You may pick any slash command if it fits the work.${blacklistLine}\n` +
+				`Set next_step.args when the selected command needs runtime identifiers or other arguments.\n` +
 				`Omit next_step entirely to stop the chain.`;
 			break;
 		}
