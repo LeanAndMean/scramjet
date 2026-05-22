@@ -39,7 +39,7 @@ const WIRING: WiringRow[] = [
 	},
 	{
 		basename: "issue-implement",
-		expected: { mode: "open", candidates: [{ name: "mach12:pr-create" }] },
+		expected: { mode: "open", candidates: [{ name: "mach12:issue-implement" }, { name: "mach12:pr-create" }] },
 	},
 	{
 		basename: "pr-create",

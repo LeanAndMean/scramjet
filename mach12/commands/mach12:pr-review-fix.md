@@ -8,6 +8,7 @@ allowed-tools:
   - glob
   - edit
   - write
+  - subagent
   - delegate
 next:
   mode: open
@@ -102,14 +103,20 @@ Let the user select which issues to fix. If there are 4 or fewer findings, list 
 
 ## Step 4: Implement the fixes
 
-Walk through the implementation using a structured 7-phase development plan:
+Walk through the implementation using a structured 7-phase development plan. Treat the phases as due-diligence discipline, not mandatory token burn: if the review and assessment comments already identify the affected files, required behavior, and fix approach clearly, verify that context is still fresh and mark broad exploration/design as satisfied. If the selected findings are ambiguous, stale, or cross-cutting, do targeted exploration before coding.
 
 1. **Discovery** -- restate the goal: fix the selected findings only; do not fix other findings in the review.
-2. **Codebase exploration** -- read every file referenced by the selected findings; trace the relevant code paths.
-3. **Clarifying questions** -- if any finding is ambiguous about what the fix should look like, ask the user before implementing.
-4. **Architecture design** -- if a fix has non-trivial structural choices, present 2-3 approaches with trade-offs and confirm the user's preference.
+2. **Codebase exploration** -- read every file referenced by the selected findings; trace the relevant code paths. When more context is needed, dispatch focused `mach12:code-explorer` tasks for the selected findings only.
+3. **Clarifying questions** -- if any finding is ambiguous about desired behavior, scope, risk, or what the fix should look like, ask the user before implementing. Do not ask ceremonial questions when the review/assessment already resolves the ambiguity.
+4. **Architecture design** -- if a fix has non-trivial structural choices not already settled by the assessment, present 2-3 approaches with trade-offs and confirm the user's preference. If the assessment already gives a sound staged plan, follow it.
 5. **Implementation** -- write the code, follow existing codebase conventions strictly.
-6. **Quality review** -- dispatch parallel reviewer tasks and address consolidated findings before declaring the fixes complete.
+6. **Quality review** -- dispatch conditional reviewer lenses and address consolidated findings before declaring the fixes complete:
+   - `mach12:code-reviewer` for correctness, conventions, security, and abstraction fit.
+   - `mach12:test-analyzer` when behavior or tests changed, or when the fix relies on test coverage.
+   - `mach12:silent-failure-hunter` when error handling, fallback behavior, subprocess/tool execution, async flows, or recovery paths changed.
+   - `mach12:type-design-analyzer` when types, schemas, interfaces, config shapes, public APIs, or data models changed.
+   - `mach12:code-simplifier` as an advisory/read-only clarity and maintainability lens when implementation code or prompt/frontmatter prose would benefit from simplification review.
+   Fix only quality-review findings that matter for the selected findings' scope.
 7. **Summary** -- list what was fixed, key decisions, files modified.
 
 Treat the selected findings list as the bounded scope:
