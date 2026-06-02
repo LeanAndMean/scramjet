@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - subagent
   - delegate
 next:
   mode: closed
