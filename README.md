@@ -89,7 +89,7 @@ Scramjet is a small TypeScript extension. The auto-continuation mechanism at its
 
 Scramjet registers a tool called `task_complete` and injects a `<scramjet-next-step>` block into the user message via Pi's `before_agent_start` hook. The block lists candidate commands when the active command's frontmatter declared `closed` or `open`.
 
-The agent calls `task_complete({ summary, next_step })` when done. For `forced` policies it omits `next_step`; the completion signal is still required before the forced target runs. The tool returns `terminate: true`, cleanly stopping the agent loop.
+The agent calls `task_complete({ summary, next_step })` when done. For `forced` policies it omits `next_step`, or sets it only to pass `args`/`fresh_session` to the declared target (`next_step.name` must match that target); the completion signal is still required before the forced target runs. The tool returns `terminate: true`, cleanly stopping the agent loop.
 
 ### Validation and dispatch
 
