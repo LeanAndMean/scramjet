@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0 — Mach 12 command effectiveness
+
+Improves Mach 12 command and agent effectiveness against the approved tranche from #60, and lets `forced` transitions pass runtime context to their target.
+
+### Added
+
+- `forced` next-step argument handoff: a `forced` command can pass `args`/`fresh_session` to its declared target via `task_complete`'s `next_step`, without letting the agent redirect to a different target. A supplied `next_step.name` that does not match the forced target is ignored with a warning.
+- Explicit `task_complete.next_step.args` guidance in the `closed` and `open` next-step instruction blocks, so follow-up commands receive the runtime identifiers they need.
+- `mach12:pr-review` now parses review aspects, gathers changed-file context, maps to explicit Mach 12 review lenses, and aggregates findings structurally (ported from `pr-review-toolkit:review-pr`).
+- `mach12:issue-review` gained F/S finding IDs and an independent assessment/classification pass.
+- Issue-creation due diligence, behavior framing, and issue-quality self-checks in `mach12:issue-create`.
+
+### Changed
+
+- `mach12:code-simplifier` is now advisory/read-only; review agents gained project-guidance anchors and high-signal checks.
+- `mach12:issue-implement` and `mach12:pr-review-fix` now allow prior planning/assessment to satisfy exploration/design when current and sufficient, and apply explicit quality-review lenses.
+
 ## 0.6.0 — Vision-alignment continuation semantics
 
 Scramjet's command chaining now runs through Pi's normal slash/input pipeline, with fresh-session continuation, policy semantics, delegation scope, and history behavior aligned to the vision document.

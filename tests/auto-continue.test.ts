@@ -164,6 +164,78 @@ describe("registerAutoContinue — dispatch through Pi input", () => {
 			expect(ctxBag.notifications).toEqual([]);
 		});
 
+		it("dispatches forced handoff args and fresh-session value when the supplied name matches", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = freshState({
+				enabled: false,
+				registry: registryWith(def, targetDef),
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
+			await setCompletion({
+				summary: "done",
+				next_step: { name: "b:target", args: "55 --review-comment 12345", fresh_session: true },
+			});
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(ctxBag.newSessionCalls).toHaveLength(1);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target 55 --review-comment 12345", options: { deliverAs: "followUp" }, session: "new" },
+			]);
+			expect(ctxBag.notifications).toEqual([]);
+		});
+
+		it("dispatches forced handoff args into the current session when fresh_session is false", async () => {
+			// Pins the production shape of the bundled pr-review -> pr-review-assessment
+			// transition (mach12:pr-review.md: fresh_session false + args carried into the
+			// current session). A regression flipping freshSession to true or dropping args
+			// on the auto-continue.ts current-session forced branch must fail CI.
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = freshState({
+				enabled: false,
+				registry: registryWith(def, targetDef),
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
+			await setCompletion({
+				summary: "done",
+				next_step: { name: "b:target", args: "55 --review-comment 12345", fresh_session: false },
+			});
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(ctxBag.newSessionCalls).toEqual([]);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target 55 --review-comment 12345", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(ctxBag.notifications).toEqual([]);
+		});
+
+		it("ignores forced handoff args when the supplied name does not match the declared target", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = freshState({
+				enabled: false,
+				registry: registryWith(def, targetDef),
+				activeTopLevelCommand: def.name,
+			});
+			const { bag, ctxBag, setCompletion } = bootstrap(state, { hasUI: false });
+			await setCompletion({
+				summary: "done",
+				next_step: { name: "z:wrong", args: "danger", fresh_session: true },
+			});
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(ctxBag.newSessionCalls).toEqual([]);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("z:wrong");
+			expect(ctxBag.notifications[0].message).toContain("b:target");
+		});
+
 		it("does not fire when the agent never called task_complete", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = freshState({

@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - subagent
   - delegate
 next:
   mode: open
@@ -198,3 +199,9 @@ After the user approves the plan:
 When referring to numbered items (findings, suggestions, stages) in the comment body, use plain words like "finding 3" or "suggestion 3" -- not `#<number>` notation, which GitHub auto-links to issues/PRs.
 
 Confirm all actions to the user (plan posted, branch created, issue assigned, and sub-issues assigned if applicable).
+
+When calling `task_complete`, choose the next step based on plan risk and user preference:
+
+- If the plan is non-trivial, touches risky areas, or should receive an approval gate, set `next_step.name` to `mach12:issue-review`, `next_step.args` to `<issue-number>`, and choose whether a fresh session is useful.
+- If the plan is small, uncontroversial, and ready for direct implementation, set `next_step.name` to `mach12:issue-implement`, `next_step.args` to `<issue-number> <first-stage>`, and set `next_step.fresh_session` to `true`.
+- Omit `next_step` if the user cancelled, the plan was not posted, or the appropriate next action is unclear.

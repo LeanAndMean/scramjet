@@ -39,7 +39,7 @@ const WIRING: WiringRow[] = [
 	},
 	{
 		basename: "issue-implement",
-		expected: { mode: "open", candidates: [{ name: "mach12:pr-create" }] },
+		expected: { mode: "open", candidates: [{ name: "mach12:issue-implement" }, { name: "mach12:pr-create" }] },
 	},
 	{
 		basename: "pr-create",
@@ -142,6 +142,28 @@ describe("mach12 wiring — bundled command set", () => {
 
 		expect(result.def.name).toBe(`${SET_NAME}:${basename}`);
 		expect(stripHints(result.def.next ?? null)).toEqual(expected);
+	});
+
+	it("pr-review is wired to invoke the bundled Mach 12 reviewer agents", () => {
+		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review.md`);
+		const content = readFileSync(filePath, "utf-8");
+		const result = parseCommandFile(filePath, content, SET_NAME);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		expect(result.def.allowedTools).toContain("subagent");
+		for (const agent of [
+			"mach12:code-reviewer",
+			"mach12:test-analyzer",
+			"mach12:comment-analyzer",
+			"mach12:silent-failure-hunter",
+			"mach12:type-design-analyzer",
+			"mach12:code-simplifier",
+			"mach12:feature-completeness-checker",
+		]) {
+			expect(content).toContain(agent);
+		}
 	});
 });
 

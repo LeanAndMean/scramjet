@@ -8,10 +8,16 @@ allowed-tools:
   - glob
   - edit
   - write
+  - subagent
   - delegate
 next:
   mode: open
   candidates:
+    - name: mach12:issue-implement
+      hint: |
+        Pick when this session landed Stage N from a staged plan and
+        Stage N+1 remains. Re-run in a fresh session with the same issue
+        number and the next stage identifier.
     - name: mach12:pr-create
       hint: |
         Pick when all planned stages are now landed and there is no
@@ -123,14 +129,20 @@ If the marker comment was not found, fall back to identifying the most recent su
 
 ## Step 4: Implement the Stage
 
-Walk through the implementation using a structured 7-phase development plan:
+Walk through the implementation using a structured 7-phase development plan. Treat the phases as due-diligence discipline, not mandatory token burn: if the issue plan already contains current architecture, relevant files, decisions, and stage scope, verify that context is still fresh and mark exploration/design as satisfied instead of re-exploring the whole codebase. If the plan is stale, ambiguous, or lacks enough context for this stage, do targeted exploration before coding.
 
-1. **Discovery** -- restate the goal of the stage in your own words; track each phase as a discrete step you do not skip.
-2. **Codebase exploration** -- dispatch parallel exploration tasks for the specific files and patterns relevant to the stage; read every file the exploration flags.
-3. **Clarifying questions** -- before implementing, surface any underspecified aspects to the user and wait for answers.
-4. **Architecture design** -- if the stage has non-trivial structural choices, present 2-3 approaches with trade-offs and confirm the user's preference.
+1. **Discovery** -- restate the goal of the stage in your own words; confirm the stage scope and what is intentionally out of scope.
+2. **Codebase exploration** -- when prior planning is sufficient, briefly verify the referenced files still exist and the plan still matches current code. When more context is needed, dispatch focused `mach12:code-explorer` tasks for the specific files, patterns, and integration points relevant to the stage; read every file the exploration flags.
+3. **Clarifying questions** -- before implementing, surface underspecified behavior, constraints, edge cases, or scope boundaries to the user and wait for answers. Do not ask ceremonial questions when the plan already resolves the ambiguity.
+4. **Architecture design** -- if the stage has non-trivial structural choices not already settled by the plan, present 2-3 approaches with trade-offs and confirm the user's preference. If the plan already made a sound architecture decision, state that you are following it and proceed.
 5. **Implementation** -- write the code, follow existing codebase conventions strictly.
-6. **Quality review** -- dispatch parallel reviewer tasks (simplicity, correctness, conventions) and address consolidated findings before declaring the stage complete.
+6. **Quality review** -- dispatch conditional reviewer lenses and address consolidated findings before declaring the stage complete:
+   - `mach12:code-reviewer` for correctness, conventions, security, and abstraction fit.
+   - `mach12:test-analyzer` when behavior or tests changed, or when the stage's test plan is central.
+   - `mach12:silent-failure-hunter` when error handling, fallback behavior, subprocess/tool execution, async flows, or recovery paths changed.
+   - `mach12:type-design-analyzer` when types, schemas, interfaces, config shapes, public APIs, or data models changed.
+   - `mach12:code-simplifier` as an advisory/read-only clarity and maintainability lens when implementation code or prompt/frontmatter prose would benefit from simplification review.
+   Fix only findings that matter for this stage's scope.
 7. **Summary** -- list what was built, key decisions, files modified.
 
 If the stage reveals issues with the original plan, surface them and suggest plan adjustments rather than silently deviating.
@@ -146,3 +158,10 @@ After implementation is complete, commit, push, and post a progress comment on t
 ```
 
 Pass the stage identifier and a brief summary of what shipped as `$ARGUMENTS` so the commit message and progress comment can speak specifically to the work.
+
+When calling `task_complete`, choose the next step using this order:
+
+1. **Continue staged implementation first.** If this session landed Stage N and the plan lists Stage N+1, set `next_step.name` to `mach12:issue-implement`, set `next_step.args` to `<issue-number> <next-stage>`, and set `next_step.fresh_session` to `true`.
+   - Example: `mach12:issue-implement 55 2`
+2. **Create the PR when all planned stages are landed.** If no open PR exists for this branch, set `next_step.name` to `mach12:pr-create`, set `next_step.args` to `<issue-number>`, and choose whether a fresh session is useful for the PR draft.
+3. **If the next stage is unclear, stop.** Omit `next_step` rather than guessing.

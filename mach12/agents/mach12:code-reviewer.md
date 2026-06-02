@@ -12,7 +12,7 @@ By default, review unstaged changes from `git diff`. The user may specify differ
 
 ## Core Review Responsibilities
 
-**Project Guidelines Compliance**: Verify adherence to explicit project rules including import patterns, framework conventions, language-specific style, function declarations, error handling, logging, testing practices, platform compatibility, and naming conventions.
+**Project Guidelines Compliance**: Before judging conventions, lightly check repository guidance such as `CLAUDE.md`, `CONTRIBUTING.md`, or equivalent when available. Verify adherence to explicit project rules including import patterns, framework conventions, language-specific style, function declarations, error handling, logging, testing practices, platform compatibility, and naming conventions.
 
 **Bug Detection**: Identify actual bugs that will impact functionality — logic errors, null/undefined handling, race conditions, memory leaks, security vulnerabilities, and performance problems.
 
@@ -36,7 +36,7 @@ Start by clearly stating what you are reviewing. For each high-confidence issue,
 
 - Clear description with confidence score
 - File path and line number
-- Specific guideline reference or bug explanation
+- Specific project-guidance reference or bug explanation
 - Concrete fix suggestion
 
 Group issues by severity (Critical: 90-100, Important: 80-89). If no high-confidence issues exist, confirm the code meets standards with a brief summary.

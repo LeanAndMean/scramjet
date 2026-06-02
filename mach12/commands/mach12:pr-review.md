@@ -1,11 +1,12 @@
 ---
-description: Run a comprehensive PR review and post the results as a structured comment
-argument-hint: "<pr-number> [context]"
+description: Run a comprehensive PR review with specialized reviewer lenses and post the results as a structured comment
+argument-hint: "<pr-number> [review-aspects] [context]"
 allowed-tools:
   - bash
   - read
   - grep
   - glob
+  - subagent
   - delegate
 next:
   mode: forced
@@ -22,14 +23,17 @@ You are running a comprehensive review of a pull request and posting the results
 
 The user's input typically contains:
 - A **PR number** (required)
+- Optional **review aspects**: `comments`, `tests`, `errors`, `types`, `code`, `simplify`, `completeness`, or `all`
 - Additional **context**, focus areas, or constraints (optional)
 
 Example inputs:
 - `108`
 - `108 error handling and test coverage`
 - `108 focus on the new API endpoints`
+- `108 tests errors`
+- `108 all`
 
-Extract the PR number. If context was provided, note it for use in Step 3. If the input is ambiguous, ask the user to clarify.
+Extract the PR number. If recognized review aspects were provided, note them for lens selection in Step 3. Treat any remaining text as user context. If the input is ambiguous, ask the user to clarify.
 
 ## Step 2: Check out PR branch
 
@@ -42,16 +46,43 @@ git pull
 
 ## Step 3: Run the review
 
-Dispatch a comprehensive PR review through parallel reviewer subagents. Each reviewer should target a different lens (code quality, correctness, conventions, test coverage, security, comment accuracy, type design, error-handling adequacy, feature completeness against any linked issue), then merge their findings into a single structured output.
+Determine the changed files and PR context before launching reviewers:
 
-For parallel execution, dispatch all review tasks in a single batch rather than sequentially.
+```
+git diff --name-only origin/main...HEAD
+gh pr view <pr-number> --json title,body,comments,files
+```
 
-Include the following constraints in the review brief:
+Use the changed files, PR description, linked issues, requested review aspects, and user context to select review lenses. Default to `all` when no aspects were specified.
 
-- Use review-relevant subagents from any installed source -- include domain-relevant lenses for the content being reviewed (e.g., a skill reviewer when reviewing skill definitions, a plugin validator when reviewing plugin code). Only include supplementary lenses when relevant to the content.
-- If the PR has a linked issue (look for issue references like `Fixes #N`, `Closes #N`, `Resolves #N`, `Part of #N`, `Issue #N`, or a bare `#N` in the PR description), include a feature-completeness lens alongside the other reviewers. This lens verifies that the PR fully implements the requirements from the linked issue's acceptance criteria and implementation plan. Do not include this lens if no linked issue is detected.
-- Label each Critical and Important finding with a sequential F-prefixed identifier (F1, F2, F3, ...) numbered continuously across both sections. Label each Suggestion with a sequential S-prefixed identifier (S1, S2, S3, ...) using a separate counter. Use bold prefixes (e.g., `**F1:** Missing null check`, `**S1:** Consider extracting helper`).
-- If user context was provided in Step 1, append it to each review brief: `> **User context:** <context>`
+Use the bundled Mach 12 review agents as the primary lenses:
+
+- **code**: `mach12:code-reviewer` -- always include for general correctness, project conventions, security, and code quality.
+- **tests**: `mach12:test-analyzer` -- include when tests changed, behavior changed without corresponding tests, or the user requested `tests` / `all`.
+- **comments**: `mach12:comment-analyzer` -- include when comments, docs, prompts, or user-facing prose changed, or the user requested `comments` / `all`.
+- **errors**: `mach12:silent-failure-hunter` -- include when error handling, fallback behavior, subprocess/tool execution, async flows, background work, or user-visible failure modes changed, or the user requested `errors` / `all`.
+- **types**: `mach12:type-design-analyzer` -- include when types, schemas, interfaces, config shapes, public APIs, or data models changed, or the user requested `types` / `all`.
+- **simplify**: `mach12:code-simplifier` -- include when the PR changes implementation code or prompt/frontmatter prose that would benefit from clarity review, or the user requested `simplify` / `all`. This lens is advisory/read-only; it must recommend improvements, not edit files.
+- **completeness**: `mach12:feature-completeness-checker` -- include when the PR has a linked issue (look for `Fixes #N`, `Closes #N`, `Resolves #N`, `Part of #N`, `Issue #N`, or a bare `#N` in the PR description), or the user requested `completeness` / `all`.
+
+Also include supplementary domain-relevant agents from any installed source when the PR content calls for them, such as a skill reviewer for skill definitions or a plugin validator for plugin code. Only include supplementary lenses when relevant.
+
+Dispatch all selected review tasks in a single parallel `subagent` call. Give each reviewer a focused brief that includes:
+
+- PR number, title, body, changed files, and any relevant PR comments.
+- The specific lens it is responsible for.
+- The user context from Step 1, if provided: `> **User context:** <context>`
+- For the completeness lens, the linked issue number(s) and instruction to read the issue body, comments, acceptance criteria, and latest implementation plan.
+
+After the reviewers return, merge their findings into a single structured review. De-duplicate overlapping findings and preserve inline source attribution when a finding comes from a specialized lens, e.g. "per `mach12:test-analyzer`".
+
+Apply these aggregation rules:
+
+- Report only actionable findings with clear evidence from the changed code, prompt, frontmatter, tests, docs, or linked issue context.
+- Group findings into Critical, Important, Suggestions, and Strengths.
+- Label each Critical and Important finding with a sequential F-prefixed identifier (F1, F2, F3, ...) numbered continuously across both sections.
+- Label each Suggestion with a sequential S-prefixed identifier (S1, S2, S3, ...) using a separate counter.
+- Use bold prefixes, e.g. `**F1:** Missing null check`, `**S1:** Consider extracting helper`.
 
 Do NOT attempt to fix any issues -- this command is for review only. Fixes happen in a later command.
 
@@ -75,5 +106,11 @@ Post the prepared body by delegating to:
 ```
 
 The subroutine posts the body and returns the comment URL and numeric ID. Record the numeric ID -- the next-step assessment command consumes it.
+
+When you call `task_complete`, include the forced next-step handoff so the assessment command receives the runtime context:
+
+- `next_step.name`: `mach12:pr-review-assessment`
+- `next_step.args`: `<pr-number> --review-comment <comment-id>`
+- `next_step.fresh_session`: `false`
 
 Do NOT fix any issues in this command. Fixes belong to `/mach12:pr-review-fix`, downstream of the assessment.

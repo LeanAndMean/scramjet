@@ -33,13 +33,16 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 			body =
 				`The command \`${id}\` declares a \`forced\` next-step: ` +
 				`\`${safe(policy.target)}\` will run after you call task_complete. ` +
-				`Do not set next_step on task_complete; the harness already knows the target.`;
+				`You may set next_step only to pass args or fresh_session to that declared target; ` +
+				`next_step.name must be \`${safe(policy.target)}\`. ` +
+				`Omit next_step if no runtime arguments need to be passed.`;
 			break;
 		case "closed":
 			body =
 				`The command \`${id}\` declares a \`closed\` next-step policy.\n` +
 				`When you call task_complete, pick one of these candidates for next_step.name (bare, no leading slash):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
+				`Set next_step.args when the selected command needs runtime identifiers or other arguments.\n` +
 				`If none apply, omit next_step entirely to stop the chain.`;
 			break;
 		case "open": {
@@ -53,6 +56,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 				`The command \`${id}\` declares an \`open\` next-step policy.\n` +
 				candidatesLine +
 				`You may pick any slash command if it fits the work.${blacklistLine}\n` +
+				`Set next_step.args when the selected command needs runtime identifiers or other arguments.\n` +
 				`Omit next_step entirely to stop the chain.`;
 			break;
 		}

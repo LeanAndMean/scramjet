@@ -166,3 +166,11 @@ Do NOT proceed to confirmation if PR creation failed.
 Report to the user:
 - PR number and URL.
 - Linked issue (if any).
+
+When you call `task_complete`, include a next-step handoff if the PR is ready for automated review:
+
+- `next_step.name`: `mach12:pr-review`
+- `next_step.args`: `<pr-number>`
+- `next_step.fresh_session`: `false`
+
+Omit `next_step` if PR creation failed, the user cancelled, or the PR should not be reviewed yet.
