@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0 — Active-PR footer indicator
+
+Adds an ambient footer hint surfacing the current branch's open GitHub PR.
+
+### Added
+
+- `pr-indicator.ts`: an ambient footer hint that shows the current branch's active GitHub PR number (`PR #<n>`) via `ctx.ui.setStatus` when exactly one open PR matches the branch, and shows nothing in every other case (no PR, multiple PRs, unsupported remote, missing/unauthenticated `gh`, not a git repo). Detection uses `gh pr list --head <branch> --state open` with an exactly-one-match rule. Resolves on `session_start` / `session_tree` / `agent_end`, with the `agent_end` `gh` call gated behind a cheap local branch-diff. It is an opportunistic hint, not workflow state: nothing is journaled, nothing is added to `ScramjetState`, and it shows regardless of `/scramjet on|off`. A commented forge-swap seam marks where a future `glab` (`MR !<iid>`) branch would slot in.
+
 ## 0.7.0 — Mach 12 command effectiveness
 
 Improves Mach 12 command and agent effectiveness against the approved tranche from #60, and lets `forced` transitions pass runtime context to their target.
