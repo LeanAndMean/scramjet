@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { type ExecFn, registerPrIndicator, resolvePr } from "../pr-indicator.ts";
+import { EXEC_TIMEOUT_MS, type ExecFn, registerPrIndicator, resolvePr } from "../pr-indicator.ts";
 import { recordingPi } from "./helpers.ts";
 
 type ExecReply = { stdout: string; code: number };
@@ -71,10 +71,13 @@ describe("resolvePr", () => {
 type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
 
 // Mutable exec config so a test can flip the branch / PR between session_start
-// and agent_end. Returns a vi.fn shaped like pi.exec (full ExecResult).
+// and agent_end. Returns a vi.fn shaped like pi.exec (full ExecResult). The
+// third `options` arg is named (not discarded) so tests can assert that cwd and
+// timeout are threaded through into pi.exec.
+type ExecOptions = { cwd?: string; timeout?: number };
 function execMockFor(cfg: { remote: ExecReply; branch: ExecReply; prList: ExecReply }) {
 	const wrap = (r: ExecReply): ExecResult => ({ ...r, stderr: "", killed: false });
-	return vi.fn(async (cmd: string, args: string[]): Promise<ExecResult> => {
+	return vi.fn(async (cmd: string, args: string[], _options?: ExecOptions): Promise<ExecResult> => {
 		if (cmd === "git" && args[0] === "remote") return wrap(cfg.remote);
 		if (cmd === "git" && args[0] === "rev-parse") return wrap(cfg.branch);
 		if (cmd === "gh") return wrap(cfg.prList);
@@ -131,6 +134,40 @@ describe("registerPrIndicator", () => {
 
 		await bag.emit("session_tree", {}, fakeCtx(setStatus));
 		expect(setStatus).toHaveBeenCalledWith("scramjet-pr", "PR #72");
+	});
+
+	it("does no work in headless mode (hasUI false): no spawns, no setStatus", async () => {
+		const bag = recordingPi();
+		const cfg = { remote: GH_REMOTE, branch: BRANCH, prList: ONE_PR };
+		const exec = execMockFor(cfg);
+		bag.pi.exec = exec;
+		const setStatus = vi.fn();
+		registerPrIndicator(bag.pi);
+
+		const headlessCtx = { cwd: "/repo", hasUI: false, ui: { setStatus } };
+		await bag.emit("session_start", {}, headlessCtx);
+		await bag.emit("agent_end", {}, headlessCtx);
+
+		expect(exec).not.toHaveBeenCalled();
+		expect(setStatus).not.toHaveBeenCalled();
+	});
+
+	it("threads cwd and timeout into every pi.exec call", async () => {
+		const bag = recordingPi();
+		const cfg = { remote: GH_REMOTE, branch: BRANCH, prList: ONE_PR };
+		const exec = execMockFor(cfg);
+		bag.pi.exec = exec;
+		const setStatus = vi.fn();
+		registerPrIndicator(bag.pi);
+
+		await bag.emit("session_start", {}, fakeCtx(setStatus));
+
+		// A regression that dropped cwd would silently resolve the wrong repo's PR
+		// in a worktree/multi-root session; assert the options arg on every call.
+		expect(exec.mock.calls.length).toBeGreaterThan(0);
+		for (const call of exec.mock.calls) {
+			expect(call[2]).toMatchObject({ cwd: "/repo", timeout: EXEC_TIMEOUT_MS });
+		}
 	});
 
 	it("skips the gh lookup on agent_end when the branch is unchanged", async () => {
