@@ -65,6 +65,7 @@ Scramjet is a compact Pi extension distributed as the npm package `@leanandmean/
 - `scramjet-command.ts` — the `/scramjet on|off` slash command.
 - `clear-alias.ts` — `/clear` alias.
 - `diagram/` — detects `mmdc` / `dot` / `plantuml` at startup and registers `draw_diagram` only if at least one renderer is installed.
+- `pr-indicator.ts` — ambient footer hint showing the current branch's active GitHub PR number (`PR #<n>`) via `ctx.ui.setStatus` when exactly one open PR matches; shows nothing in every other case (no/multiple PRs, unsupported remote, missing/unauthenticated `gh`, not a git repo). Resolves on `session_start` / `session_tree` / `agent_end` (the `gh` call on `agent_end` is gated behind a cheap local branch-diff). An opportunistic hint, not workflow state: nothing is journaled, nothing is added to `ScramjetState`, and it shows regardless of `/scramjet on|off`. This footer `setStatus` text is a different Pi primitive from — and not a violation of — the sidebar UI panel deferred in `docs/scramjet-vision.md` section 5. A commented forge-swap seam marks where a future `glab` (`MR !<iid>`) branch would slot in.
 
 **Bundled Mach 12 command set** (`mach12/`):
 

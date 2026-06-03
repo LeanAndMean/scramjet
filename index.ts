@@ -28,6 +28,7 @@ import { registerCommandLoader } from "./commands/index.ts";
 import { registerDelegateTool } from "./delegate.ts";
 import { registerDiagramTool } from "./diagram/diagram-tool.ts";
 import { registerHistory } from "./history.ts";
+import { registerPrIndicator } from "./pr-indicator.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.ts";
 import { registerTaskCompleteTool } from "./task-complete.ts";
@@ -55,4 +56,5 @@ export default function scramjet(pi: ExtensionAPI) {
 	registerClearAlias(pi);
 	registerCommandLoader(pi, state);
 	registerHistory(pi, state);
+	registerPrIndicator(pi);
 }
