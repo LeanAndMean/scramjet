@@ -1,0 +1,51 @@
+name: Release
+
+# Publishes @leanandmean/scramjet to npm when a version tag is pushed.
+# The release ritual (mach12:pr-merge Step 5) already runs `gh release create v<x>`,
+# which pushes the tag — that tag push is what triggers this job. npm publish is
+# otherwise a manual, easily-forgotten step (it sat skipped between 0.6.0 and 0.7.0).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify tag matches package.json version
+        # Guards against a tag whose version drifted from package.json — npm
+        # would otherwise publish whatever package.json says under a mismatched
+        # git tag. Fail loudly instead.
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(jq -r '.version' package.json)
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Error: git tag v$TAG does not match package.json version $PKG." >&2
+            echo "Bump package.json to match the release tag before tagging." >&2
+            exit 1
+          fi
+          echo "OK: tag and package.json agree on $PKG."
+
+      - name: Install dependencies
+        # --ignore-scripts skips postinstall; publish doesn't need Mach 12 seeded.
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to npm
+        # --access public is mandatory: scoped packages default to private.
+        # npm refuses to re-publish an existing version, so a duplicate tag
+        # fails here rather than silently mis-shipping.
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
