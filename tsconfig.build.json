@@ -15,6 +15,7 @@
 		"delegate.ts",
 		"history.ts",
 		"next-step.ts",
+		"pr-indicator.ts",
 		"scramjet-command.ts",
 		"subagent-output-advisor.ts",
 		"task-complete.ts",

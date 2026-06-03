@@ -298,6 +298,7 @@ scramjet/
   history.ts            — sidebar journal + replay
   scramjet-command.ts   — /scramjet on|off toggle
   clear-alias.ts        — /clear alias
+  pr-indicator.ts       — ambient footer hint for the branch's active PR number
   tool-scope-advisory.ts — advisory tool-scope warnings
   commands/             — command-set loader + parser + validator
   diagram/              — draw_diagram tool + renderers
