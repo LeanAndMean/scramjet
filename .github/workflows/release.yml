@@ -6,12 +6,23 @@ name: Release
 # otherwise a manual, easily-forgotten step (it sat skipped between 0.6.0 and 0.7.0).
 on:
   push:
-    tags: ["v*"]
+    # v[0-9]* (not v*) so only version tags fire this, never stray `v...` tags.
+    tags: ["v[0-9]*"]
+
+# Least privilege: publish auth is the NPM_TOKEN secret, so the job needs no
+# write scope on GITHUB_TOKEN. Read-only contents is all the checkout requires.
+permissions:
+  contents: read
 
 jobs:
   publish:
     name: publish to npm
     runs-on: ubuntu-latest
+    # Never run two publishes for the same tag concurrently; never cancel a
+    # publish mid-flight (a half-published version is the one thing to avoid).
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -36,10 +47,14 @@ jobs:
           echo "OK: tag and package.json agree on $PKG."
 
       - name: Install dependencies
-        # --ignore-scripts skips postinstall; publish doesn't need Mach 12 seeded.
+        # --ignore-scripts skips this package's postinstall (Mach 12 seeding,
+        # irrelevant in CI). It does NOT carry over to later npm invocations:
+        # `npm publish` below still runs its own `prepack` build.
         run: npm ci --ignore-scripts
 
       - name: Build
+        # Redundant with publish's `prepack` (also `npm run build`), but kept so
+        # a build failure surfaces as its own red step instead of inside publish.
         run: npm run build
 
       - name: Publish to npm
