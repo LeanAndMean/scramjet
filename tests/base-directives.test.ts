@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { registerBaseDirectives } from "../base-directives.ts";
 import { recordingPi } from "./helpers.ts";
@@ -75,5 +76,21 @@ describe("registerBaseDirectives", () => {
 		const { list } = captureHandler();
 		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
 		expect(result.systemPrompt).toContain(anchor);
+	});
+
+	// Covers the packageRoot() walk and doc-pointer construction the anchor table
+	// intentionally skips: assert the lines are present and resolve to real files,
+	// without pinning the install-specific absolute prefix.
+	it("embeds doc pointers that resolve to real files under the package root", async () => {
+		const { list } = captureHandler();
+		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
+
+		const readmePath = result.systemPrompt.match(/README: (.+)/)?.[1];
+		const visionPath = result.systemPrompt.match(/Vision \/ design: (.+)/)?.[1];
+
+		expect(readmePath).toMatch(/README\.md$/);
+		expect(visionPath).toMatch(/docs\/scramjet-vision\.md$/);
+		expect(existsSync(readmePath!)).toBe(true);
+		expect(existsSync(visionPath!)).toBe(true);
 	});
 });

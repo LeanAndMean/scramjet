@@ -168,7 +168,7 @@ describe("integration smoke — advisory warning against real subroutine scope",
 
 // Proves index.ts actually wires registerBaseDirectives into the extension —
 // the unit suite (base-directives.test.ts) covers the injector in isolation,
-// but only the real default export catches a dropped register call at line 61.
+// but only the real default export catches a dropped registerBaseDirectives call in the factory.
 // Loading the whole factory exercises the live registration order; emitting
 // before_agent_start confirms the directives land on top of Pi's assembled
 // prompt (the identity anchor is unique to the base directives, so its presence
