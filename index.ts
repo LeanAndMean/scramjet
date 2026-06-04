@@ -23,6 +23,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAutoContinue } from "./auto-continue.ts";
+import { registerBaseDirectives } from "./base-directives.ts";
 import { registerClearAlias } from "./clear-alias.ts";
 import { registerCommandLoader } from "./commands/index.ts";
 import { registerDelegateTool } from "./delegate.ts";
@@ -57,4 +58,5 @@ export default function scramjet(pi: ExtensionAPI) {
 	registerCommandLoader(pi, state);
 	registerHistory(pi, state);
 	registerPrIndicator(pi);
+	registerBaseDirectives(pi);
 }

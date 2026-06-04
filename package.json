@@ -19,6 +19,7 @@
 		"dist/",
 		"mach12/",
 		"scripts/",
+		"docs/scramjet-vision.md",
 		"CHANGELOG.md",
 		"README.md",
 		"LICENSE"
