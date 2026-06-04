@@ -11,6 +11,7 @@
 		"index.ts",
 		"types.ts",
 		"auto-continue.ts",
+		"base-directives.ts",
 		"clear-alias.ts",
 		"delegate.ts",
 		"history.ts",

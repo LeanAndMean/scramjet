@@ -6,6 +6,7 @@ import { registerAutoContinue } from "../auto-continue.ts";
 import { parseCommandFile } from "../commands/loader.ts";
 import { registerDelegateTool } from "../delegate.ts";
 import { registerHistory } from "../history.ts";
+import scramjet from "../index.ts";
 import { registerScramjetCommand } from "../scramjet-command.ts";
 import { clearLatestCompletion, registerTaskCompleteTool } from "../task-complete.ts";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
@@ -162,6 +163,36 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		await toolCallHandler({ type: "tool_call", toolCallId: "x", toolName: "bash", input: {} });
 
 		expect(warnSpy).not.toHaveBeenCalled();
+	});
+});
+
+// Proves index.ts actually wires registerBaseDirectives into the extension —
+// the unit suite (base-directives.test.ts) covers the injector in isolation,
+// but only the real default export catches a dropped registerBaseDirectives call in the factory.
+// Loading the whole factory exercises the live registration order; emitting
+// before_agent_start confirms the directives land on top of Pi's assembled
+// prompt (the identity anchor is unique to the base directives, so its presence
+// proves the injector ran).
+describe("integration smoke — base directives wired into the extension factory", () => {
+	it("scramjet() registers the injector so before_agent_start appends the directives", async () => {
+		const { pi, handlers } = recordingPi();
+		scramjet(pi);
+
+		const beforeAgentStart = handlers.get("before_agent_start") ?? [];
+		expect(beforeAgentStart.length).toBeGreaterThan(0);
+
+		// Each before_agent_start handler is independent; the base-directives one
+		// returns the appended prompt while the others (task-complete, delegate,
+		// history) no-op for this empty state. Concatenate to find the directives.
+		const outputs: string[] = [];
+		for (const handler of beforeAgentStart) {
+			const result = (await handler({ systemPrompt: "BASE PROMPT" })) as { systemPrompt?: string } | undefined;
+			if (result?.systemPrompt) outputs.push(result.systemPrompt);
+		}
+		const combined = outputs.join("\n\n");
+
+		expect(combined).toContain("BASE PROMPT");
+		expect(combined).toContain("Scramjet is the harness you are running under");
 	});
 });
 
