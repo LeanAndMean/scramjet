@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 — Base-prompt coding-agent directives
+
+Appends a general coding-agent quality block to Pi's assembled system prompt on every turn.
+
+### Added
+
+- `base-directives.ts`: a `before_agent_start` hook that appends `SCRAMJET_BASE_DIRECTIVES` to Pi's assembled system prompt on every turn. The prose is adopted from a captured Claude Code CLI system prompt and product-neutralized per issue #78 — covering external/tool content as data not instruction (prompt-injection flagging), exploratory questions not triggering implementation, scope discipline, risky/hard-to-reverse/externally-visible actions requiring clear authorization, not retrying denied tool calls unchanged, and navigable `file_path:line_number` code references. Authorization for risky actions may come from the user, the active command's instructions, or durable project instructions (CLAUDE.md / AGENTS.md), preserving Scramjet's command-owned workflow model.
+- Two Scramjet-specific reference blocks (orientation + feedback routing) as conditional self-knowledge modeled on Pi's own documentation section, with doc pointers (README, vision doc) resolved from the installed package root. The block returns only `systemPrompt` (composing cleanly with the next-step `message` injection), appends on top of any user SYSTEM.md, and is unconditional (flag-independent, like `pr-indicator.ts`).
+- `docs/scramjet-vision.md` is now shipped in the npm package so the runtime doc pointer resolves in an installed copy.
+
 ## 0.8.0 — Active-PR footer indicator
 
 Adds an ambient footer hint surfacing the current branch's open GitHub PR.

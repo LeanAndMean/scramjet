@@ -299,6 +299,7 @@ scramjet/
   scramjet-command.ts   — /scramjet on|off toggle
   clear-alias.ts        — /clear alias
   pr-indicator.ts       — ambient footer hint for the branch's active PR number
+  base-directives.ts    — appends coding-agent quality directives to the system prompt
   tool-scope-advisory.ts — advisory tool-scope warnings
   commands/             — command-set loader + parser + validator
   diagram/              — draw_diagram tool + renderers
