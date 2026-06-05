@@ -45,6 +45,8 @@ export default function scramjet(pi: ExtensionAPI) {
 		sidebarLog: [],
 		delegateStack: [],
 		pendingForcedDispatch: null,
+		commandPhase: "idle",
+		latestCommandStatus: null,
 	};
 
 	registerTaskCompleteTool(pi, state);

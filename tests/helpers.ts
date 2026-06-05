@@ -9,6 +9,8 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		sidebarLog: [],
 		delegateStack: [],
 		pendingForcedDispatch: null,
+		commandPhase: "idle",
+		latestCommandStatus: null,
 		...overrides,
 	};
 }
@@ -34,6 +36,11 @@ export function recordingPi(): RecordingPi {
 	const handlers = new Map<string, Handler[]>();
 	const pi: any = {
 		appended: [] as { customType: string; data: unknown }[],
+		// Records pi.sendMessage(message, options) calls. The two-phase
+		// command-status protocol (issue 84) sends the hidden status probe this
+		// way; later stages assert it was sent (and, for the F1 deferral, that it
+		// fired off the timer rather than synchronously inside agent_end).
+		sent: [] as { message: unknown; options?: unknown }[],
 		registerTool(tool: any) {
 			tools.push(tool);
 		},
@@ -47,6 +54,9 @@ export function recordingPi(): RecordingPi {
 		},
 		appendEntry(customType: string, data: unknown) {
 			pi.appended.push({ customType, data });
+		},
+		sendMessage(message: unknown, options?: unknown) {
+			pi.sent.push({ message, options });
 		},
 	};
 	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
