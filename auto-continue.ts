@@ -58,8 +58,11 @@ function toNextStep(step: CommandStatusNextStep): NextStep {
 // trim+collapse, plus a length cap since a status summary is unbounded. No
 // safe() close-tag escaping is needed — notify text is never re-injected into a
 // prompt.
-const NOTIFY_MAX = 200;
-function cleanForNotify(text: string): string {
+// Exported for direct unit testing of the boundary (NOTIFY_MAX - 1 + "…") and
+// the control-char/whitespace passes; the production callers are routeNonCompleted's
+// blocked/waiting notifies.
+export const NOTIFY_MAX = 200;
+export function cleanForNotify(text: string): string {
 	const collapsed = text
 		.replace(/[\u0000-\u001f\u007f]/g, " ")
 		.trim()
@@ -336,13 +339,23 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				return;
 			}
 			case "probing": {
-				// The probe turn ended without a scramjet_command_status call (the
-				// agent wrote prose instead of reporting). Self-heal: pause the chain,
-				// reset, do not re-probe — no infinite loop. The turn produced a
-				// terminal agent_end, so the liveness watchdog is no longer needed.
+				// The probe turn ended without a recorded scramjet_command_status call:
+				// either the agent wrote prose instead of reporting, or it DID call the
+				// tool but Pi rejected the call on schema grounds before `execute` ran
+				// (missing required field, bad status literal) so the phase never
+				// advanced to "reported". Self-heal: pause the chain, reset, do not
+				// re-probe — no infinite loop. The turn produced a terminal agent_end,
+				// so the liveness watchdog is no longer needed.
+				//
+				// F1: this is otherwise the only self-heal in the protocol that resets
+				// silently; every sibling (watchdog, send-throw, out-of-phase gate in
+				// command-status.ts) leaves a log breadcrumb. A subtly-malformed status
+				// payload would stop the chain with no diagnostic trail. Log-only —
+				// preserves "invisible when idle" on the user surface.
 				clearProbeWatchdog();
 				state.commandPhase = "idle";
 				state.latestCommandStatus = null;
+				console.warn("scramjet: status probe turn ended without a valid status report; auto-continue paused");
 				return;
 			}
 			case "reported": {

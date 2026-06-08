@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerAutoContinue } from "../auto-continue.ts";
+import { cleanForNotify, NOTIFY_MAX, registerAutoContinue } from "../auto-continue.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
 import { COMMAND_START_TYPE, registerHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
@@ -184,6 +184,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Answer turn → probing + probe fires.
 			bag.pi.isStreaming = true;
@@ -192,13 +193,18 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(state.commandPhase).toBe("probing");
 
-			// Probe turn ends but the agent wrote prose instead of reporting.
+			// Probe turn ends but the agent wrote prose instead of reporting (or Pi
+			// rejected a schema-invalid status call before execute ran).
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			expect(state.commandPhase).toBe("idle");
 			expect(ctxBag.dispatched).toEqual([]);
+			// F1: the silent self-heal now leaves a log breadcrumb like its siblings.
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("without a valid status report");
 			// No second probe scheduled.
 			await vi.advanceTimersByTimeAsync(0);
 			expect(bag.pi.sent).toHaveLength(1);
+			warnSpy.mockRestore();
 		});
 
 		it("does not probe for an ordinary turn with no active command (phase idle)", async () => {
@@ -475,6 +481,15 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/b:ok alpha beta", options: { deliverAs: "followUp" }, session: "current" },
 			]);
+
+			// S4: the skip is surfaced as an info notify before dispatch, naming both
+			// the skipped out-of-policy candidate and the valid target it dispatched.
+			// A regression that silently swallowed the out-of-policy pick (the exact
+			// thing this branch guards against) would otherwise pass.
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
+			expect(ctxBag.notifications[0].message).toContain("skipped out-of-policy");
+			expect(ctxBag.notifications[0].message).toContain("z:bad");
+			expect(ctxBag.notifications[0].message).toContain("b:ok");
 		});
 
 		it("valid pick + enabled=false surfaces a notify hint and does not dispatch", async () => {
@@ -922,5 +937,36 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(bag.pi.sent).toHaveLength(0);
 		});
+	});
+});
+
+// S3: the sanitizer that guards model-supplied summary/user_prompt before they
+// reach the single-line ctx.ui.notify widget. The production callers
+// (routeNonCompleted's blocked/waiting notifies) only ever pass clean short
+// strings in the existing tests, so the control-char strip, whitespace collapse,
+// and the off-by-one NOTIFY_MAX - 1 + "…" cap were entirely unexercised.
+describe("cleanForNotify", () => {
+	it("replaces control characters (newlines, tabs, NUL, DEL, BEL) with spaces and collapses runs", () => {
+		expect(cleanForNotify("line one\nline two\ttabbed")).toBe("line one line two tabbed");
+		expect(cleanForNotify("bell\x07nul\x00del\x7f")).toBe("bell nul del");
+	});
+
+	it("trims leading and trailing whitespace and collapses internal runs to a single space", () => {
+		expect(cleanForNotify("   padded   ")).toBe("padded");
+		expect(cleanForNotify("a     b\t\t\tc")).toBe("a b c");
+	});
+
+	it("leaves a string of exactly NOTIFY_MAX characters untouched (boundary, no truncation)", () => {
+		const exact = "a".repeat(NOTIFY_MAX);
+		expect(cleanForNotify(exact)).toBe(exact);
+		expect(cleanForNotify(exact)).toHaveLength(NOTIFY_MAX);
+	});
+
+	it("truncates a longer string to NOTIFY_MAX - 1 chars plus a single ellipsis (total NOTIFY_MAX)", () => {
+		const long = "a".repeat(NOTIFY_MAX + 50);
+		const out = cleanForNotify(long);
+		expect(out).toHaveLength(NOTIFY_MAX);
+		expect(out.endsWith("…")).toBe(true);
+		expect(out.slice(0, NOTIFY_MAX - 1)).toBe("a".repeat(NOTIFY_MAX - 1));
 	});
 });
