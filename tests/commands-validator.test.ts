@@ -120,6 +120,25 @@ describe("validateNextSteps — array form", () => {
 		expect(result.reason).toContain("z:one");
 	});
 
+	it("under open mode, skips a blacklisted first entry and accepts the next, recording the skip", () => {
+		const open = {
+			mode: "open" as const,
+			candidates: [{ name: "mach12:issue-review" }],
+			blacklist: ["mach12:pr-merge"],
+		};
+		const result = validateNextSteps(
+			[entry({ name: "mach12:pr-merge" }), entry({ name: "infra:rotate-key", fresh_session: false })],
+			open,
+		);
+		expect(result.valid).toEqual({
+			name: "infra:rotate-key",
+			args: undefined,
+			freshSession: false,
+			reason: undefined,
+		});
+		expect(result.skipped).toEqual(["mach12:pr-merge"]);
+	});
+
 	it("rejects every entry under an ask policy", () => {
 		const ask = { mode: "ask" as const, hint: "User picks" };
 		const result = validateNextSteps([entry({ name: "x:y" }), entry({ name: "x:z" })], ask);

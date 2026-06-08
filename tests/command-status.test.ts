@@ -81,6 +81,24 @@ describe("registerCommandStatusTool — phase gate", () => {
 		expect(result.details).toMatchObject({ status: "completed", name: "mach12:issue-implement", args: "84 3" });
 	});
 
+	it("rejects a duplicate report: the second call lands at phase 'reported' and is refused", async () => {
+		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+
+		const first = await execute({ status: "completed", summary: "done" });
+		expect(first.terminate).toBe(true);
+		expect(state.commandPhase).toBe("reported");
+
+		// A second report in the same probe lands at phase "reported", which the
+		// phase gate rejects (covered indirectly by the it.each above; named here
+		// to document the duplicate-report contract explicitly).
+		const second = await execute({ status: "completed", summary: "done again" });
+		expect(second.terminate).toBeUndefined();
+		expect(second.details.error).toBe("out-of-phase");
+		expect(second.details.phase).toBe("reported");
+		// The first report is preserved; the duplicate did not overwrite it.
+		expect(state.latestCommandStatus?.summary).toBe("done");
+	});
+
 	it("renders a plain status line for non-completed reports", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "probing" }));
 		const result = await execute({

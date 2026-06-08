@@ -293,7 +293,7 @@ scramjet/
   index.ts              — entry point (extension factory)
   types.ts              — ScramjetState and shared types
   command-status.ts     — scramjet_command_status tool (two-phase status probe)
-  auto-continue.ts      — agent_end listener: validate, dispatch, countdown
+  auto-continue.ts      — agent_end listener: probe, validate, dispatch, countdown
   next-step-dispatch.ts — Pi input-dispatch helper for next steps
   delegate.ts           — delegate tool + frame stack
   next-step.ts          — <scramjet-next-step> block builder

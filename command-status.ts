@@ -63,6 +63,7 @@ const NEXT_STEP_SCHEMA = Type.Object({
 		description:
 			"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session').",
 	}),
+	// Wire-only (MVP-unused): choice-list-UI scaffolding; toNextStep drops it on conversion.
 	label: Type.Optional(Type.String({ description: "Optional short label for a future choice-list UI." })),
 	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
 });
@@ -125,6 +126,13 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			// that window, return a helpful error WITHOUT terminate so the model's
 			// real turn is not cut short.
 			if (state.commandPhase !== "probing") {
+				// S3: parity with the sibling advisors (tool-scope-advisory.ts,
+				// subagent-output-advisor.ts) which console.warn on their conditions.
+				// The model-facing error below is unchanged; this only makes a
+				// repeatedly-misbehaving command set visible in the logs.
+				console.warn(
+					`scramjet: scramjet_command_status called out of phase (phase=${state.commandPhase}); report ignored`,
+				);
 				const details: CommandStatusDetails = { error: "out-of-phase", phase: state.commandPhase };
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
@@ -142,9 +150,12 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			state.commandPhase = "reported";
 
 			const next = params.next_steps?.[0];
+			// S4: mirror buildNextStepWire — trimStart the args so the forward
+			// pointer rendered here can't show a double space either.
+			const nextArgs = next?.args?.trimStart();
 			const text =
 				params.status === "completed" && next
-					? `→ /${next.name}${next.args ? ` ${next.args}` : ""}`
+					? `→ /${next.name}${nextArgs ? ` ${nextArgs}` : ""}`
 					: `status: ${params.status}`;
 
 			const details: CommandStatusDetails = { status: params.status, summary: params.summary, ...(next ?? {}) };

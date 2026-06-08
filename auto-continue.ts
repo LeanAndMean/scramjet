@@ -51,6 +51,22 @@ function toNextStep(step: CommandStatusNextStep): NextStep {
 	return { name: step.name, args: step.args, freshSession: step.fresh_session, reason: step.reason };
 }
 
+// S2: model-supplied summary/prompt text is interpolated into ctx.ui.notify,
+// which renders on a single line. Strip control chars (newlines included),
+// collapse internal whitespace, and cap the length so a multi-paragraph or
+// control-char report can't garble the widget. Mirrors next-step.ts formatHint's
+// trim+collapse, plus a length cap since a status summary is unbounded. No
+// safe() close-tag escaping is needed — notify text is never re-injected into a
+// prompt.
+const NOTIFY_MAX = 200;
+function cleanForNotify(text: string): string {
+	const collapsed = text
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.trim()
+		.replace(/\s+/g, " ");
+	return collapsed.length > NOTIFY_MAX ? `${collapsed.slice(0, NOTIFY_MAX - 1)}…` : collapsed;
+}
+
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let countdownTimer: ReturnType<typeof setInterval> | null = null;
 	let unsubInput: (() => void) | null = null;
@@ -241,6 +257,17 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
+		// S1: first-valid-wins is the designed semantics, but a candidate skipped
+		// before the valid one is an out-of-policy pick (closed) or a blacklisted
+		// one (open) — surface it as info so a possible authoring/model error is
+		// visible rather than silently swallowed.
+		if (result.skipped.length) {
+			ctx.ui.notify(
+				`scramjet: skipped out-of-policy next step(s) before dispatching ${result.valid.name}: ${result.skipped.join(", ")}`,
+				"info",
+			);
+		}
+
 		if (state.enabled) {
 			startCountdown(result.valid, ctx);
 		} else {
@@ -260,11 +287,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	function routeNonCompleted(status: NonNullable<ScramjetState["latestCommandStatus"]>, ctx: ExtensionContext) {
 		switch (status.status) {
 			case "blocked":
-				ctx.ui.notify(`scramjet: command blocked — ${status.summary}`, "warning");
+				ctx.ui.notify(`scramjet: command blocked — ${cleanForNotify(status.summary)}`, "warning");
 				return;
 			case "waiting_for_user":
 				if (status.user_prompt) {
-					ctx.ui.notify(`scramjet: waiting for input — ${status.user_prompt}`, "info");
+					ctx.ui.notify(`scramjet: waiting for input — ${cleanForNotify(status.user_prompt)}`, "info");
 				}
 				return;
 			default:

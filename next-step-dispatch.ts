@@ -11,7 +11,11 @@ export function buildNextStepWire(step: Pick<NextStep, "name" | "args">): string
 	// Reconstruct the slash-form wire payload from the structured NextStep.
 	// The agent supplies bare `name` and optional `args`; Scramjet owns only
 	// the slash prefix/join while Pi owns routing and prompt-template expansion.
-	return `/${step.name}${step.args ? ` ${step.args}` : ""}`;
+	// S4: trimStart the args so a model-supplied leading space can't produce a
+	// double space ("/cmd  84") — the schema asks for "no leading space", and we
+	// already prepend the separator ourselves.
+	const args = step.args?.trimStart();
+	return `/${step.name}${args ? ` ${args}` : ""}`;
 }
 
 export function dispatchNextStep(

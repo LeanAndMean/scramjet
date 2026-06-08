@@ -28,6 +28,9 @@ export interface CommandStatusNextStep {
 	name: string;
 	args?: string;
 	fresh_session: boolean;
+	// Wire-only, MVP-unused: scaffolding for a future choice-list UI. Accepted by
+	// the scramjet_command_status schema but dropped by toNextStep (auto-continue.ts),
+	// so no dispatch path reads it today.
 	label?: string;
 	reason?: string;
 }
