@@ -81,24 +81,26 @@ Scramjet reads the declaration, validates the agent's pick (or the forced target
 
 ### Simplicity is the feature
 
-Scramjet is a small TypeScript extension. The auto-continuation mechanism at its core is one tool (`task_complete`), one widget (the countdown), and a parser/validator/dispatcher reading the next-step frontmatter.
+Scramjet is a small TypeScript extension. The auto-continuation mechanism at its core is one tool (`scramjet_command_status`), one widget (the countdown), and a parser/validator/dispatcher reading the next-step frontmatter.
 
 ## How it works
 
-### The `task_complete` tool
+### The two-phase `scramjet_command_status` protocol
 
-Scramjet registers a tool called `task_complete` and injects a `<scramjet-next-step>` block into the user message via Pi's `before_agent_start` hook. The block lists candidate commands when the active command's frontmatter declared `closed` or `open`.
+An active command produces its normal user-facing answer first — nothing about completion is injected into that turn. Once the run goes idle, Scramjet defers a TUI-hidden status-check message that starts a short follow-up turn; the agent answers it by calling `scramjet_command_status`. Separating the answer from the status report removes the old failure mode where the agent poured its answer into a terminating tool's `summary` field instead of writing prose.
 
-The agent calls `task_complete({ summary, next_step })` when done. For `forced` policies it omits `next_step`, or sets it only to pass `args`/`fresh_session` to the declared target (`next_step.name` must match that target); the completion signal is still required before the forced target runs. The tool returns `terminate: true`, cleanly stopping the agent loop.
+The agent calls `scramjet_command_status({ status, summary, next_steps? })`, where `status` is one of `completed` / `waiting_for_user` / `blocked` / `incomplete`. For `completed` commands, `next_steps[]` carries the next-command handoff: each entry has a `name` (bare command, no leading slash), optional `args`, and `fresh_session`. For `forced` policies the first entry's `name` must match the declared target and only passes `args`/`fresh_session`; the array shape also carries candidates for a future choice-list UI. The tool is phase-gated by the harness — called outside the status-check window it returns a helpful error without terminating; in-phase it stores the report and returns `terminate: true`, ending the short probe turn.
 
 ### Validation and dispatch
 
-After the agent settles, Scramjet validates the pick against the active command's declared policy. Mode-by-mode behavior:
+On the probe turn's `agent_end`, Scramjet reads the reported status and validates any pick against the active command's declared policy. Mode-by-mode behavior for a `completed` status:
 
-- **`forced`** — after `task_complete`, fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent; `task_complete` is the safety gate that distinguishes successful completion from clarification or error.
+- **`forced`** — fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent; the `completed` status is the safety gate that distinguishes successful completion from clarification or error.
 - **`closed` / `open`** under `/scramjet on` — valid pick → countdown then dispatch; invalid pick → stop with a notification.
 - **`closed` / `open`** under `/scramjet off` — surface the hint via the UI only; no auto-continuation.
 - **`ask` / no `next:`** — pause regardless of the flag.
+
+A non-`completed` status never chains: `waiting_for_user` and `incomplete` pause quietly, and `blocked` pauses with a warning notification. Note: `no next:` produces no status check at all — the probe fires only for commands that declare a `next:` policy, so a command with nothing to chain stays invisible.
 
 Executing a step means either dispatching the slash command directly, or creating a fresh session first and then dispatching.
 
@@ -290,7 +292,7 @@ version, or pi-tui pin drift apart.
 scramjet/
   index.ts              — entry point (extension factory)
   types.ts              — ScramjetState and shared types
-  task-complete.ts      — task_complete tool + next-step block injection
+  command-status.ts     — scramjet_command_status tool (two-phase status probe)
   auto-continue.ts      — agent_end listener: validate, dispatch, countdown
   next-step-dispatch.ts — Pi input-dispatch helper for next steps
   delegate.ts           — delegate tool + frame stack

@@ -235,8 +235,8 @@ If genuine issues remain (including any reclassified items), the natural next st
 
 If all findings are nitpicks/false positives, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
 
-When you call `task_complete`, pass the selected follow-up's runtime arguments explicitly:
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and pass the selected follow-up as a `next_steps` entry with its runtime arguments explicit:
 
-- For fixes: set `next_step.name` to `mach12:pr-review-fix`, `next_step.args` to `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>`, and choose whether a fresh session is useful for the fix work.
-- For pre-merge: set `next_step.name` to `mach12:pr-pre-merge`, `next_step.args` to `<pr-number>`, and choose whether a fresh session is useful for the checklist.
-- Omit `next_step` if the user needs to decide before continuing.
+- For fixes: set the entry's `name` to `mach12:pr-review-fix`, `args` to `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>`, and choose whether a fresh session is useful for the fix work.
+- For pre-merge: set the entry's `name` to `mach12:pr-pre-merge`, `args` to `<pr-number>`, and choose whether a fresh session is useful for the checklist.
+- Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.

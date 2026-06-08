@@ -58,7 +58,7 @@ Once a few related commands exist, two patterns appear:
 
 Pre-MVP `scramjet` followed the principle that **commands own their
 edges** — the LLM read the command's prose and the harness only watched
-for a `task_complete` signal. That principle existed because pre-MVP
+for a completion signal. That principle existed because pre-MVP
 `scramjet` had to remain compatible with Claude Code CLI plugins, which
 cannot encode anything richer than prose. The MVP buildout (issue 23)
 completed the cutover: declared `next:` policies and the `delegate` tool
@@ -199,10 +199,10 @@ encouraged but optional.
   any non-blacklisted slash command. Use no `next` (or `mode: ask`) for a
   terminus, not an empty `open` list.
 - **`forced` completion gate.** The forced target runs only after the
-  command signals completion with `task_complete`. It does not require an
-  agent-picked `next_step`, and it still ignores `/scramjet off`; the
-  completion signal only prevents chaining after clarification, error, or
-  an otherwise unfinished turn.
+  command reports `status: "completed"` via `scramjet_command_status`. It
+  does not require an agent-picked `next_steps` entry, and it still ignores
+  `/scramjet off`; the completion status only prevents chaining after
+  clarification, error, or an otherwise unfinished turn.
 - **No `next` declared.** Equivalent to `mode: ask` with no hint. The
   harness does not inject a next-step instruction block and does not
   auto-follow a legacy/free-form agent proposal.
@@ -344,7 +344,7 @@ In both modes, Esc at any point returns to plain Pi.
 `/off` gates *decisions*: `closed` / `open` agent-picks and `ask`
 user-picks. `forced` has no decision — it is a deterministic transition
 the command author wired in. The transition still waits for the command's
-`task_complete` signal so clarification, error, or unfinished turns do
+`completed` status report so clarification, error, or unfinished turns do
 not accidentally advance. The user implicitly chose to chain by invoking
 the command that declares `forced` next-step; surfacing every completed
 `forced` transition as a manual step would be ritualistic, not
@@ -652,11 +652,14 @@ edges, and stays out of the way.
 
 #### Resolved
 
-- **Agent-picks-next mechanism.** Resolved: prose-driven extension of
-  `task_complete`. The candidate list is prefixed to the user message
-  as a `<scramjet-next-step>` block (not the system prompt, to preserve
-  prompt-cache hit rates). `task_complete.next_step.command` stays a
-  free-form string; the harness validates the agent's pick in
+- **Agent-picks-next mechanism.** Resolved: the two-phase
+  `scramjet_command_status` protocol (issue 84). After the command's
+  normal answer turn goes idle, the harness sends a TUI-hidden
+  status-check message carrying the `<scramjet-next-step>` candidate
+  block; the agent reports via `scramjet_command_status`. The candidate
+  list rides in that user-role probe message (not the system prompt, to
+  preserve prompt-cache hit rates). `next_steps[].name` stays a free-form
+  string; the harness validates the agent's pick on the probe turn's
   `agent_end` against the active command's policy.
 - **Delegation dispatch mechanism.** Resolved: same-context tool-result
   delegation (see §3 *Dispatch mechanism*). The `delegate` tool returns

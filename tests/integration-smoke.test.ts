@@ -182,8 +182,8 @@ describe("integration smoke — base directives wired into the extension factory
 		expect(beforeAgentStart.length).toBeGreaterThan(0);
 
 		// Each before_agent_start handler is independent; the base-directives one
-		// returns the appended prompt while the others (task-complete, delegate,
-		// history) no-op for this empty state. Concatenate to find the directives.
+		// returns the appended prompt while the others (delegate, history) no-op
+		// for this empty state. Concatenate to find the directives.
 		const outputs: string[] = [];
 		for (const handler of beforeAgentStart) {
 			const result = (await handler({ systemPrompt: "BASE PROMPT" })) as { systemPrompt?: string } | undefined;
