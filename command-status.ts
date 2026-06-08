@@ -73,6 +73,27 @@ type WireNextStep = Static<typeof NEXT_STEP_SCHEMA>;
 const _wireMatchesInterface = (step: WireNextStep): CommandStatusNextStep => step;
 const _interfaceMatchesWire = (step: CommandStatusNextStep): WireNextStep => step;
 
+// F3: single source of truth for the status enum, mirroring the next_steps
+// congruence guards above. The TypeBox union below and the
+// CommandStatusPayload["status"] TS union (types.ts) are two declarations of the
+// same four literals; the assignability pair underneath fails the build if
+// either side adds, drops, or renames a status (e.g. adding "cancelled" to one
+// side only), closing the last drift hole the rest of this file already guards.
+const STATUS_SCHEMA = Type.Union(
+	[Type.Literal("completed"), Type.Literal("waiting_for_user"), Type.Literal("blocked"), Type.Literal("incomplete")],
+	{
+		description:
+			"completed = the command's work is done and your final user-facing answer was already delivered; " +
+			"waiting_for_user = you asked the user a question or need input before continuing; " +
+			"blocked = the command cannot proceed (error, missing dependency, authorization); " +
+			"incomplete = none of the above (stopped without a clean completion/question/blocker).",
+	},
+);
+
+type WireStatus = Static<typeof STATUS_SCHEMA>;
+const _statusWireMatchesInterface = (status: WireStatus): CommandStatusPayload["status"] => status;
+const _statusInterfaceMatchesWire = (status: CommandStatusPayload["status"]): WireStatus => status;
+
 export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
 		name: "scramjet_command_status",
@@ -81,21 +102,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			"Report the status of an active Scramjet slash command after Scramjet explicitly asks for a status check. " +
 			"Do not call this tool for ordinary user tasks. Do not call it unless the latest message asks you to call it.",
 		parameters: Type.Object({
-			status: Type.Union(
-				[
-					Type.Literal("completed"),
-					Type.Literal("waiting_for_user"),
-					Type.Literal("blocked"),
-					Type.Literal("incomplete"),
-				],
-				{
-					description:
-						"completed = the command's work is done and your final user-facing answer was already delivered; " +
-						"waiting_for_user = you asked the user a question or need input before continuing; " +
-						"blocked = the command cannot proceed (error, missing dependency, authorization); " +
-						"incomplete = none of the above (stopped without a clean completion/question/blocker).",
-				},
-			),
+			status: STATUS_SCHEMA,
 			summary: Type.String({ description: "Brief summary of the command's outcome." }),
 			user_prompt: Type.Optional(
 				Type.String({

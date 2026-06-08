@@ -225,6 +225,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				throw new Error("send boom");
 			};
 
+			// F4: seed a non-null status so the catch's `latestCommandStatus = null`
+			// reset is actually exercised — without this the field enters null and the
+			// assertion below would pass even if a regression dropped the reset line.
+			state.latestCommandStatus = { status: "completed", summary: "stale prior report" };
+
 			bag.pi.isStreaming = true;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			expect(state.commandPhase).toBe("probing");
@@ -237,6 +242,58 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.latestCommandStatus).toBeNull();
 			expect(warnSpy).toHaveBeenCalledTimes(1);
 			expect(warnSpy.mock.calls[0][0]).toContain("status probe failed");
+			warnSpy.mockRestore();
+		});
+
+		it("self-heals to idle via the watchdog if the probe turn never completes (F1)", async () => {
+			const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
+			const def = defWithPolicy("a:cmd", policy);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			// Seed a non-null status so the watchdog's clear is meaningfully exercised.
+			state.latestCommandStatus = { status: "completed", summary: "stale" };
+
+			// Answer turn ends → probe fires and the liveness watchdog is armed.
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(state.commandPhase).toBe("probing");
+			expect(bag.pi.sent).toHaveLength(1);
+
+			// The probe turn never emits a terminal agent_end (dropped triggerTurn,
+			// Escape before the turn starts, teardown). Advancing past the watchdog
+			// window self-heals the phase instead of leaving it wedged at "probing".
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			expect(state.commandPhase).toBe("idle");
+			expect(state.latestCommandStatus).toBeNull();
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("never completed");
+			warnSpy.mockRestore();
+		});
+
+		it("does not fire the watchdog once the probe turn has reported (F1)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			// Full two-phase round trip: the probe turn reports and ends, which clears
+			// the watchdog. A later timer advance must not re-trigger a self-heal.
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false }],
+			});
+			expect(state.commandPhase).toBe("idle");
+
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			expect(warnSpy).not.toHaveBeenCalled();
 			warnSpy.mockRestore();
 		});
 	});
@@ -521,6 +578,21 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 		});
 
+		// F5: the ask-mode warning is gated on `status.next_steps?.length`; with no
+		// proposed steps the command must stay silent (Invisible when idle). Guards
+		// against a regression inverting the condition to warn when empty.
+		it("ask mode with no proposed next steps stays silent", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "ask" });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "completed", summary: "s" });
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications).toEqual([]);
+			expect(state.commandPhase).toBe("idle");
+		});
+
 		it("completed with no next_steps pauses quietly", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
@@ -553,6 +625,36 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("blocked");
 			expect(ctxBag.notifications[0].message).toContain("gh auth missing");
+		});
+
+		// F2: if the command's next-step policy vanishes (registry rebuild/reload)
+		// between the probe and its agent_end, a `blocked` report must still surface
+		// — only the completed-chaining path depends on the policy.
+		it("routes a blocked report even when the policy vanished before the probe agent_end (F2)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			// Answer turn ends → probe scheduled while the policy is still present.
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(state.commandPhase).toBe("probing");
+
+			// The command's next-step policy disappears before the probe turn ends.
+			def.next = undefined;
+
+			await report({ status: "blocked", summary: "gh auth missing" });
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("blocked");
+			expect(ctxBag.notifications[0].message).toContain("gh auth missing");
+			expect(state.commandPhase).toBe("idle");
+			expect(state.latestCommandStatus).toBeNull();
 		});
 
 		it("waiting_for_user echoes the user_prompt as an info hint", async () => {

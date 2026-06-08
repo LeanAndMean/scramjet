@@ -35,6 +35,17 @@ import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } f
 
 const COUNTDOWN_SECONDS = 3;
 const WIDGET_KEY = "scramjet-next";
+// F1: liveness watchdog window. Generous on purpose — a live probe turn is a
+// single scramjet_command_status tool call and reports well within this, and the
+// guard inside the timer re-checks the phase so a turn that DID complete (or
+// already self-healed) is never clobbered. The value only bounds how long a
+// probe that never produced a turn at all (dropped triggerTurn during run
+// settle, Escape before the turn starts, session teardown mid-turn) lingers at
+// "probing" before self-healing; the next real command resets the phase anyway.
+// Kept comfortably longer than any plausible probe turn so it cannot fire while
+// the model is still thinking before its tool call (phase still "probing"),
+// which would otherwise drop a legitimate chain — worse than the stall it fixes.
+const PROBE_WATCHDOG_MS = 30_000;
 
 function toNextStep(step: CommandStatusNextStep): NextStep {
 	return { name: step.name, args: step.args, freshSession: step.fresh_session, reason: step.reason };
@@ -44,6 +55,14 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let countdownTimer: ReturnType<typeof setInterval> | null = null;
 	let unsubInput: (() => void) | null = null;
 	let probeTimer: ReturnType<typeof setTimeout> | null = null;
+	let probeWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+	function clearProbeWatchdog() {
+		if (probeWatchdog) {
+			clearTimeout(probeWatchdog);
+			probeWatchdog = null;
+		}
+	}
 
 	function cancelCountdown(ctx: ExtensionContext) {
 		if (countdownTimer) {
@@ -150,6 +169,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	// the journal and reaches the model as user context.
 	function scheduleProbe(policy: NextStepPolicy, commandId: string) {
 		if (probeTimer) clearTimeout(probeTimer);
+		clearProbeWatchdog();
 		const content = buildProbeMessage(policy, commandId);
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
@@ -162,6 +182,23 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			// rather than ctx.ui.notify.
 			try {
 				pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
+				// F1: time-domain analog of the throw boundary above. The
+				// probing→idle self-heal lives in the agent_end handler, so it only
+				// fires if the probe turn emits a terminal agent_end. If the
+				// triggered turn never materializes at all (dropped triggerTurn,
+				// Escape before it starts, teardown mid-turn), the phase would sit at
+				// "probing" until the next real command. Arm a watchdog that self-heals
+				// after a generous window; the phase re-check inside keeps it from
+				// clobbering a probe turn that did complete. Cleared at the probe turn's
+				// agent_end (reported/probing branches) and on shutdown.
+				probeWatchdog = setTimeout(() => {
+					probeWatchdog = null;
+					if (state.commandPhase === "probing") {
+						state.commandPhase = "idle";
+						state.latestCommandStatus = null;
+						console.warn("scramjet: status probe turn never completed; auto-continue paused");
+					}
+				}, PROBE_WATCHDOG_MS);
 			} catch (err) {
 				state.commandPhase = "idle";
 				state.latestCommandStatus = null;
@@ -249,6 +286,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			state.activeTopLevelCommand = null;
 			state.commandPhase = "idle";
 			state.latestCommandStatus = null;
+			clearProbeWatchdog();
 			return;
 		}
 
@@ -273,21 +311,35 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			case "probing": {
 				// The probe turn ended without a scramjet_command_status call (the
 				// agent wrote prose instead of reporting). Self-heal: pause the chain,
-				// reset, do not re-probe — no infinite loop.
+				// reset, do not re-probe — no infinite loop. The turn produced a
+				// terminal agent_end, so the liveness watchdog is no longer needed.
+				clearProbeWatchdog();
 				state.commandPhase = "idle";
 				state.latestCommandStatus = null;
 				return;
 			}
 			case "reported": {
+				// The probe turn completed and reported, so the liveness watchdog is
+				// no longer needed.
+				clearProbeWatchdog();
 				const status = state.latestCommandStatus;
 				state.commandPhase = "idle";
 				state.latestCommandStatus = null;
-				if (!status || !policy) return;
+				if (!status) return;
 				if (status.status === "completed") {
-					routeCompleted(policy, status, ctx);
-				} else {
-					routeNonCompleted(status, ctx);
+					// Chaining a completed command needs the policy to validate the
+					// pick (or fire the forced target). If def.next vanished between
+					// the probe and this agent_end (registry rebuild/reload), there is
+					// nothing to route a completed status to — pause quietly.
+					if (policy) routeCompleted(policy, status, ctx);
+					return;
 				}
+				// F2: a non-completed report (blocked/waiting_for_user/incomplete)
+				// never chains, so it does not depend on the policy. Route it even
+				// when policy is gone so a `blocked` summary (auth failure, missing
+				// dependency) still surfaces instead of being swallowed when def.next
+				// disappeared.
+				routeNonCompleted(status, ctx);
 				return;
 			}
 			default:
@@ -303,5 +355,6 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			clearTimeout(probeTimer);
 			probeTimer = null;
 		}
+		clearProbeWatchdog();
 	});
 }
