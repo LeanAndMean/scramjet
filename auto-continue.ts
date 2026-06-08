@@ -199,6 +199,29 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
+	// A non-completed report never chains; the differentiation is only in what
+	// gets surfaced. `blocked` merits a warning (the command hit an error,
+	// missing dependency, or authorization issue the user should see). For
+	// `waiting_for_user` the visible assistant answer already asked the question,
+	// so we only echo `user_prompt` as an info hint when the agent supplied one.
+	// `incomplete` is a quiet pause — staying invisible when there's nothing
+	// useful to say (see CLAUDE.md "Invisible when idle").
+	function routeNonCompleted(status: NonNullable<ScramjetState["latestCommandStatus"]>, ctx: ExtensionContext) {
+		switch (status.status) {
+			case "blocked":
+				ctx.ui.notify(`scramjet: command blocked — ${status.summary}`, "warning");
+				return;
+			case "waiting_for_user":
+				if (status.user_prompt) {
+					ctx.ui.notify(`scramjet: waiting for input — ${status.user_prompt}`, "info");
+				}
+				return;
+			default:
+				// incomplete: quiet pause.
+				return;
+		}
+	}
+
 	pi.on("agent_end", async (_event, ctx) => {
 		const activeName = state.activeTopLevelCommand;
 		const def = activeName ? state.registry.get(activeName) : undefined;
@@ -246,12 +269,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				state.commandPhase = "idle";
 				state.latestCommandStatus = null;
 				if (!status || !policy) return;
-				if (status.status !== "completed") {
-					// Stage 2 pauses on non-completed statuses. Stage 3 differentiates
-					// waiting_for_user / blocked / incomplete notifications.
-					return;
+				if (status.status === "completed") {
+					routeCompleted(policy, status, ctx);
+				} else {
+					routeNonCompleted(status, ctx);
 				}
-				routeCompleted(policy, status, ctx);
 				return;
 			}
 			default:

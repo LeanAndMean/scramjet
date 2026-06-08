@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAutoContinue } from "../auto-continue.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
-import { registerHistory } from "../history.ts";
+import { COMMAND_START_TYPE, registerHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
@@ -445,18 +445,68 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		});
 	});
 
-	describe("non-completed statuses pause the chain (Stage 2)", () => {
+	describe("non-completed statuses never chain but surface differentiated signals", () => {
+		// A non-completed report from any policy mode behaves identically (the
+		// chain only fires on `completed`); a forced policy is used here as the
+		// representative case. Every branch must reset phase→idle and clear the
+		// stored status, and never dispatch.
+		function nonCompletedState() {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const targetDef = defWithPolicy("b:target", undefined);
+			return runningState(def, { enabled: true, registry: registryWith(targetDef) });
+		}
+
+		it("blocked warns with the summary and does not dispatch", async () => {
+			const { bag, ctxBag, report } = bootstrap(nonCompletedState(), { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "blocked", summary: "gh auth missing" });
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("blocked");
+			expect(ctxBag.notifications[0].message).toContain("gh auth missing");
+		});
+
+		it("waiting_for_user echoes the user_prompt as an info hint", async () => {
+			const { bag, ctxBag, report } = bootstrap(nonCompletedState(), { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "waiting_for_user",
+				summary: "need a branch",
+				user_prompt: "which branch should I use?",
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
+			expect(ctxBag.notifications[0].message).toContain("which branch should I use?");
+		});
+
+		it("waiting_for_user with no user_prompt stays silent", async () => {
+			const { bag, ctxBag, report } = bootstrap(nonCompletedState(), { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "waiting_for_user", summary: "asked already" });
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications).toEqual([]);
+		});
+
+		it("incomplete is a quiet pause (no dispatch, no notification)", async () => {
+			const { bag, ctxBag, report } = bootstrap(nonCompletedState(), { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "incomplete", summary: "stopped early" });
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications).toEqual([]);
+		});
+
 		it.each(["waiting_for_user", "blocked", "incomplete"] as const)(
-			"%s does not dispatch and resets the phase to idle",
+			"%s resets the phase to idle and clears the stored status",
 			async (status) => {
-				const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
-				const targetDef = defWithPolicy("b:target", undefined);
-				const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+				const state = nonCompletedState();
 				const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 
 				await simulateTwoTurns(bag, ctxBag, report, { status, summary: "not done" });
 
-				expect(ctxBag.dispatched).toEqual([]);
 				expect(state.commandPhase).toBe("idle");
 				expect(state.latestCommandStatus).toBeNull();
 			},
@@ -630,6 +680,57 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				origin: "forced",
 				depth: 0,
 			});
+		});
+	});
+
+	describe("resume mid-probe self-heals (F5)", () => {
+		it("resets the phase to idle on resume so a stale status call is rejected and never dispatches or loops", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			// State as captured mid-probe: the answer turn ended, the probe fired,
+			// and the run was interrupted before the status tool was called.
+			const state = runningState(def, {
+				enabled: true,
+				registry: registryWith(target),
+				commandPhase: "probing",
+			});
+			const { bag, ctxBag, report } = bootstrap(state);
+			registerHistory(bag.pi, state);
+
+			// Resume: the branch replays only the journaled command-start entry — the
+			// probe phase is deliberately never journaled, so rebuild must self-heal
+			// the phase rather than restore "probing".
+			const entries = [
+				{
+					type: "custom" as const,
+					customType: COMMAND_START_TYPE,
+					data: { command: "a:cmd", origin: "user", depth: 0, timestamp: 1 },
+				},
+			];
+			await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
+			expect(state.commandPhase).toBe("idle");
+			expect(state.latestCommandStatus).toBeNull();
+
+			// A stale scramjet_command_status call (the resumed model answering the
+			// dead probe) now hits the phase guard: rejected out-of-phase, no terminate,
+			// state untouched.
+			const result = (await report({
+				status: "completed",
+				summary: "stale",
+				next_steps: [{ name: "b:target", fresh_session: false }],
+			})) as any;
+			expect(result.terminate).toBeUndefined();
+			expect(result.details.error).toBe("out-of-phase");
+			expect(state.commandPhase).toBe("idle");
+			expect(state.latestCommandStatus).toBeNull();
+
+			// agent_end after the rejected call: phase is idle, so nothing dispatches
+			// and no new probe is scheduled (no loop).
+			bag.pi.isStreaming = false;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(bag.pi.sent).toHaveLength(0);
 		});
 	});
 });
