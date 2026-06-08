@@ -211,6 +211,74 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(state.commandPhase).toBe("idle");
 		});
+
+		it("resets to idle (not wedged at probing) when the deferred probe sendMessage throws (F1)", async () => {
+			const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
+			const def = defWithPolicy("a:cmd", policy);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag } = bootstrap(state);
+
+			// Model the Node uncaughtException hazard: sendMessage returns void, so a
+			// throw on the deferred tick would otherwise leave the phase at "probing".
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			bag.pi.sendMessage = () => {
+				throw new Error("send boom");
+			};
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(state.commandPhase).toBe("probing");
+
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			// The throw is caught: the lifecycle self-heals instead of stalling.
+			expect(state.commandPhase).toBe("idle");
+			expect(state.latestCommandStatus).toBeNull();
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("status probe failed");
+			warnSpy.mockRestore();
+		});
+	});
+
+	// F7: the "no probe for delegated/non-Scramjet turns" guarantee (issue 84
+	// test-list items 2 & 3) reduces to: an agent_end whose phase is not "running"
+	// fires zero probe even when activeTopLevelCommand still names a policy command.
+	// history.ts only sets phase "running" at a depth-0 Scramjet command start.
+	describe("ineligible turns fire zero probe (F7)", () => {
+		it("does not probe on a delegated sub-turn (active command set, phase not running)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, {
+				enabled: true,
+				registry: registryWith(target),
+				commandPhase: "idle",
+				delegateStack: [{ commandName: "mach12:push", depth: 1 }],
+			});
+			const { bag, ctxBag } = bootstrap(state);
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(bag.pi.sent).toHaveLength(0);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("does not probe on a non-Scramjet slash turn mid-chain (active command set, phase idle)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true, commandPhase: "idle" });
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(bag.pi.sent).toHaveLength(0);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(state.commandPhase).toBe("idle");
+		});
 	});
 
 	describe("forced completed", () => {
@@ -366,6 +434,26 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
 			expect(ctxBag.notifications[0].message).toContain("/b:ok");
+			expect(ctxBag.notifications[0].message).toContain("fresh session");
+			expect(ctxBag.notifications[0].message).toContain("/scramjet on");
+		});
+
+		// S8: the enabled=false notify branch is policy-agnostic, but only closed
+		// mode covered it above. Open mode reaches the same branch via a free pick.
+		it("open valid pick + enabled=false surfaces a notify hint and does not dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: false });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "other-extension:cmd", fresh_session: true }],
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
+			expect(ctxBag.notifications[0].message).toContain("/other-extension:cmd");
 			expect(ctxBag.notifications[0].message).toContain("fresh session");
 			expect(ctxBag.notifications[0].message).toContain("/scramjet on");
 		});

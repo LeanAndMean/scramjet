@@ -18,7 +18,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import type { CommandPhase, CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
 
 // Shared shape for the tool's result `details` so both the out-of-phase error
@@ -42,6 +42,36 @@ export const COMMAND_STATUS_PROBE_TYPE = "scramjet-command-status";
 const OUT_OF_PHASE_ERROR =
 	"scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
 	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
+
+// F6: single source of truth for the next-step wire shape. The TypeBox schema
+// below and the CommandStatusNextStep TS interface (types.ts) are two
+// declarations of the same payload. The congruence guards underneath fail the
+// build if either side renames, adds, or drops a field — so a `fresh_session`
+// rename can't typecheck clean while silently breaking the runtime contract.
+const NEXT_STEP_SCHEMA = Type.Object({
+	name: Type.String({
+		description:
+			"Bare command name (no leading slash, no arguments), e.g. 'mach12:issue-plan'. Must match the declared target for forced policies and one of the listed candidates for closed policies.",
+	}),
+	args: Type.Optional(
+		Type.String({
+			description:
+				"Optional argument string passed to the command verbatim (no leading space), e.g. '55' or '36 --review-comment 12345'.",
+		}),
+	),
+	fresh_session: Type.Boolean({
+		description:
+			"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session').",
+	}),
+	label: Type.Optional(Type.String({ description: "Optional short label for a future choice-list UI." })),
+	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
+});
+
+// Bidirectional assignability: each direction fails to compile if the schema and
+// the interface diverge (a rename drops a required field from one side's view).
+type WireNextStep = Static<typeof NEXT_STEP_SCHEMA>;
+const _wireMatchesInterface = (step: WireNextStep): CommandStatusNextStep => step;
+const _interfaceMatchesWire = (step: CommandStatusNextStep): WireNextStep => step;
 
 export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
@@ -73,33 +103,11 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				}),
 			),
 			next_steps: Type.Optional(
-				Type.Array(
-					Type.Object({
-						name: Type.String({
-							description:
-								"Bare command name (no leading slash, no arguments), e.g. 'mach12:issue-plan'. Must match the declared target for forced policies and one of the listed candidates for closed policies.",
-						}),
-						args: Type.Optional(
-							Type.String({
-								description:
-									"Optional argument string passed to the command verbatim (no leading space), e.g. '55' or '36 --review-comment 12345'.",
-							}),
-						),
-						fresh_session: Type.Boolean({
-							description:
-								"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session').",
-						}),
-						label: Type.Optional(
-							Type.String({ description: "Optional short label for a future choice-list UI." }),
-						),
-						reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
-					}),
-					{
-						description:
-							"Ordered next-step candidates for completed commands. Omit entirely to stop the chain. " +
-							"The first entry valid for the command's policy is acted on; the array shape carries candidates for a future choice-list UI.",
-					},
-				),
+				Type.Array(NEXT_STEP_SCHEMA, {
+					description:
+						"Ordered next-step candidates for completed commands. Omit entirely to stop the chain. " +
+						"The first entry valid for the command's policy is acted on; the array shape carries candidates for a future choice-list UI.",
+				}),
 			),
 		}),
 		async execute(_toolCallId, params) {

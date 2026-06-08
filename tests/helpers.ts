@@ -43,8 +43,9 @@ export function recordingPi(): RecordingPi {
 		sent: [] as { message: unknown; options?: unknown }[],
 		// Messages dropped because they were sent while the run was still
 		// streaming. The real harness drops a sendMessage issued from inside an
-		// agent_end listener (isStreaming === true until finishRun clears it after
-		// listeners settle), so a synchronous probe would never reach the model. A
+		// agent_end listener (isStreaming === true until the run settles — it clears
+		// when agent.prompt() resolves), so a synchronous probe would never reach the
+		// model. A
 		// test that models this catches a regression that sends the probe inline
 		// rather than deferring it past the streaming window.
 		dropped: [] as { message: unknown; options?: unknown }[],

@@ -13,9 +13,10 @@
  * The probe MUST be deferred, not sent synchronously from the agent_end
  * listener: during agent_end the run is still streaming, so a synchronous
  * sendMessage routes to steer/followUp and is dropped by the already-exited
- * loop. A setTimeout(0) lands after finishRun() clears isStreaming, so
- * triggerTurn correctly reaches agent.prompt(). This mirrors why the countdown
- * (setInterval) dispatch works — it fires once the run is idle.
+ * loop. A setTimeout(0) lands after the run settles — isStreaming clears when
+ * agent.prompt() resolves — so triggerTurn correctly reaches agent.prompt().
+ * This mirrors why the countdown (setInterval) dispatch works — it fires once
+ * the run is idle.
  *
  * For completed commands: `forced` fires the declared target unconditionally
  * after completion; closed/open defer to /scramjet on|off and show a 3s
@@ -152,7 +153,20 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const content = buildProbeMessage(policy, commandId);
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
-			pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
+			// Error boundary, symmetric to the countdown setInterval guard above.
+			// sendMessage returns void, so a throw on this deferred tick becomes a
+			// Node uncaughtException and leaves commandPhase wedged at "probing"
+			// with no live probe behind it — self-healing only if another agent_end
+			// happens to fire later. Reset the lifecycle so the chain pauses cleanly
+			// instead of stalling. ctx is out of scope here, so warn to the console
+			// rather than ctx.ui.notify.
+			try {
+				pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
+			} catch (err) {
+				state.commandPhase = "idle";
+				state.latestCommandStatus = null;
+				console.warn(`scramjet: status probe failed to send (${(err as Error).message}); auto-continue paused`);
+			}
 		}, 0);
 	}
 
