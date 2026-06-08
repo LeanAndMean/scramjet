@@ -3,12 +3,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAutoContinue } from "../auto-continue.ts";
+import { registerCommandStatusTool } from "../command-status.ts";
 import { parseCommandFile } from "../commands/loader.ts";
 import { registerDelegateTool } from "../delegate.ts";
 import { registerHistory } from "../history.ts";
 import scramjet from "../index.ts";
 import { registerScramjetCommand } from "../scramjet-command.ts";
-import { clearLatestCompletion, registerTaskCompleteTool } from "../task-complete.ts";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
 import type { CommandDef, NextStepPolicy, ScramjetState } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
@@ -198,19 +198,18 @@ describe("integration smoke — base directives wired into the extension factory
 
 // S21: end-to-end chain smoke under /scramjet on. Exercises every harness
 // module that participates in the dispatch loop — scramjet-command,
-// history, task-complete, auto-continue — against a synthetic two-command
+// history, command-status, auto-continue — against a synthetic two-command
 // registry. The point isn't to re-test each module in isolation (every
-// one already has its own suite) but to assert they compose: the toggle
-// writer flips state.enabled, the input handler records origin and
-// activeTopLevelCommand, the task tool latches a completion, and
-// auto-continue's forced-mode dispatch fires the next slash that the
-// input handler then records as origin: "forced".
+// one already has its own suite) but to assert they compose through the
+// two-phase command-status protocol (issue 84): the toggle writer flips
+// state.enabled, the input handler records origin/activeTopLevelCommand and
+// starts the running phase, the answer turn's agent_end defers a hidden
+// status probe, the agent reports completion via scramjet_command_status, and
+// auto-continue's forced-mode dispatch fires the next slash that the input
+// handler then records as origin: "forced".
 describe("integration smoke — end-to-end chain under /scramjet on (S21)", () => {
-	beforeEach(() => clearLatestCompletion());
-	afterEach(() => {
-		vi.useRealTimers();
-		clearLatestCompletion();
-	});
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
 
 	interface RegisteredCommand {
 		name: string;
@@ -222,9 +221,10 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		const tools: any[] = [];
 		const commands: RegisteredCommand[] = [];
 		const appended: { type: string; data: unknown }[] = [];
-		const sent: { content: string; options?: any }[] = [];
+		const probes: { message: any; options?: any }[] = [];
 		const dispatched: { input: string; options?: any }[] = [];
 		const pi: any = {
+			isStreaming: false,
 			on(event: string, handler: any) {
 				const list = handlers.get(event) ?? [];
 				list.push(handler);
@@ -239,14 +239,18 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 			appendEntry(type: string, data: unknown) {
 				appended.push({ type, data });
 			},
-			sendUserMessage(content: string, options?: any) {
-				sent.push({ content, options });
+			// Hidden status-probe channel. A send issued while the run is still
+			// streaming (i.e. synchronously from inside agent_end) would be dropped
+			// by the real harness; model that so the deferral is exercised.
+			sendMessage(message: any, options?: any) {
+				if (pi.isStreaming) return;
+				probes.push({ message, options });
 			},
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
 			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
 		}
-		return { pi, handlers, tools, commands, appended, sent, dispatched, emit };
+		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };
 	}
 
 	function fakeCtx() {
@@ -258,7 +262,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		};
 	}
 
-	it("toggle on → user slash → forced agent_end → Pi input event records next step as origin: forced", async () => {
+	it("toggle on → user slash → answer turn → status probe → forced dispatch records origin: forced", async () => {
 		const TARGET_BODY = "Run int:next now.";
 		const origin: CommandDef = {
 			name: "int:start",
@@ -285,7 +289,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		// Wire every harness module that participates in a real dispatch.
 		registerScramjetCommand(bag.pi, state);
 		registerHistory(bag.pi, state);
-		registerTaskCompleteTool(bag.pi, state);
+		registerCommandStatusTool(bag.pi, state);
 		registerAutoContinue(bag.pi, state);
 		registerDelegateTool(bag.pi, state);
 		registerToolCallAdvisor(bag.pi, state);
@@ -297,33 +301,51 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		await toggle?.spec.handler("on", ctx);
 		expect(state.enabled).toBe(true);
 
-		// 2. User types /int:start — the input handler records it as origin: "user"
-		//    and sets activeTopLevelCommand.
+		// 2. User types /int:start — the input handler records it as origin: "user",
+		//    sets activeTopLevelCommand, and starts the running phase.
 		await bag.emit("input", { text: "/int:start", source: "interactive" }, ctx);
 		expect(state.activeTopLevelCommand).toBe("int:start");
+		expect(state.commandPhase).toBe("running");
 		expect(state.sidebarLog).toHaveLength(1);
 		expect(state.sidebarLog[0].command).toBe("int:start");
 		expect(state.sidebarLog[0].origin).toBe("user");
 
-		// 3. The agent signals completion, then its turn ends. int:start declares
-		//    forced → int:next. Scramjet dispatches the slash wire through Pi's
-		//    normal input path; history observes Pi's extension-source input event
-		//    and labels it origin: "forced" via state.pendingForcedDispatch.
-		const taskComplete = bag.tools.find((tool) => tool.name === "task_complete");
-		expect(taskComplete).toBeDefined();
-		await taskComplete.execute("completion", { summary: "start complete" });
+		// 3. The answer turn ends while the run is still streaming. auto-continue
+		//    advances to the probing phase and DEFERS the hidden status probe; it
+		//    must not send synchronously (that send would be dropped).
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctx);
+		expect(state.commandPhase).toBe("probing");
+		expect(bag.probes).toHaveLength(0);
+		expect(bag.dispatched).toEqual([]);
+
+		// 4. Once the run goes idle the probe fires and reaches the model.
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(bag.probes).toHaveLength(1);
+		expect(bag.probes[0].message.display).toBe(false);
+		expect(bag.probes[0].options).toEqual({ triggerTurn: true });
+
+		// 5. The agent answers the probe by calling scramjet_command_status. int:start
+		//    declares forced → int:next, so the probe turn's agent_end dispatches the
+		//    slash wire through Pi's normal input path; history observes the
+		//    extension-source input event and labels it origin: "forced".
+		const statusTool = bag.tools.find((tool) => tool.name === "scramjet_command_status");
+		expect(statusTool).toBeDefined();
+		await statusTool.execute("status-call", { status: "completed", summary: "start complete" });
+		expect(state.commandPhase).toBe("reported");
 		await bag.emit("agent_end", {}, ctx);
 		expect(bag.dispatched).toEqual([{ input: "/int:next", options: { deliverAs: "followUp" } }]);
-		expect(bag.sent).toEqual([]);
 		expect(state.pendingForcedDispatch).toBeNull();
+		expect(state.commandPhase).toBe("running"); // int:next started its own answer turn
 
-		// 4. The input event records the forced transition.
+		// 6. The input event records the forced transition.
 		expect(state.activeTopLevelCommand).toBe("int:next");
 		expect(state.sidebarLog).toHaveLength(2);
 		expect(state.sidebarLog[1].command).toBe("int:next");
 		expect(state.sidebarLog[1].origin).toBe("forced");
 
-		// 5. Journal entries reflect both transitions; the toggle entry also landed.
+		// 7. Journal entries reflect both transitions; the toggle entry also landed.
 		const types = bag.appended.map((e) => e.type);
 		expect(types).toContain("scramjet:enabled-toggle");
 		expect(types.filter((t) => t === "scramjet:command-start")).toHaveLength(2);

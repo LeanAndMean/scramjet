@@ -38,9 +38,17 @@ export function recordingPi(): RecordingPi {
 		appended: [] as { customType: string; data: unknown }[],
 		// Records pi.sendMessage(message, options) calls. The two-phase
 		// command-status protocol (issue 84) sends the hidden status probe this
-		// way; later stages assert it was sent (and, for the F1 deferral, that it
-		// fired off the timer rather than synchronously inside agent_end).
+		// way; tests assert it was sent (and, for the F1 deferral, that it fired
+		// off the timer rather than synchronously inside agent_end).
 		sent: [] as { message: unknown; options?: unknown }[],
+		// Messages dropped because they were sent while the run was still
+		// streaming. The real harness drops a sendMessage issued from inside an
+		// agent_end listener (isStreaming === true until finishRun clears it after
+		// listeners settle), so a synchronous probe would never reach the model. A
+		// test that models this catches a regression that sends the probe inline
+		// rather than deferring it past the streaming window.
+		dropped: [] as { message: unknown; options?: unknown }[],
+		isStreaming: false,
 		registerTool(tool: any) {
 			tools.push(tool);
 		},
@@ -56,6 +64,10 @@ export function recordingPi(): RecordingPi {
 			pi.appended.push({ customType, data });
 		},
 		sendMessage(message: unknown, options?: unknown) {
+			if (pi.isStreaming) {
+				pi.dropped.push({ message, options });
+				return;
+			}
 			pi.sent.push({ message, options });
 		},
 	};

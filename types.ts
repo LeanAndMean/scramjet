@@ -12,11 +12,6 @@ export interface NextStep {
 	reason?: string;
 }
 
-export interface CompletionSignal {
-	summary: string;
-	nextStep?: NextStep;
-}
-
 // Lifecycle phase of the active top-level Scramjet command, tracked per
 // invocation by the two-phase command-status protocol (issue 84):
 //   idle     — no active command, or the chain has been resolved
@@ -26,9 +21,9 @@ export interface CompletionSignal {
 export type CommandPhase = "idle" | "running" | "probing" | "reported";
 
 // A single next-step suggestion in a command-status report. This is the
-// tool-facing (snake_case) shape the agent populates, mirroring the wire
-// convention used by the task_complete next_step payload; auto-continue
-// converts the chosen entry into a NextStep before dispatch.
+// tool-facing (snake_case) shape the agent populates in the scramjet_command_status
+// next_steps payload; auto-continue converts the chosen entry into a NextStep
+// before dispatch.
 export interface CommandStatusNextStep {
 	name: string;
 	args?: string;
