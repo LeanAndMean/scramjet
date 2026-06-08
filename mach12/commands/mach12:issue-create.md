@@ -190,10 +190,10 @@ Report to the user:
 - Issue number and URL
 - Whether issue creation was completed or skipped (and why, if skipped)
 
-When you call `task_complete`, include a next-step handoff if the new issue is ready for planning:
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and include a `next_steps` entry if the new issue is ready for planning:
 
-- `next_step.name`: `mach12:issue-plan`
-- `next_step.args`: `<new-issue-number>`
-- `next_step.fresh_session`: `false`
+- `name`: `mach12:issue-plan`
+- `args`: `<new-issue-number>`
+- `fresh_session`: `false`
 
-Omit `next_step` if issue creation was skipped, the issue is only a tracking/reference artifact, or the user asked not to continue to planning.
+Leave `next_steps` empty if issue creation was skipped, the issue is only a tracking/reference artifact, or the user asked not to continue to planning. If the command could not finish — you stopped to ask the user a question, hit a blocker, or otherwise did not complete — report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.

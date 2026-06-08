@@ -241,6 +241,30 @@ describe("recordCommandInvocation", () => {
 		expect(appended[0].customType).toBe(COMMAND_START_TYPE);
 		expect(appended[0].data as SidebarEntry).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
 	});
+
+	it("starts a depth-0 command in the running phase and clears any prior status (issue 84)", () => {
+		const state = freshState({
+			commandPhase: "reported",
+			latestCommandStatus: { status: "completed", summary: "old" },
+		});
+		const { pi } = recordingPi();
+
+		recordCommandInvocation(pi, state, "top", "user", 0);
+
+		expect(state.commandPhase).toBe("running");
+		expect(state.latestCommandStatus).toBeNull();
+	});
+
+	it("does not touch the command phase for delegated depth entries (probe stays probing)", () => {
+		// The probe turn is not a command start; a delegate during it must not
+		// reset the phase, or the status report would be rejected as out-of-phase.
+		const state = freshState({ activeTopLevelCommand: "top", commandPhase: "probing" });
+		const { pi } = recordingPi();
+
+		recordCommandInvocation(pi, state, "delegate", "agent", 1);
+
+		expect(state.commandPhase).toBe("probing");
+	});
 });
 
 describe("registerHistory — handler registration", () => {
@@ -449,6 +473,19 @@ describe("registerHistory — replay on session events", () => {
 		const { state, emit, ctx } = setup([cmdStart("a")], { pendingForcedDispatch: "stale:target" });
 		await emit("session_start", {}, ctx);
 		expect(state.pendingForcedDispatch).toBeNull();
+	});
+
+	it("self-heals the command phase to idle on rebuild (issue 84 resume safety)", async () => {
+		// A session resumed mid-probe must not replay a "probing" phase with no
+		// live probe turn behind it. Reset to idle so a stale status tool call is
+		// rejected by the phase guard instead of mis-dispatching.
+		const { state, emit, ctx } = setup([cmdStart("a")], {
+			commandPhase: "probing",
+			latestCommandStatus: { status: "completed", summary: "stale" },
+		});
+		await emit("session_start", {}, ctx);
+		expect(state.commandPhase).toBe("idle");
+		expect(state.latestCommandStatus).toBeNull();
 	});
 });
 

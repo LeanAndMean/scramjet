@@ -76,7 +76,16 @@ export function recordCommandInvocation(
 		depth,
 		timestamp: Date.now(),
 	};
-	if (depth === 0) state.activeTopLevelCommand = name;
+	if (depth === 0) {
+		state.activeTopLevelCommand = name;
+		// Single chokepoint for the two-phase command-status lifecycle (issue 84):
+		// a fresh top-level command starts its answer turn in "running" and clears
+		// any prior status report. Depth > 0 (delegated subroutines) must NOT touch
+		// the phase — the probe turn is not a command start, so keeping the phase
+		// untouched here is what lets it stay "probing" until the status tool fires.
+		state.commandPhase = "running";
+		state.latestCommandStatus = null;
+	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);
 }
@@ -135,6 +144,14 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		// that was never resolved because it wasn't in the registry) can't
 		// mislabel a future user-typed slash command as origin: "forced". (F18)
 		state.pendingForcedDispatch = null;
+		// Two-phase command-status protocol self-heals on resume/branch-switch
+		// (issue 84). The phase is deliberately not journaled: replaying a
+		// "probing" phase with no live probe turn behind it could mis-dispatch, so
+		// reset to "idle" (mirroring pendingForcedDispatch above). A post-resume
+		// scramjet_command_status call then hits the tool's phase guard and is
+		// rejected with a helpful error instead of firing into a dead chain.
+		state.commandPhase = "idle";
+		state.latestCommandStatus = null;
 		// Per design decision: leave state.enabled unchanged when the branch
 		// has no toggle entry, so the in-memory flag carries across navigation
 		// to branches that never explicitly toggled.

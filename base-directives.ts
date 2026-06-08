@@ -12,8 +12,8 @@
  * The block is APPENDED (via before_agent_start) on top of whatever Pi already
  * assembled — including a user's SYSTEM.md — so the directives, and the safety
  * guidance in particular, are always present. It returns only `systemPrompt`
- * (no `message`), so it composes cleanly with task-complete.ts's next-step
- * `message` injection. It is unconditional: base-prompt quality applies
+ * (no `message`), so it composes cleanly with any other before_agent_start
+ * handler. It is unconditional: base-prompt quality applies
  * regardless of /scramjet on|off (same flag-independent posture as
  * pr-indicator.ts), so no ScramjetState is threaded.
  *

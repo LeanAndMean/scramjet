@@ -1,9 +1,12 @@
 /**
- * Renders the <scramjet-next-step> instruction block injected into the
- * agent's first user message by task-complete.ts when the active command
- * declares a `next:` policy. Pure function: one branch per policy mode.
- * The close-tag escape is case-insensitive (S4) so an attacker-controlled
- * hint cannot smuggle a literal close tag in a different case.
+ * Renders the <scramjet-next-step> policy block and the post-response status
+ * probe (issue 84). `buildNextStepBlock` describes the active command's `next:`
+ * policy to the agent — which candidates are valid for the `next_steps[]`
+ * payload of `scramjet_command_status`. `buildProbeMessage` wraps that block
+ * with the hardcoded status-check preamble that asks the agent to report
+ * command status. Pure functions: one branch per policy mode. The close-tag
+ * escape is case-insensitive (S4) so an attacker-controlled hint cannot
+ * smuggle a literal close tag in a different case.
  */
 import type { Candidate, NextStepPolicy } from "./types.ts";
 
@@ -32,32 +35,32 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 		case "forced":
 			body =
 				`The command \`${id}\` declares a \`forced\` next-step: ` +
-				`\`${safe(policy.target)}\` will run after you call task_complete. ` +
-				`You may set next_step only to pass args or fresh_session to that declared target; ` +
-				`next_step.name must be \`${safe(policy.target)}\`. ` +
-				`Omit next_step if no runtime arguments need to be passed.`;
+				`\`${safe(policy.target)}\` will run after this command completes. ` +
+				`You may add a single next_steps entry only to pass args or fresh_session to that declared target; ` +
+				`its name must be \`${safe(policy.target)}\`. ` +
+				`Omit next_steps if no runtime arguments need to be passed.`;
 			break;
 		case "closed":
 			body =
 				`The command \`${id}\` declares a \`closed\` next-step policy.\n` +
-				`When you call task_complete, pick one of these candidates for next_step.name (bare, no leading slash):\n` +
+				`Choose next_steps entries from these candidates (set each entry's name to the bare command, no leading slash):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
-				`Set next_step.args when the selected command needs runtime identifiers or other arguments.\n` +
-				`If none apply, omit next_step entirely to stop the chain.`;
+				`Set an entry's args when the selected command needs runtime identifiers or other arguments.\n` +
+				`If none apply, omit next_steps entirely to stop the chain.`;
 			break;
 		case "open": {
 			const blacklistLine = policy.blacklist?.length
 				? `\nDo not pick: ${policy.blacklist.map(safe).join(", ")}.`
 				: "";
 			const candidatesLine = policy.candidates.length
-				? `Suggested candidates for next_step.name (bare, no leading slash):\n${formatCandidates(policy.candidates)}\n`
-				: "No suggested candidates are listed for next_step.name.\n";
+				? `Suggested candidates for next_steps entries (set each entry's name to the bare command, no leading slash):\n${formatCandidates(policy.candidates)}\n`
+				: "No suggested candidates are listed for next_steps entries.\n";
 			body =
 				`The command \`${id}\` declares an \`open\` next-step policy.\n` +
 				candidatesLine +
 				`You may pick any slash command if it fits the work.${blacklistLine}\n` +
-				`Set next_step.args when the selected command needs runtime identifiers or other arguments.\n` +
-				`Omit next_step entirely to stop the chain.`;
+				`Set an entry's args when the selected command needs runtime identifiers or other arguments.\n` +
+				`Omit next_steps entirely to stop the chain.`;
 			break;
 		}
 		case "ask": {
@@ -65,9 +68,30 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 			body =
 				`The command \`${id}\` declares an \`ask\` next-step policy. ` +
 				`The chain will pause for the user after this turn. ` +
-				`Do not set next_step on task_complete.${hintLine}`;
+				`Do not include next_steps.${hintLine}`;
 			break;
 		}
 	}
 	return `<scramjet-next-step>\n${body}\n</scramjet-next-step>`;
+}
+
+// Hardcoded preamble for the post-response status probe (issue 84). Stable
+// structure; the only variable part is the policy block appended below. No
+// user-controlled text is interpolated into the preamble, so it needs no
+// escaping — buildNextStepBlock owns escaping for the policy portion, including
+// the close tag. The probe asks the agent to call scramjet_command_status (and
+// nothing else) in a separate turn after its normal user-facing answer.
+export function buildProbeMessage(policy: NextStepPolicy, commandId: string): string {
+	const preamble =
+		"Scramjet command status check.\n\n" +
+		"You just finished responding for an active Scramjet slash command. " +
+		"Report whether the command is complete by calling `scramjet_command_status`.\n\n" +
+		"Do not write a prose answer. Call exactly one tool.\n\n" +
+		"Use:\n" +
+		'- status="completed" only if the command\'s requested work is done and your final user-facing response has already been delivered.\n' +
+		'- status="waiting_for_user" if your previous response asked the user a question or requires user input before work can continue.\n' +
+		'- status="blocked" if the command cannot proceed (error, missing dependency, authorization issue).\n' +
+		'- status="incomplete" if none of the above apply.\n\n' +
+		"For completed commands, populate next_steps only when a listed next step fits.";
+	return `${preamble}\n\n${buildNextStepBlock(policy, commandId)}`;
 }

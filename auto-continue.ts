@@ -1,28 +1,87 @@
 /**
- * Auto-continuation: on agent_end, read the active command's next-step
- * policy, show a 3s countdown widget (cancellable by Escape or any
- * keypress), then dispatch the chosen command. `forced` fires after the
- * agent signals completion; the rest defer to /scramjet on|off. See
- * CLAUDE.md "MVP design rationales" for why.
+ * Auto-continuation, two-phase command-status protocol (issue 84).
  *
- * Dispatch uses Pi's experimental dispatchUserInput primitive so slash
- * commands, skills, and prompt templates run through Pi's normal input
- * pipeline instead of Scramjet expanding command bodies locally.
+ * A top-level Scramjet command produces its normal user-facing answer in one
+ * turn (the answer turn injects nothing about completion). On that turn's
+ * agent_end, if the command declares a next-step policy, this driver advances
+ * the lifecycle to "probing" and DEFERS a hidden status-check probe — a custom
+ * message that triggers a short second turn in which the agent calls
+ * scramjet_command_status. The tool records the status and advances the phase
+ * to "reported"; this driver reads it on the probe turn's agent_end and
+ * validates/dispatches/pauses.
+ *
+ * The probe MUST be deferred, not sent synchronously from the agent_end
+ * listener: during agent_end the run is still streaming, so a synchronous
+ * sendMessage routes to steer/followUp and is dropped by the already-exited
+ * loop. A setTimeout(0) lands after the run settles — isStreaming clears when
+ * agent.prompt() resolves — so triggerTurn correctly reaches agent.prompt().
+ * This mirrors why the countdown (setInterval) dispatch works — it fires once
+ * the run is idle.
+ *
+ * For completed commands: `forced` fires the declared target unconditionally
+ * after completion; closed/open defer to /scramjet on|off and show a 3s
+ * countdown widget (cancellable by Escape or any keypress) before dispatch.
+ * Dispatch uses Pi's dispatchUserInput so slash commands run through Pi's
+ * normal input pipeline. See CLAUDE.md "MVP design rationales".
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import { validateNextStep } from "./commands/validator.ts";
+import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
+import { validateNextSteps } from "./commands/validator.ts";
+import { buildProbeMessage } from "./next-step.ts";
 import { buildNextStepWire, dispatchNextStep } from "./next-step-dispatch.ts";
-import { clearLatestCompletion, getLatestCompletion } from "./task-complete.ts";
-import type { NextStep, ScramjetState } from "./types.ts";
+import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
 const WIDGET_KEY = "scramjet-next";
+// F1: liveness watchdog window. Generous on purpose — a live probe turn is a
+// single scramjet_command_status tool call and reports well within this, and the
+// guard inside the timer re-checks the phase so a turn that DID complete (or
+// already self-healed) is never clobbered. The value only bounds how long a
+// probe that never produced a turn at all (dropped triggerTurn during run
+// settle, Escape before the turn starts, session teardown mid-turn) lingers at
+// "probing" before self-healing; the next real command resets the phase anyway.
+// Kept comfortably longer than any plausible probe turn so it cannot fire while
+// the model is still thinking before its tool call (phase still "probing"),
+// which would otherwise drop a legitimate chain — worse than the stall it fixes.
+const PROBE_WATCHDOG_MS = 30_000;
+
+function toNextStep(step: CommandStatusNextStep): NextStep {
+	return { name: step.name, args: step.args, freshSession: step.fresh_session, reason: step.reason };
+}
+
+// S2: model-supplied summary/prompt text is interpolated into ctx.ui.notify,
+// which renders on a single line. Strip control chars (newlines included),
+// collapse internal whitespace, and cap the length so a multi-paragraph or
+// control-char report can't garble the widget. Mirrors next-step.ts formatHint's
+// trim+collapse, plus a length cap since a status summary is unbounded. No
+// safe() close-tag escaping is needed — notify text is never re-injected into a
+// prompt.
+// Exported for direct unit testing of the boundary (NOTIFY_MAX - 1 + "…") and
+// the control-char/whitespace passes; the production callers are routeNonCompleted's
+// blocked/waiting notifies.
+export const NOTIFY_MAX = 200;
+export function cleanForNotify(text: string): string {
+	const collapsed = text
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.trim()
+		.replace(/\s+/g, " ");
+	return collapsed.length > NOTIFY_MAX ? `${collapsed.slice(0, NOTIFY_MAX - 1)}…` : collapsed;
+}
 
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let countdownTimer: ReturnType<typeof setInterval> | null = null;
 	let unsubInput: (() => void) | null = null;
+	let probeTimer: ReturnType<typeof setTimeout> | null = null;
+	let probeWatchdog: ReturnType<typeof setTimeout> | null = null;
+
+	function clearProbeWatchdog() {
+		if (probeWatchdog) {
+			clearTimeout(probeWatchdog);
+			probeWatchdog = null;
+		}
+	}
 
 	function cancelCountdown(ctx: ExtensionContext) {
 		if (countdownTimer) {
@@ -113,7 +172,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				step = { ...handoff, name: target };
 			} else {
 				ctx.ui.notify(
-					`scramjet: forced target is "${target}"; agent supplied next_step.name "${handoff.name}" — ignoring supplied forced handoff`,
+					`scramjet: forced target is "${target}"; agent supplied next_steps name "${handoff.name}" — ignoring supplied forced handoff`,
 					"warning",
 				);
 			}
@@ -123,74 +182,219 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		return true;
 	}
 
+	// Schedule the hidden status-check probe on a deferred tick so it lands after
+	// the run is idle (see file header). triggerTurn starts the short probe turn;
+	// display:false keeps the message out of the TUI while it still persists in
+	// the journal and reaches the model as user context.
+	function scheduleProbe(policy: NextStepPolicy, commandId: string) {
+		if (probeTimer) clearTimeout(probeTimer);
+		clearProbeWatchdog();
+		const content = buildProbeMessage(policy, commandId);
+		probeTimer = setTimeout(() => {
+			probeTimer = null;
+			// Error boundary, symmetric to the countdown setInterval guard above.
+			// sendMessage returns void, so a throw on this deferred tick becomes a
+			// Node uncaughtException and leaves commandPhase wedged at "probing"
+			// with no live probe behind it — self-healing only if another agent_end
+			// happens to fire later. Reset the lifecycle so the chain pauses cleanly
+			// instead of stalling. ctx is out of scope here, so warn to the console
+			// rather than ctx.ui.notify.
+			try {
+				pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
+				// F1: time-domain analog of the throw boundary above. The
+				// probing→idle self-heal lives in the agent_end handler, so it only
+				// fires if the probe turn emits a terminal agent_end. If the
+				// triggered turn never materializes at all (dropped triggerTurn,
+				// Escape before it starts, teardown mid-turn), the phase would sit at
+				// "probing" until the next real command. Arm a watchdog that self-heals
+				// after a generous window; the phase re-check inside keeps it from
+				// clobbering a probe turn that did complete. Cleared at the probe turn's
+				// agent_end (reported/probing branches) and on shutdown.
+				probeWatchdog = setTimeout(() => {
+					probeWatchdog = null;
+					if (state.commandPhase === "probing") {
+						state.commandPhase = "idle";
+						state.latestCommandStatus = null;
+						console.warn("scramjet: status probe turn never completed; auto-continue paused");
+					}
+				}, PROBE_WATCHDOG_MS);
+			} catch (err) {
+				state.commandPhase = "idle";
+				state.latestCommandStatus = null;
+				console.warn(`scramjet: status probe failed to send (${(err as Error).message}); auto-continue paused`);
+			}
+		}, 0);
+	}
+
+	// Route a completed-status report through the command's policy. Mirrors the
+	// pre-84 dispatch logic, now reading the validated first entry of the
+	// next_steps[] array rather than a single next_step.
+	function routeCompleted(
+		policy: NextStepPolicy,
+		status: NonNullable<ScramjetState["latestCommandStatus"]>,
+		ctx: ExtensionContext,
+	) {
+		if (policy.mode === "forced") {
+			// Forced fires regardless of state.enabled: no decision is delegated to
+			// the agent or user; the status report is only the safety gate that
+			// distinguishes completion from clarification/error.
+			const handoff = status.next_steps?.[0] ? toNextStep(status.next_steps[0]) : undefined;
+			dispatchForced(policy.target, handoff, ctx);
+			return;
+		}
+
+		if (policy.mode === "ask") {
+			if (status.next_steps?.length) {
+				ctx.ui.notify(
+					"scramjet: ask-mode command; agent proposed next steps — ignored, waiting for user",
+					"warning",
+				);
+			}
+			return;
+		}
+
+		// closed / open: dispatch the first entry valid for the policy.
+		const result = validateNextSteps(status.next_steps, policy);
+		if (!result.valid) {
+			if (result.reason) ctx.ui.notify(`scramjet: ${result.reason}`, "warning");
+			return;
+		}
+
+		// S1: first-valid-wins is the designed semantics, but a candidate skipped
+		// before the valid one is an out-of-policy pick (closed) or a blacklisted
+		// one (open) — surface it as info so a possible authoring/model error is
+		// visible rather than silently swallowed.
+		if (result.skipped.length) {
+			ctx.ui.notify(
+				`scramjet: skipped out-of-policy next step(s) before dispatching ${result.valid.name}: ${result.skipped.join(", ")}`,
+				"info",
+			);
+		}
+
+		if (state.enabled) {
+			startCountdown(result.valid, ctx);
+		} else {
+			const wire = wireFor(result.valid);
+			const fresh = result.valid.freshSession ? " (fresh session)" : "";
+			ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
+		}
+	}
+
+	// A non-completed report never chains; the differentiation is only in what
+	// gets surfaced. `blocked` merits a warning (the command hit an error,
+	// missing dependency, or authorization issue the user should see). For
+	// `waiting_for_user` the visible assistant answer already asked the question,
+	// so we only echo `user_prompt` as an info hint when the agent supplied one.
+	// `incomplete` is a quiet pause — staying invisible when there's nothing
+	// useful to say (see CLAUDE.md "Invisible when idle").
+	function routeNonCompleted(status: NonNullable<ScramjetState["latestCommandStatus"]>, ctx: ExtensionContext) {
+		switch (status.status) {
+			case "blocked":
+				ctx.ui.notify(`scramjet: command blocked — ${cleanForNotify(status.summary)}`, "warning");
+				return;
+			case "waiting_for_user":
+				if (status.user_prompt) {
+					ctx.ui.notify(`scramjet: waiting for input — ${cleanForNotify(status.user_prompt)}`, "info");
+				}
+				return;
+			default:
+				// incomplete: quiet pause.
+				return;
+		}
+	}
+
 	pi.on("agent_end", async (_event, ctx) => {
 		const activeName = state.activeTopLevelCommand;
 		const def = activeName ? state.registry.get(activeName) : undefined;
 
 		// F11: activeTopLevelCommand is set but the registry has no matching
-		// entry. Without this guard, a `forced` chain whose target dropped out of
-		// the registry (e.g. a renamed command, a partial reload) would be hard to
-		// diagnose. Notify the user and bail; clear the stale name so the warning
-		// fires once instead of on every subsequent agent_end.
+		// entry (renamed command, partial reload). Notify once, clear the stale
+		// name and reset the lifecycle so a probe never fires for a phantom
+		// command and the warning doesn't repeat on every subsequent agent_end.
 		if (activeName && !def) {
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
 			state.activeTopLevelCommand = null;
-			clearLatestCompletion();
+			state.commandPhase = "idle";
+			state.latestCommandStatus = null;
+			clearProbeWatchdog();
 			return;
 		}
 
 		const policy = def?.next;
-		const completion = getLatestCompletion();
-		if (!completion) return;
-		clearLatestCompletion();
 
-		// Forced fires the target after the agent explicitly signals that the
-		// command completed. It still ignores state.enabled because no decision is
-		// being delegated to the agent or user; task_complete is only the safety
-		// gate that distinguishes successful completion from clarification/error.
-		if (policy?.mode === "forced") {
-			dispatchForced(policy.target, completion.nextStep, ctx);
-			return;
-		}
-
-		if (policy) {
-			const proposed = completion.nextStep?.name;
-			const result = validateNextStep(proposed, policy);
-
-			if (policy.mode === "ask") {
-				if (proposed) {
-					ctx.ui.notify(
-						`scramjet: ask-mode command; agent proposed "${proposed}" — ignored, waiting for user`,
-						"warning",
-					);
+		// The phase is the eligibility signal — set to "running" only at a depth-0
+		// command start (history.ts). Keying off the phase (not delegateStack
+		// depth, which delegate.ts clears at before_agent_start) is what keeps the
+		// probe tied to the just-finished top-level command and silent otherwise.
+		switch (state.commandPhase) {
+			case "running": {
+				// Answer turn ended. Eligible policy → ask for status; otherwise stay
+				// invisible (terminus command, or no active command).
+				if (!policy) {
+					state.commandPhase = "idle";
+					return;
 				}
+				state.commandPhase = "probing";
+				scheduleProbe(policy, def.name);
 				return;
 			}
-
-			if (!result.valid) {
-				ctx.ui.notify(`scramjet: ${result.reason}`, "warning");
+			case "probing": {
+				// The probe turn ended without a recorded scramjet_command_status call:
+				// either the agent wrote prose instead of reporting, or it DID call the
+				// tool but Pi rejected the call on schema grounds before `execute` ran
+				// (missing required field, bad status literal) so the phase never
+				// advanced to "reported". Self-heal: pause the chain, reset, do not
+				// re-probe — no infinite loop. The turn produced a terminal agent_end,
+				// so the liveness watchdog is no longer needed.
+				//
+				// F1: this is otherwise the only self-heal in the protocol that resets
+				// silently; every sibling (watchdog, send-throw, out-of-phase gate in
+				// command-status.ts) leaves a log breadcrumb. A subtly-malformed status
+				// payload would stop the chain with no diagnostic trail. Log-only —
+				// preserves "invisible when idle" on the user surface.
+				clearProbeWatchdog();
+				state.commandPhase = "idle";
+				state.latestCommandStatus = null;
+				console.warn("scramjet: status probe turn ended without a valid status report; auto-continue paused");
 				return;
 			}
-
-			if (!completion.nextStep) return;
-
-			if (state.enabled) {
-				startCountdown(completion.nextStep, ctx);
-			} else {
-				const wire = wireFor(completion.nextStep);
-				const fresh = completion.nextStep.freshSession ? " (fresh session)" : "";
-				ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
+			case "reported": {
+				// The probe turn completed and reported, so the liveness watchdog is
+				// no longer needed.
+				clearProbeWatchdog();
+				const status = state.latestCommandStatus;
+				state.commandPhase = "idle";
+				state.latestCommandStatus = null;
+				if (!status) return;
+				if (status.status === "completed") {
+					// Chaining a completed command needs the policy to validate the
+					// pick (or fire the forced target). If def.next vanished between
+					// the probe and this agent_end (registry rebuild/reload), there is
+					// nothing to route a completed status to — pause quietly.
+					if (policy) routeCompleted(policy, status, ctx);
+					return;
+				}
+				// F2: a non-completed report (blocked/waiting_for_user/incomplete)
+				// never chains, so it does not depend on the policy. Route it even
+				// when policy is gone so a `blocked` summary (auth failure, missing
+				// dependency) still surfaces instead of being swallowed when def.next
+				// disappeared.
+				routeNonCompleted(status, ctx);
+				return;
 			}
-			return;
+			default:
+				return;
 		}
-
-		// No declared next-step policy is equivalent to ask-with-no-hint: the
-		// chain pauses, even if an agent supplied a legacy/free-form next_step.
-		return;
 	});
 
-	// Clean up on session shutdown
+	// Clean up on session shutdown: tear down an in-flight countdown and drop any
+	// scheduled-but-unfired probe.
 	pi.on("session_shutdown", async (_event, ctx) => {
 		cancelCountdown(ctx);
+		if (probeTimer) {
+			clearTimeout(probeTimer);
+			probeTimer = null;
+		}
+		clearProbeWatchdog();
 	});
 }

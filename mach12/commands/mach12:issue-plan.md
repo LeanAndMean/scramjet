@@ -200,8 +200,8 @@ When referring to numbered items (findings, suggestions, stages) in the comment 
 
 Confirm all actions to the user (plan posted, branch created, issue assigned, and sub-issues assigned if applicable).
 
-When calling `task_complete`, choose the next step based on plan risk and user preference:
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and choose a `next_steps` entry based on plan risk and user preference:
 
-- If the plan is non-trivial, touches risky areas, or should receive an approval gate, set `next_step.name` to `mach12:issue-review`, `next_step.args` to `<issue-number>`, and choose whether a fresh session is useful.
-- If the plan is small, uncontroversial, and ready for direct implementation, set `next_step.name` to `mach12:issue-implement`, `next_step.args` to `<issue-number> <first-stage>`, and set `next_step.fresh_session` to `true`.
-- Omit `next_step` if the user cancelled, the plan was not posted, or the appropriate next action is unclear.
+- If the plan is non-trivial, touches risky areas, or should receive an approval gate, set the entry's `name` to `mach12:issue-review`, `args` to `<issue-number>`, and choose whether a fresh session is useful.
+- If the plan is small, uncontroversial, and ready for direct implementation, set the entry's `name` to `mach12:issue-implement`, `args` to `<issue-number> <first-stage>`, and set `fresh_session` to `true`.
+- Leave `next_steps` empty if the appropriate next action is unclear. If the user cancelled, the plan was not posted, or you otherwise did not finish, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.

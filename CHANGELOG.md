@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.10.0 — Two-phase command-status protocol
+
+Replaces the single-turn, terminating `task_complete` tool with a two-phase `scramjet_command_status` protocol (issue #84): a command writes its normal user-facing answer first, then Scramjet probes for structured lifecycle status in a separate follow-up turn. This removes the failure mode where the agent poured its answer into the terminating tool's `summary` field instead of writing prose, and lays the groundwork for a future next-step choice-list UI.
+
+### Added
+
+- `scramjet_command_status` tool (`command-status.ts`): the agent's structured end-of-command report, supplied in a separate turn from the command's user-facing answer. Carries a `status` (`completed` / `waiting_for_user` / `blocked` / `incomplete`), a `summary`, an optional `user_prompt`, and a `next_steps[]` array (each entry: `name`, optional `args`, `fresh_session`, optional `label` / `reason`). The array shape carries candidates for the deferred choice-list UI. `execute` is harness-phase-gated — outside the probe window it returns a helpful error without terminating; in-phase it stores the report, advances the phase to `reported`, and terminates the short probe turn.
+- `buildProbeMessage` (`next-step.ts`): builds the hardcoded status-check preamble wrapping the per-policy `<scramjet-next-step>` block, asking the agent to call `scramjet_command_status` and nothing else.
+- Per-invocation lifecycle state on `ScramjetState`: `commandPhase` (`idle` / `running` / `probing` / `reported`) and `latestCommandStatus`.
+- Differentiated handling of non-completed statuses: `blocked` warns, `waiting_for_user` (optionally echoing `user_prompt`) and `incomplete` pause quietly; only `completed` chains.
+
+### Changed
+
+- The command's answer turn no longer injects any completion/next-step instruction — the running turn is just the answer. After it goes idle, `auto-continue.ts` defers (after the run settles — `isStreaming` clears once `agent.prompt()` resolves — so `triggerTurn` reaches a fresh `agent.prompt()`) a TUI-hidden status-check message via `pi.sendMessage({ display: false }, { triggerTurn: true })` to start the probe turn, then routes on the probe turn's `agent_end`. Forced/closed/open validation and dispatch (including `forced` firing under `/scramjet off` and headless auto-follow) are preserved.
+- The `next_steps[]` array replaces the singular `next_step`; auto-continue dispatches the first policy-valid entry. The agent-facing next-step strings and the bundled Mach 12 command prose now name `scramjet_command_status` / `next_steps`.
+- Resume safety: `commandPhase` self-heals to `idle` on `rebuild` (resume / branch switch), so a stale post-resume `scramjet_command_status` call hits the phase guard instead of mis-dispatching. The phase is intentionally not journaled.
+- `task-complete.ts` renamed to `command-status.ts`, with the `tsconfig.build.json` include entry and the `index.ts` registration (`registerTaskCompleteTool` → `registerCommandStatusTool`) updated to match.
+
+### Removed
+
+- The generic `task_complete` tool and its same-turn, summary-bearing completion shape, plus the now-dead `CompletionSignal` type.
+
 ## 0.9.0 — Base-prompt coding-agent directives
 
 Appends a general coding-agent quality block to Pi's assembled system prompt on every turn.

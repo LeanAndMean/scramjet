@@ -9,6 +9,8 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		sidebarLog: [],
 		delegateStack: [],
 		pendingForcedDispatch: null,
+		commandPhase: "idle",
+		latestCommandStatus: null,
 		...overrides,
 	};
 }
@@ -34,6 +36,20 @@ export function recordingPi(): RecordingPi {
 	const handlers = new Map<string, Handler[]>();
 	const pi: any = {
 		appended: [] as { customType: string; data: unknown }[],
+		// Records pi.sendMessage(message, options) calls. The two-phase
+		// command-status protocol (issue 84) sends the hidden status probe this
+		// way; tests assert it was sent (and, for the F1 deferral, that it fired
+		// off the timer rather than synchronously inside agent_end).
+		sent: [] as { message: unknown; options?: unknown }[],
+		// Messages dropped because they were sent while the run was still
+		// streaming. The real harness drops a sendMessage issued from inside an
+		// agent_end listener (isStreaming === true until the run settles — it clears
+		// when agent.prompt() resolves), so a synchronous probe would never reach the
+		// model. A
+		// test that models this catches a regression that sends the probe inline
+		// rather than deferring it past the streaming window.
+		dropped: [] as { message: unknown; options?: unknown }[],
+		isStreaming: false,
 		registerTool(tool: any) {
 			tools.push(tool);
 		},
@@ -47,6 +63,13 @@ export function recordingPi(): RecordingPi {
 		},
 		appendEntry(customType: string, data: unknown) {
 			pi.appended.push({ customType, data });
+		},
+		sendMessage(message: unknown, options?: unknown) {
+			if (pi.isStreaming) {
+				pi.dropped.push({ message, options });
+				return;
+			}
+			pi.sent.push({ message, options });
 		},
 	};
 	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {

@@ -140,9 +140,9 @@ Pass a brief summary of the findings addressed as `$ARGUMENTS` so the commit mes
 
 Each fix session should be **fresh** to maximize available context.
 
-When calling `task_complete`, choose the next step using this order:
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and choose a `next_steps` entry using this order:
 
-1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, set `next_step.name` to `mach12:pr-review-fix` and set `next_step.args` to the same PR/comment arguments plus the next stage label, and set `next_step.fresh_session` to `true`.
-   - Example: `mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`
+1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, set the entry's `name` to `mach12:pr-review-fix`, `args` to the same PR/comment arguments plus the next stage label, and `fresh_session` to `true`.
+   - Example: `name: mach12:pr-review-fix`, `args: 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`
 2. **After the final planned fix stage, choose the verification path.** Pick `mach12:pr-review` if the fixes were substantive enough that another full review may find issues. Pick `mach12:pr-pre-merge` if the fixes were narrow and confidence is high.
-3. **If the next stage is unclear, stop.** Omit `next_step` rather than guessing.
+3. **If the next stage is unclear, stop.** Leave `next_steps` empty rather than guessing. If fixing hit a blocker or needs user input, report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`.

@@ -12,9 +12,38 @@ export interface NextStep {
 	reason?: string;
 }
 
-export interface CompletionSignal {
+// Lifecycle phase of the active top-level Scramjet command, tracked per
+// invocation by the two-phase command-status protocol (issue 84):
+//   idle     — no active command, or the chain has been resolved
+//   running  — the command's normal answer turn is in flight
+//   probing  — the answer turn ended; Scramjet has asked for a status check
+//   reported — the agent answered the probe via scramjet_command_status
+export type CommandPhase = "idle" | "running" | "probing" | "reported";
+
+// A single next-step suggestion in a command-status report. This is the
+// tool-facing (snake_case) shape the agent populates in the scramjet_command_status
+// next_steps payload; auto-continue converts the chosen entry into a NextStep
+// before dispatch.
+export interface CommandStatusNextStep {
+	name: string;
+	args?: string;
+	fresh_session: boolean;
+	// Wire-only, MVP-unused: scaffolding for a future choice-list UI. Accepted by
+	// the scramjet_command_status schema but dropped by toNextStep (auto-continue.ts),
+	// so no dispatch path reads it today.
+	label?: string;
+	reason?: string;
+}
+
+// Structured result the agent supplies through scramjet_command_status in
+// response to the post-response status probe. `next_steps` is an array (not a
+// singular pick) so it can carry candidates for the future choice-list UI;
+// the MVP auto-continue dispatches the first valid entry.
+export interface CommandStatusPayload {
+	status: "completed" | "waiting_for_user" | "blocked" | "incomplete";
 	summary: string;
-	nextStep?: NextStep;
+	user_prompt?: string;
+	next_steps?: CommandStatusNextStep[];
 }
 
 export interface Candidate {
@@ -71,4 +100,11 @@ export interface ScramjetState {
 	// firing a forced transition, so history's input handler can label the
 	// resulting entry as origin: "forced" instead of "agent".
 	pendingForcedDispatch: string | null;
+	// Two-phase command-status protocol (issue 84). commandPhase tracks the
+	// lifecycle of the active top-level command so the probe fires exactly
+	// once per invocation; latestCommandStatus holds the agent's most recent
+	// scramjet_command_status report, read by auto-continue on the probe turn's
+	// agent_end. Reset to "idle"/null on command start and on resume/rebuild.
+	commandPhase: CommandPhase;
+	latestCommandStatus: CommandStatusPayload | null;
 }
