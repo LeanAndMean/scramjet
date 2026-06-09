@@ -9,12 +9,15 @@ allowed-tools:
   - subagent
   - delegate
 next:
-  mode: ask
-  hint: |
-    Decide whether the plan is ready to implement, needs revision, or
-    the issue should be abandoned. Suggested follow-ups when ready:
-    /mach12:issue-implement to begin work, or /mach12:issue-plan to
-    re-plan after substantive revision.
+  mode: open
+  candidates:
+    - name: mach12:issue-review
+      hint: |
+        Use when Critical or Important findings remain after revision
+        and another review pass is likely to surface genuine problems.
+    - name: mach12:issue-implement
+      hint: |
+        Use when the plan is approved and ready for implementation.
 ---
 
 # Issue Plan Review
@@ -186,3 +189,9 @@ If the user picks "Cancel":
    ```
 
 When referring to numbered items (findings, suggestions, stages) in any comment body, use plain words like "finding 3" or "suggestion 3" -- not `#<number>` notation, which GitHub auto-links to issues/PRs.
+
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and choose selector-visible `next_steps` entries based on the review outcome:
+
+- If Critical or Important findings remain and the plan was revised, include an entry with `name`: `mach12:issue-review`, `args`: `<issue-number>`, `fresh_session`: `true`, and `reason`: a brief explanation that additional review is warranted.
+- If the plan is approved (user picked "Proceed as-is" with no Critical/Important findings, or the revised plan addresses all blockers), include an entry with `name`: `mach12:issue-implement`, `args`: `<issue-number> 1`, `fresh_session`: `true`, and `reason`: a brief explanation that the plan is ready to implement.
+- Set `recommended_next_step` to the zero-based index of the entry you recommend Scramjet route to automatically. Leave `next_steps` empty if the outcome is ambiguous (e.g., user cancelled, discussion is ongoing, or no clear next action). If the user cancelled, the review was not completed, or you otherwise did not finish, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.
