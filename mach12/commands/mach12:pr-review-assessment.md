@@ -235,8 +235,8 @@ If genuine issues remain (including any reclassified items), the natural next st
 
 If all findings are nitpicks/false positives, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
 
-When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and pass the selected follow-up as a `next_steps` entry with its runtime arguments explicit:
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and pass selector-visible follow-up entries with explicit runtime arguments:
 
-- For fixes: set the entry's `name` to `mach12:pr-review-fix`, `args` to `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>`, and choose whether a fresh session is useful for the fix work.
-- For pre-merge: set the entry's `name` to `mach12:pr-pre-merge`, `args` to `<pr-number>`, and choose whether a fresh session is useful for the checklist.
-- Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.
+- For fixes: include an entry with `name`: `mach12:pr-review-fix`, `args`: `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>`, a chosen `fresh_session` value, and `reason`: a brief explanation that genuine findings remain to fix.
+- For pre-merge: include an entry with `name`: `mach12:pr-pre-merge`, `args`: `<pr-number>`, a chosen `fresh_session` value, and `reason`: a brief explanation that no fixes are required before the merge checklist.
+- Set `recommended_next_step` to the zero-based index of the entry you recommend Scramjet route to automatically. Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.

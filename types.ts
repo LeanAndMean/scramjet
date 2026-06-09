@@ -27,30 +27,35 @@ export interface NextStep {
 //              COMMAND_STATUS_TYPE entries (history.ts, issue 88 Stage 2).
 export type CommandPhase = "idle" | "running" | "probing" | "reported" | "waiting";
 
-// A single next-step suggestion in a command-status report. This is the
-// tool-facing (snake_case) shape the agent populates in the scramjet_command_status
-// next_steps payload; auto-continue converts the chosen entry into a NextStep
-// before dispatch.
-export interface CommandStatusNextStep {
+// A single next-step suggestion in a command-status report. Missing `type` is
+// a legacy command entry for compatibility with pre-selector command prose.
+export interface CommandStatusCommandNextStep {
+	type?: "command";
 	name: string;
 	args?: string;
 	fresh_session: boolean;
-	// Wire-only, MVP-unused: scaffolding for a future choice-list UI. Accepted by
-	// the scramjet_command_status schema but dropped by toNextStep (auto-continue.ts),
-	// so no dispatch path reads it today.
 	label?: string;
 	reason?: string;
 }
 
+export interface CommandStatusFreeTextNextStep {
+	type: "freetext";
+	text: string;
+	label?: string;
+	reason?: string;
+}
+
+export type CommandStatusNextStep = CommandStatusCommandNextStep | CommandStatusFreeTextNextStep;
+
 // Structured result the agent supplies through scramjet_command_status in
-// response to the post-response status probe. `next_steps` is an array (not a
-// singular pick) so it can carry candidates for the future choice-list UI;
-// the MVP auto-continue dispatches the first valid entry.
+// response to the post-response status probe. `recommended_next_step` is a
+// zero-based index into the original `next_steps` array.
 export interface CommandStatusPayload {
 	status: "completed" | "waiting_for_user" | "blocked" | "incomplete";
 	summary: string;
 	user_prompt?: string;
 	next_steps?: CommandStatusNextStep[];
+	recommended_next_step?: number;
 }
 
 export interface Candidate {

@@ -25,10 +25,16 @@ function formatHint(hint: string | undefined): string {
 }
 
 function formatCandidates(candidates: Candidate[]): string {
-	return candidates.map((c) => `  - ${safe(c.name)}${formatHint(c.hint)}`).join("\n");
+	return candidates.map((c, index) => `  - [${index}] ${safe(c.name)}${formatHint(c.hint)}`).join("\n");
 }
 
-export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): string {
+function recommendationRule(scramjetEnabled: boolean): string {
+	return scramjetEnabled
+		? "With `/scramjet on`, set `recommended_next_step` to the zero-based index only when the recommended entry is a command; do not set it for a free-text entry."
+		: "With `/scramjet off`, set `recommended_next_step` to the zero-based index of the best option to show the user; Scramjet will not auto-dispatch it.";
+}
+
+export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, scramjetEnabled = true): string {
 	const id = safe(commandId);
 	let body: string;
 	switch (policy.mode) {
@@ -43,24 +49,29 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 		case "closed":
 			body =
 				`The command \`${id}\` declares a \`closed\` next-step policy.\n` +
-				`Choose next_steps entries from these candidates (set each entry's name to the bare command, no leading slash):\n` +
+				`Selector-visible options must be command next_steps entries chosen from these zero-based candidates (set each entry's name to the bare command, no leading slash; type may be omitted or set to \`command\`):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
 				`Set an entry's args when the selected command needs runtime identifiers or other arguments.\n` +
-				`If none apply, omit next_steps entirely to stop the chain.`;
+				`Each selector-visible option must include reason before you set recommended_next_step.\n` +
+				`${recommendationRule(scramjetEnabled)}\n` +
+				`If none apply, omit next_steps and recommended_next_step entirely to stop the chain.`;
 			break;
 		case "open": {
 			const blacklistLine = policy.blacklist?.length
-				? `\nDo not pick: ${policy.blacklist.map(safe).join(", ")}.`
+				? `\nDo not pick command entries for: ${policy.blacklist.map(safe).join(", ")}.`
 				: "";
 			const candidatesLine = policy.candidates.length
-				? `Suggested candidates for next_steps entries (set each entry's name to the bare command, no leading slash):\n${formatCandidates(policy.candidates)}\n`
-				: "No suggested candidates are listed for next_steps entries.\n";
+				? `Suggested command candidates with zero-based indexes (set each command entry's name to the bare command, no leading slash; type may be omitted or set to \`command\`):\n${formatCandidates(policy.candidates)}\n`
+				: "No suggested command candidates are listed for next_steps entries.\n";
 			body =
 				`The command \`${id}\` declares an \`open\` next-step policy.\n` +
 				candidatesLine +
 				`You may pick any slash command if it fits the work.${blacklistLine}\n` +
-				`Set an entry's args when the selected command needs runtime identifiers or other arguments.\n` +
-				`Omit next_steps entirely to stop the chain.`;
+				`You may also include free-text options with type=\`freetext\` and text set to the user-facing option.\n` +
+				`Set a command entry's args when the selected command needs runtime identifiers or other arguments.\n` +
+				`Each selector-visible option must include reason before you set recommended_next_step.\n` +
+				`${recommendationRule(scramjetEnabled)}\n` +
+				`Omit next_steps and recommended_next_step entirely to stop the chain.`;
 			break;
 		}
 		case "ask": {
@@ -81,7 +92,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string): s
 // escaping — buildNextStepBlock owns escaping for the policy portion, including
 // the close tag. The probe asks the agent to call scramjet_command_status (and
 // nothing else) in a separate turn after its normal user-facing answer.
-export function buildProbeMessage(policy: NextStepPolicy, commandId: string): string {
+export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scramjetEnabled = true): string {
 	const preamble =
 		"Scramjet command status check.\n\n" +
 		"You just finished responding for an active Scramjet slash command. " +
@@ -92,6 +103,6 @@ export function buildProbeMessage(policy: NextStepPolicy, commandId: string): st
 		'- status="waiting_for_user" if your previous response asked the user a question or requires user input before work can continue.\n' +
 		'- status="blocked" if the command cannot proceed (error, missing dependency, authorization issue).\n' +
 		'- status="incomplete" if none of the above apply.\n\n' +
-		"For completed commands, populate next_steps only when a listed next step fits.";
-	return `${preamble}\n\n${buildNextStepBlock(policy, commandId)}`;
+		"For completed commands, follow the next-step policy block exactly.";
+	return `${preamble}\n\n${buildNextStepBlock(policy, commandId, scramjetEnabled)}`;
 }

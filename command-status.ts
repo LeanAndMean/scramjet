@@ -20,16 +20,34 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { recordCommandStatus } from "./history.ts";
-import type { CommandPhase, CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
+import type {
+	CommandPhase,
+	CommandStatusCommandNextStep,
+	CommandStatusNextStep,
+	CommandStatusPayload,
+	ScramjetState,
+} from "./types.ts";
 
 // Shared shape for the tool's result `details` so both the out-of-phase error
 // branch and the success branch infer the same TDetails (mirrors delegate.ts's
 // DelegateDetails pattern).
-interface CommandStatusDetails extends Partial<CommandStatusNextStep> {
+interface CommandStatusDetails {
 	error?: string;
 	phase?: CommandPhase;
 	status?: CommandStatusPayload["status"];
 	summary?: string;
+	recommended_next_step?: number;
+	type?: "command" | "freetext";
+	name?: string;
+	args?: string;
+	fresh_session?: boolean;
+	text?: string;
+	label?: string;
+	reason?: string;
+}
+
+function isCommandNextStep(step: CommandStatusNextStep | undefined): step is CommandStatusCommandNextStep {
+	return step !== undefined && (step.type === undefined || step.type === "command");
 }
 
 // customType for the hidden status-check probe message. display:false keeps it
@@ -49,7 +67,10 @@ const OUT_OF_PHASE_ERROR =
 // declarations of the same payload. The congruence guards underneath fail the
 // build if either side renames, adds, or drops a field — so a `fresh_session`
 // rename can't typecheck clean while silently breaking the runtime contract.
-const NEXT_STEP_SCHEMA = Type.Object({
+const COMMAND_NEXT_STEP_SCHEMA = Type.Object({
+	type: Type.Optional(
+		Type.Literal("command", { description: "Command next-step entry. May be omitted for compatibility." }),
+	),
 	name: Type.String({
 		description:
 			"Bare command name (no leading slash, no arguments), e.g. 'mach12:issue-plan'. Must match the declared target for forced policies and one of the listed candidates for closed policies.",
@@ -64,10 +85,18 @@ const NEXT_STEP_SCHEMA = Type.Object({
 		description:
 			"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session').",
 	}),
-	// Wire-only (MVP-unused): choice-list-UI scaffolding; toNextStep drops it on conversion.
-	label: Type.Optional(Type.String({ description: "Optional short label for a future choice-list UI." })),
+	label: Type.Optional(Type.String({ description: "Optional short label for the next-step selector." })),
 	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
 });
+
+const FREE_TEXT_NEXT_STEP_SCHEMA = Type.Object({
+	type: Type.Literal("freetext", { description: "Free-text next-step entry for open selector policies." }),
+	text: Type.String({ description: "Free-text user-facing follow-up option." }),
+	label: Type.Optional(Type.String({ description: "Optional short label for the next-step selector." })),
+	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
+});
+
+const NEXT_STEP_SCHEMA = Type.Union([COMMAND_NEXT_STEP_SCHEMA, FREE_TEXT_NEXT_STEP_SCHEMA]);
 
 // Bidirectional assignability: each direction fails to compile if the schema and
 // the interface diverge (a rename drops a required field from one side's view).
@@ -115,7 +144,13 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				Type.Array(NEXT_STEP_SCHEMA, {
 					description:
 						"Ordered next-step candidates for completed commands. Omit entirely to stop the chain. " +
-						"The first entry valid for the command's policy is acted on; the array shape carries candidates for a future choice-list UI.",
+						"Command entries may omit type for compatibility; free-text entries use type='freetext'.",
+				}),
+			),
+			recommended_next_step: Type.Optional(
+				Type.Integer({
+					minimum: 0,
+					description: "Zero-based index into next_steps for the recommended selector option.",
 				}),
 			),
 		}),
@@ -146,6 +181,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				summary: params.summary,
 				user_prompt: params.user_prompt,
 				next_steps: params.next_steps,
+				recommended_next_step: params.recommended_next_step,
 			};
 			state.latestCommandStatus = payload;
 			state.commandPhase = "reported";
@@ -161,16 +197,24 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				recordCommandStatus(pi, state.activeTopLevelCommand, params.status);
 			}
 
-			const next = params.next_steps?.[0];
+			const next =
+				params.recommended_next_step === undefined
+					? params.next_steps?.[0]
+					: params.next_steps?.[params.recommended_next_step];
 			// S4: mirror buildNextStepWire — trimStart the args so the forward
 			// pointer rendered here can't show a double space either.
-			const nextArgs = next?.args?.trimStart();
+			const nextArgs = isCommandNextStep(next) ? next.args?.trimStart() : undefined;
 			const text =
-				params.status === "completed" && next
+				params.status === "completed" && isCommandNextStep(next)
 					? `→ /${next.name}${nextArgs ? ` ${nextArgs}` : ""}`
 					: `status: ${params.status}`;
 
-			const details: CommandStatusDetails = { status: params.status, summary: params.summary, ...(next ?? {}) };
+			const details: CommandStatusDetails = {
+				status: params.status,
+				summary: params.summary,
+				recommended_next_step: params.recommended_next_step,
+				...(next ?? {}),
+			};
 			return {
 				content: [{ type: "text", text }],
 				details,

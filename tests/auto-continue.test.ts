@@ -11,6 +11,7 @@ type StatusParams = {
 	summary: string;
 	user_prompt?: string;
 	next_steps?: CommandStatusPayload["next_steps"];
+	recommended_next_step?: number;
 };
 
 function defWithPolicy(name: string, policy: NextStepPolicy | undefined, body = ""): CommandDef {
@@ -47,6 +48,9 @@ interface CtxBag {
 	widgets: { key: string; content: unknown; options?: unknown }[];
 	inputHandler: ((data: string) => unknown) | null;
 	inputUnsubCalls: number;
+	customComponents: any[];
+	customRenderCalls: number;
+	pasted: string[];
 	rejectDispatchWith?: Error;
 	rejectNewSessionWith?: Error;
 	cancelNewSession?: boolean;
@@ -68,6 +72,9 @@ function fakeCtx({
 		widgets: [],
 		inputHandler: null,
 		inputUnsubCalls: 0,
+		customComponents: [],
+		customRenderCalls: 0,
+		pasted: [],
 	};
 	const replacedCtx = {
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
@@ -94,6 +101,28 @@ function fakeCtx({
 					bag.inputUnsubCalls++;
 					bag.inputHandler = null;
 				};
+			},
+			custom<T>(factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any) {
+				return new Promise<T>((resolve) => {
+					let component: any;
+					let settled = false;
+					const done = (result: T) => {
+						if (settled) return;
+						settled = true;
+						component?.dispose?.();
+						resolve(result);
+					};
+					component = factory(
+						{ requestRender: () => bag.customRenderCalls++ },
+						{ fg: (_name: string, text: string) => text, bold: (text: string) => text },
+						{},
+						done,
+					);
+					bag.customComponents.push(component);
+				});
+			},
+			pasteToEditor(text: string) {
+				bag.pasted.push(text);
 			},
 		},
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
@@ -217,7 +246,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const probe = bag.pi.sent[0] as { message: any; options: any };
 			expect(probe.message.customType).toBe(COMMAND_STATUS_PROBE_TYPE);
 			expect(probe.message.display).toBe(false);
-			expect(probe.message.content).toBe(buildProbeMessage(policy, def.name));
+			expect(probe.message.content).toBe(buildProbeMessage(policy, def.name, state.enabled));
 			expect(probe.options).toEqual({ triggerTurn: true });
 		});
 
@@ -349,7 +378,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false }],
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
 			});
 			expect(state.commandPhase).toBe("idle");
 
@@ -427,6 +457,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "done",
 				next_steps: [{ name: "b:target", args: "55 --review-comment 12345", fresh_session: true }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.newSessionCalls).toHaveLength(1);
@@ -445,6 +476,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "done",
 				next_steps: [{ name: "b:target", args: "55 --review-comment 12345", fresh_session: false }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.newSessionCalls).toEqual([]);
@@ -462,6 +494,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "done",
 				next_steps: [{ name: "z:wrong", args: "danger", fresh_session: true }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.newSessionCalls).toEqual([]);
@@ -567,7 +600,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 	});
 
 	describe("closed / open / ask completed", () => {
-		it("closed valid pick + enabled=true shows the countdown widget", async () => {
+		it("closed valid recommendation + enabled=true shows the selector", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state);
@@ -575,15 +608,16 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false }],
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "review can continue" }],
+				recommended_next_step: 0,
 			});
 
-			expect(ctxBag.widgets[0].key).toBe("scramjet-next");
-			expect(ctxBag.widgets[0].content).toEqual(expect.arrayContaining([expect.stringContaining("/b:ok")]));
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/b:ok");
 			expect(ctxBag.dispatched).toEqual([]);
 		});
 
-		it("closed valid pick + no UI dispatches immediately, taking the first valid entry", async () => {
+		it("closed valid recommendation + no UI dispatches immediately", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
@@ -592,27 +626,21 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "s",
 				next_steps: [
-					{ name: "z:bad", fresh_session: false },
-					{ name: "b:ok", args: "alpha beta", fresh_session: false },
+					{ name: "z:bad", fresh_session: false, reason: "not valid" },
+					{ name: "b:ok", args: "alpha beta", fresh_session: false, reason: "best next step" },
 				],
+				recommended_next_step: 1,
 			});
 
-			// z:bad is skipped (not a candidate); the first VALID entry dispatches.
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/b:ok alpha beta", options: { deliverAs: "followUp" }, session: "current" },
 			]);
-
-			// S4: the skip is surfaced as an info notify before dispatch, naming both
-			// the skipped out-of-policy candidate and the valid target it dispatched.
-			// A regression that silently swallowed the out-of-policy pick (the exact
-			// thing this branch guards against) would otherwise pass.
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
-			expect(ctxBag.notifications[0].message).toContain("skipped out-of-policy");
+			expect(ctxBag.notifications[0].message).toContain("skipped invalid");
 			expect(ctxBag.notifications[0].message).toContain("z:bad");
-			expect(ctxBag.notifications[0].message).toContain("b:ok");
 		});
 
-		it("valid pick + enabled=false surfaces a notify hint and does not dispatch", async () => {
+		it("valid recommendation + enabled=false shows the selector and does not dispatch", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: false });
 			const { bag, ctxBag, report } = bootstrap(state);
@@ -620,19 +648,18 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: true }],
+				next_steps: [{ name: "b:ok", fresh_session: true, reason: "review can continue" }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
-			expect(ctxBag.notifications[0].message).toContain("/b:ok");
-			expect(ctxBag.notifications[0].message).toContain("fresh session");
-			expect(ctxBag.notifications[0].message).toContain("/scramjet on");
+			expect(ctxBag.notifications).toEqual([]);
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/b:ok");
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("[recommended]");
 		});
 
-		// S8: the enabled=false notify branch is policy-agnostic, but only closed
-		// mode covered it above. Open mode reaches the same branch via a free pick.
-		it("open valid pick + enabled=false surfaces a notify hint and does not dispatch", async () => {
+		it("open valid recommendation + enabled=false shows the selector and does not dispatch", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: false });
 			const { bag, ctxBag, report } = bootstrap(state);
@@ -640,14 +667,14 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "other-extension:cmd", fresh_session: true }],
+				next_steps: [{ name: "other-extension:cmd", fresh_session: true, reason: "external command fits" }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
-			expect(ctxBag.notifications[0].message).toContain("/other-extension:cmd");
-			expect(ctxBag.notifications[0].message).toContain("fresh session");
-			expect(ctxBag.notifications[0].message).toContain("/scramjet on");
+			expect(ctxBag.notifications).toEqual([]);
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/other-extension:cmd");
 		});
 
 		it("invalid-only picks warn and do not dispatch", async () => {
@@ -658,15 +685,82 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "z:not-in-list", fresh_session: false }],
+				next_steps: [{ name: "z:not-in-list", fresh_session: false, reason: "bad fit" }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
-			expect(ctxBag.notifications[0].message).toContain("z:not-in-list");
+			expect(ctxBag.notifications[0].message).toContain("not in closed candidates");
 		});
 
-		it("open free pick can dispatch a non-Scramjet slash command", async () => {
+		it("user selection before countdown overrides the recommendation", async () => {
+			const def = defWithPolicy("a:cmd", {
+				mode: "closed",
+				candidates: [{ name: "b:first" }, { name: "b:second" }],
+			});
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [
+					{ name: "b:first", fresh_session: false, reason: "recommended path" },
+					{ name: "b:second", fresh_session: false, reason: "manual alternate" },
+				],
+				recommended_next_step: 0,
+			});
+
+			ctxBag.customComponents[0].handleInput("\x1b[B");
+			ctxBag.customComponents[0].handleInput("\r");
+			await vi.advanceTimersByTimeAsync(3000);
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:second", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+		});
+
+		it("free-text selection pastes to the editor", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: false });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				recommended_next_step: 0,
+			});
+
+			ctxBag.customComponents[0].handleInput("\r");
+			await flushMicrotasks();
+
+			expect(ctxBag.pasted).toEqual(["Please continue in prose."]);
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("free-text recommendation under /scramjet on shows selector but does not auto-dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				recommended_next_step: 0,
+			});
+			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
+
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.pasted).toEqual([]);
+		});
+
+		it("open command recommendation can dispatch a non-Scramjet slash command", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
@@ -674,7 +768,15 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "other-extension:cmd", args: "--flag value", fresh_session: false }],
+				next_steps: [
+					{
+						name: "other-extension:cmd",
+						args: "--flag value",
+						fresh_session: false,
+						reason: "external step fits",
+					},
+				],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([
@@ -691,11 +793,85 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "danger:cmd", fresh_session: false }],
+				next_steps: [{ name: "danger:cmd", fresh_session: false, reason: "dangerous" }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+		});
+
+		it("missing recommendation does not fall back to the first valid command", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("missing recommended_next_step");
+			expect(ctxBag.notifications[0].message).toContain("/b:ok");
+		});
+
+		it("invalid recommendation does not fall back to a later valid command", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [
+					{ name: "z:bad", fresh_session: false, reason: "bad fit" },
+					{ name: "b:ok", fresh_session: false, reason: "valid fallback" },
+				],
+				recommended_next_step: 0,
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[1]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[1].message).toContain("points to invalid next step");
+		});
+
+		it("free-text recommendation under /scramjet off is shown but not dispatched", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: false });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				recommended_next_step: 0,
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
+			expect(ctxBag.notifications[0].message).toContain("Please continue in prose.");
+			expect(ctxBag.notifications[0].message).toContain("only auto-dispatches command");
+		});
+
+		it("free-text recommendation under /scramjet on is not auto-dispatchable", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				recommended_next_step: 0,
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("free-text");
+			expect(ctxBag.notifications[0].message).toContain("Please continue in prose.");
 		});
 
 		it("ask mode ignores proposed next steps and waits for the user", async () => {
@@ -707,6 +883,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "s",
 				next_steps: [{ name: "x:y", fresh_session: false }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
@@ -907,7 +1084,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await driveProbeTurn(bag, ctxBag, report, {
 				status: "completed",
 				summary: "PR created",
-				next_steps: [{ name: "mach12:pr-review", fresh_session: false }],
+				next_steps: [{ name: "mach12:pr-review", fresh_session: false, reason: "PR is ready for review" }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([
@@ -1017,7 +1195,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await driveProbeTurn(bag, ctxBag, report, {
 				status: "completed",
 				summary: "PR created",
-				next_steps: [{ name: "mach12:pr-review", fresh_session: false }],
+				next_steps: [{ name: "mach12:pr-review", fresh_session: false, reason: "PR is ready for review" }],
+				recommended_next_step: 0,
 			});
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/mach12:pr-review", options: { deliverAs: "followUp" }, session: "current" },
@@ -1073,7 +1252,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", args: "55", fresh_session: true }],
+				next_steps: [{ name: "b:ok", args: "55", fresh_session: true, reason: "continue in fresh session" }],
+				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.newSessionCalls).toHaveLength(1);
@@ -1089,7 +1269,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: true }],
+				next_steps: [{ name: "b:ok", fresh_session: true, reason: "continue in fresh session" }],
+				recommended_next_step: 0,
 			});
 			await flushMicrotasks();
 
@@ -1107,7 +1288,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: true }],
+				next_steps: [{ name: "b:ok", fresh_session: true, reason: "continue in fresh session" }],
+				recommended_next_step: 0,
 			});
 			await flushMicrotasks();
 
@@ -1141,52 +1323,213 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		});
 	});
 
-	describe("countdown lifecycle", () => {
-		async function primeCountdown(hasUI = true) {
+	describe("selector lifecycle", () => {
+		async function primeSelector(hasUI = true) {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI });
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false }],
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
 			});
 			return { bag, ctxBag, state };
 		}
 
-		it("dispatches after COUNTDOWN_SECONDS and tears down the widget", async () => {
-			const { ctxBag } = await primeCountdown();
-			expect(ctxBag.inputHandler).not.toBeNull();
+		it("auto-dispatches the recommended command after COUNTDOWN_SECONDS", async () => {
+			const { ctxBag } = await primeSelector();
+			expect(ctxBag.customComponents).toHaveLength(1);
 
 			await vi.advanceTimersByTimeAsync(3000);
+			await flushMicrotasks();
 
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" },
 			]);
-			expect(ctxBag.widgets[ctxBag.widgets.length - 1].content).toBeUndefined();
-			expect(ctxBag.inputHandler).toBeNull();
-			expect(ctxBag.inputUnsubCalls).toBe(1);
 		});
 
-		it("Escape cancels without dispatch and consumes the key", async () => {
-			const { ctxBag } = await primeCountdown();
+		it("Escape cancels without dispatch", async () => {
+			const { ctxBag } = await primeSelector();
 
 			const ESCAPE = String.fromCharCode(27);
-			expect(ctxBag.inputHandler?.(ESCAPE)).toEqual({ consume: true });
+			ctxBag.customComponents[0].handleInput(ESCAPE);
 			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.widgets[ctxBag.widgets.length - 1].content).toBeUndefined();
 		});
 
-		it("session_shutdown tears down an in-flight countdown", async () => {
-			const { bag, ctxBag } = await primeCountdown();
+		it("session_shutdown prevents an in-flight selector countdown from dispatching", async () => {
+			const { bag, ctxBag } = await primeSelector();
 
 			await bag.emit("session_shutdown", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.inputHandler).toBeNull();
+		});
+
+		it("logs stale non-abort selector failures", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector("late selector boom");
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("stale next-step selector failed");
+			expect(warnSpy.mock.calls[0][0]).toContain("late selector boom");
+			warnSpy.mockRestore();
+		});
+
+		it("keeps stale abort selector failures quiet", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector(Object.assign(new Error("aborted"), { name: "AbortError" }));
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).not.toHaveBeenCalled();
+			warnSpy.mockRestore();
+		});
+
+		it("logs non-stringifiable stale selector failures", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector({
+				[Symbol.toPrimitive]() {
+					throw new Error("toPrimitive boom");
+				},
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("<non-stringifiable rejection>");
+			warnSpy.mockRestore();
+		});
+
+		it("logs stale selector Error objects with throwing message getters", async () => {
+			class ThrowingMessageError extends Error {
+				override get message(): string {
+					throw new Error("message boom");
+				}
+			}
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector(new ThrowingMessageError());
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("<non-stringifiable rejection>");
+			warnSpy.mockRestore();
+		});
+
+		it("selector creation failure warns and does not dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			ctxBag.ctx.ui.custom = () => {
+				throw new Error("selector boom");
+			};
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("next-step selector failed");
+			expect(ctxBag.notifications[0].message).toContain("selector boom");
+		});
+
+		it("unknown selector result warns and does not dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			ctxBag.ctx.ui.custom = () => Promise.resolve("bogus");
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("unknown option value");
 		});
 
 		it("session_shutdown drops a scheduled-but-unfired probe", async () => {
@@ -1268,7 +1611,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const result = (await report({
 				status: "completed",
 				summary: "stale",
-				next_steps: [{ name: "b:target", fresh_session: false }],
+				next_steps: [{ name: "b:target", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
 			})) as any;
 			expect(result.terminate).toBeUndefined();
 			expect(result.details.error).toBe("out-of-phase");

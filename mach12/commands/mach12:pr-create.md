@@ -167,10 +167,13 @@ Report to the user:
 - PR number and URL.
 - Linked issue (if any).
 
-When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and include a `next_steps` entry if the PR is ready for automated review:
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and include a selector-visible `next_steps` entry if the PR is ready for automated review:
 
 - `name`: `mach12:pr-review`
 - `args`: `<pr-number>`
 - `fresh_session`: `false`
+- `reason`: a brief explanation that the PR is ready for automated review
+
+Set `recommended_next_step` to `0` when you include this entry so Scramjet can route to it automatically.
 
 Leave `next_steps` empty if the user cancelled or the PR should not be reviewed yet. If PR creation failed or you could not finish, report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`.

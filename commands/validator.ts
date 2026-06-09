@@ -1,4 +1,27 @@
-import type { CommandStatusNextStep, NextStep, NextStepPolicy } from "../types.ts";
+import type {
+	CommandStatusCommandNextStep,
+	CommandStatusFreeTextNextStep,
+	CommandStatusNextStep,
+	NextStep,
+	NextStepPolicy,
+} from "../types.ts";
+
+function isCommandStep(step: CommandStatusNextStep): step is CommandStatusCommandNextStep {
+	return step.type === undefined || step.type === "command";
+}
+
+function isFreeTextStep(step: CommandStatusNextStep): step is CommandStatusFreeTextNextStep {
+	return step.type === "freetext";
+}
+
+function stepLabel(step: CommandStatusNextStep): string {
+	if (isCommandStep(step)) return step.name;
+	return step.label ?? step.text;
+}
+
+function hasReason(step: CommandStatusNextStep): step is CommandStatusNextStep & { reason: string } {
+	return step.reason?.trim() !== "" && step.reason !== undefined;
+}
 
 // Discriminated union: when valid is false a reason is required, so consumers
 // can read `result.reason` after narrowing without optional-chaining.
@@ -27,44 +50,110 @@ export function validateNextStep(proposed: string | undefined, policy: DecidedPo
 	}
 }
 
-// Result of validating a command-status `next_steps[]` array against a decided
-// policy. `valid` is the first entry that passed (converted to a dispatchable
-// NextStep) or null when none did; `skipped` lists the names rejected before
-// the valid one (or every name when none passed); `reason` carries the first
-// rejection reason, useful for the warning surfaced when nothing is valid.
+export type ValidatedNextStep =
+	| {
+			type: "command";
+			index: number;
+			label?: string;
+			reason: string;
+			step: NextStep;
+	  }
+	| {
+			type: "freetext";
+			index: number;
+			label?: string;
+			reason: string;
+			text: string;
+	  };
+
+export interface SkippedNextStep {
+	index: number;
+	label: string;
+	reason: string;
+}
+
 export interface NextStepsValidation {
-	valid: NextStep | null;
-	skipped: string[];
+	valid: ValidatedNextStep[];
+	skipped: SkippedNextStep[];
+	recommended: ValidatedNextStep | null;
+	recommendedReason?: string;
 	reason?: string;
 }
 
-// Array form of validateNextStep for the two-phase status protocol (issue 84).
-// The agent supplies an ordered list of candidates; the MVP auto-continue
-// dispatches the first one that passes the policy. Each entry is validated by
-// name through the existing single-name validateNextStep, so closed/open/ask
-// semantics stay identical. The array shape is forward-looking scaffolding for
-// the choice-list UI; today only the first valid entry is acted on.
+function validateDisplayableStep(
+	step: CommandStatusNextStep,
+	policy: DecidedPolicy,
+	index: number,
+): { valid: true; option: ValidatedNextStep } | { valid: false; reason: string } {
+	if (isFreeTextStep(step)) {
+		if (policy.mode !== "open") {
+			return { valid: false, reason: "free-text next steps are valid only for open policies" };
+		}
+		if (!hasReason(step)) return { valid: false, reason: "selector-visible next steps must include reason" };
+		return {
+			valid: true,
+			option: {
+				type: "freetext",
+				index,
+				label: step.label,
+				reason: step.reason,
+				text: step.text,
+			},
+		};
+	}
+
+	const result = validateNextStep(step.name, policy);
+	if (!result.valid) return result;
+	if (!hasReason(step)) return { valid: false, reason: "selector-visible next steps must include reason" };
+	return {
+		valid: true,
+		option: {
+			type: "command",
+			index,
+			label: step.label,
+			reason: step.reason,
+			step: {
+				name: step.name,
+				args: step.args,
+				freshSession: step.fresh_session,
+				reason: step.reason,
+			},
+		},
+	};
+}
+
 export function validateNextSteps(
 	steps: readonly CommandStatusNextStep[] | undefined,
 	policy: DecidedPolicy,
+	recommendedIndex?: number,
 ): NextStepsValidation {
-	const skipped: string[] = [];
+	const valid: ValidatedNextStep[] = [];
+	const skipped: SkippedNextStep[] = [];
 	let firstReason: string | undefined;
-	for (const step of steps ?? []) {
-		const result = validateNextStep(step.name, policy);
+
+	for (const [index, step] of (steps ?? []).entries()) {
+		const result = validateDisplayableStep(step, policy, index);
 		if (result.valid) {
-			return {
-				valid: {
-					name: step.name,
-					args: step.args,
-					freshSession: step.fresh_session,
-					reason: step.reason,
-				},
-				skipped,
-			};
+			valid.push(result.option);
+			continue;
 		}
-		skipped.push(step.name);
+		skipped.push({ index, label: stepLabel(step), reason: result.reason });
 		if (firstReason === undefined) firstReason = result.reason;
 	}
-	return { valid: null, skipped, reason: firstReason };
+
+	let recommended: ValidatedNextStep | null = null;
+	let recommendedReason: string | undefined;
+	if (recommendedIndex !== undefined) {
+		recommended = valid.find((option) => option.index === recommendedIndex) ?? null;
+		if (!recommended) {
+			const skippedRecommendation = skipped.find((step) => step.index === recommendedIndex);
+			recommendedReason = skippedRecommendation
+				? `recommended_next_step ${recommendedIndex} points to invalid next step ${skippedRecommendation.label}: ${skippedRecommendation.reason}`
+				: `recommended_next_step ${recommendedIndex} is outside next_steps`;
+		}
+	} else if (valid.length > 0) {
+		recommendedReason = "missing recommended_next_step; no automatic next-step dispatch";
+	}
+
+	return { valid, skipped, recommended, recommendedReason, reason: firstReason };
 }

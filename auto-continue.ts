@@ -27,25 +27,32 @@
  * later unrelated turn (a duplicate command body with no command-start). The
  * single routeCompleted call site is therefore scheduled on a deferred tick
  * (scheduleCompletedDispatch), which also covers the no-UI closed/open path that
- * dispatches immediately rather than through the deferred countdown.
+ * dispatches immediately rather than through the selector.
  *
  * For completed commands: `forced` fires the declared target unconditionally
- * after completion; closed/open defer to /scramjet on|off and show a 3s
- * countdown widget (cancellable by Escape or any keypress) before dispatch.
- * Dispatch uses Pi's dispatchUserInput so slash commands run through Pi's
- * normal input pipeline. See CLAUDE.md "MVP design rationales".
+ * after completion; closed/open validate selector-visible options. With UI,
+ * Scramjet shows a selector and `/scramjet on` auto-selects a recommended
+ * command after a 3s countdown; without UI it dispatches only a valid
+ * recommended command under `/scramjet on`. Dispatch uses Pi's
+ * dispatchUserInput so slash commands run through Pi's normal input pipeline.
+ * See CLAUDE.md "MVP design rationales".
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
-import { validateNextSteps } from "./commands/validator.ts";
+import { type ValidatedNextStep, validateNextSteps } from "./commands/validator.ts";
 import { buildProbeMessage } from "./next-step.ts";
 import { buildNextStepWire, dispatchNextStep } from "./next-step-dispatch.ts";
-import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
+import { selectNextStep } from "./next-step-selector.ts";
+import type {
+	CommandStatusCommandNextStep,
+	CommandStatusNextStep,
+	NextStep,
+	NextStepPolicy,
+	ScramjetState,
+} from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
-const WIDGET_KEY = "scramjet-next";
 // F1: liveness watchdog window. Generous on purpose — a live probe turn is a
 // single scramjet_command_status tool call and reports well within this, and the
 // guard inside the timer re-checks the phase so a turn that DID complete (or
@@ -58,8 +65,25 @@ const WIDGET_KEY = "scramjet-next";
 // which would otherwise drop a legitimate chain — worse than the stall it fixes.
 const PROBE_WATCHDOG_MS = 30_000;
 
-function toNextStep(step: CommandStatusNextStep): NextStep {
+function isCommandNextStep(step: CommandStatusNextStep | undefined): step is CommandStatusCommandNextStep {
+	return step !== undefined && (step.type === undefined || step.type === "command");
+}
+
+function toNextStep(step: CommandStatusCommandNextStep): NextStep {
 	return { name: step.name, args: step.args, freshSession: step.fresh_session, reason: step.reason };
+}
+
+function selectorErrorMessage(err: unknown): string {
+	try {
+		return err instanceof Error ? err.message : String(err);
+	} catch {
+		return "<non-stringifiable rejection>";
+	}
+}
+
+function isExpectedSelectorCancellation(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.name === "AbortError" || err.name === "CanceledError" || err.name === "CancelledError";
 }
 
 // S2: model-supplied summary/prompt text is interpolated into ctx.ui.notify,
@@ -82,11 +106,11 @@ export function cleanForNotify(text: string): string {
 }
 
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
-	let countdownTimer: ReturnType<typeof setInterval> | null = null;
-	let unsubInput: (() => void) | null = null;
 	let probeTimer: ReturnType<typeof setTimeout> | null = null;
 	let probeWatchdog: ReturnType<typeof setTimeout> | null = null;
 	let dispatchTimer: ReturnType<typeof setTimeout> | null = null;
+	let activeSelectorId = 0;
+	let activeSelectorAbort: AbortController | null = null;
 
 	function clearProbeWatchdog() {
 		if (probeWatchdog) {
@@ -102,70 +126,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
-	function cancelCountdown(ctx: ExtensionContext) {
-		if (countdownTimer) {
-			clearInterval(countdownTimer);
-			countdownTimer = null;
-		}
-		if (unsubInput) {
-			unsubInput();
-			unsubInput = null;
-		}
-		ctx.ui.setWidget(WIDGET_KEY, undefined);
-	}
-
 	function wireFor(step: NextStep): string {
 		return buildNextStepWire(step);
-	}
-
-	function startCountdown(step: NextStep, ctx: ExtensionContext) {
-		if (!ctx.hasUI) {
-			executeStep(step, ctx);
-			return;
-		}
-
-		let remaining = COUNTDOWN_SECONDS;
-		const wire = wireFor(step);
-
-		const updateWidget = () => {
-			const sessionLabel = step.freshSession ? " (fresh session)" : "";
-			const dots = ".".repeat(remaining);
-			ctx.ui.setWidget(WIDGET_KEY, [`  Next: ${wire}${sessionLabel}    ${remaining}s${dots}    [Esc] cancel  `], {
-				placement: "belowEditor",
-			});
-		};
-
-		updateWidget();
-
-		unsubInput = ctx.ui.onTerminalInput((data) => {
-			const isEscape = matchesKey(data, "escape");
-			cancelCountdown(ctx);
-			if (isEscape) {
-				return { consume: true };
-			}
-		});
-
-		countdownTimer = setInterval(() => {
-			// S10: error boundary. setInterval callbacks that throw become
-			// unhandledException in Node — worse, the interval keeps firing.
-			// Catch, surface, and tear the countdown down cleanly so a bad
-			// tick doesn't trap the user in a runaway widget.
-			try {
-				remaining--;
-				if (remaining <= 0) {
-					cancelCountdown(ctx);
-					executeStep(step, ctx);
-				} else {
-					updateWidget();
-				}
-			} catch (err) {
-				cancelCountdown(ctx);
-				ctx.ui.notify(
-					`scramjet: countdown aborted (${(err as Error).message}); press the next-step command manually if you still want to chain`,
-					"warning",
-				);
-			}
-		}, 1000);
 	}
 
 	function executeStep(step: NextStep, ctx: ExtensionContext) {
@@ -208,7 +170,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	function scheduleProbe(policy: NextStepPolicy, commandId: string) {
 		if (probeTimer) clearTimeout(probeTimer);
 		clearProbeWatchdog();
-		const content = buildProbeMessage(policy, commandId);
+		const content = buildProbeMessage(policy, commandId, state.enabled);
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
 			// Error boundary, symmetric to the countdown setInterval guard above.
@@ -245,8 +207,111 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}, 0);
 	}
 
+	function skippedSummary(skipped: ReturnType<typeof validateNextSteps>["skipped"]): string {
+		return cleanForNotify(
+			skipped.map((step) => `${cleanForNotify(step.label)} (${cleanForNotify(step.reason)})`).join(", "),
+		);
+	}
+
+	function optionSummary(option: ReturnType<typeof validateNextSteps>["valid"][number]): string {
+		if (option.type === "command") return buildNextStepWire(option.step);
+		return cleanForNotify(option.label ?? option.text);
+	}
+
+	function optionsSummary(options: ReturnType<typeof validateNextSteps>["valid"]): string {
+		return cleanForNotify(options.map(optionSummary).join(", "));
+	}
+
+	function runSelectedOption(option: ValidatedNextStep, ctx: ExtensionContext) {
+		if (option.type === "command") {
+			executeStep(option.step, ctx);
+		} else {
+			ctx.ui.pasteToEditor(option.text);
+		}
+	}
+
+	function cancelSelector() {
+		activeSelectorId++;
+		activeSelectorAbort?.abort();
+		activeSelectorAbort = null;
+	}
+
+	function showSelector(result: ReturnType<typeof validateNextSteps>, ctx: ExtensionContext) {
+		cancelSelector();
+		const selectorId = activeSelectorId;
+		const controller = new AbortController();
+		activeSelectorAbort = controller;
+		const autoSelect = state.enabled && result.recommended?.type === "command" ? result.recommended : undefined;
+		void selectNextStep(ctx, {
+			options: result.valid,
+			recommended: result.recommended,
+			autoSelect,
+			countdownSeconds: autoSelect ? COUNTDOWN_SECONDS : 0,
+			signal: controller.signal,
+		})
+			.then((selected) => {
+				if (selectorId !== activeSelectorId) return;
+				activeSelectorAbort = null;
+				if (selected) runSelectedOption(selected, ctx);
+			})
+			.catch((err) => {
+				if (selectorId !== activeSelectorId) {
+					if (!isExpectedSelectorCancellation(err)) {
+						console.warn(
+							`scramjet: stale next-step selector failed (${selectorErrorMessage(err)}); failure ignored`,
+						);
+					}
+					return;
+				}
+				activeSelectorAbort = null;
+				ctx.ui.notify(
+					`scramjet: next-step selector failed (${selectorErrorMessage(err)}); auto-continue paused`,
+					"warning",
+				);
+			});
+	}
+
+	function routeWithoutUi(result: ReturnType<typeof validateNextSteps>, ctx: ExtensionContext) {
+		if (!result.recommended) {
+			if (result.recommendedReason) {
+				const level =
+					state.enabled && result.valid.every((option) => option.type === "freetext") ? "info" : "warning";
+				ctx.ui.notify(
+					`scramjet: ${result.recommendedReason}; valid option(s): ${optionsSummary(result.valid)}`,
+					level,
+				);
+			}
+			return;
+		}
+
+		if (result.recommended.type !== "command") {
+			const text = optionSummary(result.recommended);
+			if (state.enabled) {
+				ctx.ui.notify(
+					`scramjet: recommended next step is free-text (${text}); automatic dispatch skipped`,
+					"warning",
+				);
+			} else {
+				ctx.ui.notify(
+					`scramjet: next would be ${text}; /scramjet on only auto-dispatches command next steps`,
+					"info",
+				);
+			}
+			return;
+		}
+
+		const step = result.recommended.step;
+		if (state.enabled) {
+			executeStep(step, ctx);
+		} else {
+			const wire = wireFor(step);
+			const fresh = step.freshSession ? " (fresh session)" : "";
+			ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
+		}
+	}
+
 	// Route a completed-status report through the command's policy. Mirrors the
-	// pre-84 dispatch logic, now reading the validated first entry of the
+	// pre-84 dispatch logic, now reading the validated recommendation from the
 	// next_steps[] array rather than a single next_step.
 	function routeCompleted(
 		policy: NextStepPolicy,
@@ -257,7 +322,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			// Forced fires regardless of state.enabled: no decision is delegated to
 			// the agent or user; the status report is only the safety gate that
 			// distinguishes completion from clarification/error.
-			const handoff = status.next_steps?.[0] ? toNextStep(status.next_steps[0]) : undefined;
+			const handoff = isCommandNextStep(status.next_steps?.[0]) ? toNextStep(status.next_steps[0]) : undefined;
 			dispatchForced(policy.target, handoff, ctx);
 			return;
 		}
@@ -272,30 +337,28 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		// closed / open: dispatch the first entry valid for the policy.
-		const result = validateNextSteps(status.next_steps, policy);
-		if (!result.valid) {
+		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step);
+		if (!result.valid.length) {
 			if (result.reason) ctx.ui.notify(`scramjet: ${result.reason}`, "warning");
 			return;
 		}
 
-		// S1: first-valid-wins is the designed semantics, but a candidate skipped
-		// before the valid one is an out-of-policy pick (closed) or a blacklisted
-		// one (open) — surface it as info so a possible authoring/model error is
-		// visible rather than silently swallowed.
 		if (result.skipped.length) {
-			ctx.ui.notify(
-				`scramjet: skipped out-of-policy next step(s) before dispatching ${result.valid.name}: ${result.skipped.join(", ")}`,
-				"info",
-			);
+			ctx.ui.notify(`scramjet: skipped invalid next step(s): ${skippedSummary(result.skipped)}`, "info");
 		}
 
-		if (state.enabled) {
-			startCountdown(result.valid, ctx);
+		if (ctx.hasUI) {
+			if (result.recommendedReason) {
+				const level =
+					state.enabled && result.valid.every((option) => option.type === "freetext") ? "info" : "warning";
+				ctx.ui.notify(
+					`scramjet: ${result.recommendedReason}; valid option(s): ${optionsSummary(result.valid)}`,
+					level,
+				);
+			}
+			showSelector(result, ctx);
 		} else {
-			const wire = wireFor(result.valid);
-			const fresh = result.valid.freshSession ? " (fresh session)" : "";
-			ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
+			routeWithoutUi(result, ctx);
 		}
 	}
 
@@ -462,10 +525,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	});
 
-	// Clean up on session shutdown: tear down an in-flight countdown and drop any
-	// scheduled-but-unfired probe or deferred completed-transition dispatch.
-	pi.on("session_shutdown", async (_event, ctx) => {
-		cancelCountdown(ctx);
+	// Clean up on session shutdown: drop any scheduled-but-unfired probe or deferred completed-transition dispatch.
+	pi.on("session_shutdown", async () => {
+		cancelSelector();
 		if (probeTimer) {
 			clearTimeout(probeTimer);
 			probeTimer = null;
