@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.1 — Switch issue-review next-step policy to open
+
+Changes `mach12:issue-review` from `ask` to `open` with two candidates: re-review (`mach12:issue-review`) when critical/important findings remain, and proceed (`mach12:issue-implement`) when the plan is approved (issue #93).
+
+### Changed
+
+- `mach12:issue-review` next-step policy switched from `ask` to `open` with candidates `mach12:issue-review` and `mach12:issue-implement`, letting the agent recommend a next step based on review findings.
+- Added `scramjet_command_status` reporting section to guide candidate selection.
+- Vision doc wiring table updated to reflect the new policy.
+
 ## 0.13.0 — Bounded per-stage quality review
 
 Re-scopes the Phase 6 "Quality review" step in the implement-flow commands so per-stage review is a bounded, single-pass sanity check rather than an unbounded battery of specialized review subagents that re-fires until clean (issue #95). Comprehensive scrutiny is explicitly deferred to the full-branch `mach12:pr-review`. The change is prose-only coaching plus an explicit cap; no harness code changes (dispatch caps are not harness-enforced in the MVP).

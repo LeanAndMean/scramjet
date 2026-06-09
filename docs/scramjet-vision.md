@@ -573,7 +573,7 @@ every step Mach 10 has eventually grown.
 |--------------------------|---------|-----------------------------------------------------|------------------------------------|
 | `issue-create`           | `open`  | `issue-plan`                                        | `find-contribution-guidelines`     |
 | `issue-plan`             | `open`  | `issue-review`, `issue-implement`                   | —                                  |
-| `issue-review`           | `ask`   | (user: approve / revise / abandon)                  | —                                  |
+| `issue-review`           | `open`  | `issue-review`, `issue-implement`                   | —                                  |
 | `issue-implement`        | `open`  | `pr-create`                                         | `push`                             |
 | `pr-create`              | `open`  | `pr-review`                                         | —                                  |
 | `pr-review`              | `forced`| `pr-review-assessment`                              | —                                  |
@@ -599,9 +599,9 @@ Notes:
   `/mach12:push <context>` from inside their own prompt body and then
   declare their own `next`. `push` no longer has to know about its
   callers.
-- **`issue-review` → `ask`** because the post-review decision (approve
-  the plan, request a revision pass, abandon the issue) is genuinely a
-  human call. The `hint` field on the `ask` declaration spells this out.
+- **`issue-review` → `open`** because the agent can determine whether
+  critical findings remain (recommend re-review) or the plan is approved
+  (recommend implement). The user can still override either pick.
 - **`pr-pre-merge` → `ask`** for the same reason: the merge decision
   itself is human-owned even when the checks pass.
 - **`pr-merge` has no `next`** because merge is the natural terminus of
