@@ -37,11 +37,11 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey } from "@earendil-works/pi-tui";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
-import { validateNextSteps } from "./commands/validator.ts";
+import { type ValidatedNextStep, validateNextSteps } from "./commands/validator.ts";
 import { buildProbeMessage } from "./next-step.ts";
 import { buildNextStepWire, dispatchNextStep } from "./next-step-dispatch.ts";
+import { selectNextStep } from "./next-step-selector.ts";
 import type {
 	CommandStatusCommandNextStep,
 	CommandStatusNextStep,
@@ -51,7 +51,6 @@ import type {
 } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
-const WIDGET_KEY = "scramjet-next";
 // F1: liveness watchdog window. Generous on purpose — a live probe turn is a
 // single scramjet_command_status tool call and reports well within this, and the
 // guard inside the timer re-checks the phase so a turn that DID complete (or
@@ -92,11 +91,11 @@ export function cleanForNotify(text: string): string {
 }
 
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
-	let countdownTimer: ReturnType<typeof setInterval> | null = null;
-	let unsubInput: (() => void) | null = null;
 	let probeTimer: ReturnType<typeof setTimeout> | null = null;
 	let probeWatchdog: ReturnType<typeof setTimeout> | null = null;
 	let dispatchTimer: ReturnType<typeof setTimeout> | null = null;
+	let activeSelectorId = 0;
+	let activeSelectorAbort: AbortController | null = null;
 
 	function clearProbeWatchdog() {
 		if (probeWatchdog) {
@@ -112,70 +111,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
-	function cancelCountdown(ctx: ExtensionContext) {
-		if (countdownTimer) {
-			clearInterval(countdownTimer);
-			countdownTimer = null;
-		}
-		if (unsubInput) {
-			unsubInput();
-			unsubInput = null;
-		}
-		ctx.ui.setWidget(WIDGET_KEY, undefined);
-	}
-
 	function wireFor(step: NextStep): string {
 		return buildNextStepWire(step);
-	}
-
-	function startCountdown(step: NextStep, ctx: ExtensionContext) {
-		if (!ctx.hasUI) {
-			executeStep(step, ctx);
-			return;
-		}
-
-		let remaining = COUNTDOWN_SECONDS;
-		const wire = wireFor(step);
-
-		const updateWidget = () => {
-			const sessionLabel = step.freshSession ? " (fresh session)" : "";
-			const dots = ".".repeat(remaining);
-			ctx.ui.setWidget(WIDGET_KEY, [`  Next: ${wire}${sessionLabel}    ${remaining}s${dots}    [Esc] cancel  `], {
-				placement: "belowEditor",
-			});
-		};
-
-		updateWidget();
-
-		unsubInput = ctx.ui.onTerminalInput((data) => {
-			const isEscape = matchesKey(data, "escape");
-			cancelCountdown(ctx);
-			if (isEscape) {
-				return { consume: true };
-			}
-		});
-
-		countdownTimer = setInterval(() => {
-			// S10: error boundary. setInterval callbacks that throw become
-			// unhandledException in Node — worse, the interval keeps firing.
-			// Catch, surface, and tear the countdown down cleanly so a bad
-			// tick doesn't trap the user in a runaway widget.
-			try {
-				remaining--;
-				if (remaining <= 0) {
-					cancelCountdown(ctx);
-					executeStep(step, ctx);
-				} else {
-					updateWidget();
-				}
-			} catch (err) {
-				cancelCountdown(ctx);
-				ctx.ui.notify(
-					`scramjet: countdown aborted (${(err as Error).message}); press the next-step command manually if you still want to chain`,
-					"warning",
-				);
-			}
-		}, 1000);
 	}
 
 	function executeStep(step: NextStep, ctx: ExtensionContext) {
@@ -270,6 +207,87 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		return cleanForNotify(options.map(optionSummary).join(", "));
 	}
 
+	function runSelectedOption(option: ValidatedNextStep, ctx: ExtensionContext) {
+		if (option.type === "command") {
+			executeStep(option.step, ctx);
+		} else {
+			ctx.ui.pasteToEditor(option.text);
+		}
+	}
+
+	function cancelSelector() {
+		activeSelectorId++;
+		activeSelectorAbort?.abort();
+		activeSelectorAbort = null;
+	}
+
+	function showSelector(result: ReturnType<typeof validateNextSteps>, ctx: ExtensionContext) {
+		cancelSelector();
+		const selectorId = activeSelectorId;
+		const controller = new AbortController();
+		activeSelectorAbort = controller;
+		const autoSelect = state.enabled && result.recommended?.type === "command" ? result.recommended : undefined;
+		void selectNextStep(ctx, {
+			options: result.valid,
+			recommended: result.recommended,
+			autoSelect,
+			countdownSeconds: autoSelect ? COUNTDOWN_SECONDS : 0,
+			signal: controller.signal,
+		})
+			.then((selected) => {
+				if (selectorId !== activeSelectorId) return;
+				activeSelectorAbort = null;
+				if (selected) runSelectedOption(selected, ctx);
+			})
+			.catch((err) => {
+				if (selectorId !== activeSelectorId) return;
+				activeSelectorAbort = null;
+				ctx.ui.notify(
+					`scramjet: next-step selector failed (${(err as Error).message}); auto-continue paused`,
+					"warning",
+				);
+			});
+	}
+
+	function routeWithoutUi(result: ReturnType<typeof validateNextSteps>, ctx: ExtensionContext) {
+		if (!result.recommended) {
+			if (result.recommendedReason) {
+				const level =
+					state.enabled && result.valid.every((option) => option.type === "freetext") ? "info" : "warning";
+				ctx.ui.notify(
+					`scramjet: ${result.recommendedReason}; valid option(s): ${optionsSummary(result.valid)}`,
+					level,
+				);
+			}
+			return;
+		}
+
+		if (result.recommended.type !== "command") {
+			const text = optionSummary(result.recommended);
+			if (state.enabled) {
+				ctx.ui.notify(
+					`scramjet: recommended next step is free-text (${text}); automatic dispatch skipped`,
+					"warning",
+				);
+			} else {
+				ctx.ui.notify(
+					`scramjet: next would be ${text}; /scramjet on only auto-dispatches command next steps`,
+					"info",
+				);
+			}
+			return;
+		}
+
+		const step = result.recommended.step;
+		if (state.enabled) {
+			executeStep(step, ctx);
+		} else {
+			const wire = wireFor(step);
+			const fresh = step.freshSession ? " (fresh session)" : "";
+			ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
+		}
+	}
+
 	// Route a completed-status report through the command's policy. Mirrors the
 	// pre-84 dispatch logic, now reading the validated recommendation from the
 	// next_steps[] array rather than a single next_step.
@@ -307,7 +325,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			ctx.ui.notify(`scramjet: skipped invalid next step(s): ${skippedSummary(result.skipped)}`, "info");
 		}
 
-		if (!result.recommended) {
+		if (ctx.hasUI) {
 			if (result.recommendedReason) {
 				const level =
 					state.enabled && result.valid.every((option) => option.type === "freetext") ? "info" : "warning";
@@ -316,32 +334,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					level,
 				);
 			}
-			return;
-		}
-
-		if (result.recommended.type !== "command") {
-			const text = optionSummary(result.recommended);
-			if (state.enabled) {
-				ctx.ui.notify(
-					`scramjet: recommended next step is free-text (${text}); automatic dispatch skipped`,
-					"warning",
-				);
-			} else {
-				ctx.ui.notify(
-					`scramjet: next would be ${text}; /scramjet on only auto-dispatches command next steps`,
-					"info",
-				);
-			}
-			return;
-		}
-
-		const step = result.recommended.step;
-		if (state.enabled) {
-			startCountdown(step, ctx);
+			showSelector(result, ctx);
 		} else {
-			const wire = wireFor(step);
-			const fresh = step.freshSession ? " (fresh session)" : "";
-			ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
+			routeWithoutUi(result, ctx);
 		}
 	}
 
@@ -508,10 +503,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	});
 
-	// Clean up on session shutdown: tear down an in-flight countdown and drop any
-	// scheduled-but-unfired probe or deferred completed-transition dispatch.
-	pi.on("session_shutdown", async (_event, ctx) => {
-		cancelCountdown(ctx);
+	// Clean up on session shutdown: drop any scheduled-but-unfired probe or deferred completed-transition dispatch.
+	pi.on("session_shutdown", async () => {
+		cancelSelector();
 		if (probeTimer) {
 			clearTimeout(probeTimer);
 			probeTimer = null;

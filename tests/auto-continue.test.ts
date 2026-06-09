@@ -48,6 +48,9 @@ interface CtxBag {
 	widgets: { key: string; content: unknown; options?: unknown }[];
 	inputHandler: ((data: string) => unknown) | null;
 	inputUnsubCalls: number;
+	customComponents: any[];
+	customRenderCalls: number;
+	pasted: string[];
 	rejectDispatchWith?: Error;
 	rejectNewSessionWith?: Error;
 	cancelNewSession?: boolean;
@@ -69,6 +72,9 @@ function fakeCtx({
 		widgets: [],
 		inputHandler: null,
 		inputUnsubCalls: 0,
+		customComponents: [],
+		customRenderCalls: 0,
+		pasted: [],
 	};
 	const replacedCtx = {
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
@@ -95,6 +101,28 @@ function fakeCtx({
 					bag.inputUnsubCalls++;
 					bag.inputHandler = null;
 				};
+			},
+			custom<T>(factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any) {
+				return new Promise<T>((resolve) => {
+					let component: any;
+					let settled = false;
+					const done = (result: T) => {
+						if (settled) return;
+						settled = true;
+						component?.dispose?.();
+						resolve(result);
+					};
+					component = factory(
+						{ requestRender: () => bag.customRenderCalls++ },
+						{ fg: (_name: string, text: string) => text, bold: (text: string) => text },
+						{},
+						done,
+					);
+					bag.customComponents.push(component);
+				});
+			},
+			pasteToEditor(text: string) {
+				bag.pasted.push(text);
 			},
 		},
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
@@ -572,7 +600,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 	});
 
 	describe("closed / open / ask completed", () => {
-		it("closed valid recommendation + enabled=true shows the countdown widget", async () => {
+		it("closed valid recommendation + enabled=true shows the selector", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state);
@@ -584,8 +612,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				recommended_next_step: 0,
 			});
 
-			expect(ctxBag.widgets[0].key).toBe("scramjet-next");
-			expect(ctxBag.widgets[0].content).toEqual(expect.arrayContaining([expect.stringContaining("/b:ok")]));
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/b:ok");
 			expect(ctxBag.dispatched).toEqual([]);
 		});
 
@@ -612,7 +640,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0].message).toContain("z:bad");
 		});
 
-		it("valid recommendation + enabled=false surfaces a notify hint and does not dispatch", async () => {
+		it("valid recommendation + enabled=false shows the selector and does not dispatch", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: false });
 			const { bag, ctxBag, report } = bootstrap(state);
@@ -625,13 +653,13 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
-			expect(ctxBag.notifications[0].message).toContain("/b:ok");
-			expect(ctxBag.notifications[0].message).toContain("fresh session");
-			expect(ctxBag.notifications[0].message).toContain("/scramjet on");
+			expect(ctxBag.notifications).toEqual([]);
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/b:ok");
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("[recommended]");
 		});
 
-		it("open valid recommendation + enabled=false surfaces a notify hint and does not dispatch", async () => {
+		it("open valid recommendation + enabled=false shows the selector and does not dispatch", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: false });
 			const { bag, ctxBag, report } = bootstrap(state);
@@ -644,10 +672,9 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
-			expect(ctxBag.notifications[0].message).toContain("/other-extension:cmd");
-			expect(ctxBag.notifications[0].message).toContain("fresh session");
-			expect(ctxBag.notifications[0].message).toContain("/scramjet on");
+			expect(ctxBag.notifications).toEqual([]);
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/other-extension:cmd");
 		});
 
 		it("invalid-only picks warn and do not dispatch", async () => {
@@ -665,6 +692,72 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("not in closed candidates");
+		});
+
+		it("user selection before countdown overrides the recommendation", async () => {
+			const def = defWithPolicy("a:cmd", {
+				mode: "closed",
+				candidates: [{ name: "b:first" }, { name: "b:second" }],
+			});
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [
+					{ name: "b:first", fresh_session: false, reason: "recommended path" },
+					{ name: "b:second", fresh_session: false, reason: "manual alternate" },
+				],
+				recommended_next_step: 0,
+			});
+
+			ctxBag.customComponents[0].handleInput("\x1b[B");
+			ctxBag.customComponents[0].handleInput("\r");
+			await vi.advanceTimersByTimeAsync(3000);
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:second", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+		});
+
+		it("free-text selection pastes to the editor", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: false });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				recommended_next_step: 0,
+			});
+
+			ctxBag.customComponents[0].handleInput("\r");
+			await flushMicrotasks();
+
+			expect(ctxBag.pasted).toEqual(["Please continue in prose."]);
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("free-text recommendation under /scramjet on shows selector but does not auto-dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				recommended_next_step: 0,
+			});
+			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
+
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.pasted).toEqual([]);
 		});
 
 		it("open command recommendation can dispatch a non-Scramjet slash command", async () => {
@@ -1230,8 +1323,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		});
 	});
 
-	describe("countdown lifecycle", () => {
-		async function primeCountdown(hasUI = true) {
+	describe("selector lifecycle", () => {
+		async function primeSelector(hasUI = true) {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI });
@@ -1244,39 +1337,78 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			return { bag, ctxBag, state };
 		}
 
-		it("dispatches after COUNTDOWN_SECONDS and tears down the widget", async () => {
-			const { ctxBag } = await primeCountdown();
-			expect(ctxBag.inputHandler).not.toBeNull();
+		it("auto-dispatches the recommended command after COUNTDOWN_SECONDS", async () => {
+			const { ctxBag } = await primeSelector();
+			expect(ctxBag.customComponents).toHaveLength(1);
 
 			await vi.advanceTimersByTimeAsync(3000);
+			await flushMicrotasks();
 
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" },
 			]);
-			expect(ctxBag.widgets[ctxBag.widgets.length - 1].content).toBeUndefined();
-			expect(ctxBag.inputHandler).toBeNull();
-			expect(ctxBag.inputUnsubCalls).toBe(1);
 		});
 
-		it("Escape cancels without dispatch and consumes the key", async () => {
-			const { ctxBag } = await primeCountdown();
+		it("Escape cancels without dispatch", async () => {
+			const { ctxBag } = await primeSelector();
 
 			const ESCAPE = String.fromCharCode(27);
-			expect(ctxBag.inputHandler?.(ESCAPE)).toEqual({ consume: true });
+			ctxBag.customComponents[0].handleInput(ESCAPE);
 			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.widgets[ctxBag.widgets.length - 1].content).toBeUndefined();
 		});
 
-		it("session_shutdown tears down an in-flight countdown", async () => {
-			const { bag, ctxBag } = await primeCountdown();
+		it("session_shutdown prevents an in-flight selector countdown from dispatching", async () => {
+			const { bag, ctxBag } = await primeSelector();
 
 			await bag.emit("session_shutdown", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.inputHandler).toBeNull();
+		});
+
+		it("selector creation failure warns and does not dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			ctxBag.ctx.ui.custom = () => {
+				throw new Error("selector boom");
+			};
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("next-step selector failed");
+			expect(ctxBag.notifications[0].message).toContain("selector boom");
+		});
+
+		it("unknown selector result warns and does not dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			ctxBag.ctx.ui.custom = () => Promise.resolve("bogus");
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("unknown option value");
 		});
 
 		it("session_shutdown drops a scheduled-but-unfired probe", async () => {
