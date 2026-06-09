@@ -363,10 +363,17 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// no longer needed.
 				clearProbeWatchdog();
 				const status = state.latestCommandStatus;
-				state.commandPhase = "idle";
+				// The stored report is consumed regardless of outcome; the resting
+				// phase is then set per status below (terminal idle, or resumable
+				// waiting for waiting_for_user).
 				state.latestCommandStatus = null;
-				if (!status) return;
+				if (!status) {
+					state.commandPhase = "idle";
+					return;
+				}
 				if (status.status === "completed") {
+					// Completion is terminal for the lifecycle: reset to idle, then chain.
+					state.commandPhase = "idle";
 					// Chaining a completed command needs the policy to validate the
 					// pick (or fire the forced target). If def.next vanished between
 					// the probe and this agent_end (registry rebuild/reload), there is
@@ -379,7 +386,23 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// when policy is gone so a `blocked` summary (auth failure, missing
 				// dependency) still surfaces instead of being swallowed when def.next
 				// disappeared.
+				//
+				// issue 88: waiting_for_user is a *resumable* halt — park at "waiting"
+				// (keeping activeTopLevelCommand) so a later interactive reply
+				// (history.ts) can re-arm the running→probing probe path and the
+				// command can later report completed. blocked/incomplete stay terminal
+				// (idle). Chaining still requires an explicit completed report, so an
+				// accidental resume can only re-probe — never mis-chain.
+				state.commandPhase = status.status === "waiting_for_user" ? "waiting" : "idle";
 				routeNonCompleted(status, ctx);
+				return;
+			}
+			case "waiting": {
+				// issue 88: a paused (waiting_for_user) command rests here between the
+				// probe that reported it and the user's reply. A stray agent_end while
+				// still "waiting" — a turn NOT preceded by an interactive resume, which
+				// history.ts flips waiting→running on the reply — must NOT fire a probe,
+				// or it would re-probe with no user answer behind it. Stable no-op.
 				return;
 			}
 			default:

@@ -410,6 +410,75 @@ describe("registerHistory — input event", () => {
 		expect(state.sidebarLog).toEqual([]);
 	});
 
+	// issue 88: resuming a paused (waiting) command. An interactive, non-slash
+	// reply while the active command rests at "waiting" re-arms the probe path by
+	// flipping the phase back to "running"; the resulting turn's agent_end fires
+	// the existing running→probing probe.
+	describe("resume a paused command (issue 88)", () => {
+		function waitingState() {
+			return freshState({
+				registry: registryOf(["mach12:pr-create"]),
+				activeTopLevelCommand: "mach12:pr-create",
+				commandPhase: "waiting",
+			});
+		}
+
+		it("flips waiting→running on an interactive non-slash reply", async () => {
+			const state = waitingState();
+			const { pi, emit } = recordingPi();
+			registerHistory(pi, state);
+			await emit("input", { text: "approve", source: "interactive" });
+			expect(state.commandPhase).toBe("running");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+			// A resume is not a fresh command start: no sidebar/journal entry.
+			expect(state.sidebarLog).toHaveLength(0);
+		});
+
+		it("does not resume on an extension-source non-slash reply (only interactive)", async () => {
+			// The hidden status probe sends via triggerTurn (bypassing the input
+			// pipeline), but extension-dispatched input does flow through it; gating
+			// on source === "interactive" keeps non-user input from self-resuming.
+			const state = waitingState();
+			const { pi, emit } = recordingPi();
+			registerHistory(pi, state);
+			await emit("input", { text: "approve", source: "extension" });
+			expect(state.commandPhase).toBe("waiting");
+		});
+
+		it("treats a registered slash command while waiting as a normal command start", async () => {
+			const state = waitingState();
+			const { pi, appended, emit } = recordingPi();
+			registerHistory(pi, state);
+			await emit("input", { text: "/mach12:pr-create", source: "interactive" });
+			// recordCommandStart fires: phase running, active set, journaled.
+			expect(state.commandPhase).toBe("running");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+			expect(appended).toHaveLength(1);
+		});
+
+		it("drops the waiting phase to idle when an unknown slash exits the workflow (F25)", async () => {
+			const state = waitingState();
+			const { pi, emit } = recordingPi();
+			registerHistory(pi, state);
+			await emit("input", { text: "/typo-or-removed", source: "interactive" });
+			expect(state.activeTopLevelCommand).toBeNull();
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("does nothing for an interactive non-slash reply when phase is idle", async () => {
+			const state = freshState({
+				registry: registryOf(["mach12:pr-create"]),
+				activeTopLevelCommand: "mach12:pr-create",
+				commandPhase: "idle",
+			});
+			const { pi, emit } = recordingPi();
+			registerHistory(pi, state);
+			await emit("input", { text: "just chatting", source: "interactive" });
+			expect(state.commandPhase).toBe("idle");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+		});
+	});
+
 	it("does not consume the forced flag when the dispatched name differs", async () => {
 		const state = freshState({
 			registry: registryOf(["mach10:push", "mach10:other"]),

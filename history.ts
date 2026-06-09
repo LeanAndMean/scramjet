@@ -179,6 +179,24 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("input", async (event) => {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
+			// issue 88: resume a paused interactive command. An interactive,
+			// non-slash reply while the active command rests at "waiting" (it
+			// reported waiting_for_user) re-arms the probe path: flip
+			// waiting→running so this reply runs as a normal turn whose agent_end
+			// fires the existing running→probing probe. Chaining still requires an
+			// explicit completed report, so an off-topic reply can only cause a
+			// harmless re-probe, never a chain. Gated on source === "interactive"
+			// so the hidden status probe (sent via triggerTurn, which bypasses the
+			// input pipeline) and extension-dispatched input can never self-resume.
+			if (
+				event.source === "interactive" &&
+				!event.text.startsWith("/") &&
+				state.commandPhase === "waiting" &&
+				state.activeTopLevelCommand !== null
+			) {
+				state.commandPhase = "running";
+				return;
+			}
 			// A slash command that didn't resolve to anything in the registry
 			// (typo, removed command, stale alias) is a strong signal the user
 			// has moved on from any active workflow. Clear activeTopLevelCommand
@@ -193,6 +211,10 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			if (event.text.startsWith("/") && state.activeTopLevelCommand !== null) {
 				if (!isKnownSlashCommand(event.text, pi)) {
 					state.activeTopLevelCommand = null;
+					// issue 88: exiting the workflow also drops a paused (waiting)
+					// command back to idle so the abandoned command can't be resumed
+					// by a later non-slash reply.
+					if (state.commandPhase === "waiting") state.commandPhase = "idle";
 				}
 			}
 			return;

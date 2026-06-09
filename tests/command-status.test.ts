@@ -34,7 +34,7 @@ describe("registerCommandStatusTool — registration", () => {
 });
 
 describe("registerCommandStatusTool — phase gate", () => {
-	it.each(["idle", "running", "reported"] as const)(
+	it.each(["idle", "running", "reported", "waiting"] as const)(
 		"rejects with a helpful error and no terminate when phase is %s",
 		async (phase) => {
 			const { state, execute } = toolFor(freshState({ commandPhase: phase }));

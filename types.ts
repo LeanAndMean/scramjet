@@ -18,7 +18,13 @@ export interface NextStep {
 //   running  — the command's normal answer turn is in flight
 //   probing  — the answer turn ended; Scramjet has asked for a status check
 //   reported — the agent answered the probe via scramjet_command_status
-export type CommandPhase = "idle" | "running" | "probing" | "reported";
+//   waiting  — the probe reported waiting_for_user; the command is paused for
+//              input but stays associated with its invocation. A later
+//              interactive reply re-arms the running→probing probe path so an
+//              interactive command can resume and report completed (issue 88).
+//              The only resting phase besides idle. (Stage 1 still resets it to
+//              idle on resume/branch-switch; surviving rewind is Stage 2.)
+export type CommandPhase = "idle" | "running" | "probing" | "reported" | "waiting";
 
 // A single next-step suggestion in a command-status report. This is the
 // tool-facing (snake_case) shape the agent populates in the scramjet_command_status
