@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.12.0 — Next-step selector routing
+
+Adds selector-aware next-step routing for `closed` and `open` policies (issue #92). Scramjet now presents validated next-step options with labels, rationales, and a recommendation instead of treating the first valid command as the only handoff. With `/scramjet on`, a recommended command auto-selects after the countdown unless the user chooses another option or dismisses the selector; with `/scramjet off`, the selector remains manual-only.
+
+### Added
+
+- Selector payload support in `scramjet_command_status`: `next_steps[]` entries can now be command or free-text options, include selector-visible labels/reasons, and identify a zero-based `recommended_next_step`.
+- Interactive selector routing for valid `closed` / `open` options, including manual free-text insertion for open-policy suggestions while preventing free-text from being auto-dispatched.
+- Validation coverage for selector candidates, skipped invalid entries, and invalid recommendations without falling back to another option.
+
+### Changed
+
+- README and Mach 12 command guidance now describe selector options, recommendation rationale, and manual free-text choices instead of the previous single-pick countdown behavior.
+- Auto-continuation routes completed `closed` / `open` transitions through the selector UI; `forced` handoffs remain direct and do not show the selector.
+
 ## 0.11.0 — Resumable `waiting_for_user`
 
 Lets an interactive command that paused at `waiting_for_user` resume its lifecycle when the user answers, instead of treating the pause as terminal (issue #88). A command such as `mach12:pr-create` can now draft a PR, ask for approval, and — after the user approves and the command completes — offer its declared `mach12:pr-review` next step. The pause now also survives `pi --resume` / branch switch.
