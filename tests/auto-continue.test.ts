@@ -36,6 +36,12 @@ function runningState(def: CommandDef, extra: Partial<ScramjetState> = {}): Scra
 interface CtxBag {
 	ctx: any;
 	dispatched: Array<{ input: string; options?: unknown; session: "current" | "new" }>;
+	// Dispatches attempted while the run was still streaming (isStreaming true).
+	// In production these synchronous-from-agent_end dispatches queue a stale,
+	// duplicate command body (issue 88), so a correct deferral must leave this
+	// empty. simulateTwoTurns/driveProbeTurn assert that, proving the dispatch was
+	// scheduled past the streaming window rather than fired inline.
+	dispatchedWhileStreaming: Array<{ input: string; options?: unknown; session: "current" | "new" }>;
 	newSessionCalls: unknown[];
 	notifications: { message: string; type?: string }[];
 	widgets: { key: string; content: unknown; options?: unknown }[];
@@ -46,10 +52,17 @@ interface CtxBag {
 	cancelNewSession?: boolean;
 }
 
-function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
+function fakeCtx({
+	hasUI = true,
+	isStreaming = () => false,
+}: {
+	hasUI?: boolean;
+	isStreaming?: () => boolean;
+} = {}): CtxBag {
 	const bag: CtxBag = {
 		ctx: null,
 		dispatched: [],
+		dispatchedWhileStreaming: [],
 		newSessionCalls: [],
 		notifications: [],
 		widgets: [],
@@ -59,6 +72,10 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
 	const replacedCtx = {
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
 			if (bag.rejectDispatchWith) throw bag.rejectDispatchWith;
+			if (isStreaming()) {
+				bag.dispatchedWhileStreaming.push({ input, options, session: "new" });
+				return;
+			}
 			bag.dispatched.push({ input, options, session: "new" });
 		}),
 	};
@@ -81,6 +98,10 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
 		},
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
 			if (bag.rejectDispatchWith) throw bag.rejectDispatchWith;
+			if (isStreaming()) {
+				bag.dispatchedWhileStreaming.push({ input, options, session: "current" });
+				return;
+			}
 			bag.dispatched.push({ input, options, session: "current" });
 		}),
 		newSession: vi.fn(async (options?: { withSession?: (ctx: unknown) => Promise<void> }) => {
@@ -96,7 +117,7 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
 
 function bootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } = {}) {
 	const bag = recordingPi();
-	const ctxBag = fakeCtx({ hasUI });
+	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
 	registerCommandStatusTool(bag.pi, state);
 	registerAutoContinue(bag.pi, state);
 	const statusTool = bag.tools.find((t) => t.name === "scramjet_command_status");
@@ -115,7 +136,10 @@ async function flushMicrotasks() {
 // answers it by calling scramjet_command_status, then the probe turn ends. The
 // deferral invariants are asserted here so every routing test transitively
 // proves the probe is NOT sent synchronously from inside agent_end (a sync send
-// would be dropped by the isStreaming-aware fake, failing these assertions).
+// would be dropped by the isStreaming-aware fake, failing these assertions), and
+// that the completed-transition dispatch is likewise deferred past the probe
+// turn's streaming window (a sync dispatch lands in dispatchedWhileStreaming,
+// emptying `dispatched` and failing every routing assertion — issue 88).
 async function simulateTwoTurns(
 	bag: ReturnType<typeof recordingPi>,
 	ctxBag: CtxBag,
@@ -135,7 +159,14 @@ async function simulateTwoTurns(
 	expect(bag.pi.sent).toHaveLength(1);
 
 	await report(params);
+	// The probe turn's agent_end fires while Pi still counts the run as streaming.
+	bag.pi.isStreaming = true;
 	await bag.emit("agent_end", {}, ctxBag.ctx);
+	// Nothing dispatched inline inside that streaming window — the completed
+	// transition must defer past it (issue 88).
+	expect(ctxBag.dispatchedWhileStreaming).toHaveLength(0);
+	bag.pi.isStreaming = false;
+	await vi.advanceTimersByTimeAsync(0);
 }
 
 // Like simulateTwoTurns but safe to call several times in one test (the issue 88
@@ -155,7 +186,12 @@ async function driveProbeTurn(
 	await vi.advanceTimersByTimeAsync(0);
 	expect(bag.pi.sent.length).toBe(before + 1);
 	await report(params);
+	// Reported agent_end fires mid-stream; the completed dispatch defers past it.
+	bag.pi.isStreaming = true;
 	await bag.emit("agent_end", {}, ctxBag.ctx);
+	expect(ctxBag.dispatchedWhileStreaming).toHaveLength(0);
+	bag.pi.isStreaming = false;
+	await vi.advanceTimersByTimeAsync(0);
 }
 
 describe("registerAutoContinue — two-phase command-status protocol", () => {
@@ -463,6 +499,70 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.pendingForcedDispatch).toBeNull();
 			expect(ctxBag.notifications[0].message).toContain("forced dispatch failed");
 			expect(ctxBag.notifications[0].message).toContain("boom");
+		});
+	});
+
+	// issue 88: the completed-transition dispatch must be deferred off the probe
+	// turn's agent_end. Dispatching synchronously while Pi still counts the run as
+	// streaming queues an expanded command body the just-ending run has already
+	// passed its follow-up polling point for; it lingers stale and is delivered as
+	// a duplicate on a later turn. simulateTwoTurns proves the invariant
+	// transitively across every routing test; these two assert it directly.
+	describe("deferred completed dispatch (issue 88 duplicate-dispatch)", () => {
+		const targetDef = defWithPolicy("b:target", undefined, "routed by Pi");
+
+		it("does not dispatch synchronously inside the probe agent_end and dispatches exactly once", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			// Answer turn → deferred probe fires once the run settles.
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(state.commandPhase).toBe("probing");
+
+			// Report completed, then the probe turn's agent_end fires WHILE Pi is
+			// still streaming — the exact production window the incident describes.
+			await report({ status: "completed", summary: "done" });
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			// Nothing dispatched inline in that window (not delivered, not mis-queued).
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
+			expect(state.commandPhase).toBe("idle");
+
+			// Once the run settles, the forced target dispatches exactly once.
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
+		});
+
+		it("session_shutdown drops a scheduled-but-unfired completed dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			await report({ status: "completed", summary: "done" });
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx); // schedules the dispatch timer
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			// The pending dispatch was torn down on shutdown — nothing fires.
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
 		});
 	});
 

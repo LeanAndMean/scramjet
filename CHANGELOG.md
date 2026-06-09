@@ -14,6 +14,10 @@ Lets an interactive command that paused at `waiting_for_user` resume its lifecyc
 
 - Resume safety (amends the 0.10.0 note below): the transient phases (`running` / `probing` / `reported`) are still never journaled and self-heal to `idle` on `rebuild`, but the stable `waiting` halt is now reconstructed from the journaled command-status entries. Only the phase is reconstructed, never `latestCommandStatus`. Chaining still requires an explicit `completed` report, so an accidental or off-topic resume can only re-probe — never mis-chain — preserving the issue 84 safety properties (no status calls outside a probe, no infinite probe loop, no chaining after unresolved questions or blockers).
 
+### Fixed
+
+- Duplicate-dispatch on completed transitions (`auto-continue.ts`): the completed-transition dispatch was fired synchronously from the probe turn's `agent_end`, while Pi still counts the run as streaming. Pi expanded the slash command and queued its body as a follow-up, but the agent loop had already passed its follow-up polling point for the just-ending run, so the expanded body lingered stale in the queue and was delivered as a duplicate command body (no preceding `scramjet:command-start`) on a later unrelated turn. The single `routeCompleted` call site is now scheduled on a deferred tick (`scheduleCompletedDispatch`, `setTimeout(0)`), mirroring the existing probe deferral, so the next command dispatches exactly once as a clean new turn. The deferral also covers the no-UI `closed` / `open` path that dispatches immediately rather than through the deferred countdown, and the pending dispatch is torn down on `session_shutdown`.
+
 ## 0.10.0 — Two-phase command-status protocol
 
 Replaces the single-turn, terminating `task_complete` tool with a two-phase `scramjet_command_status` protocol (issue #84): a command writes its normal user-facing answer first, then Scramjet probes for structured lifecycle status in a separate follow-up turn. This removes the failure mode where the agent poured its answer into the terminating tool's `summary` field instead of writing prose, and lays the groundwork for a future next-step choice-list UI.

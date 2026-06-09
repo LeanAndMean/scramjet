@@ -334,7 +334,16 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		expect(statusTool).toBeDefined();
 		await statusTool.execute("status-call", { status: "completed", summary: "start complete" });
 		expect(state.commandPhase).toBe("reported");
+		// The probe turn's agent_end fires while the run is still streaming; the
+		// completed forced dispatch must defer past that window (issue 88) rather
+		// than queue a stale duplicate command body. Nothing dispatches inline.
+		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctx);
+		expect(bag.dispatched).toEqual([]);
+		expect(state.commandPhase).toBe("idle");
+		// Once the run settles, the deferred dispatch fires exactly once.
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
 		expect(bag.dispatched).toEqual([{ input: "/int:next", options: { deliverAs: "followUp" } }]);
 		expect(state.pendingForcedDispatch).toBeNull();
 		expect(state.commandPhase).toBe("running"); // int:next started its own answer turn
