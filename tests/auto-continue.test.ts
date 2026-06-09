@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, NOTIFY_MAX, registerAutoContinue } from "../auto-continue.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
-import { COMMAND_START_TYPE, registerHistory } from "../history.ts";
+import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
@@ -862,6 +862,105 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(bag.pi.sent.length).toBe(sentBefore);
 			expect(ctxBag.dispatched).toEqual([]);
 			warnSpy.mockRestore();
+		});
+	});
+
+	// issue 88 Stage 2: a paused (waiting) command survives pi --resume / branch
+	// switch. registerHistory's rebuild reconstructs the phase from journaled
+	// COMMAND_STATUS_TYPE entries, so a resumed session can pick the paused command
+	// back up — and a command that already completed never resurrects.
+	describe("rewind reconstruction survives resume (issue 88 Stage 2)", () => {
+		function seededState() {
+			const def = defWithPolicy("mach12:pr-create", { mode: "open", candidates: [] });
+			// The registry is in-memory (not journaled); the phase starts idle and is
+			// reconstructed from the replayed branch on session_start.
+			const state = freshState({ enabled: true, registry: new Map([[def.name, def]]) });
+			return state;
+		}
+
+		function branch(entries: Array<{ customType: string; data: unknown }>) {
+			return {
+				sessionManager: {
+					getBranch: () => entries.map((e) => ({ type: "custom" as const, ...e })),
+				},
+			};
+		}
+
+		it("reconstructs a waiting command on resume, then an interactive reply resumes and completed chains", async () => {
+			const state = seededState();
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			registerHistory(bag.pi, state);
+
+			// Resume: branch journals [start, status(waiting)] → reconstruct "waiting".
+			await bag.emit(
+				"session_start",
+				{},
+				branch([
+					{
+						customType: COMMAND_START_TYPE,
+						data: { command: "mach12:pr-create", origin: "user", depth: 0, timestamp: 1 },
+					},
+					{
+						customType: COMMAND_STATUS_TYPE,
+						data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+					},
+				]),
+			);
+			expect(state.commandPhase).toBe("waiting");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+
+			// User answers in the resumed session → resume the command.
+			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
+			expect(state.commandPhase).toBe("running");
+
+			// Resumed turn completes and offers the review next step → chain.
+			await driveProbeTurn(bag, ctxBag, report, {
+				status: "completed",
+				summary: "PR created",
+				next_steps: [{ name: "mach12:pr-review", fresh_session: false }],
+			});
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/mach12:pr-review", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("a completed-without-chain command reconstructs to idle and does not resurrect on resume", async () => {
+			const state = seededState();
+			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
+			registerHistory(bag.pi, state);
+
+			// Resume: branch journals [start, status(waiting), status(completed)] →
+			// reconstruct "idle" (the resolving completed status wins over waiting).
+			await bag.emit(
+				"session_start",
+				{},
+				branch([
+					{
+						customType: COMMAND_START_TYPE,
+						data: { command: "mach12:pr-create", origin: "user", depth: 0, timestamp: 1 },
+					},
+					{
+						customType: COMMAND_STATUS_TYPE,
+						data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+					},
+					{ customType: COMMAND_STATUS_TYPE, data: { commandName: "mach12:pr-create", status: "completed" } },
+				]),
+			);
+			expect(state.commandPhase).toBe("idle");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+
+			// A later interactive reply must NOT resume (phase is idle, not waiting).
+			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
+			expect(state.commandPhase).toBe("idle");
+
+			// And the next turn fires no probe and dispatches nothing (no resurrection).
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(bag.pi.sent).toHaveLength(0);
+			expect(ctxBag.dispatched).toEqual([]);
 		});
 	});
 

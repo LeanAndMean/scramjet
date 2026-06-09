@@ -22,8 +22,9 @@ export interface NextStep {
 //              input but stays associated with its invocation. A later
 //              interactive reply re-arms the running→probing probe path so an
 //              interactive command can resume and report completed (issue 88).
-//              The only resting phase besides idle. (Stage 1 still resets it to
-//              idle on resume/branch-switch; surviving rewind is Stage 2.)
+//              The only resting phase besides idle. Survives rewind/resume:
+//              replayHistory reconstructs "waiting" from the journaled
+//              COMMAND_STATUS_TYPE entries (history.ts, issue 88 Stage 2).
 export type CommandPhase = "idle" | "running" | "probing" | "reported" | "waiting";
 
 // A single next-step suggestion in a command-status report. This is the

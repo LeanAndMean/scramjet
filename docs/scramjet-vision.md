@@ -206,6 +206,14 @@ encouraged but optional.
 - **No `next` declared.** Equivalent to `mode: ask` with no hint. The
   harness does not inject a next-step instruction block and does not
   auto-follow a legacy/free-form agent proposal.
+- **`waiting_for_user` is a resumable, not terminal, halt.** When a command
+  reports `status: "waiting_for_user"` (it asked the user a question or
+  needs input), the harness parks the invocation at a stable `waiting`
+  state rather than ending it. A later interactive, non-slash reply resumes
+  the same command — the harness re-probes for status, and a now-`completed`
+  report chains its declared next step under the usual policy. Chaining
+  still requires an explicit `completed` report, so an off-topic reply can
+  only trigger a harmless re-probe, never a chain (issue 88).
 
 #### 3. Command delegation (sub-command calls)
 
@@ -466,6 +474,13 @@ is universal.
   Cross-session workflow restore beyond the visible history is not a
   goal of the MVP, but is not explicitly forbidden either — if it falls
   out trivially, that's fine.
+- A command paused at `waiting_for_user` (see §2.1) is reconstructed on
+  resume: each command-status report is journaled, and replay restores the
+  stable `waiting` state when the active command's last status was
+  `waiting_for_user`, so a `pi --resume` / branch switch mid-question can
+  still be answered and the command resumed. The transient mid-turn phases
+  are deliberately not journaled, and a command that already completed
+  reconstructs to idle (never re-fired) (issue 88).
 - Command sets isolated by namespace.
 
 ### Non-goals for `scramjet`

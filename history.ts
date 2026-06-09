@@ -1,9 +1,26 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { CommandRegistry, ScramjetState, SidebarEntry } from "./types.ts";
+import type { CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
+export const COMMAND_STATUS_TYPE = "scramjet:command-status";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
+
+// The four command-status literals, as a runtime set, so replayHistory can
+// reject a malformed journal entry whose `status` is outside the union (the TS
+// cast at the read site otherwise hides this from the compiler). Sourced from
+// CommandStatusPayload["status"] via the guard below to stay in lockstep with
+// types.ts.
+const COMMAND_STATUSES: ReadonlySet<string> = new Set<CommandStatusPayload["status"]>([
+	"completed",
+	"waiting_for_user",
+	"blocked",
+	"incomplete",
+]);
+
+function isCommandStatus(value: unknown): value is CommandStatusPayload["status"] {
+	return typeof value === "string" && COMMAND_STATUSES.has(value);
+}
 
 // Pi built-ins that the F25 clear-on-unknown-slash path must NOT treat as
 // a workflow exit. Used only when pi.getCommands() is unavailable (older Pi,
@@ -102,18 +119,50 @@ export function recordCommandStart(
 	recordCommandInvocation(pi, state, name, origin, 0);
 }
 
+// Journal entry for a command-status report (issue 88). Records which command
+// reported and what status, so a rewind/resume can reconstruct the resumable
+// "waiting" lifecycle phase (see replayHistory).
+export interface CommandStatusData {
+	commandName: string;
+	status: CommandStatusPayload["status"];
+}
+
+// Journals the agent's scramjet_command_status report. Mirrors
+// recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
+// the live phase is owned by command-status.ts / auto-continue.ts; this only
+// persists the report so resume can rebuild the resting phase. ALL four statuses
+// are journaled, not just waiting_for_user — that is what lets a command which
+// waits, is answered, then completes without offering a next step reconstruct
+// to "idle" instead of resurrecting at "waiting" (the duplicate-work hazard).
+export function recordCommandStatus(
+	pi: ExtensionAPI,
+	commandName: string,
+	status: CommandStatusPayload["status"],
+): void {
+	const data: CommandStatusData = { commandName, status };
+	pi.appendEntry(COMMAND_STATUS_TYPE, data);
+}
+
 export interface ReplayResult {
 	sidebarLog: SidebarEntry[];
 	// null when no toggle entry was found on the replayed branch — caller
 	// preserves its prior value rather than resetting to the default.
 	enabled: boolean | null;
 	activeTopLevelCommand: string | null;
+	// Reconstructed resting lifecycle phase (issue 88). Only the two STABLE
+	// resting states are ever reconstructed: "waiting" when the active top-level
+	// command's last journaled status was waiting_for_user, otherwise "idle". The
+	// transient running/probing/reported phases are never journaled or restored,
+	// preserving the issue 84 "phase is not journaled" invariant for everything
+	// but the resumable halt.
+	phase: "idle" | "waiting";
 }
 
 export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	let sidebarLog: SidebarEntry[] = [];
 	let enabled: boolean | null = null;
 	let activeTopLevelCommand: string | null = null;
+	let phase: "idle" | "waiting" = "idle";
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
@@ -124,13 +173,35 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			// above otherwise hides this from the compiler. (F10)
 			if (!data || typeof data.command !== "string" || data.command === "") continue;
 			sidebarLog = appendSidebarEntry(sidebarLog, data);
-			if (data.depth === 0) activeTopLevelCommand = data.command;
+			if (data.depth === 0) {
+				activeTopLevelCommand = data.command;
+				// A fresh top-level command start has not reported a status yet, so
+				// its derived resting phase is idle until a matching status entry is
+				// seen. This reset is what makes [start(A), status(A,waiting),
+				// start(B)] reconstruct B as idle rather than inheriting A's waiting.
+				phase = "idle";
+			}
+		} else if (entry.customType === COMMAND_STATUS_TYPE) {
+			const data = entry.data as CommandStatusData | undefined;
+			// Defensive validation, symmetric to the F10 command-start filter: a
+			// malformed status entry (missing/empty commandName, status outside the
+			// four literals) is skipped so a corrupt journal can't park the lifecycle
+			// at a bogus phase.
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (!isCommandStatus(data.status)) continue;
+			// Only the active top-level command's own report moves its phase; a stale
+			// entry from a since-superseded command is ignored (the start(B) reset
+			// above already cleared the phase, but match defensively regardless).
+			if (data.commandName !== activeTopLevelCommand) continue;
+			// Last-status-wins: waiting_for_user is the sole resumable halt; every
+			// other status (completed/blocked/incomplete) is terminal → idle.
+			phase = data.status === "waiting_for_user" ? "waiting" : "idle";
 		} else if (entry.customType === ENABLED_TOGGLE_TYPE) {
 			const data = entry.data as EnabledToggleData | undefined;
 			if (data && typeof data.enabled === "boolean") enabled = data.enabled;
 		}
 	}
-	return { sidebarLog, enabled, activeTopLevelCommand };
+	return { sidebarLog, enabled, activeTopLevelCommand, phase };
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
@@ -144,13 +215,17 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		// that was never resolved because it wasn't in the registry) can't
 		// mislabel a future user-typed slash command as origin: "forced". (F18)
 		state.pendingForcedDispatch = null;
-		// Two-phase command-status protocol self-heals on resume/branch-switch
-		// (issue 84). The phase is deliberately not journaled: replaying a
-		// "probing" phase with no live probe turn behind it could mis-dispatch, so
-		// reset to "idle" (mirroring pendingForcedDispatch above). A post-resume
-		// scramjet_command_status call then hits the tool's phase guard and is
-		// rejected with a helpful error instead of firing into a dead chain.
-		state.commandPhase = "idle";
+		// Two-phase command-status protocol on resume/branch-switch. The transient
+		// phases (running/probing/reported) are deliberately not journaled: replaying
+		// a "probing" phase with no live probe turn behind it could mis-dispatch, and
+		// a stale post-resume scramjet_command_status call must hit the tool's phase
+		// guard rather than firing into a dead chain. The one exception (issue 88) is
+		// the STABLE resumable halt: replayHistory reconstructs "waiting" iff the
+		// active command's last journaled status was waiting_for_user (via
+		// COMMAND_STATUS_TYPE entries), so a paused interactive command survives
+		// rewind/resume; everything else reconstructs to "idle". latestCommandStatus
+		// is still never restored (only the phase is reconstructed, not the payload).
+		state.commandPhase = result.phase;
 		state.latestCommandStatus = null;
 		// Per design decision: leave state.enabled unchanged when the branch
 		// has no toggle entry, so the in-memory flag carries across navigation
