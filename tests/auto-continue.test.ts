@@ -217,7 +217,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const probe = bag.pi.sent[0] as { message: any; options: any };
 			expect(probe.message.customType).toBe(COMMAND_STATUS_PROBE_TYPE);
 			expect(probe.message.display).toBe(false);
-			expect(probe.message.content).toBe(buildProbeMessage(policy, def.name));
+			expect(probe.message.content).toBe(buildProbeMessage(policy, def.name, state.enabled));
 			expect(probe.options).toEqual({ triggerTurn: true });
 		});
 

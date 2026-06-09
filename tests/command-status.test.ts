@@ -9,6 +9,7 @@ type StatusParams = {
 	summary: string;
 	user_prompt?: string;
 	next_steps?: CommandStatusPayload["next_steps"];
+	recommended_next_step?: number;
 };
 
 function toolFor(state = freshState()) {
@@ -31,6 +32,20 @@ describe("registerCommandStatusTool — registration", () => {
 	it("registers no before_agent_start handler (the answer turn injects nothing about completion)", () => {
 		const { handlers } = toolFor();
 		expect(handlers.get("before_agent_start")).toBeUndefined();
+	});
+
+	it("exposes command, free-text, and recommended-index schema fields", () => {
+		const { tool } = toolFor();
+		const params = tool.parameters;
+		expect(params.properties.recommended_next_step.type).toBe("integer");
+		expect(params.properties.recommended_next_step.minimum).toBe(0);
+		expect(params.properties.recommended_next_step.description).toContain("Zero-based index");
+		const nextStepVariants = params.properties.next_steps.items.anyOf;
+		expect(nextStepVariants).toHaveLength(2);
+		expect(nextStepVariants[0].properties.type.const).toBe("command");
+		expect(nextStepVariants[0].properties.name.type).toBe("string");
+		expect(nextStepVariants[1].properties.type.const).toBe("freetext");
+		expect(nextStepVariants[1].properties.text.type).toBe("string");
 	});
 });
 
@@ -64,6 +79,7 @@ describe("registerCommandStatusTool — phase gate", () => {
 			summary: "all green",
 			user_prompt: undefined,
 			next_steps: undefined,
+			recommended_next_step: undefined,
 		});
 		expect(String(result.content[0].text)).toContain("completed");
 		// issue 88: the report is journaled so a rewind/resume can reconstruct the
@@ -91,20 +107,52 @@ describe("registerCommandStatusTool — phase gate", () => {
 		expect(pi.appended.some((e: { customType: string }) => e.customType === COMMAND_STATUS_TYPE)).toBe(false);
 	});
 
-	it("stores next_steps and renders the first as a forward pointer for completed", async () => {
+	it("stores legacy command next_steps and renders the first as a forward pointer for completed", async () => {
 		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
 		const result = await execute({
 			status: "completed",
 			summary: "stage 2 done",
 			next_steps: [{ name: "mach12:issue-implement", args: "84 3", fresh_session: true }],
+			recommended_next_step: 0,
 		});
 
 		expect(result.terminate).toBe(true);
 		expect(state.latestCommandStatus?.next_steps).toEqual([
 			{ name: "mach12:issue-implement", args: "84 3", fresh_session: true },
 		]);
+		expect(state.latestCommandStatus?.recommended_next_step).toBe(0);
 		expect(String(result.content[0].text)).toBe("→ /mach12:issue-implement 84 3");
-		expect(result.details).toMatchObject({ status: "completed", name: "mach12:issue-implement", args: "84 3" });
+		expect(result.details).toMatchObject({
+			status: "completed",
+			name: "mach12:issue-implement",
+			args: "84 3",
+			recommended_next_step: 0,
+		});
+	});
+
+	it("stores free-text next_steps without rendering a bogus command pointer", async () => {
+		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const result = await execute({
+			status: "completed",
+			summary: "needs user choice",
+			next_steps: [
+				{ type: "freetext", text: "Ask the user which branch to use", reason: "No branch was specified" },
+			],
+			recommended_next_step: 0,
+		});
+
+		expect(result.terminate).toBe(true);
+		expect(state.latestCommandStatus?.next_steps).toEqual([
+			{ type: "freetext", text: "Ask the user which branch to use", reason: "No branch was specified" },
+		]);
+		expect(String(result.content[0].text)).toBe("status: completed");
+		expect(result.details).toMatchObject({
+			status: "completed",
+			type: "freetext",
+			text: "Ask the user which branch to use",
+			recommended_next_step: 0,
+		});
+		expect(result.details.name).toBeUndefined();
 	});
 
 	it("rejects a duplicate report: the second call lands at phase 'reported' and is refused", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateNextStep, validateNextSteps } from "../commands/validator.ts";
-import type { CommandStatusNextStep } from "../types.ts";
+import type { CommandStatusCommandNextStep, CommandStatusNextStep } from "../types.ts";
 
 describe("validateNextStep — closed mode", () => {
 	const policy = {
@@ -76,7 +76,7 @@ describe("validateNextSteps — array form", () => {
 		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
 	};
 
-	const entry = (over: Partial<CommandStatusNextStep>): CommandStatusNextStep => ({
+	const entry = (over: Partial<CommandStatusCommandNextStep>): CommandStatusNextStep => ({
 		name: "mach12:pr-review-fix",
 		fresh_session: false,
 		...over,

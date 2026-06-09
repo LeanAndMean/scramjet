@@ -1,4 +1,8 @@
-import type { CommandStatusNextStep, NextStep, NextStepPolicy } from "../types.ts";
+import type { CommandStatusCommandNextStep, CommandStatusNextStep, NextStep, NextStepPolicy } from "../types.ts";
+
+function isCommandStep(step: CommandStatusNextStep): step is CommandStatusCommandNextStep {
+	return step.type === undefined || step.type === "command";
+}
 
 // Discriminated union: when valid is false a reason is required, so consumers
 // can read `result.reason` after narrowing without optional-chaining.
@@ -51,6 +55,11 @@ export function validateNextSteps(
 	const skipped: string[] = [];
 	let firstReason: string | undefined;
 	for (const step of steps ?? []) {
+		if (!isCommandStep(step)) {
+			skipped.push(step.label ?? step.text);
+			if (firstReason === undefined) firstReason = "free-text next steps are not dispatchable yet";
+			continue;
+		}
 		const result = validateNextStep(step.name, policy);
 		if (result.valid) {
 			return {

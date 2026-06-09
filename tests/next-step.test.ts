@@ -27,6 +27,10 @@ describe("buildNextStepBlock — forced mode", () => {
 		expect(block).toContain("forced");
 		expect(block).toContain("pass args");
 		expect(block).toContain("its name must be `mach12:pr-review-assessment`");
+		expect(block).not.toContain("selector");
+		expect(block).not.toContain("recommended_next_step");
+		expect(block).not.toContain("freetext");
+		expect(block).not.toContain("reason");
 	});
 });
 
@@ -47,8 +51,25 @@ describe("buildNextStepBlock — closed mode", () => {
 		expect(block).toContain("mach12:pr-pre-merge");
 		expect(block).toContain("Pick when ready to merge");
 		expect(block).toContain("closed");
+		expect(block).toContain("[0] mach12:pr-review-fix");
+		expect(block).toContain("[1] mach12:pr-pre-merge");
 		expect(block).toContain("entry's args");
+		expect(block).toContain("reason");
+		expect(block).toContain("recommended_next_step");
+		expect(block).toContain("zero-based index");
 		expect(block).toContain("stop the chain");
+	});
+
+	it("includes only the current /scramjet on or off recommendation rule", () => {
+		const on = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
+		expect(on).toContain("With `/scramjet on`");
+		expect(on).toContain("recommended entry is a command");
+		expect(on).not.toContain("With `/scramjet off`");
+
+		const off = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
+		expect(off).toContain("With `/scramjet off`");
+		expect(off).toContain("Scramjet will not auto-dispatch");
+		expect(off).not.toContain("With `/scramjet on`");
 	});
 
 	it("renders candidates without hints", () => {
@@ -68,14 +89,30 @@ describe("buildNextStepBlock — open mode", () => {
 			"mach12:issue-plan",
 		);
 		expect(block).toContain("mach12:issue-review");
+		expect(block).toContain("[0] mach12:issue-review");
 		expect(block).toContain("any slash command");
-		expect(block).toContain("entry's args");
+		expect(block).toContain("type=`freetext`");
+		expect(block).toContain("reason");
+		expect(block).toContain("recommended_next_step");
+		expect(block).toContain("command entry's args");
 		expect(block).toContain("stop the chain");
+	});
+
+	it("includes only the current /scramjet on or off open-policy recommendation rule", () => {
+		const on = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
+		expect(on).toContain("With `/scramjet on`");
+		expect(on).toContain("do not set it for a free-text entry");
+		expect(on).not.toContain("With `/scramjet off`");
+
+		const off = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
+		expect(off).toContain("With `/scramjet off`");
+		expect(off).toContain("Scramjet will not auto-dispatch");
+		expect(off).not.toContain("With `/scramjet on`");
 	});
 
 	it("renders empty candidates as open/free-form rather than a terminus", () => {
 		const block = buildNextStepBlock({ mode: "open", candidates: [] }, "mach12:pr-merge");
-		expect(block).toContain("No suggested candidates");
+		expect(block).toContain("No suggested command candidates");
 		expect(block).toContain("any slash command");
 		expect(block).toContain("stop the chain");
 	});
@@ -120,7 +157,10 @@ describe("buildNextStepBlock — ask mode", () => {
 		);
 		expect(block).toContain("ask");
 		expect(block).toContain("pause");
+		expect(block).toContain("Do not include next_steps");
 		expect(block).toContain("Decide whether the plan is ready");
+		expect(block).not.toContain("recommended_next_step");
+		expect(block).not.toContain("selector");
 	});
 
 	it("omits hint content when hint is absent", () => {
@@ -204,6 +244,9 @@ describe("buildProbeMessage", () => {
 		expect(probe).toContain("<scramjet-next-step>");
 		expect(probe).toContain("b:target");
 		expect(probe).toContain("forced");
+		expect(probe).not.toContain("recommended_next_step");
+		expect(probe).not.toContain("freetext");
+		expect(probe).not.toContain("reason");
 	});
 
 	it("wraps the closed policy block and lists candidates", () => {

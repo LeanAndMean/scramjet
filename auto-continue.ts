@@ -42,7 +42,13 @@ import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
 import { validateNextSteps } from "./commands/validator.ts";
 import { buildProbeMessage } from "./next-step.ts";
 import { buildNextStepWire, dispatchNextStep } from "./next-step-dispatch.ts";
-import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
+import type {
+	CommandStatusCommandNextStep,
+	CommandStatusNextStep,
+	NextStep,
+	NextStepPolicy,
+	ScramjetState,
+} from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
 const WIDGET_KEY = "scramjet-next";
@@ -58,7 +64,11 @@ const WIDGET_KEY = "scramjet-next";
 // which would otherwise drop a legitimate chain — worse than the stall it fixes.
 const PROBE_WATCHDOG_MS = 30_000;
 
-function toNextStep(step: CommandStatusNextStep): NextStep {
+function isCommandNextStep(step: CommandStatusNextStep | undefined): step is CommandStatusCommandNextStep {
+	return step !== undefined && (step.type === undefined || step.type === "command");
+}
+
+function toNextStep(step: CommandStatusCommandNextStep): NextStep {
 	return { name: step.name, args: step.args, freshSession: step.fresh_session, reason: step.reason };
 }
 
@@ -208,7 +218,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	function scheduleProbe(policy: NextStepPolicy, commandId: string) {
 		if (probeTimer) clearTimeout(probeTimer);
 		clearProbeWatchdog();
-		const content = buildProbeMessage(policy, commandId);
+		const content = buildProbeMessage(policy, commandId, state.enabled);
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
 			// Error boundary, symmetric to the countdown setInterval guard above.
@@ -257,7 +267,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			// Forced fires regardless of state.enabled: no decision is delegated to
 			// the agent or user; the status report is only the safety gate that
 			// distinguishes completion from clarification/error.
-			const handoff = status.next_steps?.[0] ? toNextStep(status.next_steps[0]) : undefined;
+			const handoff = isCommandNextStep(status.next_steps?.[0]) ? toNextStep(status.next_steps[0]) : undefined;
 			dispatchForced(policy.target, handoff, ctx);
 			return;
 		}
