@@ -1370,6 +1370,127 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 		});
 
+		it("logs stale non-abort selector failures", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector("late selector boom");
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("stale next-step selector failed");
+			expect(warnSpy.mock.calls[0][0]).toContain("late selector boom");
+			warnSpy.mockRestore();
+		});
+
+		it("keeps stale abort selector failures quiet", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector(Object.assign(new Error("aborted"), { name: "AbortError" }));
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).not.toHaveBeenCalled();
+			warnSpy.mockRestore();
+		});
+
+		it("logs non-stringifiable stale selector failures", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector({
+				[Symbol.toPrimitive]() {
+					throw new Error("toPrimitive boom");
+				},
+			});
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("<non-stringifiable rejection>");
+			warnSpy.mockRestore();
+		});
+
+		it("logs stale selector Error objects with throwing message getters", async () => {
+			class ThrowingMessageError extends Error {
+				override get message(): string {
+					throw new Error("message boom");
+				}
+			}
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+			let rejectSelector: (err: unknown) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((_resolve, reject) => {
+					rejectSelector = reject;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			rejectSelector(new ThrowingMessageError());
+			await vi.advanceTimersByTimeAsync(0);
+			await flushMicrotasks();
+
+			expect(ctxBag.notifications).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledTimes(1);
+			expect(warnSpy.mock.calls[0][0]).toContain("<non-stringifiable rejection>");
+			warnSpy.mockRestore();
+		});
+
 		it("selector creation failure warns and does not dispatch", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });

@@ -73,6 +73,19 @@ function toNextStep(step: CommandStatusCommandNextStep): NextStep {
 	return { name: step.name, args: step.args, freshSession: step.fresh_session, reason: step.reason };
 }
 
+function selectorErrorMessage(err: unknown): string {
+	try {
+		return err instanceof Error ? err.message : String(err);
+	} catch {
+		return "<non-stringifiable rejection>";
+	}
+}
+
+function isExpectedSelectorCancellation(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.name === "AbortError" || err.name === "CanceledError" || err.name === "CancelledError";
+}
+
 // S2: model-supplied summary/prompt text is interpolated into ctx.ui.notify,
 // which renders on a single line. Strip control chars (newlines included),
 // collapse internal whitespace, and cap the length so a multi-paragraph or
@@ -242,10 +255,17 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				if (selected) runSelectedOption(selected, ctx);
 			})
 			.catch((err) => {
-				if (selectorId !== activeSelectorId) return;
+				if (selectorId !== activeSelectorId) {
+					if (!isExpectedSelectorCancellation(err)) {
+						console.warn(
+							`scramjet: stale next-step selector failed (${selectorErrorMessage(err)}); failure ignored`,
+						);
+					}
+					return;
+				}
 				activeSelectorAbort = null;
 				ctx.ui.notify(
-					`scramjet: next-step selector failed (${(err as Error).message}); auto-continue paused`,
+					`scramjet: next-step selector failed (${selectorErrorMessage(err)}); auto-continue paused`,
 					"warning",
 				);
 			});
