@@ -197,7 +197,10 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				recordCommandStatus(pi, state.activeTopLevelCommand, params.status);
 			}
 
-			const next = params.next_steps?.[0];
+			const next =
+				params.recommended_next_step === undefined
+					? params.next_steps?.[0]
+					: params.next_steps?.[params.recommended_next_step];
 			// S4: mirror buildNextStepWire — trimStart the args so the forward
 			// pointer rendered here can't show a double space either.
 			const nextArgs = isCommandNextStep(next) ? next.args?.trimStart() : undefined;

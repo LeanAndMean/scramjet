@@ -255,8 +255,23 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}, 0);
 	}
 
+	function skippedSummary(skipped: ReturnType<typeof validateNextSteps>["skipped"]): string {
+		return cleanForNotify(
+			skipped.map((step) => `${cleanForNotify(step.label)} (${cleanForNotify(step.reason)})`).join(", "),
+		);
+	}
+
+	function optionSummary(option: ReturnType<typeof validateNextSteps>["valid"][number]): string {
+		if (option.type === "command") return buildNextStepWire(option.step);
+		return cleanForNotify(option.label ?? option.text);
+	}
+
+	function optionsSummary(options: ReturnType<typeof validateNextSteps>["valid"]): string {
+		return cleanForNotify(options.map(optionSummary).join(", "));
+	}
+
 	// Route a completed-status report through the command's policy. Mirrors the
-	// pre-84 dispatch logic, now reading the validated first entry of the
+	// pre-84 dispatch logic, now reading the validated recommendation from the
 	// next_steps[] array rather than a single next_step.
 	function routeCompleted(
 		policy: NextStepPolicy,
@@ -282,29 +297,50 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		// closed / open: dispatch the first entry valid for the policy.
-		const result = validateNextSteps(status.next_steps, policy);
-		if (!result.valid) {
+		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step);
+		if (!result.valid.length) {
 			if (result.reason) ctx.ui.notify(`scramjet: ${result.reason}`, "warning");
 			return;
 		}
 
-		// S1: first-valid-wins is the designed semantics, but a candidate skipped
-		// before the valid one is an out-of-policy pick (closed) or a blacklisted
-		// one (open) — surface it as info so a possible authoring/model error is
-		// visible rather than silently swallowed.
 		if (result.skipped.length) {
-			ctx.ui.notify(
-				`scramjet: skipped out-of-policy next step(s) before dispatching ${result.valid.name}: ${result.skipped.join(", ")}`,
-				"info",
-			);
+			ctx.ui.notify(`scramjet: skipped invalid next step(s): ${skippedSummary(result.skipped)}`, "info");
 		}
 
+		if (!result.recommended) {
+			if (result.recommendedReason) {
+				const level =
+					state.enabled && result.valid.every((option) => option.type === "freetext") ? "info" : "warning";
+				ctx.ui.notify(
+					`scramjet: ${result.recommendedReason}; valid option(s): ${optionsSummary(result.valid)}`,
+					level,
+				);
+			}
+			return;
+		}
+
+		if (result.recommended.type !== "command") {
+			const text = optionSummary(result.recommended);
+			if (state.enabled) {
+				ctx.ui.notify(
+					`scramjet: recommended next step is free-text (${text}); automatic dispatch skipped`,
+					"warning",
+				);
+			} else {
+				ctx.ui.notify(
+					`scramjet: next would be ${text}; /scramjet on only auto-dispatches command next steps`,
+					"info",
+				);
+			}
+			return;
+		}
+
+		const step = result.recommended.step;
 		if (state.enabled) {
-			startCountdown(result.valid, ctx);
+			startCountdown(step, ctx);
 		} else {
-			const wire = wireFor(result.valid);
-			const fresh = result.valid.freshSession ? " (fresh session)" : "";
+			const wire = wireFor(step);
+			const fresh = step.freshSession ? " (fresh session)" : "";
 			ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
 		}
 	}

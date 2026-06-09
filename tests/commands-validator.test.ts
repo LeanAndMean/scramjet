@@ -70,7 +70,7 @@ describe("validateNextStep — ask mode", () => {
 	});
 });
 
-describe("validateNextSteps — array form", () => {
+describe("validateNextSteps — selector-visible array form", () => {
 	const closed = {
 		mode: "closed" as const,
 		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
@@ -79,71 +79,173 @@ describe("validateNextSteps — array form", () => {
 	const entry = (over: Partial<CommandStatusCommandNextStep>): CommandStatusNextStep => ({
 		name: "mach12:pr-review-fix",
 		fresh_session: false,
+		reason: "fits this workflow",
 		...over,
 	});
 
-	it("returns null and no skips for an empty array", () => {
-		expect(validateNextSteps([], closed)).toEqual({ valid: null, skipped: [] });
+	it("returns empty validation for an empty array", () => {
+		expect(validateNextSteps([], closed)).toEqual({
+			valid: [],
+			skipped: [],
+			recommended: null,
+			recommendedReason: undefined,
+			reason: undefined,
+		});
 	});
 
-	it("returns null and no skips for undefined", () => {
-		expect(validateNextSteps(undefined, closed)).toEqual({ valid: null, skipped: [] });
+	it("returns empty validation for undefined", () => {
+		expect(validateNextSteps(undefined, closed)).toEqual({
+			valid: [],
+			skipped: [],
+			recommended: null,
+			recommendedReason: undefined,
+			reason: undefined,
+		});
 	});
 
-	it("returns the first entry when it is valid and converts to a NextStep", () => {
+	it("accepts closed candidates and selects the recommendation by zero-based original index", () => {
 		const result = validateNextSteps(
-			[entry({ name: "mach12:pr-review-fix", args: "55", fresh_session: true, reason: "go" })],
+			[
+				entry({ name: "mach12:pr-review-fix", args: "55", fresh_session: true, reason: "fix review findings" }),
+				entry({ name: "mach12:pr-pre-merge", fresh_session: false, reason: "review is complete" }),
+			],
 			closed,
+			1,
 		);
-		expect(result.valid).toEqual({ name: "mach12:pr-review-fix", args: "55", freshSession: true, reason: "go" });
+
+		expect(result.valid).toHaveLength(2);
+		expect(result.recommended).toEqual({
+			type: "command",
+			index: 1,
+			label: undefined,
+			reason: "review is complete",
+			step: {
+				name: "mach12:pr-pre-merge",
+				args: undefined,
+				freshSession: false,
+				reason: "review is complete",
+			},
+		});
 		expect(result.skipped).toEqual([]);
 	});
 
-	it("skips invalid entries and returns the first valid one, recording the skipped names", () => {
+	it("treats missing type as a legacy command entry", () => {
+		const result = validateNextSteps([entry({ type: undefined, name: "mach12:pr-review-fix" })], closed, 0);
+		expect(result.recommended?.type).toBe("command");
+		expect(result.recommended).toMatchObject({ index: 0, step: { name: "mach12:pr-review-fix" } });
+	});
+
+	it("records skipped invalid entries with reasons without changing recommendation indexes", () => {
 		const result = validateNextSteps(
 			[entry({ name: "z:not-in-list" }), entry({ name: "mach12:pr-pre-merge", fresh_session: false })],
 			closed,
+			1,
 		);
-		expect(result.valid).toEqual({
-			name: "mach12:pr-pre-merge",
-			args: undefined,
-			freshSession: false,
-			reason: undefined,
-		});
-		expect(result.skipped).toEqual(["z:not-in-list"]);
+
+		expect(result.valid.map((option) => option.index)).toEqual([1]);
+		expect(result.recommended).toMatchObject({ type: "command", index: 1, step: { name: "mach12:pr-pre-merge" } });
+		expect(result.skipped).toEqual([
+			{
+				index: 0,
+				label: "z:not-in-list",
+				reason: expect.stringContaining("not in closed candidates"),
+			},
+		]);
 	});
 
-	it("returns null with all names skipped and a reason when none are valid", () => {
-		const result = validateNextSteps([entry({ name: "z:one" }), entry({ name: "z:two" })], closed);
-		expect(result.valid).toBeNull();
-		expect(result.skipped).toEqual(["z:one", "z:two"]);
+	it("rejects every invalid entry and keeps the first rejection reason", () => {
+		const result = validateNextSteps([entry({ name: "z:one" }), entry({ name: "z:two" })], closed, 0);
+		expect(result.valid).toEqual([]);
+		expect(result.skipped.map((step) => step.label)).toEqual(["z:one", "z:two"]);
 		expect(result.reason).toContain("z:one");
+		expect(result.recommendedReason).toContain("recommended_next_step 0 points to invalid next step z:one");
 	});
 
-	it("under open mode, skips a blacklisted first entry and accepts the next, recording the skip", () => {
+	it("accepts open command and free-text candidates", () => {
+		const open = { mode: "open" as const, candidates: [{ name: "mach12:issue-review" }] };
+		const result = validateNextSteps(
+			[
+				entry({ name: "infra:rotate-key", reason: "outside Scramjet but useful" }),
+				{
+					type: "freetext",
+					text: "Please summarize the issue.",
+					label: "Ask for summary",
+					reason: "needs more context",
+				},
+			],
+			open,
+			1,
+		);
+
+		expect(result.valid).toHaveLength(2);
+		expect(result.recommended).toEqual({
+			type: "freetext",
+			index: 1,
+			label: "Ask for summary",
+			reason: "needs more context",
+			text: "Please summarize the issue.",
+		});
+	});
+
+	it("rejects blacklisted open command candidates", () => {
 		const open = {
 			mode: "open" as const,
 			candidates: [{ name: "mach12:issue-review" }],
 			blacklist: ["mach12:pr-merge"],
 		};
-		const result = validateNextSteps(
-			[entry({ name: "mach12:pr-merge" }), entry({ name: "infra:rotate-key", fresh_session: false })],
-			open,
-		);
-		expect(result.valid).toEqual({
-			name: "infra:rotate-key",
-			args: undefined,
-			freshSession: false,
-			reason: undefined,
+		const result = validateNextSteps([entry({ name: "mach12:pr-merge" })], open, 0);
+		expect(result.valid).toEqual([]);
+		expect(result.skipped[0]).toMatchObject({
+			label: "mach12:pr-merge",
+			reason: expect.stringContaining("blacklisted"),
 		});
-		expect(result.skipped).toEqual(["mach12:pr-merge"]);
+	});
+
+	it("rejects free-text outside open policies", () => {
+		const result = validateNextSteps(
+			[{ type: "freetext", text: "Continue in prose", reason: "not a command" }],
+			closed,
+			0,
+		);
+		expect(result.valid).toEqual([]);
+		expect(result.skipped[0].reason).toContain("open policies");
+	});
+
+	it("rejects missing reason for selector-visible command entries", () => {
+		const result = validateNextSteps([entry({ reason: undefined })], closed, 0);
+		expect(result.valid).toEqual([]);
+		expect(result.skipped[0].reason).toContain("must include reason");
+	});
+
+	it("rejects missing reason for selector-visible free-text entries", () => {
+		const open = { mode: "open" as const, candidates: [] };
+		const result = validateNextSteps([{ type: "freetext", text: "Continue in prose" }], open, 0);
+		expect(result.valid).toEqual([]);
+		expect(result.skipped[0].reason).toContain("must include reason");
+	});
+
+	it("does not require reason for forced handoffs because forced validation stays outside selector validation", () => {
+		expect(validateNextStep("mach12:pr-review-fix", closed)).toEqual({ valid: true });
+	});
+
+	it("does not select a recommendation when the index is missing", () => {
+		const result = validateNextSteps([entry({ name: "mach12:pr-review-fix" })], closed);
+		expect(result.recommended).toBeNull();
+		expect(result.recommendedReason).toContain("missing recommended_next_step");
+	});
+
+	it("does not fall back to the first valid option when the recommended index is invalid", () => {
+		const result = validateNextSteps([entry({ name: "mach12:pr-review-fix" })], closed, 2);
+		expect(result.valid).toHaveLength(1);
+		expect(result.recommended).toBeNull();
+		expect(result.recommendedReason).toContain("outside next_steps");
 	});
 
 	it("rejects every entry under an ask policy", () => {
 		const ask = { mode: "ask" as const, hint: "User picks" };
-		const result = validateNextSteps([entry({ name: "x:y" }), entry({ name: "x:z" })], ask);
-		expect(result.valid).toBeNull();
-		expect(result.skipped).toEqual(["x:y", "x:z"]);
+		const result = validateNextSteps([entry({ name: "x:y" }), entry({ name: "x:z" })], ask, 0);
+		expect(result.valid).toEqual([]);
+		expect(result.skipped.map((step) => step.label)).toEqual(["x:y", "x:z"]);
 		expect(result.reason).toContain("ask");
 	});
 });

@@ -130,6 +130,27 @@ describe("registerCommandStatusTool — phase gate", () => {
 		});
 	});
 
+	it("renders the recommended command pointer when it is not the first next_step", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const result = await execute({
+			status: "completed",
+			summary: "stage done",
+			next_steps: [
+				{ name: "mach12:issue-review", fresh_session: false },
+				{ name: "mach12:issue-implement", args: "92 3", fresh_session: true },
+			],
+			recommended_next_step: 1,
+		});
+
+		expect(String(result.content[0].text)).toBe("→ /mach12:issue-implement 92 3");
+		expect(result.details).toMatchObject({
+			status: "completed",
+			name: "mach12:issue-implement",
+			args: "92 3",
+			recommended_next_step: 1,
+		});
+	});
+
 	it("stores free-text next_steps without rendering a bogus command pointer", async () => {
 		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
 		const result = await execute({
