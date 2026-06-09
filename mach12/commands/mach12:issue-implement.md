@@ -159,9 +159,9 @@ After implementation is complete, commit, push, and post a progress comment on t
 
 Pass the stage identifier and a brief summary of what shipped as `$ARGUMENTS` so the commit message and progress comment can speak specifically to the work.
 
-When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and choose a `next_steps` entry using this order:
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and choose selector-visible `next_steps` entries using this order:
 
-1. **Continue staged implementation first.** If this session landed Stage N and the plan lists Stage N+1, set the entry's `name` to `mach12:issue-implement`, `args` to `<issue-number> <next-stage>`, and `fresh_session` to `true`.
-   - Example: `name: mach12:issue-implement`, `args: 55 2`
-2. **Create the PR when all planned stages are landed.** If no open PR exists for this branch, set the entry's `name` to `mach12:pr-create`, `args` to `<issue-number>`, and choose whether a fresh session is useful for the PR draft.
-3. **If the next stage is unclear, stop.** Leave `next_steps` empty rather than guessing. If implementation hit a blocker or needs user input, report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`.
+1. **Continue staged implementation first.** If this session landed Stage N and the plan lists Stage N+1, include an entry with `name`: `mach12:issue-implement`, `args`: `<issue-number> <next-stage>`, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned stage remains.
+   - Example: `name: mach12:issue-implement`, `args: 55 2`, `reason`: `Stage 2 is the next planned implementation stage.`
+2. **Create the PR when all planned stages are landed.** If no open PR exists for this branch, include an entry with `name`: `mach12:pr-create`, `args`: `<issue-number>`, a chosen `fresh_session` value, and `reason`: a brief explanation that implementation is complete and ready for PR creation.
+3. **If the next stage is unclear, stop.** Leave `next_steps` empty rather than guessing. When you include any `next_steps`, set `recommended_next_step` to the zero-based index of the entry you recommend Scramjet route to automatically. If implementation hit a blocker or needs user input, report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`.
