@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.11.0 — Resumable `waiting_for_user`
+
+Lets an interactive command that paused at `waiting_for_user` resume its lifecycle when the user answers, instead of treating the pause as terminal (issue #88). A command such as `mach12:pr-create` can now draft a PR, ask for approval, and — after the user approves and the command completes — offer its declared `mach12:pr-review` next step. The pause now also survives `pi --resume` / branch switch.
+
+### Added
+
+- A stable `waiting` lifecycle phase (`types.ts`): the only resting phase besides `idle`. `auto-continue.ts` parks a `waiting_for_user` report at `waiting` (keeping `activeTopLevelCommand`) instead of resetting to `idle`; `completed` / `blocked` / `incomplete` stay terminal.
+- Forward resume (`history.ts`): an interactive, non-slash reply while a command rests at `waiting` flips the phase back to `running`, re-arming the existing `running → probing` probe so the resumed turn can later report `completed` and chain. A stray `agent_end` while `waiting` is a defensive no-op; exiting the workflow via an unknown slash drops `waiting → idle`.
+- Rewind/resume reconstruction (`history.ts` + `command-status.ts`): each `scramjet_command_status` report is journaled as a `COMMAND_STATUS_TYPE` (`scramjet:command-status`) entry via `recordCommandStatus`; `replayHistory` reconstructs `waiting` on `session_start` / `session_tree` when the active command's last journaled status was `waiting_for_user`. Journaling *all* statuses (not just `waiting_for_user`) makes a command that waited, was answered, then completed without chaining reconstruct to `idle` — never resurrected.
+
+### Changed
+
+- Resume safety (amends the 0.10.0 note below): the transient phases (`running` / `probing` / `reported`) are still never journaled and self-heal to `idle` on `rebuild`, but the stable `waiting` halt is now reconstructed from the journaled command-status entries. Only the phase is reconstructed, never `latestCommandStatus`. Chaining still requires an explicit `completed` report, so an accidental or off-topic resume can only re-probe — never mis-chain — preserving the issue 84 safety properties (no status calls outside a probe, no infinite probe loop, no chaining after unresolved questions or blockers).
+
+### Fixed
+
+- Duplicate-dispatch on completed transitions (`auto-continue.ts`): the completed-transition dispatch was fired synchronously from the probe turn's `agent_end`, while Pi still counts the run as streaming. Pi expanded the slash command and queued its body as a follow-up, but the agent loop had already passed its follow-up polling point for the just-ending run, so the expanded body lingered stale in the queue and was delivered as a duplicate command body (no preceding `scramjet:command-start`) on a later unrelated turn. The single `routeCompleted` call site is now scheduled on a deferred tick (`scheduleCompletedDispatch`, `setTimeout(0)`), mirroring the existing probe deferral, so the next command dispatches exactly once as a clean new turn. The deferral also covers the no-UI `closed` / `open` path that dispatches immediately rather than through the deferred countdown, and the pending dispatch is torn down on `session_shutdown`.
+
 ## 0.10.0 — Two-phase command-status protocol
 
 Replaces the single-turn, terminating `task_complete` tool with a two-phase `scramjet_command_status` protocol (issue #84): a command writes its normal user-facing answer first, then Scramjet probes for structured lifecycle status in a separate follow-up turn. This removes the failure mode where the agent poured its answer into the terminating tool's `summary` field instead of writing prose, and lays the groundwork for a future next-step choice-list UI.
@@ -15,7 +33,7 @@ Replaces the single-turn, terminating `task_complete` tool with a two-phase `scr
 
 - The command's answer turn no longer injects any completion/next-step instruction — the running turn is just the answer. After it goes idle, `auto-continue.ts` defers (after the run settles — `isStreaming` clears once `agent.prompt()` resolves — so `triggerTurn` reaches a fresh `agent.prompt()`) a TUI-hidden status-check message via `pi.sendMessage({ display: false }, { triggerTurn: true })` to start the probe turn, then routes on the probe turn's `agent_end`. Forced/closed/open validation and dispatch (including `forced` firing under `/scramjet off` and headless auto-follow) are preserved.
 - The `next_steps[]` array replaces the singular `next_step`; auto-continue dispatches the first policy-valid entry. The agent-facing next-step strings and the bundled Mach 12 command prose now name `scramjet_command_status` / `next_steps`.
-- Resume safety: `commandPhase` self-heals to `idle` on `rebuild` (resume / branch switch), so a stale post-resume `scramjet_command_status` call hits the phase guard instead of mis-dispatching. The phase is intentionally not journaled.
+- Resume safety: `commandPhase` self-heals to `idle` on `rebuild` (resume / branch switch), so a stale post-resume `scramjet_command_status` call hits the phase guard instead of mis-dispatching. The phase is intentionally not journaled. (Amended in 0.11.0: the stable `waiting` halt *is* reconstructed on resume from journaled command-status entries; only the transient phases remain un-journaled.)
 - `task-complete.ts` renamed to `command-status.ts`, with the `tsconfig.build.json` include entry and the `index.ts` registration (`registerTaskCompleteTool` → `registerCommandStatusTool`) updated to match.
 
 ### Removed

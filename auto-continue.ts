@@ -18,6 +18,17 @@
  * This mirrors why the countdown (setInterval) dispatch works — it fires once
  * the run is idle.
  *
+ * The completed-transition dispatch MUST be deferred for the same reason (issue
+ * 88 duplicate-dispatch incident). Calling dispatchUserInput synchronously from
+ * the probe turn's agent_end runs it while Pi still counts the run as streaming,
+ * so Pi expands the slash command and queues the body as a follow-up — but the
+ * agent loop has already passed its follow-up polling point for the just-ending
+ * run, so the expanded body lingers stale in the queue and is delivered on a
+ * later unrelated turn (a duplicate command body with no command-start). The
+ * single routeCompleted call site is therefore scheduled on a deferred tick
+ * (scheduleCompletedDispatch), which also covers the no-UI closed/open path that
+ * dispatches immediately rather than through the deferred countdown.
+ *
  * For completed commands: `forced` fires the declared target unconditionally
  * after completion; closed/open defer to /scramjet on|off and show a 3s
  * countdown widget (cancellable by Escape or any keypress) before dispatch.
@@ -75,11 +86,19 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let unsubInput: (() => void) | null = null;
 	let probeTimer: ReturnType<typeof setTimeout> | null = null;
 	let probeWatchdog: ReturnType<typeof setTimeout> | null = null;
+	let dispatchTimer: ReturnType<typeof setTimeout> | null = null;
 
 	function clearProbeWatchdog() {
 		if (probeWatchdog) {
 			clearTimeout(probeWatchdog);
 			probeWatchdog = null;
+		}
+	}
+
+	function clearDispatchTimer() {
+		if (dispatchTimer) {
+			clearTimeout(dispatchTimer);
+			dispatchTimer = null;
 		}
 	}
 
@@ -280,6 +299,36 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
+	// Dispatch a completed transition on a deferred tick, mirroring scheduleProbe.
+	// routeCompleted's forced path (and its no-UI closed/open path) call
+	// dispatchUserInput; running that synchronously from the probe turn's agent_end
+	// queues a stale, duplicate command body (see the file header). A setTimeout(0)
+	// lands after the run settles so the next command dispatches once, as a clean
+	// new turn. ctx is captured and remains valid across the deferral — the same
+	// property the countdown's setInterval ticks already rely on.
+	function scheduleCompletedDispatch(
+		policy: NextStepPolicy,
+		status: NonNullable<ScramjetState["latestCommandStatus"]>,
+		ctx: ExtensionContext,
+	) {
+		if (dispatchTimer) clearTimeout(dispatchTimer);
+		dispatchTimer = setTimeout(() => {
+			dispatchTimer = null;
+			// Error boundary, symmetric to scheduleProbe's: a throw on this deferred
+			// tick would otherwise become a Node uncaughtException. ctx is in scope
+			// here (unlike scheduleProbe), so surface the failure through the UI and
+			// pause the chain cleanly.
+			try {
+				routeCompleted(policy, status, ctx);
+			} catch (err) {
+				ctx.ui.notify(
+					`scramjet: next-step dispatch failed (${(err as Error).message}); auto-continue paused`,
+					"warning",
+				);
+			}
+		}, 0);
+	}
+
 	// A non-completed report never chains; the differentiation is only in what
 	// gets surfaced. `blocked` merits a warning (the command hit an error,
 	// missing dependency, or authorization issue the user should see). For
@@ -363,15 +412,25 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// no longer needed.
 				clearProbeWatchdog();
 				const status = state.latestCommandStatus;
-				state.commandPhase = "idle";
+				// The stored report is consumed regardless of outcome; the resting
+				// phase is then set per status below (terminal idle, or resumable
+				// waiting for waiting_for_user).
 				state.latestCommandStatus = null;
-				if (!status) return;
+				if (!status) {
+					state.commandPhase = "idle";
+					return;
+				}
 				if (status.status === "completed") {
+					// Completion is terminal for the lifecycle: reset to idle, then chain.
+					state.commandPhase = "idle";
 					// Chaining a completed command needs the policy to validate the
 					// pick (or fire the forced target). If def.next vanished between
 					// the probe and this agent_end (registry rebuild/reload), there is
-					// nothing to route a completed status to — pause quietly.
-					if (policy) routeCompleted(policy, status, ctx);
+					// nothing to route a completed status to — pause quietly. The
+					// dispatch is deferred off this agent_end tick (see the file header):
+					// dispatching synchronously while the run is still streaming queues a
+					// stale duplicate command body.
+					if (policy) scheduleCompletedDispatch(policy, status, ctx);
 					return;
 				}
 				// F2: a non-completed report (blocked/waiting_for_user/incomplete)
@@ -379,7 +438,23 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// when policy is gone so a `blocked` summary (auth failure, missing
 				// dependency) still surfaces instead of being swallowed when def.next
 				// disappeared.
+				//
+				// issue 88: waiting_for_user is a *resumable* halt — park at "waiting"
+				// (keeping activeTopLevelCommand) so a later interactive reply
+				// (history.ts) can re-arm the running→probing probe path and the
+				// command can later report completed. blocked/incomplete stay terminal
+				// (idle). Chaining still requires an explicit completed report, so an
+				// accidental resume can only re-probe — never mis-chain.
+				state.commandPhase = status.status === "waiting_for_user" ? "waiting" : "idle";
 				routeNonCompleted(status, ctx);
+				return;
+			}
+			case "waiting": {
+				// issue 88: a paused (waiting_for_user) command rests here between the
+				// probe that reported it and the user's reply. A stray agent_end while
+				// still "waiting" — a turn NOT preceded by an interactive resume, which
+				// history.ts flips waiting→running on the reply — must NOT fire a probe,
+				// or it would re-probe with no user answer behind it. Stable no-op.
 				return;
 			}
 			default:
@@ -388,7 +463,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	});
 
 	// Clean up on session shutdown: tear down an in-flight countdown and drop any
-	// scheduled-but-unfired probe.
+	// scheduled-but-unfired probe or deferred completed-transition dispatch.
 	pi.on("session_shutdown", async (_event, ctx) => {
 		cancelCountdown(ctx);
 		if (probeTimer) {
@@ -396,5 +471,6 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			probeTimer = null;
 		}
 		clearProbeWatchdog();
+		clearDispatchTimer();
 	});
 }

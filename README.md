@@ -100,7 +100,7 @@ On the probe turn's `agent_end`, Scramjet reads the reported status and validate
 - **`closed` / `open`** under `/scramjet off` — surface the hint via the UI only; no auto-continuation.
 - **`ask` / no `next:`** — pause regardless of the flag.
 
-A non-`completed` status never chains: `waiting_for_user` and `incomplete` pause quietly, and `blocked` pauses with a warning notification. Note: `no next:` produces no status check at all — the probe fires only for commands that declare a `next:` policy, so a command with nothing to chain stays invisible.
+A non-`completed` status never chains: `incomplete` pauses quietly and `blocked` pauses with a warning notification. `waiting_for_user` is a resumable, not terminal, halt — the command parks at a stable `waiting` phase (reconstructed across `pi --resume` / branch switch) so the user can answer the question; an interactive, non-slash reply re-arms the status probe, and a now-`completed` report chains the declared next step under the usual policy. Chaining still requires an explicit `completed` report, so an off-topic reply can only trigger a harmless re-probe, never a mis-chain. Note: `no next:` produces no status check at all — the probe fires only for commands that declare a `next:` policy, so a command with nothing to chain stays invisible.
 
 Executing a step means either dispatching the slash command directly, or creating a fresh session first and then dispatching.
 

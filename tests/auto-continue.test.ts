@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, NOTIFY_MAX, registerAutoContinue } from "../auto-continue.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
-import { COMMAND_START_TYPE, registerHistory } from "../history.ts";
+import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
@@ -36,6 +36,12 @@ function runningState(def: CommandDef, extra: Partial<ScramjetState> = {}): Scra
 interface CtxBag {
 	ctx: any;
 	dispatched: Array<{ input: string; options?: unknown; session: "current" | "new" }>;
+	// Dispatches attempted while the run was still streaming (isStreaming true).
+	// In production these synchronous-from-agent_end dispatches queue a stale,
+	// duplicate command body (issue 88), so a correct deferral must leave this
+	// empty. simulateTwoTurns/driveProbeTurn assert that, proving the dispatch was
+	// scheduled past the streaming window rather than fired inline.
+	dispatchedWhileStreaming: Array<{ input: string; options?: unknown; session: "current" | "new" }>;
 	newSessionCalls: unknown[];
 	notifications: { message: string; type?: string }[];
 	widgets: { key: string; content: unknown; options?: unknown }[];
@@ -46,10 +52,17 @@ interface CtxBag {
 	cancelNewSession?: boolean;
 }
 
-function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
+function fakeCtx({
+	hasUI = true,
+	isStreaming = () => false,
+}: {
+	hasUI?: boolean;
+	isStreaming?: () => boolean;
+} = {}): CtxBag {
 	const bag: CtxBag = {
 		ctx: null,
 		dispatched: [],
+		dispatchedWhileStreaming: [],
 		newSessionCalls: [],
 		notifications: [],
 		widgets: [],
@@ -59,6 +72,10 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
 	const replacedCtx = {
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
 			if (bag.rejectDispatchWith) throw bag.rejectDispatchWith;
+			if (isStreaming()) {
+				bag.dispatchedWhileStreaming.push({ input, options, session: "new" });
+				return;
+			}
 			bag.dispatched.push({ input, options, session: "new" });
 		}),
 	};
@@ -81,6 +98,10 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
 		},
 		dispatchUserInput: vi.fn(async (input: string, options?: unknown) => {
 			if (bag.rejectDispatchWith) throw bag.rejectDispatchWith;
+			if (isStreaming()) {
+				bag.dispatchedWhileStreaming.push({ input, options, session: "current" });
+				return;
+			}
 			bag.dispatched.push({ input, options, session: "current" });
 		}),
 		newSession: vi.fn(async (options?: { withSession?: (ctx: unknown) => Promise<void> }) => {
@@ -96,7 +117,7 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): CtxBag {
 
 function bootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } = {}) {
 	const bag = recordingPi();
-	const ctxBag = fakeCtx({ hasUI });
+	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
 	registerCommandStatusTool(bag.pi, state);
 	registerAutoContinue(bag.pi, state);
 	const statusTool = bag.tools.find((t) => t.name === "scramjet_command_status");
@@ -115,7 +136,10 @@ async function flushMicrotasks() {
 // answers it by calling scramjet_command_status, then the probe turn ends. The
 // deferral invariants are asserted here so every routing test transitively
 // proves the probe is NOT sent synchronously from inside agent_end (a sync send
-// would be dropped by the isStreaming-aware fake, failing these assertions).
+// would be dropped by the isStreaming-aware fake, failing these assertions), and
+// that the completed-transition dispatch is likewise deferred past the probe
+// turn's streaming window (a sync dispatch lands in dispatchedWhileStreaming,
+// emptying `dispatched` and failing every routing assertion — issue 88).
 async function simulateTwoTurns(
 	bag: ReturnType<typeof recordingPi>,
 	ctxBag: CtxBag,
@@ -135,7 +159,39 @@ async function simulateTwoTurns(
 	expect(bag.pi.sent).toHaveLength(1);
 
 	await report(params);
+	// The probe turn's agent_end fires while Pi still counts the run as streaming.
+	bag.pi.isStreaming = true;
 	await bag.emit("agent_end", {}, ctxBag.ctx);
+	// Nothing dispatched inline inside that streaming window — the completed
+	// transition must defer past it (issue 88).
+	expect(ctxBag.dispatchedWhileStreaming).toHaveLength(0);
+	bag.pi.isStreaming = false;
+	await vi.advanceTimersByTimeAsync(0);
+}
+
+// Like simulateTwoTurns but safe to call several times in one test (the issue 88
+// resume flow drives multiple probe turns). It asserts a fresh probe fired this
+// cycle via a delta on the cumulative `sent` count rather than the absolute
+// length, so successive calls don't fight each other's bookkeeping.
+async function driveProbeTurn(
+	bag: ReturnType<typeof recordingPi>,
+	ctxBag: CtxBag,
+	report: (p: StatusParams) => Promise<unknown>,
+	params: StatusParams,
+) {
+	const before = bag.pi.sent.length;
+	bag.pi.isStreaming = true;
+	await bag.emit("agent_end", {}, ctxBag.ctx);
+	bag.pi.isStreaming = false;
+	await vi.advanceTimersByTimeAsync(0);
+	expect(bag.pi.sent.length).toBe(before + 1);
+	await report(params);
+	// Reported agent_end fires mid-stream; the completed dispatch defers past it.
+	bag.pi.isStreaming = true;
+	await bag.emit("agent_end", {}, ctxBag.ctx);
+	expect(ctxBag.dispatchedWhileStreaming).toHaveLength(0);
+	bag.pi.isStreaming = false;
+	await vi.advanceTimersByTimeAsync(0);
 }
 
 describe("registerAutoContinue — two-phase command-status protocol", () => {
@@ -446,6 +502,70 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		});
 	});
 
+	// issue 88: the completed-transition dispatch must be deferred off the probe
+	// turn's agent_end. Dispatching synchronously while Pi still counts the run as
+	// streaming queues an expanded command body the just-ending run has already
+	// passed its follow-up polling point for; it lingers stale and is delivered as
+	// a duplicate on a later turn. simulateTwoTurns proves the invariant
+	// transitively across every routing test; these two assert it directly.
+	describe("deferred completed dispatch (issue 88 duplicate-dispatch)", () => {
+		const targetDef = defWithPolicy("b:target", undefined, "routed by Pi");
+
+		it("does not dispatch synchronously inside the probe agent_end and dispatches exactly once", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			// Answer turn → deferred probe fires once the run settles.
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(state.commandPhase).toBe("probing");
+
+			// Report completed, then the probe turn's agent_end fires WHILE Pi is
+			// still streaming — the exact production window the incident describes.
+			await report({ status: "completed", summary: "done" });
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			// Nothing dispatched inline in that window (not delivered, not mis-queued).
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
+			expect(state.commandPhase).toBe("idle");
+
+			// Once the run settles, the forced target dispatches exactly once.
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
+		});
+
+		it("session_shutdown drops a scheduled-but-unfired completed dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			await report({ status: "completed", summary: "done" });
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx); // schedules the dispatch timer
+			await bag.emit("session_shutdown", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			// The pending dispatch was torn down on shutdown — nothing fires.
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
+		});
+	});
+
 	describe("closed / open / ask completed", () => {
 		it("closed valid pick + enabled=true shows the countdown widget", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
@@ -672,8 +792,9 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.latestCommandStatus).toBeNull();
 		});
 
-		it("waiting_for_user echoes the user_prompt as an info hint", async () => {
-			const { bag, ctxBag, report } = bootstrap(nonCompletedState(), { hasUI: false });
+		it("waiting_for_user echoes the user_prompt, parks at waiting, and keeps the command active (issue 88)", async () => {
+			const state = nonCompletedState();
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "waiting_for_user",
@@ -684,6 +805,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
 			expect(ctxBag.notifications[0].message).toContain("which branch should I use?");
+			// issue 88: the command is paused (resumable), not terminated. It rests at
+			// "waiting" with its invocation still active and the stored status cleared.
+			expect(state.commandPhase).toBe("waiting");
+			expect(state.activeTopLevelCommand).toBe("a:cmd");
+			expect(state.latestCommandStatus).toBeNull();
 		});
 
 		it("waiting_for_user with no user_prompt stays silent", async () => {
@@ -704,7 +830,10 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications).toEqual([]);
 		});
 
-		it.each(["waiting_for_user", "blocked", "incomplete"] as const)(
+		// issue 88: blocked/incomplete stay terminal (idle); waiting_for_user is now
+		// the resumable exception (asserted separately below), so it is no longer in
+		// this list.
+		it.each(["blocked", "incomplete"] as const)(
 			"%s resets the phase to idle and clears the stored status",
 			async (status) => {
 				const state = nonCompletedState();
@@ -716,6 +845,223 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				expect(state.latestCommandStatus).toBeNull();
 			},
 		);
+
+		it("waiting_for_user parks at waiting (resumable) and clears the stored status (issue 88)", async () => {
+			const state = nonCompletedState();
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "waiting_for_user", summary: "not done" });
+
+			expect(state.commandPhase).toBe("waiting");
+			expect(state.latestCommandStatus).toBeNull();
+		});
+	});
+
+	// issue 88: a waiting_for_user halt is resumable. An interactive non-slash
+	// reply (history.ts flips waiting→running) re-arms the existing
+	// running→probing probe path, so a command that paused for approval can later
+	// report completed and offer its declared next step. These tests register
+	// history alongside auto-continue so the real input handler drives the resume.
+	describe("interactive resume after waiting_for_user (issue 88)", () => {
+		it("a stray agent_end while waiting is a no-op (stays waiting, fires no probe)", async () => {
+			// The defensive `case "waiting"` arm: a turn NOT preceded by an
+			// interactive resume must not re-probe with no user answer behind it.
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true, commandPhase: "waiting" });
+			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(state.commandPhase).toBe("waiting");
+			expect(bag.pi.sent).toHaveLength(0);
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("approval flow: draft → waiting → user reply resumes → completed chains the next step", async () => {
+			// Synthetic open-policy command mirroring mach12:pr-create: it drafts a
+			// PR and asks for approval (waiting_for_user), then after the user
+			// approves it creates the PR (completed) and offers mach12:pr-review.
+			const def = defWithPolicy("mach12:pr-create", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			registerHistory(bag.pi, state);
+
+			// First turn: draft + ask. Probe → report waiting_for_user → park.
+			await driveProbeTurn(bag, ctxBag, report, {
+				status: "waiting_for_user",
+				summary: "drafted PR, awaiting approval",
+				user_prompt: "approve, modify, or cancel?",
+			});
+			expect(state.commandPhase).toBe("waiting");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+			expect(ctxBag.dispatched).toEqual([]);
+
+			// User approves: an interactive non-slash reply re-arms the probe path.
+			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
+			expect(state.commandPhase).toBe("running");
+
+			// Resumed turn creates the PR, reports completed with the review next step.
+			await driveProbeTurn(bag, ctxBag, report, {
+				status: "completed",
+				summary: "PR created",
+				next_steps: [{ name: "mach12:pr-review", fresh_session: false }],
+			});
+
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/mach12:pr-review", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("re-arms across multiple clarification rounds: waiting → resume → waiting again", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			registerHistory(bag.pi, state);
+
+			await driveProbeTurn(bag, ctxBag, report, { status: "waiting_for_user", summary: "q1", user_prompt: "?" });
+			expect(state.commandPhase).toBe("waiting");
+
+			await bag.emit("input", { text: "more info", source: "interactive" }, ctxBag.ctx);
+			expect(state.commandPhase).toBe("running");
+
+			// A resumed turn that still needs input returns to waiting (no chain).
+			await driveProbeTurn(bag, ctxBag, report, { status: "waiting_for_user", summary: "q2", user_prompt: "?" });
+			expect(state.commandPhase).toBe("waiting");
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("loop-safety: a resumed probe turn that never reports self-heals to idle (no loop)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			registerHistory(bag.pi, state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			await driveProbeTurn(bag, ctxBag, report, { status: "waiting_for_user", summary: "q", user_prompt: "?" });
+			expect(state.commandPhase).toBe("waiting");
+
+			// Resume, then the resumed answer turn ends → probing + probe fires.
+			await bag.emit("input", { text: "reply", source: "interactive" }, ctxBag.ctx);
+			expect(state.commandPhase).toBe("running");
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(state.commandPhase).toBe("probing");
+
+			// The probe turn ends without a status report → self-heal to idle, no
+			// re-probe (the existing probing self-heal, reached via the resume path).
+			const sentBefore = bag.pi.sent.length;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(state.commandPhase).toBe("idle");
+			await vi.advanceTimersByTimeAsync(0);
+			expect(bag.pi.sent.length).toBe(sentBefore);
+			expect(ctxBag.dispatched).toEqual([]);
+			warnSpy.mockRestore();
+		});
+	});
+
+	// issue 88 Stage 2: a paused (waiting) command survives pi --resume / branch
+	// switch. registerHistory's rebuild reconstructs the phase from journaled
+	// COMMAND_STATUS_TYPE entries, so a resumed session can pick the paused command
+	// back up — and a command that already completed never resurrects.
+	describe("rewind reconstruction survives resume (issue 88 Stage 2)", () => {
+		function seededState() {
+			const def = defWithPolicy("mach12:pr-create", { mode: "open", candidates: [] });
+			// The registry is in-memory (not journaled); the phase starts idle and is
+			// reconstructed from the replayed branch on session_start.
+			const state = freshState({ enabled: true, registry: new Map([[def.name, def]]) });
+			return state;
+		}
+
+		function branch(entries: Array<{ customType: string; data: unknown }>) {
+			return {
+				sessionManager: {
+					getBranch: () => entries.map((e) => ({ type: "custom" as const, ...e })),
+				},
+			};
+		}
+
+		it("reconstructs a waiting command on resume, then an interactive reply resumes and completed chains", async () => {
+			const state = seededState();
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			registerHistory(bag.pi, state);
+
+			// Resume: branch journals [start, status(waiting)] → reconstruct "waiting".
+			await bag.emit(
+				"session_start",
+				{},
+				branch([
+					{
+						customType: COMMAND_START_TYPE,
+						data: { command: "mach12:pr-create", origin: "user", depth: 0, timestamp: 1 },
+					},
+					{
+						customType: COMMAND_STATUS_TYPE,
+						data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+					},
+				]),
+			);
+			expect(state.commandPhase).toBe("waiting");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+
+			// User answers in the resumed session → resume the command.
+			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
+			expect(state.commandPhase).toBe("running");
+
+			// Resumed turn completes and offers the review next step → chain.
+			await driveProbeTurn(bag, ctxBag, report, {
+				status: "completed",
+				summary: "PR created",
+				next_steps: [{ name: "mach12:pr-review", fresh_session: false }],
+			});
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/mach12:pr-review", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("a completed-without-chain command reconstructs to idle and does not resurrect on resume", async () => {
+			const state = seededState();
+			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
+			registerHistory(bag.pi, state);
+
+			// Resume: branch journals [start, status(waiting), status(completed)] →
+			// reconstruct "idle" (the resolving completed status wins over waiting).
+			await bag.emit(
+				"session_start",
+				{},
+				branch([
+					{
+						customType: COMMAND_START_TYPE,
+						data: { command: "mach12:pr-create", origin: "user", depth: 0, timestamp: 1 },
+					},
+					{
+						customType: COMMAND_STATUS_TYPE,
+						data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+					},
+					{ customType: COMMAND_STATUS_TYPE, data: { commandName: "mach12:pr-create", status: "completed" } },
+				]),
+			);
+			expect(state.commandPhase).toBe("idle");
+			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+
+			// A later interactive reply must NOT resume (phase is idle, not waiting).
+			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
+			expect(state.commandPhase).toBe("idle");
+
+			// And the next turn fires no probe and dispatches nothing (no resurrection).
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(bag.pi.sent).toHaveLength(0);
+			expect(ctxBag.dispatched).toEqual([]);
+		});
 	});
 
 	describe("fresh-session continuation", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
+import { COMMAND_STATUS_TYPE } from "../history.ts";
 import type { CommandStatusPayload } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
@@ -34,7 +35,7 @@ describe("registerCommandStatusTool — registration", () => {
 });
 
 describe("registerCommandStatusTool — phase gate", () => {
-	it.each(["idle", "running", "reported"] as const)(
+	it.each(["idle", "running", "reported", "waiting"] as const)(
 		"rejects with a helpful error and no terminate when phase is %s",
 		async (phase) => {
 			const { state, execute } = toolFor(freshState({ commandPhase: phase }));
@@ -51,7 +52,9 @@ describe("registerCommandStatusTool — phase gate", () => {
 	);
 
 	it("records the status, advances to reported, and terminates when phase is probing", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { state, pi, execute } = toolFor(
+			freshState({ commandPhase: "probing", activeTopLevelCommand: "mach12:pr-create" }),
+		);
 		const result = await execute({ status: "completed", summary: "all green" });
 
 		expect(result.terminate).toBe(true);
@@ -63,6 +66,29 @@ describe("registerCommandStatusTool — phase gate", () => {
 			next_steps: undefined,
 		});
 		expect(String(result.content[0].text)).toContain("completed");
+		// issue 88: the report is journaled so a rewind/resume can reconstruct the
+		// resting phase (idle here; waiting for a waiting_for_user report).
+		expect(pi.appended).toContainEqual({
+			customType: COMMAND_STATUS_TYPE,
+			data: { commandName: "mach12:pr-create", status: "completed" },
+		});
+	});
+
+	it("journals the report under the active command name (issue 88)", async () => {
+		const { pi, execute } = toolFor(
+			freshState({ commandPhase: "probing", activeTopLevelCommand: "mach12:pr-create" }),
+		);
+		await execute({ status: "waiting_for_user", summary: "awaiting approval" });
+		expect(pi.appended).toContainEqual({
+			customType: COMMAND_STATUS_TYPE,
+			data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+		});
+	});
+
+	it("does not journal a status when there is no active command (guarded)", async () => {
+		const { pi, execute } = toolFor(freshState({ commandPhase: "probing", activeTopLevelCommand: null }));
+		await execute({ status: "completed", summary: "no active command" });
+		expect(pi.appended.some((e: { customType: string }) => e.customType === COMMAND_STATUS_TYPE)).toBe(false);
 	});
 
 	it("stores next_steps and renders the first as a forward pointer for completed", async () => {

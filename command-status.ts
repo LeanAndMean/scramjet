@@ -19,6 +19,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { recordCommandStatus } from "./history.ts";
 import type { CommandPhase, CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
 
 // Shared shape for the tool's result `details` so both the out-of-phase error
@@ -148,6 +149,17 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			};
 			state.latestCommandStatus = payload;
 			state.commandPhase = "reported";
+
+			// issue 88: journal the report so a rewind/resume can reconstruct the
+			// resumable "waiting" state — and, just as importantly, reconstruct a
+			// command that completed-without-chaining to "idle" rather than
+			// resurrecting it. Guarded on a non-null active command: the phase gate
+			// above means we're mid-probe for an active invocation, but the field is
+			// typed nullable, and journaling an entry with no command name would be
+			// skipped by replayHistory's defensive filter anyway.
+			if (state.activeTopLevelCommand) {
+				recordCommandStatus(pi, state.activeTopLevelCommand, params.status);
+			}
 
 			const next = params.next_steps?.[0];
 			// S4: mirror buildNextStepWire — trimStart the args so the forward
