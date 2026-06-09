@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0 — Bounded per-stage quality review
+
+Re-scopes the Phase 6 "Quality review" step in the implement-flow commands so per-stage review is a bounded, single-pass sanity check rather than an unbounded battery of specialized review subagents that re-fires until clean (issue #95). Comprehensive scrutiny is explicitly deferred to the full-branch `mach12:pr-review`. The change is prose-only coaching plus an explicit cap; no harness code changes (dispatch caps are not harness-enforced in the MVP).
+
+### Changed
+
+- `mach12:issue-implement` and `mach12:pr-review-fix` Phase 6 now cap per-stage review at **3 `mach12:code-reviewer` subagents total** (including any re-review), dispatched in a single parallel batch with focused briefs. Three is framed as a ceiling for unusually risky stages, not a quota — most stages need one or two, and trivial/low-risk stages may skip review entirely. The prose mandates a single pass (re-review only for non-trivial fixes that reworked a flagged area, counted against the same cap), forbids dispatching subagents to re-report or restate findings already in hand, and replaces the previous five-specialized-lens enumeration (`code-reviewer`, `test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`, `code-simplifier`) with `mach12:code-reviewer` instances given focus briefs. The four specialized lenses remain fully covered at PR-review time by `mach12:pr-review`.
+
 ## 0.12.0 — Next-step selector routing
 
 Adds selector-aware next-step routing for `closed` and `open` policies (issue #92). Scramjet now presents validated next-step options with labels, rationales, and a recommendation instead of treating the first valid command as the only handoff. With `/scramjet on`, a recommended command auto-selects after the countdown unless the user chooses another option or dismisses the selector; with `/scramjet off`, the selector remains manual-only.
