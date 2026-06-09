@@ -24,20 +24,26 @@ This ceremony breaks flow state. The machine already knows what to do; it's just
 
 ## The solution
 
-Scramjet removes the ceremony. When a command declares its next step (via YAML frontmatter), Scramjet validates the agent's pick, shows what's about to happen, and auto-continues after a brief countdown. Press Escape (or type anything) to cancel.
+Scramjet removes the ceremony. When a command declares its next step (via YAML frontmatter), Scramjet validates the agent's options and shows a selector with the recommendation and rationale. With `/scramjet on`, a recommended command auto-selects after a brief countdown unless you choose another option or press Escape. With `/scramjet off`, the selector still appears but nothing dispatches until you choose it.
 
 ```
 > /mach12:issue-plan 55
   [agent works, asks you about architecture, you pick an approach, plan posted]
 
-  ┌─ Next: /mach12:issue-review 55 (fresh session)    3s...    [Esc] cancel ─┐
-  └──────────────────────────────────────────────────────────────────────────┘
+  Select next step
+  > 0: /mach12:issue-review 55 [recommended]
+       Reviews the plan before implementation.
+    1: /mach12:issue-implement 55 2
+       The plan is straightforward enough to continue.
+  ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
 
   [fresh session starts, runs issue-review]
   [agent works, asks you questions, you answer, review posted]
 
-  ┌─ Next: /mach12:issue-implement 55 (fresh session)    3s...              ┐
-  └─────────────────────────────────────────────────────────────────────────-┘
+  Select next step
+  > 0: /mach12:issue-implement 55 1 [recommended]
+       Stage 1 is ready to build.
+  ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
 
   [continues through the entire methodology...]
 ```
@@ -59,8 +65,8 @@ Scramjet doesn't define workflows. Each command independently declares its own n
 
 Scramjet is an autopilot, not a conveyor belt. At any transition:
 
-- **Escape** cancels the countdown — you're back in normal Pi
-- **Any keypress** cancels — your typing takes priority
+- **Escape** dismisses the selector — you're back in normal Pi
+- **Arrow keys + Enter** let you choose a different valid option before any countdown fires
 - **Run a different command** — Scramjet doesn't interfere
 - **Close the terminal** — no workflow state to corrupt
 
@@ -81,7 +87,7 @@ Scramjet reads the declaration, validates the agent's pick (or the forced target
 
 ### Simplicity is the feature
 
-Scramjet is a small TypeScript extension. The auto-continuation mechanism at its core is one tool (`scramjet_command_status`), one widget (the countdown), and a parser/validator/dispatcher reading the next-step frontmatter.
+Scramjet is a small TypeScript extension. The auto-continuation mechanism at its core is one tool (`scramjet_command_status`), one selector widget, and a parser/validator/dispatcher reading the next-step frontmatter.
 
 ## How it works
 
@@ -89,15 +95,15 @@ Scramjet is a small TypeScript extension. The auto-continuation mechanism at its
 
 An active command produces its normal user-facing answer first — nothing about completion is injected into that turn. Once the run goes idle, Scramjet defers a TUI-hidden status-check message that starts a short follow-up turn; the agent answers it by calling `scramjet_command_status`. Separating the answer from the status report removes the old failure mode where the agent poured its answer into a terminating tool's `summary` field instead of writing prose.
 
-The agent calls `scramjet_command_status({ status, summary, next_steps? })`, where `status` is one of `completed` / `waiting_for_user` / `blocked` / `incomplete`. For `completed` commands, `next_steps[]` carries the next-command handoff: each entry has a `name` (bare command, no leading slash), optional `args`, and `fresh_session`. For `forced` policies the first entry's `name` must match the declared target and only passes `args`/`fresh_session`; the array shape also carries candidates for a future choice-list UI. The tool is phase-gated by the harness — called outside the status-check window it returns a helpful error without terminating; in-phase it stores the report and returns `terminate: true`, ending the short probe turn.
+The agent calls `scramjet_command_status({ status, summary, next_steps?, recommended_next_step? })`, where `status` is one of `completed` / `waiting_for_user` / `blocked` / `incomplete`. For `completed` commands, `next_steps[]` carries selector options. Command entries have an optional `type: "command"`, a `name` (bare command, no leading slash), optional `args`, and `fresh_session`; legacy command entries may omit `type`. Open-policy commands can also include `type: "freetext"` entries with `text`, which paste into the editor when selected. Selector-visible entries include `reason`, and `recommended_next_step` is a zero-based index into the original `next_steps[]` array. For `forced` policies the first command entry's `name` must match the declared target and only passes `args`/`fresh_session`; forced handoffs do not show the selector. The tool is phase-gated by the harness — called outside the status-check window it returns a helpful error without terminating; in-phase it stores the report and returns `terminate: true`, ending the short probe turn.
 
 ### Validation and dispatch
 
 On the probe turn's `agent_end`, Scramjet reads the reported status and validates any pick against the active command's declared policy. Mode-by-mode behavior for a `completed` status:
 
 - **`forced`** — fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent; the `completed` status is the safety gate that distinguishes successful completion from clarification or error.
-- **`closed` / `open`** under `/scramjet on` — valid pick → countdown then dispatch; invalid pick → stop with a notification.
-- **`closed` / `open`** under `/scramjet off` — surface the hint via the UI only; no auto-continuation.
+- **`closed` / `open`** under `/scramjet on` — valid options → selector; a valid recommended command auto-selects after the countdown unless you choose another option or dismiss it. Free-text options can be selected manually but are never auto-selected or auto-sent.
+- **`closed` / `open`** under `/scramjet off` — valid options → selector with no countdown; selecting a command dispatches it, selecting free text pastes it into the editor, and dismissal has no side effects.
 - **`ask` / no `next:`** — pause regardless of the flag.
 
 A non-`completed` status never chains: `incomplete` pauses quietly and `blocked` pauses with a warning notification. `waiting_for_user` is a resumable, not terminal, halt — the command parks at a stable `waiting` phase (reconstructed across `pi --resume` / branch switch) so the user can answer the question; an interactive, non-slash reply re-arms the status probe, and a now-`completed` report chains the declared next step under the usual policy. Chaining still requires an explicit `completed` report, so an off-topic reply can only trigger a harmless re-probe, never a mis-chain. Note: `no next:` produces no status check at all — the probe fires only for commands that declare a `next:` policy, so a command with nothing to chain stays invisible.
@@ -293,7 +299,7 @@ scramjet/
   index.ts              — entry point (extension factory)
   types.ts              — ScramjetState and shared types
   command-status.ts     — scramjet_command_status tool (two-phase status probe)
-  auto-continue.ts      — agent_end listener: probe, validate, dispatch, countdown
+  auto-continue.ts      — agent_end listener: probe, validate, selector routing
   next-step-dispatch.ts — Pi input-dispatch helper for next steps
   delegate.ts           — delegate tool + frame stack
   next-step.ts          — <scramjet-next-step> block builder

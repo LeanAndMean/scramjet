@@ -85,14 +85,14 @@ const COMMAND_NEXT_STEP_SCHEMA = Type.Object({
 		description:
 			"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session').",
 	}),
-	label: Type.Optional(Type.String({ description: "Optional short label for a future choice-list UI." })),
+	label: Type.Optional(Type.String({ description: "Optional short label for the next-step selector." })),
 	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
 });
 
 const FREE_TEXT_NEXT_STEP_SCHEMA = Type.Object({
 	type: Type.Literal("freetext", { description: "Free-text next-step entry for open selector policies." }),
 	text: Type.String({ description: "Free-text user-facing follow-up option." }),
-	label: Type.Optional(Type.String({ description: "Optional short label for a future choice-list UI." })),
+	label: Type.Optional(Type.String({ description: "Optional short label for the next-step selector." })),
 	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
 });
 

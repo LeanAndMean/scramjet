@@ -3,6 +3,21 @@ import { type SelectItem, SelectList } from "@earendil-works/pi-tui";
 import type { ValidatedNextStep } from "./commands/validator.ts";
 import { buildNextStepWire } from "./next-step-dispatch.ts";
 
+export interface ScramjetSelectorOption {
+	index: number;
+	reason: string;
+}
+
+export interface ScramjetSelectorOptions<TOption extends ScramjetSelectorOption> {
+	title: string;
+	options: TOption[];
+	recommended: TOption | null;
+	getTitle(option: TOption): string;
+	autoSelect?: TOption;
+	countdownSeconds?: number;
+	signal?: AbortSignal;
+}
+
 export interface NextStepSelectorOptions {
 	options: ValidatedNextStep[];
 	recommended: ValidatedNextStep | null;
@@ -23,10 +38,18 @@ function optionTitle(option: ValidatedNextStep): string {
 	return option.label ?? `Text: ${cleanDisplay(option.text)}`;
 }
 
-export async function selectNextStep(
+export async function selectScramjetChoice<TOption extends ScramjetSelectorOption>(
 	ctx: ExtensionContext,
-	{ options, recommended, autoSelect, countdownSeconds = 0, signal }: NextStepSelectorOptions,
-): Promise<ValidatedNextStep | null> {
+	{
+		title,
+		options,
+		recommended,
+		getTitle,
+		autoSelect,
+		countdownSeconds = 0,
+		signal,
+	}: ScramjetSelectorOptions<TOption>,
+): Promise<TOption | null> {
 	if (signal?.aborted) return null;
 
 	let fail: (err: unknown) => void = () => {};
@@ -36,7 +59,7 @@ export async function selectNextStep(
 	const byValue = new Map(options.map((option) => [String(option.index), option]));
 	const items: SelectItem[] = options.map((option) => ({
 		value: String(option.index),
-		label: `${option.index}: ${optionTitle(option)}${option.index === recommended?.index ? " [recommended]" : ""}`,
+		label: `${option.index}: ${getTitle(option)}${option.index === recommended?.index ? " [recommended]" : ""}`,
 		description: cleanDisplay(option.reason),
 	}));
 
@@ -101,11 +124,7 @@ export async function selectNextStep(
 					const footer = timer
 						? `↑↓ navigate • enter select • esc cancel • auto-selects recommendation in ${remaining}s`
 						: "↑↓ navigate • enter select • esc cancel";
-					return [
-						theme.fg("accent", theme.bold("Select next step")),
-						...selectList.render(width),
-						theme.fg("dim", footer),
-					];
+					return [theme.fg("accent", theme.bold(title)), ...selectList.render(width), theme.fg("dim", footer)];
 				},
 				invalidate() {
 					selectList.invalidate();
@@ -133,4 +152,19 @@ export async function selectNextStep(
 	const selected = byValue.get(selectedValue);
 	if (!selected) throw new Error(`selector returned unknown option value ${JSON.stringify(selectedValue)}`);
 	return selected;
+}
+
+export function selectNextStep(
+	ctx: ExtensionContext,
+	{ options, recommended, autoSelect, countdownSeconds = 0, signal }: NextStepSelectorOptions,
+): Promise<ValidatedNextStep | null> {
+	return selectScramjetChoice(ctx, {
+		title: "Select next step",
+		options,
+		recommended,
+		getTitle: optionTitle,
+		autoSelect,
+		countdownSeconds,
+		signal,
+	});
 }

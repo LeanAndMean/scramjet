@@ -27,13 +27,15 @@
  * later unrelated turn (a duplicate command body with no command-start). The
  * single routeCompleted call site is therefore scheduled on a deferred tick
  * (scheduleCompletedDispatch), which also covers the no-UI closed/open path that
- * dispatches immediately rather than through the deferred countdown.
+ * dispatches immediately rather than through the selector.
  *
  * For completed commands: `forced` fires the declared target unconditionally
- * after completion; closed/open defer to /scramjet on|off and show a 3s
- * countdown widget (cancellable by Escape or any keypress) before dispatch.
- * Dispatch uses Pi's dispatchUserInput so slash commands run through Pi's
- * normal input pipeline. See CLAUDE.md "MVP design rationales".
+ * after completion; closed/open validate selector-visible options. With UI,
+ * Scramjet shows a selector and `/scramjet on` auto-selects a recommended
+ * command after a 3s countdown; without UI it dispatches only a valid
+ * recommended command under `/scramjet on`. Dispatch uses Pi's
+ * dispatchUserInput so slash commands run through Pi's normal input pipeline.
+ * See CLAUDE.md "MVP design rationales".
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
