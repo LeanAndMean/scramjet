@@ -76,7 +76,6 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 				items,
 				Math.min(items.length, 8),
 				{
-					selectedPrefix: (text) => theme.fg("accent", text),
 					selectedText: (text) => theme.fg("accent", text),
 					description: (text) => theme.fg("muted", text),
 					scrollInfo: (text) => theme.fg("dim", text),

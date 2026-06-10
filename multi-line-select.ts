@@ -7,7 +7,6 @@ export interface MultiLineSelectItem {
 }
 
 export interface MultiLineSelectTheme {
-	selectedPrefix: (text: string) => string;
 	selectedText: (text: string) => string;
 	description: (text: string) => string;
 	scrollInfo: (text: string) => string;
@@ -100,8 +99,7 @@ export class MultiLineSelectList {
 
 		const half = Math.floor(this.maxVisible / 2);
 		let startIndex = Math.max(0, Math.min(this.selectedIndex - half, total - this.maxVisible));
-		const endIndex = Math.min(startIndex + this.maxVisible, total);
-		startIndex = Math.max(0, endIndex - this.maxVisible);
+		const endIndex = startIndex + this.maxVisible;
 		return { startIndex, endIndex };
 	}
 

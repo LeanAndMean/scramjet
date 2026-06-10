@@ -3,7 +3,6 @@ import { type MultiLineSelectItem, MultiLineSelectList, type MultiLineSelectThem
 
 const identity = (text: string) => text;
 const theme: MultiLineSelectTheme = {
-	selectedPrefix: identity,
 	selectedText: identity,
 	description: (text: string) => `[desc]${text}[/desc]`,
 	scrollInfo: (text: string) => `[scroll]${text}[/scroll]`,
