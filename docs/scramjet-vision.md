@@ -578,7 +578,7 @@ every step Mach 10 has eventually grown.
 | `pr-create`              | `open`  | `pr-review`                                         | —                                  |
 | `pr-review`              | `forced`| `pr-review-assessment`                              | —                                  |
 | `pr-review-assessment`   | `closed`| `pr-review-fix`, `pr-pre-merge`                     | —                                  |
-| `pr-review-fix`          | `closed`| `pr-review`, `pr-pre-merge`                         | `push`                             |
+| `pr-review-fix`          | `open`  | `pr-review-fix`, `pr-review`, `pr-pre-merge`        | `push`                             |
 | `pr-pre-merge`           | `open`  | `pr-merge`, `pr-review-fix`                         | `find-contribution-guidelines`     |
 | `pr-merge`               | n/a     | (terminus — no `next`)                              | —                                  |
 | `push`                   | n/a     | (delegation target — no top-level `next`)           | (gh comment subroutines)           |
