@@ -10,13 +10,12 @@ allowed-tools:
   - write
   - delegate
 next:
-  mode: ask
-  hint: |
-    Decide whether to merge now, run another fix pass, or hold the PR
-    open. Suggested follow-ups: /mach12:pr-merge if the checklist passed
-    and you are ready to merge, /mach12:pr-review-fix if the checklist
-    surfaced issues that warrant code changes, or stop the chain if the
-    PR should sit while waiting on an external decision.
+  mode: open
+  candidates:
+    - name: mach12:pr-merge
+      hint: Checklist passed cleanly and the PR is ready to merge
+    - name: mach12:pr-review-fix
+      hint: Checklist surfaced issues that warrant code changes
 ---
 
 # Pre-Merge Checklist
@@ -180,3 +179,10 @@ Present a summary of what was done:
 - [ ] Tests: [all passing / N failures noted / skipped per user request]
 
 Report any items that need follow-up (test failures, manual conflict resolution, etc.) so the user can decide how to proceed.
+
+When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
+
+- Always include an entry with `name`: `mach12:pr-merge`, `args`: `<pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when merging is appropriate.
+- Always include an entry with `name`: `mach12:pr-review-fix`, `args`: `<pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a fix pass is warranted.
+- Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-merge` (index 0) when the checklist passed cleanly and no issues remain; recommend `mach12:pr-review-fix` (index 1) when the checklist surfaced issues that warrant code changes.
+- Leave `next_steps` empty if the PR should be held open (waiting on an external decision, discussion ongoing, or no clear next action). If the checklist was not completed or you need user input, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.
