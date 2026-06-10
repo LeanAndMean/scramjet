@@ -70,6 +70,90 @@ describe("validateNextStep — ask mode", () => {
 	});
 });
 
+describe("validateNextStep — same-name-different-args (closed)", () => {
+	const policy = {
+		mode: "closed" as const,
+		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
+	};
+
+	it("accepts the same command name regardless of args", () => {
+		expect(validateNextStep("mach12:pr-review-fix", policy)).toEqual({ valid: true });
+		expect(validateNextStep("mach12:pr-review-fix", policy)).toEqual({ valid: true });
+	});
+});
+
+describe("validateNextSteps — same-name-different-args entries", () => {
+	const closed = {
+		mode: "closed" as const,
+		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
+	};
+
+	const genuineOnly: CommandStatusCommandNextStep = {
+		name: "mach12:pr-review-fix",
+		args: "94 --review-comment 123 --assessment-comment 456",
+		fresh_session: true,
+		reason: "Address genuine issues only",
+	};
+
+	const withNitpicks: CommandStatusCommandNextStep = {
+		name: "mach12:pr-review-fix",
+		args: "94 --review-comment 123 --assessment-comment 456 --include-nitpicks",
+		fresh_session: true,
+		reason: "Address genuine issues and nitpicks",
+	};
+
+	const preMerge: CommandStatusCommandNextStep = {
+		name: "mach12:pr-pre-merge",
+		fresh_session: false,
+		reason: "No issues found, proceed to merge",
+	};
+
+	it("accepts both same-name entries with different args under closed validation", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks], closed, 0);
+		expect(result.valid).toHaveLength(2);
+		expect(result.skipped).toEqual([]);
+	});
+
+	it("assigns distinct indexes to same-name entries", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks, preMerge], closed, 0);
+		expect(result.valid.map((o) => o.index)).toEqual([0, 1, 2]);
+	});
+
+	it("preserves distinct args on each validated entry", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks], closed, 0);
+		const steps = result.valid.filter((o) => o.type === "command").map((o) => o.step);
+		expect(steps[0].args).toBe("94 --review-comment 123 --assessment-comment 456");
+		expect(steps[1].args).toBe("94 --review-comment 123 --assessment-comment 456 --include-nitpicks");
+	});
+
+	it("recommendation correctly targets the second same-name entry", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks, preMerge], closed, 1);
+		expect(result.recommended).toMatchObject({
+			type: "command",
+			index: 1,
+			reason: "Address genuine issues and nitpicks",
+			step: { name: "mach12:pr-review-fix", args: withNitpicks.args },
+		});
+	});
+
+	it("recommendation correctly targets the first same-name entry", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks, preMerge], closed, 0);
+		expect(result.recommended).toMatchObject({
+			type: "command",
+			index: 0,
+			reason: "Address genuine issues only",
+			step: { name: "mach12:pr-review-fix", args: genuineOnly.args },
+		});
+	});
+
+	it("same-name entries with different args pass open validation", () => {
+		const open = { mode: "open" as const, candidates: [{ name: "mach12:pr-review-fix" }] };
+		const result = validateNextSteps([genuineOnly, withNitpicks], open, 0);
+		expect(result.valid).toHaveLength(2);
+		expect(result.skipped).toEqual([]);
+	});
+});
+
 describe("validateNextSteps — selector-visible array form", () => {
 	const closed = {
 		mode: "closed" as const,
