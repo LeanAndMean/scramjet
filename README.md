@@ -186,6 +186,57 @@ You are planning implementation of issue $ARGUMENTS. ...
 The four policies (`forced`, `closed`, `open`, `ask`) are documented in
 `docs/scramjet-vision.md`.
 
+### Same command, different args
+
+Multiple `next_steps` entries may share the same command name with
+different `args` to offer meaningful variants. The harness validates by
+name only (`closed` mode checks that the command appears in `candidates`),
+so same-name entries pass without deduplication. Each entry renders
+distinctly in the selector — the full command wire (name + args) is
+shown, and the `reason` field differentiates the intent.
+
+Frontmatter declares the candidate name once:
+
+```yaml
+next:
+  mode: closed
+  candidates:
+    - name: pr-review-fix
+      hint: fix issues flagged in the review
+    - name: pr-pre-merge
+      hint: when no genuine issues remain
+```
+
+The agent's status report emits variants via `args`:
+
+```json
+{
+  "status": "completed",
+  "summary": "Found genuine issues and optional nitpicks.",
+  "next_steps": [
+    {
+      "name": "mach12:pr-review-fix",
+      "args": "94 --review-comment 123 --assessment-comment 456",
+      "reason": "Address the genuine issues only."
+    },
+    {
+      "name": "mach12:pr-review-fix",
+      "args": "94 --review-comment 123 --assessment-comment 456 --include-nitpicks",
+      "reason": "Address genuine issues and optional nitpicks in one pass."
+    },
+    {
+      "name": "mach12:pr-pre-merge",
+      "args": "94",
+      "reason": "Skip fixes and proceed to merge checks."
+    }
+  ],
+  "recommended_next_step": 0
+}
+```
+
+The `reason` field is the primary differentiator — avoid overriding with
+`label` so users see the full command wire and know exactly what will run.
+
 ## Delegation
 
 Subroutine commands are invoked from a calling command's body via the
