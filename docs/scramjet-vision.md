@@ -675,9 +675,10 @@ edges, and stays out of the way.
   status-check message carrying the `<scramjet-next-step>` candidate
   block; the agent reports via `scramjet_command_status`. The candidate
   list rides in that user-role probe message (not the system prompt, to
-  preserve prompt-cache hit rates). `next_steps[].name` stays a free-form
-  string; the harness validates the agent's pick on the probe turn's
-  `agent_end` against the active command's policy.
+  preserve prompt-cache hit rates). `next_steps[].message` is the
+  suggested next message (a leading `/` makes it a slash command); the
+  harness validates the agent's pick on the probe turn's `agent_end`
+  against the active command's policy.
 - **Delegation dispatch mechanism.** Resolved: same-context tool-result
   delegation (see §3 *Dispatch mechanism*). The `delegate` tool returns
   the substituted command body as text in the tool result; the agent
