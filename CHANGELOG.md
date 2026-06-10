@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.0 — Multi-line layout for next-step selector
+
+Adds `MultiLineSelectList` component that renders selector items with the full command on line 1 and reason text indented below, improving readability for long command args and descriptions (issue #107).
+
+### Added
+
+- `MultiLineSelectList` component with word-wrapping, per-field line cap (4 lines with `…` truncation), variable-height scrolling, and keyboard navigation with wrap-around.
+- 27 unit tests for the new component.
+
+### Changed
+
+- Next-step selector uses `MultiLineSelectList` instead of `SelectList`, showing reason text on a separate indented line.
+- `[recommended]` tag moved from the command label to the description line.
+
 ## 0.13.3 — Switch pr-pre-merge next-step policy to open
 
 Changes `mach12:pr-pre-merge` from `ask` to `open` with two candidates: merge (`mach12:pr-merge`) when the checklist passes cleanly, and fix (`mach12:pr-review-fix`) when the checklist surfaces issues that warrant code changes (issue #99).
