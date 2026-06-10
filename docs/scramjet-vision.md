@@ -578,8 +578,8 @@ every step Mach 10 has eventually grown.
 | `pr-create`              | `open`  | `pr-review`                                         | —                                  |
 | `pr-review`              | `forced`| `pr-review-assessment`                              | —                                  |
 | `pr-review-assessment`   | `closed`| `pr-review-fix`, `pr-pre-merge`                     | —                                  |
-| `pr-review-fix`          | `closed`| `pr-review`, `pr-pre-merge`                         | `push`                             |
-| `pr-pre-merge`           | `ask`   | (user: merge / fix more / hold)                     | `find-contribution-guidelines`     |
+| `pr-review-fix`          | `open`  | `pr-review-fix`, `pr-review`, `pr-pre-merge`        | `push`                             |
+| `pr-pre-merge`           | `open`  | `pr-merge`, `pr-review-fix`                         | `find-contribution-guidelines`     |
 | `pr-merge`               | n/a     | (terminus — no `next`)                              | —                                  |
 | `push`                   | n/a     | (delegation target — no top-level `next`)           | (gh comment subroutines)           |
 
@@ -602,8 +602,10 @@ Notes:
 - **`issue-review` → `open`** because the agent can determine whether
   critical findings remain (recommend re-review) or the plan is approved
   (recommend implement). The user can still override either pick.
-- **`pr-pre-merge` → `ask`** for the same reason: the merge decision
-  itself is human-owned even when the checks pass.
+- **`pr-pre-merge` → `open`** because the agent can determine
+  merge-readiness from checklist results; the "hold" case maps to
+  omitting `next_steps` (no candidate recommended), which under `open`
+  policy ends the chain without dispatch.
 - **`pr-merge` has no `next`** because merge is the natural terminus of
   the default Mach 12 lifecycle. If a user has a post-merge process
   (e.g. `release:announce`), they should add an explicit `next` policy in
