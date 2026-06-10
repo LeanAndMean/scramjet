@@ -52,6 +52,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, sc
 				`Selector-visible options must be command next_steps entries chosen from these zero-based candidates (set each entry's name to the bare command, no leading slash; type may be omitted or set to \`command\`):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
 				`Set an entry's args when the selected command needs runtime identifiers or other arguments.\n` +
+				`Multiple entries may share the same command name with different args to offer meaningful variants (e.g., a conservative pass vs. a comprehensive pass).\n` +
 				`Each selector-visible option must include reason before you set recommended_next_step.\n` +
 				`${recommendationRule(scramjetEnabled)}\n` +
 				`If none apply, omit next_steps and recommended_next_step entirely to stop the chain.`;
@@ -69,6 +70,7 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, sc
 				`You may pick any slash command if it fits the work.${blacklistLine}\n` +
 				`You may also include free-text options with type=\`freetext\` and text set to the user-facing option.\n` +
 				`Set a command entry's args when the selected command needs runtime identifiers or other arguments.\n` +
+				`Multiple entries may share the same command name with different args to offer meaningful variants (e.g., a conservative pass vs. a comprehensive pass).\n` +
 				`Each selector-visible option must include reason before you set recommended_next_step.\n` +
 				`${recommendationRule(scramjetEnabled)}\n` +
 				`Omit next_steps and recommended_next_step entirely to stop the chain.`;

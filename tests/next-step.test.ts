@@ -170,6 +170,37 @@ describe("buildNextStepBlock — ask mode", () => {
 	});
 });
 
+describe("buildNextStepBlock — same-name-different-args awareness", () => {
+	it("closed mode mentions that multiple entries may share the same command name", () => {
+		const block = buildNextStepBlock(
+			{
+				mode: "closed",
+				candidates: [{ name: "mach12:pr-review-fix", hint: "Fix genuine issues" }, { name: "mach12:pr-pre-merge" }],
+			},
+			"mach12:pr-review-assessment",
+		);
+		expect(block).toContain("Multiple entries may share the same command name with different args");
+	});
+
+	it("open mode mentions that multiple entries may share the same command name", () => {
+		const block = buildNextStepBlock(
+			{ mode: "open", candidates: [{ name: "mach12:issue-review" }] },
+			"mach12:issue-plan",
+		);
+		expect(block).toContain("Multiple entries may share the same command name with different args");
+	});
+
+	it("forced mode does not mention same-name pattern (single target only)", () => {
+		const block = buildNextStepBlock({ mode: "forced", target: "a:b" }, "x:y");
+		expect(block).not.toContain("Multiple entries may share");
+	});
+
+	it("ask mode does not mention same-name pattern (no next_steps)", () => {
+		const block = buildNextStepBlock({ mode: "ask" }, "x:y");
+		expect(block).not.toContain("Multiple entries may share");
+	});
+});
+
 describe("buildNextStepBlock — close-tag escaping", () => {
 	it("escapes </scramjet-next-step> inside a candidate hint", () => {
 		const block = buildNextStepBlock(

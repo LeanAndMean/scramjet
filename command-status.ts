@@ -78,7 +78,8 @@ const COMMAND_NEXT_STEP_SCHEMA = Type.Object({
 	args: Type.Optional(
 		Type.String({
 			description:
-				"Optional argument string passed to the command verbatim (no leading space), e.g. '55' or '36 --review-comment 12345'.",
+				"Optional argument string passed to the command verbatim (no leading space), e.g. '55' or '36 --review-comment 12345'. " +
+				"Multiple entries may share the same name with different args to offer meaningful variants.",
 		}),
 	),
 	fresh_session: Type.Boolean({
@@ -144,7 +145,8 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				Type.Array(NEXT_STEP_SCHEMA, {
 					description:
 						"Ordered next-step candidates for completed commands. Omit entirely to stop the chain. " +
-						"Command entries may omit type for compatibility; free-text entries use type='freetext'.",
+						"Command entries may omit type for compatibility; free-text entries use type='freetext'. " +
+						"Multiple entries may share the same command name with different args to offer meaningful variants.",
 				}),
 			),
 			recommended_next_step: Type.Optional(
