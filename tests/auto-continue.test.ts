@@ -378,7 +378,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			expect(state.commandPhase).toBe("idle");
@@ -456,7 +456,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "done",
-				next_steps: [{ name: "b:target", args: "55 --review-comment 12345", fresh_session: true }],
+				next_steps: [{ message: "/b:target 55 --review-comment 12345", fresh_session: true }],
 				recommended_next_step: 0,
 			});
 
@@ -475,7 +475,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "done",
-				next_steps: [{ name: "b:target", args: "55 --review-comment 12345", fresh_session: false }],
+				next_steps: [{ message: "/b:target 55 --review-comment 12345" }],
 				recommended_next_step: 0,
 			});
 
@@ -493,7 +493,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "done",
-				next_steps: [{ name: "z:wrong", args: "danger", fresh_session: true }],
+				next_steps: [{ message: "/z:wrong danger", fresh_session: true }],
 				recommended_next_step: 0,
 			});
 
@@ -608,7 +608,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "review can continue" }],
+				next_steps: [{ message: "/b:ok", reason: "review can continue" }],
 				recommended_next_step: 0,
 			});
 
@@ -626,8 +626,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "s",
 				next_steps: [
-					{ name: "z:bad", fresh_session: false, reason: "not valid" },
-					{ name: "b:ok", args: "alpha beta", fresh_session: false, reason: "best next step" },
+					{ message: "/z:bad", reason: "not valid" },
+					{ message: "/b:ok alpha beta", reason: "best next step" },
 				],
 				recommended_next_step: 1,
 			});
@@ -648,7 +648,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: true, reason: "review can continue" }],
+				next_steps: [{ message: "/b:ok", fresh_session: true, reason: "review can continue" }],
 				recommended_next_step: 0,
 			});
 
@@ -667,7 +667,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "other-extension:cmd", fresh_session: true, reason: "external command fits" }],
+				next_steps: [{ message: "/other-extension:cmd", fresh_session: true, reason: "external command fits" }],
 				recommended_next_step: 0,
 			});
 
@@ -685,7 +685,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "z:not-in-list", fresh_session: false, reason: "bad fit" }],
+				next_steps: [{ message: "/z:not-in-list", reason: "bad fit" }],
 				recommended_next_step: 0,
 			});
 
@@ -706,8 +706,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "s",
 				next_steps: [
-					{ name: "b:first", fresh_session: false, reason: "recommended path" },
-					{ name: "b:second", fresh_session: false, reason: "manual alternate" },
+					{ message: "/b:first", reason: "recommended path" },
+					{ message: "/b:second", reason: "manual alternate" },
 				],
 				recommended_next_step: 0,
 			});
@@ -730,7 +730,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				next_steps: [{ message: "Please continue in prose.", reason: "best handled as text" }],
 				recommended_next_step: 0,
 			});
 
@@ -749,7 +749,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				next_steps: [{ message: "Please continue in prose.", reason: "best handled as text" }],
 				recommended_next_step: 0,
 			});
 			await vi.advanceTimersByTimeAsync(10000);
@@ -768,14 +768,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [
-					{
-						name: "other-extension:cmd",
-						args: "--flag value",
-						fresh_session: false,
-						reason: "external step fits",
-					},
-				],
+				next_steps: [{ message: "/other-extension:cmd --flag value", reason: "external step fits" }],
 				recommended_next_step: 0,
 			});
 
@@ -793,7 +786,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "danger:cmd", fresh_session: false, reason: "dangerous" }],
+				next_steps: [{ message: "/danger:cmd", reason: "dangerous" }],
 				recommended_next_step: 0,
 			});
 
@@ -809,7 +802,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
@@ -827,8 +820,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				status: "completed",
 				summary: "s",
 				next_steps: [
-					{ name: "z:bad", fresh_session: false, reason: "bad fit" },
-					{ name: "b:ok", fresh_session: false, reason: "valid fallback" },
+					{ message: "/z:bad", reason: "bad fit" },
+					{ message: "/b:ok", reason: "valid fallback" },
 				],
 				recommended_next_step: 0,
 			});
@@ -846,7 +839,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				next_steps: [{ message: "Please continue in prose.", reason: "best handled as text" }],
 				recommended_next_step: 0,
 			});
 
@@ -864,13 +857,13 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ type: "freetext", text: "Please continue in prose.", reason: "best handled as text" }],
+				next_steps: [{ message: "Please continue in prose.", reason: "best handled as text" }],
 				recommended_next_step: 0,
 			});
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
-			expect(ctxBag.notifications[0].message).toContain("free-text");
+			expect(ctxBag.notifications[0].message).toContain("not a slash command");
 			expect(ctxBag.notifications[0].message).toContain("Please continue in prose.");
 		});
 
@@ -882,7 +875,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "x:y", fresh_session: false }],
+				next_steps: [{ message: "/x:y" }],
 				recommended_next_step: 0,
 			});
 
@@ -1084,7 +1077,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await driveProbeTurn(bag, ctxBag, report, {
 				status: "completed",
 				summary: "PR created",
-				next_steps: [{ name: "mach12:pr-review", fresh_session: false, reason: "PR is ready for review" }],
+				next_steps: [{ message: "/mach12:pr-review", reason: "PR is ready for review" }],
 				recommended_next_step: 0,
 			});
 
@@ -1195,7 +1188,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await driveProbeTurn(bag, ctxBag, report, {
 				status: "completed",
 				summary: "PR created",
-				next_steps: [{ name: "mach12:pr-review", fresh_session: false, reason: "PR is ready for review" }],
+				next_steps: [{ message: "/mach12:pr-review", reason: "PR is ready for review" }],
 				recommended_next_step: 0,
 			});
 			expect(ctxBag.dispatched).toEqual([
@@ -1252,7 +1245,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", args: "55", fresh_session: true, reason: "continue in fresh session" }],
+				next_steps: [{ message: "/b:ok 55", fresh_session: true, reason: "continue in fresh session" }],
 				recommended_next_step: 0,
 			});
 
@@ -1269,7 +1262,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: true, reason: "continue in fresh session" }],
+				next_steps: [{ message: "/b:ok", fresh_session: true, reason: "continue in fresh session" }],
 				recommended_next_step: 0,
 			});
 			await flushMicrotasks();
@@ -1288,7 +1281,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: true, reason: "continue in fresh session" }],
+				next_steps: [{ message: "/b:ok", fresh_session: true, reason: "continue in fresh session" }],
 				recommended_next_step: 0,
 			});
 			await flushMicrotasks();
@@ -1331,7 +1324,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			return { bag, ctxBag, state };
@@ -1384,7 +1377,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			await bag.emit("session_shutdown", {}, ctxBag.ctx);
@@ -1413,7 +1406,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			await bag.emit("session_shutdown", {}, ctxBag.ctx);
@@ -1440,7 +1433,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			await bag.emit("session_shutdown", {}, ctxBag.ctx);
@@ -1477,7 +1470,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			await bag.emit("session_shutdown", {}, ctxBag.ctx);
@@ -1502,7 +1495,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			await flushMicrotasks();
@@ -1522,7 +1515,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
 				summary: "s",
-				next_steps: [{ name: "b:ok", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
 			await flushMicrotasks();
@@ -1611,7 +1604,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const result = (await report({
 				status: "completed",
 				summary: "stale",
-				next_steps: [{ name: "b:target", fresh_session: false, reason: "continue" }],
+				next_steps: [{ message: "/b:target", reason: "continue" }],
 				recommended_next_step: 0,
 			})) as any;
 			expect(result.terminate).toBeUndefined();

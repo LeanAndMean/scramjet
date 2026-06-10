@@ -109,9 +109,7 @@ The subroutine posts the body and returns the comment URL and numeric ID. Record
 
 When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"`. This command declares a `forced` next step, so Scramjet runs `mach12:pr-review-assessment` regardless; include a single `next_steps` entry only to pass the runtime context to that forced target:
 
-- `name`: `mach12:pr-review-assessment` (must match the forced target)
-- `args`: `<pr-number> --review-comment <comment-id>`
-- `fresh_session`: `false`
+- `message`: `/mach12:pr-review-assessment <pr-number> --review-comment <comment-id>` (the message must start with the forced target)
 
 If the review could not finish — a blocker, a question for the user, or an incomplete turn — report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`, and the forced target will not run.
 

@@ -40,17 +40,11 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
-import { type ValidatedNextStep, validateNextSteps } from "./commands/validator.ts";
+import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.ts";
 import { buildProbeMessage } from "./next-step.ts";
-import { buildNextStepWire, dispatchNextStep } from "./next-step-dispatch.ts";
+import { dispatchNextStep } from "./next-step-dispatch.ts";
 import { selectNextStep } from "./next-step-selector.ts";
-import type {
-	CommandStatusCommandNextStep,
-	CommandStatusNextStep,
-	NextStep,
-	NextStepPolicy,
-	ScramjetState,
-} from "./types.ts";
+import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
 // F1: liveness watchdog window. Generous on purpose — a live probe turn is a
@@ -65,12 +59,14 @@ const COUNTDOWN_SECONDS = 3;
 // which would otherwise drop a legitimate chain — worse than the stall it fixes.
 const PROBE_WATCHDOG_MS = 30_000;
 
-function isCommandNextStep(step: CommandStatusNextStep | undefined): step is CommandStatusCommandNextStep {
-	return step !== undefined && (step.type === undefined || step.type === "command");
-}
-
-function toNextStep(step: CommandStatusCommandNextStep): NextStep {
-	return { name: step.name, args: step.args, freshSession: step.fresh_session, reason: step.reason };
+// Parse a raw report entry's message into a dispatchable NextStep, or null
+// when the message is not a slash command. Used for the forced-handoff path,
+// which reads the raw payload before selector validation.
+function toNextStep(step: CommandStatusNextStep | undefined): NextStep | undefined {
+	if (!step) return undefined;
+	const parsed = parseSlashCommand(step.message);
+	if (!parsed) return undefined;
+	return { name: parsed.name, args: parsed.args, freshSession: step.fresh_session ?? false, reason: step.reason };
 }
 
 function selectorErrorMessage(err: unknown): string {
@@ -126,12 +122,14 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
-	function wireFor(step: NextStep): string {
-		return buildNextStepWire(step);
-	}
-
 	function executeStep(step: NextStep, ctx: ExtensionContext) {
 		dispatchNextStep(ctx, state, step, { origin: "agent" });
+	}
+
+	// Build the dispatchable NextStep for a validated option whose message
+	// parsed as a slash command.
+	function toDispatchStep(option: ValidatedNextStep, parsed: NonNullable<ValidatedNextStep["parsedCommand"]>) {
+		return { name: parsed.name, args: parsed.args, freshSession: option.freshSession, reason: option.reason };
 	}
 
 	function dispatchForced(target: string, handoff: NextStep | undefined, ctx: ExtensionContext): boolean {
@@ -214,8 +212,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	function optionSummary(option: ReturnType<typeof validateNextSteps>["valid"][number]): string {
-		if (option.type === "command") return buildNextStepWire(option.step);
-		return cleanForNotify(option.label ?? option.text);
+		return cleanForNotify(option.message);
 	}
 
 	function optionsSummary(options: ReturnType<typeof validateNextSteps>["valid"]): string {
@@ -223,10 +220,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	function runSelectedOption(option: ValidatedNextStep, ctx: ExtensionContext) {
-		if (option.type === "command") {
-			executeStep(option.step, ctx);
+		if (option.parsedCommand) {
+			executeStep(toDispatchStep(option, option.parsedCommand), ctx);
 		} else {
-			ctx.ui.pasteToEditor(option.text);
+			ctx.ui.pasteToEditor(option.message);
 		}
 	}
 
@@ -241,7 +238,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const selectorId = activeSelectorId;
 		const controller = new AbortController();
 		activeSelectorAbort = controller;
-		const autoSelect = state.enabled && result.recommended?.type === "command" ? result.recommended : undefined;
+		const autoSelect = state.enabled && result.recommended?.parsedCommand ? result.recommended : undefined;
 		void selectNextStep(ctx, {
 			options: result.valid,
 			recommended: result.recommended,
@@ -274,8 +271,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	function routeWithoutUi(result: ReturnType<typeof validateNextSteps>, ctx: ExtensionContext) {
 		if (!result.recommended) {
 			if (result.recommendedReason) {
-				const level =
-					state.enabled && result.valid.every((option) => option.type === "freetext") ? "info" : "warning";
+				const level = state.enabled && result.valid.every((option) => !option.parsedCommand) ? "info" : "warning";
 				ctx.ui.notify(
 					`scramjet: ${result.recommendedReason}; valid option(s): ${optionsSummary(result.valid)}`,
 					level,
@@ -284,11 +280,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		if (result.recommended.type !== "command") {
+		if (!result.recommended.parsedCommand) {
 			const text = optionSummary(result.recommended);
 			if (state.enabled) {
 				ctx.ui.notify(
-					`scramjet: recommended next step is free-text (${text}); automatic dispatch skipped`,
+					`scramjet: recommended next step is not a slash command (${text}); automatic dispatch skipped`,
 					"warning",
 				);
 			} else {
@@ -300,13 +296,14 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		const step = result.recommended.step;
 		if (state.enabled) {
-			executeStep(step, ctx);
+			executeStep(toDispatchStep(result.recommended, result.recommended.parsedCommand), ctx);
 		} else {
-			const wire = wireFor(step);
-			const fresh = step.freshSession ? " (fresh session)" : "";
-			ctx.ui.notify(`scramjet: next would be ${wire}${fresh}; /scramjet on to chain`, "info");
+			const fresh = result.recommended.freshSession ? " (fresh session)" : "";
+			ctx.ui.notify(
+				`scramjet: next would be ${cleanForNotify(result.recommended.message)}${fresh}; /scramjet on to chain`,
+				"info",
+			);
 		}
 	}
 
@@ -321,8 +318,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (policy.mode === "forced") {
 			// Forced fires regardless of state.enabled: no decision is delegated to
 			// the agent or user; the status report is only the safety gate that
-			// distinguishes completion from clarification/error.
-			const handoff = isCommandNextStep(status.next_steps?.[0]) ? toNextStep(status.next_steps[0]) : undefined;
+			// distinguishes completion from clarification/error. A handoff whose
+			// message is not a slash command parses to undefined and is ignored.
+			const handoff = toNextStep(status.next_steps?.[0]);
 			dispatchForced(policy.target, handoff, ctx);
 			return;
 		}
@@ -349,8 +347,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 		if (ctx.hasUI) {
 			if (result.recommendedReason) {
-				const level =
-					state.enabled && result.valid.every((option) => option.type === "freetext") ? "info" : "warning";
+				const level = state.enabled && result.valid.every((option) => !option.parsedCommand) ? "info" : "warning";
 				ctx.ui.notify(
 					`scramjet: ${result.recommendedReason}; valid option(s): ${optionsSummary(result.valid)}`,
 					level,

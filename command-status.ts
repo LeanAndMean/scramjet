@@ -19,14 +19,9 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { parseSlashCommand } from "./commands/validator.ts";
 import { recordCommandStatus } from "./history.ts";
-import type {
-	CommandPhase,
-	CommandStatusCommandNextStep,
-	CommandStatusNextStep,
-	CommandStatusPayload,
-	ScramjetState,
-} from "./types.ts";
+import type { CommandPhase, CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
 
 // Shared shape for the tool's result `details` so both the out-of-phase error
 // branch and the success branch infer the same TDetails (mirrors delegate.ts's
@@ -37,17 +32,9 @@ interface CommandStatusDetails {
 	status?: CommandStatusPayload["status"];
 	summary?: string;
 	recommended_next_step?: number;
-	type?: "command" | "freetext";
-	name?: string;
-	args?: string;
+	message?: string;
 	fresh_session?: boolean;
-	text?: string;
-	label?: string;
 	reason?: string;
-}
-
-function isCommandNextStep(step: CommandStatusNextStep | undefined): step is CommandStatusCommandNextStep {
-	return step !== undefined && (step.type === undefined || step.type === "command");
 }
 
 // customType for the hidden status-check probe message. display:false keeps it
@@ -67,36 +54,22 @@ const OUT_OF_PHASE_ERROR =
 // declarations of the same payload. The congruence guards underneath fail the
 // build if either side renames, adds, or drops a field — so a `fresh_session`
 // rename can't typecheck clean while silently breaking the runtime contract.
-const COMMAND_NEXT_STEP_SCHEMA = Type.Object({
-	type: Type.Optional(
-		Type.Literal("command", { description: "Command next-step entry. May be omitted for compatibility." }),
-	),
-	name: Type.String({
+const NEXT_STEP_SCHEMA = Type.Object({
+	message: Type.String({
 		description:
-			"Bare command name (no leading slash, no arguments), e.g. 'mach12:issue-plan'. Must match the declared target for forced policies and one of the listed candidates for closed policies.",
+			"The suggested next message, shown to the user verbatim and dispatched on selection. " +
+			"For a slash command, start with '/' and include any arguments, e.g. '/mach12:issue-plan 55'. " +
+			"For a non-command follow-up, write the message text directly.",
 	}),
-	args: Type.Optional(
-		Type.String({
+	fresh_session: Type.Optional(
+		Type.Boolean({
 			description:
-				"Optional argument string passed to the command verbatim (no leading space), e.g. '55' or '36 --review-comment 12345'.",
+				"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session'). " +
+				"Only meaningful for slash commands; defaults to false.",
 		}),
 	),
-	fresh_session: Type.Boolean({
-		description:
-			"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session').",
-	}),
-	label: Type.Optional(Type.String({ description: "Optional short label for the next-step selector." })),
 	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
 });
-
-const FREE_TEXT_NEXT_STEP_SCHEMA = Type.Object({
-	type: Type.Literal("freetext", { description: "Free-text next-step entry for open selector policies." }),
-	text: Type.String({ description: "Free-text user-facing follow-up option." }),
-	label: Type.Optional(Type.String({ description: "Optional short label for the next-step selector." })),
-	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
-});
-
-const NEXT_STEP_SCHEMA = Type.Union([COMMAND_NEXT_STEP_SCHEMA, FREE_TEXT_NEXT_STEP_SCHEMA]);
 
 // Bidirectional assignability: each direction fails to compile if the schema and
 // the interface diverge (a rename drops a required field from one side's view).
@@ -144,7 +117,8 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				Type.Array(NEXT_STEP_SCHEMA, {
 					description:
 						"Ordered next-step candidates for completed commands. Omit entirely to stop the chain. " +
-						"Command entries may omit type for compatibility; free-text entries use type='freetext'.",
+						"Each entry is a suggested next message; entries may reuse the same slash command with " +
+						"different arguments to offer meaningful variants.",
 				}),
 			),
 			recommended_next_step: Type.Optional(
@@ -201,12 +175,11 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				params.recommended_next_step === undefined
 					? params.next_steps?.[0]
 					: params.next_steps?.[params.recommended_next_step];
-			// S4: mirror buildNextStepWire — trimStart the args so the forward
-			// pointer rendered here can't show a double space either.
-			const nextArgs = isCommandNextStep(next) ? next.args?.trimStart() : undefined;
+			// Forward pointer only for slash-command messages: a non-command
+			// message is pasted, not dispatched, so an arrow would overstate it.
 			const text =
-				params.status === "completed" && isCommandNextStep(next)
-					? `→ /${next.name}${nextArgs ? ` ${nextArgs}` : ""}`
+				params.status === "completed" && next && parseSlashCommand(next.message)
+					? `→ ${next.message.trim()}`
 					: `status: ${params.status}`;
 
 			const details: CommandStatusDetails = {

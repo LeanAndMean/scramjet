@@ -1,6 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { validateNextStep, validateNextSteps } from "../commands/validator.ts";
-import type { CommandStatusCommandNextStep, CommandStatusNextStep } from "../types.ts";
+import { parseSlashCommand, validateNextStep, validateNextSteps } from "../commands/validator.ts";
+import type { CommandStatusNextStep } from "../types.ts";
+
+describe("parseSlashCommand", () => {
+	it("parses a bare slash command with no args", () => {
+		expect(parseSlashCommand("/mach12:pr-merge")).toEqual({ name: "mach12:pr-merge", args: undefined });
+	});
+
+	it("parses a slash command with args", () => {
+		expect(parseSlashCommand("/mach12:pr-review-fix 94 --review-comment 123")).toEqual({
+			name: "mach12:pr-review-fix",
+			args: "94 --review-comment 123",
+		});
+	});
+
+	it("trims surrounding whitespace before parsing", () => {
+		expect(parseSlashCommand("  /mach12:pr-merge 113  ")).toEqual({ name: "mach12:pr-merge", args: "113" });
+	});
+
+	it("returns null for a non-slash message", () => {
+		expect(parseSlashCommand("Let's discuss the failures")).toBeNull();
+	});
+
+	it("returns null for a bare slash", () => {
+		expect(parseSlashCommand("/")).toBeNull();
+	});
+
+	it("returns null for a slash followed by a space (empty command name)", () => {
+		expect(parseSlashCommand("/ foo")).toBeNull();
+	});
+
+	it("collapses args that are only whitespace to undefined", () => {
+		expect(parseSlashCommand("/mach12:pr-merge   ")).toEqual({ name: "mach12:pr-merge", args: undefined });
+	});
+});
 
 describe("validateNextStep — closed mode", () => {
 	const policy = {
@@ -70,15 +103,84 @@ describe("validateNextStep — ask mode", () => {
 	});
 });
 
+describe("validateNextSteps — same-command-different-args messages", () => {
+	const closed = {
+		mode: "closed" as const,
+		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
+	};
+
+	const genuineOnly: CommandStatusNextStep = {
+		message: "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456",
+		fresh_session: true,
+		reason: "Address genuine issues only",
+	};
+
+	const withNitpicks: CommandStatusNextStep = {
+		message: "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456 --include-nitpicks",
+		fresh_session: true,
+		reason: "Address genuine issues and nitpicks",
+	};
+
+	const preMerge: CommandStatusNextStep = {
+		message: "/mach12:pr-pre-merge 94",
+		reason: "No issues found, proceed to merge",
+	};
+
+	it("accepts both same-command messages with different args under closed validation", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks], closed, 0);
+		expect(result.valid).toHaveLength(2);
+		expect(result.skipped).toEqual([]);
+	});
+
+	it("assigns distinct indexes to same-command entries", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks, preMerge], closed, 0);
+		expect(result.valid.map((o) => o.index)).toEqual([0, 1, 2]);
+	});
+
+	it("preserves each entry's full message and parsed args", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks], closed, 0);
+		expect(result.valid[0].message).toBe(genuineOnly.message);
+		expect(result.valid[1].message).toBe(withNitpicks.message);
+		expect(result.valid[0].parsedCommand?.args).toBe("94 --review-comment 123 --assessment-comment 456");
+		expect(result.valid[1].parsedCommand?.args).toBe(
+			"94 --review-comment 123 --assessment-comment 456 --include-nitpicks",
+		);
+	});
+
+	it("recommendation correctly targets the second same-command entry", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks, preMerge], closed, 1);
+		expect(result.recommended).toMatchObject({
+			index: 1,
+			reason: "Address genuine issues and nitpicks",
+			parsedCommand: { name: "mach12:pr-review-fix" },
+		});
+	});
+
+	it("recommendation correctly targets the first same-command entry", () => {
+		const result = validateNextSteps([genuineOnly, withNitpicks, preMerge], closed, 0);
+		expect(result.recommended).toMatchObject({
+			index: 0,
+			reason: "Address genuine issues only",
+			parsedCommand: { name: "mach12:pr-review-fix" },
+		});
+	});
+
+	it("same-command messages with different args pass open validation", () => {
+		const open = { mode: "open" as const, candidates: [{ name: "mach12:pr-review-fix" }] };
+		const result = validateNextSteps([genuineOnly, withNitpicks], open, 0);
+		expect(result.valid).toHaveLength(2);
+		expect(result.skipped).toEqual([]);
+	});
+});
+
 describe("validateNextSteps — selector-visible array form", () => {
 	const closed = {
 		mode: "closed" as const,
 		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
 	};
 
-	const entry = (over: Partial<CommandStatusCommandNextStep>): CommandStatusNextStep => ({
-		name: "mach12:pr-review-fix",
-		fresh_session: false,
+	const entry = (over: Partial<CommandStatusNextStep>): CommandStatusNextStep => ({
+		message: "/mach12:pr-review-fix",
 		reason: "fits this workflow",
 		...over,
 	});
@@ -106,8 +208,8 @@ describe("validateNextSteps — selector-visible array form", () => {
 	it("accepts closed candidates and selects the recommendation by zero-based original index", () => {
 		const result = validateNextSteps(
 			[
-				entry({ name: "mach12:pr-review-fix", args: "55", fresh_session: true, reason: "fix review findings" }),
-				entry({ name: "mach12:pr-pre-merge", fresh_session: false, reason: "review is complete" }),
+				entry({ message: "/mach12:pr-review-fix 55", fresh_session: true, reason: "fix review findings" }),
+				entry({ message: "/mach12:pr-pre-merge", reason: "review is complete" }),
 			],
 			closed,
 			1,
@@ -115,61 +217,53 @@ describe("validateNextSteps — selector-visible array form", () => {
 
 		expect(result.valid).toHaveLength(2);
 		expect(result.recommended).toEqual({
-			type: "command",
 			index: 1,
-			label: undefined,
 			reason: "review is complete",
-			step: {
-				name: "mach12:pr-pre-merge",
-				args: undefined,
-				freshSession: false,
-				reason: "review is complete",
-			},
+			message: "/mach12:pr-pre-merge",
+			freshSession: false,
+			parsedCommand: { name: "mach12:pr-pre-merge", args: undefined },
 		});
 		expect(result.skipped).toEqual([]);
 	});
 
-	it("treats missing type as a legacy command entry", () => {
-		const result = validateNextSteps([entry({ type: undefined, name: "mach12:pr-review-fix" })], closed, 0);
-		expect(result.recommended?.type).toBe("command");
-		expect(result.recommended).toMatchObject({ index: 0, step: { name: "mach12:pr-review-fix" } });
+	it("defaults freshSession to false when fresh_session is omitted", () => {
+		const result = validateNextSteps([entry({})], closed, 0);
+		expect(result.recommended?.freshSession).toBe(false);
 	});
 
 	it("records skipped invalid entries with reasons without changing recommendation indexes", () => {
 		const result = validateNextSteps(
-			[entry({ name: "z:not-in-list" }), entry({ name: "mach12:pr-pre-merge", fresh_session: false })],
+			[entry({ message: "/z:not-in-list" }), entry({ message: "/mach12:pr-pre-merge" })],
 			closed,
 			1,
 		);
 
 		expect(result.valid.map((option) => option.index)).toEqual([1]);
-		expect(result.recommended).toMatchObject({ type: "command", index: 1, step: { name: "mach12:pr-pre-merge" } });
+		expect(result.recommended).toMatchObject({ index: 1, parsedCommand: { name: "mach12:pr-pre-merge" } });
 		expect(result.skipped).toEqual([
 			{
 				index: 0,
-				label: "z:not-in-list",
+				label: "/z:not-in-list",
 				reason: expect.stringContaining("not in closed candidates"),
 			},
 		]);
 	});
 
 	it("rejects every invalid entry and keeps the first rejection reason", () => {
-		const result = validateNextSteps([entry({ name: "z:one" }), entry({ name: "z:two" })], closed, 0);
+		const result = validateNextSteps([entry({ message: "/z:one" }), entry({ message: "/z:two" })], closed, 0);
 		expect(result.valid).toEqual([]);
-		expect(result.skipped.map((step) => step.label)).toEqual(["z:one", "z:two"]);
+		expect(result.skipped.map((step) => step.label)).toEqual(["/z:one", "/z:two"]);
 		expect(result.reason).toContain("z:one");
-		expect(result.recommendedReason).toContain("recommended_next_step 0 points to invalid next step z:one");
+		expect(result.recommendedReason).toContain("recommended_next_step 0 points to invalid next step /z:one");
 	});
 
-	it("accepts open command and free-text candidates", () => {
+	it("accepts open command and non-command message candidates", () => {
 		const open = { mode: "open" as const, candidates: [{ name: "mach12:issue-review" }] };
 		const result = validateNextSteps(
 			[
-				entry({ name: "infra:rotate-key", reason: "outside Scramjet but useful" }),
+				entry({ message: "/infra:rotate-key", reason: "outside Scramjet but useful" }),
 				{
-					type: "freetext",
-					text: "Please summarize the issue.",
-					label: "Ask for summary",
+					message: "Please summarize the issue.",
 					reason: "needs more context",
 				},
 			],
@@ -179,11 +273,11 @@ describe("validateNextSteps — selector-visible array form", () => {
 
 		expect(result.valid).toHaveLength(2);
 		expect(result.recommended).toEqual({
-			type: "freetext",
 			index: 1,
-			label: "Ask for summary",
 			reason: "needs more context",
-			text: "Please summarize the issue.",
+			message: "Please summarize the issue.",
+			freshSession: false,
+			parsedCommand: null,
 		});
 	});
 
@@ -193,20 +287,16 @@ describe("validateNextSteps — selector-visible array form", () => {
 			candidates: [{ name: "mach12:issue-review" }],
 			blacklist: ["mach12:pr-merge"],
 		};
-		const result = validateNextSteps([entry({ name: "mach12:pr-merge" })], open, 0);
+		const result = validateNextSteps([entry({ message: "/mach12:pr-merge" })], open, 0);
 		expect(result.valid).toEqual([]);
 		expect(result.skipped[0]).toMatchObject({
-			label: "mach12:pr-merge",
+			label: "/mach12:pr-merge",
 			reason: expect.stringContaining("blacklisted"),
 		});
 	});
 
-	it("rejects free-text outside open policies", () => {
-		const result = validateNextSteps(
-			[{ type: "freetext", text: "Continue in prose", reason: "not a command" }],
-			closed,
-			0,
-		);
+	it("rejects non-command messages outside open policies", () => {
+		const result = validateNextSteps([{ message: "Continue in prose", reason: "not a command" }], closed, 0);
 		expect(result.valid).toEqual([]);
 		expect(result.skipped[0].reason).toContain("open policies");
 	});
@@ -217,9 +307,9 @@ describe("validateNextSteps — selector-visible array form", () => {
 		expect(result.skipped[0].reason).toContain("must include reason");
 	});
 
-	it("rejects missing reason for selector-visible free-text entries", () => {
+	it("rejects missing reason for selector-visible non-command entries", () => {
 		const open = { mode: "open" as const, candidates: [] };
-		const result = validateNextSteps([{ type: "freetext", text: "Continue in prose" }], open, 0);
+		const result = validateNextSteps([{ message: "Continue in prose" }], open, 0);
 		expect(result.valid).toEqual([]);
 		expect(result.skipped[0].reason).toContain("must include reason");
 	});
@@ -229,13 +319,13 @@ describe("validateNextSteps — selector-visible array form", () => {
 	});
 
 	it("does not select a recommendation when the index is missing", () => {
-		const result = validateNextSteps([entry({ name: "mach12:pr-review-fix" })], closed);
+		const result = validateNextSteps([entry({})], closed);
 		expect(result.recommended).toBeNull();
 		expect(result.recommendedReason).toContain("missing recommended_next_step");
 	});
 
 	it("does not fall back to the first valid option when the recommended index is invalid", () => {
-		const result = validateNextSteps([entry({ name: "mach12:pr-review-fix" })], closed, 2);
+		const result = validateNextSteps([entry({})], closed, 2);
 		expect(result.valid).toHaveLength(1);
 		expect(result.recommended).toBeNull();
 		expect(result.recommendedReason).toContain("outside next_steps");
@@ -243,9 +333,9 @@ describe("validateNextSteps — selector-visible array form", () => {
 
 	it("rejects every entry under an ask policy", () => {
 		const ask = { mode: "ask" as const, hint: "User picks" };
-		const result = validateNextSteps([entry({ name: "x:y" }), entry({ name: "x:z" })], ask, 0);
+		const result = validateNextSteps([entry({ message: "/x:y" }), entry({ message: "/x:z" })], ask, 0);
 		expect(result.valid).toEqual([]);
-		expect(result.skipped.map((step) => step.label)).toEqual(["x:y", "x:z"]);
+		expect(result.skipped.map((step) => step.label)).toEqual(["/x:y", "/x:z"]);
 		expect(result.reason).toContain("ask");
 	});
 });

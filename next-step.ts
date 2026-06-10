@@ -30,7 +30,7 @@ function formatCandidates(candidates: Candidate[]): string {
 
 function recommendationRule(scramjetEnabled: boolean): string {
 	return scramjetEnabled
-		? "With `/scramjet on`, set `recommended_next_step` to the zero-based index only when the recommended entry is a command; do not set it for a free-text entry."
+		? "With `/scramjet on`, set `recommended_next_step` to the zero-based index only when the recommended entry's message is a slash command; do not set it for a non-command message."
 		: "With `/scramjet off`, set `recommended_next_step` to the zero-based index of the best option to show the user; Scramjet will not auto-dispatch it.";
 }
 
@@ -42,34 +42,37 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, sc
 			body =
 				`The command \`${id}\` declares a \`forced\` next-step: ` +
 				`\`${safe(policy.target)}\` will run after this command completes. ` +
-				`You may add a single next_steps entry only to pass args or fresh_session to that declared target; ` +
-				`its name must be \`${safe(policy.target)}\`. ` +
+				`You may add a single next_steps entry only to pass arguments or fresh_session to that declared target; ` +
+				`its message must be \`/${safe(policy.target)}\` followed by any arguments. ` +
 				`Omit next_steps if no runtime arguments need to be passed.`;
 			break;
 		case "closed":
 			body =
 				`The command \`${id}\` declares a \`closed\` next-step policy.\n` +
-				`Selector-visible options must be command next_steps entries chosen from these zero-based candidates (set each entry's name to the bare command, no leading slash; type may be omitted or set to \`command\`):\n` +
+				`Each next_steps entry has a \`message\` field containing the next action as a slash command: start with \`/\`, use one of these zero-based candidates, and include any arguments (e.g., \`/<candidate> <args>\`):\n` +
 				`${formatCandidates(policy.candidates)}\n` +
-				`Set an entry's args when the selected command needs runtime identifiers or other arguments.\n` +
-				`Each selector-visible option must include reason before you set recommended_next_step.\n` +
+				`Entries may reuse the same command with different arguments to offer meaningful variants.\n` +
+				`Set \`fresh_session: true\` when the command should run in a clean session.\n` +
+				`Each entry must include reason before you set recommended_next_step.\n` +
 				`${recommendationRule(scramjetEnabled)}\n` +
 				`If none apply, omit next_steps and recommended_next_step entirely to stop the chain.`;
 			break;
 		case "open": {
 			const blacklistLine = policy.blacklist?.length
-				? `\nDo not pick command entries for: ${policy.blacklist.map(safe).join(", ")}.`
+				? `\nDo not pick slash commands for: ${policy.blacklist.map(safe).join(", ")}.`
 				: "";
 			const candidatesLine = policy.candidates.length
-				? `Suggested command candidates with zero-based indexes (set each command entry's name to the bare command, no leading slash; type may be omitted or set to \`command\`):\n${formatCandidates(policy.candidates)}\n`
-				: "No suggested command candidates are listed for next_steps entries.\n";
+				? `Suggested commands with zero-based indexes:\n${formatCandidates(policy.candidates)}\n`
+				: "No suggested commands are listed.\n";
 			body =
 				`The command \`${id}\` declares an \`open\` next-step policy.\n` +
 				candidatesLine +
 				`You may pick any slash command if it fits the work.${blacklistLine}\n` +
-				`You may also include free-text options with type=\`freetext\` and text set to the user-facing option.\n` +
-				`Set a command entry's args when the selected command needs runtime identifiers or other arguments.\n` +
-				`Each selector-visible option must include reason before you set recommended_next_step.\n` +
+				`Each next_steps entry has a \`message\` field containing the next action.\n` +
+				`For slash commands, start with \`/\` and include any arguments (e.g., \`/mach12:pr-merge 113\`).\n` +
+				`For non-command follow-ups, write the message text directly.\n` +
+				`Set \`fresh_session: true\` when the command should run in a clean session.\n` +
+				`Each entry must include reason before you set recommended_next_step.\n` +
 				`${recommendationRule(scramjetEnabled)}\n` +
 				`Omit next_steps and recommended_next_step entirely to stop the chain.`;
 			break;

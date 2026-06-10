@@ -34,18 +34,22 @@ describe("registerCommandStatusTool — registration", () => {
 		expect(handlers.get("before_agent_start")).toBeUndefined();
 	});
 
-	it("exposes command, free-text, and recommended-index schema fields", () => {
+	it("exposes the unified message-based next-step schema and recommended-index fields", () => {
 		const { tool } = toolFor();
 		const params = tool.parameters;
 		expect(params.properties.recommended_next_step.type).toBe("integer");
 		expect(params.properties.recommended_next_step.minimum).toBe(0);
 		expect(params.properties.recommended_next_step.description).toContain("Zero-based index");
-		const nextStepVariants = params.properties.next_steps.items.anyOf;
-		expect(nextStepVariants).toHaveLength(2);
-		expect(nextStepVariants[0].properties.type.const).toBe("command");
-		expect(nextStepVariants[0].properties.name.type).toBe("string");
-		expect(nextStepVariants[1].properties.type.const).toBe("freetext");
-		expect(nextStepVariants[1].properties.text.type).toBe("string");
+		const nextStepSchema = params.properties.next_steps.items;
+		// One flat shape — no discriminated union, no type field, no label.
+		expect(nextStepSchema.anyOf).toBeUndefined();
+		expect(nextStepSchema.properties.message.type).toBe("string");
+		expect(nextStepSchema.properties.fresh_session.type).toBe("boolean");
+		expect(nextStepSchema.properties.reason.type).toBe("string");
+		expect(nextStepSchema.properties.type).toBeUndefined();
+		expect(nextStepSchema.properties.name).toBeUndefined();
+		expect(nextStepSchema.properties.label).toBeUndefined();
+		expect(nextStepSchema.required).toEqual(["message"]);
 	});
 });
 
@@ -107,25 +111,24 @@ describe("registerCommandStatusTool — phase gate", () => {
 		expect(pi.appended.some((e: { customType: string }) => e.customType === COMMAND_STATUS_TYPE)).toBe(false);
 	});
 
-	it("stores legacy command next_steps and renders the first as a forward pointer for completed", async () => {
+	it("stores command-message next_steps and renders the first as a forward pointer for completed", async () => {
 		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
 		const result = await execute({
 			status: "completed",
 			summary: "stage 2 done",
-			next_steps: [{ name: "mach12:issue-implement", args: "84 3", fresh_session: true }],
+			next_steps: [{ message: "/mach12:issue-implement 84 3", fresh_session: true }],
 			recommended_next_step: 0,
 		});
 
 		expect(result.terminate).toBe(true);
 		expect(state.latestCommandStatus?.next_steps).toEqual([
-			{ name: "mach12:issue-implement", args: "84 3", fresh_session: true },
+			{ message: "/mach12:issue-implement 84 3", fresh_session: true },
 		]);
 		expect(state.latestCommandStatus?.recommended_next_step).toBe(0);
 		expect(String(result.content[0].text)).toBe("→ /mach12:issue-implement 84 3");
 		expect(result.details).toMatchObject({
 			status: "completed",
-			name: "mach12:issue-implement",
-			args: "84 3",
+			message: "/mach12:issue-implement 84 3",
 			recommended_next_step: 0,
 		});
 	});
@@ -136,8 +139,8 @@ describe("registerCommandStatusTool — phase gate", () => {
 			status: "completed",
 			summary: "stage done",
 			next_steps: [
-				{ name: "mach12:issue-review", fresh_session: false },
-				{ name: "mach12:issue-implement", args: "92 3", fresh_session: true },
+				{ message: "/mach12:issue-review" },
+				{ message: "/mach12:issue-implement 92 3", fresh_session: true },
 			],
 			recommended_next_step: 1,
 		});
@@ -145,35 +148,30 @@ describe("registerCommandStatusTool — phase gate", () => {
 		expect(String(result.content[0].text)).toBe("→ /mach12:issue-implement 92 3");
 		expect(result.details).toMatchObject({
 			status: "completed",
-			name: "mach12:issue-implement",
-			args: "92 3",
+			message: "/mach12:issue-implement 92 3",
 			recommended_next_step: 1,
 		});
 	});
 
-	it("stores free-text next_steps without rendering a bogus command pointer", async () => {
+	it("stores non-command messages without rendering a bogus command pointer", async () => {
 		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
 		const result = await execute({
 			status: "completed",
 			summary: "needs user choice",
-			next_steps: [
-				{ type: "freetext", text: "Ask the user which branch to use", reason: "No branch was specified" },
-			],
+			next_steps: [{ message: "Ask the user which branch to use", reason: "No branch was specified" }],
 			recommended_next_step: 0,
 		});
 
 		expect(result.terminate).toBe(true);
 		expect(state.latestCommandStatus?.next_steps).toEqual([
-			{ type: "freetext", text: "Ask the user which branch to use", reason: "No branch was specified" },
+			{ message: "Ask the user which branch to use", reason: "No branch was specified" },
 		]);
 		expect(String(result.content[0].text)).toBe("status: completed");
 		expect(result.details).toMatchObject({
 			status: "completed",
-			type: "freetext",
-			text: "Ask the user which branch to use",
+			message: "Ask the user which branch to use",
 			recommended_next_step: 0,
 		});
-		expect(result.details.name).toBeUndefined();
 	});
 
 	it("rejects a duplicate report: the second call lands at phase 'reported' and is refused", async () => {

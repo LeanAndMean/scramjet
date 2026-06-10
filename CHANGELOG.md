@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.15.0 — Unified next-step message schema; same-command-different-args
+
+Redesigns the `next_steps` schema from a discriminated union (`CommandStatusCommandNextStep` / `CommandStatusFreeTextNextStep`) to a single flat `{ message, fresh_session?, reason? }` shape, and adds support for multiple entries that invoke the same command with different arguments (issue #108).
+
+### Changed
+
+- `scramjet_command_status` `next_steps[]` entries now use a single `message` field instead of `command`/`name`/`args`/`text`/`label`/`type`. A leading `/` makes the message a slash command; anything else pastes into the editor (open policies only).
+- Removed the `label` field: the selector always shows the exact message that will run.
+- Added `parseSlashCommand` to `commands/validator.ts` for harness-side `/` prefix parsing.
+- Simplified all four policy-mode instruction blocks in `next-step.ts`.
+- Rewrote status-reporting prose in 9 Mach 12 command files to the `message` form.
+- `mach12:pr-review-assessment` demonstrates same-command-different-args with conditional genuine-only vs genuine+nitpicks fix variants.
+
+### Added
+
+- Same-command-different-args pattern: multiple `next_steps` entries may suggest the same command with different arguments. Documented in README.
+- `parseSlashCommand` function and corresponding validator tests.
+
+### Removed
+
+- `CommandStatusCommandNextStep` and `CommandStatusFreeTextNextStep` type aliases.
+- `label` field from next-step entries.
+
 ## 0.14.0 — Multi-line layout for next-step selector
 
 Adds `MultiLineSelectList` component that renders selector items with the full command on line 1 and reason text indented below, improving readability for long command args and descriptions (issue #107).
