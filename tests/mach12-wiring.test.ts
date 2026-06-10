@@ -35,7 +35,7 @@ const WIRING: WiringRow[] = [
 	},
 	{
 		basename: "issue-review",
-		expected: { mode: "ask" },
+		expected: { mode: "open", candidates: [{ name: "mach12:issue-review" }, { name: "mach12:issue-implement" }] },
 	},
 	{
 		basename: "issue-implement",
