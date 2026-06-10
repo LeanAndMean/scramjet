@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.2 — Present all open-policy candidates in next_steps
+
+Rewrites status-reporting instructions across all open-policy commands to always present every declared candidate with `recommended_next_step` instead of conditional single-entry logic (issue #97).
+
+### Changed
+
+- `mach12:issue-plan`, `mach12:issue-review`, `mach12:pr-review-assessment`, and `mach12:pr-review-fix` status-reporting sections rewritten from conditional single-entry to unconditional multi-entry with `recommended_next_step` index, so the agent always presents all declared candidates to the selector.
+
 ## 0.13.1 — Switch issue-review next-step policy to open
 
 Changes `mach12:issue-review` from `ask` to `open` with two candidates: re-review (`mach12:issue-review`) when critical/important findings remain, and proceed (`mach12:issue-implement`) when the plan is approved (issue #93).
