@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.3 — Switch pr-pre-merge next-step policy to open
+
+Changes `mach12:pr-pre-merge` from `ask` to `open` with two candidates: merge (`mach12:pr-merge`) when the checklist passes cleanly, and fix (`mach12:pr-review-fix`) when the checklist surfaces issues that warrant code changes (issue #99).
+
+### Changed
+
+- `mach12:pr-pre-merge` next-step policy switched from `ask` to `open` with candidates `mach12:pr-merge` and `mach12:pr-review-fix`, letting the agent recommend the appropriate follow-up after the checklist.
+- Added status-reporting guidance requiring both candidates in `next_steps` with `recommended_next_step` based on checklist results.
+- Vision doc wiring and Mach 12 wiring test updated to pin the new policy.
+
 ## 0.13.2 — Present all open-policy candidates in next_steps
 
 Rewrites status-reporting instructions across all open-policy commands to always present every declared candidate with `recommended_next_step` instead of conditional single-entry logic (issue #97).
