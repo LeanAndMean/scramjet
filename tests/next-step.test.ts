@@ -25,8 +25,8 @@ describe("buildNextStepBlock — forced mode", () => {
 		expect(block).toContain("mach12:pr-review-assessment");
 		expect(block).toContain("mach12:pr-review");
 		expect(block).toContain("forced");
-		expect(block).toContain("pass args");
-		expect(block).toContain("its name must be `mach12:pr-review-assessment`");
+		expect(block).toContain("pass arguments");
+		expect(block).toContain("its message must be `/mach12:pr-review-assessment`");
 		expect(block).not.toContain("selector");
 		expect(block).not.toContain("recommended_next_step");
 		expect(block).not.toContain("freetext");
@@ -53,7 +53,9 @@ describe("buildNextStepBlock — closed mode", () => {
 		expect(block).toContain("closed");
 		expect(block).toContain("[0] mach12:pr-review-fix");
 		expect(block).toContain("[1] mach12:pr-pre-merge");
-		expect(block).toContain("entry's args");
+		expect(block).toContain("`message` field");
+		expect(block).toContain("start with `/`");
+		expect(block).toContain("fresh_session");
 		expect(block).toContain("reason");
 		expect(block).toContain("recommended_next_step");
 		expect(block).toContain("zero-based index");
@@ -63,7 +65,7 @@ describe("buildNextStepBlock — closed mode", () => {
 	it("includes only the current /scramjet on or off recommendation rule", () => {
 		const on = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
 		expect(on).toContain("With `/scramjet on`");
-		expect(on).toContain("recommended entry is a command");
+		expect(on).toContain("recommended entry's message is a slash command");
 		expect(on).not.toContain("With `/scramjet off`");
 
 		const off = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
@@ -91,17 +93,17 @@ describe("buildNextStepBlock — open mode", () => {
 		expect(block).toContain("mach12:issue-review");
 		expect(block).toContain("[0] mach12:issue-review");
 		expect(block).toContain("any slash command");
-		expect(block).toContain("type=`freetext`");
+		expect(block).toContain("`message` field");
+		expect(block).toContain("non-command follow-ups");
 		expect(block).toContain("reason");
 		expect(block).toContain("recommended_next_step");
-		expect(block).toContain("command entry's args");
 		expect(block).toContain("stop the chain");
 	});
 
 	it("includes only the current /scramjet on or off open-policy recommendation rule", () => {
 		const on = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
 		expect(on).toContain("With `/scramjet on`");
-		expect(on).toContain("do not set it for a free-text entry");
+		expect(on).toContain("do not set it for a non-command message");
 		expect(on).not.toContain("With `/scramjet off`");
 
 		const off = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
@@ -112,7 +114,7 @@ describe("buildNextStepBlock — open mode", () => {
 
 	it("renders empty candidates as open/free-form rather than a terminus", () => {
 		const block = buildNextStepBlock({ mode: "open", candidates: [] }, "mach12:pr-merge");
-		expect(block).toContain("No suggested command candidates");
+		expect(block).toContain("No suggested commands");
 		expect(block).toContain("any slash command");
 		expect(block).toContain("stop the chain");
 	});
@@ -170,8 +172,8 @@ describe("buildNextStepBlock — ask mode", () => {
 	});
 });
 
-describe("buildNextStepBlock — same-name-different-args awareness", () => {
-	it("closed mode mentions that multiple entries may share the same command name", () => {
+describe("buildNextStepBlock — same-command-different-args awareness", () => {
+	it("closed mode mentions that entries may reuse the same command with different arguments", () => {
 		const block = buildNextStepBlock(
 			{
 				mode: "closed",
@@ -179,25 +181,17 @@ describe("buildNextStepBlock — same-name-different-args awareness", () => {
 			},
 			"mach12:pr-review-assessment",
 		);
-		expect(block).toContain("Multiple entries may share the same command name with different args");
+		expect(block).toContain("Entries may reuse the same command with different arguments");
 	});
 
-	it("open mode mentions that multiple entries may share the same command name", () => {
-		const block = buildNextStepBlock(
-			{ mode: "open", candidates: [{ name: "mach12:issue-review" }] },
-			"mach12:issue-plan",
-		);
-		expect(block).toContain("Multiple entries may share the same command name with different args");
-	});
-
-	it("forced mode does not mention same-name pattern (single target only)", () => {
+	it("forced mode does not mention command reuse (single target only)", () => {
 		const block = buildNextStepBlock({ mode: "forced", target: "a:b" }, "x:y");
-		expect(block).not.toContain("Multiple entries may share");
+		expect(block).not.toContain("reuse the same command");
 	});
 
-	it("ask mode does not mention same-name pattern (no next_steps)", () => {
+	it("ask mode does not mention command reuse (no next_steps)", () => {
 		const block = buildNextStepBlock({ mode: "ask" }, "x:y");
-		expect(block).not.toContain("Multiple entries may share");
+		expect(block).not.toContain("reuse the same command");
 	});
 });
 

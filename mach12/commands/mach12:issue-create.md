@@ -192,9 +192,7 @@ Report to the user:
 
 When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and include a selector-visible `next_steps` entry if the new issue is ready for planning:
 
-- `name`: `mach12:issue-plan`
-- `args`: `<new-issue-number>`
-- `fresh_session`: `false`
+- `message`: `/mach12:issue-plan <new-issue-number>`
 - `reason`: a brief explanation that the new issue is ready for staged planning
 
 Set `recommended_next_step` to `0` when you include this entry so Scramjet can route to it automatically.

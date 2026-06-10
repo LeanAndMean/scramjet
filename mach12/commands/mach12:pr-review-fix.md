@@ -140,10 +140,10 @@ Each fix session should be **fresh** to maximize available context.
 
 When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and choose selector-visible `next_steps` entries using this order:
 
-1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, include an entry with `name`: `mach12:pr-review-fix`, `args`: the same PR/comment arguments plus the next stage label, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned fix stage remains.
-   - Example: `name: mach12:pr-review-fix`, `args`: `36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`, `reason`: `Stage 2 is the next planned fix stage.`
+1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, include an entry with `message`: `/mach12:pr-review-fix` followed by the same PR/comment arguments plus the next stage label, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned fix stage remains.
+   - Example: `message`: `/mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`, `reason`: `Stage 2 is the next planned fix stage.`
 2. **After the final planned fix stage, include both verification-path candidates** so the user can see all options:
-   - Always include an entry with `name`: `mach12:pr-review`, `args`: `<pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a full re-review is warranted.
-   - Always include an entry with `name`: `mach12:pr-pre-merge`, `args`: `<pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation that the PR is ready for the merge checklist.
+   - Always include an entry with `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a full re-review is warranted.
+   - Always include an entry with `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation that the PR is ready for the merge checklist.
    - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-review` (index 0) when the fixes were substantive enough that another full review may find issues; recommend `mach12:pr-pre-merge` (index 1) when the fixes were narrow and confidence is high.
    - Leave `next_steps` empty if the appropriate next action is unclear. If fixing hit a blocker or needs user input, report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`.

@@ -1,7 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ValidatedNextStep } from "./commands/validator.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
-import { buildNextStepWire } from "./next-step-dispatch.ts";
 
 export interface ScramjetSelectorOption {
 	index: number;
@@ -22,7 +21,7 @@ export interface ScramjetSelectorOptions<TOption extends ScramjetSelectorOption>
 export interface NextStepSelectorOptions {
 	options: ValidatedNextStep[];
 	recommended: ValidatedNextStep | null;
-	autoSelect?: Extract<ValidatedNextStep, { type: "command" }>;
+	autoSelect?: ValidatedNextStep;
 	countdownSeconds?: number;
 	signal?: AbortSignal;
 }
@@ -35,8 +34,9 @@ function cleanDisplay(text: string): string {
 }
 
 function optionTitle(option: ValidatedNextStep): string {
-	if (option.type === "command") return option.label ?? buildNextStepWire(option.step);
-	return option.label ?? `Text: ${cleanDisplay(option.text)}`;
+	// What you see is what you get: the message is both the display text and
+	// the dispatched payload. No label indirection.
+	return cleanDisplay(option.message);
 }
 
 export async function selectScramjetChoice<TOption extends ScramjetSelectorOption>(

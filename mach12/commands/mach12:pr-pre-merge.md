@@ -182,7 +182,7 @@ Report any items that need follow-up (test failures, manual conflict resolution,
 
 When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
 
-- Always include an entry with `name`: `mach12:pr-merge`, `args`: `<pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when merging is appropriate.
-- Always include an entry with `name`: `mach12:pr-review-fix`, `args`: `<pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a fix pass is warranted.
+- Always include an entry with `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when merging is appropriate.
+- Always include an entry with `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a fix pass is warranted.
 - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-merge` (index 0) when the checklist passed cleanly and no issues remain; recommend `mach12:pr-review-fix` (index 1) when the checklist surfaced issues that warrant code changes.
 - Leave `next_steps` empty if the PR should be held open (waiting on an external decision, discussion ongoing, or no clear next action). If the checklist was not completed or you need user input, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.

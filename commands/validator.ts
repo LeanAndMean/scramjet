@@ -1,22 +1,23 @@
-import type {
-	CommandStatusCommandNextStep,
-	CommandStatusFreeTextNextStep,
-	CommandStatusNextStep,
-	NextStep,
-	NextStepPolicy,
-} from "../types.ts";
+import type { CommandStatusNextStep, NextStepPolicy } from "../types.ts";
 
-function isCommandStep(step: CommandStatusNextStep): step is CommandStatusCommandNextStep {
-	return step.type === undefined || step.type === "command";
+// A next-step `message` that starts with "/" parses into a slash command: the
+// bare command name plus an optional verbatim argument string. The harness
+// owns this parse — the agent only ever supplies the message text, and the
+// dispatch behavior (auto-dispatch vs. paste-to-editor) follows from whether
+// the message parses as a command.
+export interface ParsedSlashCommand {
+	name: string;
+	args?: string;
 }
 
-function isFreeTextStep(step: CommandStatusNextStep): step is CommandStatusFreeTextNextStep {
-	return step.type === "freetext";
-}
-
-function stepLabel(step: CommandStatusNextStep): string {
-	if (isCommandStep(step)) return step.name;
-	return step.label ?? step.text;
+export function parseSlashCommand(message: string): ParsedSlashCommand | null {
+	const trimmed = message.trim();
+	if (!trimmed.startsWith("/")) return null;
+	const spaceIdx = trimmed.indexOf(" ", 1);
+	const name = spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx);
+	if (!name) return null; // bare "/" or "/ foo" — not a valid command
+	const args = spaceIdx === -1 ? undefined : trimmed.slice(spaceIdx + 1).trimStart() || undefined;
+	return { name, args };
 }
 
 function hasReason(step: CommandStatusNextStep): step is CommandStatusNextStep & { reason: string } {
@@ -50,21 +51,14 @@ export function validateNextStep(proposed: string | undefined, policy: DecidedPo
 	}
 }
 
-export type ValidatedNextStep =
-	| {
-			type: "command";
-			index: number;
-			label?: string;
-			reason: string;
-			step: NextStep;
-	  }
-	| {
-			type: "freetext";
-			index: number;
-			label?: string;
-			reason: string;
-			text: string;
-	  };
+export interface ValidatedNextStep {
+	index: number;
+	reason: string;
+	message: string;
+	freshSession: boolean;
+	// null = non-command message (pasted into the editor on selection).
+	parsedCommand: ParsedSlashCommand | null;
+}
 
 export interface SkippedNextStep {
 	index: number;
@@ -85,39 +79,23 @@ function validateDisplayableStep(
 	policy: DecidedPolicy,
 	index: number,
 ): { valid: true; option: ValidatedNextStep } | { valid: false; reason: string } {
-	if (isFreeTextStep(step)) {
-		if (policy.mode !== "open") {
-			return { valid: false, reason: "free-text next steps are valid only for open policies" };
-		}
-		if (!hasReason(step)) return { valid: false, reason: "selector-visible next steps must include reason" };
-		return {
-			valid: true,
-			option: {
-				type: "freetext",
-				index,
-				label: step.label,
-				reason: step.reason,
-				text: step.text,
-			},
-		};
+	const parsedCommand = parseSlashCommand(step.message);
+	if (!parsedCommand && policy.mode !== "open") {
+		return { valid: false, reason: "non-command messages are valid only for open policies" };
 	}
-
-	const result = validateNextStep(step.name, policy);
-	if (!result.valid) return result;
+	if (parsedCommand) {
+		const result = validateNextStep(parsedCommand.name, policy);
+		if (!result.valid) return result;
+	}
 	if (!hasReason(step)) return { valid: false, reason: "selector-visible next steps must include reason" };
 	return {
 		valid: true,
 		option: {
-			type: "command",
 			index,
-			label: step.label,
 			reason: step.reason,
-			step: {
-				name: step.name,
-				args: step.args,
-				freshSession: step.fresh_session,
-				reason: step.reason,
-			},
+			message: step.message,
+			freshSession: step.fresh_session ?? false,
+			parsedCommand,
 		},
 	};
 }
@@ -137,7 +115,7 @@ export function validateNextSteps(
 			valid.push(result.option);
 			continue;
 		}
-		skipped.push({ index, label: stepLabel(step), reason: result.reason });
+		skipped.push({ index, label: step.message.trim(), reason: result.reason });
 		if (firstReason === undefined) firstReason = result.reason;
 	}
 

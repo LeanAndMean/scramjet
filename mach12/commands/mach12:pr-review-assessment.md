@@ -239,20 +239,20 @@ When Scramjet asks you to report command status, call `scramjet_command_status` 
 
 **When genuine issues exist AND nitpicks/optional items were also found:**
 
-Emit three entries — two `mach12:pr-review-fix` entries with different args, plus `mach12:pr-pre-merge`:
+Emit three entries — two `/mach12:pr-review-fix` messages with different arguments, plus `/mach12:pr-pre-merge`:
 
-1. `name`: `mach12:pr-review-fix`, `args`: `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <genuine-findings-only>` (e.g., `94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3`), `fresh_session`: `true`, `reason`: "Address the genuine issues flagged in the review assessment."
-2. `name`: `mach12:pr-review-fix`, `args`: `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <genuine-and-nitpick-findings>` (e.g., `94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3 S2`), `fresh_session`: `true`, `reason`: "Address genuine issues and optional nitpicks in one pass."
-3. `name`: `mach12:pr-pre-merge`, `args`: `<pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
+1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <genuine-findings-only>` (e.g., `/mach12:pr-review-fix 94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3`), `fresh_session`: `true`, `reason`: "Address the genuine issues flagged in the review assessment."
+2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <genuine-and-nitpick-findings>` (e.g., `/mach12:pr-review-fix 94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3 S2`), `fresh_session`: `true`, `reason`: "Address genuine issues and optional nitpicks in one pass."
+3. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
 
 Set `recommended_next_step` to `0` (genuine-only fix pass).
 
 **When genuine issues exist but NO nitpicks/optional items were found:**
 
-Emit two entries — one `mach12:pr-review-fix` and one `mach12:pr-pre-merge`:
+Emit two entries — one `/mach12:pr-review-fix` and one `/mach12:pr-pre-merge`:
 
-1. `name`: `mach12:pr-review-fix`, `args`: `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <all-genuine-findings>`, `fresh_session`: `true`, `reason`: "Address the genuine issues flagged in the review assessment."
-2. `name`: `mach12:pr-pre-merge`, `args`: `<pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
+1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <all-genuine-findings>`, `fresh_session`: `true`, `reason`: "Address the genuine issues flagged in the review assessment."
+2. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
 
 Set `recommended_next_step` to `0` (fix pass).
 
@@ -260,8 +260,8 @@ Set `recommended_next_step` to `0` (fix pass).
 
 Emit two entries:
 
-1. `name`: `mach12:pr-pre-merge`, `args`: `<pr-number>`, `fresh_session`: `true`, `reason`: "No genuine issues found — proceed to the merge checklist."
-2. `name`: `mach12:pr-review-fix`, `args`: `<pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <nitpick-findings>`, `fresh_session`: `true`, `reason`: "Optionally address nitpicks before merging."
+1. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "No genuine issues found — proceed to the merge checklist."
+2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <nitpick-findings>`, `fresh_session`: `true`, `reason`: "Optionally address nitpicks before merging."
 
 Set `recommended_next_step` to `0` (pre-merge).
 

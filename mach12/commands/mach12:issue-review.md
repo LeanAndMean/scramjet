@@ -192,7 +192,7 @@ When referring to numbered items (findings, suggestions, stages) in any comment 
 
 When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
 
-- Always include an entry with `name`: `mach12:issue-review`, `args`: `<issue-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when another review pass would be warranted.
-- Always include an entry with `name`: `mach12:issue-implement`, `args`: `<issue-number> 1`, `fresh_session`: `true`, and `reason`: a brief explanation that the plan is ready to implement.
+- Always include an entry with `message`: `/mach12:issue-review <issue-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when another review pass would be warranted.
+- Always include an entry with `message`: `/mach12:issue-implement <issue-number> 1`, `fresh_session`: `true`, and `reason`: a brief explanation that the plan is ready to implement.
 - Set `recommended_next_step` to indicate your preference: recommend `mach12:issue-review` (index 0) when the plan was revised and Critical or Important findings remain; recommend `mach12:issue-implement` (index 1) when the plan is approved (user picked "Proceed as-is" — whether or not findings remain — or the revised plan addresses all blockers).
 - Leave `next_steps` empty if the outcome is ambiguous (e.g., user cancelled, discussion is ongoing, or no clear next action). If the user cancelled, the review was not completed, or you otherwise did not finish, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.

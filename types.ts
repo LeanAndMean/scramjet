@@ -27,25 +27,21 @@ export interface NextStep {
 //              COMMAND_STATUS_TYPE entries (history.ts, issue 88 Stage 2).
 export type CommandPhase = "idle" | "running" | "probing" | "reported" | "waiting";
 
-// A single next-step suggestion in a command-status report. Missing `type` is
-// a legacy command entry for compatibility with pre-selector command prose.
-export interface CommandStatusCommandNextStep {
-	type?: "command";
-	name: string;
-	args?: string;
-	fresh_session: boolean;
-	label?: string;
+// A single next-step suggestion in a command-status report: a suggested next
+// message. `message` is both the selector display text and the dispatched
+// payload — a leading slash makes it a command (auto-dispatched on selection);
+// anything else is pasted into the editor. The harness parses the `/` prefix
+// itself (commands/validator.ts parseSlashCommand); the agent never declares a
+// type discriminator, and there is no label indirection — the user sees
+// exactly what will run.
+export interface CommandStatusNextStep {
+	// Displayed in the selector AND dispatched on selection.
+	message: string;
+	// Only meaningful for slash commands; defaults to false.
+	fresh_session?: boolean;
+	// Shown as the description underneath the message.
 	reason?: string;
 }
-
-export interface CommandStatusFreeTextNextStep {
-	type: "freetext";
-	text: string;
-	label?: string;
-	reason?: string;
-}
-
-export type CommandStatusNextStep = CommandStatusCommandNextStep | CommandStatusFreeTextNextStep;
 
 // Structured result the agent supplies through scramjet_command_status in
 // response to the post-response status probe. `recommended_next_step` is a

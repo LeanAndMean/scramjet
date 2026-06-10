@@ -95,15 +95,15 @@ Scramjet is a small TypeScript extension. The auto-continuation mechanism at its
 
 An active command produces its normal user-facing answer first — nothing about completion is injected into that turn. Once the run goes idle, Scramjet defers a TUI-hidden status-check message that starts a short follow-up turn; the agent answers it by calling `scramjet_command_status`. Separating the answer from the status report removes the old failure mode where the agent poured its answer into a terminating tool's `summary` field instead of writing prose.
 
-The agent calls `scramjet_command_status({ status, summary, next_steps?, recommended_next_step? })`, where `status` is one of `completed` / `waiting_for_user` / `blocked` / `incomplete`. For `completed` commands, `next_steps[]` carries selector options. Command entries have an optional `type: "command"`, a `name` (bare command, no leading slash), optional `args`, and `fresh_session`; legacy command entries may omit `type`. Open-policy commands can also include `type: "freetext"` entries with `text`, which paste into the editor when selected. Selector-visible entries include `reason`, and `recommended_next_step` is a zero-based index into the original `next_steps[]` array. For `forced` policies the first command entry's `name` must match the declared target and only passes `args`/`fresh_session`; forced handoffs do not show the selector. The tool is phase-gated by the harness — called outside the status-check window it returns a helpful error without terminating; in-phase it stores the report and returns `terminate: true`, ending the short probe turn.
+The agent calls `scramjet_command_status({ status, summary, next_steps?, recommended_next_step? })`, where `status` is one of `completed` / `waiting_for_user` / `blocked` / `incomplete`. For `completed` commands, `next_steps[]` carries selector options. Each entry is a *suggested next message* with three fields: `message` (displayed in the selector verbatim and dispatched on selection), optional `fresh_session` (only meaningful for slash commands; defaults to false), and `reason` (shown as the description underneath). A message starting with `/` is a slash command and is auto-dispatched on selection; any other message pastes into the editor when selected (open policies only). The harness parses the `/` prefix itself — there is no type discriminator for the agent to choose, and no label indirection: what the user sees is exactly what will run. Selector-visible entries include `reason`, and `recommended_next_step` is a zero-based index into the original `next_steps[]` array. For `forced` policies the entry's message must start with the declared target and only passes arguments/`fresh_session`; forced handoffs do not show the selector. The tool is phase-gated by the harness — called outside the status-check window it returns a helpful error without terminating; in-phase it stores the report and returns `terminate: true`, ending the short probe turn.
 
 ### Validation and dispatch
 
 On the probe turn's `agent_end`, Scramjet reads the reported status and validates any pick against the active command's declared policy. Mode-by-mode behavior for a `completed` status:
 
 - **`forced`** — fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent; the `completed` status is the safety gate that distinguishes successful completion from clarification or error.
-- **`closed` / `open`** under `/scramjet on` — valid options → selector; a valid recommended command auto-selects after the countdown unless you choose another option or dismiss it. Free-text options can be selected manually but are never auto-selected or auto-sent.
-- **`closed` / `open`** under `/scramjet off` — valid options → selector with no countdown; selecting a command dispatches it, selecting free text pastes it into the editor, and dismissal has no side effects.
+- **`closed` / `open`** under `/scramjet on` — valid options → selector; a valid recommended command auto-selects after the countdown unless you choose another option or dismiss it. Non-command messages can be selected manually but are never auto-selected or auto-sent.
+- **`closed` / `open`** under `/scramjet off` — valid options → selector with no countdown; selecting a slash-command message dispatches it, selecting a non-command message pastes it into the editor, and dismissal has no side effects.
 - **`ask` / no `next:`** — pause regardless of the flag.
 
 A non-`completed` status never chains: `incomplete` pauses quietly and `blocked` pauses with a warning notification. `waiting_for_user` is a resumable, not terminal, halt — the command parks at a stable `waiting` phase (reconstructed across `pi --resume` / branch switch) so the user can answer the question; an interactive, non-slash reply re-arms the status probe, and a now-`completed` report chains the declared next step under the usual policy. Chaining still requires an explicit `completed` report, so an off-topic reply can only trigger a harmless re-probe, never a mis-chain. Note: `no next:` produces no status check at all — the probe fires only for commands that declare a `next:` policy, so a command with nothing to chain stays invisible.
@@ -186,14 +186,14 @@ You are planning implementation of issue $ARGUMENTS. ...
 The four policies (`forced`, `closed`, `open`, `ask`) are documented in
 `docs/scramjet-vision.md`.
 
-### Same command, different args
+### Same command, different arguments
 
-Multiple `next_steps` entries may share the same command name with
-different `args` to offer meaningful variants. The harness validates by
-name only (`closed` mode checks that the command appears in `candidates`),
-so same-name entries pass without deduplication. Each entry renders
-distinctly in the selector — the full command wire (name + args) is
-shown, and the `reason` field differentiates the intent.
+Multiple `next_steps` entries may suggest the same command with
+different arguments to offer meaningful variants. The harness validates
+by command name only (`closed` mode checks that the parsed command
+appears in `candidates`), so same-command entries pass without
+deduplication. Each entry renders distinctly in the selector — the full
+message is shown, and the `reason` field differentiates the intent.
 
 Frontmatter declares the candidate name once:
 
@@ -207,7 +207,10 @@ next:
       hint: when no genuine issues remain
 ```
 
-The agent's status report emits variants via `args`:
+(Frontmatter uses unqualified names; the loader prefixes the command-set
+name at runtime, so `pr-review-fix` matches `mach12:pr-review-fix`.)
+
+The agent's status report emits variants as different messages:
 
 ```json
 {
@@ -215,18 +218,15 @@ The agent's status report emits variants via `args`:
   "summary": "Found genuine issues and optional nitpicks.",
   "next_steps": [
     {
-      "name": "mach12:pr-review-fix",
-      "args": "94 --review-comment 123 --assessment-comment 456",
+      "message": "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456",
       "reason": "Address the genuine issues only."
     },
     {
-      "name": "mach12:pr-review-fix",
-      "args": "94 --review-comment 123 --assessment-comment 456 --include-nitpicks",
+      "message": "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456 --include-nitpicks",
       "reason": "Address genuine issues and optional nitpicks in one pass."
     },
     {
-      "name": "mach12:pr-pre-merge",
-      "args": "94",
+      "message": "/mach12:pr-pre-merge 94",
       "reason": "Skip fixes and proceed to merge checks."
     }
   ],
@@ -234,8 +234,8 @@ The agent's status report emits variants via `args`:
 }
 ```
 
-The `reason` field is the primary differentiator — avoid overriding with
-`label` so users see the full command wire and know exactly what will run.
+The `reason` field is the primary differentiator. The selector always
+shows the full message, so users know exactly what will run.
 
 ## Delegation
 
