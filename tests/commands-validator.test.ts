@@ -70,18 +70,6 @@ describe("validateNextStep — ask mode", () => {
 	});
 });
 
-describe("validateNextStep — same-name-different-args (closed)", () => {
-	const policy = {
-		mode: "closed" as const,
-		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
-	};
-
-	it("accepts the same command name regardless of args", () => {
-		expect(validateNextStep("mach12:pr-review-fix", policy)).toEqual({ valid: true });
-		expect(validateNextStep("mach12:pr-review-fix", policy)).toEqual({ valid: true });
-	});
-});
-
 describe("validateNextSteps — same-name-different-args entries", () => {
 	const closed = {
 		mode: "closed" as const,
