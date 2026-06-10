@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type SelectItem, SelectList } from "@earendil-works/pi-tui";
 import type { ValidatedNextStep } from "./commands/validator.ts";
+import { MultiLineSelectList } from "./multi-line-select.ts";
 import { buildNextStepWire } from "./next-step-dispatch.ts";
 
 export interface ScramjetSelectorOption {
@@ -13,6 +13,7 @@ export interface ScramjetSelectorOptions<TOption extends ScramjetSelectorOption>
 	options: TOption[];
 	recommended: TOption | null;
 	getTitle(option: TOption): string;
+	getDescription(option: TOption): string;
 	autoSelect?: TOption;
 	countdownSeconds?: number;
 	signal?: AbortSignal;
@@ -45,6 +46,7 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 		options,
 		recommended,
 		getTitle,
+		getDescription,
 		autoSelect,
 		countdownSeconds = 0,
 		signal,
@@ -57,28 +59,32 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 		fail = reject;
 	});
 	const byValue = new Map(options.map((option) => [String(option.index), option]));
-	const items: SelectItem[] = options.map((option) => ({
+	const items = options.map((option) => ({
 		value: String(option.index),
-		label: `${option.index}: ${getTitle(option)}${option.index === recommended?.index ? " [recommended]" : ""}`,
-		description: cleanDisplay(option.reason),
+		label: `${option.index}: ${getTitle(option)}`,
+		description: getDescription(option),
 	}));
 
-	const selectedIndex = recommended ? options.findIndex((option) => option.index === recommended.index) : -1;
+	const recommendedIndex = recommended ? options.findIndex((option) => option.index === recommended.index) : -1;
 	const selectedValue = await Promise.race([
 		ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
 			let remaining = countdownSeconds;
 			let timer: ReturnType<typeof setInterval> | null = null;
 			let finished = false;
 
-			const selectList = new SelectList(items, Math.min(items.length, 8), {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
-			});
+			const selectList = new MultiLineSelectList(
+				items,
+				Math.min(items.length, 8),
+				{
+					selectedPrefix: (text) => theme.fg("accent", text),
+					selectedText: (text) => theme.fg("accent", text),
+					description: (text) => theme.fg("muted", text),
+					scrollInfo: (text) => theme.fg("dim", text),
+				},
+				{ recommendedIndex },
+			);
 
-			if (selectedIndex >= 0) selectList.setSelectedIndex(selectedIndex);
+			if (recommendedIndex >= 0) selectList.setSelectedIndex(recommendedIndex);
 
 			const abort = () => finish(null);
 
@@ -163,6 +169,7 @@ export function selectNextStep(
 		options,
 		recommended,
 		getTitle: optionTitle,
+		getDescription: (option) => cleanDisplay(option.reason),
 		autoSelect,
 		countdownSeconds,
 		signal,
