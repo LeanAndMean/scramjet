@@ -96,6 +96,128 @@ wins) is preserved; the *mechanism* (LLM reads prose) is replaced.
   affordance, not a behavioral one — see §5.
 - **Authoring is a first-class flow.** Creating and editing commands lives
   inside `scramjet` itself, not in a separate toolchain.
+- **Informed decisions and informed consent.** Users should be empowered to
+  make informed decisions and give informed consent before actions with
+  consequences.
+- **Incremental debt awareness.** Resist the "each change is small" pattern
+  that accumulates structural debt; restructure before the pattern solidifies.
+- **Facilitate iterative self-improvement.** Structures should enable agents
+  and users to diagnose failures, identify pattern gaps, and feed improvements
+  back into commands and processes.
+
+### Design principles (elaborated)
+
+The core principles above are the at-a-glance summary. This section grounds
+individual principles with context, examples, and counterexamples — the
+reasoning behind each one-liner. Readers who want the capabilities catalog can
+skip ahead to the next section; nothing here changes what scramjet *does*, only
+why.
+
+#### Informed decisions and informed consent
+
+Users should be empowered to make informed decisions and give informed consent.
+When scramjet or a command asks the user to choose, confirm, or allow something,
+the information presented *before* the ask must be sufficient for the user to
+understand what they are choosing between, why it matters, and what the
+consequences are.
+
+This principle applies across five dimensions:
+
+1. **Selector transparency.** The user sees the exact command wire that will
+   execute, not a simplified label. The `reason` field provides context; the
+   command wire provides transparency. A user who reads the selector knows
+   precisely what pressing Enter will do.
+
+2. **Pre-decision summaries.** When a command asks for input, permission, or a
+   choice, it presents findings and analysis *before* the question — not after.
+   The user should never be asked to choose without seeing what they are choosing
+   between and why.
+
+3. **GitHub artifacts.** Information written to GitHub (issues, PRs, comments,
+   progress updates) should be structured so that readers — human or agent — can
+   understand the reasoning, not just the conclusion. A plan comment that says
+   "do X" without explaining why X was chosen over Y fails this test.
+
+4. **Command design.** Commands should surface relevant context, trade-offs, and
+   consequences before asking for user direction. The structure is: gather →
+   analyze → present → ask. Not: ask → then explain.
+
+5. **Consent for risky actions.** When a command takes actions with side effects
+   (posting comments, creating issues, pushing code), the user should understand
+   what will be done and have the opportunity to redirect before it happens. This
+   is distinct from — and complementary to — the CLAUDE.md guidance about
+   confirming risky actions; that guidance tells the *agent* when to pause, this
+   principle tells *command authors* to design for informed consent by default.
+
+**Relationship to `forced` mode:** A `forced` transition does not need a consent
+gate — consent was given at invocation time when the user ran the command that
+declares the forced next step. But the agent must still exercise judgment about
+user intent, especially for irreversible changes. The balance: do not bombard
+with obvious confirmations for routine transitions, but do not silently do
+unexpected things under the cover of "the user invoked the workflow."
+
+**Counterexample:** Stopping to ask "shall I continue?" after every obvious step
+is not informed consent — it is consent theater. The user gains no information
+from the question and loses flow. Informed consent requires that the pause point
+coincides with a genuine decision or a genuine risk, and that the information
+presented at that point is sufficient to make the decision well.
+
+#### Incremental debt awareness
+
+Resist the "each change is small" pattern that accumulates structural debt.
+
+The failure mode: a codebase (or document, or process) receives a series of
+additions, each individually too small to justify restructuring. No single
+change is wrong. But the aggregate degrades maintainability — duplication
+accumulates, abstractions strain, organizational structure stops reflecting the
+actual shape of the content. By the time anyone notices, restructuring is a
+project rather than a cleanup.
+
+The right time to restructure is *before* the pattern solidifies. The signal is
+not "this change is large" but "this change is the Nth instance of a pattern
+that is becoming load-bearing." When you notice that signal, restructure now —
+the cost is lower than it will be after more instances accumulate.
+
+This applies to scramjet itself (vision doc structure, command-set organization,
+harness module boundaries) and to work done under scramjet commands (code being
+written during implementation stages).
+
+**Counterexample:** Premature abstraction when there is genuinely only one
+instance and no signal of recurrence. The principle is not "always abstract" —
+it is "restructure when the pattern is real and solidifying, not after." One
+instance is not a pattern. Two instances might be coincidence. Three instances
+with the same shape are a signal.
+
+#### Facilitate iterative self-improvement
+
+Scramjet should enable agents and users to diagnose failures, identify pattern
+gaps, and feed improvements back into commands and processes.
+
+This is a harness design vision pointing toward concrete capabilities:
+troubleshooting flows that help diagnose what went wrong when a command produces
+unexpected results, retrospective commands that analyze a completed workflow for
+process improvements, and failure-to-improvement feedback loops that route
+operational failures into command or process changes rather than treating them as
+one-off problems.
+
+The discovery pattern: working on something, encountering a failure or friction
+point, noticing that the failure reveals a generalizable gap (not just a local
+bug), and having harness-level support for routing that insight into an
+actionable improvement — a command edit, a new command, a process change.
+Without that support, insights are lost to session boundaries.
+
+**Tension:** The system should be inviting enough that agents can contribute
+improvements, but not so open that they do so without checking. An agent that
+rewrites a command based on one failure is overreacting; an agent that notices a
+pattern across multiple failures and proposes a specific improvement is
+contributing. The difference is evidence and specificity.
+
+**Counterexample:** Using these principles to rationalize poor decisions.
+Principles need grounding examples and counterexamples precisely to prevent
+over-generalization. "Self-improvement" is not a license to refactor at will —
+it is a commitment to building the harness-level machinery that makes
+improvement *informed* (connecting back to the first principle) and *incremental*
+(connecting to the second).
 
 ### Capabilities `scramjet` provides
 
