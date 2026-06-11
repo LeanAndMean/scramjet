@@ -97,6 +97,16 @@ wins) is preserved; the *mechanism* (LLM reads prose) is replaced.
 - **Authoring is a first-class flow.** Creating and editing commands lives
   inside `scramjet` itself, not in a separate toolchain.
 
+### Design principles (elaborated)
+
+The core principles above are the at-a-glance summary. This section grounds
+individual principles with context, examples, and counterexamples — the
+reasoning behind each one-liner. Readers who want the capabilities catalog can
+skip ahead to the next section; nothing here changes what scramjet *does*, only
+why.
+
+*(Subsections will be added as principles are elaborated.)*
+
 ### Capabilities `scramjet` provides
 
 These are harness-level features. They are independent of any particular
