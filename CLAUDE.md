@@ -84,6 +84,7 @@ The architecture section above describes the **current** shape of the code. The 
 - Deciding what is in scope vs. deferred for the MVP. The vision doc carries the MVP-vs-post-MVP boundaries and the per-section deferrals (sidebar UI, hard tool-scoping enforcement, authoring loop).
 - Resolving "should we add X?" questions about the harness — the vision doc states the non-goals as well as the goals, and several common asks (workflow DAG, conditional next-step DSL, prose-replacement abstractions) are explicit non-goals.
 - Reviewing a design decision and wanting to know what was already considered and rejected, and why.
+- Reviewing or planning work that touches design principles, harness behavior, or command-set conventions — the elaborated principles section grounds decisions with context, examples, and counterexamples.
 
 The MVP buildout shipped under GitHub issue 23 (umbrella). Subissues 24-33 carried the individual stages; the staged plan and per-stage progress comments live on issue 23 for the historical record. Post-MVP work (sidebar UI, hard tool-scoping enforcement, authoring loop) is tracked as separate issues — consult the vision doc for the deferred-scope catalog. The CLAUDE.md design-philosophy section below was rewritten to match the vision (commands declare their edges, MVP-specific rationales are explicit); when those bullets reference design decisions you don't recognize, the vision doc is where the long-form reasoning lives.
 
@@ -96,6 +97,9 @@ These principles override default instincts. Do not add complexity that violates
 - **Invisible when idle.** If Scramjet has nothing to suggest, it produces zero output — no widgets, no prompts, no status messages.
 - **Commands declare their edges; the harness enforces.** Each command declares its next-step policy (`forced` / `closed` / `open` / `ask`) in YAML frontmatter; the harness reads the declaration, validates the agent's pick (or the forced target), and dispatches. The harness does NOT own routing logic — there is no central workflow registry, DAG, or state machine. This replaces the older "the LLM reads prose and Scramjet only watches for a completion signal" mechanism; the motivation (emergent workflows, user control, simplicity) is preserved, the mechanism is not.
 - **Simplicity is the feature.** Resist adding configuration, options, or abstraction layers. Scramjet stays small: one extension, a handful of hooks, the delegate tool, the next-step block, the history log.
+- **Informed decisions over silent action.** When a command takes side-effect actions or asks the user to choose, present the relevant context, trade-offs, and consequences before the ask. Don't surface the question without the information needed to answer it.
+- **Resist incremental debt.** Each small addition looks too small to justify restructuring, but the aggregate degrades maintainability. Restructure before the pattern solidifies, not after.
+- **Enable self-improvement feedback loops.** When commands fail or produce unexpected results, help diagnose what went wrong and feed improvements back into commands and processes. Don't treat operational failures as one-off problems when they reveal pattern gaps.
 
 ### MVP design rationales
 

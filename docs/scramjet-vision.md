@@ -96,6 +96,14 @@ wins) is preserved; the *mechanism* (LLM reads prose) is replaced.
   affordance, not a behavioral one — see §5.
 - **Authoring is a first-class flow.** Creating and editing commands lives
   inside `scramjet` itself, not in a separate toolchain.
+- **Informed decisions and informed consent.** Users should be empowered to
+  make informed decisions and give informed consent before actions with
+  consequences.
+- **Incremental debt awareness.** Resist the "each change is small" pattern
+  that accumulates structural debt; restructure before the pattern solidifies.
+- **Facilitate iterative self-improvement.** Structures should enable agents
+  and users to diagnose failures, identify pattern gaps, and feed improvements
+  back into commands and processes.
 
 ### Design principles (elaborated)
 
