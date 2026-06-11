@@ -2,9 +2,10 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export type DocKey = "readme" | "vision" | "command-authoring";
+
 export interface DocEntry {
-	key: string;
-	label: string;
+	key: DocKey;
 	path: string;
 	condition: string;
 }
@@ -23,24 +24,26 @@ const root = packageRoot();
 export const DOCS_REGISTRY: readonly DocEntry[] = [
 	{
 		key: "readme",
-		label: "README",
 		path: join(root, "README.md"),
 		condition: "read only when the user asks about Scramjet itself",
 	},
 	{
 		key: "vision",
-		label: "Vision / design",
 		path: join(root, "docs", "scramjet-vision.md"),
 		condition: "read only when the user asks about Scramjet itself",
 	},
 	{
 		key: "command-authoring",
-		label: "Command authoring",
 		path: join(root, "docs", "command-authoring.md"),
 		condition: "read when authoring, creating, or editing commands",
 	},
 ];
 
-export function getDocPath(key: string): string | undefined {
-	return DOCS_REGISTRY.find((e) => e.key === key)?.path;
+export const DOCS_BY_KEY: Record<DocKey, DocEntry> = Object.fromEntries(DOCS_REGISTRY.map((e) => [e.key, e])) as Record<
+	DocKey,
+	DocEntry
+>;
+
+export function getDocPath(key: DocKey): string {
+	return DOCS_BY_KEY[key].path;
 }

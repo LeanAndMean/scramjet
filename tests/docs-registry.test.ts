@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { DOCS_REGISTRY, getDocPath } from "../docs-registry.ts";
+import { DOCS_REGISTRY, type DocKey, getDocPath } from "../docs-registry.ts";
 
 describe("docs-registry", () => {
 	it("all registered doc paths resolve to existing files", () => {
@@ -9,11 +9,15 @@ describe("docs-registry", () => {
 		}
 	});
 
-	it("registry entries have non-empty labels and conditions", () => {
+	it("registry entries have non-empty conditions", () => {
 		for (const entry of DOCS_REGISTRY) {
-			expect(entry.label.length, `${entry.key} has empty label`).toBeGreaterThan(0);
 			expect(entry.condition.length, `${entry.key} has empty condition`).toBeGreaterThan(0);
 		}
+	});
+
+	it("registry has no duplicate keys", () => {
+		const keys = DOCS_REGISTRY.map((e) => e.key);
+		expect(new Set(keys).size).toBe(DOCS_REGISTRY.length);
 	});
 
 	it("getDocPath returns the path for a known key", () => {
@@ -22,7 +26,8 @@ describe("docs-registry", () => {
 		expect(getDocPath("command-authoring")).toMatch(/command-authoring\.md$/);
 	});
 
-	it("getDocPath returns undefined for unknown keys", () => {
-		expect(getDocPath("nonexistent")).toBeUndefined();
+	it("getDocPath is typed to accept only valid DocKeys", () => {
+		const key: DocKey = "readme";
+		expect(getDocPath(key)).toMatch(/README\.md$/);
 	});
 });

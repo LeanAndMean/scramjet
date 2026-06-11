@@ -24,12 +24,11 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DOCS_REGISTRY } from "./docs-registry.ts";
+import { DOCS_BY_KEY } from "./docs-registry.ts";
 
-const docsByKey = new Map(DOCS_REGISTRY.map((e) => [e.key, e]));
-const scramjetReadmePath = docsByKey.get("readme")!.path;
-const scramjetVisionPath = docsByKey.get("vision")!.path;
-const commandAuthoringPath = docsByKey.get("command-authoring")!.path;
+const scramjetReadmePath = DOCS_BY_KEY.readme.path;
+const scramjetVisionPath = DOCS_BY_KEY.vision.path;
+const commandAuthoringPath = DOCS_BY_KEY["command-authoring"].path;
 
 export const SCRAMJET_BASE_DIRECTIVES = `# Scramjet
 
@@ -44,7 +43,7 @@ commands, command sets, next-step chaining, delegation, or the /scramjet on/off
 flag):
 - README: ${scramjetReadmePath}
 - Vision / design: ${scramjetVisionPath}
-- Command authoring (${docsByKey.get("command-authoring")!.condition}): ${commandAuthoringPath}
+- Command authoring (${DOCS_BY_KEY["command-authoring"].condition}): ${commandAuthoringPath}
 
 If the user wants to report a bug or give feedback, direct them to the Scramjet
 issue tracker: https://github.com/LeanAndMean/scramjet/issues. Scramjet is
