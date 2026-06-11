@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.0 — Agent-discoverable command authoring documentation
+
+Adds a comprehensive command authoring guide and a centralized doc path resolution module, so agents can discover authoring conventions from the system prompt (issue #111).
+
+### Added
+
+- `docs/command-authoring.md` — authoring guide covering frontmatter schema, next-step policies, same-name-different-args pattern, delegation, tool scoping, status-reporting conventions, and selector transparency.
+- `docs-registry.ts` — centralized doc path resolution module replacing inline path variables in `base-directives.ts`.
+- Authoring doc pointer wired into the system prompt via `base-directives.ts` with conditional-read instruction.
+- CLAUDE.md documentation sync directive for the authoring doc.
+- README reference to the new authoring guide.
+
+### Changed
+
+- `package.json` `files` array broadened from `"docs/scramjet-vision.md"` to `"docs/"` to ship the whole docs directory.
+
 ## 0.15.0 — Unified next-step message schema; same-command-different-args
 
 Redesigns the `next_steps` schema from a discriminated union (`CommandStatusCommandNextStep` / `CommandStatusFreeTextNextStep`) to a single flat `{ message, fresh_session?, reason? }` shape, and adds support for multiple entries that invoke the same command with different arguments (issue #108).

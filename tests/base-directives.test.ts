@@ -87,10 +87,13 @@ describe("registerBaseDirectives", () => {
 
 		const readmePath = result.systemPrompt.match(/README: (.+)/)?.[1];
 		const visionPath = result.systemPrompt.match(/Vision \/ design: (.+)/)?.[1];
+		const authoringPath = result.systemPrompt.match(/Command authoring .+?: (.+)/)?.[1];
 
 		expect(readmePath).toMatch(/README\.md$/);
 		expect(visionPath).toMatch(/docs\/scramjet-vision\.md$/);
+		expect(authoringPath).toMatch(/docs\/command-authoring\.md$/);
 		expect(existsSync(readmePath!)).toBe(true);
 		expect(existsSync(visionPath!)).toBe(true);
+		expect(existsSync(authoringPath!)).toBe(true);
 	});
 });

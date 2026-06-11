@@ -184,7 +184,9 @@ You are planning implementation of issue $ARGUMENTS. ...
 ```
 
 The four policies (`forced`, `closed`, `open`, `ask`) are documented in
-`docs/scramjet-vision.md`.
+`docs/scramjet-vision.md`. For a comprehensive guide to writing commands
+(frontmatter schema, delegation, tool scoping, status reporting), see
+`docs/command-authoring.md`.
 
 ### Same command, different arguments
 

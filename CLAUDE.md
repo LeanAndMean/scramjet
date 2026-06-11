@@ -40,6 +40,10 @@ If you previously ran the (now-deleted) `./install.sh`, you may have dangling sy
 
 Biome: tabs, indent width 3, line width 120. Run `npx biome check --write .` to auto-fix.
 
+## Documentation sync
+
+When modifying command frontmatter schema (`commands/loader.ts`, `commands/parse-next-step.ts`), delegation behavior (`delegate.ts`), tool scoping (`delegate.ts`, `tool-scope-advisory.ts`), status reporting (`command-status.ts`), or next-step dispatch (`auto-continue.ts`, `commands/validator.ts`), update `docs/command-authoring.md` to reflect the change. The authoring doc is agent-facing — inaccurate guidance produces malformed commands.
+
 ## Architecture
 
 Scramjet is a compact Pi extension distributed as the npm package `@leanandmean/scramjet`. The `bin/scramjet.js` entry point calls Pi's library `main(argv, { extensionFactories: [scramjetExtension] })`; Pi instantiates scramjet alongside any disk-discoverable extensions in the user's Pi agent dir. The package ships compiled output in `dist/` produced by `tsconfig.build.json` (vanilla `tsc` with `--rewriteRelativeImportExtensions` to rewrite the source's `.ts` import extensions to `.js` in the emit).

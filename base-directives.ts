@@ -23,29 +23,12 @@
  * that colors every response.
  */
 
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DOCS_BY_KEY } from "./docs-registry.ts";
 
-// Walk up from this module's own directory to the installed package root
-// (mirrors Pi's getPackageDir, config.js). Works both from source
-// (base-directives.ts at the repo root) and from the npm emit
-// (dist/base-directives.js walks up one level); there is no dist/package.json,
-// so the walk terminates at the package root. Resolving from the module — not
-// cwd — keeps the doc pointers read-able no matter where the user invoked Pi.
-function packageRoot(): string {
-	let dir = dirname(fileURLToPath(import.meta.url));
-	while (dir !== dirname(dir)) {
-		if (existsSync(join(dir, "package.json"))) return dir;
-		dir = dirname(dir);
-	}
-	return dir;
-}
-
-const root = packageRoot();
-const scramjetReadmePath = join(root, "README.md");
-const scramjetVisionPath = join(root, "docs", "scramjet-vision.md");
+const scramjetReadmePath = DOCS_BY_KEY.readme.path;
+const scramjetVisionPath = DOCS_BY_KEY.vision.path;
+const commandAuthoringPath = DOCS_BY_KEY["command-authoring"].path;
 
 export const SCRAMJET_BASE_DIRECTIVES = `# Scramjet
 
@@ -60,6 +43,7 @@ commands, command sets, next-step chaining, delegation, or the /scramjet on/off
 flag):
 - README: ${scramjetReadmePath}
 - Vision / design: ${scramjetVisionPath}
+- Command authoring (${DOCS_BY_KEY["command-authoring"].condition}): ${commandAuthoringPath}
 
 If the user wants to report a bug or give feedback, direct them to the Scramjet
 issue tracker: https://github.com/LeanAndMean/scramjet/issues. Scramjet is
