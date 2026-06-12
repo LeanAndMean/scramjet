@@ -210,6 +210,27 @@ describe("reconstructPhase", () => {
 		).toBe("idle");
 	});
 
+	it("skips command-status entries with invalid status literals", () => {
+		expect(
+			reconstructPhase([
+				entry("scramjet:command-start", { command: "a", depth: 0 }),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
+				entry("scramjet:command-status", { commandName: "a", status: 42 }),
+				entry("scramjet:command-status", { commandName: "a", status: null }),
+			]),
+		).toBe("idle");
+	});
+
+	it("accepts valid status after skipping invalid ones", () => {
+		expect(
+			reconstructPhase([
+				entry("scramjet:command-start", { command: "a", depth: 0 }),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
+				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
+			]),
+		).toBe("waiting");
+	});
+
 	it("ignores non-custom entries", () => {
 		const entries = [
 			{ type: "text" as any, customType: "scramjet:command-start", data: { command: "a", depth: 0 } },

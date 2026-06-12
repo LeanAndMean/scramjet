@@ -441,7 +441,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					transitionPhase(state, "idle");
 					return;
 				}
-				transitionPhase(state, "probing");
+				if (!transitionPhase(state, "probing")) return;
 				scheduleProbe(policy, def.name);
 				return;
 			}
@@ -503,7 +503,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// command can later report completed. blocked/incomplete stay terminal
 				// (idle). Chaining still requires an explicit completed report, so an
 				// accidental resume can only re-probe — never mis-chain.
-				transitionPhase(state, status.status === "waiting_for_user" ? "waiting" : "idle");
+				if (!transitionPhase(state, status.status === "waiting_for_user" ? "waiting" : "idle")) return;
 				routeNonCompleted(status, ctx);
 				return;
 			}

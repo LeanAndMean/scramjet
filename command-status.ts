@@ -159,7 +159,15 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				recommended_next_step: params.recommended_next_step,
 			};
 			state.latestCommandStatus = payload;
-			transitionPhase(state, "reported");
+			if (!transitionPhase(state, "reported")) {
+				state.latestCommandStatus = null;
+				const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.commandPhase };
+				return {
+					content: [{ type: "text", text: "Status recorded but phase transition to reported failed." }],
+					details,
+					terminate: true,
+				};
+			}
 
 			// issue 88: journal the report so a rewind/resume can reconstruct the
 			// resumable "waiting" state — and, just as importantly, reconstruct a

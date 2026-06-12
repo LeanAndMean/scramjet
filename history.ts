@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { reconstructPhase, transitionPhase } from "./phase-machine.ts";
+import { isPhaseEntry, reconstructPhase, transitionPhase } from "./phase-machine.ts";
 import type { CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
@@ -85,7 +85,7 @@ export function recordCommandInvocation(
 		// any prior status report. Depth > 0 (delegated subroutines) must NOT touch
 		// the phase — the probe turn is not a command start, so keeping the phase
 		// untouched here is what lets it stay "probing" until the status tool fires.
-		transitionPhase(state, "running");
+		if (!transitionPhase(state, "running")) return;
 		state.latestCommandStatus = null;
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
@@ -165,7 +165,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			if (data && typeof data.enabled === "boolean") enabled = data.enabled;
 		}
 	}
-	const phase = reconstructPhase(entries as unknown as Parameters<typeof reconstructPhase>[0]);
+	const phase = reconstructPhase(entries.filter(isPhaseEntry));
 	return { sidebarLog, enabled, activeTopLevelCommand, phase };
 }
 
@@ -234,7 +234,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 				state.commandPhase === "waiting" &&
 				state.activeTopLevelCommand !== null
 			) {
-				transitionPhase(state, "running");
+				if (!transitionPhase(state, "running")) return;
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
