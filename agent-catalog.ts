@@ -14,6 +14,6 @@ export function registerAgentCatalog(pi: ExtensionAPI, state: ScramjetState): vo
 	pi.on("before_agent_start", (event) => {
 		const block = buildAgentCatalogBlock(state.agentRegistry);
 		if (!block) return {};
-		return { systemPrompt: `${(event as { systemPrompt: string }).systemPrompt}\n\n${block}` };
+		return { systemPrompt: `${event.systemPrompt}\n\n${block}` };
 	});
 }
