@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.0 — Inject subagent catalog into system prompt
+
+Adds an agent-catalog module that injects available subagent names and descriptions into the system prompt, enabling commands with open-ended agent selection to discover agents before dispatching (issue #119).
+
+### Added
+
+- `agent-catalog.ts` — `buildAgentCatalogBlock()` formats the agent registry alphabetically; registered via `before_agent_start` hook.
+- `tests/agent-catalog.test.ts` — unit tests for empty registry, formatting, sorting, hook registration, and prompt composition.
+- CLAUDE.md architecture documentation for the new module.
+
 ## 0.16.0 — Agent-discoverable command authoring documentation
 
 Adds a comprehensive command authoring guide and a centralized doc path resolution module, so agents can discover authoring conventions from the system prompt (issue #111).
