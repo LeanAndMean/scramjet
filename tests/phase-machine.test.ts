@@ -21,6 +21,8 @@ describe("transitionPhase", () => {
 		["probing", "idle"],
 		["reported", "idle"],
 		["reported", "waiting"],
+		["reported", "running"],
+		["probing", "running"],
 		["waiting", "running"],
 		["waiting", "idle"],
 	];
@@ -53,15 +55,23 @@ describe("transitionPhase", () => {
 		expect(state.latestCommandStatus).toEqual({ status: "waiting_for_user", summary: "y" });
 	});
 
+	it("self-transition running → running is a no-op", () => {
+		const state = freshState({
+			commandPhase: "running",
+			latestCommandStatus: { status: "completed", summary: "z" },
+		});
+		expect(transitionPhase(state, "running")).toBe(true);
+		expect(state.commandPhase).toBe("running");
+		expect(state.latestCommandStatus).toEqual({ status: "completed", summary: "z" });
+	});
+
 	const illegalPairs: [CommandPhase, CommandPhase][] = [
 		["idle", "probing"],
 		["idle", "reported"],
 		["idle", "waiting"],
 		["running", "reported"],
 		["running", "waiting"],
-		["probing", "running"],
 		["probing", "waiting"],
-		["reported", "running"],
 		["reported", "probing"],
 		["waiting", "probing"],
 		["waiting", "reported"],
