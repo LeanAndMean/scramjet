@@ -98,7 +98,7 @@ export class MultiLineSelectList {
 		if (total <= this.maxVisible) return { startIndex: 0, endIndex: total };
 
 		const half = Math.floor(this.maxVisible / 2);
-		let startIndex = Math.max(0, Math.min(this.selectedIndex - half, total - this.maxVisible));
+		const startIndex = Math.max(0, Math.min(this.selectedIndex - half, total - this.maxVisible));
 		const endIndex = startIndex + this.maxVisible;
 		return { startIndex, endIndex };
 	}

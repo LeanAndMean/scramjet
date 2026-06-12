@@ -1,26 +1,11 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { isPhaseEntry, reconstructPhase, transitionPhase } from "./phase-machine.ts";
 import type { CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
-
-// The four command-status literals, as a runtime set, so replayHistory can
-// reject a malformed journal entry whose `status` is outside the union (the TS
-// cast at the read site otherwise hides this from the compiler). Sourced from
-// CommandStatusPayload["status"] via the guard below to stay in lockstep with
-// types.ts.
-const COMMAND_STATUSES: ReadonlySet<string> = new Set<CommandStatusPayload["status"]>([
-	"completed",
-	"waiting_for_user",
-	"blocked",
-	"incomplete",
-]);
-
-function isCommandStatus(value: unknown): value is CommandStatusPayload["status"] {
-	return typeof value === "string" && COMMAND_STATUSES.has(value);
-}
 
 // Pi built-ins that the F25 clear-on-unknown-slash path must NOT treat as
 // a workflow exit. Used only when pi.getCommands() is unavailable (older Pi,
@@ -100,7 +85,7 @@ export function recordCommandInvocation(
 		// any prior status report. Depth > 0 (delegated subroutines) must NOT touch
 		// the phase — the probe turn is not a command start, so keeping the phase
 		// untouched here is what lets it stay "probing" until the status tool fires.
-		state.commandPhase = "running";
+		if (!transitionPhase(state, "running")) return;
 		state.latestCommandStatus = null;
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
@@ -162,7 +147,6 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	let sidebarLog: SidebarEntry[] = [];
 	let enabled: boolean | null = null;
 	let activeTopLevelCommand: string | null = null;
-	let phase: "idle" | "waiting" = "idle";
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
@@ -175,32 +159,13 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			sidebarLog = appendSidebarEntry(sidebarLog, data);
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
-				// A fresh top-level command start has not reported a status yet, so
-				// its derived resting phase is idle until a matching status entry is
-				// seen. This reset is what makes [start(A), status(A,waiting),
-				// start(B)] reconstruct B as idle rather than inheriting A's waiting.
-				phase = "idle";
 			}
-		} else if (entry.customType === COMMAND_STATUS_TYPE) {
-			const data = entry.data as CommandStatusData | undefined;
-			// Defensive validation, symmetric to the F10 command-start filter: a
-			// malformed status entry (missing/empty commandName, status outside the
-			// four literals) is skipped so a corrupt journal can't park the lifecycle
-			// at a bogus phase.
-			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
-			if (!isCommandStatus(data.status)) continue;
-			// Only the active top-level command's own report moves its phase; a stale
-			// entry from a since-superseded command is ignored (the start(B) reset
-			// above already cleared the phase, but match defensively regardless).
-			if (data.commandName !== activeTopLevelCommand) continue;
-			// Last-status-wins: waiting_for_user is the sole resumable halt; every
-			// other status (completed/blocked/incomplete) is terminal → idle.
-			phase = data.status === "waiting_for_user" ? "waiting" : "idle";
 		} else if (entry.customType === ENABLED_TOGGLE_TYPE) {
 			const data = entry.data as EnabledToggleData | undefined;
 			if (data && typeof data.enabled === "boolean") enabled = data.enabled;
 		}
 	}
+	const phase = reconstructPhase(entries.filter(isPhaseEntry));
 	return { sidebarLog, enabled, activeTopLevelCommand, phase };
 }
 
@@ -269,7 +234,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 				state.commandPhase === "waiting" &&
 				state.activeTopLevelCommand !== null
 			) {
-				state.commandPhase = "running";
+				if (!transitionPhase(state, "running")) return;
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
@@ -289,7 +254,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 					// issue 88: exiting the workflow also drops a paused (waiting)
 					// command back to idle so the abandoned command can't be resumed
 					// by a later non-slash reply.
-					if (state.commandPhase === "waiting") state.commandPhase = "idle";
+					if (state.commandPhase === "waiting") transitionPhase(state, "idle");
 				}
 			}
 			return;

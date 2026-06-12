@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/scramjet",
-	"version": "0.17.0",
+	"version": "0.17.1",
 	"description": "Smart auto-continuation and command-set harness for Pi",
 	"license": "MIT",
 	"repository": "github:LeanAndMean/scramjet",
