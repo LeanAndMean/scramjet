@@ -165,3 +165,11 @@ Scramjet intentionally consumes a LeanAndMean-patched Pi coding-agent package th
 ```
 
 The alias preserves existing imports while installing the patched package at the upstream dependency key. The patched package is based on upstream Pi `pi.piBaseVersion` with Scramjet patch flavor `pi.piPatchFlavor`; `pi.piTestedVersion` is the combined `${piBaseVersion}-${piPatchFlavor}`. `@earendil-works/pi-tui` remains the upstream `pi.piBaseVersion` package. CI enforces that all of these fields stay in sync — bump the base version, patch flavor/tested version, coding-agent alias, and pi-tui pin together.
+
+## Release process
+
+Every merge to `main` must carry a version bump. The release workflow (`release.yml`) publishes to npm when a version tag is pushed, and `mach12:pr-merge` creates that tag from `package.json`'s version. Without a bump, no tag is created, no publish happens, and users never receive the changes.
+
+- **Every PR gets a version bump** — including pure refactors, test-only changes, and documentation updates. If it merges to main, it needs a new version.
+- **Bump level**: patch for bug fixes, refactors, docs, and test changes; minor for new features or non-breaking behavioral changes; major for breaking changes.
+- **CHANGELOG entry**: required alongside every version bump, following the existing format in `CHANGELOG.md`.
