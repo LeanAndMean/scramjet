@@ -214,9 +214,9 @@ describe("reconstructPhase", () => {
 		expect(
 			reconstructPhase([
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
-				entry("scramjet:command-status", { commandName: "a", status: 42 }),
-				entry("scramjet:command-status", { commandName: "a", status: null }),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" as any }),
+				entry("scramjet:command-status", { commandName: "a", status: 42 as any }),
+				entry("scramjet:command-status", { commandName: "a", status: null as any }),
 			]),
 		).toBe("idle");
 	});
@@ -225,7 +225,7 @@ describe("reconstructPhase", () => {
 		expect(
 			reconstructPhase([
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" as any }),
 				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
 			]),
 		).toBe("waiting");
