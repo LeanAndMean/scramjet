@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.1 — Centralize commandPhase state machine transitions
+
+Extracts all `commandPhase` mutation logic into a new `phase-machine.ts` module with a validated transition table, replacing 13 direct assignments scattered across `history.ts`, `command-status.ts`, and `auto-continue.ts` (issue #121).
+
+### Added
+
+- `phase-machine.ts` — `LEGAL_TRANSITIONS` adjacency map, `transitionPhase()` with auto-clear of `latestCommandStatus` on →idle, and `reconstructPhase()` for rebuild/resume derivation.
+- `tests/phase-machine.test.ts` — covers legal/illegal transitions, self-transitions, auto-clear, and `reconstructPhase` derivation.
+
+### Changed
+
+- `history.ts`, `command-status.ts`, `auto-continue.ts` — all direct `state.commandPhase =` assignments replaced with `transitionPhase()` calls.
+- Removed duplicated `COMMAND_STATUS_TYPE` scanning logic from `history.ts` (now delegated to `reconstructPhase`).
+
 ## 0.17.0 — Inject subagent catalog into system prompt
 
 Adds an agent-catalog module that injects available subagent names and descriptions into the system prompt, enabling commands with open-ended agent selection to discover agents before dispatching (issue #119).
