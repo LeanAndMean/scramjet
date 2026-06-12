@@ -21,6 +21,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.ts";
 import { recordCommandStatus } from "./history.ts";
+import { transitionPhase } from "./phase-machine.ts";
 import type { CommandPhase, CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
 
 // Shared shape for the tool's result `details` so both the out-of-phase error
@@ -158,7 +159,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				recommended_next_step: params.recommended_next_step,
 			};
 			state.latestCommandStatus = payload;
-			state.commandPhase = "reported";
+			transitionPhase(state, "reported");
 
 			// issue 88: journal the report so a rewind/resume can reconstruct the
 			// resumable "waiting" state — and, just as importantly, reconstruct a

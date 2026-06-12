@@ -44,6 +44,7 @@ import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./
 import { buildProbeMessage } from "./next-step.ts";
 import { dispatchNextStep } from "./next-step-dispatch.ts";
 import { selectNextStep } from "./next-step-selector.ts";
+import { transitionPhase } from "./phase-machine.ts";
 import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
@@ -192,14 +193,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				probeWatchdog = setTimeout(() => {
 					probeWatchdog = null;
 					if (state.commandPhase === "probing") {
-						state.commandPhase = "idle";
-						state.latestCommandStatus = null;
+						transitionPhase(state, "idle");
 						console.warn("scramjet: status probe turn never completed; auto-continue paused");
 					}
 				}, PROBE_WATCHDOG_MS);
 			} catch (err) {
-				state.commandPhase = "idle";
-				state.latestCommandStatus = null;
+				transitionPhase(state, "idle");
 				console.warn(`scramjet: status probe failed to send (${(err as Error).message}); auto-continue paused`);
 			}
 		}, 0);
@@ -423,8 +422,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (activeName && !def) {
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
 			state.activeTopLevelCommand = null;
-			state.commandPhase = "idle";
-			state.latestCommandStatus = null;
+			transitionPhase(state, "idle");
 			clearProbeWatchdog();
 			return;
 		}
@@ -440,10 +438,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// Answer turn ended. Eligible policy → ask for status; otherwise stay
 				// invisible (terminus command, or no active command).
 				if (!policy) {
-					state.commandPhase = "idle";
+					transitionPhase(state, "idle");
 					return;
 				}
-				state.commandPhase = "probing";
+				transitionPhase(state, "probing");
 				scheduleProbe(policy, def.name);
 				return;
 			}
@@ -462,8 +460,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// payload would stop the chain with no diagnostic trail. Log-only —
 				// preserves "invisible when idle" on the user surface.
 				clearProbeWatchdog();
-				state.commandPhase = "idle";
-				state.latestCommandStatus = null;
+				transitionPhase(state, "idle");
 				console.warn("scramjet: status probe turn ended without a valid status report; auto-continue paused");
 				return;
 			}
@@ -474,15 +471,16 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				const status = state.latestCommandStatus;
 				// The stored report is consumed regardless of outcome; the resting
 				// phase is then set per status below (terminal idle, or resumable
-				// waiting for waiting_for_user).
+				// waiting for waiting_for_user). Cleared explicitly before routing
+				// because the target may be "waiting" (where auto-clear doesn't apply).
 				state.latestCommandStatus = null;
 				if (!status) {
-					state.commandPhase = "idle";
+					transitionPhase(state, "idle");
 					return;
 				}
 				if (status.status === "completed") {
 					// Completion is terminal for the lifecycle: reset to idle, then chain.
-					state.commandPhase = "idle";
+					transitionPhase(state, "idle");
 					// Chaining a completed command needs the policy to validate the
 					// pick (or fire the forced target). If def.next vanished between
 					// the probe and this agent_end (registry rebuild/reload), there is
@@ -505,7 +503,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// command can later report completed. blocked/incomplete stay terminal
 				// (idle). Chaining still requires an explicit completed report, so an
 				// accidental resume can only re-probe — never mis-chain.
-				state.commandPhase = status.status === "waiting_for_user" ? "waiting" : "idle";
+				transitionPhase(state, status.status === "waiting_for_user" ? "waiting" : "idle");
 				routeNonCompleted(status, ctx);
 				return;
 			}
