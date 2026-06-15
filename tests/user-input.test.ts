@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { registerUserInputTool } from "../user-input.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerUserInputTool, USER_INPUT_TYPE } from "../user-input.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
 type UserInputParams = {
@@ -324,5 +324,176 @@ describe("registerUserInputTool — freetext interaction", () => {
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ cancelled: true });
 		expect(result.details.cancelled).toBe(true);
+	});
+});
+
+describe("registerUserInputTool — probing phase compatibility", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("suspends probe watchdog before UI and re-arms after", async () => {
+		const state = freshState({ commandPhase: "probing" });
+		const suspended: string[] = [];
+		state.suspendProbeWatchdog = () => suspended.push("suspended");
+		state.rearmProbeWatchdog = () => suspended.push("rearmed");
+		const { execute } = toolFor(state);
+		const ctx = mockUICtx("yes");
+		await execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		expect(suspended).toEqual(["suspended", "rearmed"]);
+	});
+
+	it("re-arms probe watchdog even if UI throws", async () => {
+		const state = freshState({ commandPhase: "probing" });
+		const suspended: string[] = [];
+		state.suspendProbeWatchdog = () => suspended.push("suspended");
+		state.rearmProbeWatchdog = () => suspended.push("rearmed");
+		const { execute } = toolFor(state);
+		const ctx = {
+			ui: {
+				custom: () => Promise.reject(new Error("UI crashed")),
+				input: () => Promise.reject(new Error("UI crashed")),
+			},
+		};
+		await expect(execute({ type: "confirm", message: "Continue?" }, ctx)).rejects.toThrow("UI crashed");
+
+		expect(suspended).toEqual(["suspended", "rearmed"]);
+	});
+
+	it("does not suspend watchdog when phase is running", async () => {
+		const state = freshState({ commandPhase: "running" });
+		const suspended: string[] = [];
+		state.suspendProbeWatchdog = () => suspended.push("suspended");
+		state.rearmProbeWatchdog = () => suspended.push("rearmed");
+		const { execute } = toolFor(state);
+		const ctx = mockUICtx("yes");
+		await execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		expect(suspended).toEqual([]);
+	});
+
+	it("does not terminate so scramjet_command_status can still report", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const ctx = mockUICtx("yes");
+		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		expect(result.terminate).toBeUndefined();
+	});
+
+	it("phase stays probing past watchdog timeout while UI is pending", async () => {
+		const { registerAutoContinue } = await import("../auto-continue.ts");
+		const state = freshState({
+			commandPhase: "probing",
+			activeTopLevelCommand: "mach12:test",
+			registry: new Map([
+				[
+					"mach12:test",
+					{ name: "mach12:test", filePath: "", body: "", next: { mode: "forced", target: "mach12:next" } },
+				],
+			]),
+		});
+		const { pi } = recordingPi();
+		registerAutoContinue(pi, state);
+
+		let resolveUI: (v: string) => void;
+		const uiPromise = new Promise<string>((r) => {
+			resolveUI = r;
+		});
+		const { execute } = toolFor(state);
+		const ctx = { ui: { custom: () => uiPromise, input: () => uiPromise } };
+
+		const resultPromise = execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		// Advance past the 30s watchdog window
+		await vi.advanceTimersByTimeAsync(35_000);
+		expect(state.commandPhase).toBe("probing");
+
+		// Complete the UI interaction
+		resolveUI!("yes");
+		const result = await resultPromise;
+		expect(result.terminate).toBeUndefined();
+		expect(state.commandPhase).toBe("probing");
+	});
+});
+
+describe("registerUserInputTool — journaling", () => {
+	it("journals a confirm interaction", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx("yes");
+		await execute({ type: "confirm", message: "Deploy?" }, ctx);
+
+		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
+		expect(entry).toBeDefined();
+		expect(entry.data).toMatchObject({
+			interactionType: "confirm",
+			message: "Deploy?",
+			type: "confirm",
+			confirmed: true,
+		});
+	});
+
+	it("journals a select interaction", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx("patch");
+		await execute(
+			{
+				type: "select",
+				message: "Bump level?",
+				options: [{ value: "patch", label: "Patch" }],
+			},
+			ctx,
+		);
+
+		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
+		expect(entry).toBeDefined();
+		expect(entry.data).toMatchObject({
+			interactionType: "select",
+			message: "Bump level?",
+			type: "select",
+			selected: "patch",
+		});
+	});
+
+	it("journals a freetext interaction", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx(null, "My title");
+		await execute({ type: "freetext", message: "Title?" }, ctx);
+
+		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
+		expect(entry).toBeDefined();
+		expect(entry.data).toMatchObject({
+			interactionType: "freetext",
+			message: "Title?",
+			type: "freetext",
+			text: "My title",
+		});
+	});
+
+	it("journals a cancelled interaction", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx(null);
+		await execute({ type: "confirm", message: "Deploy?" }, ctx);
+
+		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
+		expect(entry).toBeDefined();
+		expect(entry.data).toMatchObject({
+			interactionType: "confirm",
+			message: "Deploy?",
+			cancelled: true,
+		});
+	});
+
+	it("does not journal when phase gate rejects", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "idle" }));
+		await execute({ type: "confirm", message: "Deploy?" }, { ui: {} });
+
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
+	});
+
+	it("does not journal when validation rejects", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		await execute({ type: "select", message: "Pick", options: [] }, { ui: {} });
+
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
 	});
 });

@@ -3,6 +3,8 @@ import { Type } from "typebox";
 import { MultiLineSelectList } from "./multi-line-select.ts";
 import type { ScramjetState } from "./types.ts";
 
+export const USER_INPUT_TYPE = "scramjet:user-input";
+
 const ALLOWED_PHASES = new Set(["running", "probing"]);
 
 const OUT_OF_PHASE_ERROR =
@@ -77,19 +79,42 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				};
 			}
 
-			switch (params.type) {
-				case "confirm":
-					return handleConfirm(params.message, ctx as ExtensionContext);
-				case "select":
-					return handleSelect(
-						params.message,
-						params.options as { value: string; label: string; description?: string }[],
-						params.recommended,
-						ctx as ExtensionContext,
-					);
-				case "freetext":
-					return handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
+			const isProbing = state.commandPhase === "probing";
+			if (isProbing) state.suspendProbeWatchdog?.();
+
+			type InteractionResult = {
+				content: { type: "text"; text: string }[];
+				details: Record<string, unknown>;
+			};
+			let result: InteractionResult;
+			try {
+				switch (params.type) {
+					case "confirm":
+						result = await handleConfirm(params.message, ctx as ExtensionContext);
+						break;
+					case "select":
+						result = await handleSelect(
+							params.message,
+							params.options as { value: string; label: string; description?: string }[],
+							params.recommended,
+							ctx as ExtensionContext,
+						);
+						break;
+					case "freetext":
+						result = await handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
+						break;
+				}
+			} finally {
+				if (isProbing) state.rearmProbeWatchdog?.();
 			}
+
+			pi.appendEntry(USER_INPUT_TYPE, {
+				interactionType: params.type,
+				message: params.message,
+				...result.details,
+			});
+
+			return result;
 		},
 	});
 }

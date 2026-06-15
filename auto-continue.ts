@@ -116,6 +116,20 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
+	state.suspendProbeWatchdog = () => clearProbeWatchdog();
+	state.rearmProbeWatchdog = () => {
+		clearProbeWatchdog();
+		if (state.commandPhase === "probing") {
+			probeWatchdog = setTimeout(() => {
+				probeWatchdog = null;
+				if (state.commandPhase === "probing") {
+					transitionPhase(state, "idle");
+					console.warn("scramjet: status probe turn never completed; auto-continue paused");
+				}
+			}, PROBE_WATCHDOG_MS);
+		}
+	};
+
 	function clearDispatchTimer() {
 		if (dispatchTimer) {
 			clearTimeout(dispatchTimer);
