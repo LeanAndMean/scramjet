@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { MultiLineSelectList } from "./multi-line-select.ts";
 import type { ScramjetState } from "./types.ts";
 
@@ -21,6 +21,38 @@ const PROMPT_SNIPPET =
 	"answer as the tool result — the turn does not end. Use it when you need explicit user " +
 	"decisions during command execution rather than ending the turn with a prose question.";
 
+const USER_INPUT_OPTION_SCHEMA = Type.Object({
+	value: Type.String(),
+	label: Type.String(),
+	description: Type.Optional(Type.String()),
+});
+
+export const USER_INPUT_SCHEMA = Type.Object({
+	type: Type.Union([Type.Literal("confirm"), Type.Literal("select"), Type.Literal("freetext")], {
+		description: "The interaction type: confirm, select, or freetext.",
+	}),
+	message: Type.String({ description: "The question or prompt to show the user." }),
+	options: Type.Optional(
+		Type.Array(USER_INPUT_OPTION_SCHEMA, {
+			description: "Required for select type. The list of options to present.",
+		}),
+	),
+	recommended: Type.Optional(
+		Type.Integer({
+			minimum: 0,
+			description: "For select type: zero-based index of the recommended option.",
+		}),
+	),
+	placeholder: Type.Optional(
+		Type.String({ description: "For freetext type: placeholder hint text shown in the input." }),
+	),
+});
+
+type UserInputParams = Static<typeof USER_INPUT_SCHEMA>;
+type UserInputOption = Static<typeof USER_INPUT_OPTION_SCHEMA>;
+const _schemaMatchesParams = (params: Static<typeof USER_INPUT_SCHEMA>): UserInputParams => params;
+const _paramsMatchSchema = (params: UserInputParams): Static<typeof USER_INPUT_SCHEMA> => params;
+
 export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
 		name: "scramjet_user_input",
@@ -30,31 +62,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			"Supports confirm (yes/no), select (pick from options), and freetext (open-ended input). " +
 			"Blocks until the user responds; the turn continues after the response.",
 		promptSnippet: PROMPT_SNIPPET,
-		parameters: Type.Object({
-			type: Type.Union([Type.Literal("confirm"), Type.Literal("select"), Type.Literal("freetext")], {
-				description: "The interaction type: confirm, select, or freetext.",
-			}),
-			message: Type.String({ description: "The question or prompt to show the user." }),
-			options: Type.Optional(
-				Type.Array(
-					Type.Object({
-						value: Type.String(),
-						label: Type.String(),
-						description: Type.Optional(Type.String()),
-					}),
-					{ description: "Required for select type. The list of options to present." },
-				),
-			),
-			recommended: Type.Optional(
-				Type.Integer({
-					minimum: 0,
-					description: "For select type: zero-based index of the recommended option.",
-				}),
-			),
-			placeholder: Type.Optional(
-				Type.String({ description: "For freetext type: placeholder hint text shown in the input." }),
-			),
-		}),
+		parameters: USER_INPUT_SCHEMA,
 		async execute(_toolCallId, params, _resource, _read, ctx) {
 			if (!ALLOWED_PHASES.has(state.commandPhase)) {
 				console.warn(`scramjet: scramjet_user_input called out of phase (phase=${state.commandPhase}); rejected`);
@@ -95,7 +103,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					case "select":
 						result = await handleSelect(
 							params.message,
-							params.options as { value: string; label: string; description?: string }[],
+							params.options ?? [],
 							params.recommended,
 							ctx as ExtensionContext,
 						);
@@ -104,6 +112,12 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 						result = await handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
 						break;
 				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return {
+					content: [{ type: "text", text: `UI interaction failed: ${message}` }],
+					details: { error: "ui-error", message },
+				};
 			} finally {
 				if (isProbing) state.rearmProbeWatchdog?.();
 			}
@@ -166,7 +180,7 @@ async function handleConfirm(message: string, ctx: ExtensionContext) {
 
 async function handleSelect(
 	message: string,
-	options: { value: string; label: string; description?: string }[],
+	options: UserInputOption[],
 	recommended: number | undefined,
 	ctx: ExtensionContext,
 ) {
@@ -235,12 +249,7 @@ async function handleFreetext(message: string, placeholder: string | undefined, 
 	return { content: [{ type: "text" as const, text: JSON.stringify({ text }) }], details: { type: "freetext", text } };
 }
 
-function validateParams(params: {
-	type: string;
-	message?: string;
-	options?: unknown[];
-	recommended?: number;
-}): string | null {
+function validateParams(params: UserInputParams): string | null {
 	if (!params.message || params.message.trim() === "") {
 		return "Validation error: 'message' is required and must be non-empty.";
 	}
@@ -248,6 +257,18 @@ function validateParams(params: {
 	if (params.type === "select") {
 		if (!Array.isArray(params.options) || params.options.length === 0) {
 			return "Validation error: 'options' is required and must be a non-empty array for select type.";
+		}
+		const invalidOptionIndex = params.options.findIndex(
+			(option) =>
+				typeof option !== "object" ||
+				option === null ||
+				typeof option.value !== "string" ||
+				option.value.trim() === "" ||
+				typeof option.label !== "string" ||
+				option.label.trim() === "",
+		);
+		if (invalidOptionIndex !== -1) {
+			return `Validation error: 'options[${invalidOptionIndex}]' must include non-empty string 'value' and 'label'.`;
 		}
 		if (params.recommended !== undefined && (params.recommended < 0 || params.recommended >= params.options.length)) {
 			return `Validation error: 'recommended' index ${params.recommended} is out of range (0-${params.options.length - 1}).`;

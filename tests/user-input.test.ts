@@ -142,6 +142,23 @@ describe("registerUserInputTool — runtime validation", () => {
 		expect(String(result.content[0].text)).toContain("non-empty array");
 	});
 
+	it.each([
+		["missing value", [{ label: "A" }]],
+		["empty value", [{ value: "", label: "A" }]],
+		["missing label", [{ value: "a" }]],
+		["empty label", [{ value: "a", label: "   " }]],
+		["null option", [null]],
+	])("rejects select option with %s", async (_name, options) => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const result = await execute({ type: "select", message: "Pick one", options } as any, ctx);
+
+		expect(result.terminate).toBeUndefined();
+		expect(result.details.error).toBe("validation");
+		expect(String(result.content[0].text)).toContain("options[0]");
+		expect(String(result.content[0].text)).toContain("value");
+		expect(String(result.content[0].text)).toContain("label");
+	});
+
 	it("rejects select with recommended out of range", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "running" }));
 		const result = await execute(
@@ -206,6 +223,12 @@ describe("registerUserInputTool — non-terminating results", () => {
 
 		const nonTuiResult = await execute({ type: "confirm", message: "Ok?" });
 		expect(nonTuiResult.terminate).toBeUndefined();
+
+		const uiErrorResult = await execute(
+			{ type: "confirm", message: "Ok?" },
+			{ ui: { custom: () => Promise.reject(new Error("UI crashed")) } },
+		);
+		expect(uiErrorResult.terminate).toBeUndefined();
 	});
 
 	it("never returns terminate: true on success paths", async () => {
@@ -327,6 +350,19 @@ describe("registerUserInputTool — freetext interaction", () => {
 	});
 });
 
+describe("registerUserInputTool — UI interaction errors", () => {
+	it("returns a structured non-terminating error when UI fails during running phase", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = { ui: { custom: () => Promise.reject(new Error("UI crashed")) } };
+		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		expect(result.terminate).toBeUndefined();
+		expect(result.details.error).toBe("ui-error");
+		expect(result.details.message).toBe("UI crashed");
+		expect(String(result.content[0].text)).toContain("UI interaction failed");
+	});
+});
+
 describe("registerUserInputTool — probing phase compatibility", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
@@ -343,7 +379,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(suspended).toEqual(["suspended", "rearmed"]);
 	});
 
-	it("re-arms probe watchdog even if UI throws", async () => {
+	it("re-arms probe watchdog and returns a structured error if UI throws", async () => {
 		const state = freshState({ commandPhase: "probing" });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
@@ -355,8 +391,11 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 				input: () => Promise.reject(new Error("UI crashed")),
 			},
 		};
-		await expect(execute({ type: "confirm", message: "Continue?" }, ctx)).rejects.toThrow("UI crashed");
+		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
 
+		expect(result.terminate).toBeUndefined();
+		expect(result.details.error).toBe("ui-error");
+		expect(result.details.message).toBe("UI crashed");
 		expect(suspended).toEqual(["suspended", "rearmed"]);
 	});
 
