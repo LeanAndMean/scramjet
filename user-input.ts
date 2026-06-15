@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { MultiLineSelectList } from "./multi-line-select.ts";
 import type { ScramjetState } from "./types.ts";
@@ -150,7 +151,7 @@ async function handleConfirm(message: string, ctx: ExtensionContext) {
 		return {
 			render(width: number) {
 				return [
-					theme.fg("accent", theme.bold(message)),
+					...wrapTextWithAnsi(theme.fg("accent", theme.bold(message)), width),
 					...selectList.render(width),
 					theme.fg("dim", "enter select \u2022 esc cancel"),
 				];
@@ -210,7 +211,7 @@ async function handleSelect(
 		return {
 			render(width: number) {
 				return [
-					theme.fg("accent", theme.bold(message)),
+					...wrapTextWithAnsi(theme.fg("accent", theme.bold(message)), width),
 					...selectList.render(width),
 					theme.fg("dim", "\u2191\u2193 navigate \u2022 enter select \u2022 esc cancel"),
 				];
