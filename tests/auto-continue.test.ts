@@ -1695,46 +1695,405 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 	});
 });
 
-describe("continuing status via report_scramjet_command_status", () => {
+describe("multi-path probe integration", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
-	it("continue → work → probe → complete chains correctly", async () => {
-		const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-		const state = runningState(def, { enabled: true });
-		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+	// Helper: bootstrap with user-input tool registered alongside status+auto-continue.
+	function fullBootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } = {}) {
+		const bag = recordingPi();
+		const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
+		registerCommandStatusTool(bag.pi, state);
+		registerUserInputTool(bag.pi, state);
+		registerAutoContinue(bag.pi, state);
+		registerHistory(bag.pi, state);
+		const statusTool = bag.tools.find((t: any) => t.name === "report_scramjet_command_status");
+		if (!statusTool) throw new Error("report_scramjet_command_status not registered");
+		const report = (params: StatusParams) =>
+			statusTool.execute("call-id", params, undefined, undefined, undefined) as Promise<any>;
+		const userInputTool = bag.tools.find((t: any) => t.name === "get_scramjet_user_input");
+		if (!userInputTool) throw new Error("get_scramjet_user_input not registered");
+		const callUserInput = (params: { type: string; message: string; [k: string]: unknown }, ctx?: unknown) =>
+			userInputTool.execute("call-id", params, undefined, undefined, ctx ?? ctxBag.ctx) as Promise<any>;
+		return { bag, ctxBag, report, callUserInput };
+	}
 
-		// Answer turn ends → probe fires
+	// Helper: fire one probe cycle (answer turn ends → probe sent).
+	async function fireProbe(bag: ReturnType<typeof recordingPi>, ctxBag: CtxBag) {
 		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctxBag.ctx);
 		bag.pi.isStreaming = false;
 		await vi.advanceTimersByTimeAsync(0);
-		expect(state.commandPhase).toBe("probing");
-		expect(bag.pi.sent).toHaveLength(1);
+	}
 
-		// Agent reports continuing → phase back to running, turn continues
-		const contResult = (await report({ status: "continuing", summary: "more work" })) as any;
-		expect(contResult.terminate).toBeUndefined();
-		expect(contResult.details.status).toBe("continuing");
-		expect(state.commandPhase).toBe("running");
-
-		// Agent does more work, turn ends → another probe fires
+	// Helper: complete the probe turn (agent_end after report, deferred dispatch).
+	async function endProbeTurn(bag: ReturnType<typeof recordingPi>, ctxBag: CtxBag) {
 		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctxBag.ctx);
+		expect(ctxBag.dispatchedWhileStreaming).toHaveLength(0);
 		bag.pi.isStreaming = false;
 		await vi.advanceTimersByTimeAsync(0);
-		expect(state.commandPhase).toBe("probing");
-		expect(bag.pi.sent).toHaveLength(2);
+	}
 
-		// Agent reports completed
-		await report({ status: "completed", summary: "done" });
-		expect(state.commandPhase).toBe("reported");
+	describe("continue → work → probe → complete", () => {
+		it("continue then complete chains the next step", async () => {
+			const def = defWithPolicy("a:cmd", {
+				mode: "closed",
+				candidates: [{ name: "b:next" }],
+			});
+			const state = runningState(def, { enabled: true, registry: registryWith(defWithPolicy("b:next", undefined)) });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
 
-		bag.pi.isStreaming = true;
-		await bag.emit("agent_end", {}, ctxBag.ctx);
-		bag.pi.isStreaming = false;
-		await vi.advanceTimersByTimeAsync(0);
-		expect(state.commandPhase).toBe("idle");
+			// Answer turn ends → first probe
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+			expect(bag.pi.sent).toHaveLength(1);
+
+			// Agent reports continuing → phase back to running
+			const contResult = await report({ status: "continuing", summary: "more work" });
+			expect(contResult.terminate).toBeUndefined();
+			expect(contResult.details.status).toBe("continuing");
+			expect(state.commandPhase).toBe("running");
+
+			// Agent does more work, turn ends → second probe
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+			expect(bag.pi.sent).toHaveLength(2);
+
+			// Agent reports completed with a next step
+			await report({
+				status: "completed",
+				summary: "done",
+				next_steps: [{ message: "/b:next", reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			expect(state.commandPhase).toBe("reported");
+
+			// Probe turn ends → dispatches the next step
+			await endProbeTurn(bag, ctxBag);
+			expect(state.commandPhase).toBe("idle");
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:next", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+		});
+
+		it("multiple continues then complete chains correctly", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			// Two rounds of continue
+			for (let i = 0; i < 2; i++) {
+				await fireProbe(bag, ctxBag);
+				expect(state.commandPhase).toBe("probing");
+				const r = await report({ status: "continuing", summary: `round ${i + 1}` });
+				expect(r.details.status).toBe("continuing");
+				expect(state.commandPhase).toBe("running");
+			}
+
+			// Final probe → completed
+			await fireProbe(bag, ctxBag);
+			await report({ status: "completed", summary: "done" });
+			await endProbeTurn(bag, ctxBag);
+			expect(state.commandPhase).toBe("idle");
+		});
+	});
+
+	describe("continue loop bound", () => {
+		it("3 consecutive continues then 4th returns limit error without terminating", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			// Exhaust the 3-continue limit
+			for (let i = 0; i < 3; i++) {
+				await fireProbe(bag, ctxBag);
+				const r = await report({ status: "continuing", summary: `round ${i + 1}` });
+				expect(r.details.status).toBe("continuing");
+				expect(state.commandPhase).toBe("running");
+			}
+
+			// 4th continue hits the limit — stays probing, not terminated
+			await fireProbe(bag, ctxBag);
+			const limited = await report({ status: "continuing", summary: "too many" });
+			expect(limited.details.error).toBe("continue-limit");
+			expect(limited.terminate).toBeUndefined();
+			// Phase stays probing — agent must now report a terminal status
+			expect(state.commandPhase).toBe("probing");
+
+			// Agent heeds the error and reports completed
+			await report({ status: "completed", summary: "finally done" });
+			await endProbeTurn(bag, ctxBag);
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("counter resets after a terminal status allowing continues in a subsequent command", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			// Use up all 3 continues
+			for (let i = 0; i < 3; i++) {
+				await fireProbe(bag, ctxBag);
+				await report({ status: "continuing", summary: `round ${i + 1}` });
+			}
+
+			// Hit the limit
+			await fireProbe(bag, ctxBag);
+			const limited = await report({ status: "continuing", summary: "too many" });
+			expect(limited.details.error).toBe("continue-limit");
+
+			// Report completed → resets counter
+			await report({ status: "completed", summary: "done" });
+			await endProbeTurn(bag, ctxBag);
+
+			// Start a new command cycle — continues work again
+			state.commandPhase = "running";
+			state.activeTopLevelCommand = "a:cmd";
+			await fireProbe(bag, ctxBag);
+			const fresh = await report({ status: "continuing", summary: "fresh" });
+			expect(fresh.details.status).toBe("continuing");
+			expect(state.commandPhase).toBe("running");
+		});
+	});
+
+	describe("user-input during probe → work → complete", () => {
+		it("agent calls get_scramjet_user_input during probe, continues, then completes", async () => {
+			const def = defWithPolicy("a:cmd", {
+				mode: "closed",
+				candidates: [{ name: "b:next" }],
+			});
+			const state = runningState(def, { enabled: true, registry: registryWith(defWithPolicy("b:next", undefined)) });
+			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: false });
+
+			// Answer turn ends → probe fires
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+
+			// Agent calls get_scramjet_user_input during the probe turn.
+			// Pass a ctx with auto-resolving custom UI.
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			const inputResult = await callUserInput({ type: "confirm", message: "Proceed?" }, autoCtx);
+			expect(inputResult.details.error).toBeUndefined();
+			expect(inputResult.details.confirmed).toBe(true);
+			// Phase is still probing — user-input doesn't transition the phase
+			expect(state.commandPhase).toBe("probing");
+
+			// Agent continues working and reports continuing
+			const contResult = await report({ status: "continuing", summary: "got input, working" });
+			expect(contResult.details.status).toBe("continuing");
+			expect(state.commandPhase).toBe("running");
+
+			// Agent finishes, turn ends → second probe
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+
+			// Agent reports completed
+			await report({
+				status: "completed",
+				summary: "done",
+				next_steps: [{ message: "/b:next", reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			await endProbeTurn(bag, ctxBag);
+			expect(state.commandPhase).toBe("idle");
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:next", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+		});
+
+		it("user-input is rejected outside probing/running phase", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			state.commandPhase = "idle";
+			const { callUserInput } = fullBootstrap(state);
+
+			const result = await callUserInput({ type: "confirm", message: "Should I?" });
+			expect(result.details.error).toBe("out-of-phase");
+		});
+	});
+
+	describe("existing scramjet_command_status flow regression", () => {
+		it("completed without continue dispatches the next step (no regression)", async () => {
+			const def = defWithPolicy("a:cmd", {
+				mode: "forced",
+				target: "b:target",
+			});
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "completed", summary: "done" });
+
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("blocked warns without dispatching (no regression)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "blocked",
+				summary: "missing dependency",
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("blocked");
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("waiting_for_user parks at waiting phase (no regression)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "waiting_for_user",
+				summary: "need input",
+				user_prompt: "Which option?",
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(state.commandPhase).toBe("waiting");
+			expect(state.activeTopLevelCommand).toBe("a:cmd");
+		});
+
+		it("incomplete pauses quietly (no regression)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "incomplete",
+				summary: "stopped early",
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications).toEqual([]);
+			expect(state.commandPhase).toBe("idle");
+		});
+	});
+
+	describe("probe watchdog covers all paths", () => {
+		it("watchdog fires when probe turn hangs after no tool call", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag } = fullBootstrap(state, { hasUI: false });
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			// Answer turn ends → probe fires, watchdog armed
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+
+			// No tool call, no agent_end — watchdog fires
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(state.commandPhase).toBe("idle");
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("never completed"));
+			warnSpy.mockRestore();
+		});
+
+		it("watchdog is suspended during continuing and re-armed after", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+
+			// Agent reports continuing — watchdog is suspended during transition
+			await report({ status: "continuing", summary: "working" });
+			expect(state.commandPhase).toBe("running");
+
+			// Advancing past the watchdog window shouldn't fire it (phase is running)
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(state.commandPhase).toBe("running");
+			expect(warnSpy).not.toHaveBeenCalled();
+			warnSpy.mockRestore();
+		});
+
+		it("watchdog is suspended during get_scramjet_user_input and re-armed after", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, callUserInput } = fullBootstrap(state);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+
+			// Agent calls user-input with auto-resolving ctx
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			await callUserInput({ type: "confirm", message: "Continue?" }, autoCtx);
+
+			// Watchdog was re-armed after user-input. Advancing past the window
+			// should fire it since no terminal report was made.
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(state.commandPhase).toBe("idle");
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("never completed"));
+			warnSpy.mockRestore();
+		});
+
+		it("watchdog does not fire after a completed report", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "done",
+			});
+			expect(state.commandPhase).toBe("idle");
+
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(state.commandPhase).toBe("idle");
+			expect(warnSpy).not.toHaveBeenCalled();
+			warnSpy.mockRestore();
+		});
+	});
+
+	describe("self-heal without tool call", () => {
+		it("probe turn ending without any tool call self-heals to idle", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag } = fullBootstrap(state, { hasUI: false });
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			// Answer turn ends → probe fires
+			await fireProbe(bag, ctxBag);
+			expect(state.commandPhase).toBe("probing");
+
+			// Probe turn ends without a report → self-heals
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(state.commandPhase).toBe("idle");
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("without a valid status report"));
+			warnSpy.mockRestore();
+		});
+
+		it("self-heal does not re-probe (no infinite loop)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag } = fullBootstrap(state, { hasUI: false });
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			// Answer turn → probe → self-heal
+			await fireProbe(bag, ctxBag);
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(state.commandPhase).toBe("idle");
+			const sentAfterHeal = bag.pi.sent.length;
+
+			// Another agent_end at idle should NOT fire a new probe
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(bag.pi.sent.length).toBe(sentAfterHeal);
+			warnSpy.mockRestore();
+		});
 	});
 });
 
