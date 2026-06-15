@@ -1007,15 +1007,20 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		// the resumable exception (asserted separately below), so it is no longer in
 		// this list.
 		it.each(["blocked", "incomplete"] as const)(
-			"%s resets the phase to idle and clears the stored status",
+			"%s resets to terminal idle and cannot be re-armed by a later reply",
 			async (status) => {
 				const state = nonCompletedState();
 				const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+				registerHistory(bag.pi, state);
 
 				await simulateTwoTurns(bag, ctxBag, report, { status, summary: "not done" });
 
 				expect(state.commandPhase).toBe("idle");
+				expect(state.activeTopLevelCommand).toBeNull();
 				expect(state.latestCommandStatus).toBeNull();
+
+				await bag.emit("input", { text: "unrelated follow-up", source: "interactive" }, ctxBag.ctx);
+				expect(state.commandPhase).toBe("idle");
 			},
 		);
 

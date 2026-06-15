@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { LEGAL_TRANSITIONS, reconstructPhase, transitionPhase } from "../phase-machine.ts";
-import type { CommandPhase, CommandStatusPayload } from "../types.ts";
+import type { CommandPhase } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
 describe("LEGAL_TRANSITIONS", () => {
@@ -119,7 +119,7 @@ describe("transitionPhase", () => {
 describe("reconstructPhase", () => {
 	function entry(
 		customType: string,
-		data?: { command?: string; depth?: number; commandName?: string; status?: CommandStatusPayload["status"] },
+		data?: { command?: string; depth?: number; commandName?: string; status?: unknown },
 	) {
 		return { type: "custom" as const, customType, data };
 	}
@@ -214,9 +214,10 @@ describe("reconstructPhase", () => {
 		expect(
 			reconstructPhase([
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "bogus" as any }),
-				entry("scramjet:command-status", { commandName: "a", status: 42 as any }),
-				entry("scramjet:command-status", { commandName: "a", status: null as any }),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
+				entry("scramjet:command-status", { commandName: "a", status: "continuing" }),
+				entry("scramjet:command-status", { commandName: "a", status: 42 }),
+				entry("scramjet:command-status", { commandName: "a", status: null }),
 			]).phase,
 		).toBe("idle");
 	});
@@ -225,7 +226,7 @@ describe("reconstructPhase", () => {
 		expect(
 			reconstructPhase([
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "bogus" as any }),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
 				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
 			]).phase,
 		).toBe("waiting");

@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isPhaseEntry, reconstructPhase, transitionPhase } from "./phase-machine.ts";
-import type { CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "./types.ts";
+import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
@@ -110,20 +110,20 @@ export function recordCommandStart(
 // "waiting" lifecycle phase (see replayHistory).
 export interface CommandStatusData {
 	commandName: string;
-	status: CommandStatusPayload["status"];
+	status: CommandStatusRestingStatus;
 }
 
 // Journals the agent's report_scramjet_command_status report. Mirrors
 // recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
 // the live phase is owned by command-status.ts / auto-continue.ts; this only
-// persists the report so resume can rebuild the resting phase. ALL four statuses
-// are journaled, not just waiting_for_user — that is what lets a command which
-// waits, is answered, then completes without offering a next step reconstruct
+// persists the report so resume can rebuild the resting phase. Terminal/resting
+// statuses are journaled, not just waiting_for_user — that is what lets a command
+// which waits, is answered, then completes without offering a next step reconstruct
 // to "idle" instead of resurrecting at "waiting" (the duplicate-work hazard).
 export function recordCommandStatus(
 	pi: ExtensionAPI,
 	commandName: string,
-	status: CommandStatusPayload["status"],
+	status: CommandStatusRestingStatus,
 ): void {
 	const data: CommandStatusData = { commandName, status };
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
@@ -224,10 +224,10 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// Resume the active command on an interactive non-slash reply. Two
 			// cases: (1) issue 88 — the command reported waiting_for_user and
 			// rests at "waiting"; the user's answer re-arms the probe path.
-			// (2) issue 128 — the probe self-healed to "idle" (or reported
-			// incomplete/blocked) but activeTopLevelCommand is still set; the
-			// user's reply is still engaging with the command. In both cases,
-			// flip to "running" so phase-gated tools (get_scramjet_user_input) work
+			// (2) issue 128 — the probe self-healed to "idle" but
+			// activeTopLevelCommand is still set; the user's reply is still
+			// engaging with the command. In both cases, flip to "running" so
+			// phase-gated tools (get_scramjet_user_input) work
 			// and agent_end fires the running→probing probe. Chaining still
 			// requires an explicit completed report, so an off-topic reply can
 			// only cause a harmless re-probe, never a chain. Gated on

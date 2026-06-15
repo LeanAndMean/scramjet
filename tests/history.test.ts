@@ -13,7 +13,7 @@ import {
 	replayHistory,
 	SIDEBAR_MAX,
 } from "../history.ts";
-import type { CommandDef, CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "../types.ts";
+import type { CommandDef, CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
@@ -58,7 +58,7 @@ function cmdStart(command: string, depth = 0, ts = 0): SessionEntry {
 	return customEntry(COMMAND_START_TYPE, data);
 }
 
-function cmdStatus(commandName: string, status: CommandStatusPayload["status"]): SessionEntry {
+function cmdStatus(commandName: string, status: CommandStatusRestingStatus): SessionEntry {
 	const data: CommandStatusData = { commandName, status };
 	return customEntry(COMMAND_STATUS_TYPE, data);
 }
@@ -280,6 +280,7 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 			customEntry(COMMAND_STATUS_TYPE, { status: "waiting_for_user" }),
 			customEntry(COMMAND_STATUS_TYPE, { commandName: "", status: "waiting_for_user" }),
 			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "bogus" }),
+			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "continuing" }),
 		]);
 		// None of the malformed entries reconstruct a waiting phase.
 		expect(result.phase).toBe("idle");

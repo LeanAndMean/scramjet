@@ -54,6 +54,8 @@ export interface CommandStatusPayload {
 	recommended_next_step?: number;
 }
 
+export type CommandStatusRestingStatus = Exclude<CommandStatusPayload["status"], "continuing">;
+
 export interface Candidate {
 	name: string;
 	hint?: string;

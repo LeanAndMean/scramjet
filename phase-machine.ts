@@ -1,4 +1,4 @@
-import type { CommandPhase, CommandStatusPayload, ScramjetState } from "./types.ts";
+import type { CommandPhase, CommandStatusRestingStatus, ScramjetState } from "./types.ts";
 
 export const LEGAL_TRANSITIONS = {
 	idle: ["idle", "running"],
@@ -27,12 +27,11 @@ export interface PhaseEntry {
 	data?: unknown;
 }
 
-const VALID_STATUSES: ReadonlySet<string> = new Set<CommandStatusPayload["status"]>([
+const VALID_STATUSES: ReadonlySet<string> = new Set<CommandStatusRestingStatus>([
 	"completed",
 	"waiting_for_user",
 	"blocked",
 	"incomplete",
-	"continuing",
 ]);
 
 export function isPhaseEntry(entry: { type: string; customType?: string; data?: unknown }): entry is PhaseEntry {

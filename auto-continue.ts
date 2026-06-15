@@ -521,9 +521,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// (keeping activeTopLevelCommand) so a later interactive reply
 				// (history.ts) can re-arm the running→probing probe path and the
 				// command can later report completed. blocked/incomplete stay terminal
-				// (idle). Chaining still requires an explicit completed report, so an
-				// accidental resume can only re-probe — never mis-chain.
+				// (idle), so they clear the active command like completed does.
 				if (!transitionPhase(state, status.status === "waiting_for_user" ? "waiting" : "idle")) return;
+				if (status.status !== "waiting_for_user") state.activeTopLevelCommand = null;
 				routeNonCompleted(status, ctx);
 				return;
 			}
