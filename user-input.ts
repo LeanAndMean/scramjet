@@ -1,5 +1,6 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { MultiLineSelectList } from "./multi-line-select.ts";
 import type { ScramjetState } from "./types.ts";
 
 const ALLOWED_PHASES = new Set(["running", "probing"]);
@@ -76,13 +77,137 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				};
 			}
 
-			// Stub: actual UI interactions wired in Stage 2
-			return {
-				content: [{ type: "text", text: "scramjet_user_input: UI interactions not yet implemented." }],
-				details: { error: "not-implemented" },
-			};
+			switch (params.type) {
+				case "confirm":
+					return handleConfirm(params.message, ctx as ExtensionContext);
+				case "select":
+					return handleSelect(
+						params.message,
+						params.options as { value: string; label: string; description?: string }[],
+						params.recommended,
+						ctx as ExtensionContext,
+					);
+				case "freetext":
+					return handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
+			}
 		},
 	});
+}
+
+async function handleConfirm(message: string, ctx: ExtensionContext) {
+	const result = await ctx.ui.custom<"yes" | "no" | null>((tui, theme, _keybindings, done) => {
+		const items = [
+			{ value: "yes", label: "Yes" },
+			{ value: "no", label: "No" },
+		];
+		const selectList = new MultiLineSelectList(items, 2, {
+			selectedText: (text) => theme.fg("accent", text),
+			description: (text) => theme.fg("muted", text),
+			scrollInfo: (text) => theme.fg("dim", text),
+		});
+		selectList.onSelect = (item) => done(item.value as "yes" | "no");
+		selectList.onCancel = () => done(null);
+
+		return {
+			render(width: number) {
+				return [
+					theme.fg("accent", theme.bold(message)),
+					...selectList.render(width),
+					theme.fg("dim", "enter select \u2022 esc cancel"),
+				];
+			},
+			invalidate() {
+				selectList.invalidate();
+			},
+			handleInput(data: string) {
+				selectList.handleInput(data);
+				tui.requestRender();
+			},
+			dispose() {},
+		};
+	});
+
+	if (result === null) {
+		return {
+			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
+			details: { type: "confirm", cancelled: true },
+		};
+	}
+	return {
+		content: [{ type: "text" as const, text: JSON.stringify({ confirmed: result === "yes" }) }],
+		details: { type: "confirm", confirmed: result === "yes" },
+	};
+}
+
+async function handleSelect(
+	message: string,
+	options: { value: string; label: string; description?: string }[],
+	recommended: number | undefined,
+	ctx: ExtensionContext,
+) {
+	const items = options.map((opt) => ({
+		value: opt.value,
+		label: opt.label,
+		description: opt.description,
+	}));
+
+	const selectedValue = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+		const selectList = new MultiLineSelectList(
+			items,
+			Math.min(items.length, 8),
+			{
+				selectedText: (text) => theme.fg("accent", text),
+				description: (text) => theme.fg("muted", text),
+				scrollInfo: (text) => theme.fg("dim", text),
+			},
+			{ recommendedIndex: recommended },
+		);
+
+		if (recommended !== undefined) selectList.setSelectedIndex(recommended);
+
+		selectList.onSelect = (item) => done(item.value);
+		selectList.onCancel = () => done(null);
+
+		return {
+			render(width: number) {
+				return [
+					theme.fg("accent", theme.bold(message)),
+					...selectList.render(width),
+					theme.fg("dim", "\u2191\u2193 navigate \u2022 enter select \u2022 esc cancel"),
+				];
+			},
+			invalidate() {
+				selectList.invalidate();
+			},
+			handleInput(data: string) {
+				selectList.handleInput(data);
+				tui.requestRender();
+			},
+			dispose() {},
+		};
+	});
+
+	if (selectedValue === null) {
+		return {
+			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
+			details: { type: "select", cancelled: true },
+		};
+	}
+	return {
+		content: [{ type: "text" as const, text: JSON.stringify({ selected: selectedValue }) }],
+		details: { type: "select", selected: selectedValue },
+	};
+}
+
+async function handleFreetext(message: string, placeholder: string | undefined, ctx: ExtensionContext) {
+	const text = await ctx.ui.input(message, placeholder);
+	if (text === undefined) {
+		return {
+			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
+			details: { type: "freetext", cancelled: true },
+		};
+	}
+	return { content: [{ type: "text" as const, text: JSON.stringify({ text }) }], details: { type: "freetext", text } };
 }
 
 function validateParams(params: {

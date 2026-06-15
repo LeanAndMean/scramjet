@@ -20,6 +20,37 @@ function toolFor(state = freshState()) {
 	return { state, pi, tools, handlers, tool, execute };
 }
 
+function mockUICtx(customResult: unknown = null, inputResult: string | undefined = undefined) {
+	return {
+		ui: {
+			custom: (_factory: any) => Promise.resolve(customResult),
+			input: (_title: string, _placeholder?: string) => Promise.resolve(inputResult),
+		},
+	};
+}
+
+function mockUICtxWithFactory() {
+	let capturedFactory: any = null;
+	return {
+		ctx: {
+			ui: {
+				custom: (factory: any) => {
+					return new Promise((resolve) => {
+						const tui = { requestRender: () => {} };
+						const theme = {
+							fg: (_color: string, text: string) => text,
+							bold: (text: string) => text,
+						};
+						capturedFactory = factory(tui, theme, {}, resolve);
+					});
+				},
+				input: (_title: string, _placeholder?: string) => Promise.resolve(undefined),
+			},
+		},
+		getFactory: () => capturedFactory,
+	};
+}
+
 describe("registerUserInputTool — registration", () => {
 	it("registers exactly the scramjet_user_input tool", () => {
 		const { tools } = toolFor();
@@ -63,7 +94,7 @@ describe("registerUserInputTool — phase gate", () => {
 
 	it.each(["running", "probing"] as const)("accepts calls when phase is %s", async (phase) => {
 		const { execute } = toolFor(freshState({ commandPhase: phase }));
-		const ctx = { ui: {} };
+		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Proceed?" }, ctx);
 
 		expect(result.details.error).not.toBe("out-of-phase");
@@ -130,6 +161,7 @@ describe("registerUserInputTool — runtime validation", () => {
 
 	it("accepts select with valid recommended index", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const uiCtx = mockUICtx("b");
 		const result = await execute(
 			{
 				type: "select",
@@ -140,7 +172,7 @@ describe("registerUserInputTool — runtime validation", () => {
 				],
 				recommended: 1,
 			},
-			ctx,
+			uiCtx,
 		);
 
 		expect(result.details.error).not.toBe("validation");
@@ -176,10 +208,121 @@ describe("registerUserInputTool — non-terminating results", () => {
 		expect(nonTuiResult.terminate).toBeUndefined();
 	});
 
-	it("never returns terminate: true on the stub success path", async () => {
+	it("never returns terminate: true on success paths", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "running" }));
-		const ctx = { ui: {} };
+		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Proceed?" }, ctx);
 		expect(result.terminate).toBeUndefined();
+	});
+});
+
+describe("registerUserInputTool — confirm interaction", () => {
+	it("returns confirmed: true when user selects Yes", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx("yes");
+		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ confirmed: true });
+		expect(result.details.type).toBe("confirm");
+		expect(result.details.confirmed).toBe(true);
+	});
+
+	it("returns confirmed: false when user selects No", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx("no");
+		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ confirmed: false });
+		expect(result.details.confirmed).toBe(false);
+	});
+
+	it("returns cancelled: true when user presses Escape", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx(null);
+		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ cancelled: true });
+		expect(result.details.cancelled).toBe(true);
+	});
+});
+
+describe("registerUserInputTool — select interaction", () => {
+	const selectParams: UserInputParams = {
+		type: "select",
+		message: "Which bump?",
+		options: [
+			{ value: "patch", label: "Patch", description: "Bug fixes" },
+			{ value: "minor", label: "Minor", description: "Features" },
+			{ value: "major", label: "Major", description: "Breaking" },
+		],
+	};
+
+	it("returns selected value when user picks an option", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx("minor");
+		const result = await execute(selectParams, ctx);
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ selected: "minor" });
+		expect(result.details.type).toBe("select");
+		expect(result.details.selected).toBe("minor");
+	});
+
+	it("returns cancelled: true when user presses Escape", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx(null);
+		const result = await execute(selectParams, ctx);
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ cancelled: true });
+		expect(result.details.cancelled).toBe(true);
+	});
+
+	it("passes recommended index to the select widget", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { ctx, getFactory } = mockUICtxWithFactory();
+
+		const promise = execute({ ...selectParams, recommended: 1 }, ctx);
+
+		// Allow the factory to be captured, then simulate selection
+		await new Promise((r) => setTimeout(r, 0));
+		const factory = getFactory();
+		// The factory was created; we can't easily assert the internal selectedIndex
+		// but we verify it doesn't throw and the widget renders
+		expect(factory).toBeDefined();
+		expect(factory.render(80)).toBeDefined();
+
+		// Simulate a select to resolve the promise
+		factory.handleInput("\r");
+		const result = await promise;
+		// With recommended=1, pressing enter on default selection gives "minor"
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed.selected).toBe("minor");
+	});
+});
+
+describe("registerUserInputTool — freetext interaction", () => {
+	it("returns text when user provides input", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx(null, "v1.2.3 - Auth fixes");
+		const result = await execute({ type: "freetext", message: "Release title?", placeholder: "v1.2.3" }, ctx);
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ text: "v1.2.3 - Auth fixes" });
+		expect(result.details.type).toBe("freetext");
+		expect(result.details.text).toBe("v1.2.3 - Auth fixes");
+	});
+
+	it("returns cancelled: true when user presses Escape", async () => {
+		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const ctx = mockUICtx(null, undefined);
+		const result = await execute({ type: "freetext", message: "Release title?" }, ctx);
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ cancelled: true });
+		expect(result.details.cancelled).toBe(true);
 	});
 });
