@@ -42,14 +42,9 @@ export interface EnabledToggleData {
 	enabled: boolean;
 }
 
-// Returns the qualified command name if `text` starts with /<name> and <name>
-// is registered, else null. The first whitespace-delimited token after the
-// slash is the candidate; anything after is treated as args and ignored.
+// Returns the qualified command name if `text` starts with a registered slash command.
 export function parseSlashCommand(text: string, registry: CommandRegistry): string | null {
-	if (!text.startsWith("/")) return null;
-	const rest = text.slice(1);
-	const space = rest.search(/\s/);
-	const name = space === -1 ? rest : rest.slice(0, space);
+	const name = extractSlashName(text);
 	if (!name) return null;
 	return registry.has(name) ? name : null;
 }

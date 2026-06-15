@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { MultiLineSelectList } from "./multi-line-select.ts";
+import { transitionPhase } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
@@ -122,7 +123,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					details: { error: "ui-error", message },
 				};
 			} finally {
-				if (isProbing) state.rearmProbeWatchdog?.();
+				if (isProbing) transitionPhase(state, "running");
 			}
 
 			pi.appendEntry(USER_INPUT_TYPE, {

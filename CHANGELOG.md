@@ -10,7 +10,7 @@ New tool that lets agents request confirm/select/freetext input from the user mi
 - Phase gating: tool accepts calls in `running` and `probing` phases only; out-of-phase calls return a helpful non-terminating error.
 - Non-TUI guard: returns error without terminating when no TUI is available.
 - Runtime validation of type-specific required fields (options for select, message non-empty, recommended in range).
-- Probe watchdog suspension: suspends the 30s probe watchdog while awaiting UI during `probing` phase, re-arms after response.
+- Probe watchdog suspension: suspends the 30s probe watchdog while awaiting UI during `probing` phase, then transitions back to `running` after the response so work can continue.
 - Journaling: each interaction appended as `scramjet:user-input` custom entry type.
 - `promptSnippet` on tool definition for system prompt visibility.
 - `tests/user-input.test.ts` — 37 tests covering registration, phase gate, validation, UI interactions, watchdog coordination, and journaling.

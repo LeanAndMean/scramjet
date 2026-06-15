@@ -1863,7 +1863,7 @@ describe("multi-path probe integration", () => {
 	});
 
 	describe("user-input during probe → work → complete", () => {
-		it("agent calls get_scramjet_user_input during probe, continues, then completes", async () => {
+		it("agent calls get_scramjet_user_input during probe, resumes work, then completes", async () => {
 			const def = defWithPolicy("a:cmd", {
 				mode: "closed",
 				candidates: [{ name: "b:next" }],
@@ -1871,29 +1871,18 @@ describe("multi-path probe integration", () => {
 			const state = runningState(def, { enabled: true, registry: registryWith(defWithPolicy("b:next", undefined)) });
 			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: false });
 
-			// Answer turn ends → probe fires
 			await fireProbe(bag, ctxBag);
 			expect(state.commandPhase).toBe("probing");
 
-			// Agent calls get_scramjet_user_input during the probe turn.
-			// Pass a ctx with auto-resolving custom UI.
 			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
 			const inputResult = await callUserInput({ type: "confirm", message: "Proceed?" }, autoCtx);
 			expect(inputResult.details.error).toBeUndefined();
 			expect(inputResult.details.confirmed).toBe(true);
-			// Phase is still probing — user-input doesn't transition the phase
-			expect(state.commandPhase).toBe("probing");
-
-			// Agent continues working and reports continuing
-			const contResult = await report({ status: "continuing", summary: "got input, working" });
-			expect(contResult.details.status).toBe("continuing");
 			expect(state.commandPhase).toBe("running");
 
-			// Agent finishes, turn ends → second probe
 			await fireProbe(bag, ctxBag);
 			expect(state.commandPhase).toBe("probing");
 
-			// Agent reports completed
 			await report({
 				status: "completed",
 				summary: "done",
@@ -2022,7 +2011,7 @@ describe("multi-path probe integration", () => {
 			warnSpy.mockRestore();
 		});
 
-		it("watchdog is suspended during get_scramjet_user_input and re-armed after", async () => {
+		it("watchdog is suspended during get_scramjet_user_input and not re-armed after running resumes", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, callUserInput } = fullBootstrap(state);
@@ -2031,15 +2020,13 @@ describe("multi-path probe integration", () => {
 			await fireProbe(bag, ctxBag);
 			expect(state.commandPhase).toBe("probing");
 
-			// Agent calls user-input with auto-resolving ctx
 			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
 			await callUserInput({ type: "confirm", message: "Continue?" }, autoCtx);
+			expect(state.commandPhase).toBe("running");
 
-			// Watchdog was re-armed after user-input. Advancing past the window
-			// should fire it since no terminal report was made.
 			await vi.advanceTimersByTimeAsync(30_000);
-			expect(state.commandPhase).toBe("idle");
-			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("never completed"));
+			expect(state.commandPhase).toBe("running");
+			expect(warnSpy).not.toHaveBeenCalled();
 			warnSpy.mockRestore();
 		});
 

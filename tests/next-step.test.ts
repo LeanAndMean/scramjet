@@ -263,9 +263,10 @@ describe("buildProbeMessage", () => {
 	it("uses the two-tool router format with the command name", () => {
 		const probe = buildProbeMessage({ mode: "forced", target: "b:target" }, "a:cmd");
 		expect(probe).toContain("Scramjet status check for `a:cmd`.");
-		expect(probe).toContain("Call exactly one tool");
+		expect(probe).toContain("Choose one route");
 		expect(probe).toContain("`report_scramjet_command_status`");
 		expect(probe).toContain("`get_scramjet_user_input`");
+		expect(probe).toContain("continue the command work in this turn");
 		expect(probe).toContain("`continuing`");
 		expect(probe).toContain("`completed`");
 		expect(probe).toContain("<scramjet-next-step>");

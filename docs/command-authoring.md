@@ -407,16 +407,18 @@ In the current implementation, tool-scoping is advisory only. The harness logs w
 
 Every top-level command (not delegate-only subroutines) must instruct the agent on how to report completion via `report_scramjet_command_status`. This happens in a **separate turn** from the command's user-facing answer — Scramjet sends a hidden status-check probe after the answer turn completes.
 
-### The two-phase protocol
+### The answer/probe protocol
 
 1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
-2. **Probe turn:** Scramjet sends a hidden message asking for status. The agent calls `report_scramjet_command_status` exactly once and stops.
+2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
+   - Call `report_scramjet_command_status` with a status and stop the probe turn.
+   - Call `get_scramjet_user_input` if structured input is needed before continuing; after the input tool returns, continue command work in that same turn. The phase returns to `running`, so Scramjet will send another probe after the resumed work ends.
 
 ### Tool parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `status` | enum | Yes | `"completed"`, `"waiting_for_user"`, `"blocked"`, or `"incomplete"` |
+| `status` | enum | Yes | `"continuing"`, `"completed"`, `"waiting_for_user"`, `"blocked"`, or `"incomplete"` |
 | `summary` | string | Yes | Brief summary of the command's outcome. |
 | `user_prompt` | string | No | For `waiting_for_user`: the question the agent is waiting on. |
 | `next_steps` | array | No | Ordered next-step candidates. Omit to stop the chain. |
@@ -424,6 +426,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 ### Status values
 
+- **`continuing`**: The command has more work to do in the current session. This is non-terminating: the tool returns control to the agent, transitions the phase back to `running`, and is bounded by the consecutive-continue limit.
 - **`completed`**: The command's requested work is done. `next_steps` may propose continuations.
 - **`waiting_for_user`**: The agent asked the user a question and needs input before continuing. The command stays active.
 - **`blocked`**: The command cannot proceed (error, missing dependency, authorization issue).
@@ -531,7 +534,7 @@ All interaction types return `{ "cancelled": true }` when the user presses Escap
 
 ### Phase gating
 
-The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, the tool suspends the probe watchdog while awaiting user input and re-arms it after the response, so the 30-second watchdog does not fire while the user is deciding.
+The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, the tool suspends the probe watchdog while awaiting user input; after the response, the command transitions back to `running` so the agent can continue work in the same turn and Scramjet can probe again when that work ends.
 
 ### Journaling
 

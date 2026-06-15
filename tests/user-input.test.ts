@@ -367,7 +367,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
-	it("suspends probe watchdog before UI and re-arms after", async () => {
+	it("suspends probe watchdog before UI and resumes running after", async () => {
 		const state = freshState({ commandPhase: "probing" });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
@@ -376,10 +376,11 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		const ctx = mockUICtx("yes");
 		await execute({ type: "confirm", message: "Continue?" }, ctx);
 
-		expect(suspended).toEqual(["suspended", "rearmed"]);
+		expect(suspended).toEqual(["suspended"]);
+		expect(state.commandPhase).toBe("running");
 	});
 
-	it("re-arms probe watchdog and returns a structured error if UI throws", async () => {
+	it("resumes running and returns a structured error if UI throws", async () => {
 		const state = freshState({ commandPhase: "probing" });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
@@ -396,7 +397,8 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.error).toBe("ui-error");
 		expect(result.details.message).toBe("UI crashed");
-		expect(suspended).toEqual(["suspended", "rearmed"]);
+		expect(suspended).toEqual(["suspended"]);
+		expect(state.commandPhase).toBe("running");
 	});
 
 	it("does not suspend watchdog when phase is running", async () => {
@@ -411,18 +413,20 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(suspended).toEqual([]);
 	});
 
-	it("does not terminate so report_scramjet_command_status can still report", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "probing" }));
+	it("does not terminate so command work can continue", async () => {
+		const state = freshState({ commandPhase: "probing" });
+		const { execute } = toolFor(state);
 		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		expect(result.terminate).toBeUndefined();
+		expect(state.commandPhase).toBe("running");
 	});
 
-	it("phase stays probing past watchdog timeout while UI is pending", async () => {
+	it("phase stays probing past an armed watchdog timeout while UI is pending", async () => {
 		const { registerAutoContinue } = await import("../auto-continue.ts");
 		const state = freshState({
-			commandPhase: "probing",
+			commandPhase: "running",
 			activeTopLevelCommand: "mach12:test",
 			registry: new Map([
 				[
@@ -431,8 +435,13 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 				],
 			]),
 		});
-		const { pi } = recordingPi();
+		const { pi, emit } = recordingPi();
 		registerAutoContinue(pi, state);
+
+		await emit("agent_end", {}, { ui: { notify: () => {} } });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(state.commandPhase).toBe("probing");
+		expect(pi.sent).toHaveLength(1);
 
 		let resolveUI: (v: string) => void;
 		const uiPromise = new Promise<string>((r) => {
@@ -443,15 +452,13 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 
 		const resultPromise = execute({ type: "confirm", message: "Continue?" }, ctx);
 
-		// Advance past the 30s watchdog window
 		await vi.advanceTimersByTimeAsync(35_000);
 		expect(state.commandPhase).toBe("probing");
 
-		// Complete the UI interaction
 		resolveUI!("yes");
 		const result = await resultPromise;
 		expect(result.terminate).toBeUndefined();
-		expect(state.commandPhase).toBe("probing");
+		expect(state.commandPhase).toBe("running");
 	});
 });
 

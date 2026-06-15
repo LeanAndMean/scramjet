@@ -419,23 +419,27 @@ A command that needs user input has two paths to get it:
 - **Via probe (reliable path):** end the turn, receive the probe, then
   call `get_scramjet_user_input` from the probe turn.
 
-Both produce the same outcome. The harness supports both without
-distinguishing them — the tool works identically regardless of when it
-is called.
+Both keep the command active, but the probe path has one extra lifecycle step:
+while the UI is pending, the harness suspends the active probe watchdog; after
+the tool returns, the phase transitions `probing → running` so the agent can
+continue work in that same turn.
 
 ##### Phase machine implications
 
-`get_scramjet_user_input` does not interact with the command phase lifecycle.
-The tool executes entirely within a running turn:
+For proactive calls during normal command work, `get_scramjet_user_input` does
+not change the phase: it remains `running`, no status report is generated, and
+the agent's turn continues after the tool result returns.
 
-- Phase remains `running` throughout.
-- No probe is triggered.
-- No status report is generated.
-- The agent's turn continues after the tool result returns.
+For probe-time calls, the tool is the handoff from status-check probing back to
+active command work:
 
-This is by design: intra-command interactions are *within* a command's
-execution, not transitions *between* phases. The phase machine only cares
-about turn boundaries and lifecycle status reports.
+- Phase remains `probing` while the UI is pending.
+- The probe watchdog is suspended and is not re-armed after the response.
+- After the tool returns, the phase becomes `running`.
+- The next `agent_end` schedules a fresh status probe.
+
+This keeps intra-command interactions within command execution while preserving
+the phase machine's turn-boundary lifecycle checks.
 
 ##### Auto-answer semantics
 
