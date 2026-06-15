@@ -25,12 +25,12 @@ scramjet
 
 `scramjet` launches Pi with Scramjet loaded as an extension. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged. Running plain `pi` still works — `scramjet` is a wrapper that registers the extension at startup.
 
-Scramjet ships with the **Mach 12** command set as a starting point — ten top-level commands for the issue → plan → review → implement → PR → ship methodology. But the harness is designed for your own processes: any directory of command files becomes a command set.
+Scramjet ships with the **Mach 12** command set as a starting point — ten top-level commands for the issue → plan → review → implement → PR → ship methodology. But the harness is designed for your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
 Try it:
 
 ```
-> /mach12:issue-plan 55
+> /mach12:issue-plan 55          # replace 55 with a GitHub issue number from your repo
 ```
 
 ## Why
@@ -134,7 +134,7 @@ The seeded Mach 12 directory at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/`
 
 ## Routing Pi through a proxy
 
-If you use a proxy like [tux](https://github.com/merckgroup/tux) or Foundry, Pi by default still calls `api.anthropic.com` directly — its Anthropic provider pins the base URL and its SDK does not read `ANTHROPIC_BASE_URL`.
+If you route API calls through a corporate proxy or gateway like Palantir Foundry, Pi by default still calls `api.anthropic.com` directly — its Anthropic provider pins the base URL and its SDK does not read `ANTHROPIC_BASE_URL`.
 
 To route through your proxy, edit `~/.pi/agent/models.json`:
 
