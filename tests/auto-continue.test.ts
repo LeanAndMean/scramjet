@@ -4,6 +4,7 @@ import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command
 import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
+import { registerUserInputTool } from "../user-input.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
 type StatusParams = {
@@ -515,7 +516,9 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(state.pendingForcedDispatch).toBeNull();
-			expect(state.activeTopLevelCommand).toBe("a:cmd");
+			// issue 128: completion clears activeTopLevelCommand regardless of
+			// whether the forced target dispatched.
+			expect(state.activeTopLevelCommand).toBeNull();
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("b:missing");
 		});
@@ -1220,9 +1223,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				]),
 			);
 			expect(state.commandPhase).toBe("idle");
-			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+			// issue 128: completed commands clear activeTopLevelCommand so a later
+			// reply doesn't re-arm the phase for a finished command.
+			expect(state.activeTopLevelCommand).toBeNull();
 
-			// A later interactive reply must NOT resume (phase is idle, not waiting).
+			// A later interactive reply must NOT resume (activeTopLevelCommand is null).
 			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
 			expect(state.commandPhase).toBe("idle");
 
@@ -1628,6 +1633,68 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 // (routeNonCompleted's blocked/waiting notifies) only ever pass clean short
 // strings in the existing tests, so the control-char strip, whitespace collapse,
 // and the off-by-one NOTIFY_MAX - 1 + "…" cap were entirely unexercised.
+// Bug reproduction: scramjet_user_input is unusable after a probe cycle because
+// the input handler only re-arms waiting→running, not idle→running. This means
+// that after the first turn ends (probe fires and self-heals to idle), the user
+// replies to a clarifying question, but the phase stays idle and the tool's
+// phase gate rejects it. Observed live in issue-plan sessions where the agent
+// asked clarifying questions via scramjet_user_input after subagent exploration.
+describe("scramjet_user_input after probe self-heal (bug #128)", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	function fullBootstrap(state: ScramjetState) {
+		const bag = recordingPi();
+		const ctxBag = fakeCtx({ hasUI: true, isStreaming: () => bag.pi.isStreaming });
+		registerCommandStatusTool(bag.pi, state);
+		registerUserInputTool(bag.pi, state);
+		registerAutoContinue(bag.pi, state);
+		registerHistory(bag.pi, state);
+		const userInputTool = bag.tools.find((t: any) => t.name === "scramjet_user_input");
+		if (!userInputTool) throw new Error("scramjet_user_input not registered");
+		const callUserInput = (params: { type: string; message: string }, ctx?: unknown) =>
+			userInputTool.execute("call-id", params, undefined, undefined, ctx) as Promise<any>;
+		return { bag, ctxBag, callUserInput };
+	}
+
+	it("scramjet_user_input works after probe self-heals to idle and user replies (issue 128 fix)", async () => {
+		const policy: NextStepPolicy = { mode: "open", candidates: [{ name: "b:next" }] };
+		const def = defWithPolicy("a:cmd", policy);
+		const state = runningState(def);
+		const { bag, ctxBag, callUserInput } = fullBootstrap(state);
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		// Step 1: command is running, agent works and ends its turn.
+		expect(state.commandPhase).toBe("running");
+
+		// Step 2: answer turn ends → probe fires.
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(state.commandPhase).toBe("probing");
+
+		// Step 3: probe turn ends without a status report → self-heals to idle.
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		expect(state.commandPhase).toBe("idle");
+		expect(state.activeTopLevelCommand).toBe("a:cmd"); // still set!
+
+		// Step 4: user replies to the clarifying question (non-slash, interactive).
+		await bag.emit("input", { text: "Yes, go with option 2", source: "interactive" });
+
+		// Fixed: phase re-arms to running so phase-gated tools work.
+		expect(state.commandPhase).toBe("running");
+
+		// Step 5: agent calls scramjet_user_input → accepted (not out-of-phase).
+		// Use a mock UI ctx that auto-resolves to avoid blocking on TUI interaction.
+		const mockCtx = { ui: { custom: () => Promise.resolve("yes") } };
+		const result = await callUserInput({ type: "confirm", message: "Proceed with the plan?" }, mockCtx);
+		expect(result.details.error).not.toBe("out-of-phase");
+
+		warnSpy.mockRestore();
+	});
+});
+
 describe("cleanForNotify", () => {
 	it("replaces control characters (newlines, tabs, NUL, DEL, BEL) with spaces and collapses runs", () => {
 		expect(cleanForNotify("line one\nline two\ttabbed")).toBe("line one line two tabbed");

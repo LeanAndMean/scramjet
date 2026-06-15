@@ -165,8 +165,9 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			if (data && typeof data.enabled === "boolean") enabled = data.enabled;
 		}
 	}
-	const phase = reconstructPhase(entries.filter(isPhaseEntry));
-	return { sidebarLog, enabled, activeTopLevelCommand, phase };
+	const reconstructed = reconstructPhase(entries.filter(isPhaseEntry));
+	if (reconstructed.activeCommandCompleted) activeTopLevelCommand = null;
+	return { sidebarLog, enabled, activeTopLevelCommand, phase: reconstructed.phase };
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
@@ -219,19 +220,23 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("input", async (event) => {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
-			// issue 88: resume a paused interactive command. An interactive,
-			// non-slash reply while the active command rests at "waiting" (it
-			// reported waiting_for_user) re-arms the probe path: flip
-			// waiting→running so this reply runs as a normal turn whose agent_end
-			// fires the existing running→probing probe. Chaining still requires an
-			// explicit completed report, so an off-topic reply can only cause a
-			// harmless re-probe, never a chain. Gated on source === "interactive"
-			// so the hidden status probe (sent via triggerTurn, which bypasses the
-			// input pipeline) and extension-dispatched input can never self-resume.
+			// Resume the active command on an interactive non-slash reply. Two
+			// cases: (1) issue 88 — the command reported waiting_for_user and
+			// rests at "waiting"; the user's answer re-arms the probe path.
+			// (2) issue 128 — the probe self-healed to "idle" (or reported
+			// incomplete/blocked) but activeTopLevelCommand is still set; the
+			// user's reply is still engaging with the command. In both cases,
+			// flip to "running" so phase-gated tools (scramjet_user_input) work
+			// and agent_end fires the running→probing probe. Chaining still
+			// requires an explicit completed report, so an off-topic reply can
+			// only cause a harmless re-probe, never a chain. Gated on
+			// source === "interactive" so the hidden status probe (sent via
+			// triggerTurn, which bypasses the input pipeline) and
+			// extension-dispatched input can never self-resume.
 			if (
 				event.source === "interactive" &&
 				!event.text.startsWith("/") &&
-				state.commandPhase === "waiting" &&
+				(state.commandPhase === "waiting" || state.commandPhase === "idle") &&
 				state.activeTopLevelCommand !== null
 			) {
 				if (!transitionPhase(state, "running")) return;

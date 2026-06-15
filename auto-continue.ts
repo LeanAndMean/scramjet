@@ -495,6 +495,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				if (status.status === "completed") {
 					// Completion is terminal for the lifecycle: reset to idle, then chain.
 					transitionPhase(state, "idle");
+					// issue 128: clear activeTopLevelCommand so a later interactive
+					// reply doesn't re-arm the phase for a completed command.
+					// routeCompleted/scheduleCompletedDispatch use captured `policy`
+					// and `status` parameters, not activeTopLevelCommand; the next
+					// command start (if chaining) sets it to the new command.
+					state.activeTopLevelCommand = null;
 					// Chaining a completed command needs the policy to validate the
 					// pick (or fire the forced target). If def.next vanished between
 					// the probe and this agent_end (registry rebuild/reload), there is
