@@ -93,7 +93,7 @@ wins) is preserved; the *mechanism* (LLM reads prose) is replaced.
 - **Behaviorally invisible when idle, visually unobtrusive otherwise.**
   When `/scramjet off`, the harness behaves like any standard coding
   agent (Claude Code, Codex, Pi). The history sidebar is a small visual
-  affordance, not a behavioral one — see §5.
+  affordance, not a behavioral one — see §6.
 - **Authoring is a first-class flow.** Creating and editing commands lives
   inside `scramjet` itself, not in a separate toolchain.
 - **Informed decisions and informed consent.** Users should be empowered to
@@ -336,8 +336,158 @@ encouraged but optional.
   report chains its declared next step under the usual policy. Chaining
   still requires an explicit `completed` report, so an off-topic reply can
   only trigger a harmless re-probe, never a chain (issue 88).
+  `scramjet_user_input` (§3) provides a separate, proactive mid-turn path
+  for collecting user input without ending the turn; `waiting_for_user`
+  is the turn-ending lifecycle status for when the agent has already
+  surfaced its question in normal output.
 
-#### 3. Command delegation (sub-command calls)
+#### 3. Intra-command interactions
+
+Commands sometimes need input from the user mid-execution — a confirmation
+before a destructive action, a choice between approaches, or freetext input
+for a commit message or description. This section defines how those
+interactions are requested, collected, and returned to the agent.
+
+##### The `scramjet_user_input` tool
+
+The harness registers a `scramjet_user_input` tool with three interaction
+types:
+
+| Type       | Payload                                  | Harness behavior                                      |
+|------------|------------------------------------------|-------------------------------------------------------|
+| `confirm`  | `{ type: "confirm", message: string }`   | Shows a yes/no prompt; returns `{ confirmed: boolean }` |
+| `select`   | `{ type: "select", message: string, options: string[] }` | Shows a picker; returns `{ selected: string }` |
+| `freetext` | `{ type: "freetext", message: string, default?: string }` | Shows a text input; returns `{ text: string }` |
+
+The tool **does not end the agent's turn**. The harness displays the
+appropriate UI, blocks until the user responds, and returns the result as
+a normal tool result. The agent continues executing with the answer in
+context — no phase transition, no probe, no re-dispatch.
+
+This is the key distinction from `scramjet_command_status`: the status
+tool is a terminal lifecycle signal ("I'm done or stuck"), while
+`scramjet_user_input` is a within-turn request ("I need something from
+the user to continue").
+
+##### The probe-as-router extension
+
+The existing probe (§2.1, the `waiting_for_user` mechanism) asks the agent
+to report command status. The extended probe offers three paths:
+
+1. **Continue executing.** The agent has more work to do — it stopped
+   prematurely (observed most frequently after complex delegations). It
+   returns from the probe without calling either `scramjet_user_input` or
+   `scramjet_command_status`; the harness interprets the absence of a
+   terminal signal as "re-arm the turn" and resumes without user
+   involvement.
+2. **Request user input.** The agent needs information from the user. It
+   calls `scramjet_user_input` with the appropriate type and payload.
+3. **Report terminal status.** The agent is done or stuck. It calls
+   `scramjet_command_status` as today.
+
+The probe is the **reliable path** — it catches the natural LLM
+turn-ending behavior regardless of whether the agent proactively called a
+tool. Proactive tool use (calling `scramjet_user_input` or
+`scramjet_command_status` during the turn, before the probe fires) is
+the **fast path** — it skips the probe round-trip and produces the same
+outcome.
+
+##### The "continue" nudge
+
+Agents sometimes stop mid-execution without being done, blocked, or
+waiting for input. This is observed most frequently after complex
+delegations where the agent loses track of its outer task. The current
+workaround is the user typing "continue."
+
+The probe's "continue" path handles this structurally: when the agent
+reports that it has more work to do, the harness re-arms the agent's
+turn without surfacing anything to the user. From the user's perspective,
+the agent simply keeps working. No manual "continue" needed.
+
+##### Relationship to `scramjet_command_status`
+
+The two tools are complementary:
+
+- **`scramjet_user_input`** — "I need something from the user to continue."
+  Within-turn; the harness collects input and returns it as a tool result.
+  The command keeps running.
+- **`scramjet_command_status`** — "I'm done or stuck." Terminal lifecycle
+  signal. The turn ends. Chaining may follow.
+
+A command that needs user input has two paths to get it:
+- **Proactive (fast path):** call `scramjet_user_input` during the turn.
+- **Via probe (reliable path):** end the turn, receive the probe, then
+  call `scramjet_user_input` from the probe turn.
+
+Both produce the same outcome. The harness supports both without
+distinguishing them — the tool works identically regardless of when it
+is called.
+
+##### Phase machine implications
+
+`scramjet_user_input` does not interact with the command phase lifecycle.
+The tool executes entirely within a running turn:
+
+- Phase remains `running` throughout.
+- No probe is triggered.
+- No status report is generated.
+- The agent's turn continues after the tool result returns.
+
+This is by design: intra-command interactions are *within* a command's
+execution, not transitions *between* phases. The phase machine only cares
+about turn boundaries and lifecycle status reports.
+
+##### Auto-answer semantics
+
+Future settings could pre-answer specific interactions without the agent
+knowing the difference. The tool's return type is the same whether a
+human answered or a setting provided the value. This enables a graduation
+path:
+
+1. Initially, all interactions surface to the user.
+2. As trust builds, specific named gates can be configured to auto-answer
+   (e.g., "always confirm the push in `pr-merge`").
+3. The agent's code path is unchanged — it calls the tool, gets a result.
+
+The naming and declaration of auto-answerable gates is deferred (see
+*Non-goals* below). The architectural point is that the tool's interface
+already supports this without schema changes.
+
+##### Design decisions
+
+- **`/scramjet on` does not affect intra-command interactions.** `/scramjet on`
+  auto-accepts recommended *between-command* next steps. Intra-command
+  interactions are the mechanism for human-AI alignment within a command
+  and cannot be safely skipped by a global toggle. The autonomy graduation
+  path for intra-command gates is per-interaction settings (auto-answer
+  semantics above), not `/scramjet on` absorbing them.
+
+- **Probe messages should be concise.** The extended probe reminds the
+  agent of the available tool names at the decision point; it does not
+  re-enumerate parameter schemas (those are already in the tool
+  definitions). Token-saving optimization of probe content is deferred.
+
+- **Proactive tool use is the fast path, not the required path.** An
+  agent that calls `scramjet_user_input` during its turn without a probe
+  is faster (skips the probe round-trip). An agent that ends its turn and
+  gets redirected via the probe produces the same outcome, just slower.
+  The harness supports both.
+
+- **A "continue" response from the probe re-arms the agent's turn**
+  without user involvement, handling the observed premature-stop pattern.
+
+##### Non-goals
+
+- **No intra-command interaction auto-answering in the initial design.**
+  Named gate auto-answering (e.g., "always skip release confirm in
+  `pr-merge`") requires design work around how gates are named and
+  declared. Deferred to a future issue.
+
+- **No interaction type extensibility in the initial design.**
+  `confirm`/`select`/`freetext` are the initial set. New types (multiline
+  editor, file picker, etc.) can be added later without schema breaks.
+
+#### 4. Command delegation (sub-command calls)
 
 A command can invoke another command as a subroutine mid-execution.
 Delegation is the *composability* primitive (subroutine call); next-step
@@ -452,7 +602,7 @@ Y, Z" in a system prompt is not enforcement; it is hope. When hard
 enforcement lands, the harness gates at the event level, not at the
 prose level.
 
-#### 4. `/scramjet on` / `/scramjet off`
+#### 5. `/scramjet on` / `/scramjet off`
 
 When **off** (default), the harness pauses after each top-level
 command's `closed`, `open`, `ask`, or absent next-step. Hint text from
@@ -468,6 +618,20 @@ auto-dispatches after a brief countdown widget. `ask` and absent `next`
 still pause for the user regardless of the flag.
 
 In both modes, Esc at any point returns to plain Pi.
+
+##### Scope: between-command chaining only
+
+`/scramjet on` and `/scramjet off` affect only *between-command* chaining
+decisions — the next-step dispatch that occurs after a command reports
+`completed`. They do **not** gate intra-command user interactions (§3).
+
+Intra-command interactions (confirmations, choices, freetext input) are the
+mechanism for human-AI alignment *within* a command's execution. Skipping
+them under a global toggle would conflate "automate obvious transitions"
+with "suppress judgment checkpoints," which are fundamentally different
+concerns. The autonomy graduation path for intra-command interactions is
+per-interaction auto-answer settings (§3, *Auto-answer semantics*), not
+`/scramjet on`.
 
 ##### Why `forced` fires under `/off`
 
@@ -489,7 +653,7 @@ re-type the obvious next step on every `forced` edge. scramjet's choice
 is that `/off` is about user control over decisions, not user control
 over deterministic transitions.
 
-#### 5. Process history sidebar
+#### 6. Process history sidebar
 
 `scramjet` displays a **right-side sidebar** showing recent commands run
 in the current session. The sidebar is **always on**. This is a visual
@@ -561,7 +725,7 @@ specifically — a transcript-inline log, an expandable panel, or a
 post-hoc viewer are all plausible. What is deferred is the rendering,
 not the data.
 
-#### 6. Authoring loop
+#### 7. Authoring loop
 
 > **MVP status:** the authoring loop is **deferred to a post-MVP issue**.
 > The MVP ships without `/scramjet:new-command`, `/scramjet:edit-command`,
@@ -570,7 +734,7 @@ not the data.
 > known analog in adjacent Pi-consumer projects (gsd-2 etc.) and needs a
 > concrete spec — what does an actionable suggestion look like? how is
 > it presented? — before it is worth building. The data model for
-> `/scramjet:rewire` (sidebar history journal) lands in the MVP per §5,
+> `/scramjet:rewire` (sidebar history journal) lands in the MVP per §6,
 > so a future authoring loop has the data it needs. The vision below is
 > retained as the intended shape.
 
@@ -589,7 +753,7 @@ These are part of the harness, not part of any particular command set,
 because the workflow they support — *"I keep doing X; let's codify it"* —
 is universal.
 
-#### 7. Persistence and isolation
+#### 8. Persistence and isolation
 
 - Per-session `/scramjet on` state.
 - Process history persisted in the session and restored on resume.
@@ -782,10 +946,10 @@ edges, and stays out of the way.
   same-name-collision — what permissions a project-local set has, how
   it is sandboxed — is deferred until core functionality works.
 - **Hard tool-scoping enforcement.** Deferred to a post-MVP issue (see
-  §3 *Tool-scoping enforcement*). The MVP ships advisory logging; hard
+  §4 *Tool-scoping enforcement*). The MVP ships advisory logging; hard
   enforcement requires multi-turn save/restore of the active tool set
   and is not in scope for the initial build.
-- **History sidebar UI.** Deferred entirely (see §5). The data model
+- **History sidebar UI.** Deferred entirely (see §6). The data model
   ships in the MVP; the rendering primitive does not yet exist in
   pi-tui.
 
@@ -802,7 +966,7 @@ edges, and stays out of the way.
   harness validates the agent's pick on the probe turn's `agent_end`
   against the active command's policy.
 - **Delegation dispatch mechanism.** Resolved: same-context tool-result
-  delegation (see §3 *Dispatch mechanism*). The `delegate` tool returns
+  delegation (see §4 *Dispatch mechanism*). The `delegate` tool returns
   the substituted command body as text in the tool result; the agent
   reads it and follows its instructions in the same conversation
   context. Subprocess-based dispatch was considered (and prior

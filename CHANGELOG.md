@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.2 — Vision doc: add §3 intra-command interactions
+
+Add intra-command user interaction design to `docs/scramjet-vision.md` — the `scramjet_user_input` tool, the probe-as-router extension, the "continue" nudge, phase machine implications, auto-answer semantics, and the `/scramjet on` scope clarification (issue #126).
+
+### Added
+
+- `docs/scramjet-vision.md` §3 "Intra-command interactions" covering `scramjet_user_input` tool types (confirm/select/freetext), probe-as-router extension (continue/input/status), "continue" nudge for premature stops, relationship to `scramjet_command_status`, phase machine non-interaction, auto-answer semantics, design decisions, and non-goals.
+- `docs/scramjet-vision.md` §5 new subsection "Scope: between-command chaining only" clarifying that `/scramjet on|off` does not gate intra-command interactions.
+
+### Changed
+
+- `docs/scramjet-vision.md` — renumbered §3-§7 → §4-§8; updated all internal §-number cross-references.
+- `docs/scramjet-vision.md` §2.1 — added cross-reference distinguishing `scramjet_user_input` (proactive mid-turn) from `waiting_for_user` (turn-ending lifecycle status).
+
 ## 0.17.1 — Centralize commandPhase state machine transitions
 
 Extracts all `commandPhase` mutation logic into a new `phase-machine.ts` module with a validated transition table, replacing 13 direct assignments scattered across `history.ts`, `command-status.ts`, and `auto-continue.ts` (issue #121).
