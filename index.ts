@@ -36,6 +36,7 @@ import { registerScramjetCommand } from "./scramjet-command.ts";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.ts";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.ts";
 import type { ScramjetState } from "./types.ts";
+import { registerUserInputTool } from "./user-input.ts";
 
 export default function scramjet(pi: ExtensionAPI) {
 	const state: ScramjetState = {
@@ -51,6 +52,7 @@ export default function scramjet(pi: ExtensionAPI) {
 	};
 
 	registerCommandStatusTool(pi, state);
+	registerUserInputTool(pi, state);
 	registerDelegateTool(pi, state);
 	registerToolCallAdvisor(pi, state);
 	registerSubagentOutputAdvisor(pi, state);

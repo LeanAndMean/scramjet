@@ -476,7 +476,76 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ---
 
-## 7. Selector Transparency
+## 7. User Input Tool
+
+Commands can request structured user input mid-turn via `scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns their answer as the tool result — the turn does not end.
+
+### When to use it
+
+Use `scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input) and the agent should continue executing in the same turn after receiving the response. Prefer it over prose questions when:
+
+- The response has a constrained shape (yes/no, pick-one, short text).
+- The agent needs the response to continue work in the same turn.
+- The interaction should be journaled for history visibility.
+
+Fall back to prose questions for complex, multi-part, or open-ended discussions where the agent should stop and wait for the user's full response.
+
+### Interaction types
+
+**confirm** — yes/no decision:
+
+```json
+{ "type": "confirm", "message": "Create the release?" }
+```
+
+Returns `{ "confirmed": true }`, `{ "confirmed": false }`, or `{ "cancelled": true }` (user pressed Escape).
+
+**select** — pick from options:
+
+```json
+{
+  "type": "select",
+  "message": "Which bump level?",
+  "options": [
+    { "value": "patch", "label": "Patch", "description": "Bug fixes only" },
+    { "value": "minor", "label": "Minor", "description": "New features" },
+    { "value": "major", "label": "Major", "description": "Breaking changes" }
+  ],
+  "recommended": 0
+}
+```
+
+Returns `{ "selected": "patch" }` or `{ "cancelled": true }`. The `recommended` field (zero-based index) highlights the suggested option; it is optional.
+
+**freetext** — open-ended input:
+
+```json
+{ "type": "freetext", "message": "What should the release title be?", "placeholder": "v1.2.3" }
+```
+
+Returns `{ "text": "v1.2.3 - Auth improvements" }` or `{ "cancelled": true }`. The `placeholder` field is optional hint text.
+
+### Cancellation
+
+All interaction types return `{ "cancelled": true }` when the user presses Escape. The agent receives this as an honest signal and should adapt — re-ask, adjust approach, or move on. Cancellation is not an error.
+
+### Phase gating
+
+The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, the tool suspends the probe watchdog while awaiting user input and re-arms it after the response, so the 30-second watchdog does not fire while the user is deciding.
+
+### Journaling
+
+Each interaction (including cancellations) is journaled as a `scramjet:user-input` custom entry type, recording the interaction type, message, and result.
+
+### Don't
+
+- Don't use `scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
+- Don't use `scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
+- Don't ignore `{ "cancelled": true }` — treat it as the user declining to answer, not as an error or a default.
+
+---
+
+## 8. Selector Transparency
 
 The Scramjet selector shows the **full command wire** (`message` field) to the user. There is no label indirection — what the user sees is exactly what gets dispatched.
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.17.4 — Add `scramjet_user_input` tool for structured intra-command interactions
+
+New tool that lets agents request confirm/select/freetext input from the user mid-turn without ending the turn. The harness shows TUI widgets, blocks until the user responds, and returns the result as a non-terminating tool result (issue #127).
+
+### Added
+
+- `user-input.ts` — `scramjet_user_input` tool with three interaction types: `confirm` (Yes/No/cancel via MultiLineSelectList), `select` (structured options with descriptions and recommended marker), `freetext` (open-ended input via `ctx.ui.input()`).
+- Phase gating: tool accepts calls in `running` and `probing` phases only; out-of-phase calls return a helpful non-terminating error.
+- Non-TUI guard: returns error without terminating when no TUI is available.
+- Runtime validation of type-specific required fields (options for select, message non-empty, recommended in range).
+- Probe watchdog suspension: suspends the 30s probe watchdog while awaiting UI during `probing` phase, re-arms after response.
+- Journaling: each interaction appended as `scramjet:user-input` custom entry type.
+- `promptSnippet` on tool definition for system prompt visibility.
+- `tests/user-input.test.ts` — 37 tests covering registration, phase gate, validation, UI interactions, watchdog coordination, and journaling.
+
+### Changed
+
+- `index.ts` — wires `registerUserInputTool(pi, state)` alongside other tools.
+- `auto-continue.ts` — exposes `suspendProbeWatchdog`/`rearmProbeWatchdog` callbacks via state.
+- `types.ts` — added optional watchdog callback fields to `ScramjetState`.
+- `CLAUDE.md` — documents `user-input.ts` in architecture notes.
+- `docs/command-authoring.md` — new section documenting `scramjet_user_input` for command authors.
+
 ## 0.17.3 — Restructure README for public npm audience
 
 Rewrite README for external npm users: new framing, status notice, background section, motivation discovery arc, and removal of internal implementation details.

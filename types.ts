@@ -115,4 +115,6 @@ export interface ScramjetState {
 	// agent_end. Reset to "idle"/null on command start and on resume/rebuild.
 	commandPhase: CommandPhase;
 	latestCommandStatus: CommandStatusPayload | null;
+	suspendProbeWatchdog?: () => void;
+	rearmProbeWatchdog?: () => void;
 }
