@@ -2,7 +2,7 @@
 
 ## 0.17.2 — Vision doc: add §3 intra-command interactions
 
-Documents the design for intra-command user interactions in `docs/scramjet-vision.md` — the `scramjet_user_input` tool, the probe-as-router extension, the "continue" nudge, phase machine implications, auto-answer semantics, and the `/scramjet on` scope clarification (issue #126).
+Add intra-command user interaction design to `docs/scramjet-vision.md` — the `scramjet_user_input` tool, the probe-as-router extension, the "continue" nudge, phase machine implications, auto-answer semantics, and the `/scramjet on` scope clarification (issue #126).
 
 ### Added
 

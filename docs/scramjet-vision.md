@@ -331,14 +331,15 @@ encouraged but optional.
 - **`waiting_for_user` is a resumable, not terminal, halt.** When a command
   reports `status: "waiting_for_user"` (it asked the user a question or
   needs input), the harness parks the invocation at a stable `waiting`
-  state rather than ending it. Note: `scramjet_user_input` (§3) provides
-  the proactive mid-turn path for collecting user input without ending
-  the turn; `waiting_for_user` is the turn-ending lifecycle status for
-  when the agent has already surfaced its question in normal output. A later interactive, non-slash reply resumes
+  state rather than ending it. A later interactive, non-slash reply resumes
   the same command — the harness re-probes for status, and a now-`completed`
   report chains its declared next step under the usual policy. Chaining
   still requires an explicit `completed` report, so an off-topic reply can
   only trigger a harmless re-probe, never a chain (issue 88).
+  `scramjet_user_input` (§3) provides a separate, proactive mid-turn path
+  for collecting user input without ending the turn; `waiting_for_user`
+  is the turn-ending lifecycle status for when the agent has already
+  surfaced its question in normal output.
 
 #### 3. Intra-command interactions
 
@@ -374,8 +375,11 @@ The existing probe (§2.1, the `waiting_for_user` mechanism) asks the agent
 to report command status. The extended probe offers three paths:
 
 1. **Continue executing.** The agent has more work to do — it stopped
-   prematurely (observed most frequently after complex delegations). The
-   harness re-arms the turn without user involvement.
+   prematurely (observed most frequently after complex delegations). It
+   returns from the probe without calling either `scramjet_user_input` or
+   `scramjet_command_status`; the harness interprets the absence of a
+   terminal signal as "re-arm the turn" and resumes without user
+   involvement.
 2. **Request user input.** The agent needs information from the user. It
    calls `scramjet_user_input` with the appropriate type and payload.
 3. **Report terminal status.** The agent is done or stuck. It calls
