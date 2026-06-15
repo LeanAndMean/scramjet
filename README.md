@@ -1,30 +1,44 @@
 # Scramjet
 
-Smart auto-continuation and command-set harness for [Pi](https://github.com/earendil-works/pi-mono). When a command finishes and knows what should come next, Scramjet just does it — unless you stop it.
+A high-velocity harness for agentic development. Built on [Pi](https://github.com/earendil-works/pi-mono).
 
-Also bundled:
+## Background
 
-- The **Mach 12 command set**: ten top-level commands (`issue-create`, `issue-plan`, `issue-review`, `issue-implement`, `pr-create`, `pr-review`, `pr-review-assessment`, `pr-review-fix`, `pr-pre-merge`, `pr-merge`) plus seven delegated subroutines and nine bundled agents. Vendor-neutral prose; declared next-step edges in YAML frontmatter.
-- **`draw_diagram`**: inline Mermaid, Graphviz, or PlantUML rendering via Pi's terminal image support.
-- **`/scramjet on|off`**: toggle auto-continuation without unloading the extension.
+Scramjet grew out of [Mach 10](https://github.com/LeanAndMean/mach10), a development methodology for agentic coding. Mach 10 addresses the core challenge of scaling AI-assisted development to larger codebases: managing finite context windows, ensuring due diligence through structured review cycles, and using GitHub as persistent memory so multiple developers (and agents) can collaborate across sessions. It works — but the user experience of running a 10–15 step workflow in a CLI harness was friction-heavy: copy the suggested next command, clear the session, paste, wait, repeat.
 
-## The problem
+Scramjet started as a way to eliminate that friction, but it became clear that the Mach 10 workflow was a special case of a general problem: any team's recurring processes can be codified as a command set, and any command set benefits from composability and chaining. Scramjet is the harness that makes this possible.
 
-Coding harnesses like Pi let you build multi-step methodologies as sets of commands. A code review workflow might be: assess the issue, plan the implementation, review the plan, implement each stage, create a PR, review it, fix findings, and merge. Each step is its own command with its own instructions.
+## Quick start
 
-The commands already know what comes next. But today, after every step, you have to:
+```sh
+npm install -g @leanandmean/scramjet
+scramjet
+```
 
-1. Read what the agent suggests
-2. Type `/clear`
-3. Type the next command with the right arguments
-4. Wait for it to finish
-5. Repeat 10-15 times
+`scramjet` launches Pi with Scramjet loaded as an extension. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged. Running plain `pi` still works — `scramjet` is a wrapper that registers the extension at startup.
 
-This ceremony breaks flow state. The machine already knows what to do; it's just waiting for you to type it.
+Scramjet ships with the **Mach 12** command set as a starting point — ten top-level commands for the issue → plan → review → implement → PR → ship methodology. But the harness is designed for your own processes: any directory of command files becomes a command set.
 
-## The solution
+Try it:
 
-Scramjet removes the ceremony. When a command declares its next step (via YAML frontmatter), Scramjet validates the agent's options and shows a selector with the recommendation and rationale. With `/scramjet on`, a recommended command auto-selects after a brief countdown unless you choose another option or press Escape. With `/scramjet off`, the selector still appears but nothing dispatches until you choose it.
+```
+> /mach12:issue-plan 55
+```
+
+## Why
+
+Working with a coding agent, you notice yourself asking for the same kind of thing repeatedly — refining the wording each time until it stabilizes. At that point it should be a *command*: something you invoke without retyping, that captures what you've learned about how to do it well.
+
+Once you have a few related commands, two patterns appear:
+
+1. **Some commands show up as subroutines inside others.** "Find the contribution guidelines" or "commit, push, and post a progress comment" gets embedded in multiple higher-level flows. Without a way to call one command from another, these routines get copy-pasted across commands — and drift.
+
+2. **Some commands naturally follow others.** Planning leads to review or implementation. Implementation leads to PR creation. Review leads to fixes or merge. You start to see the shape of a workflow, but after every step you're still manually clearing the session, typing the next command with the right arguments, and waiting.
+
+Scramjet supports both patterns:
+
+- **Composability.** Commands invoke other commands as subroutines — write common routines once, call them from anywhere.
+- **Chaining.** Commands declare what should come next. Scramjet validates the options and shows a selector. With `/scramjet on`, the recommendation auto-selects after a brief countdown. With `/scramjet off`, you pick manually. Either way, Escape returns to plain Pi.
 
 ```
 > /mach12:issue-plan 55
@@ -48,254 +62,73 @@ Scramjet removes the ceremony. When a command declares its next step (via YAML f
   [continues through the entire methodology...]
 ```
 
-That's it. No workflow engine, no queue, no DAG, no state machine.
+No workflow engine, no queue, no DAG, no state machine. The workflow emerges from what each command declares as its next step.
 
-## Design philosophy
+## Design
 
-### Workflows are emergent, not prescribed
+### Emergent workflows
 
-Scramjet doesn't define workflows. Each command independently declares its own next step in YAML frontmatter — an edge, not a graph. The workflow emerges from following those edges. This means:
+Scramjet doesn't define workflows. Each command independently declares its own next step — an edge, not a graph. The workflow is the union of those edges:
 
 - Any set of commands with next-step declarations is automatically a workflow
 - You don't register workflows, create config files, or maintain a separate DAG
 - Different command sets coexist without knowing about each other
-- Adding a step means editing one command's frontmatter
+- Adding a step means editing one command's declaration
 
-### The user is never locked in
+### Never locked in
 
 Scramjet is an autopilot, not a conveyor belt. At any transition:
 
 - **Escape** dismisses the selector — you're back in normal Pi
-- **Arrow keys + Enter** let you choose a different valid option before any countdown fires
+- **Arrow keys + Enter** let you choose a different option before any countdown fires
 - **Run a different command** — Scramjet doesn't interfere
 - **Close the terminal** — no workflow state to corrupt
 
 There is no "workflow mode" to enter or exit. You're always just using Pi. Scramjet is invisible when it has nothing to suggest.
 
-### Commands declare their edges; the harness enforces
+## Mach 12
 
-Each command's YAML frontmatter declares one of four next-step policies:
+Scramjet ships with the Mach 12 command set — one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not the only way to use Scramjet.
 
-- `forced` — after the command signals completion, a single named command runs unconditionally
-- `closed` — agent picks from a bounded candidate list
-- `open` — agent picks from candidates or any other command minus a blacklist
-- `ask` — chain pauses for user decision
+| Command | Purpose |
+| --- | --- |
+| `mach12:issue-create` | Create a new GitHub issue |
+| `mach12:issue-plan` | Plan implementation of an issue |
+| `mach12:issue-review` | Review the plan before implementing |
+| `mach12:issue-implement` | Implement a planned stage |
+| `mach12:pr-create` | Create a pull request |
+| `mach12:pr-review` | Review a PR |
+| `mach12:pr-review-assessment` | Detailed multi-lens PR assessment |
+| `mach12:pr-review-fix` | Fix issues flagged in review |
+| `mach12:pr-pre-merge` | Pre-merge checks |
+| `mach12:pr-merge` | Merge the PR |
 
-Omitting `next:` is equivalent to `ask` with no hint: Scramjet does not auto-follow an agent-proposed next step.
+Plus seven subroutine commands and nine specialized agents covering code exploration, architecture, review, testing, and more.
 
-Scramjet reads the declaration, validates the agent's pick (or the forced target), and dispatches. The harness does not own routing logic — there is no central workflow registry.
+## Platform support
 
-### Simplicity is the feature
+| Platform | Supported |
+| --- | --- |
+| Linux | yes |
+| macOS | yes |
+| Windows (WSL) | yes |
+| Windows (native) | no |
 
-Scramjet is a small TypeScript extension. The auto-continuation mechanism at its core is one tool (`scramjet_command_status`), one selector widget, and a parser/validator/dispatcher reading the next-step frontmatter.
+`npm install` succeeds on native Windows but skips the Mach 12 seed. Install inside WSL for full functionality.
 
-## How it works
-
-### The two-phase `scramjet_command_status` protocol
-
-An active command produces its normal user-facing answer first — nothing about completion is injected into that turn. Once the run goes idle, Scramjet defers a TUI-hidden status-check message that starts a short follow-up turn; the agent answers it by calling `scramjet_command_status`. Separating the answer from the status report removes the old failure mode where the agent poured its answer into a terminating tool's `summary` field instead of writing prose.
-
-The agent calls `scramjet_command_status({ status, summary, next_steps?, recommended_next_step? })`, where `status` is one of `completed` / `waiting_for_user` / `blocked` / `incomplete`. For `completed` commands, `next_steps[]` carries selector options. Each entry is a *suggested next message* with three fields: `message` (displayed in the selector verbatim and dispatched on selection), optional `fresh_session` (only meaningful for slash commands; defaults to false), and `reason` (shown as the description underneath). A message starting with `/` is a slash command and is auto-dispatched on selection; any other message pastes into the editor when selected (open policies only). The harness parses the `/` prefix itself — there is no type discriminator for the agent to choose, and no label indirection: what the user sees is exactly what will run. Selector-visible entries include `reason`, and `recommended_next_step` is a zero-based index into the original `next_steps[]` array. For `forced` policies the entry's message must start with the declared target and only passes arguments/`fresh_session`; forced handoffs do not show the selector. The tool is phase-gated by the harness — called outside the status-check window it returns a helpful error without terminating; in-phase it stores the report and returns `terminate: true`, ending the short probe turn.
-
-### Validation and dispatch
-
-On the probe turn's `agent_end`, Scramjet reads the reported status and validates any pick against the active command's declared policy. Mode-by-mode behavior for a `completed` status:
-
-- **`forced`** — fires the declared target unconditionally, even under `/scramjet off`. The user implicitly chose to chain by invoking the parent; the `completed` status is the safety gate that distinguishes successful completion from clarification or error.
-- **`closed` / `open`** under `/scramjet on` — valid options → selector; a valid recommended command auto-selects after the countdown unless you choose another option or dismiss it. Non-command messages can be selected manually but are never auto-selected or auto-sent.
-- **`closed` / `open`** under `/scramjet off` — valid options → selector with no countdown; selecting a slash-command message dispatches it, selecting a non-command message pastes it into the editor, and dismissal has no side effects.
-- **`ask` / no `next:`** — pause regardless of the flag.
-
-A non-`completed` status never chains: `incomplete` pauses quietly and `blocked` pauses with a warning notification. `waiting_for_user` is a resumable, not terminal, halt — the command parks at a stable `waiting` phase (reconstructed across `pi --resume` / branch switch) so the user can answer the question; an interactive, non-slash reply re-arms the status probe, and a now-`completed` report chains the declared next step under the usual policy. Chaining still requires an explicit `completed` report, so an off-topic reply can only trigger a harmless re-probe, never a mis-chain. Note: `no next:` produces no status check at all — the probe fires only for commands that declare a `next:` policy, so a command with nothing to chain stays invisible.
-
-Executing a step means either dispatching the slash command directly, or creating a fresh session first and then dispatching.
-
-### Delegation
-
-Commands invoke other commands as subroutines via the `delegate` tool. Delegated commands run in the same agent turn. Their effective `allowed-tools` are the intersection of the active top-level command/caller scope and the delegated command's own declaration, so delegation cannot widen the top-level scope. Enforcement is advisory in this MVP — out-of-scope calls log a warning but proceed. Delegated invocations are journaled at indented history depths with `agent` origin, and delegated commands' own `next:` declarations are ignored; only the caller's `next:` controls chaining.
-
-## Install
-
-```sh
-npm install -g @leanandmean/scramjet
-```
-
-The postinstall step seeds the Mach 12 command set at
-`${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12/` if it doesn't
-already exist. Scramjet's command-set loader discovers it on next
-startup. To start a Pi session with Scramjet loaded:
-
-```sh
-scramjet
-```
-
-This launches Pi with Scramjet registered as an extension factory.
-`scramjet --help`, `scramjet --print`, and every other Pi flag are
-forwarded unchanged. Running plain `pi` continues to work; the
-`scramjet` bin is just a convenience wrapper that registers the
-extension at startup.
-
-### Platform support
-
-| Platform              | Supported |
-| --------------------- | --------- |
-| Linux                 | yes       |
-| macOS                 | yes       |
-| Windows (WSL)         | yes       |
-| Windows (native)      | no        |
-
-`npm install` succeeds on native Windows but the postinstall prints a
-notice and skips the Mach 12 seed. Install inside WSL for full
-functionality.
-
-### Uninstall
+## Uninstall
 
 ```sh
 npm uninstall -g @leanandmean/scramjet
 ```
 
-`npm uninstall` removes the package and the `scramjet` bin. The seeded
-Mach 12 directory at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/`
-is left in place so user edits to commands or agents are not destroyed.
-Remove it manually if you want a clean state.
+The seeded Mach 12 directory at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/` is left in place so any edits are preserved. Remove it manually for a clean state.
 
-## Writing commands
+## Routing Pi through a proxy
 
-A command is a Markdown file with YAML frontmatter. The frontmatter
-declares the next-step policy and the command's allowed tool set; the
-body is the prompt sent to the agent.
+If you use a proxy like [tux](https://github.com/merckgroup/tux) or Foundry, Pi by default still calls `api.anthropic.com` directly — its Anthropic provider pins the base URL and its SDK does not read `ANTHROPIC_BASE_URL`.
 
-```markdown
----
-description: Plan implementation of a GitHub issue
-allowed-tools: bash, read, write, edit, delegate
-next:
-  mode: closed
-  candidates:
-    - name: issue-review
-      hint: when the plan needs validation before implementing
-    - name: issue-implement
-      hint: when the plan is straightforward enough to execute directly
-    - name: stop
-      hint: when the user wants to pause for review
----
-
-You are planning implementation of issue $ARGUMENTS. ...
-```
-
-The four policies (`forced`, `closed`, `open`, `ask`) are documented in
-`docs/scramjet-vision.md`. For a comprehensive guide to writing commands
-(frontmatter schema, delegation, tool scoping, status reporting), see
-`docs/command-authoring.md`.
-
-### Same command, different arguments
-
-Multiple `next_steps` entries may suggest the same command with
-different arguments to offer meaningful variants. The harness validates
-by command name only (`closed` mode checks that the parsed command
-appears in `candidates`), so same-command entries pass without
-deduplication. Each entry renders distinctly in the selector — the full
-message is shown, and the `reason` field differentiates the intent.
-
-Frontmatter declares the candidate name once:
-
-```yaml
-next:
-  mode: closed
-  candidates:
-    - name: pr-review-fix
-      hint: fix issues flagged in the review
-    - name: pr-pre-merge
-      hint: when no genuine issues remain
-```
-
-(Frontmatter uses unqualified names; the loader prefixes the command-set
-name at runtime, so `pr-review-fix` matches `mach12:pr-review-fix`.)
-
-The agent's status report emits variants as different messages:
-
-```json
-{
-  "status": "completed",
-  "summary": "Found genuine issues and optional nitpicks.",
-  "next_steps": [
-    {
-      "message": "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456",
-      "reason": "Address the genuine issues only."
-    },
-    {
-      "message": "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456 --include-nitpicks",
-      "reason": "Address genuine issues and optional nitpicks in one pass."
-    },
-    {
-      "message": "/mach12:pr-pre-merge 94",
-      "reason": "Skip fixes and proceed to merge checks."
-    }
-  ],
-  "recommended_next_step": 0
-}
-```
-
-The `reason` field is the primary differentiator. The selector always
-shows the full message, so users know exactly what will run.
-
-## Delegation
-
-Subroutine commands are invoked from a calling command's body via the
-`delegate` tool:
-
-```markdown
-Before posting the assessment, fetch the contribution guidelines:
-call `delegate({ command: "mach12:find-contribution-guidelines", args: "" })`.
-```
-
-The subroutine runs in the same agent turn. Its frontmatter declares
-its own `allowed-tools`, intersected with the active top-level/caller
-scope; `next:` declarations on subroutines are ignored. MVP delegation
-frames are latched until the next agent turn, so repeated calls to the
-same subroutine in one turn are treated as cycles and sequential sibling
-delegations inherit prior narrowing rather than true push/pop return
-semantics.
-
-## Bundled Mach 12 command set
-
-Ten top-level commands implement the Mach 12 methodology:
-
-- `mach12:issue-create`, `mach12:issue-plan`, `mach12:issue-review`, `mach12:issue-implement`
-- `mach12:pr-create`, `mach12:pr-review`, `mach12:pr-review-assessment`, `mach12:pr-review-fix`, `mach12:pr-pre-merge`, `mach12:pr-merge`
-
-Plus seven delegated subroutines (`push`, `find-contribution-guidelines`,
-`gh-issue-read`, `gh-pr-read`, `gh-sub-issues`, `gh-assign`,
-`gh-comment`) and nine bundled agents covering exploration, architecture,
-code review, comment analysis, test analysis, silent-failure analysis,
-type-design analysis, feature-completeness checking, and code
-simplification.
-
-## Diagram tool
-
-When you ask the agent to draw a flowchart, architecture diagram, or
-sequence diagram, scramjet's `draw_diagram` tool renders it as an
-actual image in the terminal instead of ASCII art.
-
-Supported formats:
-
-- **Mermaid** (requires `mmdc` — `npm install -g @mermaid-js/mermaid-cli`)
-- **Graphviz** (requires `dot` — `apt install graphviz` or `brew install graphviz`)
-- **PlantUML** (requires `plantuml` — `apt install plantuml` or `brew install plantuml`)
-
-Only renderers that are actually installed are registered as tool
-options. The diagram tool requires a terminal with image support
-(Kitty, iTerm2, WezTerm, or Ghostty).
-
-## Routing pi through a proxy
-
-If you point Anthropic-compatible tooling at a proxy like
-[tux](https://github.com/merckgroup/tux) or Foundry by sourcing an env
-file, Pi by default still calls `api.anthropic.com` directly — its
-Anthropic provider pins `baseUrl: "https://api.anthropic.com"` and its
-SDK does not read `ANTHROPIC_BASE_URL`.
-
-To route Pi through the same proxy, edit `~/.pi/agent/models.json`:
+To route through your proxy, edit `~/.pi/agent/models.json`:
 
 ```json
 {
@@ -308,120 +141,23 @@ To route Pi through the same proxy, edit `~/.pi/agent/models.json`:
 }
 ```
 
-The `compat.supportsEagerToolInputStreaming: false` opt-out is required
-for Foundry's Anthropic gateway — without it, every request fails with
-`INVALID_ARGUMENT: unrecognizedProperty=eager_input_streaming`. Stock
-Anthropic accepts the field, so the opt-out is harmless if you switch
-back.
+The `compat.supportsEagerToolInputStreaming: false` opt-out is required for Foundry's Anthropic gateway. Stock Anthropic accepts the field, so the opt-out is harmless if you switch back.
 
 ### Authentication
 
-Pi reads `ANTHROPIC_API_KEY` natively but **not**
-`ANTHROPIC_AUTH_TOKEN`. If your env file only sets the latter, add an
-alias line:
+Pi reads `ANTHROPIC_API_KEY` natively but **not** `ANTHROPIC_AUTH_TOKEN`. If your env file only sets the latter:
 
 ```sh
 export ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"
 ```
 
-Alternatively, set `apiKey` directly inside `providers.anthropic` in
-`models.json`. The trade-off is plaintext on disk.
+## Compatibility
 
-## Versions
+Tested against **Pi `0.74.0-scramjet.1`** (see `pi.piTestedVersion` in `package.json`). Scramjet uses a LeanAndMean-patched Pi coding-agent package based on upstream Pi `0.74.0`; the patch flavor is `scramjet.1`.
 
-Tested against **Pi `0.74.0-scramjet.1`** (see `pi.piTestedVersion` in
-`package.json`). Scramjet uses a LeanAndMean-patched Pi coding-agent
-package based on upstream Pi `0.74.0`; the patch flavor is
-`scramjet.1`.
+## Feedback
 
-The dependency key remains `@earendil-works/pi-coding-agent`, but it is
-intentionally installed via npm alias:
-
-```json
-"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.1"
-```
-
-`@earendil-works/pi-tui` remains the upstream `0.74.0` package. CI fails
-if the Pi base version, Scramjet patch flavor, coding-agent alias, tested
-version, or pi-tui pin drift apart.
-
-## File structure
-
-```
-scramjet/
-  index.ts              — entry point (extension factory)
-  types.ts              — ScramjetState and shared types
-  command-status.ts     — scramjet_command_status tool (two-phase status probe)
-  auto-continue.ts      — agent_end listener: probe, validate, selector routing
-  next-step-dispatch.ts — Pi input-dispatch helper for next steps
-  delegate.ts           — delegate tool + frame stack
-  next-step.ts          — <scramjet-next-step> block builder
-  history.ts            — sidebar journal + replay
-  scramjet-command.ts   — /scramjet on|off toggle
-  clear-alias.ts        — /clear alias
-  pr-indicator.ts       — ambient footer hint for the branch's active PR number
-  base-directives.ts    — appends coding-agent quality directives to the system prompt
-  tool-scope-advisory.ts — advisory tool-scope warnings
-  commands/             — command-set loader + parser + validator
-  diagram/              — draw_diagram tool + renderers
-  mach12/               — bundled command set (commands + agents)
-  bin/
-    scramjet.js         — Node entrypoint that calls Pi main()
-  scripts/
-    postinstall.js      — Mach 12 seed on npm install
-  tests/                — vitest suites
-```
-
-## Develop
-
-```sh
-npm install          # installs deps and runs postinstall (seeds mach12)
-npm run typecheck    # tsc --noEmit
-npm run build        # tsc -p tsconfig.build.json -> dist/
-npm test             # vitest --run
-npm run lint         # biome check .
-```
-
-### In-tree iteration
-
-The `scramjet` bin on `PATH` runs the compiled `dist/index.js`, not the
-TypeScript source. After cloning and installing, run this once:
-
-```sh
-npm run build          # produce dist/ so the bin has something to import
-npm link               # install `scramjet` globally as a symlink to this tree
-ln -sfn "$(pwd)/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
-                       # so edits to mach12/*.md are picked up live
-```
-
-The `mach12/` symlink replaces the postinstall's static seed; without
-it, edits to `mach12/commands/*.md` or `mach12/agents/*.md` in the repo
-are invisible to the running scramjet because the command-set loader
-reads from `~/.local/share/scramjet/mach12/`, not from your working
-tree.
-
-Then while iterating:
-
-- Edited a `.ts` file → `npm run build` (or `tsc -p tsconfig.build.json
-  --watch` in another terminal). The linked bin imports the compiled
-  output, so changes are not picked up until you build.
-- Edited `mach12/*.md` → no rebuild needed (with the symlink in place).
-- Edited `bin/scramjet.js` or `scripts/postinstall.js` → no rebuild
-  needed; they run as-is.
-
-If `which scramjet` returns nothing or points outside this repo:
-
-```sh
-readlink -f "$(which scramjet)"
-```
-
-should resolve into your working tree. If it doesn't — or if you have
-dangling symlinks at `~/.local/bin/scramjet` or
-`~/.pi/agent/extensions/scramjet` from a pre-Stage-8 `./install.sh` —
-remove those leftovers and re-run `npm link`.
-
-To skip the postinstall during dev (avoid seeding while iterating), use
-`npm ci --ignore-scripts`.
+Found a bug or have a feature request? Open an issue at [github.com/LeanAndMean/scramjet/issues](https://github.com/LeanAndMean/scramjet/issues).
 
 ## License
 
