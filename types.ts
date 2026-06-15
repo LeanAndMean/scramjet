@@ -117,4 +117,5 @@ export interface ScramjetState {
 	latestCommandStatus: CommandStatusPayload | null;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
+	resetConsecutiveContinues?: () => void;
 }

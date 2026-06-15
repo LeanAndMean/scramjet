@@ -121,6 +121,9 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 	// before_agent_start reset would clear the counter every cycle and make
 	// the limit unreachable). Reset only on the terminating path below.
 	let consecutiveContinues = 0;
+	state.resetConsecutiveContinues = () => {
+		consecutiveContinues = 0;
+	};
 
 	pi.registerTool({
 		name: "report_scramjet_command_status",

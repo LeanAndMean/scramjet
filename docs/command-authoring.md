@@ -478,11 +478,11 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_get_scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns their answer as the tool result — the turn does not end.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns their answer as the tool result — the turn does not end.
 
 ### When to use it
 
-Use `get_get_scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input) and the agent should continue executing in the same turn after receiving the response. Prefer it over prose questions when:
+Use `get_scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input) and the agent should continue executing in the same turn after receiving the response. Prefer it over prose questions when:
 
 - The response has a constrained shape (yes/no, pick-one, short text).
 - The agent needs the response to continue work in the same turn.
@@ -539,8 +539,8 @@ Each interaction (including cancellations) is journaled as a `scramjet:user-inpu
 
 ### Don't
 
-- Don't use `get_get_scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
-- Don't use `get_get_scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
+- Don't use `get_scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
+- Don't use `get_scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
 - Don't ignore `{ "cancelled": true }` — treat it as the user declining to answer, not as an error or a default.
 
 ---

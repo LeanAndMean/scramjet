@@ -260,6 +260,29 @@ describe("registerCommandStatusTool — continuing status", () => {
 		expect(fresh.details.status).toBe("continuing");
 		expect(state.commandPhase).toBe("running");
 	});
+
+	it("resets the counter via resetConsecutiveContinues callback (new command start after self-heal)", async () => {
+		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+
+		// Exhaust the counter — 4th continue hits the limit
+		for (let i = 0; i < 3; i++) {
+			state.commandPhase = "probing";
+			await execute({ status: "continuing", summary: "working" });
+		}
+		state.commandPhase = "probing";
+		const limited = await execute({ status: "continuing", summary: "too many" });
+		expect(limited.details.error).toBe("continue-limit");
+
+		// Self-heal: probe ends without terminal report (no counter reset).
+		// A new command starts and calls resetConsecutiveContinues.
+		state.resetConsecutiveContinues?.();
+
+		// Counter is fresh — next command can continue without hitting the limit
+		state.commandPhase = "probing";
+		const fresh = await execute({ status: "continuing", summary: "new command" });
+		expect(fresh.details.status).toBe("continuing");
+		expect(state.commandPhase).toBe("running");
+	});
 });
 
 describe("COMMAND_STATUS_PROBE_TYPE", () => {

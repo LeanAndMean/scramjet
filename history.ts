@@ -87,6 +87,7 @@ export function recordCommandInvocation(
 		// untouched here is what lets it stay "probing" until the status tool fires.
 		if (!transitionPhase(state, "running")) return;
 		state.latestCommandStatus = null;
+		state.resetConsecutiveContinues?.();
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);

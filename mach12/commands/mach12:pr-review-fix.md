@@ -138,7 +138,7 @@ Pass a brief summary of the findings addressed as `$ARGUMENTS` so the commit mes
 
 Each fix session should be **fresh** to maximize available context.
 
-When Scramjet asks you to report command status, call `report_report_scramjet_command_status` with `status: "completed"` and choose selector-visible `next_steps` entries using this order:
+When Scramjet asks you to report command status, call `report_scramjet_command_status` with `status: "completed"` and choose selector-visible `next_steps` entries using this order:
 
 1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, include an entry with `message`: `/mach12:pr-review-fix` followed by the same PR/comment arguments plus the next stage label, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned fix stage remains.
    - Example: `message`: `/mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`, `reason`: `Stage 2 is the next planned fix stage.`
