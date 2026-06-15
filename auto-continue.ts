@@ -6,7 +6,7 @@
  * agent_end, if the command declares a next-step policy, this driver advances
  * the lifecycle to "probing" and DEFERS a hidden status-check probe — a custom
  * message that triggers a short second turn in which the agent calls
- * scramjet_command_status. The tool records the status and advances the phase
+ * report_scramjet_command_status. The tool records the status and advances the phase
  * to "reported"; this driver reads it on the probe turn's agent_end and
  * validates/dispatches/pauses.
  *
@@ -48,16 +48,17 @@ import { transitionPhase } from "./phase-machine.ts";
 import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
-// F1: liveness watchdog window. Generous on purpose — a live probe turn is a
-// single scramjet_command_status tool call and reports well within this, and the
-// guard inside the timer re-checks the phase so a turn that DID complete (or
-// already self-healed) is never clobbered. The value only bounds how long a
-// probe that never produced a turn at all (dropped triggerTurn during run
-// settle, Escape before the turn starts, session teardown mid-turn) lingers at
-// "probing" before self-healing; the next real command resets the phase anyway.
-// Kept comfortably longer than any plausible probe turn so it cannot fire while
-// the model is still thinking before its tool call (phase still "probing"),
-// which would otherwise drop a legitimate chain — worse than the stall it fixes.
+// Liveness watchdog window. Generous on purpose — a live probe turn is a
+// single report_scramjet_command_status tool call and reports well within this,
+// and the guard inside the timer re-checks the phase so a turn that DID
+// complete (or already self-healed) is never clobbered. The value only bounds
+// how long a probe that never produced a turn at all (dropped triggerTurn
+// during run settle, Escape before the turn starts, session teardown mid-turn)
+// lingers at "probing" before self-healing; the next real command resets the
+// phase anyway. Kept comfortably longer than any plausible probe turn so it
+// cannot fire while the model is still thinking before its tool call (phase
+// still "probing"), which would otherwise drop a legitimate chain — worse than
+// the stall it fixes.
 const PROBE_WATCHDOG_MS = 30_000;
 
 // Parse a raw report entry's message into a dispatchable NextStep, or null
@@ -83,16 +84,15 @@ function isExpectedSelectorCancellation(err: unknown): boolean {
 	return err.name === "AbortError" || err.name === "CanceledError" || err.name === "CancelledError";
 }
 
-// S2: model-supplied summary/prompt text is interpolated into ctx.ui.notify,
-// which renders on a single line. Strip control chars (newlines included),
-// collapse internal whitespace, and cap the length so a multi-paragraph or
-// control-char report can't garble the widget. Mirrors next-step.ts formatHint's
+// Model-supplied summary/prompt text is interpolated into ctx.ui.notify, which
+// renders on a single line. Strip control chars (newlines included), collapse
+// internal whitespace, and cap the length so a multi-paragraph or control-char
+// report can't garble the widget. Mirrors next-step.ts formatHint's
 // trim+collapse, plus a length cap since a status summary is unbounded. No
 // safe() close-tag escaping is needed — notify text is never re-injected into a
-// prompt.
-// Exported for direct unit testing of the boundary (NOTIFY_MAX - 1 + "…") and
-// the control-char/whitespace passes; the production callers are routeNonCompleted's
-// blocked/waiting notifies.
+// prompt. Exported for direct unit testing of the boundary (NOTIFY_MAX - 1 +
+// "…") and the control-char/whitespace passes; the production callers are
+// routeNonCompleted's blocked/waiting notifies.
 export const NOTIFY_MAX = 200;
 export function cleanForNotify(text: string): string {
 	const collapsed = text
@@ -116,8 +116,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
-	state.suspendProbeWatchdog = () => clearProbeWatchdog();
-	state.rearmProbeWatchdog = () => {
+	function armProbeWatchdog() {
 		clearProbeWatchdog();
 		if (state.commandPhase === "probing") {
 			probeWatchdog = setTimeout(() => {
@@ -128,7 +127,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				}
 			}, PROBE_WATCHDOG_MS);
 		}
-	};
+	}
+
+	state.suspendProbeWatchdog = () => clearProbeWatchdog();
+	state.rearmProbeWatchdog = armProbeWatchdog;
 
 	function clearDispatchTimer() {
 		if (dispatchTimer) {
@@ -148,12 +150,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	function dispatchForced(target: string, handoff: NextStep | undefined, ctx: ExtensionContext): boolean {
-		// F6: symmetric to the F11 "active command missing from registry" guard
-		// at the top of agent_end. A `forced` target that dropped out of the
-		// registry (rename, removed command, partial reload) would otherwise
-		// silently dispatch the wrong command and set activeTopLevelCommand to
-		// a non-registry name; the next agent_end would then warn late, after the
-		// forced chain already went off the rails.
+		// Symmetric to the "active command missing from registry" guard at the top
+		// of agent_end. A `forced` target that dropped out of the registry (rename,
+		// removed command, partial reload) would otherwise silently dispatch the
+		// wrong command and set activeTopLevelCommand to a non-registry name; the
+		// next agent_end would then warn late, after the forced chain already went
+		// off the rails.
 		const def = state.registry.get(target);
 		if (!def) {
 			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
@@ -195,22 +197,16 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			// rather than ctx.ui.notify.
 			try {
 				pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
-				// F1: time-domain analog of the throw boundary above. The
-				// probing→idle self-heal lives in the agent_end handler, so it only
-				// fires if the probe turn emits a terminal agent_end. If the
-				// triggered turn never materializes at all (dropped triggerTurn,
-				// Escape before it starts, teardown mid-turn), the phase would sit at
-				// "probing" until the next real command. Arm a watchdog that self-heals
-				// after a generous window; the phase re-check inside keeps it from
-				// clobbering a probe turn that did complete. Cleared at the probe turn's
-				// agent_end (reported/probing branches) and on shutdown.
-				probeWatchdog = setTimeout(() => {
-					probeWatchdog = null;
-					if (state.commandPhase === "probing") {
-						transitionPhase(state, "idle");
-						console.warn("scramjet: status probe turn never completed; auto-continue paused");
-					}
-				}, PROBE_WATCHDOG_MS);
+				// Time-domain analog of the throw boundary above. The probing→idle
+				// self-heal lives in the agent_end handler, so it only fires if the
+				// probe turn emits a terminal agent_end. If the triggered turn never
+				// materializes at all (dropped triggerTurn, Escape before it starts,
+				// teardown mid-turn), the phase would sit at "probing" until the next
+				// real command. Arm a watchdog that self-heals after a generous window;
+				// the phase re-check inside keeps it from clobbering a probe turn that
+				// did complete. Cleared at the probe turn's agent_end (reported/probing
+				// branches) and on shutdown.
+				armProbeWatchdog();
 			} catch (err) {
 				transitionPhase(state, "idle");
 				console.warn(`scramjet: status probe failed to send (${(err as Error).message}); auto-continue paused`);
@@ -429,10 +425,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const activeName = state.activeTopLevelCommand;
 		const def = activeName ? state.registry.get(activeName) : undefined;
 
-		// F11: activeTopLevelCommand is set but the registry has no matching
-		// entry (renamed command, partial reload). Notify once, clear the stale
-		// name and reset the lifecycle so a probe never fires for a phantom
-		// command and the warning doesn't repeat on every subsequent agent_end.
+		// activeTopLevelCommand is set but the registry has no matching entry
+		// (renamed command, partial reload). Notify once, clear the stale name and
+		// reset the lifecycle so a probe never fires for a phantom command and the
+		// warning doesn't repeat on every subsequent agent_end.
 		if (activeName && !def) {
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
 			state.activeTopLevelCommand = null;
@@ -460,7 +456,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				return;
 			}
 			case "probing": {
-				// The probe turn ended without a recorded scramjet_command_status call:
+				// The probe turn ended without a recorded report_scramjet_command_status call:
 				// either the agent wrote prose instead of reporting, or it DID call the
 				// tool but Pi rejected the call on schema grounds before `execute` ran
 				// (missing required field, bad status literal) so the phase never
@@ -468,9 +464,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// re-probe — no infinite loop. The turn produced a terminal agent_end,
 				// so the liveness watchdog is no longer needed.
 				//
-				// F1: this is otherwise the only self-heal in the protocol that resets
+				// This is otherwise the only self-heal in the protocol that resets
 				// silently; every sibling (watchdog, send-throw, out-of-phase gate in
-				// command-status.ts) leaves a log breadcrumb. A subtly-malformed status
+				// command-status.ts) leaves a log breadcrumb. A subtly malformed status
 				// payload would stop the chain with no diagnostic trail. Log-only —
 				// preserves "invisible when idle" on the user surface.
 				clearProbeWatchdog();
@@ -495,6 +491,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				if (status.status === "completed") {
 					// Completion is terminal for the lifecycle: reset to idle, then chain.
 					transitionPhase(state, "idle");
+					// issue 128: clear activeTopLevelCommand so a later interactive
+					// reply doesn't re-arm the phase for a completed command.
+					// routeCompleted/scheduleCompletedDispatch use captured `policy`
+					// and `status` parameters, not activeTopLevelCommand; the next
+					// command start (if chaining) sets it to the new command.
+					state.activeTopLevelCommand = null;
 					// Chaining a completed command needs the policy to validate the
 					// pick (or fire the forced target). If def.next vanished between
 					// the probe and this agent_end (registry rebuild/reload), there is
@@ -505,9 +507,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					if (policy) scheduleCompletedDispatch(policy, status, ctx);
 					return;
 				}
-				// F2: a non-completed report (blocked/waiting_for_user/incomplete)
-				// never chains, so it does not depend on the policy. Route it even
-				// when policy is gone so a `blocked` summary (auth failure, missing
+				// A non-completed report (blocked/waiting_for_user/incomplete) never
+				// chains, so it does not depend on the policy. Route it even when
+				// policy is gone so a `blocked` summary (auth failure, missing
 				// dependency) still surfaces instead of being swallowed when def.next
 				// disappeared.
 				//
@@ -515,9 +517,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				// (keeping activeTopLevelCommand) so a later interactive reply
 				// (history.ts) can re-arm the running→probing probe path and the
 				// command can later report completed. blocked/incomplete stay terminal
-				// (idle). Chaining still requires an explicit completed report, so an
-				// accidental resume can only re-probe — never mis-chain.
+				// (idle), so they clear the active command like completed does.
 				if (!transitionPhase(state, status.status === "waiting_for_user" ? "waiting" : "idle")) return;
+				if (status.status !== "waiting_for_user") state.activeTopLevelCommand = null;
 				routeNonCompleted(status, ctx);
 				return;
 			}

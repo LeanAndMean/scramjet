@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { MultiLineSelectList } from "./multi-line-select.ts";
+import { transitionPhase } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
@@ -9,15 +10,15 @@ export const USER_INPUT_TYPE = "scramjet:user-input";
 const ALLOWED_PHASES = new Set(["running", "probing"]);
 
 const OUT_OF_PHASE_ERROR =
-	"scramjet_user_input is not available right now. " +
+	"get_scramjet_user_input is not available right now. " +
 	"This tool can only be called during active command execution (running or probing phase).";
 
 const NON_TUI_ERROR =
-	"scramjet_user_input requires a TUI environment. " +
+	"get_scramjet_user_input requires a TUI environment. " +
 	"The current session does not support interactive UI — use prose-based interaction instead.";
 
 const PROMPT_SNIPPET =
-	"You have access to `scramjet_user_input` for requesting structured user input mid-turn " +
+	"You have access to `get_scramjet_user_input` for requesting structured user input mid-turn " +
 	"(confirm, select, or freetext). The tool blocks until the user responds and returns their " +
 	"answer as the tool result — the turn does not end. Use it when you need explicit user " +
 	"decisions during command execution rather than ending the turn with a prose question.";
@@ -56,8 +57,8 @@ const _paramsMatchSchema = (params: UserInputParams): Static<typeof USER_INPUT_S
 
 export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
-		name: "scramjet_user_input",
-		label: "Scramjet User Input",
+		name: "get_scramjet_user_input",
+		label: "Get Scramjet User Input",
 		description:
 			"Request structured input from the user during command execution. " +
 			"Supports confirm (yes/no), select (pick from options), and freetext (open-ended input). " +
@@ -66,7 +67,9 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 		parameters: USER_INPUT_SCHEMA,
 		async execute(_toolCallId, params, _resource, _read, ctx) {
 			if (!ALLOWED_PHASES.has(state.commandPhase)) {
-				console.warn(`scramjet: scramjet_user_input called out of phase (phase=${state.commandPhase}); rejected`);
+				console.warn(
+					`scramjet: get_scramjet_user_input called out of phase (phase=${state.commandPhase}); rejected`,
+				);
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
 					details: { error: "out-of-phase", phase: state.commandPhase },
@@ -120,7 +123,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					details: { error: "ui-error", message },
 				};
 			} finally {
-				if (isProbing) state.rearmProbeWatchdog?.();
+				if (isProbing) transitionPhase(state, "running");
 			}
 
 			pi.appendEntry(USER_INPUT_TYPE, {

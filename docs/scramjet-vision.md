@@ -321,7 +321,7 @@ encouraged but optional.
   any non-blacklisted slash command. Use no `next` (or `mode: ask`) for a
   terminus, not an empty `open` list.
 - **`forced` completion gate.** The forced target runs only after the
-  command reports `status: "completed"` via `scramjet_command_status`. It
+  command reports `status: "completed"` via `report_scramjet_command_status`. It
   does not require an agent-picked `next_steps` entry, and it still ignores
   `/scramjet off`; the completion status only prevents chaining after
   clarification, error, or an otherwise unfinished turn.
@@ -336,7 +336,7 @@ encouraged but optional.
   report chains its declared next step under the usual policy. Chaining
   still requires an explicit `completed` report, so an off-topic reply can
   only trigger a harmless re-probe, never a chain (issue 88).
-  `scramjet_user_input` (§3) provides a separate, proactive mid-turn path
+  `get_scramjet_user_input` (§3) provides a separate, proactive mid-turn path
   for collecting user input without ending the turn; `waiting_for_user`
   is the turn-ending lifecycle status for when the agent has already
   surfaced its question in normal output.
@@ -348,9 +348,9 @@ before a destructive action, a choice between approaches, or freetext input
 for a commit message or description. This section defines how those
 interactions are requested, collected, and returned to the agent.
 
-##### The `scramjet_user_input` tool
+##### The `get_scramjet_user_input` tool
 
-The harness registers a `scramjet_user_input` tool with three interaction
+The harness registers a `get_scramjet_user_input` tool with three interaction
 types:
 
 | Type       | Payload                                  | Harness behavior                                      |
@@ -364,9 +364,9 @@ appropriate UI, blocks until the user responds, and returns the result as
 a normal tool result. The agent continues executing with the answer in
 context — no phase transition, no probe, no re-dispatch.
 
-This is the key distinction from `scramjet_command_status`: the status
+This is the key distinction from `report_scramjet_command_status`: the status
 tool is a terminal lifecycle signal ("I'm done or stuck"), while
-`scramjet_user_input` is a within-turn request ("I need something from
+`get_scramjet_user_input` is a within-turn request ("I need something from
 the user to continue").
 
 ##### The probe-as-router extension
@@ -376,19 +376,19 @@ to report command status. The extended probe offers three paths:
 
 1. **Continue executing.** The agent has more work to do — it stopped
    prematurely (observed most frequently after complex delegations). It
-   returns from the probe without calling either `scramjet_user_input` or
-   `scramjet_command_status`; the harness interprets the absence of a
+   returns from the probe without calling either `get_scramjet_user_input` or
+   `report_scramjet_command_status`; the harness interprets the absence of a
    terminal signal as "re-arm the turn" and resumes without user
    involvement.
 2. **Request user input.** The agent needs information from the user. It
-   calls `scramjet_user_input` with the appropriate type and payload.
+   calls `get_scramjet_user_input` with the appropriate type and payload.
 3. **Report terminal status.** The agent is done or stuck. It calls
-   `scramjet_command_status` as today.
+   `report_scramjet_command_status` as today.
 
 The probe is the **reliable path** — it catches the natural LLM
 turn-ending behavior regardless of whether the agent proactively called a
-tool. Proactive tool use (calling `scramjet_user_input` or
-`scramjet_command_status` during the turn, before the probe fires) is
+tool. Proactive tool use (calling `get_scramjet_user_input` or
+`report_scramjet_command_status` during the turn, before the probe fires) is
 the **fast path** — it skips the probe round-trip and produces the same
 outcome.
 
@@ -404,38 +404,42 @@ reports that it has more work to do, the harness re-arms the agent's
 turn without surfacing anything to the user. From the user's perspective,
 the agent simply keeps working. No manual "continue" needed.
 
-##### Relationship to `scramjet_command_status`
+##### Relationship to `report_scramjet_command_status`
 
 The two tools are complementary:
 
-- **`scramjet_user_input`** — "I need something from the user to continue."
+- **`get_scramjet_user_input`** — "I need something from the user to continue."
   Within-turn; the harness collects input and returns it as a tool result.
   The command keeps running.
-- **`scramjet_command_status`** — "I'm done or stuck." Terminal lifecycle
+- **`report_scramjet_command_status`** — "I'm done or stuck." Terminal lifecycle
   signal. The turn ends. Chaining may follow.
 
 A command that needs user input has two paths to get it:
-- **Proactive (fast path):** call `scramjet_user_input` during the turn.
+- **Proactive (fast path):** call `get_scramjet_user_input` during the turn.
 - **Via probe (reliable path):** end the turn, receive the probe, then
-  call `scramjet_user_input` from the probe turn.
+  call `get_scramjet_user_input` from the probe turn.
 
-Both produce the same outcome. The harness supports both without
-distinguishing them — the tool works identically regardless of when it
-is called.
+Both keep the command active, but the probe path has one extra lifecycle step:
+while the UI is pending, the harness suspends the active probe watchdog; after
+the tool returns, the phase transitions `probing → running` so the agent can
+continue work in that same turn.
 
 ##### Phase machine implications
 
-`scramjet_user_input` does not interact with the command phase lifecycle.
-The tool executes entirely within a running turn:
+For proactive calls during normal command work, `get_scramjet_user_input` does
+not change the phase: it remains `running`, no status report is generated, and
+the agent's turn continues after the tool result returns.
 
-- Phase remains `running` throughout.
-- No probe is triggered.
-- No status report is generated.
-- The agent's turn continues after the tool result returns.
+For probe-time calls, the tool is the handoff from status-check probing back to
+active command work:
 
-This is by design: intra-command interactions are *within* a command's
-execution, not transitions *between* phases. The phase machine only cares
-about turn boundaries and lifecycle status reports.
+- Phase remains `probing` while the UI is pending.
+- The probe watchdog is suspended and is not re-armed after the response.
+- After the tool returns, the phase becomes `running`.
+- The next `agent_end` schedules a fresh status probe.
+
+This keeps intra-command interactions within command execution while preserving
+the phase machine's turn-boundary lifecycle checks.
 
 ##### Auto-answer semantics
 
@@ -468,7 +472,7 @@ already supports this without schema changes.
   definitions). Token-saving optimization of probe content is deferred.
 
 - **Proactive tool use is the fast path, not the required path.** An
-  agent that calls `scramjet_user_input` during its turn without a probe
+  agent that calls `get_scramjet_user_input` during its turn without a probe
   is faster (skips the probe round-trip). An agent that ends its turn and
   gets redirected via the probe produces the same outcome, just slower.
   The harness supports both.
@@ -956,10 +960,10 @@ edges, and stays out of the way.
 #### Resolved
 
 - **Agent-picks-next mechanism.** Resolved: the two-phase
-  `scramjet_command_status` protocol (issue 84). After the command's
+  `report_scramjet_command_status` protocol (issue 84). After the command's
   normal answer turn goes idle, the harness sends a TUI-hidden
   status-check message carrying the `<scramjet-next-step>` candidate
-  block; the agent reports via `scramjet_command_status`. The candidate
+  block; the agent reports via `report_scramjet_command_status`. The candidate
   list rides in that user-role probe message (not the system prompt, to
   preserve prompt-cache hit rates). `next_steps[].message` is the
   suggested next message (a leading `/` makes it a slash command); the

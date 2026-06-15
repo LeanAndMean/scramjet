@@ -13,7 +13,7 @@ import {
 	replayHistory,
 	SIDEBAR_MAX,
 } from "../history.ts";
-import type { CommandDef, CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "../types.ts";
+import type { CommandDef, CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
@@ -58,7 +58,7 @@ function cmdStart(command: string, depth = 0, ts = 0): SessionEntry {
 	return customEntry(COMMAND_START_TYPE, data);
 }
 
-function cmdStatus(commandName: string, status: CommandStatusPayload["status"]): SessionEntry {
+function cmdStatus(commandName: string, status: CommandStatusRestingStatus): SessionEntry {
 	const data: CommandStatusData = { commandName, status };
 	return customEntry(COMMAND_STATUS_TYPE, data);
 }
@@ -243,16 +243,19 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		// The duplicate-work safety: a command that waited, was answered, then
 		// completed without offering a next step writes no subsequent command-start,
 		// so journaling the resolving status is what makes the rewind land on idle.
+		// issue 128: completed clears activeTopLevelCommand so a later reply
+		// doesn't re-arm the phase for a finished command.
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStatus("a", "completed")]);
 		expect(result.phase).toBe("idle");
-		expect(result.activeTopLevelCommand).toBe("a");
+		expect(result.activeTopLevelCommand).toBeNull();
 	});
 
 	it.each(["blocked", "incomplete"] as const)(
-		"reconstructs idle when a waiting command later reported %s",
+		"clears the active command when a waiting command later reported %s",
 		(status) => {
 			const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStatus("a", status)]);
 			expect(result.phase).toBe("idle");
+			expect(result.activeTopLevelCommand).toBeNull();
 		},
 	);
 
@@ -278,6 +281,7 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 			customEntry(COMMAND_STATUS_TYPE, { status: "waiting_for_user" }),
 			customEntry(COMMAND_STATUS_TYPE, { commandName: "", status: "waiting_for_user" }),
 			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "bogus" }),
+			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "continuing" }),
 		]);
 		// None of the malformed entries reconstruct a waiting phase.
 		expect(result.phase).toBe("idle");
@@ -550,7 +554,7 @@ describe("registerHistory — input event", () => {
 			expect(state.commandPhase).toBe("idle");
 		});
 
-		it("does nothing for an interactive non-slash reply when phase is idle", async () => {
+		it("re-arms idle→running on an interactive non-slash reply when activeTopLevelCommand is set (issue 128)", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
 				activeTopLevelCommand: "mach12:pr-create",
@@ -559,8 +563,34 @@ describe("registerHistory — input event", () => {
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "just chatting", source: "interactive" });
-			expect(state.commandPhase).toBe("idle");
+			expect(state.commandPhase).toBe("running");
 			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+			// A resume is not a fresh command start: no sidebar/journal entry.
+			expect(state.sidebarLog).toHaveLength(0);
+		});
+
+		it("does not re-arm idle→running when activeTopLevelCommand is null", async () => {
+			const state = freshState({
+				registry: registryOf(["mach12:pr-create"]),
+				activeTopLevelCommand: null,
+				commandPhase: "idle",
+			});
+			const { pi, emit } = recordingPi();
+			registerHistory(pi, state);
+			await emit("input", { text: "just chatting", source: "interactive" });
+			expect(state.commandPhase).toBe("idle");
+		});
+
+		it("does not re-arm idle→running on extension-source replies", async () => {
+			const state = freshState({
+				registry: registryOf(["mach12:pr-create"]),
+				activeTopLevelCommand: "mach12:pr-create",
+				commandPhase: "idle",
+			});
+			const { pi, emit } = recordingPi();
+			registerHistory(pi, state);
+			await emit("input", { text: "approve", source: "extension" });
+			expect(state.commandPhase).toBe("idle");
 		});
 	});
 

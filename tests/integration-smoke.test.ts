@@ -204,7 +204,7 @@ describe("integration smoke — base directives wired into the extension factory
 // two-phase command-status protocol (issue 84): the toggle writer flips
 // state.enabled, the input handler records origin/activeTopLevelCommand and
 // starts the running phase, the answer turn's agent_end defers a hidden
-// status probe, the agent reports completion via scramjet_command_status, and
+// status probe, the agent reports completion via report_scramjet_command_status, and
 // auto-continue's forced-mode dispatch fires the next slash that the input
 // handler then records as origin: "forced".
 describe("integration smoke — end-to-end chain under /scramjet on (S21)", () => {
@@ -326,11 +326,11 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		expect(bag.probes[0].message.display).toBe(false);
 		expect(bag.probes[0].options).toEqual({ triggerTurn: true });
 
-		// 5. The agent answers the probe by calling scramjet_command_status. int:start
+		// 5. The agent answers the probe by calling report_scramjet_command_status. int:start
 		//    declares forced → int:next, so the probe turn's agent_end dispatches the
 		//    slash wire through Pi's normal input path; history observes the
 		//    extension-source input event and labels it origin: "forced".
-		const statusTool = bag.tools.find((tool) => tool.name === "scramjet_command_status");
+		const statusTool = bag.tools.find((tool) => tool.name === "report_scramjet_command_status");
 		expect(statusTool).toBeDefined();
 		await statusTool.execute("status-call", { status: "completed", summary: "start complete" });
 		expect(state.commandPhase).toBe("reported");

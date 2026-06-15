@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { LEGAL_TRANSITIONS, reconstructPhase, transitionPhase } from "../phase-machine.ts";
-import type { CommandPhase, CommandStatusPayload } from "../types.ts";
+import type { CommandPhase } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
 describe("LEGAL_TRANSITIONS", () => {
@@ -119,55 +119,64 @@ describe("transitionPhase", () => {
 describe("reconstructPhase", () => {
 	function entry(
 		customType: string,
-		data?: { command?: string; depth?: number; commandName?: string; status?: CommandStatusPayload["status"] },
+		data?: { command?: string; depth?: number; commandName?: string; status?: unknown },
 	) {
 		return { type: "custom" as const, customType, data };
 	}
 
 	it("returns idle for empty entries", () => {
-		expect(reconstructPhase([])).toBe("idle");
+		expect(reconstructPhase([]).phase).toBe("idle");
 	});
 
 	it("returns idle for command-start only", () => {
-		expect(reconstructPhase([entry("scramjet:command-start", { command: "a", depth: 0 })])).toBe("idle");
+		expect(reconstructPhase([entry("scramjet:command-start", { command: "a", depth: 0 })]).phase).toBe("idle");
 	});
 
 	it("returns waiting for start + waiting_for_user status", () => {
-		expect(
-			reconstructPhase([
-				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
-			]),
-		).toBe("waiting");
+		const result = reconstructPhase([
+			entry("scramjet:command-start", { command: "a", depth: 0 }),
+			entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
+		]);
+		expect(result.phase).toBe("waiting");
+		expect(result.activeCommandCleared).toBe(false);
 	});
 
 	it("returns idle for start + completed status", () => {
-		expect(
-			reconstructPhase([
-				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "completed" }),
-			]),
-		).toBe("idle");
+		const result = reconstructPhase([
+			entry("scramjet:command-start", { command: "a", depth: 0 }),
+			entry("scramjet:command-status", { commandName: "a", status: "completed" }),
+		]);
+		expect(result.phase).toBe("idle");
+		expect(result.activeCommandCleared).toBe(true);
 	});
 
 	it("last-status-wins", () => {
-		expect(
-			reconstructPhase([
-				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
-				entry("scramjet:command-status", { commandName: "a", status: "completed" }),
-			]),
-		).toBe("idle");
+		const result = reconstructPhase([
+			entry("scramjet:command-start", { command: "a", depth: 0 }),
+			entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
+			entry("scramjet:command-status", { commandName: "a", status: "completed" }),
+		]);
+		expect(result.phase).toBe("idle");
+		expect(result.activeCommandCleared).toBe(true);
 	});
 
-	it("new command start resets phase to idle", () => {
-		expect(
-			reconstructPhase([
-				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
-				entry("scramjet:command-start", { command: "b", depth: 0 }),
-			]),
-		).toBe("idle");
+	it.each(["blocked", "incomplete"] as const)("clears the active command for terminal %s status", (status) => {
+		const result = reconstructPhase([
+			entry("scramjet:command-start", { command: "a", depth: 0 }),
+			entry("scramjet:command-status", { commandName: "a", status }),
+		]);
+		expect(result.phase).toBe("idle");
+		expect(result.activeCommandCleared).toBe(true);
+	});
+
+	it("new command start resets phase to idle and clears activeCommandCleared", () => {
+		const result = reconstructPhase([
+			entry("scramjet:command-start", { command: "a", depth: 0 }),
+			entry("scramjet:command-status", { commandName: "a", status: "completed" }),
+			entry("scramjet:command-start", { command: "b", depth: 0 }),
+		]);
+		expect(result.phase).toBe("idle");
+		expect(result.activeCommandCleared).toBe(false);
 	});
 
 	it("ignores status entries for non-active command", () => {
@@ -175,7 +184,7 @@ describe("reconstructPhase", () => {
 			reconstructPhase([
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
 				entry("scramjet:command-status", { commandName: "b", status: "waiting_for_user" }),
-			]),
+			]).phase,
 		).toBe("idle");
 	});
 
@@ -185,7 +194,7 @@ describe("reconstructPhase", () => {
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
 				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
 				entry("scramjet:command-start", { command: "b", depth: 1 }),
-			]),
+			]).phase,
 		).toBe("waiting");
 	});
 
@@ -196,7 +205,7 @@ describe("reconstructPhase", () => {
 				entry("scramjet:command-start", { depth: 0 }),
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
 				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
-			]),
+			]).phase,
 		).toBe("waiting");
 	});
 
@@ -206,7 +215,7 @@ describe("reconstructPhase", () => {
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
 				entry("scramjet:command-status", { commandName: "", status: "waiting_for_user" }),
 				entry("scramjet:command-status", { commandName: "a" }),
-			]),
+			]).phase,
 		).toBe("idle");
 	});
 
@@ -214,10 +223,11 @@ describe("reconstructPhase", () => {
 		expect(
 			reconstructPhase([
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "bogus" as any }),
-				entry("scramjet:command-status", { commandName: "a", status: 42 as any }),
-				entry("scramjet:command-status", { commandName: "a", status: null as any }),
-			]),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
+				entry("scramjet:command-status", { commandName: "a", status: "continuing" }),
+				entry("scramjet:command-status", { commandName: "a", status: 42 }),
+				entry("scramjet:command-status", { commandName: "a", status: null }),
+			]).phase,
 		).toBe("idle");
 	});
 
@@ -225,9 +235,9 @@ describe("reconstructPhase", () => {
 		expect(
 			reconstructPhase([
 				entry("scramjet:command-start", { command: "a", depth: 0 }),
-				entry("scramjet:command-status", { commandName: "a", status: "bogus" as any }),
+				entry("scramjet:command-status", { commandName: "a", status: "bogus" }),
 				entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
-			]),
+			]).phase,
 		).toBe("waiting");
 	});
 
@@ -241,6 +251,6 @@ describe("reconstructPhase", () => {
 				data: { commandName: "a", status: "waiting_for_user" as const },
 			},
 		];
-		expect(reconstructPhase(entries)).toBe("waiting");
+		expect(reconstructPhase(entries).phase).toBe("waiting");
 	});
 });

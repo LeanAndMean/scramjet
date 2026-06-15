@@ -93,7 +93,7 @@ next:
 
 ## 2. Next-Step Policies
 
-The `next` block declares what Scramjet does after a command reports `status: "completed"` via `scramjet_command_status`. Four modes exist, each with different control semantics.
+The `next` block declares what Scramjet does after a command reports `status: "completed"` via `report_scramjet_command_status`. Four modes exist, each with different control semantics.
 
 ### `forced`
 
@@ -203,7 +203,7 @@ allowed-tools:
 
 ## 3. Same-Name-Different-Args Pattern
 
-A command's `next_steps` array (reported via `scramjet_command_status`) can include multiple entries with the **same command name but different arguments**. The `reason` field differentiates them in the selector — it is what the user sees when choosing.
+A command's `next_steps` array (reported via `report_scramjet_command_status`) can include multiple entries with the **same command name but different arguments**. The `reason` field differentiates them in the selector — it is what the user sees when choosing.
 
 ### When to use
 
@@ -405,18 +405,20 @@ In the current implementation, tool-scoping is advisory only. The harness logs w
 
 ## 6. Status-Reporting Conventions
 
-Every top-level command (not delegate-only subroutines) must instruct the agent on how to report completion via `scramjet_command_status`. This happens in a **separate turn** from the command's user-facing answer — Scramjet sends a hidden status-check probe after the answer turn completes.
+Every top-level command (not delegate-only subroutines) must instruct the agent on how to report completion via `report_scramjet_command_status`. This happens in a **separate turn** from the command's user-facing answer — Scramjet sends a hidden status-check probe after the answer turn completes.
 
-### The two-phase protocol
+### The answer/probe protocol
 
 1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
-2. **Probe turn:** Scramjet sends a hidden message asking for status. The agent calls `scramjet_command_status` exactly once and stops.
+2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
+   - Call `report_scramjet_command_status` with a status and stop the probe turn.
+   - Call `get_scramjet_user_input` if structured input is needed before continuing; after the input tool returns, continue command work in that same turn. The phase returns to `running`, so Scramjet will send another probe after the resumed work ends.
 
 ### Tool parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `status` | enum | Yes | `"completed"`, `"waiting_for_user"`, `"blocked"`, or `"incomplete"` |
+| `status` | enum | Yes | `"continuing"`, `"completed"`, `"waiting_for_user"`, `"blocked"`, or `"incomplete"` |
 | `summary` | string | Yes | Brief summary of the command's outcome. |
 | `user_prompt` | string | No | For `waiting_for_user`: the question the agent is waiting on. |
 | `next_steps` | array | No | Ordered next-step candidates. Omit to stop the chain. |
@@ -424,6 +426,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 ### Status values
 
+- **`continuing`**: The command has more work to do in the current session. This is non-terminating: the tool returns control to the agent, transitions the phase back to `running`, and is bounded by the consecutive-continue limit.
 - **`completed`**: The command's requested work is done. `next_steps` may propose continuations.
 - **`waiting_for_user`**: The agent asked the user a question and needs input before continuing. The command stays active.
 - **`blocked`**: The command cannot proceed (error, missing dependency, authorization issue).
@@ -431,7 +434,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 ### Instructing the agent in command prose
 
-The command body must include explicit instructions for how to call `scramjet_command_status`. The instructions should specify:
+The command body must include explicit instructions for how to call `report_scramjet_command_status`. The instructions should specify:
 
 1. What `status` to report and under what conditions.
 2. What `next_steps` entries to populate (with concrete examples of `message`, `fresh_session`, and `reason`).
@@ -441,7 +444,7 @@ The command body must include explicit instructions for how to call `scramjet_co
 **Example prose (from a command with `forced` next step):**
 
 ```markdown
-When Scramjet asks you to report command status, call `scramjet_command_status`
+When Scramjet asks you to report command status, call `report_scramjet_command_status`
 with `status: "completed"`. This command declares a `forced` next step, so
 Scramjet runs the target regardless; include a single `next_steps` entry only
 to pass runtime context to that target:
@@ -455,7 +458,7 @@ If the command could not finish, report `status: "blocked"` or
 **Example prose (from a command with `open` next step):**
 
 ```markdown
-When Scramjet asks you to report command status, call `scramjet_command_status`
+When Scramjet asks you to report command status, call `report_scramjet_command_status`
 with `status: "completed"` and choose selector-visible `next_steps` entries:
 
 1. If Stage N+1 remains: `message`: `/mach12:issue-implement <issue> <next-stage>`,
@@ -469,8 +472,8 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ### Don't
 
-- Don't instruct the agent to call `scramjet_command_status` during the answer turn. The tool is phase-gated and will return an error.
-- Don't instruct subroutine commands to call `scramjet_command_status`. Only the top-level command reports status; subroutines return control to their caller.
+- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is phase-gated and will return an error.
+- Don't instruct subroutine commands to call `report_scramjet_command_status`. Only the top-level command reports status; subroutines return control to their caller.
 - Don't put user-facing content in `summary`. The agent's answer was already delivered in the answer turn. `summary` is metadata for Scramjet's internal routing.
 - Don't omit `reason` from `next_steps` entries. The harness rejects entries without a non-empty `reason`.
 
@@ -478,11 +481,11 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns their answer as the tool result — the turn does not end.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns their answer as the tool result — the turn does not end.
 
 ### When to use it
 
-Use `scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input) and the agent should continue executing in the same turn after receiving the response. Prefer it over prose questions when:
+Use `get_scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input) and the agent should continue executing in the same turn after receiving the response. Prefer it over prose questions when:
 
 - The response has a constrained shape (yes/no, pick-one, short text).
 - The agent needs the response to continue work in the same turn.
@@ -531,7 +534,7 @@ All interaction types return `{ "cancelled": true }` when the user presses Escap
 
 ### Phase gating
 
-The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, the tool suspends the probe watchdog while awaiting user input and re-arms it after the response, so the 30-second watchdog does not fire while the user is deciding.
+The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, the tool suspends the probe watchdog while awaiting user input; after the response, the command transitions back to `running` so the agent can continue work in the same turn and Scramjet can probe again when that work ends.
 
 ### Journaling
 
@@ -539,8 +542,8 @@ Each interaction (including cancellations) is journaled as a `scramjet:user-inpu
 
 ### Don't
 
-- Don't use `scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
-- Don't use `scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
+- Don't use `get_scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
+- Don't use `get_scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
 - Don't ignore `{ "cancelled": true }` — treat it as the user declining to answer, not as an error or a default.
 
 ---
@@ -624,7 +627,7 @@ Delegate to:
 
 <Do the final action (post comment, push code, etc.)>
 
-When Scramjet asks you to report command status, call `scramjet_command_status`
+When Scramjet asks you to report command status, call `report_scramjet_command_status`
 with <specific instructions for this command's reporting>.
 ```
 

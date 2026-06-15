@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.18.0 — Extend probe router and rename status/input tools
+
+Adds a non-terminating `continuing` status for probe turns that need more work, renames the status and user-input tools to verb-first names, and tightens the probe lifecycle so commands can resume cleanly after structured input (issues #128 and #134).
+
+### Added
+
+- `continuing` status for `report_scramjet_command_status`, allowing a probe turn to transition back to `running` without terminating command work.
+- Consecutive-continue bounding to prevent probe loops from continuing indefinitely.
+- Integration coverage for continue flow, loop bounds, user-input during probe, watchdog behavior, and terminal-status regressions.
+
+### Changed
+
+- Renamed `scramjet_command_status` to `report_scramjet_command_status` and `scramjet_user_input` to `get_scramjet_user_input` across tools, bundled Mach 12 commands, and authoring documentation.
+- Reworked the hidden probe message into a concise router that directs agents to either report status or request structured user input.
+- Fixed phase re-arming and completed-command clearing so multi-turn command replies resume only active commands.
+
 ## 0.17.4 — Add `scramjet_user_input` tool for structured intra-command interactions
 
 New tool that lets agents request confirm/select/freetext input from the user mid-turn without ending the turn. The harness shows TUI widgets, blocks until the user responds, and returns the result as a non-terminating tool result (issue #127).
@@ -10,7 +26,7 @@ New tool that lets agents request confirm/select/freetext input from the user mi
 - Phase gating: tool accepts calls in `running` and `probing` phases only; out-of-phase calls return a helpful non-terminating error.
 - Non-TUI guard: returns error without terminating when no TUI is available.
 - Runtime validation of type-specific required fields (options for select, message non-empty, recommended in range).
-- Probe watchdog suspension: suspends the 30s probe watchdog while awaiting UI during `probing` phase, re-arms after response.
+- Probe watchdog suspension: suspends the 30s probe watchdog while awaiting UI during `probing` phase, then transitions back to `running` after the response so work can continue.
 - Journaling: each interaction appended as `scramjet:user-input` custom entry type.
 - `promptSnippet` on tool definition for system prompt visibility.
 - `tests/user-input.test.ts` — 37 tests covering registration, phase gate, validation, UI interactions, watchdog coordination, and journaling.

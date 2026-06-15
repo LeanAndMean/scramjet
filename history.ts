@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isPhaseEntry, reconstructPhase, transitionPhase } from "./phase-machine.ts";
-import type { CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "./types.ts";
+import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
@@ -42,14 +42,9 @@ export interface EnabledToggleData {
 	enabled: boolean;
 }
 
-// Returns the qualified command name if `text` starts with /<name> and <name>
-// is registered, else null. The first whitespace-delimited token after the
-// slash is the candidate; anything after is treated as args and ignored.
+// Returns the qualified command name if `text` starts with a registered slash command.
 export function parseSlashCommand(text: string, registry: CommandRegistry): string | null {
-	if (!text.startsWith("/")) return null;
-	const rest = text.slice(1);
-	const space = rest.search(/\s/);
-	const name = space === -1 ? rest : rest.slice(0, space);
+	const name = extractSlashName(text);
 	if (!name) return null;
 	return registry.has(name) ? name : null;
 }
@@ -87,6 +82,7 @@ export function recordCommandInvocation(
 		// untouched here is what lets it stay "probing" until the status tool fires.
 		if (!transitionPhase(state, "running")) return;
 		state.latestCommandStatus = null;
+		state.resetConsecutiveContinues?.();
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);
@@ -109,21 +105,17 @@ export function recordCommandStart(
 // "waiting" lifecycle phase (see replayHistory).
 export interface CommandStatusData {
 	commandName: string;
-	status: CommandStatusPayload["status"];
+	status: CommandStatusRestingStatus;
 }
 
-// Journals the agent's scramjet_command_status report. Mirrors
+// Journals the agent's report_scramjet_command_status report. Mirrors
 // recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
 // the live phase is owned by command-status.ts / auto-continue.ts; this only
-// persists the report so resume can rebuild the resting phase. ALL four statuses
-// are journaled, not just waiting_for_user — that is what lets a command which
-// waits, is answered, then completes without offering a next step reconstruct
+// persists the report so resume can rebuild the resting phase. Terminal/resting
+// statuses are journaled, not just waiting_for_user — that is what lets a command
+// which waits, is answered, then completes without offering a next step reconstruct
 // to "idle" instead of resurrecting at "waiting" (the duplicate-work hazard).
-export function recordCommandStatus(
-	pi: ExtensionAPI,
-	commandName: string,
-	status: CommandStatusPayload["status"],
-): void {
+export function recordCommandStatus(pi: ExtensionAPI, commandName: string, status: CommandStatusRestingStatus): void {
 	const data: CommandStatusData = { commandName, status };
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
 }
@@ -165,8 +157,9 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			if (data && typeof data.enabled === "boolean") enabled = data.enabled;
 		}
 	}
-	const phase = reconstructPhase(entries.filter(isPhaseEntry));
-	return { sidebarLog, enabled, activeTopLevelCommand, phase };
+	const reconstructed = reconstructPhase(entries.filter(isPhaseEntry));
+	if (reconstructed.activeCommandCleared) activeTopLevelCommand = null;
+	return { sidebarLog, enabled, activeTopLevelCommand, phase: reconstructed.phase };
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
@@ -183,7 +176,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		// Two-phase command-status protocol on resume/branch-switch. The transient
 		// phases (running/probing/reported) are deliberately not journaled: replaying
 		// a "probing" phase with no live probe turn behind it could mis-dispatch, and
-		// a stale post-resume scramjet_command_status call must hit the tool's phase
+		// a stale post-resume report_scramjet_command_status call must hit the tool's phase
 		// guard rather than firing into a dead chain. The one exception (issue 88) is
 		// the STABLE resumable halt: replayHistory reconstructs "waiting" iff the
 		// active command's last journaled status was waiting_for_user (via
@@ -219,19 +212,23 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("input", async (event) => {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
-			// issue 88: resume a paused interactive command. An interactive,
-			// non-slash reply while the active command rests at "waiting" (it
-			// reported waiting_for_user) re-arms the probe path: flip
-			// waiting→running so this reply runs as a normal turn whose agent_end
-			// fires the existing running→probing probe. Chaining still requires an
-			// explicit completed report, so an off-topic reply can only cause a
-			// harmless re-probe, never a chain. Gated on source === "interactive"
-			// so the hidden status probe (sent via triggerTurn, which bypasses the
-			// input pipeline) and extension-dispatched input can never self-resume.
+			// Resume the active command on an interactive non-slash reply. Two
+			// cases: (1) issue 88 — the command reported waiting_for_user and
+			// rests at "waiting"; the user's answer re-arms the probe path.
+			// (2) issue 128 — the probe self-healed to "idle" but
+			// activeTopLevelCommand is still set; the user's reply is still
+			// engaging with the command. In both cases, flip to "running" so
+			// phase-gated tools (get_scramjet_user_input) work
+			// and agent_end fires the running→probing probe. Chaining still
+			// requires an explicit completed report, so an off-topic reply can
+			// only cause a harmless re-probe, never a chain. Gated on
+			// source === "interactive" so the hidden status probe (sent via
+			// triggerTurn, which bypasses the input pipeline) and
+			// extension-dispatched input can never self-resume.
 			if (
 				event.source === "interactive" &&
 				!event.text.startsWith("/") &&
-				state.commandPhase === "waiting" &&
+				(state.commandPhase === "waiting" || state.commandPhase === "idle") &&
 				state.activeTopLevelCommand !== null
 			) {
 				if (!transitionPhase(state, "running")) return;

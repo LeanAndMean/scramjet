@@ -13,6 +13,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		latestCommandStatus: null,
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
+		resetConsecutiveContinues: undefined,
 		...overrides,
 	};
 }
