@@ -251,10 +251,11 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 	});
 
 	it.each(["blocked", "incomplete"] as const)(
-		"reconstructs idle when a waiting command later reported %s",
+		"clears the active command when a waiting command later reported %s",
 		(status) => {
 			const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStatus("a", status)]);
 			expect(result.phase).toBe("idle");
+			expect(result.activeTopLevelCommand).toBeNull();
 		},
 	);
 

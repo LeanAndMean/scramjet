@@ -40,13 +40,13 @@ export function isPhaseEntry(entry: { type: string; customType?: string; data?: 
 
 export interface ReconstructedPhase {
 	phase: "idle" | "waiting";
-	activeCommandCompleted: boolean;
+	activeCommandCleared: boolean;
 }
 
 export function reconstructPhase(entries: readonly PhaseEntry[]): ReconstructedPhase {
 	let activeTopLevelCommand: string | null = null;
 	let phase: "idle" | "waiting" = "idle";
-	let activeCommandCompleted = false;
+	let activeCommandCleared = false;
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === "scramjet:command-start") {
@@ -55,7 +55,7 @@ export function reconstructPhase(entries: readonly PhaseEntry[]): ReconstructedP
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
 				phase = "idle";
-				activeCommandCompleted = false;
+				activeCommandCleared = false;
 			}
 		} else if (entry.customType === "scramjet:command-status") {
 			const data = entry.data as { commandName?: unknown; status?: unknown } | undefined;
@@ -63,8 +63,8 @@ export function reconstructPhase(entries: readonly PhaseEntry[]): ReconstructedP
 			if (data.commandName !== activeTopLevelCommand) continue;
 			if (typeof data.status !== "string" || !VALID_STATUSES.has(data.status)) continue;
 			phase = data.status === "waiting_for_user" ? "waiting" : "idle";
-			activeCommandCompleted = data.status === "completed";
+			activeCommandCleared = data.status !== "waiting_for_user";
 		}
 	}
-	return { phase, activeCommandCompleted };
+	return { phase, activeCommandCleared };
 }

@@ -138,7 +138,7 @@ describe("reconstructPhase", () => {
 			entry("scramjet:command-status", { commandName: "a", status: "waiting_for_user" }),
 		]);
 		expect(result.phase).toBe("waiting");
-		expect(result.activeCommandCompleted).toBe(false);
+		expect(result.activeCommandCleared).toBe(false);
 	});
 
 	it("returns idle for start + completed status", () => {
@@ -147,7 +147,7 @@ describe("reconstructPhase", () => {
 			entry("scramjet:command-status", { commandName: "a", status: "completed" }),
 		]);
 		expect(result.phase).toBe("idle");
-		expect(result.activeCommandCompleted).toBe(true);
+		expect(result.activeCommandCleared).toBe(true);
 	});
 
 	it("last-status-wins", () => {
@@ -157,17 +157,26 @@ describe("reconstructPhase", () => {
 			entry("scramjet:command-status", { commandName: "a", status: "completed" }),
 		]);
 		expect(result.phase).toBe("idle");
-		expect(result.activeCommandCompleted).toBe(true);
+		expect(result.activeCommandCleared).toBe(true);
 	});
 
-	it("new command start resets phase to idle and clears activeCommandCompleted", () => {
+	it.each(["blocked", "incomplete"] as const)("clears the active command for terminal %s status", (status) => {
+		const result = reconstructPhase([
+			entry("scramjet:command-start", { command: "a", depth: 0 }),
+			entry("scramjet:command-status", { commandName: "a", status }),
+		]);
+		expect(result.phase).toBe("idle");
+		expect(result.activeCommandCleared).toBe(true);
+	});
+
+	it("new command start resets phase to idle and clears activeCommandCleared", () => {
 		const result = reconstructPhase([
 			entry("scramjet:command-start", { command: "a", depth: 0 }),
 			entry("scramjet:command-status", { commandName: "a", status: "completed" }),
 			entry("scramjet:command-start", { command: "b", depth: 0 }),
 		]);
 		expect(result.phase).toBe("idle");
-		expect(result.activeCommandCompleted).toBe(false);
+		expect(result.activeCommandCleared).toBe(false);
 	});
 
 	it("ignores status entries for non-active command", () => {

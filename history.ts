@@ -120,11 +120,7 @@ export interface CommandStatusData {
 // statuses are journaled, not just waiting_for_user — that is what lets a command
 // which waits, is answered, then completes without offering a next step reconstruct
 // to "idle" instead of resurrecting at "waiting" (the duplicate-work hazard).
-export function recordCommandStatus(
-	pi: ExtensionAPI,
-	commandName: string,
-	status: CommandStatusRestingStatus,
-): void {
+export function recordCommandStatus(pi: ExtensionAPI, commandName: string, status: CommandStatusRestingStatus): void {
 	const data: CommandStatusData = { commandName, status };
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
 }
@@ -167,7 +163,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 		}
 	}
 	const reconstructed = reconstructPhase(entries.filter(isPhaseEntry));
-	if (reconstructed.activeCommandCompleted) activeTopLevelCommand = null;
+	if (reconstructed.activeCommandCleared) activeTopLevelCommand = null;
 	return { sidebarLog, enabled, activeTopLevelCommand, phase: reconstructed.phase };
 }
 
