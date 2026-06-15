@@ -2,6 +2,14 @@
 
 A high-velocity harness for agentic development. Built on [Pi](https://github.com/earendil-works/pi-mono).
 
+## Status
+
+Scramjet is in active early development. The harness works and is used daily, but:
+
+- The command-set format is not yet stable for third-party authoring
+- Breaking changes may land between minor versions
+- The bundled Mach 12 commands evolve alongside the harness
+
 ## Background
 
 Scramjet grew out of [Mach 10](https://github.com/LeanAndMean/mach10), a development methodology for agentic coding. Mach 10 addresses the core challenge of scaling AI-assisted development to larger codebases: managing finite context windows, ensuring due diligence through structured review cycles, and using GitHub as persistent memory so multiple developers (and agents) can collaborate across sessions. It works — but the user experience of running a 10–15 step workflow in a CLI harness was friction-heavy: copy the suggested next command, clear the session, paste, wait, repeat.
