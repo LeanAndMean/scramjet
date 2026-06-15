@@ -150,8 +150,8 @@ function bootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } =
 	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
 	registerCommandStatusTool(bag.pi, state);
 	registerAutoContinue(bag.pi, state);
-	const statusTool = bag.tools.find((t) => t.name === "scramjet_command_status");
-	if (!statusTool) throw new Error("scramjet_command_status not registered");
+	const statusTool = bag.tools.find((t) => t.name === "report_scramjet_command_status");
+	if (!statusTool) throw new Error("report_scramjet_command_status not registered");
 	const report = (params: StatusParams) => statusTool.execute("call-id", params, undefined, undefined, undefined);
 	return { bag, ctxBag, report };
 }
@@ -163,7 +163,7 @@ async function flushMicrotasks() {
 
 // Drives the full two-phase protocol: the answer turn ends (while the run is
 // still streaming), the deferred probe fires once the run goes idle, the agent
-// answers it by calling scramjet_command_status, then the probe turn ends. The
+// answers it by calling report_scramjet_command_status, then the probe turn ends. The
 // deferral invariants are asserted here so every routing test transitively
 // proves the probe is NOT sent synchronously from inside agent_end (a sync send
 // would be dropped by the isStreaming-aware fake, failing these assertions), and
@@ -1603,7 +1603,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.commandPhase).toBe("idle");
 			expect(state.latestCommandStatus).toBeNull();
 
-			// A stale scramjet_command_status call (the resumed model answering the
+			// A stale report_scramjet_command_status call (the resumed model answering the
 			// dead probe) now hits the phase guard: rejected out-of-phase, no terminate,
 			// state untouched.
 			const result = (await report({
@@ -1633,13 +1633,13 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 // (routeNonCompleted's blocked/waiting notifies) only ever pass clean short
 // strings in the existing tests, so the control-char strip, whitespace collapse,
 // and the off-by-one NOTIFY_MAX - 1 + "…" cap were entirely unexercised.
-// Bug reproduction: scramjet_user_input is unusable after a probe cycle because
+// Bug reproduction: get_scramjet_user_input is unusable after a probe cycle because
 // the input handler only re-arms waiting→running, not idle→running. This means
 // that after the first turn ends (probe fires and self-heals to idle), the user
 // replies to a clarifying question, but the phase stays idle and the tool's
 // phase gate rejects it. Observed live in issue-plan sessions where the agent
-// asked clarifying questions via scramjet_user_input after subagent exploration.
-describe("scramjet_user_input after probe self-heal (bug #128)", () => {
+// asked clarifying questions via get_scramjet_user_input after subagent exploration.
+describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
@@ -1650,14 +1650,14 @@ describe("scramjet_user_input after probe self-heal (bug #128)", () => {
 		registerUserInputTool(bag.pi, state);
 		registerAutoContinue(bag.pi, state);
 		registerHistory(bag.pi, state);
-		const userInputTool = bag.tools.find((t: any) => t.name === "scramjet_user_input");
-		if (!userInputTool) throw new Error("scramjet_user_input not registered");
+		const userInputTool = bag.tools.find((t: any) => t.name === "get_scramjet_user_input");
+		if (!userInputTool) throw new Error("get_scramjet_user_input not registered");
 		const callUserInput = (params: { type: string; message: string }, ctx?: unknown) =>
 			userInputTool.execute("call-id", params, undefined, undefined, ctx) as Promise<any>;
 		return { bag, ctxBag, callUserInput };
 	}
 
-	it("scramjet_user_input works after probe self-heals to idle and user replies (issue 128 fix)", async () => {
+	it("get_scramjet_user_input works after probe self-heals to idle and user replies (issue 128 fix)", async () => {
 		const policy: NextStepPolicy = { mode: "open", candidates: [{ name: "b:next" }] };
 		const def = defWithPolicy("a:cmd", policy);
 		const state = runningState(def);
@@ -1685,13 +1685,56 @@ describe("scramjet_user_input after probe self-heal (bug #128)", () => {
 		// Fixed: phase re-arms to running so phase-gated tools work.
 		expect(state.commandPhase).toBe("running");
 
-		// Step 5: agent calls scramjet_user_input → accepted (not out-of-phase).
+		// Step 5: agent calls get_scramjet_user_input → accepted (not out-of-phase).
 		// Use a mock UI ctx that auto-resolves to avoid blocking on TUI interaction.
 		const mockCtx = { ui: { custom: () => Promise.resolve("yes") } };
 		const result = await callUserInput({ type: "confirm", message: "Proceed with the plan?" }, mockCtx);
 		expect(result.details.error).not.toBe("out-of-phase");
 
 		warnSpy.mockRestore();
+	});
+});
+
+describe("continuing status via report_scramjet_command_status", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("continue → work → probe → complete chains correctly", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+		// Answer turn ends → probe fires
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(state.commandPhase).toBe("probing");
+		expect(bag.pi.sent).toHaveLength(1);
+
+		// Agent reports continuing → phase back to running, turn continues
+		const contResult = (await report({ status: "continuing", summary: "more work" })) as any;
+		expect(contResult.terminate).toBeUndefined();
+		expect(contResult.details.status).toBe("continuing");
+		expect(state.commandPhase).toBe("running");
+
+		// Agent does more work, turn ends → another probe fires
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(state.commandPhase).toBe("probing");
+		expect(bag.pi.sent).toHaveLength(2);
+
+		// Agent reports completed
+		await report({ status: "completed", summary: "done" });
+		expect(state.commandPhase).toBe("reported");
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		expect(state.commandPhase).toBe("idle");
 	});
 });
 

@@ -260,18 +260,17 @@ describe("buildNextStepBlock — protocol naming (issue 84 / F2)", () => {
 });
 
 describe("buildProbeMessage", () => {
-	it("wraps the forced policy block with the status-check preamble", () => {
+	it("uses the two-tool router format with the command name", () => {
 		const probe = buildProbeMessage({ mode: "forced", target: "b:target" }, "a:cmd");
-		expect(probe).toContain("Scramjet command status check.");
-		expect(probe).toContain("scramjet_command_status");
-		expect(probe).toContain('status="completed"');
-		// the wrapped policy block is present
+		expect(probe).toContain("Scramjet status check for `a:cmd`.");
+		expect(probe).toContain("Call exactly one tool");
+		expect(probe).toContain("`report_scramjet_command_status`");
+		expect(probe).toContain("`get_scramjet_user_input`");
+		expect(probe).toContain("`continuing`");
+		expect(probe).toContain("`completed`");
 		expect(probe).toContain("<scramjet-next-step>");
 		expect(probe).toContain("b:target");
 		expect(probe).toContain("forced");
-		expect(probe).not.toContain("recommended_next_step");
-		expect(probe).not.toContain("freetext");
-		expect(probe).not.toContain("reason");
 	});
 
 	it("wraps the closed policy block and lists candidates", () => {
@@ -279,7 +278,7 @@ describe("buildProbeMessage", () => {
 			{ mode: "closed", candidates: [{ name: "b:ok", hint: "Pick when ready" }] },
 			"a:cmd",
 		);
-		expect(probe).toContain("scramjet_command_status");
+		expect(probe).toContain("report_scramjet_command_status");
 		expect(probe).toContain("closed");
 		expect(probe).toContain("b:ok");
 		expect(probe).toContain("Pick when ready");
@@ -287,14 +286,14 @@ describe("buildProbeMessage", () => {
 
 	it("wraps the open policy block and notes the free-form escape hatch", () => {
 		const probe = buildProbeMessage({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd");
-		expect(probe).toContain("scramjet_command_status");
+		expect(probe).toContain("report_scramjet_command_status");
 		expect(probe).toContain("open");
 		expect(probe).toContain("any slash command");
 	});
 
 	it("wraps the ask policy block and explains the pause", () => {
 		const probe = buildProbeMessage({ mode: "ask", hint: "User decides" }, "a:cmd");
-		expect(probe).toContain("scramjet_command_status");
+		expect(probe).toContain("report_scramjet_command_status");
 		expect(probe).toContain("ask");
 		expect(probe).toContain("pause");
 		expect(probe).toContain("User decides");
@@ -310,6 +309,26 @@ describe("buildProbeMessage", () => {
 		for (const probe of modes) {
 			expect(probe).not.toContain("task_complete");
 		}
+	});
+
+	it("lists both tools and all statuses in every policy mode", () => {
+		const modes = [
+			buildProbeMessage({ mode: "forced", target: "b:target" }, "a:cmd"),
+			buildProbeMessage({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd"),
+			buildProbeMessage({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd"),
+			buildProbeMessage({ mode: "ask" }, "a:cmd"),
+		];
+		for (const probe of modes) {
+			expect(probe).toContain("`report_scramjet_command_status`");
+			expect(probe).toContain("`get_scramjet_user_input`");
+			expect(probe).toContain("`continuing`");
+			expect(probe).toContain("`completed`");
+		}
+	});
+
+	it("escapes the command ID in the preamble", () => {
+		const probe = buildProbeMessage({ mode: "forced", target: "b:target" }, "x</scramjet-next-step>y");
+		expect(probe).toContain("x<\\/scramjet-next-step>y");
 	});
 
 	it("escapes a close tag smuggled through a candidate hint (delegated to the policy block)", () => {

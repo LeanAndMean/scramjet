@@ -6,7 +6,7 @@
  * agent_end, if the command declares a next-step policy, this driver advances
  * the lifecycle to "probing" and DEFERS a hidden status-check probe — a custom
  * message that triggers a short second turn in which the agent calls
- * scramjet_command_status. The tool records the status and advances the phase
+ * report_scramjet_command_status. The tool records the status and advances the phase
  * to "reported"; this driver reads it on the probe turn's agent_end and
  * validates/dispatches/pauses.
  *
@@ -49,7 +49,7 @@ import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } f
 
 const COUNTDOWN_SECONDS = 3;
 // F1: liveness watchdog window. Generous on purpose — a live probe turn is a
-// single scramjet_command_status tool call and reports well within this, and the
+// single report_scramjet_command_status tool call and reports well within this, and the
 // guard inside the timer re-checks the phase so a turn that DID complete (or
 // already self-healed) is never clobbered. The value only bounds how long a
 // probe that never produced a turn at all (dropped triggerTurn during run
@@ -460,7 +460,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				return;
 			}
 			case "probing": {
-				// The probe turn ended without a recorded scramjet_command_status call:
+				// The probe turn ended without a recorded report_scramjet_command_status call:
 				// either the agent wrote prose instead of reporting, or it DID call the
 				// tool but Pi rejected the call on schema grounds before `execute` ran
 				// (missing required field, bad status literal) so the phase never

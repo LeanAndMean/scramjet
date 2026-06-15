@@ -157,7 +157,7 @@ After implementation is complete, commit, push, and post a progress comment on t
 
 Pass the stage identifier and a brief summary of what shipped as `$ARGUMENTS` so the commit message and progress comment can speak specifically to the work.
 
-When Scramjet asks you to report command status, call `scramjet_command_status` with `status: "completed"` and choose selector-visible `next_steps` entries using this order:
+When Scramjet asks you to report command status, call `report_report_scramjet_command_status` with `status: "completed"` and choose selector-visible `next_steps` entries using this order:
 
 1. **Continue staged implementation first.** If this session landed Stage N and the plan lists Stage N+1, include an entry with `message`: `/mach12:issue-implement <issue-number> <next-stage>`, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned stage remains.
    - Example: `message`: `/mach12:issue-implement 55 2`, `reason`: `Stage 2 is the next planned implementation stage.`

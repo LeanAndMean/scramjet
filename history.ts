@@ -112,7 +112,7 @@ export interface CommandStatusData {
 	status: CommandStatusPayload["status"];
 }
 
-// Journals the agent's scramjet_command_status report. Mirrors
+// Journals the agent's report_scramjet_command_status report. Mirrors
 // recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
 // the live phase is owned by command-status.ts / auto-continue.ts; this only
 // persists the report so resume can rebuild the resting phase. ALL four statuses
@@ -184,7 +184,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		// Two-phase command-status protocol on resume/branch-switch. The transient
 		// phases (running/probing/reported) are deliberately not journaled: replaying
 		// a "probing" phase with no live probe turn behind it could mis-dispatch, and
-		// a stale post-resume scramjet_command_status call must hit the tool's phase
+		// a stale post-resume report_scramjet_command_status call must hit the tool's phase
 		// guard rather than firing into a dead chain. The one exception (issue 88) is
 		// the STABLE resumable halt: replayHistory reconstructs "waiting" iff the
 		// active command's last journaled status was waiting_for_user (via
@@ -226,7 +226,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// (2) issue 128 — the probe self-healed to "idle" (or reported
 			// incomplete/blocked) but activeTopLevelCommand is still set; the
 			// user's reply is still engaging with the command. In both cases,
-			// flip to "running" so phase-gated tools (scramjet_user_input) work
+			// flip to "running" so phase-gated tools (get_scramjet_user_input) work
 			// and agent_end fires the running→probing probe. Chaining still
 			// requires an explicit completed report, so an off-topic reply can
 			// only cause a harmless re-probe, never a chain. Gated on

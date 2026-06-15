@@ -13,23 +13,23 @@ type StatusParams = {
 };
 
 function toolFor(state = freshState()) {
-	const { pi, tools, handlers } = recordingPi();
+	const { pi, tools, handlers, emit } = recordingPi();
 	registerCommandStatusTool(pi, state);
-	const tool = tools.find((t) => t.name === "scramjet_command_status");
-	if (!tool) throw new Error("scramjet_command_status tool not registered");
+	const tool = tools.find((t) => t.name === "report_scramjet_command_status");
+	if (!tool) throw new Error("report_scramjet_command_status tool not registered");
 	const execute = (params: StatusParams) =>
 		tool.execute("call-id", params, undefined, undefined, undefined) as Promise<any>;
-	return { state, pi, tools, handlers, tool, execute };
+	return { state, pi, tools, handlers, emit, tool, execute };
 }
 
 describe("registerCommandStatusTool — registration", () => {
-	it("registers exactly the scramjet_command_status tool", () => {
+	it("registers exactly the report_scramjet_command_status tool", () => {
 		const { tools } = toolFor();
 		expect(tools).toHaveLength(1);
-		expect(tools[0].name).toBe("scramjet_command_status");
+		expect(tools[0].name).toBe("report_scramjet_command_status");
 	});
 
-	it("registers no before_agent_start handler (the answer turn injects nothing about completion)", () => {
+	it("registers no event handlers (counter resets on terminal status, not per-turn)", () => {
 		const { handlers } = toolFor();
 		expect(handlers.get("before_agent_start")).toBeUndefined();
 	});
@@ -202,6 +202,63 @@ describe("registerCommandStatusTool — phase gate", () => {
 
 		expect(result.terminate).toBe(true);
 		expect(String(result.content[0].text)).toBe("status: waiting_for_user");
+	});
+});
+
+describe("registerCommandStatusTool — continuing status", () => {
+	it("transitions probing → running and does not terminate", async () => {
+		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const result = await execute({ status: "continuing", summary: "more work to do" });
+
+		expect(result.terminate).toBeUndefined();
+		expect(result.details.status).toBe("continuing");
+		expect(state.commandPhase).toBe("running");
+		expect(state.latestCommandStatus).toBeNull();
+	});
+
+	it("does not journal the continuing status", async () => {
+		const { pi, execute } = toolFor(freshState({ commandPhase: "probing", activeTopLevelCommand: "a:cmd" }));
+		await execute({ status: "continuing", summary: "still working" });
+		expect(pi.appended).toHaveLength(0);
+	});
+
+	it("allows up to 3 consecutive continues then returns limit error", async () => {
+		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+
+		for (let i = 0; i < 3; i++) {
+			state.commandPhase = "probing";
+			const result = await execute({ status: "continuing", summary: "working" });
+			expect(result.details.status).toBe("continuing");
+		}
+
+		state.commandPhase = "probing";
+		const limited = await execute({ status: "continuing", summary: "still going" });
+		expect(limited.details.error).toBe("continue-limit");
+		expect(limited.content[0].text).toContain("completed");
+		expect(limited.terminate).toBeUndefined();
+		expect(state.commandPhase).toBe("probing");
+	});
+
+	it("resets the counter when a terminal status is reported", async () => {
+		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+
+		for (let i = 0; i < 3; i++) {
+			state.commandPhase = "probing";
+			await execute({ status: "continuing", summary: "working" });
+		}
+		state.commandPhase = "probing";
+		const limited = await execute({ status: "continuing", summary: "too many" });
+		expect(limited.details.error).toBe("continue-limit");
+
+		// A terminal status resets the counter
+		state.commandPhase = "probing";
+		await execute({ status: "completed", summary: "done" });
+
+		// Counter is fresh again for the next command
+		state.commandPhase = "probing";
+		const fresh = await execute({ status: "continuing", summary: "fresh start" });
+		expect(fresh.details.status).toBe("continuing");
+		expect(state.commandPhase).toBe("running");
 	});
 });
 

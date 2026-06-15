@@ -13,8 +13,8 @@ type UserInputParams = {
 function toolFor(state = freshState()) {
 	const { pi, tools, handlers } = recordingPi();
 	registerUserInputTool(pi, state);
-	const tool = tools.find((t: any) => t.name === "scramjet_user_input");
-	if (!tool) throw new Error("scramjet_user_input tool not registered");
+	const tool = tools.find((t: any) => t.name === "get_scramjet_user_input");
+	if (!tool) throw new Error("get_scramjet_user_input tool not registered");
 	const execute = (params: UserInputParams, ctx?: unknown) =>
 		tool.execute("call-id", params, undefined, undefined, ctx) as Promise<any>;
 	return { state, pi, tools, handlers, tool, execute };
@@ -52,16 +52,16 @@ function mockUICtxWithFactory() {
 }
 
 describe("registerUserInputTool — registration", () => {
-	it("registers exactly the scramjet_user_input tool", () => {
+	it("registers exactly the get_scramjet_user_input tool", () => {
 		const { tools } = toolFor();
 		expect(tools).toHaveLength(1);
-		expect(tools[0].name).toBe("scramjet_user_input");
+		expect(tools[0].name).toBe("get_scramjet_user_input");
 	});
 
 	it("has a promptSnippet for system prompt visibility", () => {
 		const { tool } = toolFor();
 		expect(tool.promptSnippet).toBeDefined();
-		expect(tool.promptSnippet).toContain("scramjet_user_input");
+		expect(tool.promptSnippet).toContain("get_scramjet_user_input");
 	});
 
 	it("has the expected schema shape with type enum and flat optional fields", () => {
@@ -411,7 +411,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(suspended).toEqual([]);
 	});
 
-	it("does not terminate so scramjet_command_status can still report", async () => {
+	it("does not terminate so report_scramjet_command_status can still report", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "probing" }));
 		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);

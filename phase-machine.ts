@@ -32,6 +32,7 @@ const VALID_STATUSES: ReadonlySet<string> = new Set<CommandStatusPayload["status
 	"waiting_for_user",
 	"blocked",
 	"incomplete",
+	"continuing",
 ]);
 
 export function isPhaseEntry(entry: { type: string; customType?: string; data?: unknown }): entry is PhaseEntry {

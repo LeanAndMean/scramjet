@@ -1,15 +1,22 @@
 /**
- * scramjet_command_status tool: the agent's structured report at the end of an
- * active Scramjet command, supplied in a *separate* turn from the command's
- * user-facing answer (issue 84, two-phase protocol).
+ * report_scramjet_command_status tool: the agent's structured report at the
+ * end of an active Scramjet command, supplied in a *separate* turn from the
+ * command's user-facing answer (issue 84, two-phase protocol).
  *
  * The command's normal answer turn injects nothing about completion. After that
  * turn goes idle, auto-continue.ts defers a hidden status-check probe (see
  * buildProbeMessage); the agent answers it by calling this tool. execute() is
- * phase-gated — it only accepts the report while commandPhase === "probing",
- * stores it on ScramjetState, advances the phase to "reported", and terminates
- * the short probe turn. auto-continue.ts reads the stored status on the probe
- * turn's agent_end and validates/dispatches/pauses.
+ * phase-gated — it only accepts the report while commandPhase === "probing".
+ *
+ * Five statuses, two execution paths:
+ * - "continuing": non-terminating. The agent has more work to do; the tool
+ *   transitions probing → running and returns without terminate so the agent
+ *   keeps working in the same turn. A local counter bounds consecutive
+ *   continues (MAX_CONSECUTIVE_CONTINUES) to prevent infinite loops.
+ * - "completed" / "waiting_for_user" / "blocked" / "incomplete": terminating.
+ *   The tool stores the report on ScramjetState, advances the phase to
+ *   "reported", and returns terminate: true. auto-continue.ts reads the stored
+ *   status on the probe turn's agent_end and validates/dispatches/pauses.
  *
  * This replaces the old generic `task_complete` tool, whose same-turn,
  * summary-bearing shape invited the model to pour its answer into the tool
@@ -40,15 +47,18 @@ interface CommandStatusDetails {
 
 // customType for the hidden status-check probe message. display:false keeps it
 // out of the TUI; it still persists in the journal and reaches the model as a
-// user-role message that asks for exactly one scramjet_command_status call.
+// user-role message that asks for exactly one report_scramjet_command_status call.
 export const COMMAND_STATUS_PROBE_TYPE = "scramjet-command-status";
 
-// Error text returned (without terminate) when the tool is called outside the
-// probe phase. Phrased to teach the model the harness-enforced contract: the
-// tool is only valid in direct response to the injected status-check message.
+const MAX_CONSECUTIVE_CONTINUES = 3;
+
 const OUT_OF_PHASE_ERROR =
-	"scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
+	"report_scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
 	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
+
+const CONTINUE_LIMIT_ERROR =
+	`You have reported "continuing" ${MAX_CONSECUTIVE_CONTINUES} times without completing the command. ` +
+	"Report your actual status: completed, blocked, waiting_for_user, or incomplete.";
 
 // F6: single source of truth for the next-step wire shape. The TypeBox schema
 // below and the CommandStatusNextStep TS interface (types.ts) are two
@@ -81,14 +91,21 @@ const _interfaceMatchesWire = (step: CommandStatusNextStep): WireNextStep => ste
 // F3: single source of truth for the status enum, mirroring the next_steps
 // congruence guards above. The TypeBox union below and the
 // CommandStatusPayload["status"] TS union (types.ts) are two declarations of the
-// same four literals; the assignability pair underneath fails the build if
+// same five literals; the assignability pair underneath fails the build if
 // either side adds, drops, or renames a status (e.g. adding "cancelled" to one
 // side only), closing the last drift hole the rest of this file already guards.
 const STATUS_SCHEMA = Type.Union(
-	[Type.Literal("completed"), Type.Literal("waiting_for_user"), Type.Literal("blocked"), Type.Literal("incomplete")],
+	[
+		Type.Literal("completed"),
+		Type.Literal("waiting_for_user"),
+		Type.Literal("blocked"),
+		Type.Literal("incomplete"),
+		Type.Literal("continuing"),
+	],
 	{
 		description:
 			"completed = the command's work is done and your final user-facing answer was already delivered; " +
+			"continuing = you have more work to do right now (not blocked, not waiting for input, not finished); " +
 			"waiting_for_user = you asked the user a question or need input before continuing; " +
 			"blocked = the command cannot proceed (error, missing dependency, authorization); " +
 			"incomplete = none of the above (stopped without a clean completion/question/blocker).",
@@ -100,9 +117,14 @@ const _statusWireMatchesInterface = (status: WireStatus): CommandStatusPayload["
 const _statusInterfaceMatchesWire = (status: CommandStatusPayload["status"]): WireStatus => status;
 
 export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
+	// Accumulates across probe cycles (each probe is a new turn, so a
+	// before_agent_start reset would clear the counter every cycle and make
+	// the limit unreachable). Reset only on the terminating path below.
+	let consecutiveContinues = 0;
+
 	pi.registerTool({
-		name: "scramjet_command_status",
-		label: "Scramjet Command Status",
+		name: "report_scramjet_command_status",
+		label: "Report Scramjet Command Status",
 		description:
 			"Report the status of an active Scramjet slash command after Scramjet explicitly asks for a status check. " +
 			"Do not call this tool for ordinary user tasks. Do not call it unless the latest message asks you to call it.",
@@ -137,12 +159,8 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			// that window, return a helpful error WITHOUT terminate so the model's
 			// real turn is not cut short.
 			if (state.commandPhase !== "probing") {
-				// S3: parity with the sibling advisors (tool-scope-advisory.ts,
-				// subagent-output-advisor.ts) which console.warn on their conditions.
-				// The model-facing error below is unchanged; this only makes a
-				// repeatedly-misbehaving command set visible in the logs.
 				console.warn(
-					`scramjet: scramjet_command_status called out of phase (phase=${state.commandPhase}); report ignored`,
+					`scramjet: report_scramjet_command_status called out of phase (phase=${state.commandPhase}); report ignored`,
 				);
 				const details: CommandStatusDetails = { error: "out-of-phase", phase: state.commandPhase };
 				return {
@@ -150,6 +168,29 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 					details,
 				};
 			}
+
+			// Non-terminating path: the agent has more work to do.
+			if (params.status === "continuing") {
+				consecutiveContinues++;
+				if (consecutiveContinues > MAX_CONSECUTIVE_CONTINUES) {
+					const details: CommandStatusDetails = { error: "continue-limit", phase: state.commandPhase };
+					return {
+						content: [{ type: "text", text: CONTINUE_LIMIT_ERROR }],
+						details,
+					};
+				}
+				state.suspendProbeWatchdog?.();
+				transitionPhase(state, "running");
+				state.rearmProbeWatchdog?.();
+				const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
+				return {
+					content: [{ type: "text", text: "Continuing. Proceed with your work." }],
+					details,
+				};
+			}
+
+			// Terminating path: reset the continue counter.
+			consecutiveContinues = 0;
 
 			const payload: CommandStatusPayload = {
 				status: params.status,

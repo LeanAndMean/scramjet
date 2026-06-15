@@ -17,7 +17,7 @@ export interface NextStep {
 //   idle     — no active command, or the chain has been resolved
 //   running  — the command's normal answer turn is in flight
 //   probing  — the answer turn ended; Scramjet has asked for a status check
-//   reported — the agent answered the probe via scramjet_command_status
+//   reported — the agent answered the probe via report_scramjet_command_status
 //   waiting  — the probe reported waiting_for_user; the command is paused for
 //              input but stays associated with its invocation. A later
 //              interactive reply re-arms the running→probing probe path so an
@@ -43,11 +43,11 @@ export interface CommandStatusNextStep {
 	reason?: string;
 }
 
-// Structured result the agent supplies through scramjet_command_status in
+// Structured result the agent supplies through report_scramjet_command_status in
 // response to the post-response status probe. `recommended_next_step` is a
 // zero-based index into the original `next_steps` array.
 export interface CommandStatusPayload {
-	status: "completed" | "waiting_for_user" | "blocked" | "incomplete";
+	status: "completed" | "waiting_for_user" | "blocked" | "incomplete" | "continuing";
 	summary: string;
 	user_prompt?: string;
 	next_steps?: CommandStatusNextStep[];
@@ -111,7 +111,7 @@ export interface ScramjetState {
 	// Two-phase command-status protocol (issue 84). commandPhase tracks the
 	// lifecycle of the active top-level command so the probe fires exactly
 	// once per invocation; latestCommandStatus holds the agent's most recent
-	// scramjet_command_status report, read by auto-continue on the probe turn's
+	// report_scramjet_command_status report, read by auto-continue on the probe turn's
 	// agent_end. Reset to "idle"/null on command start and on resume/rebuild.
 	commandPhase: CommandPhase;
 	latestCommandStatus: CommandStatusPayload | null;

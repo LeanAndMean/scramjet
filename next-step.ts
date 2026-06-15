@@ -2,7 +2,7 @@
  * Renders the <scramjet-next-step> policy block and the post-response status
  * probe (issue 84). `buildNextStepBlock` describes the active command's `next:`
  * policy to the agent — which candidates are valid for the `next_steps[]`
- * payload of `scramjet_command_status`. `buildProbeMessage` wraps that block
+ * payload of `report_scramjet_command_status`. `buildProbeMessage` wraps that block
  * with the hardcoded status-check preamble that asks the agent to report
  * command status. Pure functions: one branch per policy mode. The close-tag
  * escape is case-insensitive (S4) so an attacker-controlled hint cannot
@@ -89,23 +89,22 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, sc
 	return `<scramjet-next-step>\n${body}\n</scramjet-next-step>`;
 }
 
-// Hardcoded preamble for the post-response status probe (issue 84). Stable
-// structure; the only variable part is the policy block appended below. No
-// user-controlled text is interpolated into the preamble, so it needs no
-// escaping — buildNextStepBlock owns escaping for the policy portion, including
-// the close tag. The probe asks the agent to call scramjet_command_status (and
-// nothing else) in a separate turn after its normal user-facing answer.
+// Post-response probe message (issue 84, issue 128). A concise two-tool
+// router: the agent picks exactly one tool based on its current state. No
+// user-controlled text is interpolated into the preamble; buildNextStepBlock
+// owns escaping for the policy portion. The probe fires in a separate turn
+// after the command's normal user-facing answer.
 export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scramjetEnabled = true): string {
+	const id = safe(commandId);
 	const preamble =
-		"Scramjet command status check.\n\n" +
-		"You just finished responding for an active Scramjet slash command. " +
-		"Report whether the command is complete by calling `scramjet_command_status`.\n\n" +
-		"Do not write a prose answer. Call exactly one tool.\n\n" +
-		"Use:\n" +
-		'- status="completed" only if the command\'s requested work is done and your final user-facing response has already been delivered.\n' +
-		'- status="waiting_for_user" if your previous response asked the user a question or requires user input before work can continue.\n' +
-		'- status="blocked" if the command cannot proceed (error, missing dependency, authorization issue).\n' +
-		'- status="incomplete" if none of the above apply.\n\n' +
-		"For completed commands, follow the next-step policy block exactly.";
+		`Scramjet status check for \`${id}\`.\n\n` +
+		"Call exactly one tool \u2014 do not write prose.\n\n" +
+		"`report_scramjet_command_status` \u2014 report your status:\n" +
+		"- `continuing` \u2014 you have more work to do (not blocked, not waiting for input, not finished)\n" +
+		"- `completed` \u2014 the command's work is done and your answer was already delivered\n" +
+		"- `waiting_for_user` \u2014 you need user input before continuing\n" +
+		"- `blocked` \u2014 cannot proceed (error, missing dependency, authorization)\n" +
+		"- `incomplete` \u2014 stopped without clean completion\n\n" +
+		"`get_scramjet_user_input` \u2014 if you need structured input (confirm/select/freetext) before continuing";
 	return `${preamble}\n\n${buildNextStepBlock(policy, commandId, scramjetEnabled)}`;
 }

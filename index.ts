@@ -10,7 +10,7 @@
  * Pi extension entry point. Distributed as an npm package
  * (@leanandmean/scramjet); bin/scramjet.js imports the default export
  * below and hands it to Pi via main()'s extensionFactories option. The
- * function registers the tools the harness owns (scramjet_command_status,
+ * function registers the tools the harness owns (report_scramjet_command_status,
  * delegate, and draw_diagram when a renderer is available), the
  * agent_end listener (drives the countdown widget
  * and next-step dispatch), command-set discovery, history journaling,
