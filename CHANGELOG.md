@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.3 — Restructure README for public npm audience
+
+Rewrite README for external npm users: new framing, status notice, background section, motivation discovery arc, and removal of internal implementation details.
+
+### Changed
+
+- `README.md` — restructured for public npm audience; removed implementation internals, contributing/dev-setup section, and command authoring format details; added alpha status notice and background section connecting to Mach 10 origin.
+
 ## 0.17.2 — Vision doc: add §3 intra-command interactions
 
 Add intra-command user interaction design to `docs/scramjet-vision.md` — the `scramjet_user_input` tool, the probe-as-router extension, the "continue" nudge, phase machine implications, auto-answer semantics, and the `/scramjet on` scope clarification (issue #126).
