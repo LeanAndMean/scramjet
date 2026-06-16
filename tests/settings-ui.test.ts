@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { buildCommandItems, buildEdgeItems, buildTopLevelItems } from "../settings-ui.ts";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { Component } from "@earendil-works/pi-tui";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../autonomy-settings.ts";
+import { buildCommandItems, buildEdgeItems, buildTopLevelItems, showSettingsPage } from "../settings-ui.ts";
 import type { AutonomyConfig, CommandDef, NextStepPolicy } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
@@ -11,8 +16,29 @@ const noopTheme = {
 	hint: (text: string) => text,
 };
 
+const tuiTheme = {
+	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
+let tmpDir: string | null = null;
+
+beforeEach(() => {
+	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-settings-ui-"));
+});
+
+afterEach(() => {
+	resetCache();
+	if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+	tmpDir = null;
+});
+
 function makeCommandDef(name: string, next?: NextStepPolicy): CommandDef {
 	return { name, filePath: `/fake/${name}.md`, body: "", description: `${name} desc`, next };
+}
+
+function renderText(component: Component | undefined): string {
+	return component?.render(120).join("\n") ?? "";
 }
 
 describe("buildEdgeItems", () => {
@@ -106,7 +132,12 @@ describe("buildCommandItems", () => {
 			["mach12:no-next", makeCommandDef("mach12:no-next")],
 		]);
 
-		const items = buildCommandItems(state, null, noopTheme, () => {});
+		const items = buildCommandItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 
 		expect(items).toHaveLength(2);
 		expect(items[0].label).toBe("mach12:a-first");
@@ -119,7 +150,12 @@ describe("buildCommandItems", () => {
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "mach12:push" })],
 		]);
 
-		const items = buildCommandItems(state, null, noopTheme, () => {});
+		const items = buildCommandItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		expect(items[0].description).toBe("mach12:cmd desc");
 	});
 
@@ -130,7 +166,12 @@ describe("buildCommandItems", () => {
 		]);
 		const config: AutonomyConfig = { edges: { "mach12:cmd": { a: "chain" } } };
 
-		const items = buildCommandItems(state, config, noopTheme, () => {});
+		const items = buildCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			() => {},
+		);
 		expect(items[0].currentValue).toContain("1/2 overridden");
 	});
 
@@ -141,7 +182,12 @@ describe("buildCommandItems", () => {
 		]);
 		const config: AutonomyConfig = { edges: { "mach12:cmd": { "*": "pause", a: "chain" } } };
 
-		const items = buildCommandItems(state, config, noopTheme, () => {});
+		const items = buildCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			() => {},
+		);
 		expect(items[0].currentValue).toBe("closed · 1/2 overridden, 1/2 wildcard");
 	});
 
@@ -149,7 +195,12 @@ describe("buildCommandItems", () => {
 		const state = freshState();
 		state.registry = new Map([["mach12:cmd", makeCommandDef("mach12:cmd")]]);
 
-		const items = buildCommandItems(state, null, noopTheme, () => {});
+		const items = buildCommandItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		expect(items).toEqual([]);
 	});
 
@@ -159,8 +210,55 @@ describe("buildCommandItems", () => {
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "mach12:push" })],
 		]);
 
-		const items = buildCommandItems(state, null, noopTheme, () => {});
+		const items = buildCommandItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		expect(items[0].submenu).toBeTypeOf("function");
+	});
+
+	it("reads fresh config when opening an edge submenu", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }] })],
+		]);
+		let config: AutonomyConfig | null = null;
+		const items = buildCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			() => {},
+		);
+
+		config = { edges: { "mach12:cmd": { a: "chain" } } };
+		const submenu = items[0].submenu?.("closed · 1 edge", () => {});
+
+		expect(renderText(submenu)).toContain("a  chain");
+	});
+
+	it("passes a refreshed command summary when closing an edge submenu", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }, { name: "b" }] })],
+		]);
+		let config: AutonomyConfig | null = null;
+		const items = buildCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			() => {},
+		);
+		let selectedValue: string | undefined;
+		const submenu = items[0].submenu?.("closed · 2 edges", (value) => {
+			selectedValue = value;
+		});
+
+		config = { edges: { "mach12:cmd": { a: "pause" } } };
+		submenu?.handleInput?.("\x1b");
+
+		expect(selectedValue).toBe("closed · 1/2 overridden");
 	});
 });
 
@@ -169,8 +267,18 @@ describe("buildTopLevelItems", () => {
 		const stateOn = freshState({ enabled: true });
 		const stateOff = freshState({ enabled: false });
 
-		const itemsOn = buildTopLevelItems(stateOn, null, noopTheme, () => {});
-		const itemsOff = buildTopLevelItems(stateOff, null, noopTheme, () => {});
+		const itemsOn = buildTopLevelItems(
+			stateOn,
+			() => null,
+			noopTheme,
+			() => {},
+		);
+		const itemsOff = buildTopLevelItems(
+			stateOff,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 
 		const toggleOn = itemsOn.find((i) => i.id === "auto-continuation");
 		const toggleOff = itemsOff.find((i) => i.id === "auto-continuation");
@@ -186,7 +294,12 @@ describe("buildTopLevelItems", () => {
 			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "mach12:push" })],
 		]);
 
-		const items = buildTopLevelItems(state, null, noopTheme, () => {});
+		const items = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		const autonomy = items.find((i) => i.id === "command-autonomy");
 		expect(autonomy).toBeDefined();
 		expect(autonomy?.submenu).toBeTypeOf("function");
@@ -196,7 +309,12 @@ describe("buildTopLevelItems", () => {
 		const state = freshState();
 		state.registry = new Map([["mach12:cmd", makeCommandDef("mach12:cmd")]]);
 
-		const items = buildTopLevelItems(state, null, noopTheme, () => {});
+		const items = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		const autonomy = items.find((i) => i.id === "command-autonomy");
 		expect(autonomy).toBeDefined();
 		expect(autonomy?.currentValue).toBe("no edges");
@@ -211,7 +329,12 @@ describe("buildTopLevelItems", () => {
 		]);
 		const config: AutonomyConfig = { edges: { "mach12:cmd": { a: "pause" } } };
 
-		const items = buildTopLevelItems(state, config, noopTheme, () => {});
+		const items = buildTopLevelItems(
+			state,
+			() => config,
+			noopTheme,
+			() => {},
+		);
 		const autonomy = items.find((i) => i.id === "command-autonomy");
 		expect(autonomy?.currentValue).toContain("1 override");
 	});
@@ -220,8 +343,91 @@ describe("buildTopLevelItems", () => {
 		const state = freshState();
 		state.registry = new Map([["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "forced", target: "x" })]]);
 
-		const items = buildTopLevelItems(state, null, noopTheme, () => {});
+		const items = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		const autonomy = items.find((i) => i.id === "command-autonomy");
 		expect(autonomy?.currentValue).toBe("all defaults");
+	});
+
+	it("reads fresh config when opening the command autonomy submenu", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }] })],
+		]);
+		let config: AutonomyConfig | null = null;
+		const items = buildTopLevelItems(
+			state,
+			() => config,
+			noopTheme,
+			() => {},
+		);
+		const autonomy = items.find((i) => i.id === "command-autonomy");
+
+		config = { edges: { "mach12:cmd": { a: "chain" } } };
+		const submenu = autonomy?.submenu?.("all defaults", () => {});
+
+		expect(renderText(submenu)).toContain("mach12:cmd  closed · 1/1 overridden");
+	});
+
+	it("passes a refreshed registry summary when closing the command autonomy submenu", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }] })],
+		]);
+		let config: AutonomyConfig | null = null;
+		const items = buildTopLevelItems(
+			state,
+			() => config,
+			noopTheme,
+			() => {},
+		);
+		const autonomy = items.find((i) => i.id === "command-autonomy");
+		let selectedValue: string | undefined;
+		const submenu = autonomy?.submenu?.("all defaults", (value) => {
+			selectedValue = value;
+		});
+
+		config = { edges: { "mach12:cmd": { a: "pause" } } };
+		submenu?.handleInput?.("\x1b");
+
+		expect(selectedValue).toBe("1 override");
+	});
+});
+
+describe("showSettingsPage", () => {
+	it("preserves fresh disk overrides when saving an autonomy toggle", async () => {
+		const configPath = path.join(tmpDir!, "autonomy.yaml");
+		const state = freshState({ autonomyConfigPath: configPath });
+		state.registry = new Map([
+			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }, { name: "b" }] })],
+		]);
+		saveAutonomyConfig(configPath, { edges: { "mach12:cmd": { a: "pause" } } });
+
+		const pi = { appendEntry: vi.fn() };
+		const ctx = {
+			ui: {
+				notify: vi.fn(),
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+					saveAutonomyConfig(configPath, { edges: { "mach12:cmd": { a: "chain", b: "pause" } } });
+
+					component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+					expect(renderText(component)).toContain("a  chain");
+					component.handleInput?.("\r");
+				},
+			},
+		};
+
+		await showSettingsPage(pi as never, ctx as never, state);
+
+		expect(loadAutonomyConfig(configPath)).toEqual({ edges: { "mach12:cmd": { a: "pause", b: "pause" } } });
 	});
 });

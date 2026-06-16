@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.3 — Refresh settings autonomy summaries
+
+Settings submenus now reload autonomy config when opened and refresh parent summary values when exiting, so edge overrides remain visible throughout a settings session (issue #145).
+
+### Fixed
+
+- `settings-ui.ts` — per-command edge submenus read fresh autonomy config instead of captured snapshots.
+- `settings-ui.ts` — command and top-level autonomy summaries update on Escape after submenu edits.
+
 ## 0.20.2 — Enrich pr-merge release notes context
 
 `mach12:pr-merge` Step 5 now gathers the PR body, linked issues (with implementation plans via `mach12:gh-issue-read --marker mach12-plan`), and commit history before drafting release notes, producing richer drafts without user re-prompting (issue #141).
