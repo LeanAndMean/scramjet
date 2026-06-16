@@ -102,18 +102,28 @@ export function saveAutonomyConfig(configPath: string, config: AutonomyConfig): 
 	const dir = path.dirname(configPath);
 	fs.mkdirSync(dir, { recursive: true });
 	const tmpPath = `${configPath}.tmp`;
-	if (Object.keys(cleaned.edges).length === 0) {
-		try {
-			fs.unlinkSync(configPath);
-		} catch (err: unknown) {
-			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+	try {
+		if (Object.keys(cleaned.edges).length === 0) {
+			try {
+				fs.unlinkSync(configPath);
+			} catch (err: unknown) {
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+			}
+		} else {
+			const yaml = stringifyYaml(cleaned);
+			fs.writeFileSync(tmpPath, yaml, "utf-8");
+			try {
+				fs.renameSync(tmpPath, configPath);
+			} catch (err: unknown) {
+				try {
+					fs.unlinkSync(tmpPath);
+				} catch {}
+				throw err;
+			}
 		}
-	} else {
-		const yaml = stringifyYaml(cleaned);
-		fs.writeFileSync(tmpPath, yaml, "utf-8");
-		fs.renameSync(tmpPath, configPath);
+	} finally {
+		resetCache();
 	}
-	resetCache();
 }
 
 function cleanConfig(config: AutonomyConfig): AutonomyConfig {

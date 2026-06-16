@@ -172,6 +172,7 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 	let config = safeLoadConfig(configPath, ctx);
 
 	const handleAutonomyChange = (commandName: string, target: string, value: string) => {
+		const prev = config ? structuredClone(config) : null;
 		if (!config) config = { edges: {} };
 		if (value === "default") {
 			if (config.edges[commandName]) {
@@ -184,7 +185,13 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 			if (!config.edges[commandName]) config.edges[commandName] = {};
 			config.edges[commandName][target] = value as "chain" | "pause";
 		}
-		saveAutonomyConfig(configPath, config);
+		try {
+			saveAutonomyConfig(configPath, config);
+		} catch (err: unknown) {
+			config = prev;
+			const msg = err instanceof Error ? err.message : String(err);
+			ctx.ui.notify(`Failed to save autonomy config: ${msg}`, "error");
+		}
 	};
 
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
