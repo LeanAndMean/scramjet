@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import { recordCommandStatus } from "./history.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
 import { transitionPhase } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
@@ -20,7 +21,7 @@ const NON_TUI_ERROR =
 const PROMPT_SNIPPET =
 	"You have access to `get_scramjet_user_input` for requesting structured user input mid-turn " +
 	"(confirm, select, or freetext). The tool blocks until the user responds and returns their " +
-	"answer as the tool result — the turn does not end. Use it when you need explicit user " +
+	"answer as the tool result; if the user cancels, the turn ends. Use it when you need explicit user " +
 	"decisions during command execution rather than ending the turn with a prose question.";
 
 const USER_INPUT_OPTION_SCHEMA = Type.Object({
@@ -97,8 +98,9 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			type InteractionResult = {
 				content: { type: "text"; text: string }[];
 				details: Record<string, unknown>;
+				cancelled: boolean;
 			};
-			let result: InteractionResult;
+			let result: InteractionResult | undefined;
 			try {
 				switch (params.type) {
 					case "confirm":
@@ -115,6 +117,11 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					case "freetext":
 						result = await handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
 						break;
+					default:
+						return {
+							content: [{ type: "text", text: `Unknown interaction type: ${params.type}` }],
+							details: { error: "unknown-type", type: params.type },
+						};
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
@@ -123,7 +130,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					details: { error: "ui-error", message },
 				};
 			} finally {
-				if (isProbing) transitionPhase(state, "running");
+				if (isProbing) transitionPhase(state, result?.cancelled ? "waiting" : "running");
 			}
 
 			pi.appendEntry(USER_INPUT_TYPE, {
@@ -132,7 +139,14 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				...result.details,
 			});
 
-			return result;
+			const toolResult = { content: result.content, details: result.details };
+			if (result.cancelled) {
+				if (!isProbing) transitionPhase(state, "waiting");
+				if (state.activeTopLevelCommand) recordCommandStatus(pi, state.activeTopLevelCommand, "waiting_for_user");
+				return { ...toolResult, terminate: true };
+			}
+
+			return toolResult;
 		},
 	});
 }
@@ -174,11 +188,13 @@ async function handleConfirm(message: string, ctx: ExtensionContext) {
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
 			details: { type: "confirm", cancelled: true },
+			cancelled: true,
 		};
 	}
 	return {
 		content: [{ type: "text" as const, text: JSON.stringify({ confirmed: result === "yes" }) }],
 		details: { type: "confirm", confirmed: result === "yes" },
+		cancelled: false,
 	};
 }
 
@@ -234,11 +250,13 @@ async function handleSelect(
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
 			details: { type: "select", cancelled: true },
+			cancelled: true,
 		};
 	}
 	return {
 		content: [{ type: "text" as const, text: JSON.stringify({ selected: selectedValue }) }],
 		details: { type: "select", selected: selectedValue },
+		cancelled: false,
 	};
 }
 
@@ -248,9 +266,14 @@ async function handleFreetext(message: string, placeholder: string | undefined, 
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
 			details: { type: "freetext", cancelled: true },
+			cancelled: true,
 		};
 	}
-	return { content: [{ type: "text" as const, text: JSON.stringify({ text }) }], details: { type: "freetext", text } };
+	return {
+		content: [{ type: "text" as const, text: JSON.stringify({ text }) }],
+		details: { type: "freetext", text },
+		cancelled: false,
+	};
 }
 
 function validateParams(params: UserInputParams): string | null {
