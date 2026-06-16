@@ -36,8 +36,17 @@ Analyze recently modified code and recommend refinements that:
 
 ## Refinement Process
 
-1. Identify the recently modified code sections
-2. Analyze for opportunities to improve elegance and consistency
-3. Recommend concrete edits that apply project-specific best practices and coding standards
-4. Explain how each recommendation preserves functionality
-5. Prioritize recommendations that make the code simpler and more maintainable
+For each recently modified section, walk this sequence before recommending rewrites:
+
+1. Does this code need to exist? Can it be deleted entirely?
+2. Can existing project code, platform behavior, stdlib, or installed dependencies replace it?
+3. Can new files, config, or abstractions be avoided by a smaller edit to existing code?
+4. Is the suggested simplification still clearer than the original?
+
+Then:
+
+5. Recommend concrete edits that apply project-specific best practices and coding standards
+6. Explain how each recommendation preserves functionality
+7. Prioritize recommendations that make the code simpler and more maintainable
+
+Do not recommend clever compression or over-simplification that reduces maintainability.

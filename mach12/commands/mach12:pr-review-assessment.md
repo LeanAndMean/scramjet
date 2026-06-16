@@ -74,6 +74,7 @@ The brief should instruct the assessor to:
    - **False positive** -- The reviewer flagged something that is not actually an issue. Explain why the code is correct.
    - **Deferred** -- Real issue but out of scope for this PR. Should be tracked separately.
    - If a finding was already fixed in a subsequent commit or resolved in discussion, classify it as **False positive** with a note that it has been addressed. If explicitly deferred in discussion, classify it as **Deferred** and reference the relevant comment.
+   For simplification findings specifically: a simplification is worthwhile only if it preserves behavior, improves or maintains clarity, fits project conventions, and does not remove necessary validation, error handling, security, or tests. Do not treat "shorter" as automatically better.
 4. After classifying all findings, produce a **staged implementation plan** covering everything worth fixing. Reference findings by their F/S identifiers (e.g., "stage 1 addresses F1 and F3"):
    - Number each stage with a descriptive name.
    - Required stages for genuine issues (must fix before merge).

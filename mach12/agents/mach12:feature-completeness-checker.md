@@ -79,3 +79,4 @@ For each gap found, provide:
 - When a PR targets a specific stage of a multi-stage plan, only assess requirements for that stage.
 - Requirements explicitly marked as deferred or out-of-scope should be classified as LOW severity at most.
 - Some requirements may be met by existing code that predates this PR. Note this rather than flagging as a gap.
+- If the PR implements significant behavior beyond the issue or plan, flag it when the extra scope increases risk or maintenance burden.
