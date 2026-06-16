@@ -6,6 +6,7 @@ allowed-tools:
   - read
   - grep
   - glob
+  - delegate
 ---
 
 # Merge and Release
@@ -99,10 +100,24 @@ gh release view <latest-tag>
 
 If the user provided context, use it to inform the release draft (e.g., specific tag, highlighted changes, notes style).
 
-Draft a release:
+Gather context from the PR, linked issues, and commits:
+
+```
+gh pr view <pr-number> --json title,body,closingIssuesReferences,commits
+```
+
+For each linked issue in `closingIssuesReferences`, delegate to:
+
+```
+/mach12:gh-issue-read <issue-number> --marker mach12-plan
+```
+
+This retrieves the issue title, body, and implementation plan. If no `mach12-plan` marker is found for an issue, use just its title and body. If there are no linked issues, continue without — this is not an error.
+
+Draft a release using the PR title/body, linked issue context (including plans when available), and commit headlines alongside the existing style reference:
 - **Tag**: follow existing tagging convention (e.g., `v1.2.3`, `1.2.3`). If a version bump was done in pre-merge, use that version.
 - **Title**: follow existing title convention. If none, use the PR title.
-- **Notes**: summarize changes from this PR. Match the style of previous release notes.
+- **Notes**: summarize changes from this PR, informed by the full gathered context. Match the style of previous release notes.
 
 Present the draft to the user and ask:
 

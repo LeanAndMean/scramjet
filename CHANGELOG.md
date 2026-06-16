@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.2 — Enrich pr-merge release notes context
+
+`mach12:pr-merge` Step 5 now gathers the PR body, linked issues (with implementation plans via `mach12:gh-issue-read --marker mach12-plan`), and commit history before drafting release notes, producing richer drafts without user re-prompting (issue #141).
+
+### Changed
+
+- `mach12:pr-merge.md` — Step 5 reads PR title/body/commits and linked issues before drafting release notes; `delegate` added to `allowed-tools`.
+
 ## 0.20.1 — Terminate user input cancellation
 
 Cancellation of `get_scramjet_user_input` now ends the current agent turn, parks the active command in `waiting`, and journals a `waiting_for_user` status for resume reconstruction (issue #142).
