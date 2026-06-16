@@ -56,6 +56,34 @@ describe("buildEdgeItems", () => {
 		expect(items[0].values).toEqual(["default", "chain", "pause"]);
 	});
 
+	it("shows wildcard-inherited closed policy settings distinctly", () => {
+		const policy: NextStepPolicy = {
+			mode: "closed",
+			candidates: [{ name: "mach12:pr-create" }, { name: "mach12:issue-implement" }],
+		};
+		const config: AutonomyConfig = { edges: { "mach12:plan": { "*": "pause", "mach12:pr-create": "chain" } } };
+		const items = buildEdgeItems("mach12:plan", policy, config);
+
+		expect(items[0].currentValue).toBe("chain");
+		expect(items[0].description).toContain("Override:");
+		expect(items[1].currentValue).toBe("pause");
+		expect(items[1].description).toContain("Inherited wildcard override: pause");
+		expect(items[1].values).toEqual(["chain", "pause"]);
+	});
+
+	it("shows wildcard-inherited open policy settings distinctly", () => {
+		const policy: NextStepPolicy = {
+			mode: "open",
+			candidates: [{ name: "mach12:pr-review" }],
+		};
+		const config: AutonomyConfig = { edges: { "mach12:implement": { "*": "chain" } } };
+		const items = buildEdgeItems("mach12:implement", policy, config);
+
+		expect(items[0].currentValue).toBe("chain");
+		expect(items[0].description).toContain("Inherited wildcard override: chain");
+		expect(items[0].values).toEqual(["chain", "pause"]);
+	});
+
 	it("returns empty array for ask policy (no targets)", () => {
 		const policy: NextStepPolicy = { mode: "ask" };
 		const items = buildEdgeItems("mach12:review", policy, null);
@@ -104,6 +132,17 @@ describe("buildCommandItems", () => {
 
 		const items = buildCommandItems(state, config, noopTheme, () => {});
 		expect(items[0].currentValue).toContain("1/2 overridden");
+	});
+
+	it("includes wildcard-inherited edges in currentValue summaries", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:cmd", makeCommandDef("mach12:cmd", { mode: "closed", candidates: [{ name: "a" }, { name: "b" }] })],
+		]);
+		const config: AutonomyConfig = { edges: { "mach12:cmd": { "*": "pause", a: "chain" } } };
+
+		const items = buildCommandItems(state, config, noopTheme, () => {});
+		expect(items[0].currentValue).toBe("closed · 1/2 overridden, 1/2 wildcard");
 	});
 
 	it("returns empty array when no commands have next policies", () => {

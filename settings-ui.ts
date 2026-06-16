@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { type SettingItem, SettingsList, type SettingsListTheme } from "@earendil-works/pi-tui";
-import { defaultConfigPath, loadAutonomyConfig, saveAutonomyConfig } from "./autonomy-settings.ts";
+import { defaultConfigPath, loadAutonomyConfig, lookupEdge, saveAutonomyConfig } from "./autonomy-settings.ts";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.ts";
 import type { AutonomyConfig, NextStepPolicy, ScramjetState } from "./types.ts";
 
@@ -27,16 +27,20 @@ export function buildEdgeItems(
 ): SettingItem[] {
 	const targets = resolveTargets(policy);
 	return targets.map((target) => {
-		const currentSetting = config?.edges[commandName]?.[target.name] ?? null;
+		const exactSetting = config?.edges[commandName]?.[target.name] ?? null;
+		const effectiveSetting = lookupEdge(config, commandName, target.name);
+		const wildcardInherited = !target.forced && exactSetting == null && effectiveSetting != null;
 		const description = target.forced
 			? "Forced transition — autonomy settings are ignored"
-			: `Override: chain (always run), pause (always ask), default (use policy)`;
+			: wildcardInherited
+				? `Inherited wildcard override: ${effectiveSetting}; choose chain or pause to create an exact override`
+				: `Override: chain (always run), pause (always ask), default (use policy)`;
 		return {
 			id: `${commandName}::${target.name}`,
 			label: target.name,
 			description,
-			currentValue: currentSetting ?? "default",
-			values: target.forced ? undefined : [...EDGE_VALUES],
+			currentValue: effectiveSetting ?? "default",
+			values: target.forced ? undefined : wildcardInherited ? ["chain", "pause"] : [...EDGE_VALUES],
 		};
 	});
 }
@@ -85,9 +89,18 @@ export function buildCommandItems(
 function summarizeEdges(commandName: string, policy: NextStepPolicy, config: AutonomyConfig | null): string {
 	const targets = resolveTargets(policy);
 	if (targets.length === 0) return `${policy.mode} (no targets)`;
-	const overrideCount = targets.filter((t) => !t.forced && config?.edges[commandName]?.[t.name] != null).length;
-	if (overrideCount === 0) return `${policy.mode} · ${targets.length} edge${targets.length > 1 ? "s" : ""}`;
-	return `${policy.mode} · ${overrideCount}/${targets.length} overridden`;
+	const configurableTargets = targets.filter((t) => !t.forced);
+	const exactOverrideCount = configurableTargets.filter((t) => config?.edges[commandName]?.[t.name] != null).length;
+	const wildcardCount = configurableTargets.filter(
+		(t) => config?.edges[commandName]?.[t.name] == null && lookupEdge(config, commandName, t.name) != null,
+	).length;
+	if (exactOverrideCount === 0 && wildcardCount === 0) {
+		return `${policy.mode} · ${targets.length} edge${targets.length > 1 ? "s" : ""}`;
+	}
+	const parts: string[] = [];
+	if (exactOverrideCount > 0) parts.push(`${exactOverrideCount}/${targets.length} overridden`);
+	if (wildcardCount > 0) parts.push(`${wildcardCount}/${targets.length} wildcard`);
+	return `${policy.mode} · ${parts.join(", ")}`;
 }
 
 function buildEdgeSubmenu(
@@ -231,8 +244,9 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 function safeLoadConfig(configPath: string, ctx: ExtensionContext): AutonomyConfig | null {
 	try {
 		return loadAutonomyConfig(configPath);
-	} catch {
-		ctx.ui.notify("autonomy.yaml is corrupt or unreadable — starting with defaults", "warning");
+	} catch (err: unknown) {
+		const msg = err instanceof Error ? err.message : String(err);
+		ctx.ui.notify(`autonomy.yaml is corrupt or unreadable — starting with defaults: ${msg}`, "warning");
 		return null;
 	}
 }
