@@ -107,7 +107,7 @@ Based on the codebase findings and clarified requirements, dispatch parallel arc
 
 - **Smallest sufficient change**: Design the implementation that satisfies the requirements with the smallest change surface. Walk the minimum-sufficient solution ladder before proposing any new abstractions, files, or dependencies. Maximize reuse of existing patterns.
 - **Strongest structural design**: Design the implementation prioritizing clear separation of concerns, maintainability, and well-defined abstractions. Still walk the ladder — justify each new component against a lower rung.
-- **Alternative trade-off design**: Design an implementation that optimizes for a different axis (performance, extensibility, or a constraint the other lenses deprioritized). Walk the ladder and state what this lens deliberately trades away.
+- **Alternative trade-off design**: Design an implementation that optimizes for a different axis (such as performance, extensibility, or a constraint the other lenses deprioritized). Walk the ladder and state what this lens deliberately trades away.
 
 For parallel execution, dispatch all architecture tasks in a single batch rather than sequentially.
 
@@ -125,9 +125,8 @@ Each lens must state:
 
 Present to the user: brief summary of each approach, trade-offs comparison, **your recommendation with reasoning**, and concrete implementation differences.
 
-The recommendation must answer:
-- Which ladder rung is the selected approach on?
-- Why did lower rungs fail?
+The recommendation must answer only what the selected lens did not already cover:
+- Which lens and ladder rung did you select, citing the lens's lower-rung rationale rather than restating it?
 - Why is this not bigger than necessary?
 - Why is this not too small to satisfy the requirements?
 - Which larger abstractions/dependencies/files were rejected, and why?

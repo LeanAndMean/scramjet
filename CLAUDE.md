@@ -175,12 +175,7 @@ Rules that govern the block:
 
 ## Dependency orientation
 
-Before adding a dependency, utility, or custom implementation, check whether an existing package already provides the capability. Inspect `package.json`, existing imports in adjacent files, and Pi docs/examples.
-
-- **`@earendil-works/pi-coding-agent`** (aliased to `@leanandmean/pi-coding-agent`): Pi extension API — hooks, `ExtensionContext`, `ExtensionAPI`, `SessionEntry`, `parseFrontmatter`, `getAgentDir`.
-- **`@earendil-works/pi-tui`**: TUI components (`Text`, `Image`, `SettingsList`), keybindings, `visibleWidth`, `truncateToWidth`, `wrapTextWithAnsi`.
-- **`typebox`**: tool input schemas (`Type.*`) and `Static` type inference for runtime validation.
-- **`yaml`**: YAML parsing (`parse`) and stringifying (`stringify`) for config files such as autonomy settings.
+Before adding a dependency, utility, or custom implementation, check whether existing project dependencies already provide the capability. Inspect `package.json`, adjacent imports, and relevant Pi docs/examples; treat those live sources as authoritative for available packages and APIs. The `@earendil-works/pi-coding-agent` dependency key is an npm alias to the maintained `@leanandmean/pi-coding-agent` fork; do not treat it as upstream Pi.
 
 ## Version pinning
 
