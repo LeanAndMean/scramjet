@@ -46,7 +46,8 @@
 	"dependencies": {
 		"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.1",
 		"@earendil-works/pi-tui": "0.74.0",
-		"typebox": "1.1.24"
+		"typebox": "1.1.24",
+		"yaml": "^2.9.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",

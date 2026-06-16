@@ -24,6 +24,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAgentCatalog } from "./agent-catalog.ts";
 import { registerAutoContinue } from "./auto-continue.ts";
+import { defaultConfigPath } from "./autonomy-settings.ts";
 import { registerBaseDirectives } from "./base-directives.ts";
 import { registerClearAlias } from "./clear-alias.ts";
 import { registerCommandStatusTool } from "./command-status.ts";
@@ -49,6 +50,7 @@ export default function scramjet(pi: ExtensionAPI) {
 		pendingForcedDispatch: null,
 		commandPhase: "idle",
 		latestCommandStatus: null,
+		autonomyConfigPath: defaultConfigPath(),
 	};
 
 	registerCommandStatusTool(pi, state);

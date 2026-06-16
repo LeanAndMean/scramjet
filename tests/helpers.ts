@@ -14,6 +14,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		resetConsecutiveContinues: undefined,
+		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
 		...overrides,
 	};
 }
