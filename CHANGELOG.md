@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.0 — TUI settings widget
+
+Interactive TUI widget for browsing and editing Scramjet settings, including per-edge autonomy overrides and the auto-continuation toggle, accessible via `/scramjet settings` (issue #138).
+
+### Added
+
+- `settings-ui.ts` — three-level `SettingsList` navigation: top-level settings (auto-continuation on/off) → command list (commands with `next:` policies) → per-edge autonomy overrides (chain/pause/default cycle).
+- `/scramjet settings` subcommand with TUI environment check and tab-completion support.
+- `saveAutonomyConfig()` write path in `autonomy-settings.ts` with atomic writes (temp file + rename), parent directory creation, cache invalidation, and cleanup semantics.
+- Graceful handling: corrupt config shows warning and starts fresh, empty registry shows informational message, no-TUI environment shows error notification.
+- Unit tests for settings UI item builders, edge display computation, config mutation semantics, and settings subcommand routing.
+
+### Changed
+
+- `scramjet-command.ts` — added `settings` subcommand routing alongside existing `on`/`off`/`status`.
+
 ## 0.19.0 — Edge-level autonomy settings
 
 Per-transition autonomy settings that let users control which command chains auto-fire and which pause, at the granularity of individual edges. Users configure `~/.config/scramjet/autonomy.yaml` (XDG-respecting) to pin specific transitions to `chain` (always auto-dispatch) or `pause` (always show selector), while unconfigured edges follow the existing `/scramjet on|off` flag (issue #129).

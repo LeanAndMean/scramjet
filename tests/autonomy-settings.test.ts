@@ -9,6 +9,7 @@ import {
 	parseAutonomyConfig,
 	resetCache,
 	resolveEdgeBehavior,
+	saveAutonomyConfig,
 	validateConfig,
 } from "../autonomy-settings.ts";
 import type { AutonomyConfig, CommandRegistry } from "../types.ts";
@@ -252,6 +253,97 @@ describe("defaultConfigPath", () => {
 		} finally {
 			if (original !== undefined) process.env.XDG_CONFIG_HOME = original;
 		}
+	});
+});
+
+describe("saveAutonomyConfig", () => {
+	let tmpDir: string;
+	let configPath: string;
+
+	beforeEach(() => {
+		resetCache();
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-test-"));
+		configPath = path.join(tmpDir, "scramjet", "autonomy.yaml");
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("creates parent directories and writes YAML", () => {
+		const config: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "chain" } },
+		};
+		saveAutonomyConfig(configPath, config);
+		expect(fs.existsSync(configPath)).toBe(true);
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded!.edges["cmd:a"]).toEqual({ "cmd:b": "chain" });
+	});
+
+	it("roundtrips config through save and load", () => {
+		const config: AutonomyConfig = {
+			edges: {
+				"cmd:a": { "cmd:b": "chain", "cmd:c": "pause" },
+				"cmd:d": { "*": "pause" },
+			},
+		};
+		saveAutonomyConfig(configPath, config);
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded).toEqual(config);
+	});
+
+	it("removes source entries with no valid targets", () => {
+		const config: AutonomyConfig = {
+			edges: {
+				"cmd:a": {} as any,
+				"cmd:b": { "cmd:c": "chain" },
+			},
+		};
+		saveAutonomyConfig(configPath, config);
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded!.edges["cmd:a"]).toBeUndefined();
+		expect(loaded!.edges["cmd:b"]).toEqual({ "cmd:c": "chain" });
+	});
+
+	it("deletes config file when all edges are empty", () => {
+		const config: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "chain" } },
+		};
+		saveAutonomyConfig(configPath, config);
+		expect(fs.existsSync(configPath)).toBe(true);
+
+		saveAutonomyConfig(configPath, { edges: {} });
+		expect(fs.existsSync(configPath)).toBe(false);
+	});
+
+	it("handles delete when file does not exist", () => {
+		expect(() => saveAutonomyConfig(configPath, { edges: {} })).not.toThrow();
+	});
+
+	it("resets cache after save", () => {
+		const config1: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "chain" } },
+		};
+		saveAutonomyConfig(configPath, config1);
+		loadAutonomyConfig(configPath);
+
+		const config2: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "pause" } },
+		};
+		saveAutonomyConfig(configPath, config2);
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded!.edges["cmd:a"]).toEqual({ "cmd:b": "pause" });
+	});
+
+	it("writes atomically (no .tmp file left behind)", () => {
+		const config: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "chain" } },
+		};
+		saveAutonomyConfig(configPath, config);
+		const dir = path.dirname(configPath);
+		const files = fs.readdirSync(dir);
+		expect(files).not.toContain("autonomy.yaml.tmp");
+		expect(files).toContain("autonomy.yaml");
 	});
 });
 
