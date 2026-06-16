@@ -63,7 +63,9 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 		description:
 			"Request structured input from the user during command execution. " +
 			"Supports confirm (yes/no), select (pick from options), and freetext (open-ended input). " +
-			"Blocks until the user responds; the turn continues after the response.",
+			"Confirm and select block until the user responds and return their answer as the tool result; " +
+			"freetext terminates the turn so the user replies in the standard editor. " +
+			"The placeholder parameter is accepted for compatibility but unused by freetext.",
 		promptSnippet: PROMPT_SNIPPET,
 		parameters: USER_INPUT_SCHEMA,
 		async execute(_toolCallId, params, _resource, _read, ctx) {
@@ -89,7 +91,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				pi.appendEntry(USER_INPUT_TYPE, {
 					interactionType: params.type,
 					message: params.message,
-					type: params.type,
 				});
 				transitionPhase(state, "waiting");
 				if (state.activeTopLevelCommand) recordCommandStatus(pi, state.activeTopLevelCommand, "waiting_for_user");

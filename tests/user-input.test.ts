@@ -541,7 +541,6 @@ describe("registerUserInputTool — journaling", () => {
 		expect(entry.data).toEqual({
 			interactionType: "freetext",
 			message: "Title?",
-			type: "freetext",
 		});
 
 		const statusEntry = pi.appended.find((e: any) => e.customType === COMMAND_STATUS_TYPE);
