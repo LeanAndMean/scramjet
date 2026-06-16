@@ -377,13 +377,18 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 		// Edge-level autonomy: validate config once (first dispatch after registry is populated).
 		if (!autonomyValidated && state.registry.size > 0) {
-			autonomyValidated = true;
-			const config = loadAutonomyConfig(state.autonomyConfigPath);
-			if (config) {
-				const warnings = validateConfig(config, state.registry);
-				for (const w of warnings) {
-					ctx.ui.notify(`scramjet: autonomy.yaml: ${w}`, "warning");
+			try {
+				const config = loadAutonomyConfig(state.autonomyConfigPath);
+				autonomyValidated = true;
+				if (config) {
+					const warnings = validateConfig(config, state.registry);
+					for (const w of warnings) {
+						ctx.ui.notify(`scramjet: autonomy.yaml: ${w}`, "warning");
+					}
 				}
+			} catch (err) {
+				autonomyValidated = false;
+				ctx.ui.notify(`scramjet: ${(err as Error).message}; edge settings ignored until fixed`, "warning");
 			}
 		}
 
@@ -391,9 +396,14 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		// next step is a slash command. The lookup happens before the UI/headless
 		// branch so both paths respect the setting.
 		const recommendedName = result.recommended?.parsedCommand?.name;
-		const edgeSetting = recommendedName
-			? resolveEdgeBehavior(state.autonomyConfigPath, sourceName, recommendedName)
-			: null;
+		let edgeSetting: EdgeSetting = null;
+		if (recommendedName) {
+			try {
+				edgeSetting = resolveEdgeBehavior(state.autonomyConfigPath, sourceName, recommendedName);
+			} catch (err) {
+				ctx.ui.notify(`scramjet: ${(err as Error).message}; edge settings ignored this dispatch`, "warning");
+			}
+		}
 
 		if (edgeSetting === "chain" && result.recommended?.parsedCommand) {
 			executeStep(toDispatchStep(result.recommended, result.recommended.parsedCommand), ctx);

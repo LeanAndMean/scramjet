@@ -118,7 +118,7 @@ edges:
 
 A `"*"` wildcard target applies to any command not explicitly listed under a source. `forced` transitions are not affected by edge settings.
 
-The file is optional — without it, behavior is identical to today. Invalid command names in the config produce startup warnings but never crash.
+The file is optional — without it, behavior is identical to today. Invalid command names in the config produce warnings on first use but never crash.
 
 ## Mach 12
 

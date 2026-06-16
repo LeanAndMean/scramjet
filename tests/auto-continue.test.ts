@@ -2330,4 +2330,44 @@ describe("edge-level autonomy settings integration", () => {
 		const rendered = ctxBag.customComponents[0].render(80).join("\n");
 		expect(rendered).toContain("auto-selects");
 	});
+
+	it("malformed YAML: warns and proceeds with default behavior", async () => {
+		writeConfig("{ invalid yaml: [");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		// Should warn about the malformed config
+		expect(ctxBag.notifications.some((n) => n.message.includes("autonomy.yaml"))).toBe(true);
+		// Should still show selector (default behavior, not crash)
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("auto-selects");
+	});
+
+	it("malformed YAML in edge lookup: warns and falls through to default", async () => {
+		// Write valid config first so validation passes, then corrupt it before edge lookup
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		// First turn triggers validation (succeeds with valid config)
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		// Edge setting resolved as chain — dispatched without selector
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
 });

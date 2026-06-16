@@ -176,6 +176,26 @@ edges:
 		fs.unlinkSync(configPath);
 		expect(loadAutonomyConfig(configPath)).toBeNull();
 	});
+
+	it("throws on malformed YAML with a descriptive message", () => {
+		fs.writeFileSync(configPath, "{ invalid yaml: [");
+		expect(() => loadAutonomyConfig(configPath)).toThrow(/autonomy\.yaml: failed to load config/);
+	});
+
+	it("caches null after malformed YAML so repeated calls return null", () => {
+		fs.writeFileSync(configPath, "{ invalid yaml: [");
+		expect(() => loadAutonomyConfig(configPath)).toThrow();
+		// Second call with same mtime returns cached null without re-throwing
+		expect(loadAutonomyConfig(configPath)).toBeNull();
+	});
+
+	it("throws on permission errors from stat with a descriptive message", () => {
+		// Use a path we know will fail with something other than ENOENT
+		const badPath = path.join(configPath, "nested", "impossible");
+		fs.writeFileSync(configPath, "edges:\n  cmd:a:\n    cmd:b: chain\n");
+		// Trying to stat a path through a file (not a dir) gives ENOTDIR
+		expect(() => loadAutonomyConfig(badPath)).toThrow(/autonomy\.yaml: cannot stat config file/);
+	});
 });
 
 describe("resolveEdgeBehavior", () => {

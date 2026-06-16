@@ -6,9 +6,7 @@ import type { AutonomyConfig, CommandRegistry, EdgeSetting } from "./types.ts";
 
 const VALID_SETTINGS = new Set(["chain", "pause"]);
 
-let cachedMtimeMs = -1;
-let cachedConfig: AutonomyConfig | null = null;
-let cachedConfigPath = "";
+let cache: { path: string; mtimeMs: number; config: AutonomyConfig | null } | null = null;
 
 export function defaultConfigPath(): string {
 	const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
@@ -47,24 +45,29 @@ export function loadAutonomyConfig(configPath: string): AutonomyConfig | null {
 	let stat: fs.Stats;
 	try {
 		stat = fs.statSync(configPath);
-	} catch {
-		if (cachedConfigPath === configPath) {
-			cachedMtimeMs = -1;
-			cachedConfig = null;
+	} catch (err: unknown) {
+		if (cache?.path === configPath) cache = null;
+		if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(`autonomy.yaml: cannot stat config file: ${msg}`);
 		}
 		return null;
 	}
 
-	if (cachedConfigPath === configPath && stat.mtimeMs === cachedMtimeMs) {
-		return cachedConfig;
+	if (cache?.path === configPath && stat.mtimeMs === cache.mtimeMs) {
+		return cache.config;
 	}
 
-	const raw = fs.readFileSync(configPath, "utf-8");
-	const config = parseAutonomyConfig(raw);
-	cachedConfigPath = configPath;
-	cachedMtimeMs = stat.mtimeMs;
-	cachedConfig = config;
-	return config;
+	try {
+		const raw = fs.readFileSync(configPath, "utf-8");
+		const config = parseAutonomyConfig(raw);
+		cache = { path: configPath, mtimeMs: stat.mtimeMs, config };
+		return config;
+	} catch (err: unknown) {
+		cache = { path: configPath, mtimeMs: stat.mtimeMs, config: null };
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(`autonomy.yaml: failed to load config: ${msg}`);
+	}
 }
 
 export function lookupEdge(config: AutonomyConfig | null, source: string, target: string): EdgeSetting {
@@ -95,7 +98,5 @@ export function validateConfig(config: AutonomyConfig, registry: CommandRegistry
 }
 
 export function resetCache(): void {
-	cachedMtimeMs = -1;
-	cachedConfig = null;
-	cachedConfigPath = "";
+	cache = null;
 }

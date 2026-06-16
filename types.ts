@@ -102,7 +102,7 @@ export interface SidebarEntry {
 export type EdgeSetting = "chain" | "pause" | null;
 
 export interface AutonomyConfig {
-	edges: Record<string, Record<string, "chain" | "pause">>;
+	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;
 }
 
 export interface ScramjetState {
