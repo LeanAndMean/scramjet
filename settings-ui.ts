@@ -147,6 +147,13 @@ export function buildTopLevelItems(
 				);
 			},
 		});
+	} else {
+		items.push({
+			id: "command-autonomy",
+			label: "Command autonomy",
+			description: "No commands with next-step policies registered — load a command set to configure edges",
+			currentValue: "no edges",
+		});
 	}
 
 	return items;
