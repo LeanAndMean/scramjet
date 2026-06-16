@@ -331,26 +331,24 @@ describe("registerUserInputTool — select interaction", () => {
 });
 
 describe("registerUserInputTool — freetext interaction", () => {
-	it("returns text when user provides input", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
-		const ctx = mockUICtx(null, "v1.2.3 - Auth fixes");
-		const result = await execute({ type: "freetext", message: "Release title?", placeholder: "v1.2.3" }, ctx);
+	it.each(["running", "probing"] as const)("terminates and parks at waiting from %s", async (phase) => {
+		const state = freshState({ commandPhase: phase });
+		const { execute } = toolFor(state);
+		const result = await execute({ type: "freetext", message: "Release title?", placeholder: "v1.2.3" });
 
 		const parsed = JSON.parse(result.content[0].text);
-		expect(parsed).toEqual({ text: "v1.2.3 - Auth fixes" });
-		expect(result.details.type).toBe("freetext");
-		expect(result.details.text).toBe("v1.2.3 - Auth fixes");
+		expect(parsed).toEqual({ waiting_for_user: true });
+		expect(result.details).toEqual({ type: "freetext", waiting_for_user: true });
+		expect(result.terminate).toBe(true);
+		expect(state.commandPhase).toBe("waiting");
 	});
 
-	it("returns cancelled: true and terminates when user presses Escape", async () => {
+	it("works when ctx.ui is absent", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "running" }));
-		const ctx = mockUICtx(null, undefined);
-		const result = await execute({ type: "freetext", message: "Release title?" }, ctx);
+		const result = await execute({ type: "freetext", message: "Release title?" }, {});
 
-		const parsed = JSON.parse(result.content[0].text);
-		expect(parsed).toEqual({ cancelled: true });
-		expect(result.details.cancelled).toBe(true);
 		expect(result.terminate).toBe(true);
+		expect(result.details.error).toBeUndefined();
 	});
 });
 
@@ -534,19 +532,21 @@ describe("registerUserInputTool — journaling", () => {
 		});
 	});
 
-	it("journals a freetext interaction", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
-		const ctx = mockUICtx(null, "My title");
-		await execute({ type: "freetext", message: "Title?" }, ctx);
+	it("journals a prompt-only freetext interaction and waiting command status", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "running", activeTopLevelCommand: "mach12:test" }));
+		await execute({ type: "freetext", message: "Title?" });
 
 		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
 		expect(entry).toBeDefined();
-		expect(entry.data).toMatchObject({
+		expect(entry.data).toEqual({
 			interactionType: "freetext",
 			message: "Title?",
 			type: "freetext",
-			text: "My title",
 		});
+
+		const statusEntry = pi.appended.find((e: any) => e.customType === COMMAND_STATUS_TYPE);
+		expect(statusEntry).toBeDefined();
+		expect(statusEntry.data).toEqual({ commandName: "mach12:test", status: "waiting_for_user" });
 	});
 
 	it("journals a cancelled interaction and waiting command status", async () => {
