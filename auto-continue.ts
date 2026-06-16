@@ -39,13 +39,14 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { resolveEdgeBehavior } from "./autonomy-settings.ts";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.ts";
 import { buildProbeMessage } from "./next-step.ts";
 import { dispatchNextStep } from "./next-step-dispatch.ts";
 import { selectNextStep } from "./next-step-selector.ts";
 import { transitionPhase } from "./phase-machine.ts";
-import type { CommandStatusNextStep, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
+import type { CommandStatusNextStep, EdgeSetting, NextStep, NextStepPolicy, ScramjetState } from "./types.ts";
 
 const COUNTDOWN_SECONDS = 3;
 // Liveness watchdog window. Generous on purpose — a live probe turn is a
@@ -242,12 +243,17 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		activeSelectorAbort = null;
 	}
 
-	function showSelector(result: ReturnType<typeof validateNextSteps>, ctx: ExtensionContext) {
+	function showSelector(
+		result: ReturnType<typeof validateNextSteps>,
+		ctx: ExtensionContext,
+		{ forcePause = false }: { forcePause?: boolean } = {},
+	) {
 		cancelSelector();
 		const selectorId = activeSelectorId;
 		const controller = new AbortController();
 		activeSelectorAbort = controller;
-		const autoSelect = state.enabled && result.recommended?.parsedCommand ? result.recommended : undefined;
+		const autoSelect =
+			!forcePause && state.enabled && result.recommended?.parsedCommand ? result.recommended : undefined;
 		void selectNextStep(ctx, {
 			options: result.valid,
 			recommended: result.recommended,
@@ -277,7 +283,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			});
 	}
 
-	function routeWithoutUi(result: ReturnType<typeof validateNextSteps>, ctx: ExtensionContext) {
+	function routeWithoutUi(
+		result: ReturnType<typeof validateNextSteps>,
+		ctx: ExtensionContext,
+		edgeSetting: EdgeSetting = null,
+	) {
 		if (!result.recommended) {
 			if (result.recommendedReason) {
 				const level = state.enabled && result.valid.every((option) => !option.parsedCommand) ? "info" : "warning";
@@ -305,6 +315,15 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
+		if (edgeSetting === "pause") {
+			const fresh = result.recommended.freshSession ? " (fresh session)" : "";
+			ctx.ui.notify(
+				`scramjet: next would be ${cleanForNotify(result.recommended.message)}${fresh}; edge setting: pause`,
+				"info",
+			);
+			return;
+		}
+
 		if (state.enabled) {
 			executeStep(toDispatchStep(result.recommended, result.recommended.parsedCommand), ctx);
 		} else {
@@ -323,6 +342,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		policy: NextStepPolicy,
 		status: NonNullable<ScramjetState["latestCommandStatus"]>,
 		ctx: ExtensionContext,
+		sourceName: string,
 	) {
 		if (policy.mode === "forced") {
 			// Forced fires regardless of state.enabled: no decision is delegated to
@@ -354,6 +374,19 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			ctx.ui.notify(`scramjet: skipped invalid next step(s): ${skippedSummary(result.skipped)}`, "info");
 		}
 
+		// Edge-level autonomy: look up a per-edge override when the recommended
+		// next step is a slash command. The lookup happens before the UI/headless
+		// branch so both paths respect the setting.
+		const recommendedName = result.recommended?.parsedCommand?.name;
+		const edgeSetting = recommendedName
+			? resolveEdgeBehavior(state.autonomyConfigPath, sourceName, recommendedName)
+			: null;
+
+		if (edgeSetting === "chain" && result.recommended?.parsedCommand) {
+			executeStep(toDispatchStep(result.recommended, result.recommended.parsedCommand), ctx);
+			return;
+		}
+
 		if (ctx.hasUI) {
 			if (result.recommendedReason) {
 				const level = state.enabled && result.valid.every((option) => !option.parsedCommand) ? "info" : "warning";
@@ -362,9 +395,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					level,
 				);
 			}
-			showSelector(result, ctx);
+			if (edgeSetting === "pause") {
+				showSelector(result, ctx, { forcePause: true });
+			} else {
+				showSelector(result, ctx);
+			}
 		} else {
-			routeWithoutUi(result, ctx);
+			routeWithoutUi(result, ctx, edgeSetting);
 		}
 	}
 
@@ -379,6 +416,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		policy: NextStepPolicy,
 		status: NonNullable<ScramjetState["latestCommandStatus"]>,
 		ctx: ExtensionContext,
+		sourceName: string,
 	) {
 		if (dispatchTimer) clearTimeout(dispatchTimer);
 		dispatchTimer = setTimeout(() => {
@@ -388,7 +426,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			// here (unlike scheduleProbe), so surface the failure through the UI and
 			// pause the chain cleanly.
 			try {
-				routeCompleted(policy, status, ctx);
+				routeCompleted(policy, status, ctx, sourceName);
 			} catch (err) {
 				ctx.ui.notify(
 					`scramjet: next-step dispatch failed (${(err as Error).message}); auto-continue paused`,
@@ -504,7 +542,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					// dispatch is deferred off this agent_end tick (see the file header):
 					// dispatching synchronously while the run is still streaming queues a
 					// stale duplicate command body.
-					if (policy) scheduleCompletedDispatch(policy, status, ctx);
+					if (policy) scheduleCompletedDispatch(policy, status, ctx, activeName!);
 					return;
 				}
 				// A non-completed report (blocked/waiting_for_user/incomplete) never
