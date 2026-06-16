@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { AutonomyConfig, CommandRegistry, EdgeSetting } from "./types.ts";
 
 const VALID_SETTINGS = new Set(["chain", "pause"]);
@@ -95,6 +95,41 @@ export function validateConfig(config: AutonomyConfig, registry: CommandRegistry
 		}
 	}
 	return warnings;
+}
+
+export function saveAutonomyConfig(configPath: string, config: AutonomyConfig): void {
+	const cleaned = cleanConfig(config);
+	const dir = path.dirname(configPath);
+	fs.mkdirSync(dir, { recursive: true });
+	const tmpPath = `${configPath}.tmp`;
+	if (Object.keys(cleaned.edges).length === 0) {
+		try {
+			fs.unlinkSync(configPath);
+		} catch (err: unknown) {
+			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+		}
+	} else {
+		const yaml = stringifyYaml(cleaned);
+		fs.writeFileSync(tmpPath, yaml, "utf-8");
+		fs.renameSync(tmpPath, configPath);
+	}
+	resetCache();
+}
+
+function cleanConfig(config: AutonomyConfig): AutonomyConfig {
+	const edges: AutonomyConfig["edges"] = {};
+	for (const [source, targets] of Object.entries(config.edges)) {
+		const filtered: Record<string, NonNullable<EdgeSetting>> = {};
+		for (const [target, setting] of Object.entries(targets)) {
+			if (VALID_SETTINGS.has(setting)) {
+				filtered[target] = setting;
+			}
+		}
+		if (Object.keys(filtered).length > 0) {
+			edges[source] = filtered;
+		}
+	}
+	return { edges };
 }
 
 export function resetCache(): void {
