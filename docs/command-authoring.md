@@ -585,6 +585,15 @@ Given these `next_steps`:
 
 The user sees three entries. The first two are the same command with different arguments — `reason` explains the difference. The third is a different command for the "skip fixes" path.
 
+### Edge autonomy overrides
+
+Users can configure per-edge autonomy settings in `~/.config/scramjet/autonomy.yaml` that override the normal dispatch behavior for specific transitions:
+
+- **`chain`**: auto-dispatches the transition immediately, bypassing the selector — even when `/scramjet off`.
+- **`pause`**: forces the selector without auto-select or countdown — even when `/scramjet on`.
+
+These settings are user-controlled and invisible to command authors. They do not affect `forced` transitions. As an author, you don't need to account for them — declare policies based on what makes sense for the command's semantics, and trust that users who configure edge overrides know what they want.
+
 ---
 
 ## Command File Anatomy
