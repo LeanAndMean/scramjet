@@ -39,7 +39,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveEdgeBehavior } from "./autonomy-settings.ts";
+import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.ts";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.ts";
 import { buildProbeMessage } from "./next-step.ts";
@@ -109,6 +109,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	let dispatchTimer: ReturnType<typeof setTimeout> | null = null;
 	let activeSelectorId = 0;
 	let activeSelectorAbort: AbortController | null = null;
+	let autonomyValidated = false;
 
 	function clearProbeWatchdog() {
 		if (probeWatchdog) {
@@ -372,6 +373,18 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 		if (result.skipped.length) {
 			ctx.ui.notify(`scramjet: skipped invalid next step(s): ${skippedSummary(result.skipped)}`, "info");
+		}
+
+		// Edge-level autonomy: validate config once (first dispatch after registry is populated).
+		if (!autonomyValidated && state.registry.size > 0) {
+			autonomyValidated = true;
+			const config = loadAutonomyConfig(state.autonomyConfigPath);
+			if (config) {
+				const warnings = validateConfig(config, state.registry);
+				for (const w of warnings) {
+					ctx.ui.notify(`scramjet: autonomy.yaml: ${w}`, "warning");
+				}
+			}
 		}
 
 		// Edge-level autonomy: look up a per-edge override when the recommended

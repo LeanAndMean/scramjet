@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { AutonomyConfig, EdgeSetting } from "./types.ts";
+import type { AutonomyConfig, CommandRegistry, EdgeSetting } from "./types.ts";
 
 const VALID_SETTINGS = new Set(["chain", "pause"]);
 
@@ -77,6 +77,21 @@ export function lookupEdge(config: AutonomyConfig | null, source: string, target
 export function resolveEdgeBehavior(configPath: string, source: string, target: string): EdgeSetting {
 	const config = loadAutonomyConfig(configPath);
 	return lookupEdge(config, source, target);
+}
+
+export function validateConfig(config: AutonomyConfig, registry: CommandRegistry): string[] {
+	const warnings: string[] = [];
+	for (const [source, targets] of Object.entries(config.edges)) {
+		if (!registry.has(source)) {
+			warnings.push(`unknown source command "${source}"`);
+		}
+		for (const target of Object.keys(targets)) {
+			if (target !== "*" && !registry.has(target)) {
+				warnings.push(`unknown target command "${target}" (in ${source})`);
+			}
+		}
+	}
+	return warnings;
 }
 
 export function resetCache(): void {

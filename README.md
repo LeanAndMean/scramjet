@@ -94,6 +94,32 @@ Scramjet is an autopilot, not a conveyor belt. At any transition:
 
 There is no "workflow mode" to enter or exit. You're always just using Pi. Scramjet is invisible when it has nothing to suggest.
 
+## Autonomy settings
+
+By default, `/scramjet on` auto-accepts all recommended transitions and `/scramjet off` pauses at every one. Autonomy settings let you override this per edge — pin specific transitions to always chain or always pause, regardless of the global flag.
+
+Create `~/.config/scramjet/autonomy.yaml` (or `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`):
+
+```yaml
+edges:
+  mach12:issue-implement:
+    mach12:issue-implement: chain    # same command, next stage — keep going
+    mach12:pr-create: pause          # major phase transition — stop here
+
+  mach12:pr-pre-merge:
+    mach12:pr-merge: chain           # trust the checklist
+```
+
+| Setting   | Behavior |
+|-----------|----------|
+| `chain`   | Auto-dispatch without selector or countdown, regardless of `/scramjet on\|off` |
+| `pause`   | Always show selector without auto-select, regardless of `/scramjet on\|off` |
+| (absent)  | Default behavior — follows `/scramjet on\|off` flag |
+
+A `"*"` wildcard target applies to any command not explicitly listed under a source. `forced` transitions are not affected by edge settings.
+
+The file is optional — without it, behavior is identical to today. Invalid command names in the config produce startup warnings but never crash.
+
 ## Mach 12
 
 Scramjet ships with the Mach 12 command set — one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not the only way to use Scramjet.

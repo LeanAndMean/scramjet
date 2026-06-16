@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.19.0 — Edge-level autonomy settings
+
+Per-transition autonomy settings that let users control which command chains auto-fire and which pause, at the granularity of individual edges. Users configure `~/.config/scramjet/autonomy.yaml` (XDG-respecting) to pin specific transitions to `chain` (always auto-dispatch) or `pause` (always show selector), while unconfigured edges follow the existing `/scramjet on|off` flag (issue #129).
+
+### Added
+
+- `autonomy-settings.ts` — settings loader with mtime-cached YAML parsing, edge lookup with wildcard fallback, and registry-aware validation diagnostics.
+- Per-edge `chain` behavior: bypasses the selector entirely and dispatches immediately, regardless of `/scramjet on|off`.
+- Per-edge `pause` behavior: forces the selector without auto-select or countdown, regardless of `/scramjet on|off`.
+- Validation warnings on first dispatch when config references unknown command names.
+- 26 unit tests covering parsing, lookup, caching, validation, and integration.
+
+### Changed
+
+- `auto-continue.ts` — edge setting lookup inserted after `validateNextSteps` and before the selector/dispatch decision in both UI and headless paths.
+- `types.ts` — added `EdgeSetting`, `AutonomyConfig` types and `autonomyConfigPath` on `ScramjetState`.
+- `package.json` — added `yaml` as direct dependency.
+- `README.md` — added autonomy settings documentation section.
+
 ## 0.18.0 — Extend probe router and rename status/input tools
 
 Adds a non-terminating `continuing` status for probe turns that need more work, renames the status and user-input tools to verb-first names, and tightens the probe lifecycle so commands can resume cleanly after structured input (issues #128 and #134).

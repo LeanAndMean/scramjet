@@ -9,8 +9,9 @@ import {
 	parseAutonomyConfig,
 	resetCache,
 	resolveEdgeBehavior,
+	validateConfig,
 } from "../autonomy-settings.ts";
-import type { AutonomyConfig } from "../types.ts";
+import type { AutonomyConfig, CommandRegistry } from "../types.ts";
 
 describe("parseAutonomyConfig", () => {
 	it("parses valid config", () => {
@@ -231,5 +232,66 @@ describe("defaultConfigPath", () => {
 		} finally {
 			if (original !== undefined) process.env.XDG_CONFIG_HOME = original;
 		}
+	});
+});
+
+describe("validateConfig", () => {
+	const registry: CommandRegistry = new Map([
+		["mach12:issue-implement", {} as any],
+		["mach12:pr-create", {} as any],
+		["mach12:pr-merge", {} as any],
+	]);
+
+	it("returns no warnings for valid config", () => {
+		const config: AutonomyConfig = {
+			edges: {
+				"mach12:issue-implement": {
+					"mach12:issue-implement": "chain",
+					"mach12:pr-create": "pause",
+				},
+			},
+		};
+		expect(validateConfig(config, registry)).toEqual([]);
+	});
+
+	it("warns on unknown source command", () => {
+		const config: AutonomyConfig = {
+			edges: {
+				"mach12:nonexistent": { "mach12:pr-create": "chain" },
+			},
+		};
+		const warnings = validateConfig(config, registry);
+		expect(warnings).toContain('unknown source command "mach12:nonexistent"');
+	});
+
+	it("warns on unknown target command", () => {
+		const config: AutonomyConfig = {
+			edges: {
+				"mach12:issue-implement": { "mach12:unknown": "chain" },
+			},
+		};
+		const warnings = validateConfig(config, registry);
+		expect(warnings).toContain('unknown target command "mach12:unknown" (in mach12:issue-implement)');
+	});
+
+	it("does not warn on wildcard target", () => {
+		const config: AutonomyConfig = {
+			edges: {
+				"mach12:issue-implement": { "*": "pause" },
+			},
+		};
+		expect(validateConfig(config, registry)).toEqual([]);
+	});
+
+	it("reports multiple warnings", () => {
+		const config: AutonomyConfig = {
+			edges: {
+				"bad:source": { "bad:target": "chain", "mach12:pr-merge": "pause" },
+			},
+		};
+		const warnings = validateConfig(config, registry);
+		expect(warnings).toHaveLength(2);
+		expect(warnings[0]).toContain('unknown source command "bad:source"');
+		expect(warnings[1]).toContain('unknown target command "bad:target"');
 	});
 });
