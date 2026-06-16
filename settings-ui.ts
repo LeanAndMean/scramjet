@@ -64,7 +64,7 @@ function resolveTargets(policy: NextStepPolicy): ResolvedTarget[] {
 
 export function buildCommandItems(
 	state: ScramjetState,
-	config: AutonomyConfig | null,
+	configGetter: () => AutonomyConfig | null,
 	theme: SettingsListTheme,
 	onChange: (commandName: string, target: string, value: string) => void,
 ): SettingItem[] {
@@ -74,13 +74,16 @@ export function buildCommandItems(
 		.sort(([a], [b]) => a.localeCompare(b));
 
 	for (const [name, def] of sorted) {
-		const edgeSummary = summarizeEdges(name, def.next!, config);
+		const edgeSummary = summarizeEdges(name, def.next!, configGetter());
 		items.push({
 			id: name,
 			label: name,
 			description: def.description,
 			currentValue: edgeSummary,
-			submenu: (_currentValue, done) => buildEdgeSubmenu(name, def.next!, config, theme, onChange, () => done()),
+			submenu: (_currentValue, done) =>
+				buildEdgeSubmenu(name, def.next!, configGetter, theme, onChange, () =>
+					done(summarizeEdges(name, def.next!, configGetter())),
+				),
 		});
 	}
 	return items;
@@ -106,12 +109,12 @@ function summarizeEdges(commandName: string, policy: NextStepPolicy, config: Aut
 function buildEdgeSubmenu(
 	commandName: string,
 	policy: NextStepPolicy,
-	config: AutonomyConfig | null,
+	configGetter: () => AutonomyConfig | null,
 	theme: SettingsListTheme,
 	onChange: (commandName: string, target: string, value: string) => void,
 	onCancel: () => void,
 ): Component {
-	const edgeItems = buildEdgeItems(commandName, policy, config);
+	const edgeItems = buildEdgeItems(commandName, policy, configGetter());
 	const list = new SettingsList(
 		edgeItems,
 		Math.min(edgeItems.length, 10),
@@ -127,7 +130,7 @@ function buildEdgeSubmenu(
 
 export function buildTopLevelItems(
 	state: ScramjetState,
-	config: AutonomyConfig | null,
+	configGetter: () => AutonomyConfig | null,
 	theme: SettingsListTheme,
 	commandOnChange: (commandName: string, target: string, value: string) => void,
 ): SettingItem[] {
@@ -143,20 +146,20 @@ export function buildTopLevelItems(
 
 	const commandsWithEdges = [...state.registry.values()].filter((def) => def.next != null);
 	if (commandsWithEdges.length > 0) {
-		const edgeSummary = buildRegistrySummary(config);
+		const edgeSummary = buildRegistrySummary(configGetter());
 		items.push({
 			id: "command-autonomy",
 			label: "Command autonomy",
 			description: "Per-edge overrides for command chaining behavior",
 			currentValue: edgeSummary,
 			submenu: (_currentValue, done) => {
-				const commandItems = buildCommandItems(state, config, theme, commandOnChange);
+				const commandItems = buildCommandItems(state, configGetter, theme, commandOnChange);
 				return new SettingsList(
 					commandItems,
 					Math.min(commandItems.length, 10),
 					theme,
 					(_id, _newValue) => {},
-					() => done(),
+					() => done(buildRegistrySummary(configGetter())),
 				);
 			},
 		});
@@ -183,6 +186,7 @@ function buildRegistrySummary(config: AutonomyConfig | null): string {
 export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, state: ScramjetState): Promise<void> {
 	const configPath = state.autonomyConfigPath || defaultConfigPath();
 	let config = safeLoadConfig(configPath, ctx);
+	const configGetter = () => safeLoadConfig(configPath, ctx);
 
 	const handleAutonomyChange = (commandName: string, target: string, value: string) => {
 		const prev = config ? structuredClone(config) : null;
@@ -210,7 +214,7 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 		const settingsTheme = buildSettingsTheme(theme as Parameters<SettingsThemeFactory>[0]);
 
-		const topItems = buildTopLevelItems(state, config, settingsTheme, handleAutonomyChange);
+		const topItems = buildTopLevelItems(state, configGetter, settingsTheme, handleAutonomyChange);
 		const list = new SettingsList(
 			topItems,
 			Math.min(topItems.length + 2, 10),
