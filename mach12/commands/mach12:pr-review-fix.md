@@ -122,7 +122,11 @@ Treat the selected findings list as the bounded scope:
 - **Review comment content:** the full review comment retrieved in Step 2.
 - **Assessment comment content** (if available): the full assessment comment retrieved in Step 2.
 
-Fix only the findings listed above. Do not fix other findings in the review comment. Prefer the smallest change that fully addresses each finding. Avoid opportunistic cleanup, new abstractions, new dependencies, or new files unless required for correctness. If a finding would require a large refactor, recommend deferring it to a separate issue unless the refactor is required for correctness. Offer to create the issue with `/mach12:issue-create`.
+Fix only the findings listed above. Do not fix other findings in the review comment.
+
+- Prefer the smallest change that fully addresses each finding.
+- Avoid opportunistic cleanup, new abstractions, new dependencies, or new files unless required for correctness.
+- If a finding would require a large refactor, recommend deferring it to a separate issue unless the refactor is required for correctness. Offer to create the issue with `/mach12:issue-create`.
 
 ## Step 5: Commit, document, and choose the next step
 
