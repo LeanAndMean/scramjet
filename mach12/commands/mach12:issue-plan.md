@@ -105,9 +105,9 @@ If the user says "whatever you think is best", provide your recommendation and g
 
 Based on the codebase findings and clarified requirements, dispatch parallel architecture tasks to specialized subagents under three different lenses:
 
-- **Minimal changes**: Design the implementation with the smallest change surface. Maximize reuse of existing patterns. Minimize new abstractions.
-- **Clean architecture**: Design the implementation prioritizing clear separation of concerns, maintainability, and well-defined abstractions.
-- **Pragmatic balance**: Design the implementation balancing speed with code quality and extensibility.
+- **Smallest sufficient change**: Design the implementation that satisfies the requirements with the smallest change surface. Walk the minimum-sufficient solution ladder before proposing any new abstractions, files, or dependencies. Maximize reuse of existing patterns.
+- **Strongest structural design**: Design the implementation prioritizing clear separation of concerns, maintainability, and well-defined abstractions. Still walk the ladder — justify each new component against a lower rung.
+- **Alternative trade-off design**: Design an implementation that optimizes for a different axis (such as performance, extensibility, or a constraint the other lenses deprioritized). Walk the ladder and state what this lens deliberately trades away.
 
 For parallel execution, dispatch all architecture tasks in a single batch rather than sequentially.
 
@@ -117,7 +117,21 @@ Each lens should produce a full implementation blueprint: files to create or mod
 
 After all results return, review the approaches and form your own recommendation based on the issue's scope, the codebase's conventions, and the user's clarified requirements.
 
+Each lens must state:
+- Which ladder rung it sits on and why lower rungs are insufficient.
+- What problem it optimizes for.
+- What it deliberately does not build.
+- What evidence would make this approach inappropriate.
+
 Present to the user: brief summary of each approach, trade-offs comparison, **your recommendation with reasoning**, and concrete implementation differences.
+
+The recommendation must answer only what the selected lens did not already cover:
+- Which lens and ladder rung did you select, citing the lens's lower-rung rationale rather than restating it?
+- Why is this not bigger than necessary?
+- Why is this not too small to satisfy the requirements?
+- Which larger abstractions/dependencies/files were rejected, and why?
+
+Do not default to the middle option without explaining why both the smaller and more structural options are worse for this issue.
 
 **Ask the user which approach they prefer.**
 

@@ -115,6 +115,22 @@ These are project-specific commitments for the scramjet vision MVP. They are not
 - **Tool-scoping is advisory in MVP.** The harness computes effective scopes by intersecting the active top-level command's scope with the first delegated command, then intersecting each nested delegated frame with its caller. It logs warnings on out-of-scope tool calls but does NOT block them. Hard enforcement (rejecting tool calls outside the active frame's `allowed-tools`) is deferred to a post-MVP issue that also lands multi-turn save/restore so the caller's broader scope is restored after a delegated frame returns. Rationale: latched-only enforcement (once narrowed, scope stays narrowed for the rest of the turn) is a hidden authoring trap. gsd-2's nearest analog (`write-gate.ts`, ~1,053 LOC) has a documented bug history even with full engineering; landing it partial in scramjet's MVP is the worse failure mode.
 - **Per-command `allowed-tools` enforcement is harness-bound, not prose-trusted.** When hard enforcement lands post-MVP, the gate is at the `tool_call` event hook, not in prose. LLMs cannot be trusted to follow instruction-level "restrict yourself to X, Y, Z" constraints — the harness must intercept and reject. Advisory logging in the MVP is a half-measure that documents the intent and makes the eventual hard cut a flip rather than a redesign.
 
+## Minimal implementation discipline
+
+Use this ladder when choosing a solution, plan, architecture, implementation approach, or review recommendation. Stop at the first rung that satisfies the requirement.
+
+1. Does this need to exist at all?
+2. Can this be solved by deleting code or narrowing scope?
+3. Can this be solved with documentation, configuration, or existing behavior?
+4. Can a native platform feature, standard library API, or existing project utility solve it?
+5. Can an already-installed dependency solve it?
+6. Can this be a small edit to existing code instead of a new file/component?
+7. Only then add the minimum new code, abstraction, dependency, configuration, or process that works.
+
+Non-trivial behavior changes need the smallest meaningful check consistent with the repo. Trivial docs, prompt, mechanical, or one-line changes may not need new tests.
+
+Never simplify away validation at trust boundaries, security controls, accessibility basics, data-loss protection, actionable error reporting, or explicit user requirements.
+
 ## Solution Assessment (for assessment and planning work)
 
 Applies when the deliverable is a recommendation, plan, or assessment rather than the change itself — e.g., `/mach12:issue-plan`, `/mach12:issue-review`, `/mach12:pr-review-assessment`, or any user request that asks "how should we do X?" / "what's the right way to add Y?" rather than "do X." When you are executing an already-decided plan, this section does not apply.
@@ -156,6 +172,10 @@ Rules that govern the block:
   - **Frame the evidence as an action you took, not a thing that happened to you.** "A test revealed Y" is unconvincing and unfalsifiable. "I ran <snippet> and got <output>, which shows Y" is reproducible and reviewable. The user (or a future agent) must be able to re-run your probe from the snippet alone.
 
   Probes count as first-class evidence in the candidate bullets above. A confirmed probe result outranks a doc quote, because the doc describes the contract and the probe describes the implementation. When they disagree, the probe wins for planning purposes, and the disagreement itself is worth surfacing to the user.
+
+## Dependency orientation
+
+Before adding a dependency, utility, or custom implementation, check whether existing project dependencies already provide the capability. Inspect `package.json`, adjacent imports, and relevant Pi docs/examples; treat those live sources as authoritative for available packages and APIs. The `@earendil-works/pi-coding-agent` dependency key is an npm alias to the maintained `@leanandmean/pi-coding-agent` fork; do not treat it as upstream Pi.
 
 ## Version pinning
 

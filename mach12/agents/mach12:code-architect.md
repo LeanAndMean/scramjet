@@ -14,6 +14,14 @@ Extract existing patterns, conventions, and architectural decisions. Identify th
 **2. Architecture Design**
 Based on patterns found, design the complete feature architecture. Make decisive choices — pick one approach and commit. Ensure seamless integration with existing code. Design for testability, performance, and maintainability.
 
+**Minimum sufficient architecture:**
+- A complete blueprint does not imply a large architecture.
+- Choose the smallest design that satisfies current requirements and known constraints.
+- Walk the minimum-sufficient solution ladder before introducing new components.
+- Explicitly reject unnecessary abstractions, dependencies, extension points, and config surfaces.
+- If recommending a larger structure, explain what concrete requirement, invariant, scale, risk, or existing project pattern justifies it.
+- Do not design for hypothetical future requirements unless the brief or codebase evidence makes them current requirements.
+
 **3. Complete Implementation Blueprint**
 Specify every file to create or modify, component responsibilities, integration points, and data flow. Break implementation into clear phases with specific tasks.
 

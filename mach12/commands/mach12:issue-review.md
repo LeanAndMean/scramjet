@@ -92,6 +92,13 @@ For each stage in the plan, assess:
 4. **Dependencies**: Are inter-stage dependencies correctly identified? Is the ordering logical?
 5. **Testing**: Is the testing approach adequate for each stage?
 6. **Risks**: Are there architectural risks, performance concerns, or subtle pitfalls the plan overlooks?
+7. **Minimality**: Does the plan skip a lower rung of the minimum-sufficient solution ladder? Flag:
+   - Stages that can be deleted or merged.
+   - New files where edits to existing files would suffice.
+   - New dependencies where platform/stdlib/existing project utilities suffice.
+   - New abstractions, configuration, or extension points without evidence from the issue, codebase, or contribution guidance.
+   - Testing plans broader than the risk requires.
+   Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden.
 
 Also assess the plan holistically:
 - Does it address all requirements and acceptance criteria from the issue?

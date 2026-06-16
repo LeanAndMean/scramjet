@@ -124,7 +124,9 @@ Treat the selected findings list as the bounded scope:
 
 Fix only the findings listed above. Do not fix other findings in the review comment.
 
-If a fix is out of scope or would require significant refactoring, recommend deferring it to a new GitHub issue rather than fixing it inline. Offer to create the issue with `/mach12:issue-create`.
+- Prefer the smallest change that fully addresses each finding.
+- Avoid opportunistic cleanup, new abstractions, new dependencies, or new files unless required for correctness.
+- If a finding would require a large refactor, recommend deferring it to a separate issue unless the refactor is required for correctness. Offer to create the issue with `/mach12:issue-create`.
 
 ## Step 5: Commit, document, and choose the next step
 

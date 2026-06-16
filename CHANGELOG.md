@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.1 — Minimality pressure across planning, implementation, and review prompts
+
+Adds the minimum-sufficient solution ladder and tailored minimality guidance to CLAUDE.md and 11 Mach 12 command/agent prompts (issue #150).
+
+### Added
+
+- `CLAUDE.md` — added the canonical minimal implementation discipline ladder, test proportionality guidance, safety exceptions, and dependency-orientation guidance.
+- Mach 12 commands — added tailored minimality guidance across issue planning, implementation, issue review, PR review, PR review assessment, and PR review fixing.
+- Mach 12 agents — added tailored minimality checks across simplification, architecture, testing, silent-failure, and feature-completeness lenses.
+
 ## 0.21.0 — Freetext user input terminates and parks at waiting
 
 Freetext `get_scramjet_user_input` now returns `terminate: true` and parks at the `waiting` phase, so the user replies in the standard message editor instead of a single-line input widget (issue #147).
