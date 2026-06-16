@@ -10,6 +10,10 @@ Cancellation of `get_scramjet_user_input` now ends the current agent turn, parks
 - `phase-machine.ts` — allows `running → waiting` and `probing → waiting` transitions.
 - User-input command authoring and vision docs now distinguish successful in-turn input from cancellation.
 
+### Fixed
+
+- `user-input.ts` — typecheck failure (TS2454) from uninitialized `result` variable in `finally` block; added `default` switch case and widened the type to `| undefined`.
+
 ## 0.20.0 — TUI settings widget
 
 Interactive TUI widget for browsing and editing Scramjet settings, including per-edge autonomy overrides and the auto-continuation toggle, accessible via `/scramjet settings` (issue #138).

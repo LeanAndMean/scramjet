@@ -100,7 +100,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				details: Record<string, unknown>;
 				cancelled: boolean;
 			};
-			let result: InteractionResult;
+			let result: InteractionResult | undefined;
 			try {
 				switch (params.type) {
 					case "confirm":
@@ -117,6 +117,11 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					case "freetext":
 						result = await handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
 						break;
+					default:
+						return {
+							content: [{ type: "text", text: `Unknown interaction type: ${params.type}` }],
+							details: { error: "unknown-type", type: params.type },
+						};
 				}
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
