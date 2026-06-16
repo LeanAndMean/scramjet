@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.21.1 — Minimality pressure across planning, implementation, and review prompts
+
+Adds the minimum-sufficient solution ladder and tailored minimality guidance to CLAUDE.md and 11 Mach 12 command/agent prompts (issue #150).
+
+### Added
+
+- `CLAUDE.md` — "Minimal implementation discipline" section with 7-rung ladder, test proportionality, and safety exceptions; "Dependency orientation" subsection documenting existing package capabilities.
+- `mach12/commands/mach12:issue-plan.md` — reframed architecture selection with ladder-aware lenses.
+- `mach12/commands/mach12:issue-implement.md` — minimality re-checks in Discovery and Implementation phases.
+- `mach12/commands/mach12:issue-review.md` — minimality review axis for plan assessment.
+- `mach12/commands/mach12:pr-review.md` — strengthened simplification lens with explicit ladder walk.
+- `mach12/commands/mach12:pr-review-assessment.md` — simplification assessment guidance.
+- `mach12/commands/mach12:pr-review-fix.md` — minimum-scope fix guidance.
+- `mach12/agents/mach12:code-simplifier.md` — ladder as first-pass analysis sequence.
+- `mach12/agents/mach12:code-architect.md` — "Minimum sufficient architecture" guidance block.
+- `mach12/agents/mach12:test-analyzer.md` — smallest-meaningful-check principle.
+- `mach12/agents/mach12:silent-failure-hunter.md` — guard against simplification hiding failures.
+- `mach12/agents/mach12:feature-completeness-checker.md` — scope-creep detection note.
+
 ## 0.21.0 — Freetext user input terminates and parks at waiting
 
 Freetext `get_scramjet_user_input` now returns `terminate: true` and parks at the `waiting` phase, so the user replies in the standard message editor instead of a single-line input widget (issue #147).
