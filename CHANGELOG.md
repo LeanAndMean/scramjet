@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0 — Freetext user input terminates and parks at waiting
+
+Freetext `get_scramjet_user_input` now returns `terminate: true` and parks at the `waiting` phase, so the user replies in the standard message editor instead of a single-line input widget (issue #147).
+
+### Changed
+
+- `user-input.ts` — freetext short-circuits before the UI block, returns `terminate: true`, and parks at `waiting`; `handleFreetext` removed entirely.
+- `docs/command-authoring.md` — freetext section updated to document terminate-and-wait behavior.
+- `CLAUDE.md` — architecture description updated for freetext flow.
+
 ## 0.20.3 — Refresh settings autonomy summaries
 
 Settings submenus now reload autonomy config when opened and refresh parent summary values when exiting, so edge overrides remain visible throughout a settings session (issue #145).

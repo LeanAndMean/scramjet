@@ -20,9 +20,9 @@ const NON_TUI_ERROR =
 
 const PROMPT_SNIPPET =
 	"You have access to `get_scramjet_user_input` for requesting structured user input mid-turn " +
-	"(confirm, select, or freetext). The tool blocks until the user responds and returns their " +
-	"answer as the tool result; if the user cancels, the turn ends. Use it when you need explicit user " +
-	"decisions during command execution rather than ending the turn with a prose question.";
+	"(confirm, select, or freetext). Confirm/select block until the user responds and return their " +
+	"answer as the tool result; freetext terminates the turn so the user replies in the standard editor. " +
+	"State freetext questions in prose before calling the tool.";
 
 const USER_INPUT_OPTION_SCHEMA = Type.Object({
 	value: Type.String(),
@@ -63,7 +63,9 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 		description:
 			"Request structured input from the user during command execution. " +
 			"Supports confirm (yes/no), select (pick from options), and freetext (open-ended input). " +
-			"Blocks until the user responds; the turn continues after the response.",
+			"Confirm and select block until the user responds and return their answer as the tool result; " +
+			"freetext terminates the turn so the user replies in the standard editor. " +
+			"The placeholder parameter is accepted for compatibility but unused by freetext.",
 		promptSnippet: PROMPT_SNIPPET,
 		parameters: USER_INPUT_SCHEMA,
 		async execute(_toolCallId, params, _resource, _read, ctx) {
@@ -77,18 +79,32 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				};
 			}
 
-			if (!ctx?.ui) {
-				return {
-					content: [{ type: "text", text: NON_TUI_ERROR }],
-					details: { error: "non-tui" },
-				};
-			}
-
 			const validationError = validateParams(params);
 			if (validationError) {
 				return {
 					content: [{ type: "text", text: validationError }],
 					details: { error: "validation", message: validationError },
+				};
+			}
+
+			if (params.type === "freetext") {
+				pi.appendEntry(USER_INPUT_TYPE, {
+					interactionType: params.type,
+					message: params.message,
+				});
+				transitionPhase(state, "waiting");
+				if (state.activeTopLevelCommand) recordCommandStatus(pi, state.activeTopLevelCommand, "waiting_for_user");
+				return {
+					content: [{ type: "text", text: JSON.stringify({ waiting_for_user: true }) }],
+					details: { type: "freetext", waiting_for_user: true },
+					terminate: true,
+				};
+			}
+
+			if (!ctx?.ui) {
+				return {
+					content: [{ type: "text", text: NON_TUI_ERROR }],
+					details: { error: "non-tui" },
 				};
 			}
 
@@ -113,9 +129,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 							params.recommended,
 							ctx as ExtensionContext,
 						);
-						break;
-					case "freetext":
-						result = await handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
 						break;
 					default:
 						return {
@@ -256,22 +269,6 @@ async function handleSelect(
 	return {
 		content: [{ type: "text" as const, text: JSON.stringify({ selected: selectedValue }) }],
 		details: { type: "select", selected: selectedValue },
-		cancelled: false,
-	};
-}
-
-async function handleFreetext(message: string, placeholder: string | undefined, ctx: ExtensionContext) {
-	const text = await ctx.ui.input(message, placeholder);
-	if (text === undefined) {
-		return {
-			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
-			details: { type: "freetext", cancelled: true },
-			cancelled: true,
-		};
-	}
-	return {
-		content: [{ type: "text" as const, text: JSON.stringify({ text }) }],
-		details: { type: "freetext", text },
 		cancelled: false,
 	};
 }
