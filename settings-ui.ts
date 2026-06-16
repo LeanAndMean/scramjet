@@ -185,27 +185,24 @@ function buildRegistrySummary(config: AutonomyConfig | null): string {
 
 export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, state: ScramjetState): Promise<void> {
 	const configPath = state.autonomyConfigPath || defaultConfigPath();
-	let config = safeLoadConfig(configPath, ctx);
 	const configGetter = () => safeLoadConfig(configPath, ctx);
 
 	const handleAutonomyChange = (commandName: string, target: string, value: string) => {
-		const prev = config ? structuredClone(config) : null;
-		if (!config) config = { edges: {} };
+		const current = configGetter() ?? { edges: {} };
 		if (value === "default") {
-			if (config.edges[commandName]) {
-				delete config.edges[commandName][target];
-				if (Object.keys(config.edges[commandName]).length === 0) {
-					delete config.edges[commandName];
+			if (current.edges[commandName]) {
+				delete current.edges[commandName][target];
+				if (Object.keys(current.edges[commandName]).length === 0) {
+					delete current.edges[commandName];
 				}
 			}
 		} else {
-			if (!config.edges[commandName]) config.edges[commandName] = {};
-			config.edges[commandName][target] = value as "chain" | "pause";
+			if (!current.edges[commandName]) current.edges[commandName] = {};
+			current.edges[commandName][target] = value as "chain" | "pause";
 		}
 		try {
-			saveAutonomyConfig(configPath, config);
+			saveAutonomyConfig(configPath, current);
 		} catch (err: unknown) {
-			config = prev;
 			const msg = err instanceof Error ? err.message : String(err);
 			ctx.ui.notify(`Failed to save autonomy config: ${msg}`, "error");
 		}
