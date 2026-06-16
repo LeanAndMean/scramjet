@@ -2,8 +2,8 @@ import type { CommandPhase, CommandStatusRestingStatus, ScramjetState } from "./
 
 export const LEGAL_TRANSITIONS = {
 	idle: ["idle", "running"],
-	running: ["idle", "probing", "running"],
-	probing: ["idle", "reported", "running"],
+	running: ["idle", "probing", "running", "waiting"],
+	probing: ["idle", "reported", "running", "waiting"],
 	reported: ["idle", "waiting", "running"],
 	waiting: ["idle", "running", "waiting"],
 } as const satisfies Record<CommandPhase, readonly CommandPhase[]>;

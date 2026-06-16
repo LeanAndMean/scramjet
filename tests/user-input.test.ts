@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { COMMAND_STATUS_TYPE } from "../history.ts";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../user-input.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
@@ -261,7 +262,7 @@ describe("registerUserInputTool — confirm interaction", () => {
 		expect(result.details.confirmed).toBe(false);
 	});
 
-	it("returns cancelled: true when user presses Escape", async () => {
+	it("returns cancelled: true and terminates when user presses Escape", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "running" }));
 		const ctx = mockUICtx(null);
 		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
@@ -269,6 +270,7 @@ describe("registerUserInputTool — confirm interaction", () => {
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ cancelled: true });
 		expect(result.details.cancelled).toBe(true);
+		expect(result.terminate).toBe(true);
 	});
 });
 
@@ -294,7 +296,7 @@ describe("registerUserInputTool — select interaction", () => {
 		expect(result.details.selected).toBe("minor");
 	});
 
-	it("returns cancelled: true when user presses Escape", async () => {
+	it("returns cancelled: true and terminates when user presses Escape", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "running" }));
 		const ctx = mockUICtx(null);
 		const result = await execute(selectParams, ctx);
@@ -302,6 +304,7 @@ describe("registerUserInputTool — select interaction", () => {
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ cancelled: true });
 		expect(result.details.cancelled).toBe(true);
+		expect(result.terminate).toBe(true);
 	});
 
 	it("passes recommended index to the select widget", async () => {
@@ -339,7 +342,7 @@ describe("registerUserInputTool — freetext interaction", () => {
 		expect(result.details.text).toBe("v1.2.3 - Auth fixes");
 	});
 
-	it("returns cancelled: true when user presses Escape", async () => {
+	it("returns cancelled: true and terminates when user presses Escape", async () => {
 		const { execute } = toolFor(freshState({ commandPhase: "running" }));
 		const ctx = mockUICtx(null, undefined);
 		const result = await execute({ type: "freetext", message: "Release title?" }, ctx);
@@ -347,6 +350,37 @@ describe("registerUserInputTool — freetext interaction", () => {
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ cancelled: true });
 		expect(result.details.cancelled).toBe(true);
+		expect(result.terminate).toBe(true);
+	});
+});
+
+describe("registerUserInputTool — cancellation phase handling", () => {
+	it("transitions running to waiting on cancellation", async () => {
+		const state = freshState({ commandPhase: "running" });
+		const { execute } = toolFor(state);
+		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
+
+		expect(result.terminate).toBe(true);
+		expect(state.commandPhase).toBe("waiting");
+	});
+
+	it("transitions probing to waiting on cancellation", async () => {
+		const state = freshState({ commandPhase: "probing" });
+		const { execute } = toolFor(state);
+		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
+
+		expect(result.terminate).toBe(true);
+		expect(state.commandPhase).toBe("waiting");
+	});
+
+	it("terminates and transitions without journaling command status when no active command is set", async () => {
+		const state = freshState({ commandPhase: "running", activeTopLevelCommand: null });
+		const { execute, pi } = toolFor(state);
+		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
+
+		expect(result.terminate).toBe(true);
+		expect(state.commandPhase).toBe("waiting");
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
 	});
 });
 
@@ -515,8 +549,8 @@ describe("registerUserInputTool — journaling", () => {
 		});
 	});
 
-	it("journals a cancelled interaction", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+	it("journals a cancelled interaction and waiting command status", async () => {
+		const { execute, pi } = toolFor(freshState({ commandPhase: "running", activeTopLevelCommand: "mach12:test" }));
 		const ctx = mockUICtx(null);
 		await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
@@ -527,6 +561,10 @@ describe("registerUserInputTool — journaling", () => {
 			message: "Deploy?",
 			cancelled: true,
 		});
+
+		const statusEntry = pi.appended.find((e: any) => e.customType === COMMAND_STATUS_TYPE);
+		expect(statusEntry).toBeDefined();
+		expect(statusEntry.data).toEqual({ commandName: "mach12:test", status: "waiting_for_user" });
 	});
 
 	it("does not journal when phase gate rejects", async () => {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.1 — Terminate user input cancellation
+
+Cancellation of `get_scramjet_user_input` now ends the current agent turn, parks the active command in `waiting`, and journals a `waiting_for_user` status for resume reconstruction (issue #142).
+
+### Changed
+
+- `user-input.ts` — cancellation from confirm/select/freetext prompts returns `terminate: true`, transitions active command phases to `waiting`, and records waiting command status when a top-level command is active.
+- `phase-machine.ts` — allows `running → waiting` and `probing → waiting` transitions.
+- User-input command authoring and vision docs now distinguish successful in-turn input from cancellation.
+
 ## 0.20.0 — TUI settings widget
 
 Interactive TUI widget for browsing and editing Scramjet settings, including per-edge autonomy overrides and the auto-continuation toggle, accessible via `/scramjet settings` (issue #138).

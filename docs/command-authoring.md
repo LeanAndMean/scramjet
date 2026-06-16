@@ -481,7 +481,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns their answer as the tool result — the turn does not end.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns successful answers as the tool result; pressing Escape cancels the prompt and ends the turn.
 
 ### When to use it
 
@@ -530,21 +530,21 @@ Returns `{ "text": "v1.2.3 - Auth improvements" }` or `{ "cancelled": true }`. T
 
 ### Cancellation
 
-All interaction types return `{ "cancelled": true }` when the user presses Escape. The agent receives this as an honest signal and should adapt — re-ask, adjust approach, or move on. Cancellation is not an error.
+All interaction types return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command.
 
 ### Phase gating
 
-The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, the tool suspends the probe watchdog while awaiting user input; after the response, the command transitions back to `running` so the agent can continue work in the same turn and Scramjet can probe again when that work ends.
+The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, the tool suspends the probe watchdog while awaiting user input; after a successful response, the command transitions back to `running` so the agent can continue work in the same turn and Scramjet can probe again when that work ends. If the user cancels during either `running` or `probing`, the command transitions to `waiting` instead.
 
 ### Journaling
 
-Each interaction (including cancellations) is journaled as a `scramjet:user-input` custom entry type, recording the interaction type, message, and result.
+Each interaction (including cancellations) is journaled as a `scramjet:user-input` custom entry type, recording the interaction type, message, and result. Cancellations with an active top-level command are also journaled as `waiting_for_user` command status entries so resume reconstruction preserves the waiting state.
 
 ### Don't
 
 - Don't use `get_scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
 - Don't use `get_scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
-- Don't ignore `{ "cancelled": true }` — treat it as the user declining to answer, not as an error or a default.
+- Don't rely on handling `{ "cancelled": true }` in the same turn — cancellation terminates the turn and parks the command in `waiting`.
 
 ---
 

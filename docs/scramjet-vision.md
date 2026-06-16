@@ -359,10 +359,11 @@ types:
 | `select`   | `{ type: "select", message: string, options: string[] }` | Shows a picker; returns `{ selected: string }` |
 | `freetext` | `{ type: "freetext", message: string, default?: string }` | Shows a text input; returns `{ text: string }` |
 
-The tool **does not end the agent's turn**. The harness displays the
+Successful input **does not end the agent's turn**. The harness displays the
 appropriate UI, blocks until the user responds, and returns the result as
 a normal tool result. The agent continues executing with the answer in
-context — no phase transition, no probe, no re-dispatch.
+context — no phase transition, no probe, no re-dispatch. If the user cancels
+the prompt, the tool terminates the turn and parks the command in `waiting`.
 
 This is the key distinction from `report_scramjet_command_status`: the status
 tool is a terminal lifecycle signal ("I'm done or stuck"), while
@@ -409,8 +410,9 @@ the agent simply keeps working. No manual "continue" needed.
 The two tools are complementary:
 
 - **`get_scramjet_user_input`** — "I need something from the user to continue."
-  Within-turn; the harness collects input and returns it as a tool result.
-  The command keeps running.
+  Within-turn on successful input; the harness collects input and returns it as
+  a tool result. If the user cancels, the turn ends and the command waits for a
+  later user reply.
 - **`report_scramjet_command_status`** — "I'm done or stuck." Terminal lifecycle
   signal. The turn ends. Chaining may follow.
 
@@ -426,17 +428,20 @@ continue work in that same turn.
 
 ##### Phase machine implications
 
-For proactive calls during normal command work, `get_scramjet_user_input` does
-not change the phase: it remains `running`, no status report is generated, and
-the agent's turn continues after the tool result returns.
+For proactive calls during normal command work, successful `get_scramjet_user_input`
+does not change the phase: it remains `running`, no status report is generated,
+and the agent's turn continues after the tool result returns. Cancellation
+transitions `running → waiting`, journals `waiting_for_user`, and terminates the
+turn.
 
 For probe-time calls, the tool is the handoff from status-check probing back to
 active command work:
 
 - Phase remains `probing` while the UI is pending.
 - The probe watchdog is suspended and is not re-armed after the response.
-- After the tool returns, the phase becomes `running`.
-- The next `agent_end` schedules a fresh status probe.
+- After a successful tool response, the phase becomes `running`.
+- If the user cancels, the phase becomes `waiting` and the turn terminates.
+- The next `agent_end` schedules a fresh status probe only after successful input resumes command work.
 
 This keeps intra-command interactions within command execution while preserving
 the phase machine's turn-boundary lifecycle checks.
