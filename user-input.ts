@@ -101,7 +101,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				cancelled: boolean;
 			};
 			let result: InteractionResult;
-			let cancelled = false;
 			try {
 				switch (params.type) {
 					case "confirm":
@@ -119,7 +118,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 						result = await handleFreetext(params.message, params.placeholder, ctx as ExtensionContext);
 						break;
 				}
-				cancelled = result.cancelled;
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return {
@@ -127,7 +125,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					details: { error: "ui-error", message },
 				};
 			} finally {
-				if (isProbing && !cancelled) transitionPhase(state, "running");
+				if (isProbing) transitionPhase(state, result?.cancelled ? "waiting" : "running");
 			}
 
 			pi.appendEntry(USER_INPUT_TYPE, {
@@ -137,8 +135,8 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			});
 
 			const toolResult = { content: result.content, details: result.details };
-			if (cancelled) {
-				transitionPhase(state, "waiting");
+			if (result.cancelled) {
+				if (!isProbing) transitionPhase(state, "waiting");
 				if (state.activeTopLevelCommand) recordCommandStatus(pi, state.activeTopLevelCommand, "waiting_for_user");
 				return { ...toolResult, terminate: true };
 			}
