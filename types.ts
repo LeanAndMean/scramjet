@@ -99,6 +99,12 @@ export interface SidebarEntry {
 	timestamp: number;
 }
 
+export type EdgeSetting = "chain" | "pause" | null;
+
+export interface AutonomyConfig {
+	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;
+}
+
 export interface ScramjetState {
 	enabled: boolean;
 	registry: CommandRegistry;
@@ -120,4 +126,5 @@ export interface ScramjetState {
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	resetConsecutiveContinues?: () => void;
+	autonomyConfigPath: string;
 }

@@ -1,5 +1,9 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, NOTIFY_MAX, registerAutoContinue } from "../auto-continue.ts";
+import { resetCache } from "../autonomy-settings.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
 import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
@@ -2112,5 +2116,258 @@ describe("cleanForNotify", () => {
 		expect(out).toHaveLength(NOTIFY_MAX);
 		expect(out.endsWith("…")).toBe(true);
 		expect(out.slice(0, NOTIFY_MAX - 1)).toBe("a".repeat(NOTIFY_MAX - 1));
+	});
+});
+
+describe("edge-level autonomy settings integration", () => {
+	let configDir: string;
+	let configPath: string;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		configDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-edge-test-"));
+		configPath = path.join(configDir, "autonomy.yaml");
+		resetCache();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		resetCache();
+		fs.rmSync(configDir, { recursive: true, force: true });
+	});
+
+	function writeConfig(yaml: string) {
+		fs.writeFileSync(configPath, yaml);
+	}
+
+	it("chain + UI: skips selector and dispatches immediately", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok 42", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([
+			{ input: "/b:ok 42", options: { deliverAs: "followUp" }, session: "current" },
+		]);
+	});
+
+	it("chain + headless: dispatches without selector", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("chain fires regardless of /scramjet off (user pre-decided)", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("chain + non-matching recommendation: falls through to default behavior", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const def = defWithPolicy("a:cmd", {
+			mode: "closed",
+			candidates: [{ name: "b:ok" }, { name: "c:other" }],
+		});
+		const state = runningState(def, {
+			enabled: true,
+			autonomyConfigPath: configPath,
+			registry: registryWith(defWithPolicy("c:other", undefined)),
+		});
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/c:other", reason: "different" }],
+			recommended_next_step: 0,
+		});
+
+		// Falls through: c:other is not marked chain, so shows selector
+		expect(ctxBag.customComponents).toHaveLength(1);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("chain + forced mode: forced takes precedence", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:target: pause\n");
+		const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+		const targetDef = defWithPolicy("b:target", undefined);
+		const state = runningState(def, {
+			autonomyConfigPath: configPath,
+			registry: registryWith(targetDef),
+		});
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:target", reason: "forced" }],
+		});
+
+		// Forced fires regardless of edge setting
+		expect(ctxBag.dispatched).toEqual([
+			{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+		]);
+	});
+
+	it("pause + UI + /scramjet on: shows selector without auto-select", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: pause\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		// Selector shown, but no auto-select countdown
+		expect(ctxBag.customComponents).toHaveLength(1);
+		expect(ctxBag.dispatched).toEqual([]);
+		// Verify the render does NOT contain "auto-selects" (no countdown)
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).not.toContain("auto-selects");
+	});
+
+	it("pause + headless + /scramjet on: notifies but does not dispatch", async () => {
+		writeConfig("edges:\n  a:cmd:\n    b:ok: pause\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		expect(ctxBag.dispatched).toEqual([]);
+		expect(ctxBag.notifications.some((n) => n.message.includes("edge setting: pause"))).toBe(true);
+	});
+
+	it("absent setting: behavior unchanged (follows /scramjet flag)", async () => {
+		writeConfig("edges:\n  other:cmd:\n    b:ok: chain\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		// No edge setting for a:cmd→b:ok, enabled=false: selector shown, no dispatch
+		expect(ctxBag.customComponents).toHaveLength(1);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("wildcard edge setting applies to unspecified targets", async () => {
+		writeConfig('edges:\n  a:cmd:\n    "*": chain\n');
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("missing config file: default behavior preserved", async () => {
+		// No writeConfig call — file does not exist
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		// enabled=true with UI: selector with auto-select (normal behavior)
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("auto-selects");
+	});
+
+	it("malformed YAML: warns and proceeds with default behavior", async () => {
+		writeConfig("{ invalid yaml: [");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		// Should warn about the malformed config
+		expect(ctxBag.notifications.some((n) => n.message.includes("autonomy.yaml"))).toBe(true);
+		// Should still show selector (default behavior, not crash)
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("auto-selects");
+	});
+
+	it("malformed YAML in edge lookup: warns and falls through to default", async () => {
+		// Write valid config first so validation passes, then corrupt it before edge lookup
+		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		// First turn triggers validation (succeeds with valid config)
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		// Edge setting resolved as chain — dispatched without selector
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
 	});
 });
