@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.22.1 — Add test-designer agent and planning workflow integration
+
+Adds a `mach12:test-designer` subagent that designs test strategies from requirements and architecture at planning time, distinct from the existing `mach12:test-analyzer` which reviews existing tests at review time. Integrates into the Mach 12 planning workflow with conditional dispatch, testability notes for bug reports, and soft test-first guidance during implementation (issue #159).
+
+### Added
+
+- `mach12/agents/mach12:test-designer.md` — new subagent providing per-test cost/benefit assessments, coverage intent categorization (problem verification / invariant protection / implementation completeness / regression prevention), and test-first recommendations for bug fixes.
+- `mach12:issue-plan` Step 7 — conditional test-design step between architecture selection and plan drafting; dispatches `mach12:test-designer` for bugs, non-trivial features, and critical-path refactors.
+- `mach12:issue-create` — `## Testability` section in bug reports noting reproducibility, assertions, and test type.
+- `mach12:issue-implement` — soft test-first guidance in the Implementation phase when the plan's Test Strategy includes test-first directives.
+
 ## 0.22.0 — Eliminate redundant waiting_for_user path
 
 Removes `waiting_for_user` from `report_scramjet_command_status` status enum. All "park for user input" flows now go exclusively through `get_scramjet_user_input` (freetext for unstructured, confirm/select for structured). The status tool accepts only `completed`, `continuing`, `blocked`, and `incomplete` (issue #156).
