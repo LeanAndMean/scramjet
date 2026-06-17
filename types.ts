@@ -92,6 +92,7 @@ export interface AutonomyConfig {
 	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;
 }
 
+// Exposed for test observability of closure-local timer state in auto-continue.ts.
 export interface LifecycleTimerAccessors {
 	isProbeScheduled(): boolean;
 	isWatchdogActive(): boolean;

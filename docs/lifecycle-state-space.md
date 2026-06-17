@@ -71,7 +71,7 @@ All other event/state pairs are illegal and return `{ ok: false }` rather than t
 
 ## Module ownership map
 
-- `types.ts`: currently defines legacy `CommandPhase`, status payloads, and `ScramjetState`; later stages add `LifecycleState` to `ScramjetState` and eventually remove legacy fields.
+- `types.ts`: defines `LifecycleState` (discriminated union), `LifecycleEvent`, status payloads, `ScramjetState` (with `lifecycle: LifecycleState`), and `LifecycleTimerAccessors` (test-observability accessors for timer state).
 - `phase-machine.ts`: owns transition legality, replay reconstruction helpers, and lifecycle invariants.
 - `history.ts`: owns command-start journaling, replay reconstruction, interactive reply resume, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns answer-turn `agent_end`, probe scheduling, probe self-heal, status routing, selector/dispatch timers, and terminal resolution.

@@ -11,7 +11,7 @@ export type LifecycleState =
 export type LifecycleEvent =
 	| { type: "command-start"; command: string }
 	| { type: "agent-end" }
-	| { type: "probe-sent" }
+	| { type: "probe-sent" } // Forward placeholder for observability; not currently emitted by any caller.
 	| { type: "probe-self-healed" }
 	| { type: "status-reported"; status: CommandStatusPayload }
 	| { type: "continuing" }

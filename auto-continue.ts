@@ -200,6 +200,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (probeTimer) clearTimeout(probeTimer);
 		clearProbeWatchdog();
 		const content = buildProbeMessage(policy, commandId, state.enabled);
+		// Deferred to land after the run settles; a throw here becomes an uncaughtException and leaves lifecycle wedged.
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
 			try {
@@ -421,6 +422,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		sourceName: string,
 	) {
 		if (dispatchTimer) clearTimeout(dispatchTimer);
+		// Deferred to land after the run settles; a throw here becomes an uncaughtException and leaves lifecycle wedged.
 		dispatchTimer = setTimeout(() => {
 			dispatchTimer = null;
 			try {
