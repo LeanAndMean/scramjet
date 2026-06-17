@@ -81,6 +81,7 @@ Draft a structured issue with these sections:
 - **Acceptance Criteria**: Bullet list of verifiable end-state conditions that define "done", independent of implementation approach. Exception: when the artifact being changed is itself a specification (command definitions, config schemas, workflow files, documentation), implementation-specific criteria are appropriate because the spec IS the implementation.
 - **Relevant Context** (optional): Links to related PRs, issues, discussions, review findings, assessment comments, or code areas discovered during due diligence.
 - **Technical Notes** (optional): Non-binding implementation hints, relevant files, architectural considerations, risks, or suspected approaches.
+- **Testability** (bug reports only): Whether the problem is reproducible via an automated test, what such a test would assert, and what test type would be appropriate (unit, integration, end-to-end). Skip this section for features, refactors, and documentation tasks.
 
 ### Drafting notes
 
