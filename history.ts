@@ -4,6 +4,7 @@ import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, Sideba
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
+export const USER_INPUT_PARKED_TYPE = "scramjet:user-input-parked";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
 
@@ -110,7 +111,7 @@ export interface CommandStatusData {
 // recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
 // the live phase is owned by command-status.ts / auto-continue.ts; this only
 // persists the report so resume can rebuild the resting phase. Terminal/resting
-// statuses are journaled, not just waiting_for_user — that is what lets a command
+// terminal statuses are journaled — that is what lets a command
 // which waits, is answered, then completes without offering a next step reconstruct
 // to "idle" instead of resurrecting at "waiting" (the duplicate-work hazard).
 export function recordCommandStatus(pi: ExtensionAPI, commandName: string, status: CommandStatusRestingStatus): void {
@@ -200,8 +201,8 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
 			// Resume the active command on an interactive non-slash reply. Two
-			// cases: (1) issue 88 — the command reported waiting_for_user and
-			// rests at "waiting"; the user's answer re-arms the probe path.
+			// cases: (1) issue 88 — the command parked via user-input freetext
+			// and rests at "waiting"; the user's answer re-arms the probe path.
 			// (2) issue 128 — the probe self-healed to "dormant" (command
 			// still associated but not running); the user's reply is still
 			// engaging with the command. In both cases, flip to "running" so

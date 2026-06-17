@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, NOTIFY_MAX, registerAutoContinue } from "../auto-continue.ts";
 import { resetCache } from "../autonomy-settings.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
-import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory, replayHistory } from "../history.ts";
+import {
+	COMMAND_START_TYPE,
+	COMMAND_STATUS_TYPE,
+	registerHistory,
+	replayHistory,
+	USER_INPUT_PARKED_TYPE,
+} from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import { getActiveCommand } from "../phase-machine.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
@@ -983,34 +989,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.lifecycle.phase).toBe("idle");
 		});
 
-		it("waiting_for_user echoes the user_prompt, parks at waiting, and keeps the command active (issue 88)", async () => {
-			const state = nonCompletedState();
-			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
-
-			await simulateTwoTurns(bag, ctxBag, report, {
-				status: "waiting_for_user",
-				summary: "need a branch",
-				user_prompt: "which branch should I use?",
-			});
-
-			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.notifications[0]).toMatchObject({ type: "info" });
-			expect(ctxBag.notifications[0].message).toContain("which branch should I use?");
-			// issue 88: the command is paused (resumable), not terminated. It rests at
-			// "waiting" with its invocation still active and the stored status cleared.
-			expect(state.lifecycle.phase).toBe("waiting");
-			expect(getActiveCommand(state.lifecycle)).toBe("a:cmd");
-		});
-
-		it("waiting_for_user with no user_prompt stays silent", async () => {
-			const { bag, ctxBag, report } = bootstrap(nonCompletedState(), { hasUI: false });
-
-			await simulateTwoTurns(bag, ctxBag, report, { status: "waiting_for_user", summary: "asked already" });
-
-			expect(ctxBag.dispatched).toEqual([]);
-			expect(ctxBag.notifications).toEqual([]);
-		});
-
 		it("incomplete is a quiet pause (no dispatch, no notification)", async () => {
 			const { bag, ctxBag, report } = bootstrap(nonCompletedState(), { hasUI: false });
 
@@ -1020,9 +998,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications).toEqual([]);
 		});
 
-		// issue 88: blocked/incomplete stay terminal (idle); waiting_for_user is now
-		// the resumable exception (asserted separately below), so it is no longer in
-		// this list.
 		it.each(["blocked", "incomplete"] as const)(
 			"%s resets to terminal idle and cannot be re-armed by a later reply",
 			async (status) => {
@@ -1039,23 +1014,14 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				expect(state.lifecycle.phase).toBe("idle");
 			},
 		);
-
-		it("waiting_for_user parks at waiting (resumable) and clears the stored status (issue 88)", async () => {
-			const state = nonCompletedState();
-			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
-
-			await simulateTwoTurns(bag, ctxBag, report, { status: "waiting_for_user", summary: "not done" });
-
-			expect(state.lifecycle.phase).toBe("waiting");
-		});
 	});
 
-	// issue 88: a waiting_for_user halt is resumable. An interactive non-slash
-	// reply (history.ts flips waiting→running) re-arms the existing
-	// running→probing probe path, so a command that paused for approval can later
-	// report completed and offer its declared next step. These tests register
-	// history alongside auto-continue so the real input handler drives the resume.
-	describe("interactive resume after waiting_for_user (issue 88)", () => {
+	// issue 88 / issue 156: the waiting phase is now entered only through
+	// get_scramjet_user_input (freetext/cancellation), not through the status tool.
+	// These tests verify auto-continue's behavior when lifecycle is already at
+	// waiting — history.ts flips waiting→running on interactive reply, re-arming
+	// the running→probing probe path.
+	describe("interactive resume from waiting phase (issue 88)", () => {
 		it("a stray agent_end while waiting is a no-op (stays waiting, fires no probe)", async () => {
 			// The defensive `case "waiting"` arm: a turn NOT preceded by an
 			// interactive resume must not re-probe with no user answer behind it.
@@ -1075,19 +1041,15 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 		it("approval flow: draft → waiting → user reply resumes → completed chains the next step", async () => {
 			// Synthetic open-policy command mirroring mach12:pr-create: it drafts a
-			// PR and asks for approval (waiting_for_user), then after the user
-			// approves it creates the PR (completed) and offers mach12:pr-review.
+			// PR and asks for approval via get_scramjet_user_input freetext, then
+			// after the user approves it creates the PR (completed) and offers mach12:pr-review.
 			const def = defWithPolicy("mach12:pr-create", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 			registerHistory(bag.pi, state);
 
-			// First turn: draft + ask. Probe → report waiting_for_user → park.
-			await driveProbeTurn(bag, ctxBag, report, {
-				status: "waiting_for_user",
-				summary: "drafted PR, awaiting approval",
-				user_prompt: "approve, modify, or cancel?",
-			});
+			// First turn: draft + ask via freetext → park at waiting.
+			state.lifecycle = { phase: "waiting", command: "mach12:pr-create" };
 			expect(state.lifecycle.phase).toBe("waiting");
 			expect(getActiveCommand(state.lifecycle)).toBe("mach12:pr-create");
 			expect(ctxBag.dispatched).toEqual([]);
@@ -1113,17 +1075,18 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		it("re-arms across multiple clarification rounds: waiting → resume → waiting again", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
-			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
 			registerHistory(bag.pi, state);
 
-			await driveProbeTurn(bag, ctxBag, report, { status: "waiting_for_user", summary: "q1", user_prompt: "?" });
+			// First freetext parks at waiting.
+			state.lifecycle = { phase: "waiting", command: "a:cmd" };
 			expect(state.lifecycle.phase).toBe("waiting");
 
 			await bag.emit("input", { text: "more info", source: "interactive" }, ctxBag.ctx);
 			expect(state.lifecycle.phase).toBe("running");
 
 			// A resumed turn that still needs input returns to waiting (no chain).
-			await driveProbeTurn(bag, ctxBag, report, { status: "waiting_for_user", summary: "q2", user_prompt: "?" });
+			state.lifecycle = { phase: "waiting", command: "a:cmd" };
 			expect(state.lifecycle.phase).toBe("waiting");
 			expect(ctxBag.dispatched).toEqual([]);
 		});
@@ -1131,11 +1094,12 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		it("loop-safety: a resumed probe turn that never reports self-heals to idle (no loop)", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
-			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
 			registerHistory(bag.pi, state);
 			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-			await driveProbeTurn(bag, ctxBag, report, { status: "waiting_for_user", summary: "q", user_prompt: "?" });
+			// Park at waiting via freetext.
+			state.lifecycle = { phase: "waiting", command: "a:cmd" };
 			expect(state.lifecycle.phase).toBe("waiting");
 
 			// Resume, then the resumed answer turn ends → probing + probe fires.
@@ -1161,7 +1125,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 	// issue 88 Stage 2: a paused (waiting) command survives pi --resume / branch
 	// switch. registerHistory's rebuild reconstructs the phase from journaled
-	// COMMAND_STATUS_TYPE entries, so a resumed session can pick the paused command
+	// user-input-parked entries, so a resumed session can pick the paused command
 	// back up — and a command that already completed never resurrects.
 	describe("rewind reconstruction survives resume (issue 88 Stage 2)", () => {
 		function seededState() {
@@ -1185,7 +1149,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 			registerHistory(bag.pi, state);
 
-			// Resume: branch journals [start, status(waiting)] → reconstruct "waiting".
+			// Resume: branch journals [start, user-input-parked] → reconstruct "waiting".
 			await bag.emit(
 				"session_start",
 				{},
@@ -1195,8 +1159,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 						data: { command: "mach12:pr-create", origin: "user", depth: 0, timestamp: 1 },
 					},
 					{
-						customType: COMMAND_STATUS_TYPE,
-						data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+						customType: USER_INPUT_PARKED_TYPE,
+						data: { commandName: "mach12:pr-create" },
 					},
 				]),
 			);
@@ -1225,7 +1189,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
 			registerHistory(bag.pi, state);
 
-			// Resume: branch journals [start, status(waiting), status(completed)] →
+			// Resume: branch journals [start, user-input-parked, status(completed)] →
 			// reconstruct "idle" (the resolving completed status wins over waiting).
 			await bag.emit(
 				"session_start",
@@ -1236,8 +1200,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 						data: { command: "mach12:pr-create", origin: "user", depth: 0, timestamp: 1 },
 					},
 					{
-						customType: COMMAND_STATUS_TYPE,
-						data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+						customType: USER_INPUT_PARKED_TYPE,
+						data: { commandName: "mach12:pr-create" },
 					},
 					{ customType: COMMAND_STATUS_TYPE, data: { commandName: "mach12:pr-create", status: "completed" } },
 				]),
@@ -1955,22 +1919,6 @@ describe("multi-path probe integration", () => {
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("blocked");
 			expect(state.lifecycle.phase).toBe("idle");
-		});
-
-		it("waiting_for_user parks at waiting phase (no regression)", async () => {
-			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: true });
-			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
-
-			await simulateTwoTurns(bag, ctxBag, report, {
-				status: "waiting_for_user",
-				summary: "need input",
-				user_prompt: "Which option?",
-			});
-
-			expect(ctxBag.dispatched).toEqual([]);
-			expect(state.lifecycle.phase).toBe("waiting");
-			expect(getActiveCommand(state.lifecycle)).toBe("a:cmd");
 		});
 
 		it("incomplete pauses quietly (no regression)", async () => {

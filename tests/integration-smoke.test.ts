@@ -504,7 +504,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 		expect(state.lifecycle.phase).toBe("idle");
 	});
 
-	it("waiting_for_user → replay/resume → interactive reply → completed", async () => {
+	it("freetext parks at waiting → replay/resume → interactive reply → completed", async () => {
 		const cmd: CommandDef = {
 			name: "int:wait",
 			filePath: "/fake/int:wait.md",
@@ -523,21 +523,9 @@ describe("integration smoke — lifecycle event sequences", () => {
 		await bag.emit("input", { text: "/int:wait", source: "interactive" }, ctx);
 		expect(state.lifecycle.phase).toBe("running");
 
-		// Answer turn ends → probe fires
-		await fireProbe(bag, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
-
-		// Agent reports waiting_for_user
-		const statusTool = findTool(bag, "report_scramjet_command_status");
-		await statusTool.execute("call-id", {
-			status: "waiting_for_user",
-			summary: "need input",
-			user_prompt: "Which approach?",
-		});
-		expect(state.lifecycle.phase).toBe("reported");
-
-		// Probe turn ends → parks at waiting
-		await endProbeTurn(bag, ctx);
+		// Agent calls get_scramjet_user_input freetext → parks at waiting
+		const userInputTool = findTool(bag, "get_scramjet_user_input");
+		await userInputTool.execute("call-id", { type: "freetext", message: "Which approach?" });
 		expect(state.lifecycle.phase).toBe("waiting");
 		expect(getActiveCommand(state.lifecycle)).toBe("int:wait");
 
@@ -565,6 +553,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 		expect(state.lifecycle.phase).toBe("probing");
 
 		// Agent reports completed
+		const statusTool = findTool(bag, "report_scramjet_command_status");
 		await statusTool.execute("call-id", { status: "completed", summary: "done" });
 		await endProbeTurn(bag, ctx);
 		expect(state.lifecycle.phase).toBe("idle");

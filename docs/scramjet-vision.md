@@ -328,18 +328,17 @@ encouraged but optional.
 - **No `next` declared.** Equivalent to `mode: ask` with no hint. The
   harness does not inject a next-step instruction block and does not
   auto-follow a legacy/free-form agent proposal.
-- **`waiting_for_user` is a resumable, not terminal, halt.** When a command
-  reports `status: "waiting_for_user"` (it asked the user a question or
-  needs input), the harness parks the invocation at a stable `waiting`
-  state rather than ending it. A later interactive, non-slash reply resumes
-  the same command — the harness re-probes for status, and a now-`completed`
-  report chains its declared next step under the usual policy. Chaining
-  still requires an explicit `completed` report, so an off-topic reply can
-  only trigger a harmless re-probe, never a chain (issue 88).
-  `get_scramjet_user_input` (§3) provides a separate, proactive mid-turn path
-  for collecting user input without ending the turn; `waiting_for_user`
-  is the turn-ending lifecycle status for when the agent has already
-  surfaced its question in normal output.
+- **`waiting` is a resumable, not terminal, halt.** When a command needs
+  user input, it calls `get_scramjet_user_input` with `type: "freetext"`
+  (or cancels a confirm/select prompt). The harness parks the invocation
+  at a stable `waiting` state rather than ending it. A later interactive,
+  non-slash reply resumes the same command — the harness re-probes for
+  status, and a now-`completed` report chains its declared next step under
+  the usual policy. Chaining still requires an explicit `completed` report,
+  so an off-topic reply can only trigger a harmless re-probe, never a chain
+  (issue 88, issue 156). `get_scramjet_user_input` (§3) is the sole mechanism
+  for parking at `waiting` — both proactive mid-turn freetext and
+  probe-time freetext use the same tool and journal entry.
 
 #### 3. Intra-command interactions
 
@@ -372,8 +371,8 @@ the user to continue").
 
 ##### The probe-as-router extension
 
-The existing probe (§2.1, the `waiting_for_user` mechanism) asks the agent
-to report command status. The extended probe offers three paths:
+The existing probe (§2.1) asks the agent to report command status. The
+extended probe offers three paths:
 
 1. **Continue executing.** The agent has more work to do — it stopped
    prematurely (observed most frequently after complex delegations). It
@@ -431,8 +430,8 @@ continue work in that same turn.
 For proactive calls during normal command work, successful `get_scramjet_user_input`
 does not change the phase: it remains `running`, no status report is generated,
 and the agent's turn continues after the tool result returns. Cancellation
-transitions `running → waiting`, journals `waiting_for_user`, and terminates the
-turn.
+transitions `running → waiting`, journals `scramjet:user-input-parked`, and
+terminates the turn.
 
 For probe-time calls, the tool is the handoff from status-check probing back to
 active command work:
@@ -769,13 +768,14 @@ is universal.
   Cross-session workflow restore beyond the visible history is not a
   goal of the MVP, but is not explicitly forbidden either — if it falls
   out trivially, that's fine.
-- A command paused at `waiting_for_user` (see §2.1) is reconstructed on
-  resume: each command-status report is journaled, and replay restores the
-  stable `waiting` state when the active command's last status was
-  `waiting_for_user`, so a `pi --resume` / branch switch mid-question can
-  still be answered and the command resumed. The transient mid-turn phases
-  are deliberately not journaled, and a command that already completed
-  reconstructs to idle (never re-fired) (issue 88).
+- A command parked at `waiting` (via `get_scramjet_user_input` freetext or
+  cancellation; see §2.1) is reconstructed on resume: `scramjet:user-input-parked`
+  entries are journaled, and replay restores the stable `waiting` state
+  when a parked entry exists for the active command, so a `pi --resume` /
+  branch switch mid-question can still be answered and the command resumed.
+  The transient mid-turn phases are deliberately not journaled, and a
+  command that already completed reconstructs to idle (never re-fired)
+  (issue 88, issue 156).
 - Command sets isolated by namespace.
 
 ### Non-goals for `scramjet`

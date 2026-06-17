@@ -174,4 +174,4 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 
 Set `recommended_next_step` to `0` when you include this entry so Scramjet can route to it automatically.
 
-Leave `next_steps` empty if the user cancelled or the PR should not be reviewed yet. If PR creation failed or you could not finish, report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`.
+Leave `next_steps` empty if the user cancelled or the PR should not be reviewed yet. If PR creation failed or you could not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.

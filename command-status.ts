@@ -8,12 +8,12 @@
  * buildProbeMessage); the agent answers it by calling this tool. execute() is
  * phase-gated — it only accepts the report while lifecycle.phase === "probing".
  *
- * Five statuses, two execution paths:
+ * Four statuses, two execution paths:
  * - "continuing": non-terminating. The agent has more work to do; the tool
  *   transitions probing → running and returns without terminate so the agent
  *   keeps working in the same turn. A local counter bounds consecutive
  *   continues (MAX_CONSECUTIVE_CONTINUES) to prevent infinite loops.
- * - "completed" / "waiting_for_user" / "blocked" / "incomplete": terminating.
+ * - "completed" / "blocked" / "incomplete": terminating.
  *   The tool stores the report on ScramjetState, advances the phase to
  *   "reported", and returns terminate: true. auto-continue.ts reads the stored
  *   status on the probe turn's agent_end and validates/dispatches/pauses.
@@ -60,7 +60,7 @@ const OUT_OF_PHASE_ERROR =
 
 const CONTINUE_LIMIT_ERROR =
 	`You have reported "continuing" ${MAX_CONSECUTIVE_CONTINUES} times without completing the command. ` +
-	"Report your actual status: completed, blocked, waiting_for_user, or incomplete.";
+	"Report your actual status: completed, blocked, or incomplete.";
 
 // F6: single source of truth for the next-step wire shape. The TypeBox schema
 // below and the CommandStatusNextStep TS interface (types.ts) are two
@@ -93,22 +93,15 @@ const _interfaceMatchesWire = (step: CommandStatusNextStep): WireNextStep => ste
 // F3: single source of truth for the status enum, mirroring the next_steps
 // congruence guards above. The TypeBox union below and the
 // CommandStatusPayload["status"] TS union (types.ts) are two declarations of the
-// same five literals; the assignability pair underneath fails the build if
+// same four literals; the assignability pair underneath fails the build if
 // either side adds, drops, or renames a status (e.g. adding "cancelled" to one
 // side only), closing the last drift hole the rest of this file already guards.
 const STATUS_SCHEMA = Type.Union(
-	[
-		Type.Literal("completed"),
-		Type.Literal("waiting_for_user"),
-		Type.Literal("blocked"),
-		Type.Literal("incomplete"),
-		Type.Literal("continuing"),
-	],
+	[Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("incomplete"), Type.Literal("continuing")],
 	{
 		description:
 			"completed = the command's work is done and your final user-facing answer was already delivered; " +
 			"continuing = you have more work to do right now (not blocked, not waiting for input, not finished); " +
-			"waiting_for_user = you asked the user a question or need input before continuing; " +
 			"blocked = the command cannot proceed (error, missing dependency, authorization); " +
 			"incomplete = none of the above (stopped without a clean completion/question/blocker).",
 	},
@@ -128,11 +121,6 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 		parameters: Type.Object({
 			status: STATUS_SCHEMA,
 			summary: Type.String({ description: "Brief summary of the command's outcome." }),
-			user_prompt: Type.Optional(
-				Type.String({
-					description: "For waiting_for_user: the question or input you are waiting on, if useful to surface.",
-				}),
-			),
 			next_steps: Type.Optional(
 				Type.Array(NEXT_STEP_SCHEMA, {
 					description:
@@ -191,7 +179,6 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			const payload: CommandStatusRestingPayload = {
 				status: params.status,
 				summary: params.summary,
-				user_prompt: params.user_prompt,
 				next_steps: params.next_steps,
 				recommended_next_step: params.recommended_next_step,
 			};

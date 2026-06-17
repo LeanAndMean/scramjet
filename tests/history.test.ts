@@ -12,6 +12,7 @@ import {
 	registerHistory,
 	replayHistory,
 	SIDEBAR_MAX,
+	USER_INPUT_PARKED_TYPE,
 } from "../history.ts";
 import { getActiveCommand } from "../phase-machine.ts";
 import type { CommandDef, CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "../types.ts";
@@ -62,6 +63,10 @@ function cmdStart(command: string, depth = 0, ts = 0): SessionEntry {
 function cmdStatus(commandName: string, status: CommandStatusRestingStatus): SessionEntry {
 	const data: CommandStatusData = { commandName, status };
 	return customEntry(COMMAND_STATUS_TYPE, data);
+}
+
+function userInputParked(commandName: string): SessionEntry {
+	return customEntry(USER_INPUT_PARKED_TYPE, { commandName });
 }
 
 describe("parseSlashCommand", () => {
@@ -236,8 +241,8 @@ describe("replayHistory", () => {
 // rewind/resume, while a command that completed (even without chaining) never
 // resurrects. Last-status-wins, scoped to the active top-level command.
 describe("replayHistory — command-status phase reconstruction (issue 88)", () => {
-	it("reconstructs waiting when the active command's last status was waiting_for_user", () => {
-		const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user")]);
+	it("reconstructs waiting when the active command has a user-input-parked entry", () => {
+		const result = replayHistory([cmdStart("a"), userInputParked("a")]);
 		expect(result.lifecycle.phase).toBe("waiting");
 		expect(getActiveCommand(result.lifecycle)).toBe("a");
 		expect(result.lifecycle).toEqual({ phase: "waiting", command: "a" });
@@ -249,7 +254,7 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		// so journaling the resolving status is what makes the rewind land on idle.
 		// issue 128: completed clears activeTopLevelCommand so a later reply
 		// doesn't re-arm the phase for a finished command.
-		const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStatus("a", "completed")]);
+		const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStatus("a", "completed")]);
 		expect(result.lifecycle.phase).toBe("idle");
 		expect(getActiveCommand(result.lifecycle)).toBeNull();
 		expect(result.lifecycle).toEqual({ phase: "idle" });
@@ -258,7 +263,7 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 	it.each(["blocked", "incomplete"] as const)(
 		"clears the active command when a waiting command later reported %s",
 		(status) => {
-			const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStatus("a", status)]);
+			const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStatus("a", status)]);
 			expect(result.lifecycle.phase).toBe("idle");
 			expect(getActiveCommand(result.lifecycle)).toBeNull();
 		},
@@ -267,15 +272,15 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 	it("resets to dormant when a new depth-0 command starts after a waiting report", () => {
 		// start(B) supersedes A: B has reported nothing yet, so its resting phase is
 		// dormant (command associated but not actively running).
-		const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStart("b")]);
+		const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStart("b")]);
 		expect(result.lifecycle.phase).toBe("dormant");
 		expect(getActiveCommand(result.lifecycle)).toBe("b");
 		expect(result.lifecycle).toEqual({ phase: "dormant", command: "b" });
 	});
 
-	it("ignores a status entry whose commandName does not match the active command", () => {
+	it("ignores a user-input-parked entry whose commandName does not match the active command", () => {
 		// A stale entry from a since-superseded command must not move B's phase.
-		const result = replayHistory([cmdStart("b"), cmdStatus("a", "waiting_for_user")]);
+		const result = replayHistory([cmdStart("b"), userInputParked("a")]);
 		expect(result.lifecycle.phase).toBe("dormant");
 		expect(getActiveCommand(result.lifecycle)).toBe("b");
 	});
@@ -284,8 +289,8 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		const result = replayHistory([
 			cmdStart("a"),
 			customEntry(COMMAND_STATUS_TYPE, undefined),
-			customEntry(COMMAND_STATUS_TYPE, { status: "waiting_for_user" }),
-			customEntry(COMMAND_STATUS_TYPE, { commandName: "", status: "waiting_for_user" }),
+			customEntry(COMMAND_STATUS_TYPE, { status: "completed" }),
+			customEntry(COMMAND_STATUS_TYPE, { commandName: "", status: "completed" }),
 			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "bogus" }),
 			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "continuing" }),
 		]);
@@ -294,8 +299,8 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		expect(getActiveCommand(result.lifecycle)).toBe("a");
 	});
 
-	it("reconstructs waiting only from the LAST status when several are journaled", () => {
-		const result = replayHistory([cmdStart("a"), cmdStatus("a", "incomplete"), cmdStatus("a", "waiting_for_user")]);
+	it("reconstructs waiting only from the LAST entry when several are journaled", () => {
+		const result = replayHistory([cmdStart("a"), cmdStatus("a", "incomplete"), userInputParked("a")]);
 		expect(result.lifecycle.phase).toBe("waiting");
 	});
 });
@@ -303,12 +308,12 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 describe("recordCommandStatus", () => {
 	it("appends a COMMAND_STATUS_TYPE journal entry and mutates no state", () => {
 		const { pi, appended } = recordingPi();
-		recordCommandStatus(pi, "mach12:pr-create", "waiting_for_user");
+		recordCommandStatus(pi, "mach12:pr-create", "completed");
 		expect(appended).toHaveLength(1);
 		expect(appended[0].customType).toBe(COMMAND_STATUS_TYPE);
 		expect(appended[0].data as CommandStatusData).toEqual({
 			commandName: "mach12:pr-create",
-			status: "waiting_for_user",
+			status: "completed",
 		});
 	});
 });
@@ -682,11 +687,11 @@ describe("registerHistory — replay on session events", () => {
 		expect(state.lifecycle.phase).toBe("dormant");
 	});
 
-	// issue 88: a paused (waiting_for_user) command survives rewind/resume. The
-	// journaled COMMAND_STATUS_TYPE entry reconstructs the stable "waiting" phase
+	// issue 88 / issue 156: a paused command survives rewind/resume. The
+	// journaled user-input-parked entry reconstructs the stable "waiting" phase
 	// so a later interactive reply can resume the command.
-	it("reconstructs the waiting phase on rebuild when the active command's last status was waiting_for_user", async () => {
-		const { state, emit, ctx } = setup([cmdStart("a"), cmdStatus("a", "waiting_for_user")], {
+	it("reconstructs the waiting phase on rebuild when the active command has a user-input-parked entry", async () => {
+		const { state, emit, ctx } = setup([cmdStart("a"), userInputParked("a")], {
 			lifecycle: { phase: "probing", command: "stale", continueCount: 0 },
 		});
 		await emit("session_start", {}, ctx);
@@ -695,10 +700,9 @@ describe("registerHistory — replay on session events", () => {
 	});
 
 	it("reconstructs idle on rebuild when a waiting command later completed (no resurrection)", async () => {
-		const { state, emit, ctx } = setup(
-			[cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStatus("a", "completed")],
-			{ lifecycle: { phase: "running", command: "stale", continueCount: 0 } },
-		);
+		const { state, emit, ctx } = setup([cmdStart("a"), userInputParked("a"), cmdStatus("a", "completed")], {
+			lifecycle: { phase: "running", command: "stale", continueCount: 0 },
+		});
 		await emit("session_start", {}, ctx);
 		expect(state.lifecycle.phase).toBe("idle");
 	});

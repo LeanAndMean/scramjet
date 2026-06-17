@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COMMAND_STATUS_TYPE } from "../history.ts";
+import { USER_INPUT_PARKED_TYPE } from "../history.ts";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../user-input.ts";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.ts";
 
@@ -337,8 +337,8 @@ describe("registerUserInputTool — freetext interaction", () => {
 		const result = await execute({ type: "freetext", message: "Release title?", placeholder: "v1.2.3" });
 
 		const parsed = JSON.parse(result.content[0].text);
-		expect(parsed).toEqual({ waiting_for_user: true });
-		expect(result.details).toEqual({ type: "freetext", waiting_for_user: true });
+		expect(parsed).toEqual({ parked: true });
+		expect(result.details).toEqual({ type: "freetext", parked: true });
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.phase).toBe("waiting");
 	});
@@ -371,17 +371,16 @@ describe("registerUserInputTool — cancellation phase handling", () => {
 		expect(state.lifecycle.phase).toBe("waiting");
 	});
 
-	it("journals waiting_for_user command status on cancellation with active command", async () => {
+	it("journals user-input-parked on cancellation with active command", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
 		const { execute, pi } = toolFor(state);
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.phase).toBe("waiting");
-		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(1);
-		expect(pi.appended.find((e: any) => e.customType === COMMAND_STATUS_TYPE).data).toEqual({
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE)).toHaveLength(1);
+		expect(pi.appended.find((e: any) => e.customType === USER_INPUT_PARKED_TYPE).data).toEqual({
 			commandName: "mach12:test",
-			status: "waiting_for_user",
 		});
 	});
 });
@@ -543,7 +542,7 @@ describe("registerUserInputTool — journaling", () => {
 		});
 	});
 
-	it("journals a prompt-only freetext interaction and waiting command status", async () => {
+	it("journals a prompt-only freetext interaction and user-input-parked entry", async () => {
 		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:test") }));
 		await execute({ type: "freetext", message: "Title?" });
 
@@ -554,12 +553,12 @@ describe("registerUserInputTool — journaling", () => {
 			message: "Title?",
 		});
 
-		const statusEntry = pi.appended.find((e: any) => e.customType === COMMAND_STATUS_TYPE);
-		expect(statusEntry).toBeDefined();
-		expect(statusEntry.data).toEqual({ commandName: "mach12:test", status: "waiting_for_user" });
+		const parkedEntry = pi.appended.find((e: any) => e.customType === USER_INPUT_PARKED_TYPE);
+		expect(parkedEntry).toBeDefined();
+		expect(parkedEntry.data).toEqual({ commandName: "mach12:test" });
 	});
 
-	it("journals a cancelled interaction and waiting command status", async () => {
+	it("journals a cancelled interaction and user-input-parked entry", async () => {
 		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:test") }));
 		const ctx = mockUICtx(null);
 		await execute({ type: "confirm", message: "Deploy?" }, ctx);
@@ -572,9 +571,9 @@ describe("registerUserInputTool — journaling", () => {
 			cancelled: true,
 		});
 
-		const statusEntry = pi.appended.find((e: any) => e.customType === COMMAND_STATUS_TYPE);
-		expect(statusEntry).toBeDefined();
-		expect(statusEntry.data).toEqual({ commandName: "mach12:test", status: "waiting_for_user" });
+		const parkedEntry = pi.appended.find((e: any) => e.customType === USER_INPUT_PARKED_TYPE);
+		expect(parkedEntry).toBeDefined();
+		expect(parkedEntry.data).toEqual({ commandName: "mach12:test" });
 	});
 
 	it("does not journal when phase gate rejects", async () => {

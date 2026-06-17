@@ -7,7 +7,6 @@ import { freshState, lifecycleFor, recordingPi } from "./helpers.ts";
 type StatusParams = {
 	status: CommandStatusPayload["status"];
 	summary: string;
-	user_prompt?: string;
 	next_steps?: CommandStatusPayload["next_steps"];
 	recommended_next_step?: number;
 };
@@ -91,10 +90,10 @@ describe("registerCommandStatusTool — phase gate", () => {
 
 	it("journals the report under the active command name (issue 88)", async () => {
 		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "mach12:pr-create") }));
-		await execute({ status: "waiting_for_user", summary: "awaiting approval" });
+		await execute({ status: "blocked", summary: "awaiting approval" });
 		expect(pi.appended).toContainEqual({
 			customType: COMMAND_STATUS_TYPE,
-			data: { commandName: "mach12:pr-create", status: "waiting_for_user" },
+			data: { commandName: "mach12:pr-create", status: "blocked" },
 		});
 	});
 
@@ -194,13 +193,12 @@ describe("registerCommandStatusTool — phase gate", () => {
 	it("renders a plain status line for non-completed reports", async () => {
 		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 		const result = await execute({
-			status: "waiting_for_user",
-			summary: "asked the user",
-			user_prompt: "which branch?",
+			status: "blocked",
+			summary: "missing dependency",
 		});
 
 		expect(result.terminate).toBe(true);
-		expect(String(result.content[0].text)).toBe("status: waiting_for_user");
+		expect(String(result.content[0].text)).toBe("status: blocked");
 	});
 });
 

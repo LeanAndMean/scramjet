@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.22.0 — Eliminate redundant waiting_for_user path
+
+Removes `waiting_for_user` from `report_scramjet_command_status` status enum. All "park for user input" flows now go exclusively through `get_scramjet_user_input` (freetext for unstructured, confirm/select for structured). The status tool accepts only `completed`, `continuing`, `blocked`, and `incomplete` (issue #156).
+
+### Removed
+
+- `waiting_for_user` status from `CommandStatusPayload.status` union and `STATUS_SCHEMA`.
+- `user_prompt` field from the status tool parameters.
+- `waiting_for_user` routing branch in `auto-continue.ts` (`routeNonCompleted`) and associated `reported → waiting-parked` handling.
+- Competing-paths framing in the probe message (`buildProbeMessage`).
+
+### Changed
+
+- `user-input.ts` — freetext and cancellation paths now journal `scramjet:user-input-parked` entries directly (via `pi.appendEntry`) instead of calling `recordCommandStatus("waiting_for_user")`.
+- `phase-machine.ts` — `reconstructPhase` recognizes `scramjet:user-input-parked` entries as the signal for `waiting` reconstruction.
+- `history.ts` — exports `USER_INPUT_PARKED_TYPE` constant.
+- `next-step.ts` — probe message lists 4 statuses (completed/continuing/blocked/incomplete); user-input tool described as the unified mechanism for all user input needs.
+- 9 mach12 command files — replaced `waiting_for_user` guidance with `get_scramjet_user_input` (freetext) direction.
+- `docs/command-authoring.md`, `docs/lifecycle-state-space.md`, `docs/scramjet-vision.md`, `CLAUDE.md` — updated to reflect single user-input path.
+
+### Degradation
+
+- Old `waiting_for_user` command-status journal entries from prior sessions are skipped; affected commands reconstruct to `dormant` (still resumable on user reply).
+
 ## 0.21.2 — Lifecycle state hardening via discriminated union
 
 Refactors Scramjet's command lifecycle from independently-typed fields (`commandPhase`, `activeTopLevelCommand`, `latestCommandStatus`) into a discriminated `LifecycleState` union where each phase carries exactly the data it needs, making invalid state combinations unrepresentable at the type level, including excluding `continuing` from stored `reported` statuses (issue #135).
