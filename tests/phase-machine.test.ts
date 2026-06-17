@@ -1,118 +1,151 @@
-import { describe, expect, it, vi } from "vitest";
-import { LEGAL_TRANSITIONS, reconstructPhase, transitionPhase } from "../phase-machine.ts";
-import type { CommandPhase } from "../types.ts";
-import { freshState } from "./helpers.ts";
+import { describe, expect, it } from "vitest";
+import type { LifecycleEvent, LifecycleState } from "../phase-machine.ts";
+import { assertInvariant, reconstructPhase, transition } from "../phase-machine.ts";
+import type { CommandStatusPayload, CommandStatusRestingPayload } from "../types.ts";
 
-describe("LEGAL_TRANSITIONS", () => {
-	it("covers every CommandPhase as a key", () => {
-		const phases: CommandPhase[] = ["idle", "running", "probing", "reported", "waiting"];
-		for (const p of phases) {
-			expect(LEGAL_TRANSITIONS[p]).toBeDefined();
+describe("transition", () => {
+	const completed: CommandStatusRestingPayload = { status: "completed", summary: "done" };
+	const waiting: CommandStatusRestingPayload = { status: "waiting_for_user", summary: "need input" };
+	const continuing: CommandStatusPayload = { status: "continuing", summary: "more work" };
+
+	const states: LifecycleState[] = [
+		{ phase: "idle" },
+		{ phase: "dormant", command: "cmd" },
+		{ phase: "running", command: "cmd", continueCount: 2 },
+		{ phase: "probing", command: "cmd", continueCount: 2 },
+		{ phase: "reported", command: "cmd", status: completed, continueCount: 2 },
+		{ phase: "waiting", command: "cmd" },
+	];
+
+	const events: LifecycleEvent[] = [
+		{ type: "command-start", command: "next" },
+		{ type: "agent-end" },
+		{ type: "probe-self-healed" },
+		{ type: "status-reported", status: completed },
+		{ type: "continuing" },
+		{ type: "probe-input-resumed" },
+		{ type: "terminal-resolved", status: "completed" },
+		{ type: "waiting-parked" },
+		{ type: "user-reply" },
+		{ type: "workflow-exit" },
+		{ type: "reset" },
+	];
+
+	const legal: Record<string, Record<string, LifecycleState>> = {
+		idle: {
+			"command-start": { phase: "running", command: "next", continueCount: 0 },
+			reset: { phase: "idle" },
+		},
+		dormant: {
+			"command-start": { phase: "running", command: "next", continueCount: 0 },
+			"user-reply": { phase: "running", command: "cmd", continueCount: 0 },
+			"workflow-exit": { phase: "idle" },
+			reset: { phase: "idle" },
+		},
+		running: {
+			"command-start": { phase: "running", command: "next", continueCount: 0 },
+			"agent-end": { phase: "probing", command: "cmd", continueCount: 2 },
+			"waiting-parked": { phase: "waiting", command: "cmd" },
+			"workflow-exit": { phase: "idle" },
+			reset: { phase: "idle" },
+		},
+		probing: {
+			"command-start": { phase: "running", command: "next", continueCount: 0 },
+			"probe-self-healed": { phase: "dormant", command: "cmd" },
+			"status-reported": { phase: "reported", command: "cmd", status: completed, continueCount: 2 },
+			continuing: { phase: "running", command: "cmd", continueCount: 3 },
+			"probe-input-resumed": { phase: "running", command: "cmd", continueCount: 2 },
+			"waiting-parked": { phase: "waiting", command: "cmd" },
+			"workflow-exit": { phase: "idle" },
+			reset: { phase: "idle" },
+		},
+		reported: {
+			"command-start": { phase: "running", command: "next", continueCount: 0 },
+			"terminal-resolved": { phase: "idle" },
+			"waiting-parked": { phase: "waiting", command: "cmd" },
+			"workflow-exit": { phase: "idle" },
+			reset: { phase: "idle" },
+		},
+		waiting: {
+			"command-start": { phase: "running", command: "next", continueCount: 0 },
+			"waiting-parked": { phase: "waiting", command: "cmd" },
+			"user-reply": { phase: "running", command: "cmd", continueCount: 0 },
+			"workflow-exit": { phase: "idle" },
+			reset: { phase: "idle" },
+		},
+	};
+
+	for (const state of states) {
+		for (const event of events) {
+			const expected = legal[state.phase][event.type];
+			it(`${expected ? "allows" : "rejects"} ${state.phase} + ${event.type}`, () => {
+				const result = transition(state, event);
+				if (expected) {
+					expect(result).toEqual({ ok: true, state: expected });
+				} else {
+					expect(result).toEqual({ ok: false, from: state.phase, event: event.type });
+				}
+			});
 		}
+	}
+
+	it("rejects continuing status payloads as reported states", () => {
+		expect(
+			transition(
+				{ phase: "probing", command: "cmd", continueCount: 0 },
+				{ type: "status-reported", status: continuing as unknown as CommandStatusRestingPayload },
+			),
+		).toEqual({ ok: false, from: "probing", event: "status-reported" });
+	});
+
+	it("carries waiting_for_user through reported before waiting is parked", () => {
+		expect(
+			transition(
+				{ phase: "probing", command: "cmd", continueCount: 1 },
+				{ type: "status-reported", status: waiting },
+			),
+		).toEqual({ ok: true, state: { phase: "reported", command: "cmd", status: waiting, continueCount: 1 } });
+	});
+
+	it("rejects empty command starts", () => {
+		expect(transition({ phase: "idle" }, { type: "command-start", command: "" })).toEqual({
+			ok: false,
+			from: "idle",
+			event: "command-start",
+		});
 	});
 });
 
-describe("transitionPhase", () => {
-	const legalPairs: [CommandPhase, CommandPhase][] = [
-		["idle", "running"],
-		["running", "probing"],
-		["running", "idle"],
-		["running", "waiting"],
-		["probing", "reported"],
-		["probing", "idle"],
-		["probing", "waiting"],
-		["reported", "idle"],
-		["reported", "waiting"],
-		["reported", "running"],
-		["probing", "running"],
-		["waiting", "running"],
-		["waiting", "idle"],
-	];
-
-	for (const [from, to] of legalPairs) {
-		it(`allows ${from} → ${to}`, () => {
-			const state = freshState({ commandPhase: from });
-			expect(transitionPhase(state, to)).toBe(true);
-			expect(state.commandPhase).toBe(to);
-		});
-	}
-
-	it("self-transition idle → idle is a no-op", () => {
-		const state = freshState({
-			commandPhase: "idle",
-			latestCommandStatus: { status: "completed", summary: "x" },
-		});
-		expect(transitionPhase(state, "idle")).toBe(true);
-		expect(state.commandPhase).toBe("idle");
-		expect(state.latestCommandStatus).toEqual({ status: "completed", summary: "x" });
+describe("assertInvariant", () => {
+	it("accepts every valid lifecycle variant", () => {
+		const states: LifecycleState[] = [
+			{ phase: "idle" },
+			{ phase: "dormant", command: "cmd" },
+			{ phase: "running", command: "cmd", continueCount: 0 },
+			{ phase: "probing", command: "cmd", continueCount: 1 },
+			{ phase: "reported", command: "cmd", status: { status: "completed", summary: "done" }, continueCount: 1 },
+			{ phase: "waiting", command: "cmd" },
+		];
+		for (const state of states) expect(assertInvariant(state)).toEqual({ ok: true });
 	});
 
-	it("self-transition waiting → waiting is a no-op", () => {
-		const state = freshState({
-			commandPhase: "waiting",
-			latestCommandStatus: { status: "waiting_for_user", summary: "y" },
+	it("rejects invalid lifecycle state combinations", () => {
+		expect(assertInvariant({ phase: "dormant", command: "" })).toEqual({
+			ok: false,
+			reason: "dormant requires a command",
 		});
-		expect(transitionPhase(state, "waiting")).toBe(true);
-		expect(state.commandPhase).toBe("waiting");
-		expect(state.latestCommandStatus).toEqual({ status: "waiting_for_user", summary: "y" });
-	});
-
-	it("self-transition running → running is a no-op", () => {
-		const state = freshState({
-			commandPhase: "running",
-			latestCommandStatus: { status: "completed", summary: "z" },
+		expect(assertInvariant({ phase: "running", command: "cmd", continueCount: -1 })).toEqual({
+			ok: false,
+			reason: "running requires a non-negative integer continueCount",
 		});
-		expect(transitionPhase(state, "running")).toBe(true);
-		expect(state.commandPhase).toBe("running");
-		expect(state.latestCommandStatus).toEqual({ status: "completed", summary: "z" });
-	});
-
-	const illegalPairs: [CommandPhase, CommandPhase][] = [
-		["idle", "probing"],
-		["idle", "reported"],
-		["idle", "waiting"],
-		["running", "reported"],
-		["reported", "probing"],
-		["waiting", "probing"],
-		["waiting", "reported"],
-	];
-
-	for (const [from, to] of illegalPairs) {
-		it(`rejects ${from} → ${to}`, () => {
-			const state = freshState({ commandPhase: from });
-			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-			expect(transitionPhase(state, to)).toBe(false);
-			expect(state.commandPhase).toBe(from);
-			expect(warn).toHaveBeenCalledOnce();
-			warn.mockRestore();
-		});
-	}
-
-	it("auto-clears latestCommandStatus on → idle", () => {
-		const state = freshState({
-			commandPhase: "running",
-			latestCommandStatus: { status: "completed", summary: "done" },
-		});
-		transitionPhase(state, "idle");
-		expect(state.latestCommandStatus).toBeNull();
-	});
-
-	it("does NOT clear latestCommandStatus on → probing", () => {
-		const state = freshState({
-			commandPhase: "running",
-			latestCommandStatus: { status: "completed", summary: "done" },
-		});
-		transitionPhase(state, "probing");
-		expect(state.latestCommandStatus).toEqual({ status: "completed", summary: "done" });
-	});
-
-	it("does NOT clear latestCommandStatus on → running", () => {
-		const state = freshState({
-			commandPhase: "idle",
-			latestCommandStatus: { status: "completed", summary: "done" },
-		});
-		transitionPhase(state, "running");
-		expect(state.latestCommandStatus).toEqual({ status: "completed", summary: "done" });
+		expect(
+			assertInvariant({
+				phase: "reported",
+				command: "cmd",
+				status: { status: "continuing", summary: "more" } as unknown as CommandStatusRestingPayload,
+				continueCount: 0,
+			}),
+		).toEqual({ ok: false, reason: "reported cannot carry a continuing status" });
 	});
 });
 

@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { parseDelegateArgs, substituteArguments } from "./commands/substitute.ts";
 import { recordCommandInvocation } from "./history.ts";
+import { getActiveCommand } from "./phase-machine.ts";
 import type { DelegateFrame, ScramjetState } from "./types.ts";
 
 interface DelegateDetails {
@@ -70,11 +71,12 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 					details,
 				};
 			}
+			const activeCommand = getActiveCommand(state.lifecycle);
 			const callerTools =
 				state.delegateStack.length > 0
 					? state.delegateStack[state.delegateStack.length - 1].effectiveAllowedTools
-					: state.activeTopLevelCommand !== null
-						? state.registry.get(state.activeTopLevelCommand)?.allowedTools
+					: activeCommand !== null
+						? state.registry.get(activeCommand)?.allowedTools
 						: undefined;
 			const effectiveAllowedTools = intersectTools(callerTools, def.allowedTools);
 			const frame: DelegateFrame = {

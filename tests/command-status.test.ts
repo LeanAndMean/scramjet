@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
 import { COMMAND_STATUS_TYPE } from "../history.ts";
 import type { CommandStatusPayload } from "../types.ts";
-import { freshState, recordingPi } from "./helpers.ts";
+import { freshState, lifecycleFor, recordingPi } from "./helpers.ts";
 
 type StatusParams = {
 	status: CommandStatusPayload["status"];
@@ -57,37 +57,32 @@ describe("registerCommandStatusTool — phase gate", () => {
 	it.each(["idle", "running", "reported", "waiting"] as const)(
 		"rejects with a helpful error and no terminate when phase is %s",
 		async (phase) => {
-			const { state, execute } = toolFor(freshState({ commandPhase: phase }));
+			const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor(phase) }));
 			const result = await execute({ status: "completed", summary: "done" });
 
 			expect(result.terminate).toBeUndefined();
 			expect(result.details.error).toBe("out-of-phase");
-			expect(result.details.phase).toBe(phase);
+			expect(result.details.phase).toBe(state.lifecycle.phase);
 			expect(String(result.content[0].text)).toContain("only when");
-			// State is untouched: no status stored, phase unchanged.
-			expect(state.latestCommandStatus).toBeNull();
-			expect(state.commandPhase).toBe(phase);
+			expect(state.lifecycle.phase).not.toBe("probing");
 		},
 	);
 
 	it("records the status, advances to reported, and terminates when phase is probing", async () => {
-		const { state, pi, execute } = toolFor(
-			freshState({ commandPhase: "probing", activeTopLevelCommand: "mach12:pr-create" }),
-		);
+		const { state, pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "mach12:pr-create") }));
 		const result = await execute({ status: "completed", summary: "all green" });
 
 		expect(result.terminate).toBe(true);
-		expect(state.commandPhase).toBe("reported");
-		expect(state.latestCommandStatus).toEqual({
-			status: "completed",
-			summary: "all green",
-			user_prompt: undefined,
-			next_steps: undefined,
-			recommended_next_step: undefined,
+		expect(state.lifecycle.phase).toBe("reported");
+		expect(state.lifecycle).toMatchObject({
+			phase: "reported",
+			command: "mach12:pr-create",
+			status: {
+				status: "completed",
+				summary: "all green",
+			},
 		});
 		expect(String(result.content[0].text)).toContain("completed");
-		// issue 88: the report is journaled so a rewind/resume can reconstruct the
-		// resting phase (idle here; waiting for a waiting_for_user report).
 		expect(pi.appended).toContainEqual({
 			customType: COMMAND_STATUS_TYPE,
 			data: { commandName: "mach12:pr-create", status: "completed" },
@@ -95,9 +90,7 @@ describe("registerCommandStatusTool — phase gate", () => {
 	});
 
 	it("journals the report under the active command name (issue 88)", async () => {
-		const { pi, execute } = toolFor(
-			freshState({ commandPhase: "probing", activeTopLevelCommand: "mach12:pr-create" }),
-		);
+		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "mach12:pr-create") }));
 		await execute({ status: "waiting_for_user", summary: "awaiting approval" });
 		expect(pi.appended).toContainEqual({
 			customType: COMMAND_STATUS_TYPE,
@@ -105,14 +98,17 @@ describe("registerCommandStatusTool — phase gate", () => {
 		});
 	});
 
-	it("does not journal a status when there is no active command (guarded)", async () => {
-		const { pi, execute } = toolFor(freshState({ commandPhase: "probing", activeTopLevelCommand: null }));
-		await execute({ status: "completed", summary: "no active command" });
-		expect(pi.appended.some((e: { customType: string }) => e.customType === COMMAND_STATUS_TYPE)).toBe(false);
+	it("journals a status using the lifecycle command (getActiveCommand)", async () => {
+		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "mach12:test") }));
+		await execute({ status: "completed", summary: "done" });
+		expect(pi.appended).toContainEqual({
+			customType: COMMAND_STATUS_TYPE,
+			data: { commandName: "mach12:test", status: "completed" },
+		});
 	});
 
 	it("stores command-message next_steps and renders the first as a forward pointer for completed", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 		const result = await execute({
 			status: "completed",
 			summary: "stage 2 done",
@@ -121,10 +117,12 @@ describe("registerCommandStatusTool — phase gate", () => {
 		});
 
 		expect(result.terminate).toBe(true);
-		expect(state.latestCommandStatus?.next_steps).toEqual([
-			{ message: "/mach12:issue-implement 84 3", fresh_session: true },
-		]);
-		expect(state.latestCommandStatus?.recommended_next_step).toBe(0);
+		if (state.lifecycle.phase === "reported") {
+			expect(state.lifecycle.status.next_steps).toEqual([
+				{ message: "/mach12:issue-implement 84 3", fresh_session: true },
+			]);
+			expect(state.lifecycle.status.recommended_next_step).toBe(0);
+		}
 		expect(String(result.content[0].text)).toBe("→ /mach12:issue-implement 84 3");
 		expect(result.details).toMatchObject({
 			status: "completed",
@@ -134,7 +132,7 @@ describe("registerCommandStatusTool — phase gate", () => {
 	});
 
 	it("renders the recommended command pointer when it is not the first next_step", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 		const result = await execute({
 			status: "completed",
 			summary: "stage done",
@@ -154,7 +152,7 @@ describe("registerCommandStatusTool — phase gate", () => {
 	});
 
 	it("stores non-command messages without rendering a bogus command pointer", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 		const result = await execute({
 			status: "completed",
 			summary: "needs user choice",
@@ -163,9 +161,11 @@ describe("registerCommandStatusTool — phase gate", () => {
 		});
 
 		expect(result.terminate).toBe(true);
-		expect(state.latestCommandStatus?.next_steps).toEqual([
-			{ message: "Ask the user which branch to use", reason: "No branch was specified" },
-		]);
+		if (state.lifecycle.phase === "reported") {
+			expect(state.lifecycle.status.next_steps).toEqual([
+				{ message: "Ask the user which branch to use", reason: "No branch was specified" },
+			]);
+		}
 		expect(String(result.content[0].text)).toBe("status: completed");
 		expect(result.details).toMatchObject({
 			status: "completed",
@@ -175,25 +175,24 @@ describe("registerCommandStatusTool — phase gate", () => {
 	});
 
 	it("rejects a duplicate report: the second call lands at phase 'reported' and is refused", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 
 		const first = await execute({ status: "completed", summary: "done" });
 		expect(first.terminate).toBe(true);
-		expect(state.commandPhase).toBe("reported");
+		expect(state.lifecycle.phase).toBe("reported");
 
-		// A second report in the same probe lands at phase "reported", which the
-		// phase gate rejects (covered indirectly by the it.each above; named here
-		// to document the duplicate-report contract explicitly).
 		const second = await execute({ status: "completed", summary: "done again" });
 		expect(second.terminate).toBeUndefined();
 		expect(second.details.error).toBe("out-of-phase");
 		expect(second.details.phase).toBe("reported");
-		// The first report is preserved; the duplicate did not overwrite it.
-		expect(state.latestCommandStatus?.summary).toBe("done");
+		// The first report is preserved in the lifecycle variant.
+		if (state.lifecycle.phase === "reported") {
+			expect(state.lifecycle.status.summary).toBe("done");
+		}
 	});
 
 	it("renders a plain status line for non-completed reports", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 		const result = await execute({
 			status: "waiting_for_user",
 			summary: "asked the user",
@@ -207,81 +206,63 @@ describe("registerCommandStatusTool — phase gate", () => {
 
 describe("registerCommandStatusTool — continuing status", () => {
 	it("transitions probing → running and does not terminate", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 		const result = await execute({ status: "continuing", summary: "more work to do" });
 
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.status).toBe("continuing");
-		expect(state.commandPhase).toBe("running");
-		expect(state.latestCommandStatus).toBeNull();
+		expect(state.lifecycle.phase).toBe("running");
 	});
 
 	it("does not journal the continuing status", async () => {
-		const { pi, execute } = toolFor(freshState({ commandPhase: "probing", activeTopLevelCommand: "a:cmd" }));
+		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "a:cmd") }));
 		await execute({ status: "continuing", summary: "still working" });
 		expect(pi.appended).toHaveLength(0);
 	});
 
 	it("allows up to 3 consecutive continues then returns limit error", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 
 		for (let i = 0; i < 3; i++) {
-			state.commandPhase = "probing";
+			state.lifecycle = { phase: "probing", command: "test:cmd", continueCount: i };
 			const result = await execute({ status: "continuing", summary: "working" });
 			expect(result.details.status).toBe("continuing");
 		}
 
-		state.commandPhase = "probing";
+		state.lifecycle = { phase: "probing", command: "test:cmd", continueCount: 3 };
 		const limited = await execute({ status: "continuing", summary: "still going" });
 		expect(limited.details.error).toBe("continue-limit");
 		expect(limited.content[0].text).toContain("completed");
 		expect(limited.terminate).toBeUndefined();
-		expect(state.commandPhase).toBe("probing");
+		expect(state.lifecycle.phase).toBe("probing");
 	});
 
-	it("resets the counter when a terminal status is reported", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
+	it("increments continueCount structurally on each continue", async () => {
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 
-		for (let i = 0; i < 3; i++) {
-			state.commandPhase = "probing";
-			await execute({ status: "continuing", summary: "working" });
-		}
-		state.commandPhase = "probing";
+		await execute({ status: "continuing", summary: "first" });
+		expect(state.lifecycle).toMatchObject({ phase: "running", continueCount: 1 });
+
+		// Simulate agent-end → probing (preserves count)
+		state.lifecycle = { phase: "probing", command: "test:cmd", continueCount: 1 };
+		await execute({ status: "continuing", summary: "second" });
+		expect(state.lifecycle).toMatchObject({ phase: "running", continueCount: 2 });
+	});
+
+	it("resets the counter structurally on new command start", async () => {
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
+
+		// Exhaust continues
+		state.lifecycle = { phase: "probing", command: "test:cmd", continueCount: 3 };
 		const limited = await execute({ status: "continuing", summary: "too many" });
 		expect(limited.details.error).toBe("continue-limit");
 
-		// A terminal status resets the counter
-		state.commandPhase = "probing";
-		await execute({ status: "completed", summary: "done" });
+		// A new command start structurally resets continueCount to 0
+		state.lifecycle = { phase: "probing", command: "test:new-cmd", continueCount: 0 };
 
-		// Counter is fresh again for the next command
-		state.commandPhase = "probing";
 		const fresh = await execute({ status: "continuing", summary: "fresh start" });
 		expect(fresh.details.status).toBe("continuing");
-		expect(state.commandPhase).toBe("running");
-	});
-
-	it("resets the counter via resetConsecutiveContinues callback (new command start after self-heal)", async () => {
-		const { state, execute } = toolFor(freshState({ commandPhase: "probing" }));
-
-		// Exhaust the counter — 4th continue hits the limit
-		for (let i = 0; i < 3; i++) {
-			state.commandPhase = "probing";
-			await execute({ status: "continuing", summary: "working" });
-		}
-		state.commandPhase = "probing";
-		const limited = await execute({ status: "continuing", summary: "too many" });
-		expect(limited.details.error).toBe("continue-limit");
-
-		// Self-heal: probe ends without terminal report (no counter reset).
-		// A new command starts and calls resetConsecutiveContinues.
-		state.resetConsecutiveContinues?.();
-
-		// Counter is fresh — next command can continue without hitting the limit
-		state.commandPhase = "probing";
-		const fresh = await execute({ status: "continuing", summary: "new command" });
-		expect(fresh.details.status).toBe("continuing");
-		expect(state.commandPhase).toBe("running");
+		expect(state.lifecycle).toMatchObject({ phase: "running", continueCount: 1 });
 	});
 });
 

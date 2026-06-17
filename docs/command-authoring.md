@@ -412,7 +412,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
 2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
    - Call `report_scramjet_command_status` with a status and stop the probe turn.
-   - Call `get_scramjet_user_input` if structured input is needed before continuing; after the input tool returns, continue command work in that same turn. The phase returns to `running`, so Scramjet will send another probe after the resumed work ends.
+   - Call `get_scramjet_user_input` if structured input is needed before continuing; after a successful input tool result, continue command work in that same turn. The phase returns to `running` without consuming the `continuing` status budget, so Scramjet will send another probe after the resumed work ends.
 
 ### Tool parameters
 
@@ -481,7 +481,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns successful answers as the tool result; pressing Escape cancels the prompt and ends the turn.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Freetext parks the command in `waiting` immediately so the user can reply through the standard editor.
 
 ### When to use it
 
@@ -530,11 +530,11 @@ Freetext always returns `terminate: true` and parks the command in `waiting`; th
 
 ### Cancellation
 
-Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command. Freetext cancellation uses the normal workflow-exit path after the turn has ended.
+Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it always parks the command in `waiting` and ends the turn for a standard editor reply.
 
 ### Phase gating
 
-The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the command transitions back to `running` so the agent can continue work in the same turn and Scramjet can probe again when that work ends. Freetext transitions directly to `waiting` from either phase.
+The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the command transitions back to `running` without incrementing `continueCount` so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures leave the command in `probing` so the agent can still report `blocked` or `incomplete`. Freetext transitions directly to `waiting` from either phase.
 
 ### Journaling
 

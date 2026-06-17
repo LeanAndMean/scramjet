@@ -1,3 +1,4 @@
+import type { LifecycleState } from "../phase-machine.ts";
 import type { ScramjetState } from "../types.ts";
 
 export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
@@ -5,18 +6,45 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		enabled: false,
 		registry: new Map(),
 		agentRegistry: new Map(),
-		activeTopLevelCommand: null,
 		sidebarLog: [],
 		delegateStack: [],
 		pendingForcedDispatch: null,
-		commandPhase: "idle",
-		latestCommandStatus: null,
+		lifecycle: { phase: "idle" },
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
-		resetConsecutiveContinues: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
 		...overrides,
 	};
+}
+
+/**
+ * Creates a lifecycle state for a given phase, providing sensible defaults.
+ * Use this in tests that previously passed `commandPhase` / `activeTopLevelCommand`.
+ */
+export function lifecycleFor(
+	phase: LifecycleState["phase"],
+	command = "test:cmd",
+	extra?: { continueCount?: number; status?: import("../types.ts").CommandStatusRestingPayload },
+): LifecycleState {
+	switch (phase) {
+		case "idle":
+			return { phase: "idle" };
+		case "dormant":
+			return { phase: "dormant", command };
+		case "running":
+			return { phase: "running", command, continueCount: extra?.continueCount ?? 0 };
+		case "probing":
+			return { phase: "probing", command, continueCount: extra?.continueCount ?? 0 };
+		case "reported":
+			return {
+				phase: "reported",
+				command,
+				status: extra?.status ?? { status: "completed", summary: "done" },
+				continueCount: extra?.continueCount ?? 0,
+			};
+		case "waiting":
+			return { phase: "waiting", command };
+	}
 }
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;

@@ -6,7 +6,7 @@
  * The command's normal answer turn injects nothing about completion. After that
  * turn goes idle, auto-continue.ts defers a hidden status-check probe (see
  * buildProbeMessage); the agent answers it by calling this tool. execute() is
- * phase-gated — it only accepts the report while commandPhase === "probing".
+ * phase-gated — it only accepts the report while lifecycle.phase === "probing".
  *
  * Five statuses, two execution paths:
  * - "continuing": non-terminating. The agent has more work to do; the tool
@@ -28,15 +28,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.ts";
 import { recordCommandStatus } from "./history.ts";
-import { transitionPhase } from "./phase-machine.ts";
-import type { CommandPhase, CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
+import { getActiveCommand, type LifecycleState, transition } from "./phase-machine.ts";
+import type {
+	CommandStatusNextStep,
+	CommandStatusPayload,
+	CommandStatusRestingPayload,
+	ScramjetState,
+} from "./types.ts";
 
-// Shared shape for the tool's result `details` so both the out-of-phase error
-// branch and the success branch infer the same TDetails (mirrors delegate.ts's
-// DelegateDetails pattern).
 interface CommandStatusDetails {
 	error?: string;
-	phase?: CommandPhase;
+	phase?: LifecycleState["phase"];
 	status?: CommandStatusPayload["status"];
 	summary?: string;
 	recommended_next_step?: number;
@@ -117,14 +119,6 @@ const _statusWireMatchesInterface = (status: WireStatus): CommandStatusPayload["
 const _statusInterfaceMatchesWire = (status: CommandStatusPayload["status"]): WireStatus => status;
 
 export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
-	// Accumulates across probe cycles (each probe is a new turn, so a
-	// before_agent_start reset would clear the counter every cycle and make
-	// the limit unreachable). Reset only on the terminating path below.
-	let consecutiveContinues = 0;
-	state.resetConsecutiveContinues = () => {
-		consecutiveContinues = 0;
-	};
-
 	pi.registerTool({
 		name: "report_scramjet_command_status",
 		label: "Report Scramjet Command Status",
@@ -155,17 +149,11 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			),
 		}),
 		async execute(_toolCallId, params) {
-			// Harness-enforced phase gate (issue 84 anti-pattern #3): prose alone
-			// cannot keep the model from calling this tool whenever it finishes a
-			// task. The tool is only meaningful in direct response to the injected
-			// status-check probe, i.e. while commandPhase === "probing". Outside
-			// that window, return a helpful error WITHOUT terminate so the model's
-			// real turn is not cut short.
-			if (state.commandPhase !== "probing") {
+			if (state.lifecycle.phase !== "probing") {
 				console.warn(
-					`scramjet: report_scramjet_command_status called out of phase (phase=${state.commandPhase}); report ignored`,
+					`scramjet: report_scramjet_command_status called out of phase (phase=${state.lifecycle.phase}); report ignored`,
 				);
-				const details: CommandStatusDetails = { error: "out-of-phase", phase: state.commandPhase };
+				const details: CommandStatusDetails = { error: "out-of-phase", phase: state.lifecycle.phase };
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
 					details,
@@ -174,16 +162,24 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 
 			// Non-terminating path: the agent has more work to do.
 			if (params.status === "continuing") {
-				consecutiveContinues++;
-				if (consecutiveContinues > MAX_CONSECUTIVE_CONTINUES) {
-					const details: CommandStatusDetails = { error: "continue-limit", phase: state.commandPhase };
+				if (state.lifecycle.continueCount >= MAX_CONSECUTIVE_CONTINUES) {
+					const details: CommandStatusDetails = { error: "continue-limit", phase: state.lifecycle.phase };
 					return {
 						content: [{ type: "text", text: CONTINUE_LIMIT_ERROR }],
 						details,
 					};
 				}
 				state.suspendProbeWatchdog?.();
-				transitionPhase(state, "running");
+				const result = transition(state.lifecycle, { type: "continuing" });
+				if (!result.ok) {
+					console.warn(`[scramjet] illegal lifecycle transition: ${result.from} + continuing`);
+					const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.lifecycle.phase };
+					return {
+						content: [{ type: "text", text: "Continuing transition failed." }],
+						details,
+					};
+				}
+				state.lifecycle = result.state;
 				state.rearmProbeWatchdog?.();
 				const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
 				return {
@@ -192,36 +188,27 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				};
 			}
 
-			// Terminating path: reset the continue counter.
-			consecutiveContinues = 0;
-
-			const payload: CommandStatusPayload = {
+			const payload: CommandStatusRestingPayload = {
 				status: params.status,
 				summary: params.summary,
 				user_prompt: params.user_prompt,
 				next_steps: params.next_steps,
 				recommended_next_step: params.recommended_next_step,
 			};
-			state.latestCommandStatus = payload;
-			if (!transitionPhase(state, "reported")) {
-				state.latestCommandStatus = null;
-				const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.commandPhase };
+			const reportResult = transition(state.lifecycle, { type: "status-reported", status: payload });
+			if (!reportResult.ok) {
+				const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.lifecycle.phase };
 				return {
 					content: [{ type: "text", text: "Status recorded but phase transition to reported failed." }],
 					details,
 					terminate: true,
 				};
 			}
+			state.lifecycle = reportResult.state;
 
-			// issue 88: journal the report so a rewind/resume can reconstruct the
-			// resumable "waiting" state — and, just as importantly, reconstruct a
-			// command that completed-without-chaining to "idle" rather than
-			// resurrecting it. Guarded on a non-null active command: the phase gate
-			// above means we're mid-probe for an active invocation, but the field is
-			// typed nullable, and journaling an entry with no command name would be
-			// skipped by replayHistory's defensive filter anyway.
-			if (state.activeTopLevelCommand) {
-				recordCommandStatus(pi, state.activeTopLevelCommand, params.status);
+			const activeCommand = getActiveCommand(state.lifecycle);
+			if (activeCommand) {
+				recordCommandStatus(pi, activeCommand, params.status);
 			}
 
 			const next =

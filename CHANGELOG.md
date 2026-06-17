@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.21.2 — Lifecycle state hardening via discriminated union
+
+Refactors Scramjet's command lifecycle from independently-typed fields (`commandPhase`, `activeTopLevelCommand`, `latestCommandStatus`) into a discriminated `LifecycleState` union where each phase carries exactly the data it needs, making invalid state combinations unrepresentable at the type level, including excluding `continuing` from stored `reported` statuses (issue #135).
+
+### Changed
+
+- `types.ts` — replaced `commandPhase`, `activeTopLevelCommand`, `latestCommandStatus`, and `resetConsecutiveContinues` with a single `lifecycle: LifecycleState` field and optional `lifecycleTimers?: LifecycleTimerAccessors`.
+- `phase-machine.ts` — added `LifecycleState` / `LifecycleEvent` types, pure `transition()` function, `getActiveCommand()` helper, and `assertInvariant()` validator. Removed legacy `transitionPhase()`, `LEGAL_TRANSITIONS`, bridge helpers.
+- `auto-continue.ts` — migrated to discriminant narrowing on `state.lifecycle.phase`; timer observability exposed via state-attached accessors (`isProbeScheduled`, `isWatchdogActive`, `isDispatchScheduled`).
+- `command-status.ts` — phase gate and continue counter now read from lifecycle variants; closure counter removed.
+- `user-input.ts` — phase gate reads from lifecycle variants.
+- `history.ts` — command-start, user-reply, workflow-exit, and replay reconstruction use lifecycle transitions.
+- `delegate.ts` — reads active command via `getActiveCommand(state.lifecycle)`.
+
+### Added
+
+- `docs/lifecycle-state-space.md` — documents lifecycle dimensions, valid states, transition table, module ownership, and design rationale.
+- Explicit `dormant` lifecycle phase for the "idle but command-associated" state (probe self-heal, replayed command starts), replacing the implicit `idle + activeTopLevelCommand !== null` combination.
+- Cross-module integration smoke tests covering probe self-heal → dormant → resume, waiting → replay/resume → completion, continuing cycle limits, and structured user input during probing.
+
 ## 0.21.1 — Minimality pressure across planning, implementation, and review prompts
 
 Adds the minimum-sufficient solution ladder and tailored minimality guidance to CLAUDE.md and 11 Mach 12 command/agent prompts (issue #150).

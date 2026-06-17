@@ -44,12 +44,10 @@ export default function scramjet(pi: ExtensionAPI) {
 		enabled: false,
 		registry: new Map(),
 		agentRegistry: new Map(),
-		activeTopLevelCommand: null,
 		sidebarLog: [],
 		delegateStack: [],
 		pendingForcedDispatch: null,
-		commandPhase: "idle",
-		latestCommandStatus: null,
+		lifecycle: { phase: "idle" },
 		autonomyConfigPath: defaultConfigPath(),
 	};
 

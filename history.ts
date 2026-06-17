@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { isPhaseEntry, reconstructPhase, transitionPhase } from "./phase-machine.ts";
+import { getActiveCommand, isPhaseEntry, type LifecycleState, reconstructPhase, transition } from "./phase-machine.ts";
 import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
@@ -57,9 +57,10 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 
 // Single chokepoint for "a command was invoked." Pushes a sidebar entry and
 // persists it to the journal so resume can replay it. Depth-0 entries are
-// top-level command starts and update activeTopLevelCommand; depth > 0 entries
-// are delegated subroutine invocations and must not replace the active top-level
+// top-level command starts and update the lifecycle; depth > 0 entries are
+// delegated subroutine invocations and must not replace the active top-level
 // command whose next-step policy controls the turn.
+
 export function recordCommandInvocation(
 	pi: ExtensionAPI,
 	state: ScramjetState,
@@ -74,15 +75,12 @@ export function recordCommandInvocation(
 		timestamp: Date.now(),
 	};
 	if (depth === 0) {
-		state.activeTopLevelCommand = name;
-		// Single chokepoint for the two-phase command-status lifecycle (issue 84):
-		// a fresh top-level command starts its answer turn in "running" and clears
-		// any prior status report. Depth > 0 (delegated subroutines) must NOT touch
-		// the phase — the probe turn is not a command start, so keeping the phase
-		// untouched here is what lets it stay "probing" until the status tool fires.
-		if (!transitionPhase(state, "running")) return;
-		state.latestCommandStatus = null;
-		state.resetConsecutiveContinues?.();
+		const result = transition(state.lifecycle, { type: "command-start", command: name });
+		if (!result.ok) {
+			console.warn(`[scramjet] illegal lifecycle transition: ${result.from} + command-start`);
+			return;
+		}
+		state.lifecycle = result.state;
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);
@@ -125,14 +123,7 @@ export interface ReplayResult {
 	// null when no toggle entry was found on the replayed branch — caller
 	// preserves its prior value rather than resetting to the default.
 	enabled: boolean | null;
-	activeTopLevelCommand: string | null;
-	// Reconstructed resting lifecycle phase (issue 88). Only the two STABLE
-	// resting states are ever reconstructed: "waiting" when the active top-level
-	// command's last journaled status was waiting_for_user, otherwise "idle". The
-	// transient running/probing/reported phases are never journaled or restored,
-	// preserving the issue 84 "phase is not journaled" invariant for everything
-	// but the resumable halt.
-	phase: "idle" | "waiting";
+	lifecycle: LifecycleState;
 }
 
 export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
@@ -159,32 +150,28 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	}
 	const reconstructed = reconstructPhase(entries.filter(isPhaseEntry));
 	if (reconstructed.activeCommandCleared) activeTopLevelCommand = null;
-	return { sidebarLog, enabled, activeTopLevelCommand, phase: reconstructed.phase };
+	let lifecycle: LifecycleState;
+	if (reconstructed.phase === "waiting" && activeTopLevelCommand) {
+		lifecycle = { phase: "waiting", command: activeTopLevelCommand };
+	} else if (activeTopLevelCommand && reconstructed.phase === "idle") {
+		lifecycle = { phase: "dormant", command: activeTopLevelCommand };
+	} else {
+		lifecycle = { phase: "idle" };
+	}
+	return { sidebarLog, enabled, lifecycle };
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	const rebuild = async (_event: unknown, ctx: ExtensionContext) => {
 		const result = replayHistory(ctx.sessionManager.getBranch());
 		state.sidebarLog = result.sidebarLog;
-		state.activeTopLevelCommand = result.activeTopLevelCommand;
+		state.lifecycle = result.lifecycle;
 		// pendingForcedDispatch is a transient runtime flag tied to a specific
 		// in-flight forced dispatch; it has no meaning after navigation or
 		// resume. Clear it explicitly so a stale value (e.g. a forced target
 		// that was never resolved because it wasn't in the registry) can't
 		// mislabel a future user-typed slash command as origin: "forced". (F18)
 		state.pendingForcedDispatch = null;
-		// Two-phase command-status protocol on resume/branch-switch. The transient
-		// phases (running/probing/reported) are deliberately not journaled: replaying
-		// a "probing" phase with no live probe turn behind it could mis-dispatch, and
-		// a stale post-resume report_scramjet_command_status call must hit the tool's phase
-		// guard rather than firing into a dead chain. The one exception (issue 88) is
-		// the STABLE resumable halt: replayHistory reconstructs "waiting" iff the
-		// active command's last journaled status was waiting_for_user (via
-		// COMMAND_STATUS_TYPE entries), so a paused interactive command survives
-		// rewind/resume; everything else reconstructs to "idle". latestCommandStatus
-		// is still never restored (only the phase is reconstructed, not the payload).
-		state.commandPhase = result.phase;
-		state.latestCommandStatus = null;
 		// Per design decision: leave state.enabled unchanged when the branch
 		// has no toggle entry, so the in-memory flag carries across navigation
 		// to branches that never explicitly toggled.
@@ -215,8 +202,8 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// Resume the active command on an interactive non-slash reply. Two
 			// cases: (1) issue 88 — the command reported waiting_for_user and
 			// rests at "waiting"; the user's answer re-arms the probe path.
-			// (2) issue 128 — the probe self-healed to "idle" but
-			// activeTopLevelCommand is still set; the user's reply is still
+			// (2) issue 128 — the probe self-healed to "dormant" (command
+			// still associated but not running); the user's reply is still
 			// engaging with the command. In both cases, flip to "running" so
 			// phase-gated tools (get_scramjet_user_input) work
 			// and agent_end fires the running→probing probe. Chaining still
@@ -228,15 +215,16 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			if (
 				event.source === "interactive" &&
 				!event.text.startsWith("/") &&
-				(state.commandPhase === "waiting" || state.commandPhase === "idle") &&
-				state.activeTopLevelCommand !== null
+				(state.lifecycle.phase === "waiting" || state.lifecycle.phase === "dormant")
 			) {
-				if (!transitionPhase(state, "running")) return;
+				const result = transition(state.lifecycle, { type: "user-reply" });
+				if (!result.ok) return;
+				state.lifecycle = result.state;
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
 			// (typo, removed command, stale alias) is a strong signal the user
-			// has moved on from any active workflow. Clear activeTopLevelCommand
+			// has moved on from any active workflow. Exit the workflow
 			// so the next agent_end doesn't apply the *previous* command's
 			// next-step policy to whatever the agent does in response. (F25)
 			//
@@ -245,13 +233,12 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// not a workflow exit — the user toggling /scramjet on mid-chain or
 			// checking /help should not silently break a forced next-step. Only
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
-			if (event.text.startsWith("/") && state.activeTopLevelCommand !== null) {
+			if (event.text.startsWith("/") && getActiveCommand(state.lifecycle) !== null) {
 				if (!isKnownSlashCommand(event.text, pi)) {
-					state.activeTopLevelCommand = null;
-					// issue 88: exiting the workflow also drops a paused (waiting)
-					// command back to idle so the abandoned command can't be resumed
-					// by a later non-slash reply.
-					if (state.commandPhase === "waiting") transitionPhase(state, "idle");
+					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
+					if (exitResult.ok) {
+						state.lifecycle = exitResult.state;
+					}
 				}
 			}
 			return;
