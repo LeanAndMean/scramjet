@@ -89,11 +89,11 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, sc
 	return `<scramjet-next-step>\n${body}\n</scramjet-next-step>`;
 }
 
-// Post-response probe message (issue 84, issue 128). A concise two-route
-// router: the agent either reports status or asks for structured input before
-// continuing work. No user-controlled text is interpolated into the preamble;
-// buildNextStepBlock owns escaping for the policy portion. The probe fires in a
-// separate turn after the command's normal user-facing answer.
+// Post-response probe message (issue 84, issue 128, issue 156). The agent
+// either reports status or requests user input before continuing work. No
+// user-controlled text is interpolated into the preamble; buildNextStepBlock
+// owns escaping for the policy portion. The probe fires in a separate turn
+// after the command's normal user-facing answer.
 export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scramjetEnabled = true): string {
 	const id = safe(commandId);
 	const preamble =
@@ -102,9 +102,8 @@ export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scr
 		"`report_scramjet_command_status` \u2014 report your status and stop the probe turn:\n" +
 		"- `continuing` \u2014 you have more work to do (not blocked, not waiting for input, not finished)\n" +
 		"- `completed` \u2014 the command's work is done and your answer was already delivered\n" +
-		"- `waiting_for_user` \u2014 you need user input before continuing\n" +
 		"- `blocked` \u2014 cannot proceed (error, missing dependency, authorization)\n" +
 		"- `incomplete` \u2014 stopped without clean completion\n\n" +
-		"`get_scramjet_user_input` \u2014 if you need structured input (confirm/select/freetext) before continuing; after it returns, continue the command work in this turn";
+		"`get_scramjet_user_input` \u2014 if you need user input (confirm/select/freetext) before continuing; after it returns, continue the command work in this turn";
 	return `${preamble}\n\n${buildNextStepBlock(policy, commandId, scramjetEnabled)}`;
 }
