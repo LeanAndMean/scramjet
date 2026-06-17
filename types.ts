@@ -14,21 +14,6 @@ export interface NextStep {
 	reason?: string;
 }
 
-// Lifecycle phase of the active top-level Scramjet command, tracked per
-// invocation by the two-phase command-status protocol (issue 84):
-//   idle     — no active command, or the chain has been resolved
-//   running  — the command's normal answer turn is in flight
-//   probing  — the answer turn ended; Scramjet has asked for a status check
-//   reported — the agent answered the probe via report_scramjet_command_status
-//   waiting  — the probe reported waiting_for_user; the command is paused for
-//              input but stays associated with its invocation. A later
-//              interactive reply re-arms the running→probing probe path so an
-//              interactive command can resume and report completed (issue 88).
-//              The only resting phase besides idle. Survives rewind/resume:
-//              replayHistory reconstructs "waiting" from the journaled
-//              COMMAND_STATUS_TYPE entries (history.ts, issue 88 Stage 2).
-export type CommandPhase = "idle" | "running" | "probing" | "reported" | "waiting";
-
 // A single next-step suggestion in a command-status report: a suggested next
 // message. `message` is both the selector display text and the dispatched
 // payload — a leading slash makes it a command (auto-dispatched on selection);
@@ -117,20 +102,12 @@ export interface ScramjetState {
 	enabled: boolean;
 	registry: CommandRegistry;
 	agentRegistry: AgentRegistry;
-	activeTopLevelCommand: string | null;
 	sidebarLog: SidebarEntry[];
 	delegateStack: DelegateFrame[];
 	// Set by the next-step dispatcher just before slash-input dispatch when
 	// firing a forced transition, so history's input handler can label the
 	// resulting entry as origin: "forced" instead of "agent".
 	pendingForcedDispatch: string | null;
-	// Two-phase command-status protocol (issue 84). commandPhase tracks the
-	// lifecycle of the active top-level command so the probe fires exactly
-	// once per invocation; latestCommandStatus holds the agent's most recent
-	// report_scramjet_command_status report, read by auto-continue on the probe turn's
-	// agent_end. Reset to "idle"/null on command start and on resume/rebuild.
-	commandPhase: CommandPhase;
-	latestCommandStatus: CommandStatusPayload | null;
 	lifecycle: LifecycleState;
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;

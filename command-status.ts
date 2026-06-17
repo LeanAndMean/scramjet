@@ -6,7 +6,7 @@
  * The command's normal answer turn injects nothing about completion. After that
  * turn goes idle, auto-continue.ts defers a hidden status-check probe (see
  * buildProbeMessage); the agent answers it by calling this tool. execute() is
- * phase-gated — it only accepts the report while commandPhase === "probing".
+ * phase-gated — it only accepts the report while lifecycle.phase === "probing".
  *
  * Five statuses, two execution paths:
  * - "continuing": non-terminating. The agent has more work to do; the tool
@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.ts";
 import { recordCommandStatus } from "./history.ts";
-import { getActiveCommand, type LifecycleState, toLegacy, transition } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleState, transition } from "./phase-machine.ts";
 import type { CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
 
 interface CommandStatusDetails {
@@ -113,13 +113,6 @@ type WireStatus = Static<typeof STATUS_SCHEMA>;
 const _statusWireMatchesInterface = (status: WireStatus): CommandStatusPayload["status"] => status;
 const _statusInterfaceMatchesWire = (status: CommandStatusPayload["status"]): WireStatus => status;
 
-function syncLegacyFromLifecycle(state: ScramjetState): void {
-	const legacy = toLegacy(state.lifecycle);
-	state.commandPhase = legacy.commandPhase;
-	state.activeTopLevelCommand = legacy.activeTopLevelCommand;
-	state.latestCommandStatus = legacy.latestCommandStatus;
-}
-
 export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
 		name: "report_scramjet_command_status",
@@ -182,7 +175,6 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 					};
 				}
 				state.lifecycle = result.state;
-				syncLegacyFromLifecycle(state);
 				state.rearmProbeWatchdog?.();
 				const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
 				return {
@@ -208,7 +200,6 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				};
 			}
 			state.lifecycle = reportResult.state;
-			syncLegacyFromLifecycle(state);
 
 			const activeCommand = getActiveCommand(state.lifecycle);
 			if (activeCommand) {

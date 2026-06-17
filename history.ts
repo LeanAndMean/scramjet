@@ -1,13 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import {
-	fromLegacy,
-	getActiveCommand,
-	isPhaseEntry,
-	type LifecycleState,
-	reconstructPhase,
-	toLegacy,
-	transition,
-} from "./phase-machine.ts";
+import { getActiveCommand, isPhaseEntry, type LifecycleState, reconstructPhase, transition } from "./phase-machine.ts";
 import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
@@ -65,17 +57,9 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 
 // Single chokepoint for "a command was invoked." Pushes a sidebar entry and
 // persists it to the journal so resume can replay it. Depth-0 entries are
-// top-level command starts and update activeTopLevelCommand; depth > 0 entries
-// are delegated subroutine invocations and must not replace the active top-level
+// top-level command starts and update the lifecycle; depth > 0 entries are
+// delegated subroutine invocations and must not replace the active top-level
 // command whose next-step policy controls the turn.
-// Sync legacy fields from lifecycle state. Used during the bridge period
-// (Stages 2-6) until legacy fields are removed in Stage 7.
-function syncLegacyFromLifecycle(state: ScramjetState): void {
-	const legacy = toLegacy(state.lifecycle);
-	state.commandPhase = legacy.commandPhase;
-	state.activeTopLevelCommand = legacy.activeTopLevelCommand;
-	state.latestCommandStatus = legacy.latestCommandStatus;
-}
 
 export function recordCommandInvocation(
 	pi: ExtensionAPI,
@@ -97,7 +81,6 @@ export function recordCommandInvocation(
 			return;
 		}
 		state.lifecycle = result.state;
-		syncLegacyFromLifecycle(state);
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);
@@ -140,14 +123,6 @@ export interface ReplayResult {
 	// null when no toggle entry was found on the replayed branch — caller
 	// preserves its prior value rather than resetting to the default.
 	enabled: boolean | null;
-	activeTopLevelCommand: string | null;
-	// Reconstructed resting lifecycle phase (issue 88). Only the two STABLE
-	// resting states are ever reconstructed: "waiting" when the active top-level
-	// command's last journaled status was waiting_for_user, otherwise "idle". The
-	// transient running/probing/reported phases are never journaled or restored,
-	// preserving the issue 84 "phase is not journaled" invariant for everything
-	// but the resumable halt.
-	phase: "idle" | "waiting";
 	lifecycle: LifecycleState;
 }
 
@@ -183,7 +158,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	} else {
 		lifecycle = { phase: "idle" };
 	}
-	return { sidebarLog, enabled, activeTopLevelCommand, phase: reconstructed.phase, lifecycle };
+	return { sidebarLog, enabled, lifecycle };
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
@@ -191,7 +166,6 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const result = replayHistory(ctx.sessionManager.getBranch());
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
-		syncLegacyFromLifecycle(state);
 		// pendingForcedDispatch is a transient runtime flag tied to a specific
 		// in-flight forced dispatch; it has no meaning after navigation or
 		// resume. Clear it explicitly so a stale value (e.g. a forced target
@@ -223,17 +197,13 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	});
 
 	pi.on("input", async (event) => {
-		// Bridge: re-sync lifecycle from legacy fields in case an un-migrated
-		// consumer (e.g. auto-continue.ts) updated legacy fields without syncing
-		// lifecycle. Removed when legacy fields are dropped (Stage 7).
-		state.lifecycle = fromLegacy(state);
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
 			// Resume the active command on an interactive non-slash reply. Two
 			// cases: (1) issue 88 — the command reported waiting_for_user and
 			// rests at "waiting"; the user's answer re-arms the probe path.
-			// (2) issue 128 — the probe self-healed to "idle" but
-			// activeTopLevelCommand is still set; the user's reply is still
+			// (2) issue 128 — the probe self-healed to "dormant" (command
+			// still associated but not running); the user's reply is still
 			// engaging with the command. In both cases, flip to "running" so
 			// phase-gated tools (get_scramjet_user_input) work
 			// and agent_end fires the running→probing probe. Chaining still
@@ -250,12 +220,11 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 				const result = transition(state.lifecycle, { type: "user-reply" });
 				if (!result.ok) return;
 				state.lifecycle = result.state;
-				syncLegacyFromLifecycle(state);
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
 			// (typo, removed command, stale alias) is a strong signal the user
-			// has moved on from any active workflow. Clear activeTopLevelCommand
+			// has moved on from any active workflow. Exit the workflow
 			// so the next agent_end doesn't apply the *previous* command's
 			// next-step policy to whatever the agent does in response. (F25)
 			//
@@ -269,7 +238,6 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
 					if (exitResult.ok) {
 						state.lifecycle = exitResult.state;
-						syncLegacyFromLifecycle(state);
 					}
 				}
 			}

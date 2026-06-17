@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMMAND_STATUS_TYPE } from "../history.ts";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../user-input.ts";
-import { freshState, recordingPi } from "./helpers.ts";
+import { freshState, lifecycleFor, recordingPi } from "./helpers.ts";
 
 type UserInputParams = {
 	type: "confirm" | "select" | "freetext";
@@ -82,7 +82,7 @@ describe("registerUserInputTool — phase gate", () => {
 	it.each(["idle", "reported", "waiting"] as const)(
 		"rejects with a helpful error and no terminate when phase is %s",
 		async (phase) => {
-			const { execute } = toolFor(freshState({ commandPhase: phase }));
+			const { execute } = toolFor(freshState({ lifecycle: lifecycleFor(phase) }));
 			const ctx = { ui: {} };
 			const result = await execute({ type: "confirm", message: "Proceed?" }, ctx);
 
@@ -94,7 +94,7 @@ describe("registerUserInputTool — phase gate", () => {
 	);
 
 	it.each(["running", "probing"] as const)("accepts calls when phase is %s", async (phase) => {
-		const { execute } = toolFor(freshState({ commandPhase: phase }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor(phase) }));
 		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Proceed?" }, ctx);
 
@@ -104,7 +104,7 @@ describe("registerUserInputTool — phase gate", () => {
 
 describe("registerUserInputTool — non-TUI guard", () => {
 	it("returns a helpful error when ctx.ui is absent", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "confirm", message: "Proceed?" }, {});
 
 		expect(result.terminate).toBeUndefined();
@@ -113,7 +113,7 @@ describe("registerUserInputTool — non-TUI guard", () => {
 	});
 
 	it("returns a helpful error when ctx is undefined", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "confirm", message: "Proceed?" }, undefined);
 
 		expect(result.terminate).toBeUndefined();
@@ -125,7 +125,7 @@ describe("registerUserInputTool — runtime validation", () => {
 	const ctx = { ui: {} };
 
 	it("rejects select without options", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "select", message: "Pick one" }, ctx);
 
 		expect(result.terminate).toBeUndefined();
@@ -135,7 +135,7 @@ describe("registerUserInputTool — runtime validation", () => {
 	});
 
 	it("rejects select with empty options array", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "select", message: "Pick one", options: [] }, ctx);
 
 		expect(result.terminate).toBeUndefined();
@@ -150,7 +150,7 @@ describe("registerUserInputTool — runtime validation", () => {
 		["empty label", [{ value: "a", label: "   " }]],
 		["null option", [null]],
 	])("rejects select option with %s", async (_name, options) => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "select", message: "Pick one", options } as any, ctx);
 
 		expect(result.terminate).toBeUndefined();
@@ -161,7 +161,7 @@ describe("registerUserInputTool — runtime validation", () => {
 	});
 
 	it("rejects select with recommended out of range", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute(
 			{
 				type: "select",
@@ -178,7 +178,7 @@ describe("registerUserInputTool — runtime validation", () => {
 	});
 
 	it("accepts select with valid recommended index", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const uiCtx = mockUICtx("b");
 		const result = await execute(
 			{
@@ -197,7 +197,7 @@ describe("registerUserInputTool — runtime validation", () => {
 	});
 
 	it("rejects empty message", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "confirm", message: "" }, ctx);
 
 		expect(result.terminate).toBeUndefined();
@@ -206,7 +206,7 @@ describe("registerUserInputTool — runtime validation", () => {
 	});
 
 	it("rejects whitespace-only message", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "confirm", message: "   " }, ctx);
 
 		expect(result.terminate).toBeUndefined();
@@ -216,7 +216,7 @@ describe("registerUserInputTool — runtime validation", () => {
 
 describe("registerUserInputTool — non-terminating results", () => {
 	it("never returns terminate: true on any error path", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = { ui: {} };
 
 		const validationResult = await execute({ type: "select", message: "Pick", options: [] }, ctx);
@@ -233,7 +233,7 @@ describe("registerUserInputTool — non-terminating results", () => {
 	});
 
 	it("never returns terminate: true on success paths", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Proceed?" }, ctx);
 		expect(result.terminate).toBeUndefined();
@@ -242,7 +242,7 @@ describe("registerUserInputTool — non-terminating results", () => {
 
 describe("registerUserInputTool — confirm interaction", () => {
 	it("returns confirmed: true when user selects Yes", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
@@ -253,7 +253,7 @@ describe("registerUserInputTool — confirm interaction", () => {
 	});
 
 	it("returns confirmed: false when user selects No", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx("no");
 		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
@@ -263,7 +263,7 @@ describe("registerUserInputTool — confirm interaction", () => {
 	});
 
 	it("returns cancelled: true and terminates when user presses Escape", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx(null);
 		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
@@ -286,7 +286,7 @@ describe("registerUserInputTool — select interaction", () => {
 	};
 
 	it("returns selected value when user picks an option", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx("minor");
 		const result = await execute(selectParams, ctx);
 
@@ -297,7 +297,7 @@ describe("registerUserInputTool — select interaction", () => {
 	});
 
 	it("returns cancelled: true and terminates when user presses Escape", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx(null);
 		const result = await execute(selectParams, ctx);
 
@@ -308,7 +308,7 @@ describe("registerUserInputTool — select interaction", () => {
 	});
 
 	it("passes recommended index to the select widget", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const { ctx, getFactory } = mockUICtxWithFactory();
 
 		const promise = execute({ ...selectParams, recommended: 1 }, ctx);
@@ -332,7 +332,7 @@ describe("registerUserInputTool — select interaction", () => {
 
 describe("registerUserInputTool — freetext interaction", () => {
 	it.each(["running", "probing"] as const)("terminates and parks at waiting from %s", async (phase) => {
-		const state = freshState({ commandPhase: phase });
+		const state = freshState({ lifecycle: lifecycleFor(phase) });
 		const { execute } = toolFor(state);
 		const result = await execute({ type: "freetext", message: "Release title?", placeholder: "v1.2.3" });
 
@@ -341,11 +341,10 @@ describe("registerUserInputTool — freetext interaction", () => {
 		expect(result.details).toEqual({ type: "freetext", waiting_for_user: true });
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.phase).toBe("waiting");
-		expect(state.commandPhase).toBe("waiting");
 	});
 
 	it("works when ctx.ui is absent", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ type: "freetext", message: "Release title?" }, {});
 
 		expect(result.terminate).toBe(true);
@@ -355,27 +354,25 @@ describe("registerUserInputTool — freetext interaction", () => {
 
 describe("registerUserInputTool — cancellation phase handling", () => {
 	it("transitions running to waiting on cancellation", async () => {
-		const state = freshState({ commandPhase: "running" });
+		const state = freshState({ lifecycle: lifecycleFor("running") });
 		const { execute } = toolFor(state);
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.phase).toBe("waiting");
-		expect(state.commandPhase).toBe("waiting");
 	});
 
 	it("transitions probing to waiting on cancellation", async () => {
-		const state = freshState({ commandPhase: "probing" });
+		const state = freshState({ lifecycle: lifecycleFor("probing") });
 		const { execute } = toolFor(state);
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.phase).toBe("waiting");
-		expect(state.commandPhase).toBe("waiting");
 	});
 
 	it("journals waiting_for_user command status on cancellation with active command", async () => {
-		const state = freshState({ commandPhase: "running", activeTopLevelCommand: "mach12:test" });
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
 		const { execute, pi } = toolFor(state);
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
@@ -391,7 +388,7 @@ describe("registerUserInputTool — cancellation phase handling", () => {
 
 describe("registerUserInputTool — UI interaction errors", () => {
 	it("returns a structured non-terminating error when UI fails during running phase", async () => {
-		const { execute } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = { ui: { custom: () => Promise.reject(new Error("UI crashed")) } };
 		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
 
@@ -407,7 +404,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 	afterEach(() => vi.useRealTimers());
 
 	it("suspends probe watchdog before UI and resumes running after", async () => {
-		const state = freshState({ commandPhase: "probing" });
+		const state = freshState({ lifecycle: lifecycleFor("probing") });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
 		state.rearmProbeWatchdog = () => suspended.push("rearmed");
@@ -417,11 +414,10 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 
 		expect(suspended).toEqual(["suspended"]);
 		expect(state.lifecycle.phase).toBe("running");
-		expect(state.commandPhase).toBe("running");
 	});
 
 	it("resumes running and returns a structured error if UI throws", async () => {
-		const state = freshState({ commandPhase: "probing" });
+		const state = freshState({ lifecycle: lifecycleFor("probing") });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
 		state.rearmProbeWatchdog = () => suspended.push("rearmed");
@@ -439,11 +435,10 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(result.details.message).toBe("UI crashed");
 		expect(suspended).toEqual(["suspended"]);
 		expect(state.lifecycle.phase).toBe("running");
-		expect(state.commandPhase).toBe("running");
 	});
 
 	it("does not suspend watchdog when phase is running", async () => {
-		const state = freshState({ commandPhase: "running" });
+		const state = freshState({ lifecycle: lifecycleFor("running") });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
 		state.rearmProbeWatchdog = () => suspended.push("rearmed");
@@ -455,21 +450,19 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 	});
 
 	it("does not terminate so command work can continue", async () => {
-		const state = freshState({ commandPhase: "probing" });
+		const state = freshState({ lifecycle: lifecycleFor("probing") });
 		const { execute } = toolFor(state);
 		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		expect(result.terminate).toBeUndefined();
 		expect(state.lifecycle.phase).toBe("running");
-		expect(state.commandPhase).toBe("running");
 	});
 
 	it("phase stays probing past an armed watchdog timeout while UI is pending", async () => {
 		const { registerAutoContinue } = await import("../auto-continue.ts");
 		const state = freshState({
-			commandPhase: "running",
-			activeTopLevelCommand: "mach12:test",
+			lifecycle: lifecycleFor("running", "mach12:test"),
 			registry: new Map([
 				[
 					"mach12:test",
@@ -482,7 +475,6 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 
 		await emit("agent_end", {}, { ui: { notify: () => {} } });
 		await vi.advanceTimersByTimeAsync(0);
-		expect(state.commandPhase).toBe("probing");
 		expect(pi.sent).toHaveLength(1);
 
 		let resolveUI: (v: string) => void;
@@ -506,7 +498,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 
 describe("registerUserInputTool — journaling", () => {
 	it("journals a confirm interaction", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx("yes");
 		await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
@@ -521,7 +513,7 @@ describe("registerUserInputTool — journaling", () => {
 	});
 
 	it("journals a select interaction", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = mockUICtx("patch");
 		await execute(
 			{
@@ -543,7 +535,7 @@ describe("registerUserInputTool — journaling", () => {
 	});
 
 	it("journals a prompt-only freetext interaction and waiting command status", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "running", activeTopLevelCommand: "mach12:test" }));
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:test") }));
 		await execute({ type: "freetext", message: "Title?" });
 
 		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
@@ -559,7 +551,7 @@ describe("registerUserInputTool — journaling", () => {
 	});
 
 	it("journals a cancelled interaction and waiting command status", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "running", activeTopLevelCommand: "mach12:test" }));
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:test") }));
 		const ctx = mockUICtx(null);
 		await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
@@ -577,14 +569,14 @@ describe("registerUserInputTool — journaling", () => {
 	});
 
 	it("does not journal when phase gate rejects", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "idle" }));
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("idle") }));
 		await execute({ type: "confirm", message: "Deploy?" }, { ui: {} });
 
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
 	});
 
 	it("does not journal when validation rejects", async () => {
-		const { execute, pi } = toolFor(freshState({ commandPhase: "running" }));
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		await execute({ type: "select", message: "Pick", options: [] }, { ui: {} });
 
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);

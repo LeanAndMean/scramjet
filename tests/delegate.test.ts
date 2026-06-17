@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDelegateArgs, substituteArguments } from "../commands/substitute.ts";
 import { detectCycle, intersectTools, registerDelegateTool } from "../delegate.ts";
 import { COMMAND_START_TYPE } from "../history.ts";
+import { getActiveCommand } from "../phase-machine.ts";
 import type { CommandDef, DelegateFrame, ScramjetState, SidebarEntry } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
@@ -182,14 +183,14 @@ describe("registerDelegateTool — execute paths", () => {
 	it("journals delegated command starts without changing activeTopLevelCommand", async () => {
 		const state = freshState({
 			registry: new Map([["mach12:push", def("mach12:push", "body")]]),
-			activeTopLevelCommand: "mach12:issue-plan",
+			lifecycle: { phase: "dormant", command: "mach12:issue-plan" },
 		});
 		const { pi, tools } = recordingPi();
 		registerDelegateTool(pi, state);
 
 		await tools[0].execute("call-1", { command: "mach12:push", args: "" }, undefined, undefined, { cwd: "/" });
 
-		expect(state.activeTopLevelCommand).toBe("mach12:issue-plan");
+		expect(getActiveCommand(state.lifecycle)).toBe("mach12:issue-plan");
 		// Lifecycle preserves the top-level command (dormant state since
 		// no command-start event fired for the delegate)
 		expect(state.lifecycle.phase).toBe("dormant");
@@ -209,7 +210,7 @@ describe("registerDelegateTool — execute paths", () => {
 				["top", def("top", "top-body", ["Read"])],
 				["callee", def("callee", "callee-body", ["Read", "Bash"])],
 			]),
-			activeTopLevelCommand: "top",
+			lifecycle: { phase: "dormant", command: "top" },
 		});
 		const { pi, tools } = recordingPi();
 		registerDelegateTool(pi, state);
@@ -228,7 +229,7 @@ describe("registerDelegateTool — execute paths", () => {
 				["top", def("top", "top-body")],
 				["callee", def("callee", "callee-body", ["Bash"])],
 			]),
-			activeTopLevelCommand: "top",
+			lifecycle: { phase: "dormant", command: "top" },
 		});
 		const { pi, tools } = recordingPi();
 		registerDelegateTool(pi, state);
@@ -244,7 +245,7 @@ describe("registerDelegateTool — execute paths", () => {
 				["top", def("top", "top-body", ["Read", "Edit"])],
 				["callee", def("callee", "callee-body")],
 			]),
-			activeTopLevelCommand: "top",
+			lifecycle: { phase: "dormant", command: "top" },
 		});
 		const { pi, tools } = recordingPi();
 		registerDelegateTool(pi, state);
@@ -260,7 +261,7 @@ describe("registerDelegateTool — execute paths", () => {
 				["top", def("top", "top-body", ["Read"])],
 				["callee", def("callee", "callee-body", ["Bash"])],
 			]),
-			activeTopLevelCommand: "top",
+			lifecycle: { phase: "dormant", command: "top" },
 		});
 		const { pi, tools } = recordingPi();
 		registerDelegateTool(pi, state);

@@ -1,35 +1,50 @@
-import { fromLegacy } from "../phase-machine.ts";
+import type { LifecycleState } from "../phase-machine.ts";
 import type { ScramjetState } from "../types.ts";
 
 export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
-	const base: ScramjetState = {
+	return {
 		enabled: false,
 		registry: new Map(),
 		agentRegistry: new Map(),
-		activeTopLevelCommand: null,
 		sidebarLog: [],
 		delegateStack: [],
 		pendingForcedDispatch: null,
-		commandPhase: "idle",
-		latestCommandStatus: null,
 		lifecycle: { phase: "idle" },
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
 		...overrides,
 	};
-	if (
-		base.commandPhase !== "idle" &&
-		base.activeTopLevelCommand === null &&
-		!("activeTopLevelCommand" in overrides) &&
-		!overrides.lifecycle
-	) {
-		base.activeTopLevelCommand = "test:cmd";
+}
+
+/**
+ * Creates a lifecycle state for a given phase, providing sensible defaults.
+ * Use this in tests that previously passed `commandPhase` / `activeTopLevelCommand`.
+ */
+export function lifecycleFor(
+	phase: LifecycleState["phase"],
+	command = "test:cmd",
+	extra?: { continueCount?: number; status?: import("../types.ts").CommandStatusPayload },
+): LifecycleState {
+	switch (phase) {
+		case "idle":
+			return { phase: "idle" };
+		case "dormant":
+			return { phase: "dormant", command };
+		case "running":
+			return { phase: "running", command, continueCount: extra?.continueCount ?? 0 };
+		case "probing":
+			return { phase: "probing", command, continueCount: extra?.continueCount ?? 0 };
+		case "reported":
+			return {
+				phase: "reported",
+				command,
+				status: extra?.status ?? { status: "completed", summary: "done" },
+				continueCount: extra?.continueCount ?? 0,
+			};
+		case "waiting":
+			return { phase: "waiting", command };
 	}
-	if (!overrides.lifecycle) {
-		base.lifecycle = fromLegacy(base);
-	}
-	return base;
 }
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;

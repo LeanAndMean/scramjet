@@ -3,19 +3,12 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { recordCommandStatus } from "./history.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
-import { getActiveCommand, type LifecycleEvent, toLegacy, transition } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleEvent, transition } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
 
 const ALLOWED_PHASES = new Set<string>(["running", "probing"]);
-
-function syncLegacyFromLifecycle(state: ScramjetState): void {
-	const legacy = toLegacy(state.lifecycle);
-	state.commandPhase = legacy.commandPhase;
-	state.activeTopLevelCommand = legacy.activeTopLevelCommand;
-	state.latestCommandStatus = legacy.latestCommandStatus;
-}
 
 const OUT_OF_PHASE_ERROR =
 	"get_scramjet_user_input is not available right now. " +
@@ -102,7 +95,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
 				if (waitResult.ok) {
 					state.lifecycle = waitResult.state;
-					syncLegacyFromLifecycle(state);
 				}
 				const activeCommand = getActiveCommand(state.lifecycle);
 				if (activeCommand) recordCommandStatus(pi, activeCommand, "waiting_for_user");
@@ -160,7 +152,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					const transResult = transition(state.lifecycle, event);
 					if (transResult.ok) {
 						state.lifecycle = transResult.state;
-						syncLegacyFromLifecycle(state);
 					}
 				}
 			}
@@ -177,7 +168,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
 					if (waitResult.ok) {
 						state.lifecycle = waitResult.state;
-						syncLegacyFromLifecycle(state);
 					}
 				}
 				const activeCommand = getActiveCommand(state.lifecycle);

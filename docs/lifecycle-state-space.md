@@ -1,19 +1,19 @@
 # Scramjet lifecycle state space
 
-Scramjet command lifecycle behavior is currently driven by several coupled fields and callbacks. The hardening direction is to make the coupled command lifecycle state explicit while leaving unrelated harness state independent.
+Scramjet command lifecycle behavior is driven by the discriminated `LifecycleState` union on `ScramjetState.lifecycle`. The union carries phase, command identity, status payload, and continue count as structurally coupled data — invalid combinations are unrepresentable.
 
 ## Dimensions
 
-| Dimension | Current owner | Lifecycle union ownership | Notes |
-|---|---|---|---|
-| Command phase | `ScramjetState.commandPhase` | Yes | Primary discriminator for the command-status protocol. |
-| Active top-level command | `ScramjetState.activeTopLevelCommand` | Yes | Required for every resumable or active command state. |
-| Latest command status | `ScramjetState.latestCommandStatus` | Yes, only in `reported` | Meaningful only after `report_scramjet_command_status` and before routing. |
-| Consecutive `continuing` count | `command-status.ts` closure | Yes, in `running` / `probing` / `reported` | Reset by a new command start. |
-| Probe timer, watchdog, dispatch timer | `auto-continue.ts` closures | No | Timer handles stay imperative resources. Later stages expose read-only accessors. |
-| Structured user input state | `user-input.ts` UI promise / parked phase | Partly | Lifecycle records whether input parked the command in `waiting`; UI-local details stay outside. |
-| Sidebar history / enabled flag / registries / delegate stack | `ScramjetState` | No | These affect behavior but are not command lifecycle phase state. |
-| Pending forced dispatch | `ScramjetState.pendingForcedDispatch` | No | One-shot dispatch metadata, not lifecycle state. |
+| Dimension | Owner | Notes |
+|---|---|---|
+| Command phase | `LifecycleState` discriminant | Primary discriminator for the command-status protocol. |
+| Active top-level command | `LifecycleState` `.command` | Present in every non-idle variant. |
+| Latest command status | `LifecycleState` `.status` (reported only) | Meaningful only after `report_scramjet_command_status` and before routing. |
+| Consecutive `continuing` count | `LifecycleState` `.continueCount` | In `running` / `probing` / `reported`. Reset by a new command start. |
+| Probe timer, watchdog, dispatch timer | `auto-continue.ts` closures | Timer handles stay imperative; read-only accessors exposed via `lifecycleTimers`. |
+| Structured user input state | `user-input.ts` UI promise / parked phase | Lifecycle records whether input parked the command in `waiting`; UI-local details stay outside. |
+| Sidebar history / enabled flag / registries / delegate stack | `ScramjetState` | These affect behavior but are not command lifecycle phase state. |
+| Pending forced dispatch | `ScramjetState.pendingForcedDispatch` | One-shot dispatch metadata, not lifecycle state. |
 
 ## Valid lifecycle states
 
@@ -28,7 +28,7 @@ type LifecycleState =
 ```
 
 - `idle`: no resumable lifecycle command exists.
-- `dormant`: Scramjet should not probe, but a later interactive non-slash reply may resume the associated command. This names the current `idle + activeTopLevelCommand` recovery state used after probe self-heal and replayed command starts.
+- `dormant`: Scramjet should not probe, but a later interactive non-slash reply may resume the associated command. Used after probe self-heal and replayed command starts.
 - `running`: the command answer turn or resumed work is in flight.
 - `probing`: Scramjet has ended the answer turn and is awaiting a status report probe.
 - `reported`: the probe produced a terminal/resting status payload and routing has not resolved it yet.

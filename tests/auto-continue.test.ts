@@ -7,10 +7,10 @@ import { resetCache } from "../autonomy-settings.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
 import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
-import { getActiveCommand, toLegacy } from "../phase-machine.ts";
+import { getActiveCommand } from "../phase-machine.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
 import { registerUserInputTool } from "../user-input.ts";
-import { freshState, recordingPi } from "./helpers.ts";
+import { freshState, lifecycleFor, recordingPi } from "./helpers.ts";
 
 type StatusParams = {
 	status: CommandStatusPayload["status"];
@@ -31,13 +31,15 @@ function registryWith(...defs: CommandDef[]) {
 }
 
 // State as it stands when a top-level command's answer turn is in flight:
-// history.ts has set activeTopLevelCommand + commandPhase="running". Any
-// `registry` passed in `extra` is merged with the command itself.
+// State as it stands when a top-level command's answer turn is in flight:
+// lifecycle is running with the command name. Any `registry` passed in `extra`
+// is merged with the command itself.
 function runningState(def: CommandDef, extra: Partial<ScramjetState> = {}): ScramjetState {
-	const { registry: extraRegistry, ...rest } = extra;
+	const { registry: extraRegistry, lifecycle: overrideLifecycle, ...rest } = extra;
 	const registry = new Map<string, CommandDef>([[def.name, def]]);
 	if (extraRegistry) for (const [name, d] of extraRegistry) registry.set(name, d);
-	return freshState({ registry, activeTopLevelCommand: def.name, commandPhase: "running", ...rest });
+	const lifecycle = overrideLifecycle ?? lifecycleFor("running", def.name);
+	return freshState({ registry, lifecycle, ...rest });
 }
 
 interface CtxBag {
@@ -395,7 +397,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 	// F7: the "no probe for delegated/non-Scramjet turns" guarantee (issue 84
 	// test-list items 2 & 3) reduces to: an agent_end whose phase is not "running"
-	// fires zero probe even when activeTopLevelCommand still names a policy command.
+	// fires zero probe even when the lifecycle still names a policy command.
 	// history.ts only sets phase "running" at a depth-0 Scramjet command start.
 	describe("ineligible turns fire zero probe (F7)", () => {
 		it("does not probe on a delegated sub-turn (active command set, phase not running)", async () => {
@@ -404,7 +406,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const state = runningState(def, {
 				enabled: true,
 				registry: registryWith(target),
-				commandPhase: "idle",
+				lifecycle: lifecycleFor("dormant", def.name),
 				delegateStack: [{ commandName: "mach12:push", depth: 1 }],
 			});
 			const { bag, ctxBag } = bootstrap(state);
@@ -422,7 +424,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 		it("does not probe on a non-Scramjet slash turn mid-chain (active command set, phase idle)", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
-			const state = runningState(def, { enabled: true, commandPhase: "idle" });
+			const state = runningState(def, { enabled: true, lifecycle: lifecycleFor("dormant", def.name) });
 			const { bag, ctxBag } = bootstrap(state);
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
@@ -520,7 +522,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(state.pendingForcedDispatch).toBeNull();
-			// issue 128: completion clears activeTopLevelCommand regardless of
+			// issue 128: completion clears the lifecycle command regardless of
 			// whether the forced target dispatched.
 			expect(getActiveCommand(state.lifecycle)).toBeNull();
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
@@ -1045,7 +1047,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// The defensive `case "waiting"` arm: a turn NOT preceded by an
 			// interactive resume must not re-probe with no user answer behind it.
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: true, commandPhase: "waiting" });
+			const state = runningState(def, { enabled: true, lifecycle: lifecycleFor("waiting", def.name) });
 			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
 
 			bag.pi.isStreaming = true;
@@ -1232,7 +1234,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// reply doesn't re-arm the phase for a finished command.
 			expect(getActiveCommand(state.lifecycle)).toBeNull();
 
-			// A later interactive reply must NOT resume (activeTopLevelCommand is null).
+			// A later interactive reply must NOT resume (lifecycle is idle).
 			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
 			expect(state.lifecycle.phase).toBe("idle");
 
@@ -1306,8 +1308,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const state = freshState({
 				enabled: true,
 				registry: new Map(),
-				activeTopLevelCommand: "a:missing",
-				commandPhase: "running",
+				lifecycle: lifecycleFor("running", "a:missing"),
 			});
 			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
 
@@ -1589,7 +1590,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const state = runningState(def, {
 				enabled: true,
 				registry: registryWith(target),
-				commandPhase: "probing",
+				lifecycle: lifecycleFor("probing", def.name),
 			});
 			const { bag, ctxBag, report } = bootstrap(state);
 			registerHistory(bag.pi, state);
@@ -1854,10 +1855,6 @@ describe("multi-path probe integration", () => {
 
 			// Start a new command cycle — continues work again
 			state.lifecycle = { phase: "running", command: "a:cmd", continueCount: 0 };
-			const legacy = toLegacy(state.lifecycle);
-			state.commandPhase = legacy.commandPhase;
-			state.activeTopLevelCommand = legacy.activeTopLevelCommand;
-			state.latestCommandStatus = legacy.latestCommandStatus;
 			await fireProbe(bag, ctxBag);
 			const fresh = await report({ status: "continuing", summary: "fresh" });
 			expect(fresh.details.status).toBe("continuing");
@@ -1901,9 +1898,11 @@ describe("multi-path probe integration", () => {
 
 		it("user-input is rejected outside probing/running phase", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: true });
-			state.commandPhase = "idle";
-			state.lifecycle = { phase: "idle" };
+			const state = freshState({
+				enabled: true,
+				registry: registryWith(def),
+				lifecycle: { phase: "idle" },
+			});
 			const { callUserInput } = fullBootstrap(state);
 
 			const result = await callUserInput({ type: "confirm", message: "Should I?" });

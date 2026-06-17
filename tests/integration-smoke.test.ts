@@ -306,8 +306,8 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		// 2. User types /int:start — the input handler records it as origin: "user",
 		//    sets activeTopLevelCommand, and starts the running phase.
 		await bag.emit("input", { text: "/int:start", source: "interactive" }, ctx);
-		expect(state.activeTopLevelCommand).toBe("int:start");
-		expect(state.commandPhase).toBe("running");
+		expect(getActiveCommand(state.lifecycle)).toBe("int:start");
+		expect(state.lifecycle.phase).toBe("running");
 		expect(state.sidebarLog).toHaveLength(1);
 		expect(state.sidebarLog[0].command).toBe("int:start");
 		expect(state.sidebarLog[0].origin).toBe("user");
@@ -317,7 +317,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		//    must not send synchronously (that send would be dropped).
 		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctx);
-		expect(state.commandPhase).toBe("probing");
+		expect(state.lifecycle.phase).toBe("probing");
 		expect(bag.probes).toHaveLength(0);
 		expect(bag.dispatched).toEqual([]);
 
@@ -335,23 +335,23 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		const statusTool = bag.tools.find((tool) => tool.name === "report_scramjet_command_status");
 		expect(statusTool).toBeDefined();
 		await statusTool.execute("status-call", { status: "completed", summary: "start complete" });
-		expect(state.commandPhase).toBe("reported");
+		expect(state.lifecycle.phase).toBe("reported");
 		// The probe turn's agent_end fires while the run is still streaming; the
 		// completed forced dispatch must defer past that window (issue 88) rather
 		// than queue a stale duplicate command body. Nothing dispatches inline.
 		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctx);
 		expect(bag.dispatched).toEqual([]);
-		expect(state.commandPhase).toBe("idle");
+		expect(state.lifecycle.phase).toBe("idle");
 		// Once the run settles, the deferred dispatch fires exactly once.
 		bag.pi.isStreaming = false;
 		await vi.advanceTimersByTimeAsync(0);
 		expect(bag.dispatched).toEqual([{ input: "/int:next", options: { deliverAs: "followUp" } }]);
 		expect(state.pendingForcedDispatch).toBeNull();
-		expect(state.commandPhase).toBe("running"); // int:next started its own answer turn
+		expect(state.lifecycle.phase).toBe("running"); // int:next started its own answer turn
 
 		// 6. The input event records the forced transition.
-		expect(state.activeTopLevelCommand).toBe("int:next");
+		expect(getActiveCommand(state.lifecycle)).toBe("int:next");
 		expect(state.sidebarLog).toHaveLength(2);
 		expect(state.sidebarLog[1].command).toBe("int:next");
 		expect(state.sidebarLog[1].origin).toBe("forced");
@@ -549,8 +549,6 @@ describe("integration smoke — lifecycle event sequences", () => {
 		}));
 		// Reset state to simulate a fresh session
 		state.lifecycle = { phase: "idle" };
-		state.commandPhase = "idle";
-		state.activeTopLevelCommand = null;
 		state.sidebarLog = [];
 		await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
 

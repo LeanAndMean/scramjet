@@ -1,4 +1,4 @@
-import type { CommandPhase, CommandStatusPayload, CommandStatusRestingStatus, ScramjetState } from "./types.ts";
+import type { CommandStatusPayload, CommandStatusRestingStatus } from "./types.ts";
 
 export type LifecycleState =
 	| { phase: "idle" }
@@ -129,20 +129,6 @@ export function transition(state: LifecycleState, event: LifecycleEvent): Lifecy
 	}
 }
 
-export const LEGAL_TRANSITIONS = {
-	idle: ["idle", "running"],
-	running: ["idle", "probing", "running", "waiting"],
-	probing: ["idle", "reported", "running", "waiting"],
-	reported: ["idle", "waiting", "running"],
-	waiting: ["idle", "running", "waiting"],
-} as const satisfies Record<CommandPhase, readonly CommandPhase[]>;
-
-export interface LegacyLifecycleFields {
-	commandPhase: CommandPhase;
-	activeTopLevelCommand: string | null;
-	latestCommandStatus: CommandStatusPayload | null;
-}
-
 export function getActiveCommand(lifecycle: LifecycleState): string | null {
 	switch (lifecycle.phase) {
 		case "idle":
@@ -154,67 +140,6 @@ export function getActiveCommand(lifecycle: LifecycleState): string | null {
 		case "waiting":
 			return lifecycle.command;
 	}
-}
-
-export function toLegacy(lifecycle: LifecycleState): LegacyLifecycleFields {
-	switch (lifecycle.phase) {
-		case "idle":
-			return { commandPhase: "idle", activeTopLevelCommand: null, latestCommandStatus: null };
-		case "dormant":
-			return { commandPhase: "idle", activeTopLevelCommand: lifecycle.command, latestCommandStatus: null };
-		case "running":
-			return { commandPhase: "running", activeTopLevelCommand: lifecycle.command, latestCommandStatus: null };
-		case "probing":
-			return { commandPhase: "probing", activeTopLevelCommand: lifecycle.command, latestCommandStatus: null };
-		case "reported":
-			return {
-				commandPhase: "reported",
-				activeTopLevelCommand: lifecycle.command,
-				latestCommandStatus: lifecycle.status,
-			};
-		case "waiting":
-			return { commandPhase: "waiting", activeTopLevelCommand: lifecycle.command, latestCommandStatus: null };
-	}
-}
-
-export function fromLegacy(fields: LegacyLifecycleFields): LifecycleState {
-	switch (fields.commandPhase) {
-		case "idle":
-			return fields.activeTopLevelCommand
-				? { phase: "dormant", command: fields.activeTopLevelCommand }
-				: { phase: "idle" };
-		case "running":
-			return { phase: "running", command: fields.activeTopLevelCommand!, continueCount: 0 };
-		case "probing":
-			return { phase: "probing", command: fields.activeTopLevelCommand!, continueCount: 0 };
-		case "reported":
-			return {
-				phase: "reported",
-				command: fields.activeTopLevelCommand!,
-				status: fields.latestCommandStatus!,
-				continueCount: 0,
-			};
-		case "waiting":
-			return { phase: "waiting", command: fields.activeTopLevelCommand! };
-	}
-}
-
-export function transitionPhase(state: ScramjetState, target: CommandPhase): boolean {
-	const from = state.commandPhase;
-	if (from === target) return true;
-	const allowed: readonly CommandPhase[] = LEGAL_TRANSITIONS[from];
-	if (!allowed.includes(target)) {
-		console.warn(`[scramjet] illegal phase transition: ${from} → ${target}`);
-		return false;
-	}
-	state.commandPhase = target;
-	if (target === "idle") state.latestCommandStatus = null;
-	const rebuilt = fromLegacy(state);
-	if ("continueCount" in rebuilt && "continueCount" in state.lifecycle && rebuilt.continueCount === 0) {
-		(rebuilt as { continueCount: number }).continueCount = state.lifecycle.continueCount;
-	}
-	state.lifecycle = rebuilt;
-	return true;
 }
 
 export interface PhaseEntry {

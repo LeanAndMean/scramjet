@@ -45,7 +45,7 @@ import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./
 import { buildProbeMessage } from "./next-step.ts";
 import { dispatchNextStep } from "./next-step-dispatch.ts";
 import { selectNextStep } from "./next-step-selector.ts";
-import { getActiveCommand, type LifecycleState, toLegacy, transition } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleState, transition } from "./phase-machine.ts";
 import type {
 	CommandStatusNextStep,
 	CommandStatusPayload,
@@ -110,16 +110,8 @@ export function cleanForNotify(text: string): string {
 	return collapsed.length > NOTIFY_MAX ? `${collapsed.slice(0, NOTIFY_MAX - 1)}…` : collapsed;
 }
 
-function syncLegacyFromLifecycle(state: ScramjetState): void {
-	const legacy = toLegacy(state.lifecycle);
-	state.commandPhase = legacy.commandPhase;
-	state.activeTopLevelCommand = legacy.activeTopLevelCommand;
-	state.latestCommandStatus = legacy.latestCommandStatus;
-}
-
 function applyTransition(state: ScramjetState, result: { ok: true; state: LifecycleState }): void {
 	state.lifecycle = result.state;
-	syncLegacyFromLifecycle(state);
 }
 
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
