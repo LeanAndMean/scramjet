@@ -69,7 +69,7 @@ Before exploring the code, delegate to:
 
 The subroutine returns any planning-relevant guidance found in `CONTRIBUTING.md`, `DEVELOPMENT.md`, or `.github/CONTRIBUTING.md`: expected project layers (e.g., models, migrations, API routes, services, UI, documentation), testing expectations (test frameworks, coverage requirements, test types), and any other requirements that should inform the implementation plan.
 
-Record these as **project planning requirements** -- they inform both the exploration focus and the plan drafting in Step 7.
+Record these as **project planning requirements** -- they inform both the exploration focus and the plan drafting in Step 8.
 
 ## Step 4: Explore the codebase
 
@@ -135,7 +135,40 @@ Do not default to the middle option without explaining why both the smaller and 
 
 **Ask the user which approach they prefer.**
 
-## Step 7: Draft the plan
+## Step 7: Design test strategy
+
+Before drafting the plan, decide whether the issue needs a deliberate test strategy.
+
+**Dispatch the `mach12:test-designer` subagent** when the issue is:
+- A bug fix (test-first is particularly valuable here)
+- A non-trivial feature (new behavior that needs confidence verification)
+- A refactor touching critical paths
+
+**Write a lightweight inline test note instead** when:
+- The change is documentation-only, config, or prose
+- The test need is obvious and can be stated in one sentence (e.g., "add to EXPECTED_AGENTS in wiring test")
+- There is no testable runtime code
+
+### Dispatching the subagent
+
+Pass a synthesized brief containing:
+- Issue classification (bug fix / feature / refactor) and problem statement
+- The selected architecture from Step 6
+- Relevant codebase findings: existing test patterns, related test files, and coverage landscape from Step 4
+
+The subagent returns a test strategy with per-test cost/benefit assessments, coverage intent categorization, and -- for bug fixes -- a test-first recommendation.
+
+### Incorporating the output
+
+- Add a `## Test Strategy` section in the plan, placed before the staged breakdown. Include the subagent's classification, test-first recommendation, and proposed tests table.
+- Distribute per-stage test directives into each stage's description in the staged breakdown.
+- For bug fixes where the test-designer recommends test-first, mark the relevant stages with a test-first directive so `issue-implement` knows to write the failing test before the fix.
+
+### Lightweight path
+
+When skipping the subagent, state the test approach inline in the plan (e.g., "Update wiring test; no behavioral tests needed -- prose-only change"). This satisfies the test coverage planning requirement in Step 8 without a full dispatch.
+
+## Step 8: Draft the plan
 
 Using the architecture selected in Step 6 as the structural foundation, draft a **staged implementation plan** with:
 - Clear stages (numbered, with descriptive names)
@@ -150,7 +183,7 @@ Before finalizing the plan, verify it satisfies the following:
 
 **Project-layer coverage:** Cross-check the plan against the project layers discovered during codebase exploration and any layers specified in the project planning requirements recorded in Step 3. Every affected layer should be addressed by at least one stage. If a discovered layer is not affected by this change, it may be omitted -- but if a layer is affected and no stage addresses it, add the missing work to the appropriate stage or create a new one.
 
-**Test coverage planning:** Identify what testing is appropriate for this project and codebase. If the project has an existing test suite or the project planning requirements specify testing expectations, each stage that introduces or modifies behavior must specify: what tests to add or modify, what test types are needed (unit, integration, end-to-end, etc.), and what behaviors or interfaces to cover. If the project has no testable runtime code (e.g., plugin definitions, documentation, configuration), note this in the plan and skip test planning.
+**Test coverage planning:** If Step 7 produced a test strategy, incorporate its per-stage test directives into the relevant stages. If Step 7 took the lightweight path, use its inline note. Each stage that introduces or modifies behavior must specify what tests to add or modify and what behaviors to cover. If the project has no testable runtime code (e.g., plugin definitions, documentation, configuration), note this and skip test planning.
 
 **Each stage must be scoped to what can be implemented within a single session.** A stage that is too large should be split. Consider:
 - The amount of codebase exploration needed
@@ -158,7 +191,7 @@ Before finalizing the plan, verify it satisfies the following:
 - The complexity of the logic involved
 - The testing surface area
 
-## Step 8: Post plan and create branch
+## Step 9: Post plan and create branch
 
 Present the plan to the user and ask:
 
