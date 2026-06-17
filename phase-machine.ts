@@ -143,6 +143,19 @@ export interface LegacyLifecycleFields {
 	latestCommandStatus: CommandStatusPayload | null;
 }
 
+export function getActiveCommand(lifecycle: LifecycleState): string | null {
+	switch (lifecycle.phase) {
+		case "idle":
+			return null;
+		case "dormant":
+		case "running":
+		case "probing":
+		case "reported":
+		case "waiting":
+			return lifecycle.command;
+	}
+}
+
 export function toLegacy(lifecycle: LifecycleState): LegacyLifecycleFields {
 	switch (lifecycle.phase) {
 		case "idle":

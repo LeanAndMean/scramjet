@@ -1,7 +1,8 @@
+import { fromLegacy } from "../phase-machine.ts";
 import type { ScramjetState } from "../types.ts";
 
 export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
-	return {
+	const base: ScramjetState = {
 		enabled: false,
 		registry: new Map(),
 		agentRegistry: new Map(),
@@ -18,6 +19,10 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
 		...overrides,
 	};
+	if (!overrides.lifecycle) {
+		base.lifecycle = fromLegacy(base);
+	}
+	return base;
 }
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;

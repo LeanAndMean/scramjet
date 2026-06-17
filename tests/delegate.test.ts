@@ -190,6 +190,9 @@ describe("registerDelegateTool — execute paths", () => {
 		await tools[0].execute("call-1", { command: "mach12:push", args: "" }, undefined, undefined, { cwd: "/" });
 
 		expect(state.activeTopLevelCommand).toBe("mach12:issue-plan");
+		// Lifecycle preserves the top-level command (dormant state since
+		// no command-start event fired for the delegate)
+		expect(state.lifecycle.phase).toBe("dormant");
 		expect(state.sidebarLog[0]).toMatchObject({ command: "mach12:push", origin: "agent", depth: 1 });
 		expect(pi.appended).toHaveLength(1);
 		expect(pi.appended[0].customType).toBe(COMMAND_START_TYPE);

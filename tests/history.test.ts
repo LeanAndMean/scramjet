@@ -130,6 +130,7 @@ describe("replayHistory", () => {
 		expect(result.activeTopLevelCommand).toBeNull();
 		// issue 88: with no journaled status, the resting phase reconstructs to idle.
 		expect(result.phase).toBe("idle");
+		expect(result.lifecycle).toEqual({ phase: "idle" });
 	});
 
 	it("ignores non-custom and unrelated custom entries", () => {
@@ -147,6 +148,7 @@ describe("replayHistory", () => {
 		const result = replayHistory(entries);
 		expect(result.sidebarLog.map((e) => e.command)).toEqual(["a", "b", "c"]);
 		expect(result.activeTopLevelCommand).toBe("c");
+		expect(result.lifecycle).toEqual({ phase: "dormant", command: "c" });
 	});
 
 	it("only updates activeTopLevelCommand from depth-0 entries (nested delegates don't overwrite the top level)", () => {
@@ -237,6 +239,7 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user")]);
 		expect(result.phase).toBe("waiting");
 		expect(result.activeTopLevelCommand).toBe("a");
+		expect(result.lifecycle).toEqual({ phase: "waiting", command: "a" });
 	});
 
 	it("reconstructs idle when a waiting command later completed without chaining (no resurrection)", () => {
@@ -248,6 +251,7 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStatus("a", "completed")]);
 		expect(result.phase).toBe("idle");
 		expect(result.activeTopLevelCommand).toBeNull();
+		expect(result.lifecycle).toEqual({ phase: "idle" });
 	});
 
 	it.each(["blocked", "incomplete"] as const)(
@@ -265,6 +269,7 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "waiting_for_user"), cmdStart("b")]);
 		expect(result.phase).toBe("idle");
 		expect(result.activeTopLevelCommand).toBe("b");
+		expect(result.lifecycle).toEqual({ phase: "dormant", command: "b" });
 	});
 
 	it("ignores a status entry whose commandName does not match the active command", () => {
@@ -342,6 +347,7 @@ describe("recordCommandInvocation", () => {
 
 		expect(state.commandPhase).toBe("running");
 		expect(state.latestCommandStatus).toBeNull();
+		expect(state.lifecycle).toEqual({ phase: "running", command: "top", continueCount: 0 });
 	});
 
 	it("does not touch the command phase for delegated depth entries (probe stays probing)", () => {
@@ -519,6 +525,7 @@ describe("registerHistory — input event", () => {
 			await emit("input", { text: "approve", source: "interactive" });
 			expect(state.commandPhase).toBe("running");
 			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+			expect(state.lifecycle).toEqual({ phase: "running", command: "mach12:pr-create", continueCount: 0 });
 			// A resume is not a fresh command start: no sidebar/journal entry.
 			expect(state.sidebarLog).toHaveLength(0);
 		});
@@ -552,9 +559,10 @@ describe("registerHistory — input event", () => {
 			await emit("input", { text: "/typo-or-removed", source: "interactive" });
 			expect(state.activeTopLevelCommand).toBeNull();
 			expect(state.commandPhase).toBe("idle");
+			expect(state.lifecycle).toEqual({ phase: "idle" });
 		});
 
-		it("re-arms idle→running on an interactive non-slash reply when activeTopLevelCommand is set (issue 128)", async () => {
+		it("re-arms dormant→running on an interactive non-slash reply when activeTopLevelCommand is set (issue 128)", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
 				activeTopLevelCommand: "mach12:pr-create",
@@ -565,6 +573,7 @@ describe("registerHistory — input event", () => {
 			await emit("input", { text: "just chatting", source: "interactive" });
 			expect(state.commandPhase).toBe("running");
 			expect(state.activeTopLevelCommand).toBe("mach12:pr-create");
+			expect(state.lifecycle).toEqual({ phase: "running", command: "mach12:pr-create", continueCount: 0 });
 			// A resume is not a fresh command start: no sidebar/journal entry.
 			expect(state.sidebarLog).toHaveLength(0);
 		});
@@ -579,9 +588,10 @@ describe("registerHistory — input event", () => {
 			registerHistory(pi, state);
 			await emit("input", { text: "just chatting", source: "interactive" });
 			expect(state.commandPhase).toBe("idle");
+			expect(state.lifecycle).toEqual({ phase: "idle" });
 		});
 
-		it("does not re-arm idle→running on extension-source replies", async () => {
+		it("does not re-arm dormant→running on extension-source replies", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
 				activeTopLevelCommand: "mach12:pr-create",
@@ -591,6 +601,7 @@ describe("registerHistory — input event", () => {
 			registerHistory(pi, state);
 			await emit("input", { text: "approve", source: "extension" });
 			expect(state.commandPhase).toBe("idle");
+			expect(state.lifecycle).toEqual({ phase: "dormant", command: "mach12:pr-create" });
 		});
 	});
 
