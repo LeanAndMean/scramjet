@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LifecycleEvent, LifecycleState } from "../phase-machine.ts";
-import { assertInvariant, LEGAL_TRANSITIONS, reconstructPhase, transition, transitionPhase } from "../phase-machine.ts";
+import {
+	assertInvariant,
+	fromLegacy,
+	LEGAL_TRANSITIONS,
+	reconstructPhase,
+	toLegacy,
+	transition,
+	transitionPhase,
+} from "../phase-machine.ts";
 import type { CommandPhase, CommandStatusPayload } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
@@ -260,6 +268,179 @@ describe("assertInvariant", () => {
 				continueCount: 0,
 			}),
 		).toEqual({ ok: false, reason: "reported cannot carry a continuing status" });
+	});
+});
+
+describe("toLegacy", () => {
+	it("maps idle", () => {
+		expect(toLegacy({ phase: "idle" })).toEqual({
+			commandPhase: "idle",
+			activeTopLevelCommand: null,
+			latestCommandStatus: null,
+		});
+	});
+
+	it("maps dormant to idle with active command", () => {
+		expect(toLegacy({ phase: "dormant", command: "cmd" })).toEqual({
+			commandPhase: "idle",
+			activeTopLevelCommand: "cmd",
+			latestCommandStatus: null,
+		});
+	});
+
+	it("maps running", () => {
+		expect(toLegacy({ phase: "running", command: "cmd", continueCount: 2 })).toEqual({
+			commandPhase: "running",
+			activeTopLevelCommand: "cmd",
+			latestCommandStatus: null,
+		});
+	});
+
+	it("maps probing", () => {
+		expect(toLegacy({ phase: "probing", command: "cmd", continueCount: 1 })).toEqual({
+			commandPhase: "probing",
+			activeTopLevelCommand: "cmd",
+			latestCommandStatus: null,
+		});
+	});
+
+	it("maps reported with status", () => {
+		const status: CommandStatusPayload = { status: "completed", summary: "done" };
+		expect(toLegacy({ phase: "reported", command: "cmd", status, continueCount: 0 })).toEqual({
+			commandPhase: "reported",
+			activeTopLevelCommand: "cmd",
+			latestCommandStatus: status,
+		});
+	});
+
+	it("maps waiting", () => {
+		expect(toLegacy({ phase: "waiting", command: "cmd" })).toEqual({
+			commandPhase: "waiting",
+			activeTopLevelCommand: "cmd",
+			latestCommandStatus: null,
+		});
+	});
+});
+
+describe("fromLegacy", () => {
+	it("maps idle without command to idle", () => {
+		expect(fromLegacy({ commandPhase: "idle", activeTopLevelCommand: null, latestCommandStatus: null })).toEqual({
+			phase: "idle",
+		});
+	});
+
+	it("maps idle with command to dormant", () => {
+		expect(fromLegacy({ commandPhase: "idle", activeTopLevelCommand: "cmd", latestCommandStatus: null })).toEqual({
+			phase: "dormant",
+			command: "cmd",
+		});
+	});
+
+	it("maps running", () => {
+		expect(fromLegacy({ commandPhase: "running", activeTopLevelCommand: "cmd", latestCommandStatus: null })).toEqual({
+			phase: "running",
+			command: "cmd",
+			continueCount: 0,
+		});
+	});
+
+	it("maps probing", () => {
+		expect(fromLegacy({ commandPhase: "probing", activeTopLevelCommand: "cmd", latestCommandStatus: null })).toEqual({
+			phase: "probing",
+			command: "cmd",
+			continueCount: 0,
+		});
+	});
+
+	it("maps reported", () => {
+		const status: CommandStatusPayload = { status: "completed", summary: "done" };
+		expect(
+			fromLegacy({ commandPhase: "reported", activeTopLevelCommand: "cmd", latestCommandStatus: status }),
+		).toEqual({ phase: "reported", command: "cmd", status, continueCount: 0 });
+	});
+
+	it("maps waiting", () => {
+		expect(fromLegacy({ commandPhase: "waiting", activeTopLevelCommand: "cmd", latestCommandStatus: null })).toEqual({
+			phase: "waiting",
+			command: "cmd",
+		});
+	});
+});
+
+describe("transitionPhase — lifecycle sync", () => {
+	it("syncs lifecycle on idle → running", () => {
+		const state = freshState({ activeTopLevelCommand: "cmd" });
+		transitionPhase(state, "running");
+		expect(state.lifecycle).toEqual({ phase: "running", command: "cmd", continueCount: 0 });
+	});
+
+	it("syncs lifecycle on running → probing", () => {
+		const state = freshState({ commandPhase: "running", activeTopLevelCommand: "cmd" });
+		transitionPhase(state, "probing");
+		expect(state.lifecycle).toEqual({ phase: "probing", command: "cmd", continueCount: 0 });
+	});
+
+	it("syncs lifecycle to dormant on running → idle (activeTopLevelCommand retained)", () => {
+		const state = freshState({ commandPhase: "running", activeTopLevelCommand: "cmd" });
+		transitionPhase(state, "idle");
+		expect(state.activeTopLevelCommand).toBe("cmd");
+		expect(state.lifecycle).toEqual({ phase: "dormant", command: "cmd" });
+	});
+
+	it("syncs lifecycle to idle on running → idle (no active command)", () => {
+		const state = freshState({ commandPhase: "running", activeTopLevelCommand: null });
+		transitionPhase(state, "idle");
+		expect(state.lifecycle).toEqual({ phase: "idle" });
+	});
+
+	it("syncs lifecycle on running → waiting", () => {
+		const state = freshState({ commandPhase: "running", activeTopLevelCommand: "cmd" });
+		transitionPhase(state, "waiting");
+		expect(state.lifecycle).toEqual({ phase: "waiting", command: "cmd" });
+	});
+
+	it("does not sync lifecycle on illegal transition", () => {
+		const state = freshState({ commandPhase: "idle" });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		transitionPhase(state, "reported");
+		expect(state.lifecycle).toEqual({ phase: "idle" });
+		warn.mockRestore();
+	});
+
+	it("does not sync lifecycle on self-transition (no-op)", () => {
+		const state = freshState({
+			commandPhase: "running",
+			activeTopLevelCommand: "cmd",
+			lifecycle: { phase: "running", command: "cmd", continueCount: 3 },
+		});
+		transitionPhase(state, "running");
+		// Self-transition is a no-op: lifecycle should not be overwritten
+		expect(state.lifecycle).toEqual({ phase: "running", command: "cmd", continueCount: 3 });
+	});
+
+	it("toLegacy → fromLegacy round-trips for non-dormant states", () => {
+		const states: LifecycleState[] = [
+			{ phase: "idle" },
+			{ phase: "running", command: "cmd", continueCount: 0 },
+			{ phase: "probing", command: "cmd", continueCount: 0 },
+			{
+				phase: "reported",
+				command: "cmd",
+				status: { status: "completed", summary: "done" },
+				continueCount: 0,
+			},
+			{ phase: "waiting", command: "cmd" },
+			{ phase: "dormant", command: "cmd" },
+		];
+		for (const s of states) {
+			expect(fromLegacy(toLegacy(s))).toEqual(s);
+		}
+	});
+
+	it("toLegacy → fromLegacy loses continueCount > 0 (bridge limitation)", () => {
+		const s: LifecycleState = { phase: "running", command: "cmd", continueCount: 3 };
+		const roundTripped = fromLegacy(toLegacy(s));
+		expect(roundTripped).toEqual({ phase: "running", command: "cmd", continueCount: 0 });
 	});
 });
 

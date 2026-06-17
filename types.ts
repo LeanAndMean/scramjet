@@ -1,3 +1,5 @@
+import type { LifecycleState } from "./phase-machine.ts";
+
 export interface NextStep {
 	// Bare command name (no leading slash, no args). Matches against
 	// candidate names for closed/open validation. The dispatcher in
@@ -105,6 +107,12 @@ export interface AutonomyConfig {
 	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;
 }
 
+export interface LifecycleTimerAccessors {
+	isProbeScheduled(): boolean;
+	isWatchdogActive(): boolean;
+	isDispatchScheduled(): boolean;
+}
+
 export interface ScramjetState {
 	enabled: boolean;
 	registry: CommandRegistry;
@@ -123,6 +131,8 @@ export interface ScramjetState {
 	// agent_end. Reset to "idle"/null on command start and on resume/rebuild.
 	commandPhase: CommandPhase;
 	latestCommandStatus: CommandStatusPayload | null;
+	lifecycle: LifecycleState;
+	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	resetConsecutiveContinues?: () => void;

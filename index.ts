@@ -50,6 +50,7 @@ export default function scramjet(pi: ExtensionAPI) {
 		pendingForcedDispatch: null,
 		commandPhase: "idle",
 		latestCommandStatus: null,
+		lifecycle: { phase: "idle" },
 		autonomyConfigPath: defaultConfigPath(),
 	};
 

@@ -11,6 +11,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		pendingForcedDispatch: null,
 		commandPhase: "idle",
 		latestCommandStatus: null,
+		lifecycle: { phase: "idle" },
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		resetConsecutiveContinues: undefined,
