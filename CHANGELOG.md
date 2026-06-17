@@ -2,7 +2,7 @@
 
 ## 0.21.2 — Lifecycle state hardening via discriminated union
 
-Refactors Scramjet's command lifecycle from independently-typed fields (`commandPhase`, `activeTopLevelCommand`, `latestCommandStatus`) into a discriminated `LifecycleState` union where each phase carries exactly the data it needs, making invalid state combinations unrepresentable at the type level (issue #135).
+Refactors Scramjet's command lifecycle from independently-typed fields (`commandPhase`, `activeTopLevelCommand`, `latestCommandStatus`) into a discriminated `LifecycleState` union where each phase carries exactly the data it needs, making invalid state combinations unrepresentable at the type level, including excluding `continuing` from stored `reported` statuses (issue #135).
 
 ### Changed
 

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, NOTIFY_MAX, registerAutoContinue } from "../auto-continue.ts";
 import { resetCache } from "../autonomy-settings.ts";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../command-status.ts";
-import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory } from "../history.ts";
+import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory, replayHistory } from "../history.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import { getActiveCommand } from "../phase-machine.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
@@ -273,6 +273,19 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await vi.advanceTimersByTimeAsync(0);
 
 			expect(state.lifecycle.phase).toBe("idle");
+			expect(bag.pi.appended).toContainEqual({
+				customType: COMMAND_STATUS_TYPE,
+				data: { commandName: "terminus:cmd", status: "completed" },
+			});
+			const replayed = replayHistory([
+				{
+					type: "custom",
+					customType: COMMAND_START_TYPE,
+					data: { command: "terminus:cmd", origin: "user", depth: 0, timestamp: 0 },
+				} as any,
+				...bag.pi.appended.map((entry: any) => ({ type: "custom", ...entry }) as any),
+			]);
+			expect(replayed.lifecycle).toEqual({ phase: "idle" });
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(state.lifecycleTimers?.isProbeScheduled()).toBe(false);

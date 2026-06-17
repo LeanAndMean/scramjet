@@ -1,6 +1,6 @@
 # Scramjet lifecycle state space
 
-Scramjet command lifecycle behavior is driven by the discriminated `LifecycleState` union on `ScramjetState.lifecycle`. The union carries phase, command identity, status payload, and continue count as structurally coupled data — invalid combinations are unrepresentable.
+Scramjet command lifecycle behavior is driven by the discriminated `LifecycleState` union on `ScramjetState.lifecycle`. The union carries phase, command identity, status payload, and continue count as structurally coupled data — invalid combinations are unrepresentable, with runtime invariant checks as a defensive guard at transition boundaries.
 
 ## Dimensions
 
@@ -23,7 +23,7 @@ type LifecycleState =
   | { phase: "dormant"; command: string }
   | { phase: "running"; command: string; continueCount: number }
   | { phase: "probing"; command: string; continueCount: number }
-  | { phase: "reported"; command: string; status: CommandStatusPayload; continueCount: number }
+  | { phase: "reported"; command: string; status: CommandStatusRestingPayload; continueCount: number }
   | { phase: "waiting"; command: string };
 ```
 
@@ -56,7 +56,6 @@ The union is intended to prevent these historically fragile combinations:
 | any | `reset` | `idle` | Used for rebuild/session reset. |
 | `running` | `agent-end` | `probing` | Schedules the status probe path. |
 | `running` | `waiting-parked` | `waiting` | Proactive freetext/user-input park. |
-| `probing` | `probe-sent` | `probing` | Timer-send observation; no semantic state change. |
 | `probing` | `probe-self-healed` | `dormant` | Probe turn failed to complete; pause auto-continue but keep reply recovery. |
 | `probing` | `continuing` | `running(command, continueCount + 1)` | The command is still working; the next agent end can probe again. |
 | `probing` | `probe-input-resumed` | `running(command, continueCount)` | Successful structured input resumes work without consuming status continuation budget. |

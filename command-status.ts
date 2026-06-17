@@ -29,7 +29,12 @@ import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.ts";
 import { recordCommandStatus } from "./history.ts";
 import { getActiveCommand, type LifecycleState, transition } from "./phase-machine.ts";
-import type { CommandStatusNextStep, CommandStatusPayload, ScramjetState } from "./types.ts";
+import type {
+	CommandStatusNextStep,
+	CommandStatusPayload,
+	CommandStatusRestingPayload,
+	ScramjetState,
+} from "./types.ts";
 
 interface CommandStatusDetails {
 	error?: string;
@@ -183,7 +188,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				};
 			}
 
-			const payload: CommandStatusPayload = {
+			const payload: CommandStatusRestingPayload = {
 				status: params.status,
 				summary: params.summary,
 				user_prompt: params.user_prompt,

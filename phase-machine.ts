@@ -1,19 +1,18 @@
-import type { CommandStatusPayload, CommandStatusRestingStatus } from "./types.ts";
+import type { CommandStatusPayload, CommandStatusRestingPayload, CommandStatusRestingStatus } from "./types.ts";
 
 export type LifecycleState =
 	| { phase: "idle" }
 	| { phase: "dormant"; command: string }
 	| { phase: "running"; command: string; continueCount: number }
 	| { phase: "probing"; command: string; continueCount: number }
-	| { phase: "reported"; command: string; status: CommandStatusPayload; continueCount: number }
+	| { phase: "reported"; command: string; status: CommandStatusRestingPayload; continueCount: number }
 	| { phase: "waiting"; command: string };
 
 export type LifecycleEvent =
 	| { type: "command-start"; command: string }
 	| { type: "agent-end" }
-	| { type: "probe-sent" } // Forward placeholder for observability; not currently emitted by any caller.
 	| { type: "probe-self-healed" }
-	| { type: "status-reported"; status: CommandStatusPayload }
+	| { type: "status-reported"; status: CommandStatusRestingPayload }
 	| { type: "continuing" }
 	| { type: "probe-input-resumed" }
 	| { type: "terminal-resolved"; status: "completed" | "blocked" | "incomplete" }
@@ -54,7 +53,7 @@ export function assertInvariant(state: LifecycleState): LifecycleInvariantResult
 			if (!hasValidContinueCount(state.continueCount)) {
 				return { ok: false, reason: "reported requires a non-negative integer continueCount" };
 			}
-			return state.status.status === "continuing"
+			return (state.status as CommandStatusPayload).status === "continuing"
 				? { ok: false, reason: "reported cannot carry a continuing status" }
 				: { ok: true };
 	}
@@ -96,7 +95,6 @@ export function transition(state: LifecycleState, event: LifecycleEvent): Lifecy
 			if (event.type === "waiting-parked") return ok(state, event, { phase: "waiting", command: state.command });
 			return illegal(state, event);
 		case "probing":
-			if (event.type === "probe-sent") return ok(state, event, state);
 			if (event.type === "probe-self-healed") return ok(state, event, { phase: "dormant", command: state.command });
 			if (event.type === "continuing") {
 				return ok(state, event, {
@@ -113,7 +111,7 @@ export function transition(state: LifecycleState, event: LifecycleEvent): Lifecy
 				});
 			}
 			if (event.type === "status-reported") {
-				return event.status.status === "continuing"
+				return (event.status as CommandStatusPayload).status === "continuing"
 					? illegal(state, event)
 					: ok(state, event, {
 							phase: "reported",

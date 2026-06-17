@@ -433,7 +433,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.error).toBe("ui-error");
 		expect(result.details.message).toBe("UI crashed");
-		expect(suspended).toEqual(["suspended"]);
+		expect(suspended).toEqual(["suspended", "rearmed"]);
 		expect(state.lifecycle.phase).toBe("probing");
 	});
 

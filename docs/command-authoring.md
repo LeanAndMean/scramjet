@@ -481,7 +481,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. The tool blocks until the user responds and returns successful answers as the tool result; pressing Escape cancels the prompt and ends the turn.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Freetext parks the command in `waiting` immediately so the user can reply through the standard editor.
 
 ### When to use it
 
@@ -530,7 +530,7 @@ Freetext always returns `terminate: true` and parks the command in `waiting`; th
 
 ### Cancellation
 
-Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command. Freetext cancellation uses the normal workflow-exit path after the turn has ended.
+Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it always parks the command in `waiting` and ends the turn for a standard editor reply.
 
 ### Phase gating
 

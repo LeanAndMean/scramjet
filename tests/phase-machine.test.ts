@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { LifecycleEvent, LifecycleState } from "../phase-machine.ts";
 import { assertInvariant, reconstructPhase, transition } from "../phase-machine.ts";
-import type { CommandStatusPayload } from "../types.ts";
+import type { CommandStatusPayload, CommandStatusRestingPayload } from "../types.ts";
 
 describe("transition", () => {
-	const completed: CommandStatusPayload = { status: "completed", summary: "done" };
-	const waiting: CommandStatusPayload = { status: "waiting_for_user", summary: "need input" };
+	const completed: CommandStatusRestingPayload = { status: "completed", summary: "done" };
+	const waiting: CommandStatusRestingPayload = { status: "waiting_for_user", summary: "need input" };
 	const continuing: CommandStatusPayload = { status: "continuing", summary: "more work" };
 
 	const states: LifecycleState[] = [
@@ -20,7 +20,6 @@ describe("transition", () => {
 	const events: LifecycleEvent[] = [
 		{ type: "command-start", command: "next" },
 		{ type: "agent-end" },
-		{ type: "probe-sent" },
 		{ type: "probe-self-healed" },
 		{ type: "status-reported", status: completed },
 		{ type: "continuing" },
@@ -52,7 +51,6 @@ describe("transition", () => {
 		},
 		probing: {
 			"command-start": { phase: "running", command: "next", continueCount: 0 },
-			"probe-sent": { phase: "probing", command: "cmd", continueCount: 2 },
 			"probe-self-healed": { phase: "dormant", command: "cmd" },
 			"status-reported": { phase: "reported", command: "cmd", status: completed, continueCount: 2 },
 			continuing: { phase: "running", command: "cmd", continueCount: 3 },
@@ -95,7 +93,7 @@ describe("transition", () => {
 		expect(
 			transition(
 				{ phase: "probing", command: "cmd", continueCount: 0 },
-				{ type: "status-reported", status: continuing },
+				{ type: "status-reported", status: continuing as unknown as CommandStatusRestingPayload },
 			),
 		).toEqual({ ok: false, from: "probing", event: "status-reported" });
 	});
@@ -144,7 +142,7 @@ describe("assertInvariant", () => {
 			assertInvariant({
 				phase: "reported",
 				command: "cmd",
-				status: { status: "continuing", summary: "more" },
+				status: { status: "continuing", summary: "more" } as unknown as CommandStatusRestingPayload,
 				continueCount: 0,
 			}),
 		).toEqual({ ok: false, reason: "reported cannot carry a continuing status" });

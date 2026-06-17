@@ -24,7 +24,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 export function lifecycleFor(
 	phase: LifecycleState["phase"],
 	command = "test:cmd",
-	extra?: { continueCount?: number; status?: import("../types.ts").CommandStatusPayload },
+	extra?: { continueCount?: number; status?: import("../types.ts").CommandStatusRestingPayload },
 ): LifecycleState {
 	switch (phase) {
 		case "idle":

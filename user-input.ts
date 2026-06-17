@@ -141,6 +141,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 						};
 				}
 			} catch (error) {
+				if (isProbing) state.rearmProbeWatchdog?.();
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text", text: `UI interaction failed: ${message}` }],

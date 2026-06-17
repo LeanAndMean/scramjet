@@ -42,6 +42,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.ts";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.ts";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.ts";
+import { recordCommandStatus } from "./history.ts";
 import { buildProbeMessage } from "./next-step.ts";
 import { dispatchNextStep } from "./next-step-dispatch.ts";
 import { selectNextStep } from "./next-step-selector.ts";
@@ -468,6 +469,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		switch (state.lifecycle.phase) {
 			case "running": {
 				if (!policy) {
+					recordCommandStatus(pi, state.lifecycle.command, "completed");
 					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
 					if (exitResult.ok) applyTransition(state, exitResult);
 					return;

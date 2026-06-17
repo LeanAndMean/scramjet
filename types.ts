@@ -42,6 +42,9 @@ export interface CommandStatusPayload {
 }
 
 export type CommandStatusRestingStatus = Exclude<CommandStatusPayload["status"], "continuing">;
+export type CommandStatusRestingPayload = Omit<CommandStatusPayload, "status"> & {
+	status: CommandStatusRestingStatus;
+};
 
 export interface Candidate {
 	name: string;
