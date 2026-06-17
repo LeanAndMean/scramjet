@@ -123,6 +123,7 @@ const EXPECTED_AGENTS = [
 	"mach12:feature-completeness-checker",
 	"mach12:silent-failure-hunter",
 	"mach12:test-analyzer",
+	"mach12:test-designer",
 	"mach12:type-design-analyzer",
 ].sort();
 
