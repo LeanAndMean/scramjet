@@ -59,6 +59,7 @@ The union is intended to prevent these historically fragile combinations:
 | `probing` | `probe-sent` | `probing` | Timer-send observation; no semantic state change. |
 | `probing` | `probe-self-healed` | `dormant` | Probe turn failed to complete; pause auto-continue but keep reply recovery. |
 | `probing` | `continuing` | `running(command, continueCount + 1)` | The command is still working; the next agent end can probe again. |
+| `probing` | `probe-input-resumed` | `running(command, continueCount)` | Successful structured input resumes work without consuming status continuation budget. |
 | `probing` | `status-reported(status != continuing)` | `reported` | Stores the report for the router. |
 | `probing` | `waiting-parked` | `waiting` | Probe-time input/cancel parks the command. |
 | `reported` | `terminal-resolved(completed\|blocked\|incomplete)` | `idle` | Terminal statuses clear resumability after routing. |
@@ -71,8 +72,8 @@ All other event/state pairs are illegal and return `{ ok: false }` rather than t
 
 ## Module ownership map
 
-- `types.ts`: defines `LifecycleState` (discriminated union), `LifecycleEvent`, status payloads, `ScramjetState` (with `lifecycle: LifecycleState`), and `LifecycleTimerAccessors` (test-observability accessors for timer state).
-- `phase-machine.ts`: owns transition legality, replay reconstruction helpers, and lifecycle invariants.
+- `phase-machine.ts`: defines `LifecycleState` (discriminated union) and `LifecycleEvent`; owns transition legality, replay reconstruction helpers, and lifecycle invariants.
+- `types.ts`: defines status payloads, `ScramjetState` (with `lifecycle: LifecycleState`), and `LifecycleTimerAccessors` (test-observability accessors for timer state).
 - `history.ts`: owns command-start journaling, replay reconstruction, interactive reply resume, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns answer-turn `agent_end`, probe scheduling, probe self-heal, status routing, selector/dispatch timers, and terminal resolution.
 - `command-status.ts`: owns probe-time status validation, `continuing`, terminal report storage, and status journaling.

@@ -79,7 +79,7 @@ describe("registerUserInputTool — registration", () => {
 });
 
 describe("registerUserInputTool — phase gate", () => {
-	it.each(["idle", "reported", "waiting"] as const)(
+	it.each(["idle", "dormant", "reported", "waiting"] as const)(
 		"rejects with a helpful error and no terminate when phase is %s",
 		async (phase) => {
 			const { execute } = toolFor(freshState({ lifecycle: lifecycleFor(phase) }));
@@ -416,7 +416,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(state.lifecycle.phase).toBe("running");
 	});
 
-	it("resumes running and returns a structured error if UI throws", async () => {
+	it("keeps probing reportable and returns a structured error if UI throws", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("probing") });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
@@ -434,7 +434,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(result.details.error).toBe("ui-error");
 		expect(result.details.message).toBe("UI crashed");
 		expect(suspended).toEqual(["suspended"]);
-		expect(state.lifecycle.phase).toBe("running");
+		expect(state.lifecycle.phase).toBe("probing");
 	});
 
 	it("does not suspend watchdog when phase is running", async () => {
@@ -457,6 +457,15 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 
 		expect(result.terminate).toBeUndefined();
 		expect(state.lifecycle.phase).toBe("running");
+	});
+
+	it("preserves continueCount when successful probe-time input resumes running", async () => {
+		const state = freshState({ lifecycle: lifecycleFor("probing", "test:cmd", { continueCount: 2 }) });
+		const { execute } = toolFor(state);
+		const ctx = mockUICtx("yes");
+		await execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		expect(state.lifecycle).toEqual({ phase: "running", command: "test:cmd", continueCount: 2 });
 	});
 
 	it("phase stays probing past an armed watchdog timeout while UI is pending", async () => {

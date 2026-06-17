@@ -412,7 +412,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
 2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
    - Call `report_scramjet_command_status` with a status and stop the probe turn.
-   - Call `get_scramjet_user_input` if structured input is needed before continuing; after the input tool returns, continue command work in that same turn. The phase returns to `running`, so Scramjet will send another probe after the resumed work ends.
+   - Call `get_scramjet_user_input` if structured input is needed before continuing; after a successful input tool result, continue command work in that same turn. The phase returns to `running` without consuming the `continuing` status budget, so Scramjet will send another probe after the resumed work ends.
 
 ### Tool parameters
 
@@ -534,7 +534,7 @@ Confirm and select return `{ "cancelled": true }` with `terminate: true` when th
 
 ### Phase gating
 
-The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the command transitions back to `running` so the agent can continue work in the same turn and Scramjet can probe again when that work ends. Freetext transitions directly to `waiting` from either phase.
+The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the command transitions back to `running` without incrementing `continueCount` so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures leave the command in `probing` so the agent can still report `blocked` or `incomplete`. Freetext transitions directly to `waiting` from either phase.
 
 ### Journaling
 

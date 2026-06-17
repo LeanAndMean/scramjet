@@ -147,8 +147,10 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					details: { error: "ui-error", message },
 				};
 			} finally {
-				if (isProbing) {
-					const event: LifecycleEvent = result?.cancelled ? { type: "waiting-parked" } : { type: "continuing" };
+				if (isProbing && result) {
+					const event: LifecycleEvent = result.cancelled
+						? { type: "waiting-parked" }
+						: { type: "probe-input-resumed" };
 					const transResult = transition(state.lifecycle, event);
 					if (transResult.ok) {
 						state.lifecycle = transResult.state;

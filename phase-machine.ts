@@ -15,6 +15,7 @@ export type LifecycleEvent =
 	| { type: "probe-self-healed" }
 	| { type: "status-reported"; status: CommandStatusPayload }
 	| { type: "continuing" }
+	| { type: "probe-input-resumed" }
 	| { type: "terminal-resolved"; status: "completed" | "blocked" | "incomplete" }
 	| { type: "waiting-parked" }
 	| { type: "user-reply" }
@@ -102,6 +103,13 @@ export function transition(state: LifecycleState, event: LifecycleEvent): Lifecy
 					phase: "running",
 					command: state.command,
 					continueCount: state.continueCount + 1,
+				});
+			}
+			if (event.type === "probe-input-resumed") {
+				return ok(state, event, {
+					phase: "running",
+					command: state.command,
+					continueCount: state.continueCount,
 				});
 			}
 			if (event.type === "status-reported") {
