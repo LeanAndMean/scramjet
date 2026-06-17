@@ -98,9 +98,6 @@ export function recordCommandInvocation(
 		}
 		state.lifecycle = result.state;
 		syncLegacyFromLifecycle(state);
-		// Bridge: reset the closure counter in command-status.ts until Stage 4
-		// migrates it onto the lifecycle variant's continueCount.
-		state.resetConsecutiveContinues?.();
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);

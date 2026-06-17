@@ -1904,6 +1904,7 @@ describe("multi-path probe integration", () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			state.commandPhase = "idle";
+			state.lifecycle = { phase: "idle" };
 			const { callUserInput } = fullBootstrap(state);
 
 			const result = await callUserInput({ type: "confirm", message: "Should I?" });

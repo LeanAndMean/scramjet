@@ -135,6 +135,5 @@ export interface ScramjetState {
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
-	resetConsecutiveContinues?: () => void;
 	autonomyConfigPath: string;
 }

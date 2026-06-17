@@ -15,10 +15,17 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		lifecycle: { phase: "idle" },
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
-		resetConsecutiveContinues: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
 		...overrides,
 	};
+	if (
+		base.commandPhase !== "idle" &&
+		base.activeTopLevelCommand === null &&
+		!("activeTopLevelCommand" in overrides) &&
+		!overrides.lifecycle
+	) {
+		base.activeTopLevelCommand = "test:cmd";
+	}
 	if (!overrides.lifecycle) {
 		base.lifecycle = fromLegacy(base);
 	}

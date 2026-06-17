@@ -209,7 +209,11 @@ export function transitionPhase(state: ScramjetState, target: CommandPhase): boo
 	}
 	state.commandPhase = target;
 	if (target === "idle") state.latestCommandStatus = null;
-	state.lifecycle = fromLegacy(state);
+	const rebuilt = fromLegacy(state);
+	if ("continueCount" in rebuilt && "continueCount" in state.lifecycle && rebuilt.continueCount === 0) {
+		(rebuilt as { continueCount: number }).continueCount = state.lifecycle.continueCount;
+	}
+	state.lifecycle = rebuilt;
 	return true;
 }
 

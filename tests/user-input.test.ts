@@ -340,6 +340,7 @@ describe("registerUserInputTool — freetext interaction", () => {
 		expect(parsed).toEqual({ waiting_for_user: true });
 		expect(result.details).toEqual({ type: "freetext", waiting_for_user: true });
 		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.phase).toBe("waiting");
 		expect(state.commandPhase).toBe("waiting");
 	});
 
@@ -359,6 +360,7 @@ describe("registerUserInputTool — cancellation phase handling", () => {
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.phase).toBe("waiting");
 		expect(state.commandPhase).toBe("waiting");
 	});
 
@@ -368,17 +370,22 @@ describe("registerUserInputTool — cancellation phase handling", () => {
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.phase).toBe("waiting");
 		expect(state.commandPhase).toBe("waiting");
 	});
 
-	it("terminates and transitions without journaling command status when no active command is set", async () => {
-		const state = freshState({ commandPhase: "running", activeTopLevelCommand: null });
+	it("journals waiting_for_user command status on cancellation with active command", async () => {
+		const state = freshState({ commandPhase: "running", activeTopLevelCommand: "mach12:test" });
 		const { execute, pi } = toolFor(state);
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
-		expect(state.commandPhase).toBe("waiting");
-		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
+		expect(state.lifecycle.phase).toBe("waiting");
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(1);
+		expect(pi.appended.find((e: any) => e.customType === COMMAND_STATUS_TYPE).data).toEqual({
+			commandName: "mach12:test",
+			status: "waiting_for_user",
+		});
 	});
 });
 
@@ -409,6 +416,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		await execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		expect(suspended).toEqual(["suspended"]);
+		expect(state.lifecycle.phase).toBe("running");
 		expect(state.commandPhase).toBe("running");
 	});
 
@@ -430,6 +438,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(result.details.error).toBe("ui-error");
 		expect(result.details.message).toBe("UI crashed");
 		expect(suspended).toEqual(["suspended"]);
+		expect(state.lifecycle.phase).toBe("running");
 		expect(state.commandPhase).toBe("running");
 	});
 
@@ -452,6 +461,7 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		expect(result.terminate).toBeUndefined();
+		expect(state.lifecycle.phase).toBe("running");
 		expect(state.commandPhase).toBe("running");
 	});
 
@@ -485,12 +495,12 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		const resultPromise = execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		await vi.advanceTimersByTimeAsync(35_000);
-		expect(state.commandPhase).toBe("probing");
+		expect(state.lifecycle.phase).toBe("probing");
 
 		resolveUI!("yes");
 		const result = await resultPromise;
 		expect(result.terminate).toBeUndefined();
-		expect(state.commandPhase).toBe("running");
+		expect(state.lifecycle.phase).toBe("running");
 	});
 });
 

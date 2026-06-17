@@ -3,12 +3,19 @@ import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { recordCommandStatus } from "./history.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
-import { transitionPhase } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleEvent, toLegacy, transition } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
 
-const ALLOWED_PHASES = new Set(["running", "probing"]);
+const ALLOWED_PHASES = new Set<string>(["running", "probing"]);
+
+function syncLegacyFromLifecycle(state: ScramjetState): void {
+	const legacy = toLegacy(state.lifecycle);
+	state.commandPhase = legacy.commandPhase;
+	state.activeTopLevelCommand = legacy.activeTopLevelCommand;
+	state.latestCommandStatus = legacy.latestCommandStatus;
+}
 
 const OUT_OF_PHASE_ERROR =
 	"get_scramjet_user_input is not available right now. " +
@@ -69,13 +76,13 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 		promptSnippet: PROMPT_SNIPPET,
 		parameters: USER_INPUT_SCHEMA,
 		async execute(_toolCallId, params, _resource, _read, ctx) {
-			if (!ALLOWED_PHASES.has(state.commandPhase)) {
+			if (!ALLOWED_PHASES.has(state.lifecycle.phase)) {
 				console.warn(
-					`scramjet: get_scramjet_user_input called out of phase (phase=${state.commandPhase}); rejected`,
+					`scramjet: get_scramjet_user_input called out of phase (phase=${state.lifecycle.phase}); rejected`,
 				);
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
-					details: { error: "out-of-phase", phase: state.commandPhase },
+					details: { error: "out-of-phase", phase: state.lifecycle.phase },
 				};
 			}
 
@@ -92,8 +99,13 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					interactionType: params.type,
 					message: params.message,
 				});
-				transitionPhase(state, "waiting");
-				if (state.activeTopLevelCommand) recordCommandStatus(pi, state.activeTopLevelCommand, "waiting_for_user");
+				const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
+				if (waitResult.ok) {
+					state.lifecycle = waitResult.state;
+					syncLegacyFromLifecycle(state);
+				}
+				const activeCommand = getActiveCommand(state.lifecycle);
+				if (activeCommand) recordCommandStatus(pi, activeCommand, "waiting_for_user");
 				return {
 					content: [{ type: "text", text: JSON.stringify({ waiting_for_user: true }) }],
 					details: { type: "freetext", waiting_for_user: true },
@@ -108,7 +120,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				};
 			}
 
-			const isProbing = state.commandPhase === "probing";
+			const isProbing = state.lifecycle.phase === "probing";
 			if (isProbing) state.suspendProbeWatchdog?.();
 
 			type InteractionResult = {
@@ -143,7 +155,14 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					details: { error: "ui-error", message },
 				};
 			} finally {
-				if (isProbing) transitionPhase(state, result?.cancelled ? "waiting" : "running");
+				if (isProbing) {
+					const event: LifecycleEvent = result?.cancelled ? { type: "waiting-parked" } : { type: "continuing" };
+					const transResult = transition(state.lifecycle, event);
+					if (transResult.ok) {
+						state.lifecycle = transResult.state;
+						syncLegacyFromLifecycle(state);
+					}
+				}
 			}
 
 			pi.appendEntry(USER_INPUT_TYPE, {
@@ -154,8 +173,15 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 
 			const toolResult = { content: result.content, details: result.details };
 			if (result.cancelled) {
-				if (!isProbing) transitionPhase(state, "waiting");
-				if (state.activeTopLevelCommand) recordCommandStatus(pi, state.activeTopLevelCommand, "waiting_for_user");
+				if (!isProbing) {
+					const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
+					if (waitResult.ok) {
+						state.lifecycle = waitResult.state;
+						syncLegacyFromLifecycle(state);
+					}
+				}
+				const activeCommand = getActiveCommand(state.lifecycle);
+				if (activeCommand) recordCommandStatus(pi, activeCommand, "waiting_for_user");
 				return { ...toolResult, terminate: true };
 			}
 
