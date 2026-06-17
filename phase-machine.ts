@@ -154,12 +154,7 @@ export interface PhaseEntry {
 	data?: unknown;
 }
 
-const VALID_STATUSES: ReadonlySet<string> = new Set<CommandStatusRestingStatus>([
-	"completed",
-	"waiting_for_user",
-	"blocked",
-	"incomplete",
-]);
+const VALID_STATUSES: ReadonlySet<string> = new Set<CommandStatusRestingStatus>(["completed", "blocked", "incomplete"]);
 
 export function isPhaseEntry(entry: { type: string; customType?: string; data?: unknown }): entry is PhaseEntry {
 	return entry.type === "custom" && typeof entry.customType === "string";
@@ -189,8 +184,14 @@ export function reconstructPhase(entries: readonly PhaseEntry[]): ReconstructedP
 			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
 			if (data.commandName !== activeTopLevelCommand) continue;
 			if (typeof data.status !== "string" || !VALID_STATUSES.has(data.status)) continue;
-			phase = data.status === "waiting_for_user" ? "waiting" : "idle";
-			activeCommandCleared = data.status !== "waiting_for_user";
+			phase = "idle";
+			activeCommandCleared = true;
+		} else if (entry.customType === "scramjet:user-input-parked") {
+			const data = entry.data as { commandName?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand) continue;
+			phase = "waiting";
+			activeCommandCleared = false;
 		}
 	}
 	return { phase, activeCommandCleared };

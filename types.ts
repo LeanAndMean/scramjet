@@ -34,9 +34,8 @@ export interface CommandStatusNextStep {
 // response to the post-response status probe. `recommended_next_step` is a
 // zero-based index into the original `next_steps` array.
 export interface CommandStatusPayload {
-	status: "completed" | "waiting_for_user" | "blocked" | "incomplete" | "continuing";
+	status: "completed" | "blocked" | "incomplete" | "continuing";
 	summary: string;
-	user_prompt?: string;
 	next_steps?: CommandStatusNextStep[];
 	recommended_next_step?: number;
 }

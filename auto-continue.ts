@@ -442,11 +442,6 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			case "blocked":
 				ctx.ui.notify(`scramjet: command blocked — ${cleanForNotify(status.summary)}`, "warning");
 				return;
-			case "waiting_for_user":
-				if (status.user_prompt) {
-					ctx.ui.notify(`scramjet: waiting for input — ${cleanForNotify(status.user_prompt)}`, "info");
-				}
-				return;
 			default:
 				return;
 		}
@@ -501,16 +496,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					return;
 				}
 
-				if (status.status === "waiting_for_user") {
-					const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
-					if (waitResult.ok) applyTransition(state, waitResult);
-				} else {
-					const termResult = transition(state.lifecycle, {
-						type: "terminal-resolved",
-						status: status.status as "blocked" | "incomplete",
-					});
-					if (termResult.ok) applyTransition(state, termResult);
-				}
+				const termResult = transition(state.lifecycle, {
+					type: "terminal-resolved",
+					status: status.status as "blocked" | "incomplete",
+				});
+				if (termResult.ok) applyTransition(state, termResult);
 				routeNonCompleted(status, ctx);
 				return;
 			}

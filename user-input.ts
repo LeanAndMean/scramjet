@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import { recordCommandStatus } from "./history.ts";
+import { USER_INPUT_PARKED_TYPE } from "./history.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
 import { getActiveCommand, type LifecycleEvent, transition } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
@@ -97,10 +97,10 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					state.lifecycle = waitResult.state;
 				}
 				const activeCommand = getActiveCommand(state.lifecycle);
-				if (activeCommand) recordCommandStatus(pi, activeCommand, "waiting_for_user");
+				if (activeCommand) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: activeCommand });
 				return {
-					content: [{ type: "text", text: JSON.stringify({ waiting_for_user: true }) }],
-					details: { type: "freetext", waiting_for_user: true },
+					content: [{ type: "text", text: JSON.stringify({ parked: true }) }],
+					details: { type: "freetext", parked: true },
 					terminate: true,
 				};
 			}
@@ -174,7 +174,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					}
 				}
 				const activeCommand = getActiveCommand(state.lifecycle);
-				if (activeCommand) recordCommandStatus(pi, activeCommand, "waiting_for_user");
+				if (activeCommand) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: activeCommand });
 				return { ...toolResult, terminate: true };
 			}
 
