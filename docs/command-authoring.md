@@ -418,9 +418,8 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `status` | enum | Yes | `"continuing"`, `"completed"`, `"waiting_for_user"`, `"blocked"`, or `"incomplete"` |
+| `status` | enum | Yes | `"continuing"`, `"completed"`, `"blocked"`, or `"incomplete"` |
 | `summary` | string | Yes | Brief summary of the command's outcome. |
-| `user_prompt` | string | No | For `waiting_for_user`: the question the agent is waiting on. |
 | `next_steps` | array | No | Ordered next-step candidates. Omit to stop the chain. |
 | `recommended_next_step` | integer | No | Zero-based index into `next_steps` for auto-dispatch. |
 
@@ -428,7 +427,6 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 - **`continuing`**: The command has more work to do in the current session. This is non-terminating: the tool returns control to the agent, transitions the phase back to `running`, and is bounded by the consecutive-continue limit.
 - **`completed`**: The command's requested work is done. `next_steps` may propose continuations.
-- **`waiting_for_user`**: The agent asked the user a question and needs input before continuing. The command stays active.
 - **`blocked`**: The command cannot proceed (error, missing dependency, authorization issue).
 - **`incomplete`**: None of the above — stopped without clean completion, question, or blocker.
 
@@ -452,7 +450,8 @@ to pass runtime context to that target:
 - `message`: `/mach12:pr-review-assessment <pr-number> --review-comment <comment-id>`
 
 If the command could not finish, report `status: "blocked"` or
-`status: "waiting_for_user"` instead — the forced target will not run.
+`status: "incomplete"` instead — the forced target will not run. If you need
+user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
 ```
 
 **Example prose (from a command with `open` next step):**
@@ -538,7 +537,7 @@ The tool is callable during the `running` and `probing` phases only. Outside an 
 
 ### Journaling
 
-Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; freetext records only the prompt. Terminating interactions with an active top-level command are also journaled as `waiting_for_user` command status entries so resume reconstruction preserves the waiting state.
+Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; freetext records only the prompt. Freetext and cancellation with an active top-level command are also journaled as `scramjet:user-input-parked` entries so resume reconstruction preserves the waiting state.
 
 ### Don't
 

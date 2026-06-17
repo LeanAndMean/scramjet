@@ -117,6 +117,6 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 
 - `message`: `/mach12:pr-review-assessment <pr-number> --review-comment <comment-id>` (the message must start with the forced target)
 
-If the review could not finish — a blocker, a question for the user, or an incomplete turn — report the matching `status` (`blocked` / `waiting_for_user` / `incomplete`) instead of `completed`, and the forced target will not run.
+If the review could not finish — a blocker or an incomplete turn — report the matching `status` (`blocked` / `incomplete`) instead of `completed`, and the forced target will not run. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
 
 Do NOT fix any issues in this command. Fixes belong to `/mach12:pr-review-fix`, downstream of the assessment.

@@ -61,8 +61,7 @@ The union is intended to prevent these historically fragile combinations:
 | `probing` | `probe-input-resumed` | `running(command, continueCount)` | Successful structured input resumes work without consuming status continuation budget. |
 | `probing` | `status-reported(status != continuing)` | `reported` | Stores the report for the router. |
 | `probing` | `waiting-parked` | `waiting` | Probe-time input/cancel parks the command. |
-| `reported` | `terminal-resolved(completed\|blocked\|incomplete)` | `idle` | Terminal statuses clear resumability after routing. |
-| `reported` | `waiting-parked` | `waiting` | `waiting_for_user` report pauses for input. |
+| `reported` | `terminal-resolved(completed\|blocked\|incomplete)` | `idle` | All reported statuses are terminal; routing clears the command. |
 | `waiting` | `user-reply` | `running(command, 0)` | User answer resumes the command. |
 | `waiting` | `waiting-parked` | `waiting` | Idempotent parking. |
 | `dormant` | `user-reply` | `running(command, 0)` | Later reply recovers after self-heal/replayed command start. |
@@ -82,7 +81,7 @@ All other event/state pairs are illegal and return `{ ok: false }` rather than t
 
 Replay must never restore transient live phases. Rebuild/session resume may reconstruct only:
 
-- `waiting` when the latest status for the active command is `waiting_for_user`.
+- `waiting` when a `scramjet:user-input-parked` entry exists for the active command (freetext or cancellation parked the command).
 - `dormant` when a command start remains associated but no waiting status is active.
 - `idle` when no active command is resumable, or when the active command's last status was `completed`, `blocked`, or `incomplete`.
 

@@ -267,4 +267,4 @@ Emit two entries:
 Set `recommended_next_step` to `0` (pre-merge).
 
 **General rules:**
-- Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`waiting_for_user` / `blocked` / `incomplete`) instead of `completed`.
+- Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
