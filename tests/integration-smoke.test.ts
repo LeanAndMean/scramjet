@@ -8,9 +8,11 @@ import { parseCommandFile } from "../commands/loader.ts";
 import { registerDelegateTool } from "../delegate.ts";
 import { registerHistory } from "../history.ts";
 import scramjet from "../index.ts";
+import { getActiveCommand } from "../phase-machine.ts";
 import { registerScramjetCommand } from "../scramjet-command.ts";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
 import type { CommandDef, NextStepPolicy, ScramjetState } from "../types.ts";
+import { registerUserInputTool } from "../user-input.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -358,5 +360,326 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		const types = bag.appended.map((e) => e.type);
 		expect(types).toContain("scramjet:enabled-toggle");
 		expect(types.filter((t) => t === "scramjet:command-start")).toHaveLength(2);
+	});
+});
+
+// Stage 6 lifecycle smoke scenarios: cross-module event sequences that motivated
+// the lifecycle hardening issue. Each exercises the full harness wiring (history,
+// command-status, auto-continue, user-input) in the same process rather than
+// testing individual modules in isolation.
+describe("integration smoke — lifecycle event sequences", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	interface RegisteredCommand {
+		name: string;
+		spec: { description?: string; handler: (args: string, ctx: unknown) => unknown };
+	}
+
+	function lifecyclePi() {
+		const handlers = new Map<string, ((event: unknown, ctx?: unknown) => unknown)[]>();
+		const tools: any[] = [];
+		const commands: RegisteredCommand[] = [];
+		const appended: { type: string; data: unknown }[] = [];
+		const probes: { message: any; options?: any }[] = [];
+		const dispatched: { input: string; options?: any }[] = [];
+		const pi: any = {
+			isStreaming: false,
+			on(event: string, handler: any) {
+				const list = handlers.get(event) ?? [];
+				list.push(handler);
+				handlers.set(event, list);
+			},
+			registerTool(tool: any) {
+				tools.push(tool);
+			},
+			registerCommand(name: string, spec: RegisteredCommand["spec"]) {
+				commands.push({ name, spec });
+			},
+			appendEntry(type: string, data: unknown) {
+				appended.push({ type, data });
+			},
+			sendMessage(message: any, options?: any) {
+				if (pi.isStreaming) return;
+				probes.push({ message, options });
+			},
+		};
+		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
+			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+		}
+		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };
+	}
+
+	function lifecycleCtx() {
+		const notifications: { message: string; type?: string }[] = [];
+		const dispatched: { input: string; options?: any }[] = [];
+		const ctx: any = {
+			hasUI: false,
+			ui: {
+				notify: (m: string, t?: string) => notifications.push({ message: m, type: t }),
+				custom: <T>(_factory: any) => Promise.resolve(undefined as T),
+			},
+			dispatchUserInput: async (input: string, options?: any) => {
+				dispatched.push({ input, options });
+			},
+			newSession: async () => ({ cancelled: true }),
+			notifications,
+			dispatched,
+		};
+		return ctx;
+	}
+
+	function wireAll(bag: ReturnType<typeof lifecyclePi>, state: ScramjetState) {
+		registerHistory(bag.pi, state);
+		registerCommandStatusTool(bag.pi, state);
+		registerUserInputTool(bag.pi, state);
+		registerAutoContinue(bag.pi, state);
+	}
+
+	function findTool(bag: ReturnType<typeof lifecyclePi>, name: string) {
+		const tool = bag.tools.find((t: any) => t.name === name);
+		if (!tool) throw new Error(`tool ${name} not registered`);
+		return tool;
+	}
+
+	async function fireProbe(bag: ReturnType<typeof lifecyclePi>, ctx: any) {
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+	}
+
+	async function endProbeTurn(bag: ReturnType<typeof lifecyclePi>, ctx: any) {
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+	}
+
+	it("probe self-heal → dormant → interactive reply → running → complete", async () => {
+		const cmd: CommandDef = {
+			name: "int:cmd",
+			filePath: "/fake/int:cmd.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const state = freshState({
+			registry: new Map([[cmd.name, cmd]]),
+			enabled: true,
+		});
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		wireAll(bag, state);
+
+		// User invokes the command
+		await bag.emit("input", { text: "/int:cmd", source: "interactive" }, ctx);
+		expect(state.lifecycle.phase).toBe("running");
+		expect(getActiveCommand(state.lifecycle)).toBe("int:cmd");
+
+		// Answer turn ends → probe fires
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle.phase).toBe("probing");
+		expect(bag.probes).toHaveLength(1);
+
+		// Probe turn ends WITHOUT a status report → self-heal to dormant
+		await bag.emit("agent_end", {}, ctx);
+		expect(state.lifecycle.phase).toBe("dormant");
+		expect(getActiveCommand(state.lifecycle)).toBe("int:cmd");
+
+		// User replies interactively → resumes to running
+		await bag.emit("input", { text: "Use option B", source: "interactive" }, ctx);
+		expect(state.lifecycle.phase).toBe("running");
+
+		// New answer turn ends → fresh probe
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle.phase).toBe("probing");
+
+		// Agent reports completed
+		const statusTool = findTool(bag, "report_scramjet_command_status");
+		await statusTool.execute("call-id", { status: "completed", summary: "done" });
+		expect(state.lifecycle.phase).toBe("reported");
+
+		// Probe turn ends → resolves to idle
+		await endProbeTurn(bag, ctx);
+		expect(state.lifecycle.phase).toBe("idle");
+	});
+
+	it("waiting_for_user → replay/resume → interactive reply → completed", async () => {
+		const cmd: CommandDef = {
+			name: "int:wait",
+			filePath: "/fake/int:wait.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const state = freshState({
+			registry: new Map([[cmd.name, cmd]]),
+			enabled: true,
+		});
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		wireAll(bag, state);
+
+		// User invokes the command
+		await bag.emit("input", { text: "/int:wait", source: "interactive" }, ctx);
+		expect(state.lifecycle.phase).toBe("running");
+
+		// Answer turn ends → probe fires
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle.phase).toBe("probing");
+
+		// Agent reports waiting_for_user
+		const statusTool = findTool(bag, "report_scramjet_command_status");
+		await statusTool.execute("call-id", {
+			status: "waiting_for_user",
+			summary: "need input",
+			user_prompt: "Which approach?",
+		});
+		expect(state.lifecycle.phase).toBe("reported");
+
+		// Probe turn ends → parks at waiting
+		await endProbeTurn(bag, ctx);
+		expect(state.lifecycle.phase).toBe("waiting");
+		expect(getActiveCommand(state.lifecycle)).toBe("int:wait");
+
+		// Simulate resume: reconstruct from journal entries via session_start
+		const entries = bag.appended.map((e) => ({
+			type: "custom",
+			customType: e.type,
+			data: e.data,
+		}));
+		// Reset state to simulate a fresh session
+		state.lifecycle = { phase: "idle" };
+		state.commandPhase = "idle";
+		state.activeTopLevelCommand = null;
+		state.sidebarLog = [];
+		await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
+
+		// After replay, waiting phase should be reconstructed
+		expect(state.lifecycle.phase).toBe("waiting");
+		expect(getActiveCommand(state.lifecycle)).toBe("int:wait");
+
+		// User replies interactively → resumes to running
+		await bag.emit("input", { text: "Go with approach A", source: "interactive" }, ctx);
+		expect(state.lifecycle.phase).toBe("running");
+
+		// New answer turn ends → fresh probe
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle.phase).toBe("probing");
+
+		// Agent reports completed
+		await statusTool.execute("call-id", { status: "completed", summary: "done" });
+		await endProbeTurn(bag, ctx);
+		expect(state.lifecycle.phase).toBe("idle");
+	});
+
+	it("continuing cycles preserve continueCount across probing transitions", async () => {
+		const cmd: CommandDef = {
+			name: "int:multi",
+			filePath: "/fake/int:multi.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const state = freshState({
+			registry: new Map([[cmd.name, cmd]]),
+			enabled: true,
+		});
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		wireAll(bag, state);
+
+		// User invokes the command
+		await bag.emit("input", { text: "/int:multi", source: "interactive" }, ctx);
+		expect(state.lifecycle.phase).toBe("running");
+		expect(state.lifecycle).toMatchObject({ continueCount: 0 });
+
+		const statusTool = findTool(bag, "report_scramjet_command_status");
+
+		// First continue cycle
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle.phase).toBe("probing");
+		expect(state.lifecycle).toMatchObject({ continueCount: 0 });
+
+		await statusTool.execute("call-id", { status: "continuing", summary: "more work" });
+		expect(state.lifecycle.phase).toBe("running");
+		expect(state.lifecycle).toMatchObject({ continueCount: 1 });
+
+		// Second continue cycle
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle).toMatchObject({ phase: "probing", continueCount: 1 });
+
+		await statusTool.execute("call-id", { status: "continuing", summary: "still working" });
+		expect(state.lifecycle).toMatchObject({ phase: "running", continueCount: 2 });
+
+		// Third continue cycle
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle).toMatchObject({ phase: "probing", continueCount: 2 });
+
+		await statusTool.execute("call-id", { status: "continuing", summary: "almost done" });
+		expect(state.lifecycle).toMatchObject({ phase: "running", continueCount: 3 });
+
+		// Fourth continue hits the limit
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle).toMatchObject({ phase: "probing", continueCount: 3 });
+
+		const limited = await statusTool.execute("call-id", { status: "continuing", summary: "too many" });
+		expect(limited.details.error).toBe("continue-limit");
+		expect(state.lifecycle.phase).toBe("probing"); // stays probing, agent must report terminal
+		expect(state.lifecycle).toMatchObject({ continueCount: 3 });
+
+		// Agent reports completed after hitting limit
+		await statusTool.execute("call-id", { status: "completed", summary: "finally done" });
+		await endProbeTurn(bag, ctx);
+		expect(state.lifecycle.phase).toBe("idle");
+	});
+
+	it("structured user input during probing returns to running", async () => {
+		const cmd: CommandDef = {
+			name: "int:ask",
+			filePath: "/fake/int:ask.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const state = freshState({
+			registry: new Map([[cmd.name, cmd]]),
+			enabled: true,
+		});
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		// Override ctx.ui.custom to auto-resolve confirm prompts
+		ctx.ui.custom = () => Promise.resolve("yes");
+		wireAll(bag, state);
+
+		// User invokes the command
+		await bag.emit("input", { text: "/int:ask", source: "interactive" }, ctx);
+		expect(state.lifecycle.phase).toBe("running");
+
+		// Answer turn ends → probe fires
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle.phase).toBe("probing");
+
+		// Agent calls get_scramjet_user_input during probe phase
+		const userInputTool = findTool(bag, "get_scramjet_user_input");
+		const inputResult = await userInputTool.execute(
+			"call-id",
+			{ type: "confirm", message: "Continue with plan?" },
+			undefined,
+			undefined,
+			ctx,
+		);
+
+		// Confirm succeeds and transitions back to running
+		expect(inputResult.details.error).toBeUndefined();
+		expect(inputResult.details.confirmed).toBe(true);
+		expect(state.lifecycle.phase).toBe("running");
+
+		// Agent does more work, turn ends → another probe
+		await fireProbe(bag, ctx);
+		expect(state.lifecycle.phase).toBe("probing");
+
+		// Agent reports completed
+		const statusTool = findTool(bag, "report_scramjet_command_status");
+		await statusTool.execute("call-id", { status: "completed", summary: "done" });
+		await endProbeTurn(bag, ctx);
+		expect(state.lifecycle.phase).toBe("idle");
 	});
 });
