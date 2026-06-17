@@ -93,7 +93,7 @@ const _interfaceMatchesWire = (step: CommandStatusNextStep): WireNextStep => ste
 // F3: single source of truth for the status enum, mirroring the next_steps
 // congruence guards above. The TypeBox union below and the
 // CommandStatusPayload["status"] TS union (types.ts) are two declarations of the
-// same five literals; the assignability pair underneath fails the build if
+// same four literals; the assignability pair underneath fails the build if
 // either side adds, drops, or renames a status (e.g. adding "cancelled" to one
 // side only), closing the last drift hole the rest of this file already guards.
 const STATUS_SCHEMA = Type.Union(
