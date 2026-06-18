@@ -94,6 +94,13 @@ export interface AutonomyConfig {
 	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;
 }
 
+export interface ModelRecord {
+	name: string;
+	id: string;
+	provider: string;
+	fromTurnIndex: number;
+}
+
 // Exposed for test observability of closure-local timer state in auto-continue.ts.
 export interface LifecycleTimerAccessors {
 	isProbeScheduled(): boolean;
@@ -112,6 +119,8 @@ export interface ScramjetState {
 	// resulting entry as origin: "forced" instead of "agent".
 	pendingForcedDispatch: string | null;
 	lifecycle: LifecycleState;
+	currentModel: ModelRecord | null;
+	modelHistory: ModelRecord[];
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;

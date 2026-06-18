@@ -98,7 +98,7 @@ Prepare the review comment body. It must include:
 - `<!-- mach12-review -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
 - The complete review findings (Critical, Important, Suggestions, Strengths), including any findings from supplementary lenses merged into the appropriate severity categories with inline source attribution (e.g., "per skill reviewer").
 - F/S identifiers on every finding -- Critical and Important findings use `F<n>` numbered sequentially across both sections, Suggestions use `S<n>` with a separate counter (e.g., `**F1:** ...`, `**F2:** ...`, `**S1:** ...`).
-- Model attribution at the bottom -- identify yourself by your actual model name (e.g., "Reviewed by <model name>").
+- Model attribution at the bottom -- use the model attribution from the Model Identity section of your system prompt (e.g., "Reviewed by <model name>").
 - A note that this is an automated review.
 
 Format the comment as a well-structured markdown document that can serve as input to a future `/mach12:pr-review-fix` session.

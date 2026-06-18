@@ -16,6 +16,7 @@
 		"command-status.ts",
 		"delegate.ts",
 		"history.ts",
+		"model-identity.ts",
 		"next-step.ts",
 		"pr-indicator.ts",
 		"scramjet-command.ts",

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.23.0 — Model identity tracking for accurate GitHub attribution
+
+Adds model identity tracking so agents have reliable model attribution without relying on self-knowledge. A new `model-identity.ts` module captures the initial model at session start, injects a stable `# Model Identity` block into the system prompt, and delivers change notifications on model switch via lifecycle-appropriate paths. Command prose in `pr-review` and `pr-review-assessment` updated to use harness-provided attribution instead of "identify yourself" directives (issue #163).
+
+### Added
+
+- `model-identity.ts` — tracks active model via `session_start` and `model_select` (500ms debounce), injects identity block into system prompt (cache-friendly, set once), delivers change messages via `input` transform (idle) or `before_agent_start` message return (active work). Reconstructs state on resume/fork from `ModelChangeEntry` session entries.
+- `ModelRecord` type and `currentModel`/`modelHistory` fields on `ScramjetState`.
+- `tests/model-identity.test.ts` — 39 tests covering system prompt injection, debounce, delivery paths, resume reconstruction, and probe-phase safety.
+
+### Changed
+
+- `mach12:pr-review.md` — model attribution directive now references the harness-provided Model Identity system prompt section.
+- `mach12:pr-review-assessment.md` — same change.
+
 ## 0.22.4 — Pi API surface reference
 
 Adds `docs/pi-api-surface.md`, a generated reference of all public exports from the four installed Pi packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`), kept in sync by a CI staleness guard (issue #168).

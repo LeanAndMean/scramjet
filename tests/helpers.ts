@@ -10,6 +10,8 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		delegateStack: [],
 		pendingForcedDispatch: null,
 		lifecycle: { phase: "idle" },
+		currentModel: null,
+		modelHistory: [],
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
