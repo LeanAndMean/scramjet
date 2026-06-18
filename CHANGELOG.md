@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.23.0 — Model identity tracking for accurate GitHub attribution
+## [Unreleased] — Model identity tracking for accurate GitHub attribution
 
 Adds model identity tracking so agents have reliable model attribution without relying on self-knowledge. A new `model-identity.ts` module captures the initial model at session start, injects a stable `# Model Identity` block into the system prompt, and delivers change notifications on model switch via lifecycle-appropriate paths. Command prose in `pr-review` and `pr-review-assessment` updated to use harness-provided attribution instead of "identify yourself" directives (issue #163).
 
@@ -14,6 +14,37 @@ Adds model identity tracking so agents have reliable model attribution without r
 
 - `mach12:pr-review.md` — model attribution directive now references the harness-provided Model Identity system prompt section.
 - `mach12:pr-review-assessment.md` — same change.
+
+## 0.22.4 — Pi API surface reference
+
+Adds `docs/pi-api-surface.md`, a generated reference of all public exports from the four installed Pi packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`), kept in sync by a CI staleness guard (issue #168).
+
+### Added
+
+- `scripts/generate-pi-api-surface.js` — TypeScript compiler API script that resolves re-exports, follows aliases, and extracts full declaration text with docstrings into a per-package Markdown reference.
+- `docs/pi-api-surface.md` — generated reference with per-package sections, exports grouped by source module, type signatures in fenced code blocks, and a version header.
+- CI staleness guard — regenerates the file and fails on diff, ensuring the committed reference stays current with installed packages.
+- `tests/pi-api-surface-generate.test.ts` — black-box coverage verifying script execution, package section presence, type signatures, model catalog exclusion, deterministic output, and version header.
+
+### Changed
+
+- CLAUDE.md dependency orientation section — directs agents to read `docs/pi-api-surface.md` before proposing new capabilities and to regenerate it on Pi version bumps.
+
+## 0.22.3 — Fix stale freetext tool contract descriptions
+
+### Fixed
+
+- `docs/command-authoring.md` — probe-turn guidance now distinguishes confirm/select (same-turn continuation) from freetext (parks at `waiting`, resumes on next user reply).
+- `user-input.ts` — `placeholder` schema description clarifies it is accepted for compatibility but unused by freetext.
+
+## 0.22.2 — Show freetext user-input prompts
+
+Freetext `get_scramjet_user_input` prompts now render the requested `message` in the tool call row before the command parks at `waiting`, so the user can see the question they need to answer in the standard editor (issue #166).
+
+### Fixed
+
+- `user-input.ts` — added a custom `renderCall` that displays the user-input prompt message while preserving the existing parked result and wait/resume lifecycle.
+- `docs/command-authoring.md`, `docs/scramjet-vision.md` — documented visible freetext prompts and the current wait/resume semantics.
 
 ## 0.22.1 — Add test-designer agent and planning workflow integration
 

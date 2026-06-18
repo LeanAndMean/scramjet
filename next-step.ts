@@ -104,6 +104,8 @@ export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scr
 		"- `completed` \u2014 the command's work is done and your answer was already delivered\n" +
 		"- `blocked` \u2014 cannot proceed (error, missing dependency, authorization)\n" +
 		"- `incomplete` \u2014 stopped without clean completion\n\n" +
-		"`get_scramjet_user_input` \u2014 if you need user input (confirm/select/freetext) before continuing; after it returns, continue the command work in this turn";
+		"`get_scramjet_user_input` \u2014 if you need user input before continuing:\n" +
+		"- successful `confirm`/`select` responses return in this probe turn; continue command work in this turn\n" +
+		"- `freetext` and cancelled `confirm`/`select` terminate this turn and park the command at `waiting`; do not try to continue same-turn after those paths";
 	return `${preamble}\n\n${buildNextStepBlock(policy, commandId, scramjetEnabled)}`;
 }

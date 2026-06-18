@@ -38,6 +38,11 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Pi API surface staleness guard
+        run: |
+          node scripts/generate-pi-api-surface.js
+          git diff --exit-code docs/pi-api-surface.md
+
       - name: Pi dependency metadata drift guard
         run: |
           BASE=$(jq -r '.pi.piBaseVersion' package.json)
