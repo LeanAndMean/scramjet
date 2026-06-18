@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.4 — Test Pi API surface generation
+
+### Added
+
+- `tests/pi-api-surface-generate.test.ts` — black-box coverage for the Pi API surface generator, including package sections, representative signatures, generated model catalog exclusion, deterministic output, and version header checks.
+
 ## 0.22.3 — Fix stale freetext tool contract descriptions
 
 ### Fixed
