@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { USER_INPUT_PARKED_TYPE } from "./history.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
@@ -22,7 +22,8 @@ const PROMPT_SNIPPET =
 	"You have access to `get_scramjet_user_input` for requesting structured user input mid-turn " +
 	"(confirm, select, or freetext). Confirm/select block until the user responds and return their " +
 	"answer as the tool result; freetext terminates the turn so the user replies in the standard editor. " +
-	"State freetext questions in prose before calling the tool.";
+	"Freetext message is visible in the tool row; state surrounding context in prose before calling the tool " +
+	"when the user needs that context to answer.";
 
 const USER_INPUT_OPTION_SCHEMA = Type.Object({
 	value: Type.String(),
@@ -68,6 +69,15 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			"The placeholder parameter is accepted for compatibility but unused by freetext.",
 		promptSnippet: PROMPT_SNIPPET,
 		parameters: USER_INPUT_SCHEMA,
+		renderCall(args, theme, context) {
+			const maybeArgs = args as Partial<UserInputParams> | null | undefined;
+			const message = typeof maybeArgs?.message === "string" ? maybeArgs.message : "";
+			let text = theme.fg("toolTitle", theme.bold("get_scramjet_user_input"));
+			if (message) text += ` ${theme.fg("muted", message)}`;
+			const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			component.setText(text);
+			return component;
+		},
 		async execute(_toolCallId, params, _resource, _read, ctx) {
 			if (!ALLOWED_PHASES.has(state.lifecycle.phase)) {
 				console.warn(

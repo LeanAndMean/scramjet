@@ -480,14 +480,14 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Freetext parks the command in `waiting` immediately so the user can reply through the standard editor.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Freetext renders its `message` in the tool call row, then parks the command in `waiting` immediately so the user can reply through the standard editor.
 
 ### When to use it
 
-Use `get_scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input) and the agent should continue executing in the same turn after receiving the response. Prefer it over prose questions when:
+Use `get_scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input). Confirm/select let the agent continue executing in the same turn after a successful response; freetext intentionally ends the turn and resumes after the user's next standard-editor reply. Prefer it over prose questions when:
 
 - The response has a constrained shape (yes/no, pick-one, short text).
-- The agent needs the response to continue work in the same turn.
+- The agent needs a clear prompt rendered in the transcript.
 - The interaction should be journaled for history visibility.
 
 Fall back to prose questions for complex, multi-part, or open-ended discussions where the agent should stop and wait for the user's full response.
@@ -525,7 +525,7 @@ Returns `{ "selected": "patch" }` or `{ "cancelled": true }`. The `recommended` 
 { "type": "freetext", "message": "What should the release title be?", "placeholder": "v1.2.3" }
 ```
 
-Freetext always returns `terminate: true` and parks the command in `waiting`; the user replies in the standard message editor, and that reply arrives as the next normal user message rather than as a tool result. The `placeholder` field is accepted for compatibility but unused.
+The `message` is displayed in the tool call row before/alongside the parked result. Freetext always returns `terminate: true` and parks the command in `waiting`; the user replies in the standard message editor, and that reply arrives as the next normal user message rather than as a tool result. The `placeholder` field is accepted for compatibility but unused. If the user needs context, trade-offs, or consequences to answer well, state that context in assistant prose before calling the tool; keep `message` as the concise question.
 
 ### Cancellation
 
