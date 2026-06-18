@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] — Model identity tracking for accurate GitHub attribution
+## 0.23.0 — Model identity tracking for accurate GitHub attribution
 
 Adds model identity tracking so agents have reliable model attribution without relying on self-knowledge. A new `model-identity.ts` module captures the initial model at session start, injects a stable `# Model Identity` block into the system prompt, and delivers change notifications on model switch via lifecycle-appropriate paths. Command prose in `pr-review` and `pr-review-assessment` updated to use harness-provided attribution instead of "identify yourself" directives (issue #163).
 
