@@ -39,7 +39,7 @@ function registryWith(...defs: CommandDef[]) {
 
 function logMessages(pi: any): string[] {
 	return pi.appended
-		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE)
+		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE && entry.data.level === "warn")
 		.map((entry: any) => entry.data.message);
 }
 

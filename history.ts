@@ -1,5 +1,12 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { getActiveCommand, isPhaseEntry, type LifecycleState, reconstructPhase, transition } from "./phase-machine.ts";
+import {
+	getActiveCommand,
+	isPhaseEntry,
+	type LifecycleEvent,
+	type LifecycleState,
+	reconstructPhase,
+	transition,
+} from "./phase-machine.ts";
 import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.ts";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
@@ -39,6 +46,23 @@ function isKnownSlashCommand(text: string, pi: ExtensionAPI): boolean {
 	return FALLBACK_KNOWN_SLASH.has(name);
 }
 
+function logTransition(
+	state: ScramjetState,
+	from: LifecycleState,
+	to: LifecycleState,
+	event: LifecycleEvent["type"],
+	detail?: Record<string, unknown>,
+): void {
+	const command = getActiveCommand(from) ?? getActiveCommand(to);
+	state.logger.lifecycle("lifecycle transition", {
+		from: from.phase,
+		to: to.phase,
+		event,
+		...(command ? { command } : {}),
+		...(detail ? { detail } : {}),
+	});
+}
+
 export interface EnabledToggleData {
 	enabled: boolean;
 }
@@ -75,7 +99,9 @@ export function recordCommandInvocation(
 		depth,
 		timestamp: Date.now(),
 	};
+	let commandStartTransition: { from: LifecycleState; to: LifecycleState } | null = null;
 	if (depth === 0) {
+		const from = state.lifecycle;
 		const result = transition(state.lifecycle, { type: "command-start", command: name });
 		if (!result.ok) {
 			state.logger.warn("lifecycle", `illegal lifecycle transition: ${result.from} + command-start`, {
@@ -86,9 +112,13 @@ export function recordCommandInvocation(
 			return;
 		}
 		state.lifecycle = result.state;
+		commandStartTransition = { from, to: result.state };
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);
+	if (commandStartTransition) {
+		logTransition(state, commandStartTransition.from, commandStartTransition.to, "command-start", { origin, depth });
+	}
 }
 
 // Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
@@ -222,9 +252,11 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 				!event.text.startsWith("/") &&
 				(state.lifecycle.phase === "waiting" || state.lifecycle.phase === "dormant")
 			) {
+				const from = state.lifecycle;
 				const result = transition(state.lifecycle, { type: "user-reply" });
 				if (!result.ok) return;
 				state.lifecycle = result.state;
+				logTransition(state, from, result.state, "user-reply", { source: event.source });
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
@@ -240,9 +272,15 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
 			if (event.text.startsWith("/") && getActiveCommand(state.lifecycle) !== null) {
 				if (!isKnownSlashCommand(event.text, pi)) {
+					const from = state.lifecycle;
 					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
 					if (exitResult.ok) {
 						state.lifecycle = exitResult.state;
+						logTransition(state, from, exitResult.state, "workflow-exit", {
+							reason: "unknown-slash",
+							slash: extractSlashName(event.text),
+							source: event.source,
+						});
 					}
 				}
 			}
