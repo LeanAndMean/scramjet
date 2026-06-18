@@ -289,6 +289,31 @@ describe("model_select debounce and delivery", () => {
 			expect(result.message).toBeUndefined();
 			expect(result.systemPrompt).toContain("Claude Opus 4.6");
 		});
+
+		it("delivers model change notification after probing phase completes", async () => {
+			const { handlers, emit, state } = setupWithModel();
+			await initModel(emit);
+			state.lifecycle = lifecycleFor("running");
+
+			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+			vi.advanceTimersByTime(500);
+
+			// Transition to probing before before_agent_start fires
+			state.lifecycle = lifecycleFor("probing");
+			const basHandler = handlers.get("before_agent_start")![0];
+			const probingResult = (await basHandler({ systemPrompt: "BASE" })) as any;
+
+			// Message suppressed during probing, but flag preserved
+			expect(probingResult.message).toBeUndefined();
+
+			// Phase returns to running — message should now be delivered
+			state.lifecycle = lifecycleFor("running");
+			const runningResult = (await basHandler({ systemPrompt: "BASE" })) as any;
+
+			expect(runningResult.message).toBeDefined();
+			expect(runningResult.message.content).toContain("[scramjet] Model changed to: GPT 5.5");
+			expect(runningResult.message.content).toContain("Please continue.");
+		});
 	});
 
 	it("keeps system prompt showing initial model after model change (cache-friendly)", async () => {

@@ -181,8 +181,8 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			: undefined;
 
 		if (pendingForNextTurn) {
-			pendingForNextTurn = false;
 			if (state.lifecycle.phase !== "probing") {
+				pendingForNextTurn = false;
 				return {
 					...(systemPrompt ? { systemPrompt } : {}),
 					message: {
