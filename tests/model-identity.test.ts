@@ -287,22 +287,26 @@ describe("model_select debounce and delivery", () => {
 			const result = (await basHandler({ systemPrompt: "BASE" })) as any;
 
 			expect(result.message).toBeUndefined();
-			expect(result.systemPrompt).toContain("GPT 5.5");
+			expect(result.systemPrompt).toContain("Claude Opus 4.6");
 		});
 	});
 
-	it("updates system prompt to reflect new model after change", async () => {
+	it("keeps system prompt showing initial model after model change (cache-friendly)", async () => {
 		const { handlers, emit, state } = setupWithModel();
 		await initModel(emit);
 		state.lifecycle = { phase: "idle" };
 
+		const basHandler = handlers.get("before_agent_start")![0];
+		const before = (await basHandler({ systemPrompt: "BASE" })) as any;
+
 		await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
 		vi.advanceTimersByTime(500);
 
-		const basHandler = handlers.get("before_agent_start")![0];
-		const result = (await basHandler({ systemPrompt: "BASE" })) as any;
+		const after = (await basHandler({ systemPrompt: "BASE" })) as any;
 
-		expect(result.systemPrompt).toContain("Your model is: GPT 5.5 (ID: gpt-5-5, provider: openai).");
+		expect(after.systemPrompt).toBe(before.systemPrompt);
+		expect(after.systemPrompt).toContain("Your model is: Claude Opus 4.6 (ID: claude-opus-4-6, provider: anthropic).");
+		expect(after.systemPrompt).not.toContain("GPT 5.5");
 	});
 
 	it("assigns correct fromTurnIndex to new model record", async () => {
@@ -331,7 +335,7 @@ describe("model_select debounce and delivery", () => {
 		const result = (await basHandler({ systemPrompt: "BASE" })) as any;
 
 		expect(result.message).toBeUndefined();
-		expect(result.systemPrompt).toContain("GPT 5.5");
+		expect(result.systemPrompt).toContain("Claude Opus 4.6");
 	});
 
 	it("flags are mutually exclusive across phase transitions", async () => {

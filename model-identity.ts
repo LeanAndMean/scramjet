@@ -80,12 +80,14 @@ export function reconstructModelState(
 
 export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): void {
 	let latestTurnIndex = 0;
+	let initialModel: ModelRecord | null = null;
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let pendingModel: ActiveModel | null = null;
 	let pendingForInput = false;
 	let pendingForNextTurn = false;
 
 	const rebuild = (ctx: ExtensionContext) => {
+		latestTurnIndex = 0;
 		pendingForInput = false;
 		pendingForNextTurn = false;
 		if (debounceTimer !== null) {
@@ -100,14 +102,17 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		if (result.currentModel) {
 			state.currentModel = result.currentModel;
 			state.modelHistory = result.modelHistory;
+			initialModel = result.modelHistory[0]!;
 			if (result.diverged) pendingForInput = true;
 		} else if (ctx.model) {
 			const record = modelRecord(ctx.model, latestTurnIndex);
 			state.currentModel = record;
 			state.modelHistory = [record];
+			initialModel = record;
 		} else {
 			state.currentModel = null;
 			state.modelHistory = [];
+			initialModel = null;
 		}
 	};
 
@@ -126,6 +131,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		const record = modelRecord(ctx.model, latestTurnIndex);
 		state.currentModel = record;
 		state.modelHistory = [record];
+		initialModel = record;
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
@@ -170,8 +176,8 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 	});
 
 	pi.on("before_agent_start", (event) => {
-		const systemPrompt = state.currentModel
-			? `${event.systemPrompt}\n\n${buildModelIdentityBlock(state.currentModel)}`
+		const systemPrompt = initialModel
+			? `${event.systemPrompt}\n\n${buildModelIdentityBlock(initialModel)}`
 			: undefined;
 
 		if (pendingForNextTurn) {
