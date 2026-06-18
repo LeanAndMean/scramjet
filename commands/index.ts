@@ -9,8 +9,7 @@ import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.ts";
 // Stage 9 / F6,F7,F19: filesystem-discovery error handling. These helpers
 // used to swallow all errors silently; now they collect human-readable
 // warnings through an out-parameter so the `resources_discover` hook can
-// surface them via `console.warn` (or, for a hook-level crash, a single
-// "[scramjet/discovery] failed" message). ENOENT is still treated as
+// surface them through the Scramjet logger. ENOENT is still treated as
 // "absent and fine" — only unexpected errors (EACCES, EIO, …) are reported.
 function safeReaddir(dir: string, warnings: string[]): { name: string; isDirectory: boolean }[] {
 	let raw: ReturnType<typeof readdirSync>;

@@ -144,7 +144,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				if (state.lifecycle.phase === "probing") {
 					const result = transition(state.lifecycle, { type: "probe-self-healed" });
 					if (result.ok) applyTransition(state, result);
-					console.warn("scramjet: status probe turn never completed; auto-continue paused");
+					state.logger.warn("probe", "status probe turn never completed; auto-continue paused", {
+						phase: state.lifecycle.phase,
+					});
 				}
 			}, PROBE_WATCHDOG_MS);
 		}
@@ -208,9 +210,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
 				armProbeWatchdog();
 			} catch (err) {
+				const message = (err as Error).message;
 				const result = transition(state.lifecycle, { type: "probe-self-healed" });
 				if (result.ok) applyTransition(state, result);
-				console.warn(`scramjet: status probe failed to send (${(err as Error).message}); auto-continue paused`);
+				state.logger.warn("probe", `status probe failed to send (${message}); auto-continue paused`, {
+					error: message,
+				});
 			}
 		}, 0);
 	}
@@ -269,9 +274,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			.catch((err) => {
 				if (selectorId !== activeSelectorId) {
 					if (!isExpectedSelectorCancellation(err)) {
-						console.warn(
-							`scramjet: stale next-step selector failed (${selectorErrorMessage(err)}); failure ignored`,
-						);
+						const message = selectorErrorMessage(err);
+						state.logger.warn("dispatch", `stale next-step selector failed (${message}); failure ignored`, {
+							error: message,
+						});
 					}
 					return;
 				}
@@ -479,7 +485,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				clearProbeWatchdog();
 				const result = transition(state.lifecycle, { type: "probe-self-healed" });
 				if (result.ok) applyTransition(state, result);
-				console.warn("scramjet: status probe turn ended without a valid status report; auto-continue paused");
+				state.logger.warn("probe", "status probe turn ended without a valid status report; auto-continue paused", {
+					phase: state.lifecycle.phase,
+				});
 				return;
 			}
 			case "reported": {

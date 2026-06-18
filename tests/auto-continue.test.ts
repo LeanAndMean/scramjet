@@ -12,6 +12,7 @@ import {
 	replayHistory,
 	USER_INPUT_PARKED_TYPE,
 } from "../history.ts";
+import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import { getActiveCommand } from "../phase-machine.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
@@ -34,6 +35,12 @@ function defWithPolicy(name: string, policy: NextStepPolicy | undefined, body = 
 
 function registryWith(...defs: CommandDef[]) {
 	return new Map(defs.map((def) => [def.name, def] as const));
+}
+
+function logMessages(pi: any): string[] {
+	return pi.appended
+		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE)
+		.map((entry: any) => entry.data.message);
 }
 
 // State as it stands when a top-level command's answer turn is in flight:
@@ -160,6 +167,7 @@ function fakeCtx({
 
 function bootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } = {}) {
 	const bag = recordingPi();
+	state.logger = createLogger(bag.pi);
 	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
 	registerCommandStatusTool(bag.pi, state);
 	registerAutoContinue(bag.pi, state);
@@ -302,7 +310,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = bootstrap(state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Answer turn → probing + probe fires.
 			bag.pi.isStreaming = true;
@@ -317,12 +324,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.lifecycle.phase).toBe("dormant");
 			expect(ctxBag.dispatched).toEqual([]);
 			// F1: the silent self-heal now leaves a log breadcrumb like its siblings.
-			expect(warnSpy).toHaveBeenCalledTimes(1);
-			expect(warnSpy.mock.calls[0][0]).toContain("without a valid status report");
+			expect(logMessages(bag.pi)).toHaveLength(1);
+			expect(logMessages(bag.pi)[0]).toContain("without a valid status report");
 			// No second probe scheduled.
 			await vi.advanceTimersByTimeAsync(0);
 			expect(bag.pi.sent).toHaveLength(1);
-			warnSpy.mockRestore();
 		});
 
 		it("does not probe for an ordinary turn with no active command (phase idle)", async () => {
@@ -344,7 +350,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			// Model the Node uncaughtException hazard: sendMessage returns void, so a
 			// throw on the deferred tick would otherwise leave the phase at "probing".
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			bag.pi.sendMessage = () => {
 				throw new Error("send boom");
 			};
@@ -359,9 +364,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// The throw is caught: the lifecycle self-heals to dormant (command
 			// stays associated for a later interactive reply).
 			expect(state.lifecycle.phase).toBe("dormant");
-			expect(warnSpy).toHaveBeenCalledTimes(1);
-			expect(warnSpy.mock.calls[0][0]).toContain("status probe failed");
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toHaveLength(1);
+			expect(logMessages(bag.pi)[0]).toContain("status probe failed");
 		});
 
 		it("self-heals to idle via the watchdog if the probe turn never completes (F1)", async () => {
@@ -369,7 +373,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const def = defWithPolicy("a:cmd", policy);
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = bootstrap(state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Answer turn ends → probe fires and the liveness watchdog is armed.
 			bag.pi.isStreaming = true;
@@ -386,16 +389,14 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			expect(state.lifecycle.phase).toBe("dormant");
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledTimes(1);
-			expect(warnSpy.mock.calls[0][0]).toContain("never completed");
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toHaveLength(1);
+			expect(logMessages(bag.pi)[0]).toContain("never completed");
 		});
 
 		it("does not fire the watchdog once the probe turn has reported (F1)", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Full two-phase round trip: the probe turn reports and ends, which clears
 			// the watchdog. A later timer advance must not re-trigger a self-heal.
@@ -409,8 +410,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			await vi.advanceTimersByTimeAsync(30_000);
 
-			expect(warnSpy).not.toHaveBeenCalled();
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toEqual([]);
 		});
 	});
 
@@ -1096,7 +1096,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
 			registerHistory(bag.pi, state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Park at waiting via freetext.
 			state.lifecycle = { phase: "waiting", command: "a:cmd" };
@@ -1119,7 +1118,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(bag.pi.sent.length).toBe(sentBefore);
 			expect(ctxBag.dispatched).toEqual([]);
-			warnSpy.mockRestore();
 		});
 	});
 
@@ -1355,7 +1353,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			let rejectSelector: (err: unknown) => void = () => {};
 			ctxBag.ctx.ui.custom = () =>
 				new Promise((_resolve, reject) => {
@@ -1374,17 +1371,15 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await flushMicrotasks();
 
 			expect(ctxBag.notifications).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledTimes(1);
-			expect(warnSpy.mock.calls[0][0]).toContain("stale next-step selector failed");
-			expect(warnSpy.mock.calls[0][0]).toContain("late selector boom");
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toHaveLength(1);
+			expect(logMessages(bag.pi)[0]).toContain("stale next-step selector failed");
+			expect(logMessages(bag.pi)[0]).toContain("late selector boom");
 		});
 
 		it("keeps stale abort selector failures quiet", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			let rejectSelector: (err: unknown) => void = () => {};
 			ctxBag.ctx.ui.custom = () =>
 				new Promise((_resolve, reject) => {
@@ -1403,15 +1398,13 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await flushMicrotasks();
 
 			expect(ctxBag.notifications).toEqual([]);
-			expect(warnSpy).not.toHaveBeenCalled();
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toEqual([]);
 		});
 
 		it("logs non-stringifiable stale selector failures", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			let rejectSelector: (err: unknown) => void = () => {};
 			ctxBag.ctx.ui.custom = () =>
 				new Promise((_resolve, reject) => {
@@ -1434,9 +1427,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await flushMicrotasks();
 
 			expect(ctxBag.notifications).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledTimes(1);
-			expect(warnSpy.mock.calls[0][0]).toContain("<non-stringifiable rejection>");
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toHaveLength(1);
+			expect(logMessages(bag.pi)[0]).toContain("<non-stringifiable rejection>");
 		});
 
 		it("logs stale selector Error objects with throwing message getters", async () => {
@@ -1448,7 +1440,6 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 			let rejectSelector: (err: unknown) => void = () => {};
 			ctxBag.ctx.ui.custom = () =>
 				new Promise((_resolve, reject) => {
@@ -1467,9 +1458,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await flushMicrotasks();
 
 			expect(ctxBag.notifications).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledTimes(1);
-			expect(warnSpy.mock.calls[0][0]).toContain("<non-stringifiable rejection>");
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toHaveLength(1);
+			expect(logMessages(bag.pi)[0]).toContain("<non-stringifiable rejection>");
 		});
 
 		it("selector creation failure warns and does not dispatch", async () => {
@@ -1627,6 +1617,7 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 
 	function fullBootstrap(state: ScramjetState) {
 		const bag = recordingPi();
+		state.logger = createLogger(bag.pi);
 		const ctxBag = fakeCtx({ hasUI: true, isStreaming: () => bag.pi.isStreaming });
 		registerCommandStatusTool(bag.pi, state);
 		registerUserInputTool(bag.pi, state);
@@ -1644,7 +1635,6 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 		const def = defWithPolicy("a:cmd", policy);
 		const state = runningState(def);
 		const { bag, ctxBag, callUserInput } = fullBootstrap(state);
-		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 		// Step 1: command is running, agent works and ends its turn.
 		expect(state.lifecycle.phase).toBe("running");
@@ -1673,8 +1663,6 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 		const mockCtx = { ui: { custom: () => Promise.resolve("yes") } };
 		const result = await callUserInput({ type: "confirm", message: "Proceed with the plan?" }, mockCtx);
 		expect(result.details.error).not.toBe("out-of-phase");
-
-		warnSpy.mockRestore();
 	});
 });
 
@@ -1685,6 +1673,7 @@ describe("multi-path probe integration", () => {
 	// Helper: bootstrap with user-input tool registered alongside status+auto-continue.
 	function fullBootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } = {}) {
 		const bag = recordingPi();
+		state.logger = createLogger(bag.pi);
 		const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
 		registerCommandStatusTool(bag.pi, state);
 		registerUserInputTool(bag.pi, state);
@@ -1942,7 +1931,6 @@ describe("multi-path probe integration", () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = fullBootstrap(state, { hasUI: false });
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Answer turn ends → probe fires, watchdog armed
 			await fireProbe(bag, ctxBag);
@@ -1951,15 +1939,13 @@ describe("multi-path probe integration", () => {
 			// No tool call, no agent_end — watchdog fires, self-heals to dormant
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(state.lifecycle.phase).toBe("dormant");
-			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("never completed"));
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi).some((message) => message.includes("never completed"))).toBe(true);
 		});
 
 		it("watchdog is suspended during continuing and re-armed after", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			await fireProbe(bag, ctxBag);
 			expect(state.lifecycle.phase).toBe("probing");
@@ -1971,15 +1957,13 @@ describe("multi-path probe integration", () => {
 			// Advancing past the watchdog window shouldn't fire it (phase is running)
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(state.lifecycle.phase).toBe("running");
-			expect(warnSpy).not.toHaveBeenCalled();
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toEqual([]);
 		});
 
 		it("watchdog is suspended during get_scramjet_user_input and not re-armed after running resumes", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, callUserInput } = fullBootstrap(state);
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			await fireProbe(bag, ctxBag);
 			expect(state.lifecycle.phase).toBe("probing");
@@ -1990,15 +1974,13 @@ describe("multi-path probe integration", () => {
 
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(state.lifecycle.phase).toBe("running");
-			expect(warnSpy).not.toHaveBeenCalled();
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toEqual([]);
 		});
 
 		it("watchdog does not fire after a completed report", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			await simulateTwoTurns(bag, ctxBag, report, {
 				status: "completed",
@@ -2008,8 +1990,7 @@ describe("multi-path probe integration", () => {
 
 			await vi.advanceTimersByTimeAsync(30_000);
 			expect(state.lifecycle.phase).toBe("idle");
-			expect(warnSpy).not.toHaveBeenCalled();
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi)).toEqual([]);
 		});
 	});
 
@@ -2018,7 +1999,6 @@ describe("multi-path probe integration", () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = fullBootstrap(state, { hasUI: false });
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Answer turn ends → probe fires
 			await fireProbe(bag, ctxBag);
@@ -2028,15 +2008,13 @@ describe("multi-path probe integration", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			expect(state.lifecycle.phase).toBe("dormant");
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("without a valid status report"));
-			warnSpy.mockRestore();
+			expect(logMessages(bag.pi).some((message) => message.includes("without a valid status report"))).toBe(true);
 		});
 
 		it("self-heal does not re-probe (no infinite loop)", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = fullBootstrap(state, { hasUI: false });
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
 			// Answer turn → probe → self-heal to dormant
 			await fireProbe(bag, ctxBag);
@@ -2048,7 +2026,6 @@ describe("multi-path probe integration", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(bag.pi.sent.length).toBe(sentAfterHeal);
-			warnSpy.mockRestore();
 		});
 	});
 });

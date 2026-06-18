@@ -1,6 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
 import { registerSubagentOutputAdvisor } from "../subagent-output-advisor.ts";
 import { freshState, recordingPi } from "./helpers.ts";
+
+function logMessages(pi: any): string[] {
+	return pi.appended
+		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE)
+		.map((entry: any) => entry.data.message);
+}
+
+function freshRecordingState(pi: any, overrides = {}) {
+	return freshState({ logger: createLogger(pi), ...overrides });
+}
 
 describe("registerSubagentOutputAdvisor — registration", () => {
 	it("registers exactly one tool_result handler", () => {
@@ -12,16 +23,6 @@ describe("registerSubagentOutputAdvisor — registration", () => {
 });
 
 describe("registerSubagentOutputAdvisor — (no output) detection", () => {
-	let warnSpy: ReturnType<typeof vi.spyOn>;
-
-	beforeEach(() => {
-		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-	});
-
-	afterEach(() => {
-		warnSpy.mockRestore();
-	});
-
 	function makeResult(overrides: Record<string, unknown> = {}) {
 		return {
 			type: "tool_result",
@@ -36,16 +37,15 @@ describe("registerSubagentOutputAdvisor — (no output) detection", () => {
 	}
 
 	it("warns and pushes a sidebar entry on a literal (no output) result from subagent", async () => {
-		const state = freshState();
 		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi);
 		registerSubagentOutputAdvisor(pi, state);
 		const handler = handlers.get("tool_result")![0] as any;
 
 		await handler(makeResult());
 
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-		const message = String(warnSpy.mock.calls[0][0]);
-		expect(message).toContain("[scramjet]");
+		expect(logMessages(pi)).toHaveLength(1);
+		const message = logMessages(pi)[0];
 		expect(message).toContain("advisory");
 		expect(message).toContain("mach12:code-reviewer");
 		expect(state.sidebarLog).toHaveLength(1);
@@ -55,26 +55,26 @@ describe("registerSubagentOutputAdvisor — (no output) detection", () => {
 	});
 
 	it("does not fire when the subagent returned real content", async () => {
-		const state = freshState();
 		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi);
 		registerSubagentOutputAdvisor(pi, state);
 		const handler = handlers.get("tool_result")![0] as any;
 
 		await handler(makeResult({ content: [{ type: "text", text: "Findings: nothing suspicious" }] }));
 
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 		expect(state.sidebarLog).toEqual([]);
 	});
 
 	it("does not fire on (no output) from a different tool", async () => {
-		const state = freshState();
 		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi);
 		registerSubagentOutputAdvisor(pi, state);
 		const handler = handlers.get("tool_result")![0] as any;
 
 		await handler(makeResult({ toolName: "bash" }));
 
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 		expect(state.sidebarLog).toEqual([]);
 	});
 
@@ -82,20 +82,20 @@ describe("registerSubagentOutputAdvisor — (no output) detection", () => {
 		// Upstream's error path emits e.g. "Agent failed: (no output)" — that
 		// already surfaces an error in the calling agent's context. The advisor
 		// targets only the silent success path (exact match on "(no output)").
-		const state = freshState();
 		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi);
 		registerSubagentOutputAdvisor(pi, state);
 		const handler = handlers.get("tool_result")![0] as any;
 
 		await handler(makeResult({ content: [{ type: "text", text: "Agent failed: (no output)" }], isError: true }));
 
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 		expect(state.sidebarLog).toEqual([]);
 	});
 
 	it("extracts the agent name from chain-mode input", async () => {
-		const state = freshState();
 		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi);
 		registerSubagentOutputAdvisor(pi, state);
 		const handler = handlers.get("tool_result")![0] as any;
 
@@ -110,33 +110,33 @@ describe("registerSubagentOutputAdvisor — (no output) detection", () => {
 			}),
 		);
 
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-		const message = String(warnSpy.mock.calls[0][0]);
+		expect(logMessages(pi)).toHaveLength(1);
+		const message = logMessages(pi)[0];
 		expect(message).toContain("chain ending in mach12:planner");
 		expect(state.sidebarLog).toHaveLength(1);
 		expect(state.sidebarLog[0].command).toContain("chain ending in mach12:planner");
 	});
 
 	it("falls back to <unknown> when the input shape lacks a recognizable agent name", async () => {
-		const state = freshState();
 		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi);
 		registerSubagentOutputAdvisor(pi, state);
 		const handler = handlers.get("tool_result")![0] as any;
 
 		await handler(makeResult({ input: { tasks: [{ agent: "scout", task: "x" }] } }));
 
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-		expect(String(warnSpy.mock.calls[0][0])).toContain("<unknown>");
+		expect(logMessages(pi)).toHaveLength(1);
+		expect(logMessages(pi)[0]).toContain("<unknown>");
 	});
 
 	it("records depth from the active delegate stack", async () => {
-		const state = freshState({
+		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi, {
 			delegateStack: [
 				{ commandName: "outer", depth: 0 },
 				{ commandName: "inner", depth: 1 },
 			],
 		});
-		const { pi, handlers } = recordingPi();
 		registerSubagentOutputAdvisor(pi, state);
 		const handler = handlers.get("tool_result")![0] as any;
 

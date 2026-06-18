@@ -78,7 +78,11 @@ export function recordCommandInvocation(
 	if (depth === 0) {
 		const result = transition(state.lifecycle, { type: "command-start", command: name });
 		if (!result.ok) {
-			console.warn(`[scramjet] illegal lifecycle transition: ${result.from} + command-start`);
+			state.logger.warn("lifecycle", `illegal lifecycle transition: ${result.from} + command-start`, {
+				from: result.from,
+				event: "command-start",
+				command: name,
+			});
 			return;
 		}
 		state.lifecycle = result.state;

@@ -138,8 +138,10 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 		}),
 		async execute(_toolCallId, params) {
 			if (state.lifecycle.phase !== "probing") {
-				console.warn(
-					`scramjet: report_scramjet_command_status called out of phase (phase=${state.lifecycle.phase}); report ignored`,
+				state.logger.warn(
+					"status",
+					`report_scramjet_command_status called out of phase (phase=${state.lifecycle.phase}); report ignored`,
+					{ phase: state.lifecycle.phase },
 				);
 				const details: CommandStatusDetails = { error: "out-of-phase", phase: state.lifecycle.phase };
 				return {
@@ -160,7 +162,10 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				state.suspendProbeWatchdog?.();
 				const result = transition(state.lifecycle, { type: "continuing" });
 				if (!result.ok) {
-					console.warn(`[scramjet] illegal lifecycle transition: ${result.from} + continuing`);
+					state.logger.warn("status", `illegal lifecycle transition: ${result.from} + continuing`, {
+						from: result.from,
+						event: "continuing",
+					});
 					const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.lifecycle.phase };
 					return {
 						content: [{ type: "text", text: "Continuing transition failed." }],

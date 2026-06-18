@@ -8,6 +8,7 @@ import { parseCommandFile } from "../commands/loader.ts";
 import { registerDelegateTool } from "../delegate.ts";
 import { registerHistory } from "../history.ts";
 import scramjet from "../index.ts";
+import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
 import { getActiveCommand } from "../phase-machine.ts";
 import { registerScramjetCommand } from "../scramjet-command.ts";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
@@ -45,6 +46,12 @@ function loadCommand(basename: string): CommandDef {
 
 function seedRegistry(defs: CommandDef[]): ScramjetState {
 	return freshState({ registry: new Map(defs.map((d) => [d.name, d])) });
+}
+
+function logMessages(pi: any): string[] {
+	return pi.appended
+		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE)
+		.map((entry: any) => entry.data.message);
 }
 
 describe("integration smoke — delegate against real mach12 subroutines", () => {
@@ -102,16 +109,6 @@ describe("integration smoke — delegate against real mach12 subroutines", () =>
 });
 
 describe("integration smoke — advisory warning against real subroutine scope", () => {
-	let warnSpy: ReturnType<typeof vi.spyOn>;
-
-	beforeEach(() => {
-		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-	});
-
-	afterEach(() => {
-		warnSpy.mockRestore();
-	});
-
 	it("fires the advisory warning for a tool outside the delegated frame's allowed-tools", async () => {
 		// gh-issue-read declares allowed-tools: [bash] -- a tight scope that
 		// makes "Edit" obviously out-of-scope. Using a real subroutine confirms
@@ -123,6 +120,7 @@ describe("integration smoke — advisory warning against real subroutine scope",
 
 		const state = seedRegistry([def]);
 		const { pi, tools, handlers } = recordingPi();
+		state.logger = createLogger(pi);
 		registerDelegateTool(pi, state);
 		registerToolCallAdvisor(pi, state);
 		const delegateTool = tools[0];
@@ -140,9 +138,8 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		const toolCallHandler = handlers.get("tool_call")![0] as any;
 		await toolCallHandler({ type: "tool_call", toolCallId: "x", toolName: "Edit", input: {} });
 
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-		const message = String(warnSpy.mock.calls[0][0]);
-		expect(message).toContain("[scramjet]");
+		expect(logMessages(pi)).toHaveLength(1);
+		const message = logMessages(pi)[0];
 		expect(message).toContain("advisory");
 		expect(message).toContain("Edit");
 		expect(message).toContain("mach12:gh-issue-read");
@@ -154,6 +151,7 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		const def = loadCommand("gh-issue-read");
 		const state = seedRegistry([def]);
 		const { pi, tools, handlers } = recordingPi();
+		state.logger = createLogger(pi);
 		registerDelegateTool(pi, state);
 		registerToolCallAdvisor(pi, state);
 
@@ -164,7 +162,7 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		const toolCallHandler = handlers.get("tool_call")![0] as any;
 		await toolCallHandler({ type: "tool_call", toolCallId: "x", toolName: "bash", input: {} });
 
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 	});
 });
 

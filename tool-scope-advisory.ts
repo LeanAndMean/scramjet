@@ -17,8 +17,15 @@ export function registerToolCallAdvisor(pi: ExtensionAPI, state: ScramjetState) 
 		if (top.effectiveAllowedTools === undefined) return;
 		if (event.toolName === "delegate") return;
 		if (top.effectiveAllowedTools.includes(event.toolName)) return;
-		console.warn(
-			`[scramjet] advisory: tool '${event.toolName}' called inside delegate frame '${top.commandName}' (depth=${top.depth}); not in allowed-tools=[${top.effectiveAllowedTools.join(", ")}]`,
+		state.logger.warn(
+			"scope",
+			`advisory: tool '${event.toolName}' called inside delegate frame '${top.commandName}' (depth=${top.depth}); not in allowed-tools=[${top.effectiveAllowedTools.join(", ")}]`,
+			{
+				toolName: event.toolName,
+				commandName: top.commandName,
+				depth: top.depth,
+				allowedTools: top.effectiveAllowedTools,
+			},
 		);
 	});
 }

@@ -83,8 +83,12 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 		},
 		async execute(_toolCallId, params, _resource, _read, ctx) {
 			if (!ALLOWED_PHASES.has(state.lifecycle.phase)) {
-				console.warn(
-					`scramjet: get_scramjet_user_input called out of phase (phase=${state.lifecycle.phase}); rejected`,
+				state.logger.warn(
+					"input",
+					`get_scramjet_user_input called out of phase (phase=${state.lifecycle.phase}); rejected`,
+					{
+						phase: state.lifecycle.phase,
+					},
 				);
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
