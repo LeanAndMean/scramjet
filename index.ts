@@ -32,6 +32,7 @@ import { registerCommandLoader } from "./commands/index.ts";
 import { registerDelegateTool } from "./delegate.ts";
 import { registerDiagramTool } from "./diagram/diagram-tool.ts";
 import { registerHistory } from "./history.ts";
+import { registerModelIdentity } from "./model-identity.ts";
 import { registerPrIndicator } from "./pr-indicator.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.ts";
@@ -48,6 +49,8 @@ export default function scramjet(pi: ExtensionAPI) {
 		delegateStack: [],
 		pendingForcedDispatch: null,
 		lifecycle: { phase: "idle" },
+		currentModel: null,
+		modelHistory: [],
 		autonomyConfigPath: defaultConfigPath(),
 	};
 
@@ -61,6 +64,7 @@ export default function scramjet(pi: ExtensionAPI) {
 	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);
 	registerCommandLoader(pi, state);
+	registerModelIdentity(pi, state);
 	registerHistory(pi, state);
 	registerPrIndicator(pi);
 	registerBaseDirectives(pi);
