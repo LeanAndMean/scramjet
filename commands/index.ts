@@ -105,24 +105,28 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 
 			const bridge = ensureAgentBridge(agentRegistry, [globalDir, projectDir]);
 			if (bridge.created.length > 0 && bridge.targetDir !== null) {
-				console.log(`[scramjet] bridged ${bridge.created.length} agent(s) into ${bridge.targetDir}`);
+				state.logger.debug("discovery", `bridged ${bridge.created.length} agent(s) into ${bridge.targetDir}`);
 			}
 			if (bridge.pruned.length > 0 && bridge.targetDir !== null) {
-				console.log(`[scramjet] pruned ${bridge.pruned.length} stale agent symlink(s) from ${bridge.targetDir}`);
+				state.logger.debug(
+					"discovery",
+					`pruned ${bridge.pruned.length} stale agent symlink(s) from ${bridge.targetDir}`,
+				);
 			}
 
 			for (const warning of discoveryWarnings) {
-				console.warn(warning);
+				state.logger.warn("discovery", warning);
 			}
 			for (const warning of [...warnings, ...agentWarnings, ...bridge.warnings]) {
-				console.warn(`[scramjet] ${warning}`);
+				state.logger.warn("discovery", warning);
 			}
 			const promptPaths: string[] = [];
 			for (const def of registry.values()) promptPaths.push(def.filePath);
 			return { promptPaths };
 		} catch (err) {
-			console.warn(
-				`[scramjet/discovery] failed: ${(err as Error).message}; no scramjet commands will be available this session`,
+			state.logger.warn(
+				"discovery",
+				`failed: ${(err as Error).message}; no scramjet commands will be available this session`,
 			);
 			return { promptPaths: [] };
 		}

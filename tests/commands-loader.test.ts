@@ -13,6 +13,7 @@ import {
 	parseAllowedTools,
 	parseCommandFile,
 } from "../commands/loader.ts";
+import { createLogger } from "../logger.ts";
 import type { AgentDef, CommandDef } from "../types.ts";
 import { freshState } from "./helpers.ts";
 
@@ -23,14 +24,18 @@ type Handler = (event: unknown, ctx?: unknown) => unknown;
 
 function recordingPi() {
 	const handlers = new Map<string, Handler[]>();
+	const appended: { customType: string; data: unknown }[] = [];
 	const pi: any = {
 		on(event: string, handler: Handler) {
 			const list = handlers.get(event) ?? [];
 			list.push(handler);
 			handlers.set(event, list);
 		},
+		appendEntry(customType: string, data: unknown) {
+			appended.push({ customType, data });
+		},
 	};
-	return { pi, handlers };
+	return { pi, handlers, appended };
 }
 
 describe("parseAllowedTools — input shapes", () => {
@@ -218,8 +223,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 	let originalCache: string | undefined;
 	let originalAgentDir: string | undefined;
 	let agentDirSandbox: string;
-	let warnSpy: ReturnType<typeof vi.spyOn>;
-	let logSpy: ReturnType<typeof vi.spyOn>;
+	let stderrSpy: { mockRestore(): void };
 
 	beforeEach(() => {
 		originalCache = process.env.SCRAMJET_CACHE;
@@ -228,8 +232,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		// fixture-backed runs never touch the user's real ~/.pi/agent/agents/.
 		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-loader-agentdir-"));
 		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
-		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 	});
 
 	afterEach(() => {
@@ -238,8 +241,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		rmSync(agentDirSandbox, { recursive: true, force: true });
-		warnSpy.mockRestore();
-		logSpy.mockRestore();
+		stderrSpy.mockRestore();
 	});
 
 	it("registers exactly one resources_discover handler", () => {
@@ -251,8 +253,8 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 
 	it("populates state.registry from global + project fixtures", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
-		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		expect(handler).toBeDefined();
@@ -284,7 +286,9 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 			expect(p.endsWith(".md")).toBe(true);
 		}
 
-		const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+		const warnings = appended
+			.filter((e) => (e.data as any).level === "warn")
+			.map((e) => (e.data as any).message as string);
 		expect(warnings.some((m) => m.includes("issue-plan.md") && m.includes("mach12:"))).toBe(true);
 		expect(warnings.some((m) => m.includes("mach12:broken"))).toBe(true);
 		expect(warnings.some((m) => m.includes("project") && m.includes("mach12:issue-plan"))).toBe(true);
@@ -293,7 +297,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 	it("rebuilds the registry on each handler invocation", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
 		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "startup" });
@@ -311,7 +315,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 	it("handles missing global root gracefully", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "does-not-exist");
 		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		const result = handler?.({
@@ -326,7 +330,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 	it("handles missing project root gracefully", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
 		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		const result = handler?.({
@@ -486,16 +490,14 @@ describe("registerCommandLoader — agent discovery integration", () => {
 	let originalCache: string | undefined;
 	let originalAgentDir: string | undefined;
 	let agentDirSandbox: string;
-	let warnSpy: ReturnType<typeof vi.spyOn>;
-	let logSpy: ReturnType<typeof vi.spyOn>;
+	let stderrSpy: { mockRestore(): void };
 
 	beforeEach(() => {
 		originalCache = process.env.SCRAMJET_CACHE;
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-agent-discovery-"));
 		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
-		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-		logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 	});
 
 	afterEach(() => {
@@ -504,14 +506,13 @@ describe("registerCommandLoader — agent discovery integration", () => {
 		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
 		rmSync(agentDirSandbox, { recursive: true, force: true });
-		warnSpy.mockRestore();
-		logSpy.mockRestore();
+		stderrSpy.mockRestore();
 	});
 
 	it("populates state.agentRegistry from global + project fixtures", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
 		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({
@@ -530,8 +531,8 @@ describe("registerCommandLoader — agent discovery integration", () => {
 
 	it("skips malformed agents and logs warnings", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
-		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({
@@ -540,15 +541,17 @@ describe("registerCommandLoader — agent discovery integration", () => {
 			reason: "startup",
 		});
 
-		const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+		const warnings = appended
+			.filter((e) => (e.data as any).level === "warn")
+			.map((e) => (e.data as any).message as string);
 		expect(warnings.some((m) => m.includes("broken-agent") && m.includes("name"))).toBe(true);
 		expect(warnings.some((m) => m.includes("wrong-prefix") && m.includes("mach12:"))).toBe(true);
 	});
 
 	it("global agents win over project-local on name collision", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
-		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({
@@ -559,14 +562,16 @@ describe("registerCommandLoader — agent discovery integration", () => {
 
 		const explorer = state.agentRegistry.get("mach12:test-explorer");
 		expect(explorer?.filePath).toContain("loader-global");
-		const warnings = warnSpy.mock.calls.map((c) => String(c[0]));
+		const warnings = appended
+			.filter((e) => (e.data as any).level === "warn")
+			.map((e) => (e.data as any).message as string);
 		expect(warnings.some((m) => m.includes("project") && m.includes("mach12:test-explorer"))).toBe(true);
 	});
 
 	it("rebuilds agent registry on each handler invocation", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
 		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "startup" });
@@ -580,7 +585,7 @@ describe("registerCommandLoader — agent discovery integration", () => {
 	it("handles missing agents directory gracefully", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "does-not-exist");
 		const { pi, handlers } = recordingPi();
-		const state = freshState();
+		const state = freshState({ logger: createLogger(pi) });
 		registerCommandLoader(pi, state);
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({

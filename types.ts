@@ -1,3 +1,4 @@
+import type { ScramjetLogger } from "./logger.ts";
 import type { LifecycleState } from "./phase-machine.ts";
 
 export interface NextStep {
@@ -125,4 +126,5 @@ export interface ScramjetState {
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
+	logger: ScramjetLogger;
 }

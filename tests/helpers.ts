@@ -1,3 +1,4 @@
+import { createLogger } from "../logger.ts";
 import type { LifecycleState } from "../phase-machine.ts";
 import type { ScramjetState } from "../types.ts";
 
@@ -15,6 +16,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
+		logger: createLogger({ appendEntry() {} } as any),
 		...overrides,
 	};
 }
