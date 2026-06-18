@@ -1,5 +1,6 @@
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerModelIdentity } from "../model-identity.ts";
+import { reconstructModelState, registerModelIdentity } from "../model-identity.ts";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.ts";
 
 function fakeModel(overrides: Record<string, unknown> = {}) {
@@ -357,5 +358,262 @@ describe("model_select debounce and delivery", () => {
 		const basHandler = handlers.get("before_agent_start")![0];
 		const basResult = (await basHandler({ systemPrompt: "BASE" })) as any;
 		expect(basResult.message).toBeUndefined();
+	});
+});
+
+function modelChangeEntry(provider: string, modelId: string, id?: string): SessionEntry {
+	return {
+		type: "model_change",
+		id: id ?? `mc-${Math.random()}`,
+		parentId: null,
+		timestamp: "0",
+		provider,
+		modelId,
+	} as any;
+}
+
+function messageEntry(role: "user" | "assistant", id?: string): SessionEntry {
+	return {
+		type: "message",
+		id: id ?? `msg-${Math.random()}`,
+		parentId: null,
+		timestamp: "0",
+		message: { role, content: "test" },
+	} as any;
+}
+
+describe("reconstructModelState", () => {
+	it("returns empty state when no model_change entries exist", () => {
+		const result = reconstructModelState([], undefined);
+		expect(result.currentModel).toBeNull();
+		expect(result.modelHistory).toEqual([]);
+		expect(result.diverged).toBe(false);
+	});
+
+	it("reconstructs a single model from one model_change entry", () => {
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const result = reconstructModelState(entries, undefined);
+
+		expect(result.currentModel).toEqual({
+			name: "claude-opus-4-6",
+			id: "claude-opus-4-6",
+			provider: "anthropic",
+			fromTurnIndex: 0,
+		});
+		expect(result.modelHistory).toHaveLength(1);
+		expect(result.diverged).toBe(false);
+	});
+
+	it("uses ctx.model name for the last entry when available", () => {
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const ctxModel = fakeModel({ id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" });
+		const result = reconstructModelState(entries, ctxModel);
+
+		expect(result.currentModel!.name).toBe("Claude Opus 4.6");
+		expect(result.currentModel!.id).toBe("claude-opus-4-6");
+	});
+
+	it("reconstructs multiple models with estimated turn indices", () => {
+		const entries = [
+			modelChangeEntry("anthropic", "claude-opus-4-6"),
+			messageEntry("user"),
+			messageEntry("assistant"),
+			messageEntry("user"),
+			messageEntry("assistant"),
+			modelChangeEntry("openai", "gpt-5-5"),
+			messageEntry("user"),
+			messageEntry("assistant"),
+			modelChangeEntry("anthropic", "claude-sonnet-4"),
+		];
+		const result = reconstructModelState(entries, undefined);
+
+		expect(result.modelHistory).toHaveLength(3);
+		expect(result.modelHistory[0]!.fromTurnIndex).toBe(0);
+		expect(result.modelHistory[1]!.fromTurnIndex).toBe(2);
+		expect(result.modelHistory[2]!.fromTurnIndex).toBe(3);
+		expect(result.currentModel!.id).toBe("claude-sonnet-4");
+	});
+
+	it("detects divergence when ctx.model differs from last entry", () => {
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const ctxModel = fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" });
+		const result = reconstructModelState(entries, ctxModel);
+
+		expect(result.diverged).toBe(true);
+		expect(result.currentModel!.id).toBe("gpt-5-5");
+		expect(result.currentModel!.name).toBe("GPT 5.5");
+		expect(result.modelHistory).toHaveLength(2);
+		expect(result.modelHistory[1]!.id).toBe("gpt-5-5");
+	});
+
+	it("does not detect divergence when ctx.model matches last entry", () => {
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const ctxModel = fakeModel({ id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" });
+		const result = reconstructModelState(entries, ctxModel);
+
+		expect(result.diverged).toBe(false);
+		expect(result.modelHistory).toHaveLength(1);
+	});
+
+	it("does not detect divergence when ctx.model is undefined", () => {
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const result = reconstructModelState(entries, undefined);
+
+		expect(result.diverged).toBe(false);
+	});
+
+	it("ignores non-model_change entries", () => {
+		const entries = [
+			messageEntry("user"),
+			messageEntry("assistant"),
+			{ type: "custom", id: "x", parentId: null, timestamp: "0", customType: "test", data: {} } as any,
+		];
+		const result = reconstructModelState(entries, undefined);
+
+		expect(result.currentModel).toBeNull();
+		expect(result.modelHistory).toEqual([]);
+	});
+});
+
+describe("resume reconstruction integration", () => {
+	function ctxWithBranchAndModel(entries: SessionEntry[], model?: any) {
+		return { sessionManager: { getBranch: () => entries }, model };
+	}
+
+	it("reconstructs model state on session_start with reason resume", async () => {
+		const { emit, state } = setup();
+		const entries = [
+			modelChangeEntry("anthropic", "claude-opus-4-6"),
+			messageEntry("user"),
+			messageEntry("assistant"),
+			modelChangeEntry("openai", "gpt-5-5"),
+		];
+		const ctx = ctxWithBranchAndModel(entries, fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" }));
+
+		await emit("session_start", { type: "session_start", reason: "resume" }, ctx);
+
+		expect(state.modelHistory).toHaveLength(2);
+		expect(state.currentModel!.id).toBe("gpt-5-5");
+		expect(state.currentModel!.name).toBe("GPT 5.5");
+	});
+
+	it("reconstructs model state on session_start with reason fork", async () => {
+		const { emit, state } = setup();
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const ctx = ctxWithBranchAndModel(entries, fakeModel());
+
+		await emit("session_start", { type: "session_start", reason: "fork" }, ctx);
+
+		expect(state.modelHistory).toHaveLength(1);
+		expect(state.currentModel!.name).toBe("Claude Opus 4.6");
+	});
+
+	it("keeps startup behavior for reason startup", async () => {
+		const { emit, state } = setup();
+
+		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
+
+		expect(state.modelHistory).toHaveLength(1);
+		expect(state.currentModel!.name).toBe("Claude Opus 4.6");
+		expect(state.currentModel!.fromTurnIndex).toBe(0);
+	});
+
+	it("reconstructs model state on session_tree", async () => {
+		const { emit, state } = setup();
+		const entries = [
+			modelChangeEntry("anthropic", "claude-opus-4-6"),
+			messageEntry("user"),
+			messageEntry("assistant"),
+			modelChangeEntry("openai", "gpt-5-5"),
+		];
+		const ctx = ctxWithBranchAndModel(entries, fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" }));
+
+		await emit("session_tree", { type: "session_tree", newLeafId: "leaf1", oldLeafId: "leaf0" }, ctx);
+
+		expect(state.modelHistory).toHaveLength(2);
+		expect(state.currentModel!.id).toBe("gpt-5-5");
+	});
+
+	it("detects divergence on resume and stores pendingForInput", async () => {
+		const { handlers, emit } = setup();
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const ctx = ctxWithBranchAndModel(entries, fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" }));
+
+		await emit("session_start", { type: "session_start", reason: "resume" }, ctx);
+
+		// Verify divergence is detected by checking input transform fires
+		const inputHandler = handlers.get("input")![0];
+		const result = (await inputHandler({ type: "input", text: "hello", source: "interactive" })) as any;
+
+		expect(result.action).toBe("transform");
+		expect(result.text).toContain("[scramjet] Model changed to: GPT 5.5 (ID: gpt-5-5).");
+		expect(result.text).toContain("hello");
+	});
+
+	it("does not set pendingForInput when model matches on resume", async () => {
+		const { handlers, emit } = setup();
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const ctx = ctxWithBranchAndModel(entries, fakeModel());
+
+		await emit("session_start", { type: "session_start", reason: "resume" }, ctx);
+
+		const inputHandler = handlers.get("input")![0];
+		const result = (await inputHandler({ type: "input", text: "hello", source: "interactive" })) as any;
+
+		expect(result).toBeUndefined();
+	});
+
+	it("resets history when branch has no model_change entries", async () => {
+		const { emit, state } = setup();
+		// First set up state
+		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
+		expect(state.currentModel).not.toBeNull();
+
+		// Now navigate to a branch with no model entries
+		const ctx = ctxWithBranchAndModel([], fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" }));
+		await emit("session_tree", { type: "session_tree", newLeafId: "leaf1", oldLeafId: "leaf0" }, ctx);
+
+		// Should reset and use ctx.model as initial
+		expect(state.currentModel!.id).toBe("gpt-5-5");
+		expect(state.currentModel!.name).toBe("GPT 5.5");
+		expect(state.modelHistory).toHaveLength(1);
+	});
+
+	it("resets to null when branch is empty and ctx.model is undefined", async () => {
+		const { emit, state } = setup();
+		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
+
+		const ctx = ctxWithBranchAndModel([], undefined);
+		await emit("session_tree", { type: "session_tree", newLeafId: "leaf1", oldLeafId: "leaf0" }, ctx);
+
+		expect(state.currentModel).toBeNull();
+		expect(state.modelHistory).toEqual([]);
+	});
+
+	it("clears pending flags on rebuild", async () => {
+		const { handlers, emit, state } = setup();
+		// Create a pending change from stage 2 behavior
+		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
+		state.lifecycle = { phase: "idle" };
+
+		vi.useFakeTimers();
+		const gpt5 = fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" });
+		await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+		vi.advanceTimersByTime(500);
+		vi.useRealTimers();
+
+		// Should have pending
+		const inputHandler = handlers.get("input")![0];
+		let result = (await inputHandler({ type: "input", text: "test", source: "interactive" })) as any;
+		expect(result?.action).toBe("transform");
+
+		// Now rebuild — this should clear any leftover pending flags
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const ctx = ctxWithBranchAndModel(entries, fakeModel());
+		await emit("session_start", { type: "session_start", reason: "resume" }, ctx);
+
+		// No pending change since ctx.model matches
+		result = (await inputHandler({ type: "input", text: "test2", source: "interactive" })) as any;
+		expect(result).toBeUndefined();
 	});
 });

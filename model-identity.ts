@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { ModelRecord, ScramjetState } from "./types.ts";
 
 type ActiveModel = NonNullable<ExtensionContext["model"]>;
@@ -27,6 +27,57 @@ function changeMessage(model: ModelRecord): string {
 	return `[scramjet] Model changed to: ${model.name} (ID: ${model.id}).`;
 }
 
+export interface ReconstructedModelState {
+	currentModel: ModelRecord | null;
+	modelHistory: ModelRecord[];
+	diverged: boolean;
+}
+
+export function reconstructModelState(
+	entries: readonly SessionEntry[],
+	ctxModel: ActiveModel | undefined,
+): ReconstructedModelState {
+	const history: ModelRecord[] = [];
+	let assistantCount = 0;
+
+	for (const entry of entries) {
+		if (entry.type === "message" && (entry as any).message?.role === "assistant") {
+			assistantCount++;
+		} else if (entry.type === "model_change") {
+			const mc = entry as { provider: string; modelId: string };
+			history.push({
+				name: mc.modelId,
+				id: mc.modelId,
+				provider: mc.provider,
+				fromTurnIndex: assistantCount,
+			});
+		}
+	}
+
+	if (history.length === 0) {
+		return { currentModel: null, modelHistory: [], diverged: false };
+	}
+
+	const last = history[history.length - 1]!;
+
+	if (ctxModel && ctxModel.id !== last.id) {
+		const divergedRecord: ModelRecord = {
+			name: ctxModel.name,
+			id: ctxModel.id,
+			provider: ctxModel.provider,
+			fromTurnIndex: assistantCount,
+		};
+		history.push(divergedRecord);
+		return { currentModel: divergedRecord, modelHistory: history, diverged: true };
+	}
+
+	if (ctxModel && ctxModel.id === last.id) {
+		last.name = ctxModel.name;
+	}
+
+	return { currentModel: last, modelHistory: history, diverged: false };
+}
+
 export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): void {
 	let latestTurnIndex = 0;
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -34,7 +85,38 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 	let pendingForInput = false;
 	let pendingForNextTurn = false;
 
-	pi.on("session_start", (_event, ctx) => {
+	const rebuild = (ctx: ExtensionContext) => {
+		pendingForInput = false;
+		pendingForNextTurn = false;
+		if (debounceTimer !== null) {
+			clearTimeout(debounceTimer);
+			debounceTimer = null;
+		}
+		pendingModel = null;
+
+		const branch = ctx.sessionManager.getBranch();
+		const result = reconstructModelState(branch, ctx.model);
+
+		if (result.currentModel) {
+			state.currentModel = result.currentModel;
+			state.modelHistory = result.modelHistory;
+			if (result.diverged) pendingForInput = true;
+		} else if (ctx.model) {
+			const record = modelRecord(ctx.model, latestTurnIndex);
+			state.currentModel = record;
+			state.modelHistory = [record];
+		} else {
+			state.currentModel = null;
+			state.modelHistory = [];
+		}
+	};
+
+	pi.on("session_start", (event, ctx) => {
+		if (event.reason === "resume" || event.reason === "fork") {
+			rebuild(ctx);
+			return;
+		}
+
 		if (!ctx.model) {
 			state.currentModel = null;
 			state.modelHistory = [];
@@ -44,6 +126,10 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		const record = modelRecord(ctx.model, latestTurnIndex);
 		state.currentModel = record;
 		state.modelHistory = [record];
+	});
+
+	pi.on("session_tree", (_event, ctx) => {
+		rebuild(ctx);
 	});
 
 	pi.on("model_select", (event) => {
