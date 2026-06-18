@@ -87,6 +87,10 @@ Replay must never restore transient live phases. Rebuild/session resume may reco
 
 Only the stable phase and command identity are reconstructed. Latest report payloads, timers, selector state, and dispatch timers are not replayed.
 
+## Runtime diagnosis
+
+All lifecycle phase transitions and decision points are instrumented via `state.logger.lifecycle(...)`. To diagnose why a transition did or didn't happen at runtime, query the session JSONL for `scramjet:log` entries. See `docs/logging.md` for the entry schema, query patterns, and a step-by-step diagnostic workflow.
+
 ## Design rationale
 
 The lifecycle union makes the command/status/counter combinations explicit without moving unrelated harness state into a larger workflow object. `dormant` is intentionally distinct from `idle`: it preserves current recovery behavior while preventing future code from treating every idle state as resumable. Timer handles remain closure-owned because they are resources, not durable lifecycle facts; tests should observe them through accessors rather than duplicated booleans.
