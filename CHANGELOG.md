@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.3 — Fix stale freetext tool contract descriptions
+
+### Fixed
+
+- `docs/command-authoring.md` — probe-turn guidance now distinguishes confirm/select (same-turn continuation) from freetext (parks at `waiting`, resumes on next user reply).
+- `user-input.ts` — `placeholder` schema description clarifies it is accepted for compatibility but unused by freetext.
+
+## 0.22.2 — Show freetext user-input prompts
+
+Freetext `get_scramjet_user_input` prompts now render the requested `message` in the tool call row before the command parks at `waiting`, so the user can see the question they need to answer in the standard editor (issue #166).
+
+### Fixed
+
+- `user-input.ts` — added a custom `renderCall` that displays the user-input prompt message while preserving the existing parked result and wait/resume lifecycle.
+- `docs/command-authoring.md`, `docs/scramjet-vision.md` — documented visible freetext prompts and the current wait/resume semantics.
+
 ## 0.22.1 — Add test-designer agent and planning workflow integration
 
 Adds a `mach12:test-designer` subagent that designs test strategies from requirements and architecture at planning time, distinct from the existing `mach12:test-analyzer` which reviews existing tests at review time. Integrates into the Mach 12 planning workflow with conditional dispatch, testability notes for bug reports, and soft test-first guidance during implementation (issue #159).

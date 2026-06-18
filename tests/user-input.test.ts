@@ -1,3 +1,4 @@
+import { initTheme, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { USER_INPUT_PARKED_TYPE } from "../history.ts";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../user-input.ts";
@@ -52,6 +53,19 @@ function mockUICtxWithFactory() {
 	};
 }
 
+const renderTheme = {
+	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
+function renderText(component: { render(width: number): string[] } | undefined): string {
+	return component?.render(120).join("\n") ?? "";
+}
+
+function visibleText(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 describe("registerUserInputTool — registration", () => {
 	it("registers exactly the get_scramjet_user_input tool", () => {
 		const { tools } = toolFor();
@@ -63,6 +77,52 @@ describe("registerUserInputTool — registration", () => {
 		const { tool } = toolFor();
 		expect(tool.promptSnippet).toBeDefined();
 		expect(tool.promptSnippet).toContain("get_scramjet_user_input");
+	});
+
+	it("has a custom call renderer", () => {
+		const { tool } = toolFor();
+		expect(tool.renderCall).toBeTypeOf("function");
+	});
+
+	it("renders the supplied message in the tool call row", () => {
+		const { tool } = toolFor();
+		const component = tool.renderCall(
+			{ type: "freetext", message: "What release title should I use?" },
+			renderTheme,
+			{},
+		);
+
+		expect(renderText(component)).toContain("What release title should I use?");
+	});
+
+	it("falls back to the tool name while args stream without a message", () => {
+		const { tool } = toolFor();
+		const component = tool.renderCall({}, renderTheme, {});
+
+		expect(renderText(component)).toContain("get_scramjet_user_input");
+	});
+
+	it("renders a freetext prompt alongside the parked result in Pi's tool row", () => {
+		initTheme(undefined, false);
+		const { tool } = toolFor();
+		const component = new ToolExecutionComponent(
+			"get_scramjet_user_input",
+			"call-id",
+			{ type: "freetext", message: "What should I name the release?" },
+			undefined,
+			tool,
+			{ requestRender: () => {} } as any,
+			process.cwd(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: JSON.stringify({ parked: true }) }], isError: false },
+			false,
+		);
+
+		const output = visibleText(component.render(120).join("\n"));
+		expect(output).toContain("What should I name the release?");
+		expect(output).toContain(JSON.stringify({ parked: true }));
+		expect(output.trim()).not.toBe(JSON.stringify({ parked: true }));
 	});
 
 	it("has the expected schema shape with type enum and flat optional fields", () => {

@@ -266,7 +266,7 @@ describe("buildProbeMessage", () => {
 		expect(probe).toContain("Choose one route");
 		expect(probe).toContain("`report_scramjet_command_status`");
 		expect(probe).toContain("`get_scramjet_user_input`");
-		expect(probe).toContain("continue the command work in this turn");
+		expect(probe).toContain("successful `confirm`/`select` responses");
 		expect(probe).toContain("`continuing`");
 		expect(probe).toContain("`completed`");
 		expect(probe).toContain("<scramjet-next-step>");
@@ -325,6 +325,16 @@ describe("buildProbeMessage", () => {
 			expect(probe).toContain("`continuing`");
 			expect(probe).toContain("`completed`");
 		}
+	});
+
+	it("distinguishes same-turn input from freetext and cancellation parking", () => {
+		const probe = buildProbeMessage({ mode: "forced", target: "b:target" }, "a:cmd");
+		expect(probe).toContain("successful `confirm`/`select` responses");
+		expect(probe).toContain("continue command work in this turn");
+		expect(probe).toContain("`freetext` and cancelled `confirm`/`select` terminate this turn");
+		expect(probe).toContain("park the command at `waiting`");
+		expect(probe).toContain("do not try to continue same-turn after those paths");
+		expect(probe).not.toContain("confirm/select/freetext");
 	});
 
 	it("escapes the command ID in the preamble", () => {

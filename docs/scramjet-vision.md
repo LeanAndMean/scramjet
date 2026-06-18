@@ -355,19 +355,26 @@ types:
 | Type       | Payload                                  | Harness behavior                                      |
 |------------|------------------------------------------|-------------------------------------------------------|
 | `confirm`  | `{ type: "confirm", message: string }`   | Shows a yes/no prompt; returns `{ confirmed: boolean }` |
-| `select`   | `{ type: "select", message: string, options: string[] }` | Shows a picker; returns `{ selected: string }` |
-| `freetext` | `{ type: "freetext", message: string, default?: string }` | Shows a text input; returns `{ text: string }` |
+| `select`   | `{ type: "select", message: string, options: { value, label, description? }[], recommended?: number }` | Shows a picker; returns `{ selected: string }` |
+| `freetext` | `{ type: "freetext", message: string, placeholder?: string }` | Shows `message` in the tool row, returns `{ parked: true }` with `terminate: true`, and waits for a standard-editor reply |
 
-Successful input **does not end the agent's turn**. The harness displays the
-appropriate UI, blocks until the user responds, and returns the result as
-a normal tool result. The agent continues executing with the answer in
-context — no phase transition, no probe, no re-dispatch. If the user cancels
-the prompt, the tool terminates the turn and parks the command in `waiting`.
+Successful confirm/select input **does not end the agent's turn**. The harness
+displays the appropriate UI, blocks until the user responds, and returns the
+result as a normal tool result. The agent continues executing with the answer in
+context. If the user cancels a confirm/select prompt, the tool terminates the
+turn and parks the command in `waiting`.
+
+Freetext is intentionally a wait/resume path. It does not open a TUI text input
+and does not return `{ text: string }`. Instead, the tool call renderer makes
+`message` visible in the transcript row, the tool result remains the
+machine-readable parked marker, and the user answers through the standard
+message editor on the next turn.
 
 This is the key distinction from `report_scramjet_command_status`: the status
 tool is a terminal lifecycle signal ("I'm done or stuck"), while
-`get_scramjet_user_input` is a within-turn request ("I need something from
-the user to continue").
+`get_scramjet_user_input` is a user-input request. Confirm/select can be
+within-turn on success; freetext and cancellation park the command in `waiting`
+for a later user reply.
 
 ##### The probe-as-router extension
 
@@ -409,9 +416,10 @@ the agent simply keeps working. No manual "continue" needed.
 The two tools are complementary:
 
 - **`get_scramjet_user_input`** — "I need something from the user to continue."
-  Within-turn on successful input; the harness collects input and returns it as
-  a tool result. If the user cancels, the turn ends and the command waits for a
-  later user reply.
+  Confirm/select collect input and return it as a tool result on success.
+  Freetext renders the prompt in the tool row, ends the turn, and parks the
+  command in `waiting` for a later standard-editor reply. Cancellation also
+  parks in `waiting`.
 - **`report_scramjet_command_status`** — "I'm done or stuck." Terminal lifecycle
   signal. The turn ends. Chaining may follow.
 
@@ -420,27 +428,32 @@ A command that needs user input has two paths to get it:
 - **Via probe (reliable path):** end the turn, receive the probe, then
   call `get_scramjet_user_input` from the probe turn.
 
-Both keep the command active, but the probe path has one extra lifecycle step:
-while the UI is pending, the harness suspends the active probe watchdog; after
-the tool returns, the phase transitions `probing → running` so the agent can
-continue work in that same turn.
+Both keep the command active. Confirm/select probe-time calls have one extra
+lifecycle step: while the UI is pending, the harness suspends the active probe
+watchdog; after a successful response, the phase transitions `probing → running`
+so the agent can continue work in that same turn. Freetext uses the same
+`waiting` park from either path.
 
 ##### Phase machine implications
 
-For proactive calls during normal command work, successful `get_scramjet_user_input`
+For proactive calls during normal command work, successful confirm/select input
 does not change the phase: it remains `running`, no status report is generated,
-and the agent's turn continues after the tool result returns. Cancellation
-transitions `running → waiting`, journals `scramjet:user-input-parked`, and
-terminates the turn.
+and the agent's turn continues after the tool result returns. Freetext and
+cancellation transition `running → waiting`, journal `scramjet:user-input-parked`,
+and terminate the turn.
 
-For probe-time calls, the tool is the handoff from status-check probing back to
-active command work:
+For probe-time confirm/select calls, the tool is the handoff from status-check
+probing back to active command work:
 
 - Phase remains `probing` while the UI is pending.
 - The probe watchdog is suspended and is not re-armed after the response.
-- After a successful tool response, the phase becomes `running`.
+- After a successful confirm/select response, the phase becomes `running`.
 - If the user cancels, the phase becomes `waiting` and the turn terminates.
 - The next `agent_end` schedules a fresh status probe only after successful input resumes command work.
+
+Probe-time freetext transitions `probing → waiting`, journals
+`scramjet:user-input-parked`, returns the parked marker with `terminate: true`,
+and resumes only when the user later replies normally.
 
 This keeps intra-command interactions within command execution while preserving
 the phase machine's turn-boundary lifecycle checks.
