@@ -89,7 +89,7 @@ Prepare the assessment body. It must include:
 - A reference to the review comment it is assessing (link to the specific comment URL recorded in Step 2).
 - Each finding with its classification and reasoning.
 - The staged implementation plan at the end.
-- Model attribution at the bottom -- identify yourself by your actual model name (e.g., "Assessed by <model name>").
+- Model attribution at the bottom -- use the model attribution from the Model Identity section of your system prompt (e.g., "Assessed by <model name>").
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
 
