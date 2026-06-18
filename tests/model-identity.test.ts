@@ -330,7 +330,9 @@ describe("model_select debounce and delivery", () => {
 		const after = (await basHandler({ systemPrompt: "BASE" })) as any;
 
 		expect(after.systemPrompt).toBe(before.systemPrompt);
-		expect(after.systemPrompt).toContain("Your model is: Claude Opus 4.6 (ID: claude-opus-4-6, provider: anthropic).");
+		expect(after.systemPrompt).toContain(
+			"Your model is: Claude Opus 4.6 (ID: claude-opus-4-6, provider: anthropic).",
+		);
 		expect(after.systemPrompt).not.toContain("GPT 5.5");
 	});
 
