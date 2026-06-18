@@ -1,10 +1,19 @@
 # Changelog
 
-## 0.22.4 — Test Pi API surface generation
+## 0.22.4 — Pi API surface reference
+
+Adds `docs/pi-api-surface.md`, a generated reference of all public exports from the four installed Pi packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`), kept in sync by a CI staleness guard (issue #168).
 
 ### Added
 
-- `tests/pi-api-surface-generate.test.ts` — black-box coverage for the Pi API surface generator, including package sections, representative signatures, generated model catalog exclusion, deterministic output, and version header checks.
+- `scripts/generate-pi-api-surface.js` — TypeScript compiler API script that resolves re-exports, follows aliases, and extracts full declaration text with docstrings into a per-package Markdown reference.
+- `docs/pi-api-surface.md` — generated reference with per-package sections, exports grouped by source module, type signatures in fenced code blocks, and a version header.
+- CI staleness guard — regenerates the file and fails on diff, ensuring the committed reference stays current with installed packages.
+- `tests/pi-api-surface-generate.test.ts` — black-box coverage verifying script execution, package section presence, type signatures, model catalog exclusion, deterministic output, and version header.
+
+### Changed
+
+- CLAUDE.md dependency orientation section — directs agents to read `docs/pi-api-surface.md` before proposing new capabilities and to regenerate it on Pi version bumps.
 
 ## 0.22.3 — Fix stale freetext tool contract descriptions
 
