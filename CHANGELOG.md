@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.22.3 — Fix stale freetext tool contract descriptions
+
+### Fixed
+
+- `docs/command-authoring.md` — probe-turn guidance now distinguishes confirm/select (same-turn continuation) from freetext (parks at `waiting`, resumes on next user reply).
+- `user-input.ts` — `placeholder` schema description clarifies it is accepted for compatibility but unused by freetext.
+
 ## 0.22.2 — Show freetext user-input prompts
 
 Freetext `get_scramjet_user_input` prompts now render the requested `message` in the tool call row before the command parks at `waiting`, so the user can see the question they need to answer in the standard editor (issue #166).

@@ -412,7 +412,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
 2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
    - Call `report_scramjet_command_status` with a status and stop the probe turn.
-   - Call `get_scramjet_user_input` if structured input is needed before continuing; after a successful input tool result, continue command work in that same turn. The phase returns to `running` without consuming the `continuing` status budget, so Scramjet will send another probe after the resumed work ends.
+   - Call `get_scramjet_user_input` if structured input is needed before continuing. For **confirm/select**, the tool blocks until the user responds and returns the answer in the same turn — continue command work immediately. The phase returns to `running` without consuming the `continuing` status budget, so Scramjet will send another probe after the resumed work ends. For **freetext**, the tool terminates the turn and parks the command at `waiting`; the user replies in the standard editor, and the command resumes on a new turn.
 
 ### Tool parameters
 

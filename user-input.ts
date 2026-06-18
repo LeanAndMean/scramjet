@@ -48,7 +48,10 @@ export const USER_INPUT_SCHEMA = Type.Object({
 		}),
 	),
 	placeholder: Type.Optional(
-		Type.String({ description: "For freetext type: placeholder hint text shown in the input." }),
+		Type.String({
+			description:
+				"For freetext type: placeholder hint text shown in the input. Accepted for compatibility but unused by freetext.",
+		}),
 	),
 });
 
