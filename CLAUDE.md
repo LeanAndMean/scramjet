@@ -12,7 +12,7 @@ npm run lint         # biome check .
 npx vitest run tests/command-status.test.ts   # single test file
 ```
 
-CI runs typecheck, build, test, lint, an `npm pack` round-trip smoke (installs the produced tarball globally and probes `scramjet --help`), and a postinstall smoke (against a temporary `XDG_DATA_HOME`) on ubuntu and macos.
+CI runs typecheck, build, test, lint, a Pi API surface staleness guard, an `npm pack` round-trip smoke (installs the produced tarball globally and probes `scramjet --help`), and a postinstall smoke (against a temporary `XDG_DATA_HOME`) on ubuntu and macos.
 
 ## Local development
 
@@ -176,7 +176,9 @@ Rules that govern the block:
 
 ## Dependency orientation
 
-Before adding a dependency, utility, or custom implementation, check whether existing project dependencies already provide the capability. Inspect `package.json`, adjacent imports, and relevant Pi docs/examples; treat those live sources as authoritative for available packages and APIs. The `@earendil-works/pi-coding-agent` dependency key is an npm alias to the maintained `@leanandmean/pi-coding-agent` fork; do not treat it as upstream Pi.
+Before adding a dependency, utility, or custom implementation, check whether existing project dependencies already provide the capability. For Pi capabilities, read `docs/pi-api-surface.md` first; it is the generated reference for the installed `pi-agent-core`, `pi-ai`, `pi-coding-agent`, and `pi-tui` packages. Inspect `package.json`, adjacent imports, and relevant Pi docs/examples as needed; treat those live sources as authoritative for available packages and APIs. The `@earendil-works/pi-coding-agent` dependency key is an npm alias to the maintained `@leanandmean/pi-coding-agent` fork; do not treat it as upstream Pi.
+
+Regenerate `docs/pi-api-surface.md` with `node scripts/generate-pi-api-surface.js` whenever the Pi dependency version is bumped. CI enforces that the committed document matches the installed package declarations.
 
 ## Version pinning
 
