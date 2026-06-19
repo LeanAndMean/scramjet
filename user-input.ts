@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { USER_INPUT_PARKED_TYPE } from "./history.ts";
@@ -22,8 +22,8 @@ const PROMPT_SNIPPET =
 	"You have access to `get_scramjet_user_input` for requesting structured user input mid-turn " +
 	"(confirm, select, or freetext). Confirm/select block until the user responds and return their " +
 	"answer as the tool result; freetext terminates the turn so the user replies in the standard editor. " +
-	"Freetext message is visible in the tool row; state surrounding context in prose before calling the tool " +
-	"when the user needs that context to answer.";
+	"Prompt messages remain visible in the tool row/result history; select results also show the available options. " +
+	"State surrounding context in prose before calling the tool when the user needs that context to answer.";
 
 const USER_INPUT_OPTION_SCHEMA = Type.Object({
 	value: Type.String(),
@@ -80,6 +80,9 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
 			component.setText(text);
 			return component;
+		},
+		renderResult(result, _options, theme, context) {
+			return renderUserInputResult(result, theme, context.args as Partial<UserInputParams> | null | undefined);
 		},
 		async execute(_toolCallId, params, _resource, _read, ctx) {
 			if (!ALLOWED_PHASES.has(state.lifecycle.phase)) {
@@ -310,15 +313,87 @@ async function handleSelect(
 	if (selectedValue === null) {
 		return {
 			content: [{ type: "text" as const, text: JSON.stringify({ cancelled: true }) }],
-			details: { type: "select", cancelled: true },
+			details: { type: "select", cancelled: true, options },
 			cancelled: true,
 		};
 	}
 	return {
 		content: [{ type: "text" as const, text: JSON.stringify({ selected: selectedValue }) }],
-		details: { type: "select", selected: selectedValue },
+		details: { type: "select", selected: selectedValue, options },
 		cancelled: false,
 	};
+}
+
+function renderUserInputResult(
+	result: AgentToolResult<unknown>,
+	theme: Theme,
+	args: Partial<UserInputParams> | null | undefined,
+) {
+	const details = isRecord(result.details) ? result.details : null;
+	if (!details) return new Text("", 0, 0);
+
+	if ("error" in details) {
+		const text = result.content.find((item) => item.type === "text")?.text ?? "";
+		return new Text(text, 0, 0);
+	}
+
+	const message = typeof args?.message === "string" ? args.message : "";
+	const messageLine = message ? theme.fg("accent", theme.bold(message)) : "";
+
+	if (details.type === "confirm") {
+		if (details.cancelled === true) return new Text(compactLines([messageLine, "Cancelled"]).join("\n"), 0, 0);
+		if (typeof details.confirmed === "boolean") {
+			return new Text(compactLines([messageLine, `Answer: ${details.confirmed ? "Yes" : "No"}`]).join("\n"), 0, 0);
+		}
+		return new Text("", 0, 0);
+	}
+
+	if (details.type === "select") {
+		const options = parseUserInputOptions(details.options);
+		if (!options) return new Text("", 0, 0);
+		const optionLines = options.map((option) => {
+			const description = option.description ? ` — ${option.description}` : "";
+			return `- ${option.label}${description}`;
+		});
+		const outcome =
+			details.cancelled === true
+				? "Cancelled"
+				: typeof details.selected === "string"
+					? `Selected: ${details.selected}`
+					: "";
+		if (!outcome) return new Text("", 0, 0);
+		return new Text(compactLines([messageLine, "Options:", ...optionLines, outcome]).join("\n"), 0, 0);
+	}
+
+	if (details.type === "freetext") {
+		if (details.parked === true) return new Text(compactLines([messageLine, "Parked for reply"]).join("\n"), 0, 0);
+		return new Text("", 0, 0);
+	}
+
+	return new Text("", 0, 0);
+}
+
+function parseUserInputOptions(value: unknown): UserInputOption[] | null {
+	if (!Array.isArray(value)) return null;
+	for (const option of value) {
+		if (
+			!isRecord(option) ||
+			typeof option.value !== "string" ||
+			typeof option.label !== "string" ||
+			(option.description !== undefined && typeof option.description !== "string")
+		) {
+			return null;
+		}
+	}
+	return value as UserInputOption[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function compactLines(lines: string[]) {
+	return lines.filter((line) => line.length > 0);
 }
 
 function validateParams(params: UserInputParams): string | null {

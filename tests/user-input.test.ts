@@ -102,27 +102,41 @@ describe("registerUserInputTool — registration", () => {
 		expect(renderText(component)).toContain("get_scramjet_user_input");
 	});
 
-	it("renders a freetext prompt alongside the parked result in Pi's tool row", () => {
+	it("renders a structured prompt summary in Pi's tool row after execution", () => {
 		initTheme(undefined, false);
 		const { tool } = toolFor();
 		const component = new ToolExecutionComponent(
 			"get_scramjet_user_input",
 			"call-id",
-			{ type: "freetext", message: "What should I name the release?" },
+			{
+				type: "select",
+				message: "Which bump level?",
+				options: [{ value: "patch", label: "Patch", description: "Bug fixes only" }],
+			},
 			undefined,
 			tool,
 			{ requestRender: () => {} } as any,
 			process.cwd(),
 		);
 		component.updateResult(
-			{ content: [{ type: "text", text: JSON.stringify({ parked: true }) }], isError: false },
+			{
+				content: [{ type: "text", text: JSON.stringify({ selected: "patch" }) }],
+				details: {
+					type: "select",
+					selected: "patch",
+					options: [{ value: "patch", label: "Patch", description: "Bug fixes only" }],
+				},
+				isError: false,
+			},
 			false,
 		);
 
 		const output = visibleText(component.render(120).join("\n"));
-		expect(output).toContain("What should I name the release?");
-		expect(output).toContain(JSON.stringify({ parked: true }));
-		expect(output.trim()).not.toBe(JSON.stringify({ parked: true }));
+		expect(output).toContain("Which bump level?");
+		expect(output).toContain("Patch");
+		expect(output).toContain("Bug fixes only");
+		expect(output).toContain("Selected: patch");
+		expect(output.trim()).not.toBe(JSON.stringify({ selected: "patch" }));
 	});
 
 	it("has the expected schema shape with type enum and flat optional fields", () => {
@@ -135,6 +149,168 @@ describe("registerUserInputTool — registration", () => {
 		expect(params.properties.options).toBeDefined();
 		expect(params.properties.recommended).toBeDefined();
 		expect(params.properties.placeholder).toBeDefined();
+	});
+});
+
+function renderResultText(tool: any, result: any, args: Partial<UserInputParams> = {}): string {
+	const component = tool.renderResult(result, { expanded: false, isPartial: false }, renderTheme, {
+		args,
+		toolCallId: "call-id",
+		invalidate: () => {},
+		lastComponent: undefined,
+		state: {},
+		cwd: process.cwd(),
+		executionStarted: true,
+		argsComplete: true,
+		isPartial: false,
+		expanded: false,
+		showImages: true,
+		isError: false,
+	});
+	return visibleText(renderText(component));
+}
+
+describe("registerUserInputTool — renderResult", () => {
+	it("renders confirm yes with the prompt message", () => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: JSON.stringify({ confirmed: true }) }],
+				details: { type: "confirm", confirmed: true },
+			},
+			{ type: "confirm", message: "Deploy now?" },
+		);
+
+		expect(output).toContain("Deploy now?");
+		expect(output).toContain("Yes");
+	});
+
+	it("renders confirm no with the prompt message", () => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: JSON.stringify({ confirmed: false }) }],
+				details: { type: "confirm", confirmed: false },
+			},
+			{ type: "confirm", message: "Deploy now?" },
+		);
+
+		expect(output).toContain("Deploy now?");
+		expect(output).toContain("No");
+	});
+
+	it("renders cancelled confirm with the prompt message", () => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: JSON.stringify({ cancelled: true }) }],
+				details: { type: "confirm", cancelled: true },
+			},
+			{ type: "confirm", message: "Deploy now?" },
+		);
+
+		expect(output).toContain("Deploy now?");
+		expect(output).toContain("Cancelled");
+	});
+
+	it("renders select with all options and the selected value", () => {
+		const { tool } = toolFor();
+		const options = [
+			{ value: "patch", label: "Patch", description: "Bug fixes only" },
+			{ value: "minor", label: "Minor", description: "New features" },
+		];
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: JSON.stringify({ selected: "minor" }) }],
+				details: { type: "select", selected: "minor", options },
+			},
+			{ type: "select", message: "Which bump?", options },
+		);
+
+		expect(output).toContain("Which bump?");
+		expect(output).toContain("Patch");
+		expect(output).toContain("Bug fixes only");
+		expect(output).toContain("Minor");
+		expect(output).toContain("New features");
+		expect(output).toContain("Selected: minor");
+	});
+
+	it("renders cancelled select with all options", () => {
+		const { tool } = toolFor();
+		const options = [
+			{ value: "patch", label: "Patch", description: "Bug fixes only" },
+			{ value: "minor", label: "Minor", description: "New features" },
+		];
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: JSON.stringify({ cancelled: true }) }],
+				details: { type: "select", cancelled: true, options },
+			},
+			{ type: "select", message: "Which bump?", options },
+		);
+
+		expect(output).toContain("Which bump?");
+		expect(output).toContain("Patch");
+		expect(output).toContain("Bug fixes only");
+		expect(output).toContain("Minor");
+		expect(output).toContain("New features");
+		expect(output).toContain("Cancelled");
+	});
+
+	it("renders freetext parked status with the prompt message", () => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: JSON.stringify({ parked: true }) }],
+				details: { type: "freetext", parked: true },
+			},
+			{ type: "freetext", message: "What should the title be?" },
+		);
+
+		expect(output).toContain("What should the title be?");
+		expect(output).toContain("Parked for reply");
+	});
+
+	it("renders the tool text for error details", () => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: "Validation error: message is required" }],
+				details: { error: "validation" },
+			},
+			{ type: "confirm", message: "" },
+		);
+
+		expect(output.trimEnd()).toBe("Validation error: message is required");
+	});
+
+	it("falls back to empty output for missing details", () => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{ content: [{ type: "text", text: JSON.stringify({ selected: "patch" }) }] },
+			{ type: "select", message: "Which bump?" },
+		);
+
+		expect(output).toBe("");
+	});
+
+	it("falls back to empty output for unrecognized details", () => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{ content: [{ type: "text", text: JSON.stringify({ ok: true }) }], details: { type: "other" } },
+			{ type: "confirm", message: "Proceed?" },
+		);
+
+		expect(output).toBe("");
 	});
 });
 
@@ -354,6 +530,7 @@ describe("registerUserInputTool — select interaction", () => {
 		expect(parsed).toEqual({ selected: "minor" });
 		expect(result.details.type).toBe("select");
 		expect(result.details.selected).toBe("minor");
+		expect(result.details.options).toEqual(selectParams.options);
 	});
 
 	it("returns cancelled: true and terminates when user presses Escape", async () => {
@@ -364,6 +541,7 @@ describe("registerUserInputTool — select interaction", () => {
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ cancelled: true });
 		expect(result.details.cancelled).toBe(true);
+		expect(result.details.options).toEqual(selectParams.options);
 		expect(result.terminate).toBe(true);
 	});
 
@@ -599,6 +777,30 @@ describe("registerUserInputTool — journaling", () => {
 			message: "Bump level?",
 			type: "select",
 			selected: "patch",
+			options: [{ value: "patch", label: "Patch" }],
+		});
+	});
+
+	it("journals options for a cancelled select interaction", async () => {
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:test") }));
+		const ctx = mockUICtx(null);
+		await execute(
+			{
+				type: "select",
+				message: "Bump level?",
+				options: [{ value: "patch", label: "Patch", description: "Bug fixes" }],
+			},
+			ctx,
+		);
+
+		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
+		expect(entry).toBeDefined();
+		expect(entry.data).toMatchObject({
+			interactionType: "select",
+			message: "Bump level?",
+			type: "select",
+			cancelled: true,
+			options: [{ value: "patch", label: "Patch", description: "Bug fixes" }],
 		});
 	});
 
