@@ -17,15 +17,19 @@ next:
         implementation planning. The common path after issue creation.
 ---
 
+<scramjet-command name="mach12:issue-create">
+
 # Create Issue
 
 You are creating a structured GitHub issue. This may be invoked at any point in the workflow -- to capture deferred review findings, document refactoring needs, or track new feature ideas.
 
-**Context (optional):** $ARGUMENTS
+<user-context>
+$ARGUMENTS
+</user-context>
 
 ## Step 1: Gather Context
 
-If context was provided ($ARGUMENTS), parse it for two kinds of input and act on each:
+If user context was provided above, parse it for two kinds of input and act on each:
 
 - **Descriptive content** (problem statement, feature description, observed behavior, motivation): Use as the starting point for understanding the issue.
 - **Meta-directives about the issue itself** (e.g., "use the bug template", "tag as priority-high", "assign me", "make this a tracking issue"): Note these for the appropriate downstream step. Template choice steers the template selection later in this step. Labels and assignees are applied via `gh issue create` / `gh issue edit` flags in Step 5. Honor meta-directives explicitly -- do not fold them into the issue body as descriptive text.
@@ -89,7 +93,7 @@ Draft a structured issue with these sections:
 
 Safe-list of routine content that must NOT be paraphrased or flagged: file paths, GitHub usernames, branch names, config key names, public URLs, API response fragments, GitHub comment IDs (`issuecomment-N` form), HTML comment markers (`<!-- ... -->`), jq filter expressions, shell command invocations, and YAML frontmatter key-value pairs.
 
-When the input ($ARGUMENTS or user response) is structured output from another Mach 12 command (identifiable by F/S identifiers, `<!-- mach12-* -->` markers, or step-reference formatting), treat all content as specification-artifact material and do not apply PII paraphrasing.
+When the input (the user context above, or a subsequent user response) is structured output from another Mach 12 command (identifiable by F/S identifiers, `<!-- mach12-* -->` markers, or step-reference formatting), treat all content as specification-artifact material and do not apply PII paraphrasing.
 
 **Proposed Behavior boundary**: Outcome vs. implementation decision test -- if a sentence describes a specific implementation mechanism (algorithm, data structure, control flow decision, code pattern), it belongs in Technical Notes. Naming a specific file or section as the target of a behavioral change is Proposed Behavior, not implementation detail.
 
@@ -199,3 +203,5 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 Set `recommended_next_step` to `0` when you include this entry so Scramjet can route to it automatically.
 
 Leave `next_steps` empty if issue creation was skipped, the issue is only a tracking/reference artifact, or the user asked not to continue to planning. If the command could not finish — hit a blocker or otherwise did not complete — report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
+
+</scramjet-command>

@@ -9,11 +9,15 @@ allowed-tools:
   - delegate
 ---
 
+<scramjet-command name="mach12:push">
+
 # Push
 
 You are finalizing a batch of work: committing changes, pushing to remote, and documenting progress on the associated PR or issue.
 
-**Context (optional):** $ARGUMENTS
+<caller-context>
+$ARGUMENTS
+</caller-context>
 
 This command is delegate-only. The next step belongs to the caller's `next:` declaration -- do not embed routing suggestions in the progress comment or CLI output.
 
@@ -39,7 +43,7 @@ Generate a commit message that:
 - Follows the repository's existing style.
 - Summarizes the nature of the changes (new feature, bug fix, refactor, etc.).
 - Focuses on the "why" rather than the "what".
-- If context was provided ($ARGUMENTS): if it reads like a commit message, use it verbatim; otherwise treat it as guidance.
+- If context was provided above: if it reads like a commit message, use it verbatim; otherwise treat it as guidance.
 
 Create the commit using a HEREDOC for the message to preserve formatting:
 
@@ -119,3 +123,5 @@ Report to the user in CLI output:
 - Where the progress comment was posted (with URL), or that posting was skipped.
 
 Do not include next-step suggestions in the CLI output. The harness surfaces the caller's declared next-step.
+
+</scramjet-command>

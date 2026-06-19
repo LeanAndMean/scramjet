@@ -16,11 +16,15 @@ next:
         merge consideration. The common path after PR creation.
 ---
 
+<scramjet-command name="mach12:pr-create">
+
 # Create Pull Request
 
 You are creating a pull request for the current branch, with a structured description that includes a summary, test plan, and issue linkage.
 
-**Context (optional):** $ARGUMENTS
+<user-context>
+$ARGUMENTS
+</user-context>
 
 ## Step 1: Parse input
 
@@ -67,7 +71,7 @@ For complex changes, read specific modified files and understand the changes in 
 
 **Issue resolution:**
 
-1. If an issue number was provided in $ARGUMENTS, delegate to:
+1. If an issue number was provided in the user context, delegate to:
 
    ```
    /mach12:gh-issue-read <issue-number>
@@ -119,7 +123,7 @@ Fixes #<issue-number>
 - **Issue with sub-issues:** Include `Fixes #<issue-number>` for the parent, followed by one `Fixes #<N>` line for each sub-issue. If any sub-issues are already closed, present a note above the `Fixes` lines listing those sub-issues and their closed state (adding `Fixes` for an already-closed issue is harmless but adds noise). When presenting the draft, tell the user they can remove unwanted closing keywords via the "Modify" option (e.g., for already-closed sub-issues, or if this PR only addresses some of the sub-issues). If the sub-issues were detected via Strategy B (body-parse fallback), note this to the user so they can verify the list is correct.
 
 - When referring to numbered items (findings, suggestions, stages) in the body, use plain words like "finding 3" or "suggestion 3" -- not `#<number>` notation, which GitHub auto-links to issues/PRs. (`Fixes #<issue-number>` is an intentional GitHub reference and should be kept as-is.)
-- If the user provided additional context in $ARGUMENTS, incorporate it into the summary or test plan as appropriate.
+- If the user provided additional context above, incorporate it into the summary or test plan as appropriate.
 
 Present the draft title and body to the user and ask:
 
@@ -175,3 +179,5 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 Set `recommended_next_step` to `0` when you include this entry so Scramjet can route to it automatically.
 
 Leave `next_steps` empty if the user cancelled or the PR should not be reviewed yet. If PR creation failed or you could not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
+
+</scramjet-command>
