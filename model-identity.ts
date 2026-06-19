@@ -171,6 +171,11 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 
 	pi.on("input", (event) => {
 		if (!pendingForInput) return;
+		if (event.text.trimStart().startsWith("/")) {
+			pendingForInput = false;
+			pendingForNextTurn = true;
+			return;
+		}
 		pendingForInput = false;
 		return { action: "transform" as const, text: `${changeMessage(state.currentModel!)}\n\n${event.text}` };
 	});

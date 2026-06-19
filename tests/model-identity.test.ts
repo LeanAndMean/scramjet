@@ -316,6 +316,80 @@ describe("model_select debounce and delivery", () => {
 		});
 	});
 
+	describe("slash-command input guard", () => {
+		it("does not transform slash-command input", async () => {
+			const { handlers, emit, state } = setupWithModel();
+			await initModel(emit);
+			state.lifecycle = { phase: "idle" };
+
+			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+			vi.advanceTimersByTime(500);
+
+			const inputHandler = handlers.get("input")![0];
+			const result = (await inputHandler({
+				type: "input",
+				text: "/mach12:issue-implement 55 1",
+				source: "interactive",
+			})) as any;
+
+			expect(result).toBeUndefined();
+		});
+
+		it("protects whitespace-prefixed slash commands", async () => {
+			const { handlers, emit, state } = setupWithModel();
+			await initModel(emit);
+			state.lifecycle = { phase: "idle" };
+
+			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+			vi.advanceTimersByTime(500);
+
+			const inputHandler = handlers.get("input")![0];
+			const result = (await inputHandler({
+				type: "input",
+				text: "  /mach12:pr-create 55",
+				source: "interactive",
+			})) as any;
+
+			expect(result).toBeUndefined();
+		});
+
+		it("redirects blocked notification to before_agent_start message", async () => {
+			const { handlers, emit, state } = setupWithModel();
+			await initModel(emit);
+			state.lifecycle = { phase: "idle" };
+
+			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+			vi.advanceTimersByTime(500);
+
+			const inputHandler = handlers.get("input")![0];
+			await inputHandler({ type: "input", text: "/mach12:issue-implement 55 1", source: "interactive" });
+
+			state.lifecycle = lifecycleFor("running");
+			const basHandler = handlers.get("before_agent_start")![0];
+			const result = (await basHandler({ systemPrompt: "BASE" })) as any;
+
+			expect(result.message).toBeDefined();
+			expect(result.message.content).toContain("[scramjet] Model changed to: GPT 5.5");
+			expect(result.message.content).toContain("Please continue.");
+		});
+
+		it("protects slash commands after rebuild-divergence sets pendingForInput", async () => {
+			const { handlers, emit } = setupWithModel();
+			const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+			const ctx = {
+				sessionManager: { getBranch: () => entries },
+				model: fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" }),
+			};
+
+			await emit("session_start", { type: "session_start", reason: "resume" }, ctx);
+
+			const inputHandler = handlers.get("input")![0];
+			const result = (await inputHandler({ type: "input", text: "/scramjet on", source: "interactive" })) as any;
+
+			expect(result).toBeUndefined();
+		});
+	});
+
 	it("keeps system prompt showing initial model after model change (cache-friendly)", async () => {
 		const { handlers, emit, state } = setupWithModel();
 		await initModel(emit);
