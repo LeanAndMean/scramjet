@@ -85,9 +85,11 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 	let pendingModel: ActiveModel | null = null;
 	let pendingForInput = false;
 	let pendingForNextTurn = false;
+	let firstTurnStarted = false;
 
 	const rebuild = (ctx: ExtensionContext) => {
 		latestTurnIndex = 0;
+		firstTurnStarted = false;
 		pendingForInput = false;
 		pendingForNextTurn = false;
 		if (debounceTimer !== null) {
@@ -158,19 +160,28 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			state.modelHistory.push(record);
 			pendingModel = null;
 
-			const phase = state.lifecycle.phase;
-			if (phase === "running" || phase === "probing") {
-				pendingForNextTurn = true;
-				pendingForInput = false;
+			if (!firstTurnStarted) {
+				initialModel = record;
 			} else {
-				pendingForInput = true;
-				pendingForNextTurn = false;
+				const phase = state.lifecycle.phase;
+				if (phase === "running" || phase === "probing") {
+					pendingForNextTurn = true;
+					pendingForInput = false;
+				} else {
+					pendingForInput = true;
+					pendingForNextTurn = false;
+				}
 			}
 		}, DEBOUNCE_MS);
 	});
 
 	pi.on("input", (event) => {
 		if (!pendingForInput) return;
+		if (event.text.trimStart().startsWith("/")) {
+			pendingForInput = false;
+			pendingForNextTurn = true;
+			return;
+		}
 		pendingForInput = false;
 		return { action: "transform" as const, text: `${changeMessage(state.currentModel!)}\n\n${event.text}` };
 	});
@@ -200,5 +211,6 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 
 	pi.on("turn_start", (event) => {
 		latestTurnIndex = event.turnIndex;
+		firstTurnStarted = true;
 	});
 }
