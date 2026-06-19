@@ -3,7 +3,7 @@ import { Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { USER_INPUT_PARKED_TYPE } from "./history.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
-import { getActiveCommand, type LifecycleEvent, transition } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleEvent, logTransition, transition } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
@@ -83,8 +83,12 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 		},
 		async execute(_toolCallId, params, _resource, _read, ctx) {
 			if (!ALLOWED_PHASES.has(state.lifecycle.phase)) {
-				console.warn(
-					`scramjet: get_scramjet_user_input called out of phase (phase=${state.lifecycle.phase}); rejected`,
+				state.logger.warn(
+					"input",
+					`get_scramjet_user_input called out of phase (phase=${state.lifecycle.phase}); rejected`,
+					{
+						phase: state.lifecycle.phase,
+					},
 				);
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
@@ -105,9 +109,11 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					interactionType: params.type,
 					message: params.message,
 				});
+				const from = state.lifecycle;
 				const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
 				if (waitResult.ok) {
 					state.lifecycle = waitResult.state;
+					logTransition(state, from, waitResult.state, "waiting-parked", { inputType: params.type });
 				}
 				const activeCommand = getActiveCommand(state.lifecycle);
 				if (activeCommand) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: activeCommand });
@@ -165,9 +171,14 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					const event: LifecycleEvent = result.cancelled
 						? { type: "waiting-parked" }
 						: { type: "probe-input-resumed" };
+					const from = state.lifecycle;
 					const transResult = transition(state.lifecycle, event);
 					if (transResult.ok) {
 						state.lifecycle = transResult.state;
+						logTransition(state, from, transResult.state, event.type, {
+							inputType: params.type,
+							cancelled: result.cancelled,
+						});
 					}
 				}
 			}
@@ -181,9 +192,14 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			const toolResult = { content: result.content, details: result.details };
 			if (result.cancelled) {
 				if (!isProbing) {
+					const from = state.lifecycle;
 					const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
 					if (waitResult.ok) {
 						state.lifecycle = waitResult.state;
+						logTransition(state, from, waitResult.state, "waiting-parked", {
+							inputType: params.type,
+							cancelled: true,
+						});
 					}
 				}
 				const activeCommand = getActiveCommand(state.lifecycle);

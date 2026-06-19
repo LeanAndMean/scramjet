@@ -32,6 +32,7 @@ import { registerCommandLoader } from "./commands/index.ts";
 import { registerDelegateTool } from "./delegate.ts";
 import { registerDiagramTool } from "./diagram/diagram-tool.ts";
 import { registerHistory } from "./history.ts";
+import { createLogger } from "./logger.ts";
 import { registerModelIdentity } from "./model-identity.ts";
 import { registerPrIndicator } from "./pr-indicator.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
@@ -41,6 +42,7 @@ import type { ScramjetState } from "./types.ts";
 import { registerUserInputTool } from "./user-input.ts";
 
 export default function scramjet(pi: ExtensionAPI) {
+	const logger = createLogger(pi);
 	const state: ScramjetState = {
 		enabled: false,
 		registry: new Map(),
@@ -52,7 +54,12 @@ export default function scramjet(pi: ExtensionAPI) {
 		currentModel: null,
 		modelHistory: [],
 		autonomyConfigPath: defaultConfigPath(),
+		logger,
 	};
+
+	pi.on("session_start", (_event, ctx) => {
+		logger.setHasUI(ctx.hasUI);
+	});
 
 	registerCommandStatusTool(pi, state);
 	registerUserInputTool(pi, state);

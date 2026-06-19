@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { createLogger } from "../logger.ts";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
-import { freshState, recordingPi } from "./helpers.ts";
+import { freshState, logMessages, recordingPi } from "./helpers.ts";
+
+function freshRecordingState(pi: any, overrides = {}) {
+	return freshState({ logger: createLogger(pi), ...overrides });
+}
 
 describe("registerToolCallAdvisor — registration", () => {
 	it("registers exactly one tool_call handler", () => {
@@ -12,59 +17,48 @@ describe("registerToolCallAdvisor — registration", () => {
 });
 
 describe("registerToolCallAdvisor — advisory warnings", () => {
-	let warnSpy: ReturnType<typeof vi.spyOn>;
-
-	beforeEach(() => {
-		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-	});
-
-	afterEach(() => {
-		warnSpy.mockRestore();
-	});
-
 	it("does not warn and does not block when the stack is empty", async () => {
 		const { pi, handlers } = recordingPi();
-		registerToolCallAdvisor(pi, freshState());
+		registerToolCallAdvisor(pi, freshRecordingState(pi));
 		const handler = handlers.get("tool_call")![0] as any;
 		const result = await handler({ type: "tool_call", toolCallId: "x", toolName: "bash", input: {} });
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 		expect(result).toBeUndefined();
 	});
 
 	it("does not warn when the active frame is unrestricted (effectiveAllowedTools undefined)", async () => {
-		const state = freshState({
+		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi, {
 			delegateStack: [{ commandName: "mach12:push", depth: 0 }],
 		});
-		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
 		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "anything", input: {} });
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 	});
 
 	it("does not warn when the tool is in the active frame's allowed-tools", async () => {
-		const state = freshState({
+		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi, {
 			delegateStack: [{ commandName: "mach12:push", depth: 0, effectiveAllowedTools: ["Read", "Bash"] }],
 		});
-		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
 		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "Read", input: {} });
 		await handler({ type: "tool_call", toolCallId: "y", toolName: "Bash", input: {} });
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 	});
 
 	it("warns when the tool is not in the active frame's allowed-tools and includes context", async () => {
-		const state = freshState({
+		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi, {
 			delegateStack: [{ commandName: "mach12:push", depth: 2, effectiveAllowedTools: ["Read"] }],
 		});
-		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
 		const handler = handlers.get("tool_call")![0] as any;
 		const result = await handler({ type: "tool_call", toolCallId: "x", toolName: "Bash", input: {} });
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-		const message = String(warnSpy.mock.calls[0][0]);
-		expect(message).toContain("[scramjet]");
+		expect(logMessages(pi)).toHaveLength(1);
+		const message = logMessages(pi)[0];
 		expect(message).toContain("advisory");
 		expect(message).toContain("Bash");
 		expect(message).toContain("mach12:push");
@@ -75,43 +69,43 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 	});
 
 	it("checks against the top of stack (active frame) when nested frames are present", async () => {
-		const state = freshState({
+		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi, {
 			delegateStack: [
 				{ commandName: "outer", depth: 0, effectiveAllowedTools: ["Read", "Bash", "Edit"] },
 				{ commandName: "inner", depth: 1, effectiveAllowedTools: ["Read"] },
 			],
 		});
-		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
 		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "Bash", input: {} });
-		expect(warnSpy).toHaveBeenCalledTimes(1);
-		const message = String(warnSpy.mock.calls[0][0]);
+		expect(logMessages(pi)).toHaveLength(1);
+		const message = logMessages(pi)[0];
 		expect(message).toContain("inner");
 		expect(message).not.toContain("outer");
 	});
 
 	it("exempts the delegate tool itself from advisory warnings", async () => {
-		const state = freshState({
+		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi, {
 			delegateStack: [{ commandName: "mach12:push", depth: 0, effectiveAllowedTools: ["Read"] }],
 		});
-		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
 		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "delegate", input: {} });
-		expect(warnSpy).not.toHaveBeenCalled();
+		expect(logMessages(pi)).toEqual([]);
 	});
 
 	it("warns for every tool when the frame's effectiveAllowedTools is the empty set", async () => {
 		// Empty array means the intersection was empty -- nothing is allowed.
 		// Distinct from undefined ("unrestricted"). Every tool call warns.
-		const state = freshState({
+		const { pi, handlers } = recordingPi();
+		const state = freshRecordingState(pi, {
 			delegateStack: [{ commandName: "mach12:push", depth: 0, effectiveAllowedTools: [] }],
 		});
-		const { pi, handlers } = recordingPi();
 		registerToolCallAdvisor(pi, state);
 		const handler = handlers.get("tool_call")![0] as any;
 		await handler({ type: "tool_call", toolCallId: "x", toolName: "Read", input: {} });
-		expect(warnSpy).toHaveBeenCalledTimes(1);
+		expect(logMessages(pi)).toHaveLength(1);
 	});
 });

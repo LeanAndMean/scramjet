@@ -50,8 +50,10 @@ export function registerSubagentOutputAdvisor(pi: ExtensionAPI, state: ScramjetS
 
 		const agentName = resolveSubagentLabel(event.input);
 
-		console.warn(
-			`[scramjet] advisory: subagent '${agentName}' returned no output (subprocess exited cleanly with no assistant text; check ~/.pi/agent/agents/ for the agent definition and rerun with verbose output if reproducing)`,
+		state.logger.warn(
+			"subagent",
+			`advisory: subagent '${agentName}' returned no output (subprocess exited cleanly with no assistant text; check ~/.pi/agent/agents/ for the agent definition and rerun with verbose output if reproducing)`,
+			{ agentName },
 		);
 
 		const entry: SidebarEntry = {

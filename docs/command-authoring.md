@@ -651,3 +651,7 @@ with <specific instructions for this command's reporting>.
 - **Status reporting** goes at the end of the last substantive step in a top-level command. It does not need its own dedicated step — most commands embed reporting instructions in the final step that also handles the last action (posting a comment, pushing code, etc.).
 - **Imperative voice** throughout: "You are doing X", "Read the issue", "Delegate to".
 - **Concrete examples** over abstract descriptions. Show the exact `gh` command, the exact tool call shape, the exact `next_steps` structure.
+
+### Diagnosing command behavior
+
+All lifecycle events (phase transitions, probe scheduling, dispatch decisions) are journaled as `scramjet:log` entries in the session JSONL. When a command doesn't chain as expected or a probe doesn't fire, query the session log to trace what happened. See `docs/logging.md` for the entry schema, `jq` query patterns, and a step-by-step diagnostic workflow.

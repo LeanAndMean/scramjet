@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.ts";
 import { recordCommandStatus } from "./history.ts";
-import { getActiveCommand, type LifecycleState, transition } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleState, logTransition, transition } from "./phase-machine.ts";
 import type {
 	CommandStatusNextStep,
 	CommandStatusPayload,
@@ -138,8 +138,16 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 		}),
 		async execute(_toolCallId, params) {
 			if (state.lifecycle.phase !== "probing") {
-				console.warn(
-					`scramjet: report_scramjet_command_status called out of phase (phase=${state.lifecycle.phase}); report ignored`,
+				const activeCommand = getActiveCommand(state.lifecycle);
+				state.logger.lifecycle("status report rejected", {
+					phase: state.lifecycle.phase,
+					...(activeCommand ? { command: activeCommand } : {}),
+					detail: { reason: "out-of-phase", status: params.status },
+				});
+				state.logger.warn(
+					"status",
+					`report_scramjet_command_status called out of phase (phase=${state.lifecycle.phase}); report ignored`,
+					{ phase: state.lifecycle.phase },
 				);
 				const details: CommandStatusDetails = { error: "out-of-phase", phase: state.lifecycle.phase };
 				return {
@@ -151,16 +159,44 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			// Non-terminating path: the agent has more work to do.
 			if (params.status === "continuing") {
 				if (state.lifecycle.continueCount >= MAX_CONSECUTIVE_CONTINUES) {
+					state.logger.lifecycle("status report rejected", {
+						phase: state.lifecycle.phase,
+						command: state.lifecycle.command,
+						detail: {
+							reason: "continue-limit",
+							status: params.status,
+							continueCount: state.lifecycle.continueCount,
+						},
+					});
 					const details: CommandStatusDetails = { error: "continue-limit", phase: state.lifecycle.phase };
 					return {
 						content: [{ type: "text", text: CONTINUE_LIMIT_ERROR }],
 						details,
 					};
 				}
+				state.logger.lifecycle("status report accepted", {
+					phase: state.lifecycle.phase,
+					command: state.lifecycle.command,
+					detail: { status: params.status, summary: params.summary, continueCount: state.lifecycle.continueCount },
+				});
 				state.suspendProbeWatchdog?.();
+				const from = state.lifecycle;
 				const result = transition(state.lifecycle, { type: "continuing" });
 				if (!result.ok) {
-					console.warn(`[scramjet] illegal lifecycle transition: ${result.from} + continuing`);
+					state.logger.lifecycle("status report rejected", {
+						phase: state.lifecycle.phase,
+						command: state.lifecycle.command,
+						detail: {
+							reason: "transition-failed",
+							from: result.from,
+							event: result.event,
+							status: params.status,
+						},
+					});
+					state.logger.warn("status", `illegal lifecycle transition: ${result.from} + continuing`, {
+						from: result.from,
+						event: "continuing",
+					});
 					const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.lifecycle.phase };
 					return {
 						content: [{ type: "text", text: "Continuing transition failed." }],
@@ -168,6 +204,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 					};
 				}
 				state.lifecycle = result.state;
+				logTransition(state, from, result.state, "continuing", { status: params.status });
 				state.rearmProbeWatchdog?.();
 				const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
 				return {
@@ -182,8 +219,29 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				next_steps: params.next_steps,
 				recommended_next_step: params.recommended_next_step,
 			};
+			state.logger.lifecycle("status report accepted", {
+				phase: state.lifecycle.phase,
+				command: state.lifecycle.command,
+				detail: {
+					status: params.status,
+					summary: params.summary,
+					nextStepCount: params.next_steps?.length ?? 0,
+					recommendedNextStep: params.recommended_next_step,
+				},
+			});
+			const from = state.lifecycle;
 			const reportResult = transition(state.lifecycle, { type: "status-reported", status: payload });
 			if (!reportResult.ok) {
+				state.logger.lifecycle("status report rejected", {
+					phase: state.lifecycle.phase,
+					command: state.lifecycle.command,
+					detail: {
+						reason: "transition-failed",
+						from: reportResult.from,
+						event: reportResult.event,
+						status: params.status,
+					},
+				});
 				const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.lifecycle.phase };
 				return {
 					content: [{ type: "text", text: "Status recorded but phase transition to reported failed." }],
@@ -192,6 +250,11 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				};
 			}
 			state.lifecycle = reportResult.state;
+			logTransition(state, from, reportResult.state, "status-reported", {
+				status: params.status,
+				nextStepCount: params.next_steps?.length ?? 0,
+				recommendedNextStep: params.recommended_next_step,
+			});
 
 			const activeCommand = getActiveCommand(state.lifecycle);
 			if (activeCommand) {

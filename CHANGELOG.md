@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.24.0 — Structured logging system replacing console.warn
+
+Replaces raw `console.warn` calls with a structured logging utility that journals diagnostic and lifecycle events via `pi.appendEntry()`. Eliminates TUI input area pollution, enables queryable lifecycle diagnosis from session JSONL, and adds agent-facing troubleshooting documentation (issue #169).
+
+### Added
+
+- `logger.ts` — `createLogger(pi)` factory producing a `ScramjetLogger` with `warn()`, `debug()`, and `lifecycle()` methods. All calls journal `scramjet:log` custom entries; `warn()` additionally writes to stderr when no TUI is detected.
+- `docs/logging.md` — structured troubleshooting guide: entry schema reference, `jq` query one-liners, lifecycle event reference (healthy probe cycle vs. failure patterns), common failure patterns, step-by-step diagnostic workflow.
+- Lifecycle event instrumentation across `auto-continue.ts`, `command-status.ts`, `history.ts`, and `user-input.ts` — every phase transition and decision point is now queryable.
+
+### Changed
+
+- All runtime `console.warn` calls replaced with `state.logger.warn()` across `commands/index.ts`, `tool-scope-advisory.ts`, `subagent-output-advisor.ts`, `command-status.ts`, `history.ts`, `user-input.ts`, and `auto-continue.ts`.
+- `console.log` calls in `commands/index.ts` replaced with `state.logger.debug()`.
+- Test assertions migrated from `console.warn` spies to `pi.appended` entry checks.
+- `CLAUDE.md` — added logger architecture description, logging docs reference, diagnostic pointer.
+- `docs/lifecycle-state-space.md` — added runtime diagnosis section with logging reference.
+- `docs/command-authoring.md` — added diagnosing command behavior section.
+
 ## 0.23.0 — Model identity tracking for accurate GitHub attribution
 
 Adds model identity tracking so agents have reliable model attribution without relying on self-knowledge. A new `model-identity.ts` module captures the initial model at session start, injects a stable `# Model Identity` block into the system prompt, and delivers change notifications on model switch via lifecycle-appropriate paths. Command prose in `pr-review` and `pr-review-assessment` updated to use harness-provided attribution instead of "identify yourself" directives (issue #163).

@@ -1,4 +1,9 @@
-import type { CommandStatusPayload, CommandStatusRestingPayload, CommandStatusRestingStatus } from "./types.ts";
+import type {
+	CommandStatusPayload,
+	CommandStatusRestingPayload,
+	CommandStatusRestingStatus,
+	ScramjetState,
+} from "./types.ts";
 
 export type LifecycleState =
 	| { phase: "idle" }
@@ -195,4 +200,21 @@ export function reconstructPhase(entries: readonly PhaseEntry[]): ReconstructedP
 		}
 	}
 	return { phase, activeCommandCleared };
+}
+
+export function logTransition(
+	state: ScramjetState,
+	from: LifecycleState,
+	to: LifecycleState,
+	event: LifecycleEvent["type"],
+	detail?: Record<string, unknown>,
+): void {
+	const command = getActiveCommand(from) ?? getActiveCommand(to);
+	state.logger.lifecycle("lifecycle transition", {
+		from: from.phase,
+		to: to.phase,
+		event,
+		...(command ? { command } : {}),
+		...(detail ? { detail } : {}),
+	});
 }

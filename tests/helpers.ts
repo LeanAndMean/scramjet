@@ -1,3 +1,4 @@
+import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
 import type { LifecycleState } from "../phase-machine.ts";
 import type { ScramjetState } from "../types.ts";
 
@@ -15,6 +16,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
+		logger: createLogger({ appendEntry() {} } as any),
 		...overrides,
 	};
 }
@@ -110,4 +112,10 @@ export function recordingPi(): RecordingPi {
 		for (const h of handlers.get(event) ?? []) await h(payload, ctx);
 	}
 	return { pi, tools, commands, handlers, emit };
+}
+
+export function logMessages(pi: any, level?: string): string[] {
+	return pi.appended
+		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE && (level ? entry.data.level === level : true))
+		.map((entry: any) => entry.data.message);
 }
