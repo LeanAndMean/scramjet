@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.25.3 — Fix model-identity input transform corrupting slash-command expansion
+
+Fix a race condition where the model-identity module's `input` transform could prepend `[scramjet] Model changed to: ...` to a slash command during fresh-session next-step dispatches, preventing Pi from recognizing the command. Two complementary fixes: (1) the `input` handler now detects `/`-prefixed text and redirects the notification to `before_agent_start` instead of transforming, and (2) model changes arriving before the first turn update `initialModel` directly (updating the system prompt) instead of setting pending notification flags, eliminating the root-cause spurious change detection (issue #185).
+
+### Changed
+
+- `model-identity.ts` — added slash-command input guard in the `input` handler; added `firstTurnStarted` flag so pre-first-turn model changes update `initialModel` directly instead of setting pending flags.
+- `tests/model-identity.test.ts` — added 7 test-first tests across two describe blocks (`slash-command input guard`, `pre-first-turn model change`); added `turn_start` calls to existing post-first-turn tests for correctness.
+
 ## 0.25.2 — XML framing and argument deduplication in command prose
 
 Wrap all 17 command bodies in `<scramjet-command name="...">` tags to structurally distinguish command instructions from ordinary user messages. User-provided arguments are now enclosed in `<user-context>` (top-level commands) or `<caller-context>` (delegate-only subroutines) XML tags. Deduplicate `$ARGUMENTS` in 5 multi-reference commands so each substitutes it exactly once (issue #182).

@@ -182,6 +182,7 @@ describe("model_select debounce and delivery", () => {
 		it("stores pendingForInput and transforms input text", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = { phase: "idle" };
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -199,6 +200,7 @@ describe("model_select debounce and delivery", () => {
 		it("clears the pending flag after input transform", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = { phase: "idle" };
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -214,6 +216,7 @@ describe("model_select debounce and delivery", () => {
 		it("works in waiting phase", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = lifecycleFor("waiting");
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -229,6 +232,7 @@ describe("model_select debounce and delivery", () => {
 		it("works in dormant phase", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = lifecycleFor("dormant");
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -245,6 +249,7 @@ describe("model_select debounce and delivery", () => {
 		it("stores pendingForNextTurn and delivers via before_agent_start message", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = lifecycleFor("running");
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -263,6 +268,7 @@ describe("model_select debounce and delivery", () => {
 		it("clears the pending flag after delivery", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = lifecycleFor("running");
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -278,6 +284,7 @@ describe("model_select debounce and delivery", () => {
 		it("skips message delivery during probing phase (avoids probe interference)", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = lifecycleFor("probing");
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -293,6 +300,7 @@ describe("model_select debounce and delivery", () => {
 		it("delivers model change notification after probing phase completes", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = lifecycleFor("running");
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -320,6 +328,7 @@ describe("model_select debounce and delivery", () => {
 		it("does not transform slash-command input", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = { phase: "idle" };
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -338,6 +347,7 @@ describe("model_select debounce and delivery", () => {
 		it("protects whitespace-prefixed slash commands", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = { phase: "idle" };
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -356,6 +366,7 @@ describe("model_select debounce and delivery", () => {
 		it("redirects blocked notification to before_agent_start message", async () => {
 			const { handlers, emit, state } = setupWithModel();
 			await initModel(emit);
+			await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 			state.lifecycle = { phase: "idle" };
 
 			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -390,9 +401,82 @@ describe("model_select debounce and delivery", () => {
 		});
 	});
 
+	describe("pre-first-turn model change", () => {
+		it("updates initialModel directly without setting pendingForInput", async () => {
+			const { handlers, emit, state } = setupWithModel();
+			await initModel(emit);
+			state.lifecycle = { phase: "idle" };
+
+			// model_select before any turn_start → pre-first-turn
+			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+			vi.advanceTimersByTime(500);
+
+			// No pendingForInput — input should pass through untransformed
+			const inputHandler = handlers.get("input")![0];
+			const result = (await inputHandler({ type: "input", text: "hello", source: "interactive" })) as any;
+			expect(result).toBeUndefined();
+
+			// System prompt should reflect the NEW model
+			const basHandler = handlers.get("before_agent_start")![0];
+			const basResult = (await basHandler({ systemPrompt: "BASE" })) as any;
+			expect(basResult.systemPrompt).toContain("GPT 5.5");
+			expect(basResult.systemPrompt).toContain("gpt-5-5");
+		});
+
+		it("post-first-turn model change still uses input transform", async () => {
+			const { handlers, emit, state } = setupWithModel();
+			await initModel(emit);
+			state.lifecycle = { phase: "idle" };
+
+			// turn_start marks the first turn
+			await emit("turn_start", { type: "turn_start", turnIndex: 1, timestamp: 123 });
+
+			// model_select AFTER turn_start → post-first-turn, should use input transform
+			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+			vi.advanceTimersByTime(500);
+
+			const inputHandler = handlers.get("input")![0];
+			const result = (await inputHandler({ type: "input", text: "hello", source: "interactive" })) as any;
+			expect(result.action).toBe("transform");
+			expect(result.text).toContain("[scramjet] Model changed to: GPT 5.5");
+		});
+
+		it("firstTurnStarted is cleared on rebuild", async () => {
+			const { handlers, emit, state } = setupWithModel();
+			await initModel(emit);
+			state.lifecycle = { phase: "idle" };
+
+			// Mark first turn as started
+			await emit("turn_start", { type: "turn_start", turnIndex: 1, timestamp: 123 });
+
+			// Rebuild via resume — should clear firstTurnStarted
+			const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+			const ctx = {
+				sessionManager: { getBranch: () => entries },
+				model: fakeModel(),
+			};
+			await emit("session_start", { type: "session_start", reason: "resume" }, ctx);
+
+			// model_select after rebuild but before new turn_start → pre-first-turn again
+			await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+			vi.advanceTimersByTime(500);
+
+			// No pendingForInput — input should pass through untransformed
+			const inputHandler = handlers.get("input")![0];
+			const result = (await inputHandler({ type: "input", text: "hello", source: "interactive" })) as any;
+			expect(result).toBeUndefined();
+
+			// System prompt should reflect the new model
+			const basHandler = handlers.get("before_agent_start")![0];
+			const basResult = (await basHandler({ systemPrompt: "BASE" })) as any;
+			expect(basResult.systemPrompt).toContain("GPT 5.5");
+		});
+	});
+
 	it("keeps system prompt showing initial model after model change (cache-friendly)", async () => {
 		const { handlers, emit, state } = setupWithModel();
 		await initModel(emit);
+		await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 		state.lifecycle = { phase: "idle" };
 
 		const basHandler = handlers.get("before_agent_start")![0];
@@ -424,6 +508,7 @@ describe("model_select debounce and delivery", () => {
 	it("does not inject message into probe turn (probing phase)", async () => {
 		const { handlers, emit, state } = setupWithModel();
 		await initModel(emit);
+		await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 		state.lifecycle = lifecycleFor("running");
 
 		await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
@@ -442,6 +527,7 @@ describe("model_select debounce and delivery", () => {
 	it("flags are mutually exclusive across phase transitions", async () => {
 		const { handlers, emit, state } = setupWithModel();
 		await initModel(emit);
+		await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 		state.lifecycle = lifecycleFor("running");
 
 		// First change during running
@@ -699,6 +785,7 @@ describe("resume reconstruction integration", () => {
 		const { handlers, emit, state } = setup();
 		// Create a pending change from stage 2 behavior
 		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
+		await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 		state.lifecycle = { phase: "idle" };
 
 		vi.useFakeTimers();
