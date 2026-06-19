@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.25.2 — XML framing and argument deduplication in command prose
+
+Wrap all 17 command bodies in `<scramjet-command name="...">` tags to structurally distinguish command instructions from ordinary user messages. User-provided arguments are now enclosed in `<user-context>` (top-level commands) or `<caller-context>` (delegate-only subroutines) XML tags. Deduplicate `$ARGUMENTS` in 5 multi-reference commands so each substitutes it exactly once (issue #182).
+
+### Changed
+
+- All 17 Mach 12 command `.md` files — added `<scramjet-command>` outer wrapper and `<user-context>` / `<caller-context>` argument tags.
+- 5 multi-reference commands (`issue-create`, `pr-create`, `push`, `pr-review-fix`, `issue-implement`) — deduplicated `$ARGUMENTS` to a single substitution point.
+- `docs/command-authoring.md` — documented XML framing convention, context tag distinction, single-substitution rule, and close-tag escaping note.
+
 ## 0.25.1 — Inline arrow indicator for select renderResult
 
 Replace the separate `Selected: Label` trailing line in select interaction renders with an inline `→` prefix on the chosen option, matching the live `MultiLineSelectList` visual language. Unselected options use a neutral space prefix; cancelled interactions retain their existing dash-prefix format (issue #180).
