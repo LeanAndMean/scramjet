@@ -36,7 +36,11 @@ export function createLogger(pi: ExtensionAPI): ScramjetLogger {
 	return {
 		warn(category, message, data?) {
 			append("warn", category, message, data);
-			if (!hasUI) process.stderr.write(`[scramjet/${category}] ${message}\n`);
+			if (!hasUI) {
+				try {
+					process.stderr.write(`[scramjet/${category}] ${message}\n`);
+				} catch {}
+			}
 		},
 		debug(category, message, data?) {
 			append("debug", category, message, data);

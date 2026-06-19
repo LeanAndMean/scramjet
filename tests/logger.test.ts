@@ -145,4 +145,14 @@ describe("createLogger", () => {
 		const written = stderrSpy.mock.calls[0][0];
 		expect(written).toContain("visible warning");
 	});
+
+	it("swallows stderr write failures without propagating", () => {
+		stderrSpy.mockRestore();
+		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+			throw new Error("EPIPE");
+		});
+		const { pi } = fakePi();
+		const logger = createLogger(pi as any);
+		expect(() => logger.warn("probe", "broken pipe")).not.toThrow();
+	});
 });
