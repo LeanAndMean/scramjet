@@ -270,6 +270,7 @@ describe("model_select debounce and delivery", () => {
 			expect(result.message.content).toContain("[scramjet] Model changed to: GPT 5.5 (ID: gpt-5-5).");
 			expect(result.message.content).toContain("Please continue.");
 			expect(result.message.display).toBe(true);
+			expect(result.systemPrompt).toBeUndefined();
 		});
 
 		it("clears the pending flag after delivery", async () => {
@@ -328,6 +329,7 @@ describe("model_select debounce and delivery", () => {
 			expect(runningResult.message).toBeDefined();
 			expect(runningResult.message.content).toContain("[scramjet] Model changed to: GPT 5.5");
 			expect(runningResult.message.content).toContain("Please continue.");
+			expect(runningResult.systemPrompt).toBeUndefined();
 		});
 	});
 
@@ -389,6 +391,7 @@ describe("model_select debounce and delivery", () => {
 			expect(result.message).toBeDefined();
 			expect(result.message.content).toContain("[scramjet] Model changed to: GPT 5.5");
 			expect(result.message.content).toContain("Please continue.");
+			expect(result.systemPrompt).toBeUndefined();
 		});
 
 		it("protects slash commands after rebuild-divergence sets pendingForInput", async () => {
