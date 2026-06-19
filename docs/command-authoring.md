@@ -338,11 +338,15 @@ allowed-tools:
 **Example subroutine body pattern:**
 
 ```markdown
+<scramjet-command name="mach12:gh-issue-read">
+
 # Read GitHub Issue
 
 You are reading a GitHub issue.
 
-**Caller input:** $ARGUMENTS
+<caller-context>
+$ARGUMENTS
+</caller-context>
 
 ## Step 1: Parse input
 
@@ -357,6 +361,8 @@ gh issue view <issue-number> --json title,body,comments
 ## Step 3: Return
 
 Return the issue title, body, and comments to the caller.
+
+</scramjet-command>
 ```
 
 ### Cycle detection
@@ -611,11 +617,15 @@ next:
   <mode-specific fields>
 ---
 
+<scramjet-command name="set-name:command-name">
+
 # Command Title
 
 <Brief statement of what the agent is doing.>
 
-**User input:** $ARGUMENTS
+<user-context>
+$ARGUMENTS
+</user-context>
 
 ## Step 1: <First step>
 
@@ -637,20 +647,25 @@ Delegate to:
 
 When Scramjet asks you to report command status, call `report_scramjet_command_status`
 with <specific instructions for this command's reporting>.
+
+</scramjet-command>
 ```
 
 ### Conventions
 
+- **XML framing** — the entire command body (everything after the frontmatter `---`) is wrapped in `<scramjet-command name="...">...</scramjet-command>`. The `name` attribute matches the command's qualified name (e.g., `mach12:issue-plan`). This structural boundary distinguishes command instructions from ordinary user messages.
+- **User context tags** — user-provided arguments are wrapped in XML tags, not embedded inline in markdown bold text. The tag varies by command role:
+  - `<user-context>$ARGUMENTS</user-context>` — top-level commands (arguments come from the end user).
+  - `<caller-context>$ARGUMENTS</caller-context>` — delegate-only subroutines (arguments come from the calling command).
+  - Omit the context block entirely for commands that accept no arguments (e.g., `mach12:find-contribution-guidelines`).
+- **Single substitution rule** — `$ARGUMENTS` (or positional placeholders like `$1`, `$@`) appears exactly once in the command body, inside the context tags. Subsequent references use prose (e.g., "the user context above", "the arguments provided above") rather than re-substituting the full content. This prevents argument duplication in the expanded prompt.
 - **Title** uses `# Heading` (H1). Matches the command's purpose.
-- **User input label** varies by command role:
-  - `**User input:** $ARGUMENTS` — top-level commands with required arguments.
-  - `**Context (optional):** $ARGUMENTS` — commands where the argument is optional context (e.g., `mach12:push`).
-  - `**Caller input:** $ARGUMENTS` — delegate-only subroutines that receive input from their caller, not the user.
 - **Steps** are numbered `## Step N:` headings.
 - **Delegation** uses a fenced code block with the slash-command invocation.
 - **Status reporting** goes at the end of the last substantive step in a top-level command. It does not need its own dedicated step — most commands embed reporting instructions in the final step that also handles the last action (posting a comment, pushing code, etc.).
 - **Imperative voice** throughout: "You are doing X", "Read the issue", "Delegate to".
 - **Concrete examples** over abstract descriptions. Show the exact `gh` command, the exact tool call shape, the exact `next_steps` structure.
+- **Close-tag escaping** — if user-provided content could contain literal `</scramjet-command>` or `</user-context>` strings that would break parsing, escaping is needed. This is tracked separately in issue 183.
 
 ### Diagnosing command behavior
 
