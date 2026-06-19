@@ -2,7 +2,7 @@
 
 ## 0.25.4 — Upgrade Pi dependencies to 0.74.0-scramjet.4
 
-Upgrade all four Pi dependencies from upstream `0.74.0` / fork `0.74.0-scramjet.1` to `@leanandmean` fork `0.74.0-scramjet.4`. The new fork adds sectioned, cache-aware system prompt support (`SystemPromptSection`, `flattenSystemPrompt`), increased parallel subagent output limits, and the Scramjet dispatch extension APIs (`dispatchUserInput`, `newSession` on `ExtensionContext`). All four packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`) are now aliased through `npm:@leanandmean/...` (issue #190).
+Upgrade all four Pi dependencies from upstream `0.74.0` / fork `0.74.0-scramjet.1` to `@leanandmean` fork `0.74.0-scramjet.4`. The new fork adds sectioned, cache-aware system prompt support (`SystemPromptSection`, `flattenSystemPrompt`), increased parallel subagent output limits, and expanded JSDoc for the Scramjet dispatch extension APIs (`dispatchUserInput`, `newSession` on `ExtensionContext`). All four packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`) are now aliased through `npm:@leanandmean/...` (issue #190).
 
 ### Changed
 
