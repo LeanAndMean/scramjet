@@ -359,7 +359,7 @@ function renderUserInputResult(
 			details.cancelled === true
 				? "Cancelled"
 				: typeof details.selected === "string"
-					? `Selected: ${details.selected}`
+					? `Selected: ${options.find((o) => o.value === details.selected)?.label ?? details.selected}`
 					: "";
 		if (!outcome) return new Text("", 0, 0);
 		return new Text(compactLines([messageLine, "Options:", ...optionLines, outcome]).join("\n"), 0, 0);
@@ -389,7 +389,7 @@ function parseUserInputOptions(value: unknown): UserInputOption[] | null {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function compactLines(lines: string[]) {
