@@ -351,18 +351,20 @@ function renderUserInputResult(
 	if (details.type === "select") {
 		const options = parseUserInputOptions(details.options);
 		if (!options) return new Text("", 0, 0);
+		if (details.cancelled === true) {
+			const optionLines = options.map((option) => {
+				const description = option.description ? ` — ${option.description}` : "";
+				return `- ${option.label}${description}`;
+			});
+			return new Text(compactLines([messageLine, "Options:", ...optionLines, "Cancelled"]).join("\n"), 0, 0);
+		}
+		if (typeof details.selected !== "string") return new Text("", 0, 0);
 		const optionLines = options.map((option) => {
 			const description = option.description ? ` — ${option.description}` : "";
-			return `- ${option.label}${description}`;
+			const prefix = option.value === details.selected ? "→ " : "  ";
+			return `${prefix}${option.label}${description}`;
 		});
-		const outcome =
-			details.cancelled === true
-				? "Cancelled"
-				: typeof details.selected === "string"
-					? `Selected: ${options.find((o) => o.value === details.selected)?.label ?? details.selected}`
-					: "";
-		if (!outcome) return new Text("", 0, 0);
-		return new Text(compactLines([messageLine, "Options:", ...optionLines, outcome]).join("\n"), 0, 0);
+		return new Text(compactLines([messageLine, ...optionLines]).join("\n"), 0, 0);
 	}
 
 	if (details.type === "freetext") {

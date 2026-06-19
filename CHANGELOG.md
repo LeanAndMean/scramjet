@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.25.1 — Inline arrow indicator for select renderResult
+
+Replace the separate `Selected: Label` trailing line in select interaction renders with an inline `→` prefix on the chosen option, matching the live `MultiLineSelectList` visual language. Unselected options use a neutral space prefix; cancelled interactions retain their existing dash-prefix format (issue #180).
+
+### Changed
+
+- `user-input.ts` — select `renderResult` now marks the selected option with `→ ` prefix inline rather than appending a `Selected:` line.
+
 ## 0.25.0 — Persist structured input prompt history
 
 Structured input prompts now remain visible in the session transcript after confirm/select interactions complete or are cancelled, including select option labels and descriptions (issue #171).
