@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.25.5 — Migrate prompt hooks to systemPromptSection for cache-aware prompts
+
+Migrate `base-directives.ts`, `agent-catalog.ts`, and `model-identity.ts` from full `systemPrompt` string replacement to named `systemPromptSection` returns, enabling Pi's cache-aware sectioned prompt support available since `0.74.0-scramjet.4` (issue #192).
+
+### Changed
+
+- `agent-catalog.ts` — returns `{ systemPromptSection: { id: "scramjet:agent-catalog", text } }` instead of concatenating onto `event.systemPrompt`.
+- `base-directives.ts` — returns `{ systemPromptSection: { id: "scramjet:base-directives", text } }` instead of concatenating onto `event.systemPrompt`.
+- `model-identity.ts` — returns `{ systemPromptSection: { id: "scramjet:model-identity", text } }` instead of concatenating onto `event.systemPrompt`.
+- `CLAUDE.md` — architecture descriptions updated to reflect `systemPromptSection` pattern.
+- Tests updated to assert on `systemPromptSection` shape and verify `systemPrompt` key is absent.
+
 ## 0.25.4 — Upgrade Pi dependencies to 0.74.0-scramjet.4
 
 Upgrade all four Pi dependencies from upstream `0.74.0` / fork `0.74.0-scramjet.1` to `@leanandmean` fork `0.74.0-scramjet.4`. The new fork adds sectioned, cache-aware system prompt support (`SystemPromptSection`, `flattenSystemPrompt`), increased parallel subagent output limits, and expanded JSDoc for the Scramjet dispatch extension APIs (`dispatchUserInput`, `newSession` on `ExtensionContext`). All four packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`) are now aliased through `npm:@leanandmean/...` (issue #190).
