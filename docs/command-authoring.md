@@ -480,7 +480,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Freetext renders its `message` in the tool call row, then parks the command in `waiting` immediately so the user can reply through the standard editor.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. Freetext renders its `message` in the tool call row, then parks the command in `waiting` immediately so the user can reply through the standard editor.
 
 ### When to use it
 
@@ -517,7 +517,7 @@ Returns `{ "confirmed": true }`, `{ "confirmed": false }`, or `{ "cancelled": tr
 }
 ```
 
-Returns `{ "selected": "patch" }` or `{ "cancelled": true }`. The `recommended` field (zero-based index) highlights the suggested option; it is optional.
+Returns `{ "selected": "patch" }` or `{ "cancelled": true }`. The result row also shows the prompt and all presented options, including labels and descriptions. The `recommended` field (zero-based index) highlights the suggested option; it is optional.
 
 **freetext** — open-ended input:
 
@@ -537,7 +537,7 @@ The tool is callable during the `running` and `probing` phases only. Outside an 
 
 ### Journaling
 
-Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; freetext records only the prompt. Freetext and cancellation with an active top-level command are also journaled as `scramjet:user-input-parked` entries so resume reconstruction preserves the waiting state.
+Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; select entries also record the presented options. Freetext records only the prompt. Freetext and cancellation with an active top-level command are also journaled as `scramjet:user-input-parked` entries so resume reconstruction preserves the waiting state.
 
 ### Don't
 

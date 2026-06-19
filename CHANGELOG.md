@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.25.0 — Persist structured input prompt history
+
+Structured input prompts now remain visible in the session transcript after confirm/select interactions complete or are cancelled, including select option labels and descriptions (issue #171).
+
+### Added
+
+- `get_scramjet_user_input` result rendering for confirm, select, and freetext interactions, preserving the prompt question separately from the machine-readable tool result.
+- Select interaction details now include the presented options for successful and cancelled selections, so journaled history keeps the visible choice context.
+- Tests covering prompt result rendering, select option persistence, cancelled interactions, fallback paths, and ToolExecutionComponent integration.
+
+### Changed
+
+- `docs/command-authoring.md` — documented durable confirm/select prompt history and select option visibility.
+
 ## 0.24.0 — Structured logging system replacing console.warn
 
 Replaces raw `console.warn` calls with a structured logging utility that journals diagnostic and lifecycle events via `pi.appendEntry()`. Eliminates TUI input area pollution, enables queryable lifecycle diagnosis from session JSONL, and adds agent-facing troubleshooting documentation (issue #169).
