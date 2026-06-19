@@ -36,7 +36,11 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 	"text output / cadence": "End-of-turn summary",
 };
 
-type BeforeAgentStartResult = { systemPrompt: string; message?: unknown };
+type BeforeAgentStartResult = {
+	systemPromptSection: { id: string; text: string };
+	systemPrompt?: unknown;
+	message?: unknown;
+};
 
 function captureHandler() {
 	const { pi, handlers } = recordingPi();
@@ -54,28 +58,27 @@ describe("registerBaseDirectives", () => {
 		expect(tools).toHaveLength(0);
 	});
 
-	it("appends the directives on top of the base prompt Pi already assembled", async () => {
+	it("returns directives as a cache-aware system prompt section", async () => {
 		const { list } = captureHandler();
 		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
 
-		// The base survives verbatim and leads — the directives are appended, not
-		// substituted, so a user's SYSTEM.md / --system-prompt is preserved.
-		expect(result.systemPrompt).toContain("BASE PROMPT");
-		expect(result.systemPrompt.startsWith("BASE PROMPT")).toBe(true);
-		expect(result.systemPrompt.length).toBeGreaterThan("BASE PROMPT".length);
+		expect(result.systemPromptSection.id).toBe("scramjet:base-directives");
+		expect(result.systemPromptSection.text.startsWith("\n\n# Scramjet")).toBe(true);
+		expect(result.systemPromptSection.text).not.toContain("BASE PROMPT");
 	});
 
-	it("returns only systemPrompt (no message) so it can't disturb the next-step injection", async () => {
+	it("returns only systemPromptSection (no systemPrompt or message) so it can't disturb prompt section composition", async () => {
 		const { list } = captureHandler();
 		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
-		expect(Object.keys(result)).toEqual(["systemPrompt"]);
+		expect(Object.keys(result)).toEqual(["systemPromptSection"]);
+		expect(result.systemPrompt).toBeUndefined();
 		expect(result.message).toBeUndefined();
 	});
 
 	it.each(Object.entries(DIRECTIVE_ANCHORS))("includes the %s directive area", async (_area, anchor) => {
 		const { list } = captureHandler();
 		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
-		expect(result.systemPrompt).toContain(anchor);
+		expect(result.systemPromptSection.text).toContain(anchor);
 	});
 
 	// Covers the packageRoot() walk and doc-pointer construction the anchor table
@@ -85,9 +88,9 @@ describe("registerBaseDirectives", () => {
 		const { list } = captureHandler();
 		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
 
-		const readmePath = result.systemPrompt.match(/README: (.+)/)?.[1];
-		const visionPath = result.systemPrompt.match(/Vision \/ design: (.+)/)?.[1];
-		const authoringPath = result.systemPrompt.match(/Command authoring .+?: (.+)/)?.[1];
+		const readmePath = result.systemPromptSection.text.match(/README: (.+)/)?.[1];
+		const visionPath = result.systemPromptSection.text.match(/Vision \/ design: (.+)/)?.[1];
+		const authoringPath = result.systemPromptSection.text.match(/Command authoring .+?: (.+)/)?.[1];
 
 		expect(readmePath).toMatch(/README\.md$/);
 		expect(visionPath).toMatch(/docs\/scramjet-vision\.md$/);

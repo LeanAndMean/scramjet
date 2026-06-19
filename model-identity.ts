@@ -186,16 +186,16 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		return { action: "transform" as const, text: `${changeMessage(state.currentModel!)}\n\n${event.text}` };
 	});
 
-	pi.on("before_agent_start", (event) => {
-		const systemPrompt = initialModel
-			? `${event.systemPrompt}\n\n${buildModelIdentityBlock(initialModel)}`
+	pi.on("before_agent_start", () => {
+		const systemPromptSection = initialModel
+			? { id: "scramjet:model-identity", text: `\n\n${buildModelIdentityBlock(initialModel)}` }
 			: undefined;
 
 		if (pendingForNextTurn) {
 			if (state.lifecycle.phase !== "probing") {
 				pendingForNextTurn = false;
 				return {
-					...(systemPrompt ? { systemPrompt } : {}),
+					...(systemPromptSection ? { systemPromptSection } : {}),
 					message: {
 						customType: "scramjet:model-change",
 						content: `${changeMessage(state.currentModel!)} Please continue.`,
@@ -205,8 +205,8 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			}
 		}
 
-		if (!systemPrompt) return {};
-		return { systemPrompt };
+		if (!systemPromptSection) return {};
+		return { systemPromptSection };
 	});
 
 	pi.on("turn_start", (event) => {

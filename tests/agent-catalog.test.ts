@@ -46,19 +46,25 @@ describe("registerAgentCatalog", () => {
 		expect(tools).toHaveLength(0);
 	});
 
-	it("appends catalog to existing system prompt", async () => {
+	it("returns catalog as a cache-aware system prompt section", async () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshState({
 			agentRegistry: makeRegistry(["test-agent", "Does testing"]),
 		});
 		registerAgentCatalog(pi, state);
 		const handler = handlers.get("before_agent_start")![0];
-		const result = (await handler({ systemPrompt: "BASE" })) as { systemPrompt: string };
-		expect(result.systemPrompt).toMatch(/^BASE\n\n/);
-		expect(result.systemPrompt).toContain("- test-agent: Does testing");
+		const result = (await handler({ systemPrompt: "BASE" })) as {
+			systemPromptSection: { id: string; text: string };
+			systemPrompt?: unknown;
+		};
+		expect(result.systemPromptSection.id).toBe("scramjet:agent-catalog");
+		expect(result.systemPromptSection.text).toMatch(/^\n\n# Available subagents/);
+		expect(result.systemPromptSection.text).toContain("- test-agent: Does testing");
+		expect(result.systemPromptSection.text).not.toContain("BASE");
+		expect(result.systemPrompt).toBeUndefined();
 	});
 
-	it("returns only systemPrompt, no message", async () => {
+	it("returns only systemPromptSection, no systemPrompt or message", async () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshState({
 			agentRegistry: makeRegistry(["a", "desc"]),
@@ -66,7 +72,8 @@ describe("registerAgentCatalog", () => {
 		registerAgentCatalog(pi, state);
 		const handler = handlers.get("before_agent_start")![0];
 		const result = (await handler({ systemPrompt: "BASE" })) as Record<string, unknown>;
-		expect(result).toHaveProperty("systemPrompt");
+		expect(result).toHaveProperty("systemPromptSection");
+		expect(result).not.toHaveProperty("systemPrompt");
 		expect(result).not.toHaveProperty("message");
 	});
 

@@ -1,5 +1,5 @@
 /**
- * Base directives: a general coding-agent quality block appended to Pi's
+ * Base directives: a general coding-agent quality block contributed to Pi's
  * assembled system prompt on every turn.
  *
  * The prose is adopted from the battle-tested Claude Code CLI system prompt
@@ -9,11 +9,11 @@
  * quality level that prompt encodes; deviation from the captured wording is
  * minimized deliberately (issue 78).
  *
- * The block is APPENDED (via before_agent_start) on top of whatever Pi already
- * assembled — including a user's SYSTEM.md — so the directives, and the safety
- * guidance in particular, are always present. It returns only `systemPrompt`
- * (no `message`), so it composes cleanly with any other before_agent_start
- * handler. It is unconditional: base-prompt quality applies
+ * The block is contributed (via before_agent_start) as a prompt section for Pi
+ * to compose with whatever it already assembled — including a user's SYSTEM.md —
+ * so the directives, and the safety guidance in particular, are always present.
+ * It returns only `systemPromptSection` (no `message`), so it composes cleanly
+ * with any other before_agent_start handler. It is unconditional: base-prompt quality applies
  * regardless of /scramjet on|off (same flag-independent posture as
  * pr-indicator.ts), so no ScramjetState is threaded.
  *
@@ -115,7 +115,7 @@ Match responses to the task: a simple question gets a direct answer, not headers
 In code: default to writing no comments. Never write multi-paragraph docstrings or multi-line comment blocks — one short line max. Don't create planning, decision, or analysis documents unless the user asks for them — work from conversation context, not intermediate files.`;
 
 export function registerBaseDirectives(pi: ExtensionAPI): void {
-	pi.on("before_agent_start", (event) => ({
-		systemPrompt: `${event.systemPrompt}\n\n${SCRAMJET_BASE_DIRECTIVES}`,
+	pi.on("before_agent_start", () => ({
+		systemPromptSection: { id: "scramjet:base-directives", text: `\n\n${SCRAMJET_BASE_DIRECTIVES}` },
 	}));
 }
