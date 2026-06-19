@@ -22,11 +22,15 @@ next:
         confident in the staged breakdown.
 ---
 
+<scramjet-command name="mach12:issue-plan">
+
 # Issue Plan
 
 You are creating a staged implementation plan for a GitHub issue. Your goal is to deeply understand the issue, explore the relevant codebase, and produce a plan where each stage can be implemented within a single session.
 
-**User input:** $ARGUMENTS
+<user-context>
+$ARGUMENTS
+</user-context>
 
 ## Guardrails
 
@@ -253,3 +257,5 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 - Always include an entry with `message`: `/mach12:issue-implement <issue-number> <first-stage>`, `fresh_session`: `true`, and `reason`: a brief explanation that the plan is ready to implement.
 - Set `recommended_next_step` to indicate your preference: recommend `mach12:issue-review` (index 0) when the plan is non-trivial, touches risky areas, or should receive an approval gate; recommend `mach12:issue-implement` (index 1) when the plan is small, uncontroversial, and you are confident in the staged breakdown.
 - Leave `next_steps` empty if the appropriate next action is unclear. If the user cancelled, the plan was not posted, or you otherwise did not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
+
+</scramjet-command>

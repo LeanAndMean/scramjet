@@ -6,11 +6,15 @@ allowed-tools:
   - grep
 ---
 
+<scramjet-command name="mach12:gh-sub-issues">
+
 # Detect Sub-Issues
 
 You are detecting the sub-issues of a GitHub issue. Two strategies, used in order: the API call first, the body-parse fallback only when the API call fails.
 
-**Caller input:** $ARGUMENTS
+<caller-context>
+$ARGUMENTS
+</caller-context>
 
 This subroutine is `gh`-specific. A future forge-agnostic command set would substitute an equivalent `glab-sub-issues` (or similar); Strategy B is forge-neutral and would survive a swap.
 
@@ -61,3 +65,5 @@ If `--with-state` was requested, query each matched number's state individually:
 Return the list of sub-issues (empty list is a valid answer) and which strategy produced it (`"api"` or `"body-parse"`). Each entry includes the issue number; if `--with-state` was requested, each entry also includes the state.
 
 When Strategy B was used, note this in the return -- the caller may want to flag the list to the user as less reliable than the API.
+
+</scramjet-command>
