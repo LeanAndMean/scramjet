@@ -58,20 +58,27 @@ describe("registerModelIdentity", () => {
 
 		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
 		const handler = handlers.get("before_agent_start")![0];
-		const first = (await handler({ systemPrompt: "BASE" })) as { systemPrompt: string; message?: unknown };
+		const first = (await handler({ systemPrompt: "BASE" })) as {
+			systemPromptSection: { id: string; text: string };
+			systemPrompt?: unknown;
+			message?: unknown;
+		};
 		await emit("turn_start", { type: "turn_start", turnIndex: 3, timestamp: 123 });
-		const second = (await handler({ systemPrompt: "BASE" })) as { systemPrompt: string; message?: unknown };
+		const second = (await handler({ systemPrompt: "BASE" })) as typeof first;
 
 		expect(first).toEqual(second);
-		expect(Object.keys(first)).toEqual(["systemPrompt"]);
+		expect(Object.keys(first)).toEqual(["systemPromptSection"]);
+		expect(first.systemPrompt).toBeUndefined();
 		expect(first.message).toBeUndefined();
-		expect(first.systemPrompt).toContain("BASE\n\n# Model Identity");
-		expect(first.systemPrompt).toContain(
+		expect(first.systemPromptSection.id).toBe("scramjet:model-identity");
+		expect(first.systemPromptSection.text).toContain("\n\n# Model Identity");
+		expect(first.systemPromptSection.text).not.toContain("BASE");
+		expect(first.systemPromptSection.text).toContain(
 			"Your model is: Claude Opus 4.6 (ID: claude-opus-4-6, provider: anthropic).",
 		);
-		expect(first.systemPrompt).toContain("messages prefixed with [scramjet]");
-		expect(first.systemPrompt).toContain('Single model: "Reviewed by Claude Opus 4.6"');
-		expect(first.systemPrompt).toContain("Multiple models: describe each model's contribution");
+		expect(first.systemPromptSection.text).toContain("messages prefixed with [scramjet]");
+		expect(first.systemPromptSection.text).toContain('Single model: "Reviewed by Claude Opus 4.6"');
+		expect(first.systemPromptSection.text).toContain("Multiple models: describe each model's contribution");
 	});
 
 	it("does not duplicate model history on later turn_start events", async () => {
@@ -294,7 +301,7 @@ describe("model_select debounce and delivery", () => {
 			const result = (await basHandler({ systemPrompt: "BASE" })) as any;
 
 			expect(result.message).toBeUndefined();
-			expect(result.systemPrompt).toContain("Claude Opus 4.6");
+			expect(result.systemPromptSection.text).toContain("Claude Opus 4.6");
 		});
 
 		it("delivers model change notification after probing phase completes", async () => {
@@ -419,8 +426,8 @@ describe("model_select debounce and delivery", () => {
 			// System prompt should reflect the NEW model
 			const basHandler = handlers.get("before_agent_start")![0];
 			const basResult = (await basHandler({ systemPrompt: "BASE" })) as any;
-			expect(basResult.systemPrompt).toContain("GPT 5.5");
-			expect(basResult.systemPrompt).toContain("gpt-5-5");
+			expect(basResult.systemPromptSection.text).toContain("GPT 5.5");
+			expect(basResult.systemPromptSection.text).toContain("gpt-5-5");
 		});
 
 		it("post-first-turn model change still uses input transform", async () => {
@@ -469,7 +476,7 @@ describe("model_select debounce and delivery", () => {
 			// System prompt should reflect the new model
 			const basHandler = handlers.get("before_agent_start")![0];
 			const basResult = (await basHandler({ systemPrompt: "BASE" })) as any;
-			expect(basResult.systemPrompt).toContain("GPT 5.5");
+			expect(basResult.systemPromptSection.text).toContain("GPT 5.5");
 		});
 	});
 
@@ -487,11 +494,11 @@ describe("model_select debounce and delivery", () => {
 
 		const after = (await basHandler({ systemPrompt: "BASE" })) as any;
 
-		expect(after.systemPrompt).toBe(before.systemPrompt);
-		expect(after.systemPrompt).toContain(
+		expect(after.systemPromptSection.text).toBe(before.systemPromptSection.text);
+		expect(after.systemPromptSection.text).toContain(
 			"Your model is: Claude Opus 4.6 (ID: claude-opus-4-6, provider: anthropic).",
 		);
-		expect(after.systemPrompt).not.toContain("GPT 5.5");
+		expect(after.systemPromptSection.text).not.toContain("GPT 5.5");
 	});
 
 	it("assigns correct fromTurnIndex to new model record", async () => {
@@ -521,7 +528,7 @@ describe("model_select debounce and delivery", () => {
 		const result = (await basHandler({ systemPrompt: "BASE" })) as any;
 
 		expect(result.message).toBeUndefined();
-		expect(result.systemPrompt).toContain("Claude Opus 4.6");
+		expect(result.systemPromptSection.text).toContain("Claude Opus 4.6");
 	});
 
 	it("flags are mutually exclusive across phase transitions", async () => {
