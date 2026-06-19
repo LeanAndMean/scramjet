@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/scramjet",
-	"version": "0.25.3",
+	"version": "0.25.4",
 	"description": "Smart auto-continuation and command-set harness for Pi",
 	"license": "MIT",
 	"repository": "github:LeanAndMean/scramjet",
@@ -29,8 +29,8 @@
 	},
 	"pi": {
 		"piBaseVersion": "0.74.0",
-		"piPatchFlavor": "scramjet.1",
-		"piTestedVersion": "0.74.0-scramjet.1"
+		"piPatchFlavor": "scramjet.4",
+		"piTestedVersion": "0.74.0-scramjet.4"
 	},
 	"publishConfig": {
 		"access": "public"
@@ -44,8 +44,10 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.1",
-		"@earendil-works/pi-tui": "0.74.0",
+		"@earendil-works/pi-agent-core": "npm:@leanandmean/pi-agent-core@0.74.0-scramjet.4",
+		"@earendil-works/pi-ai": "npm:@leanandmean/pi-ai@0.74.0-scramjet.4",
+		"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.4",
+		"@earendil-works/pi-tui": "npm:@leanandmean/pi-tui@0.74.0-scramjet.4",
 		"typebox": "1.1.24",
 		"yaml": "^2.9.0"
 	},

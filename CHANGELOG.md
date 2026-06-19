@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.25.4 — Upgrade Pi dependencies to 0.74.0-scramjet.4
+
+Upgrade all four Pi dependencies from upstream `0.74.0` / fork `0.74.0-scramjet.1` to `@leanandmean` fork `0.74.0-scramjet.4`. The new fork adds sectioned, cache-aware system prompt support (`SystemPromptSection`, `flattenSystemPrompt`), increased parallel subagent output limits, and the Scramjet dispatch extension APIs (`dispatchUserInput`, `newSession` on `ExtensionContext`). All four packages (`pi-agent-core`, `pi-ai`, `pi-coding-agent`, `pi-tui`) are now aliased through `npm:@leanandmean/...` (issue #190).
+
+### Changed
+
+- `package.json` — all four `@earendil-works/pi-*` dependencies now alias to `npm:@leanandmean/pi-*@0.74.0-scramjet.4`; `pi.piPatchFlavor` → `scramjet.4`, `pi.piTestedVersion` → `0.74.0-scramjet.4`.
+- `docs/pi-api-surface.md` — regenerated from the updated packages.
+- `tests/pi-api-surface-generate.test.ts` — updated version header expectation.
+
 ## 0.25.3 — Fix model-identity input transform corrupting slash-command expansion
 
 Fix a race condition where the model-identity module's `input` transform could prepend `[scramjet] Model changed to: ...` to a slash command during fresh-session next-step dispatches, preventing Pi from recognizing the command. Two complementary fixes: (1) the `input` handler now detects `/`-prefixed text and redirects the notification to `before_agent_start` instead of transforming, and (2) model changes arriving before the first turn update `initialModel` directly (updating the system prompt) instead of setting pending notification flags, eliminating the root-cause spurious change detection (issue #185).
