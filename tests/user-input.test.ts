@@ -135,7 +135,7 @@ describe("registerUserInputTool — registration", () => {
 		expect(output).toContain("Which bump level?");
 		expect(output).toContain("Patch");
 		expect(output).toContain("Bug fixes only");
-		expect(output).toContain("Selected: Patch");
+		expect(output).toContain("→ Patch");
 		expect(output.trim()).not.toBe(JSON.stringify({ selected: "patch" }));
 	});
 
@@ -236,7 +236,9 @@ describe("registerUserInputTool — renderResult", () => {
 		expect(output).toContain("Bug fixes only");
 		expect(output).toContain("Minor");
 		expect(output).toContain("New features");
-		expect(output).toContain("Selected: Minor");
+		expect(output).toContain("→ Minor");
+		expect(output).toContain("  Patch");
+		expect(output).not.toContain("Selected:");
 	});
 
 	it("renders cancelled select with all options", () => {
