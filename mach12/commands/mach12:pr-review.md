@@ -13,11 +13,15 @@ next:
   target: mach12:pr-review-assessment
 ---
 
+<scramjet-command name="mach12:pr-review">
+
 # Review PR
 
 You are running a comprehensive review of a pull request and posting the results as a structured comment. The post-turn forced next-step runs `/mach12:pr-review-assessment`, which independently assesses each finding before any fixes happen. Review and assessment are deliberately split: this command performs only the review.
 
-**User input:** $ARGUMENTS
+<user-context>
+$ARGUMENTS
+</user-context>
 
 ## Step 1: Parse input
 
@@ -120,3 +124,5 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 If the review could not finish — a blocker or an incomplete turn — report the matching `status` (`blocked` / `incomplete`) instead of `completed`, and the forced target will not run. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
 
 Do NOT fix any issues in this command. Fixes belong to `/mach12:pr-review-fix`, downstream of the assessment.
+
+</scramjet-command>

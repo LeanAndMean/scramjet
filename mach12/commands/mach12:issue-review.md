@@ -20,11 +20,15 @@ next:
         Use when the plan is approved and ready for implementation.
 ---
 
+<scramjet-command name="mach12:issue-review">
+
 # Issue Plan Review
 
 You are reviewing the implementation plan for a GitHub issue. Your goal is to read the issue and all comments, independently assess the plan, and present your findings.
 
-**User input:** $ARGUMENTS
+<user-context>
+$ARGUMENTS
+</user-context>
 
 ## Step 1: Parse input
 
@@ -203,3 +207,5 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 - Always include an entry with `message`: `/mach12:issue-implement <issue-number> 1`, `fresh_session`: `true`, and `reason`: a brief explanation that the plan is ready to implement.
 - Set `recommended_next_step` to indicate your preference: recommend `mach12:issue-review` (index 0) when the plan was revised and Critical or Important findings remain; recommend `mach12:issue-implement` (index 1) when the plan is approved (user picked "Proceed as-is" — whether or not findings remain — or the revised plan addresses all blockers).
 - Leave `next_steps` empty if the outcome is ambiguous (e.g., user cancelled, discussion is ongoing, or no clear next action). If the user cancelled, the review was not completed, or you otherwise did not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
+
+</scramjet-command>

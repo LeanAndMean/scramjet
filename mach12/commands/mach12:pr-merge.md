@@ -9,11 +9,15 @@ allowed-tools:
   - delegate
 ---
 
+<scramjet-command name="mach12:pr-merge">
+
 # Merge and Release
 
 You are merging a PR that has passed review and the pre-merge checklist, then optionally creating a release.
 
-**User input:** $ARGUMENTS
+<user-context>
+$ARGUMENTS
+</user-context>
 
 This command intentionally declares no next-step policy. Merge is the natural terminus of a feature lifecycle, so Scramjet pauses after a successful merge. If your process has a post-merge follow-up (e.g., a `release:announce` step), add an explicit next-step policy in your local command set.
 
@@ -140,3 +144,5 @@ Report to the user:
 - Feature branch deleted.
 - Release created (if applicable, with link).
 - Current state of the default branch.
+
+</scramjet-command>

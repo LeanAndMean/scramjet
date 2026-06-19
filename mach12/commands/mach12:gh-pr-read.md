@@ -5,11 +5,15 @@ allowed-tools:
   - bash
 ---
 
+<scramjet-command name="mach12:gh-pr-read">
+
 # Read GitHub Pull Request
 
 You are reading a GitHub pull request and optionally locating a specific HTML-marker comment within its thread.
 
-**Caller input:** $ARGUMENTS
+<caller-context>
+$ARGUMENTS
+</caller-context>
 
 This subroutine is `gh`-specific. A future forge-agnostic command set would substitute an equivalent `glab-pr-read` (or similar); the marker-hunt logic stays the same.
 
@@ -43,3 +47,5 @@ Return:
 - The PR title and body.
 - The full comments array (parsed JSON).
 - If `--marker` was requested: the matched comment body and its numeric comment ID (parsed from the comment URL -- the number after `issuecomment-`). If the marker was not found, indicate that.
+
+</scramjet-command>
