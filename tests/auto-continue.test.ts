@@ -12,12 +12,12 @@ import {
 	replayHistory,
 	USER_INPUT_PARKED_TYPE,
 } from "../history.ts";
-import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
+import { createLogger } from "../logger.ts";
 import { buildProbeMessage } from "../next-step.ts";
 import { getActiveCommand } from "../phase-machine.ts";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../types.ts";
 import { registerUserInputTool } from "../user-input.ts";
-import { freshState, lifecycleFor, recordingPi } from "./helpers.ts";
+import { freshState, lifecycleFor, logMessages as logMessagesAll, recordingPi } from "./helpers.ts";
 
 type StatusParams = {
 	status: CommandStatusPayload["status"];
@@ -38,9 +38,7 @@ function registryWith(...defs: CommandDef[]) {
 }
 
 function logMessages(pi: any): string[] {
-	return pi.appended
-		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE && entry.data.level === "warn")
-		.map((entry: any) => entry.data.message);
+	return logMessagesAll(pi, "warn");
 }
 
 // State as it stands when a top-level command's answer turn is in flight:

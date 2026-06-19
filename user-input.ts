@@ -3,7 +3,7 @@ import { Text, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { USER_INPUT_PARKED_TYPE } from "./history.ts";
 import { MultiLineSelectList } from "./multi-line-select.ts";
-import { getActiveCommand, type LifecycleEvent, type LifecycleState, transition } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleEvent, logTransition, transition } from "./phase-machine.ts";
 import type { ScramjetState } from "./types.ts";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
@@ -30,23 +30,6 @@ const USER_INPUT_OPTION_SCHEMA = Type.Object({
 	label: Type.String(),
 	description: Type.Optional(Type.String()),
 });
-
-function logTransition(
-	state: ScramjetState,
-	from: LifecycleState,
-	to: LifecycleState,
-	event: LifecycleEvent["type"],
-	detail?: Record<string, unknown>,
-): void {
-	const command = getActiveCommand(from) ?? getActiveCommand(to);
-	state.logger.lifecycle("lifecycle transition", {
-		from: from.phase,
-		to: to.phase,
-		event,
-		...(command ? { command } : {}),
-		...(detail ? { detail } : {}),
-	});
-}
 
 export const USER_INPUT_SCHEMA = Type.Object({
 	type: Type.Union([Type.Literal("confirm"), Type.Literal("select"), Type.Literal("freetext")], {

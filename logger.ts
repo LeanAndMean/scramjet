@@ -28,7 +28,9 @@ export function createLogger(pi: ExtensionAPI): ScramjetLogger {
 	) {
 		const entry: ScramjetLogEntry = { level, category, message, timestamp: Date.now() };
 		if (data !== undefined) entry.data = data;
-		pi.appendEntry(SCRAMJET_LOG_TYPE, entry);
+		try {
+			pi.appendEntry(SCRAMJET_LOG_TYPE, entry);
+		} catch {}
 	}
 
 	return {

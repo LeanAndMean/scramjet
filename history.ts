@@ -2,8 +2,8 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-wor
 import {
 	getActiveCommand,
 	isPhaseEntry,
-	type LifecycleEvent,
 	type LifecycleState,
+	logTransition,
 	reconstructPhase,
 	transition,
 } from "./phase-machine.ts";
@@ -44,23 +44,6 @@ function isKnownSlashCommand(text: string, pi: ExtensionAPI): boolean {
 		}
 	}
 	return FALLBACK_KNOWN_SLASH.has(name);
-}
-
-function logTransition(
-	state: ScramjetState,
-	from: LifecycleState,
-	to: LifecycleState,
-	event: LifecycleEvent["type"],
-	detail?: Record<string, unknown>,
-): void {
-	const command = getActiveCommand(from) ?? getActiveCommand(to);
-	state.logger.lifecycle("lifecycle transition", {
-		from: from.phase,
-		to: to.phase,
-		event,
-		...(command ? { command } : {}),
-		...(detail ? { detail } : {}),
-	});
 }
 
 export interface EnabledToggleData {

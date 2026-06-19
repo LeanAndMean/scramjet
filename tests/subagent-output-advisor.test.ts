@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
+import { createLogger } from "../logger.ts";
 import { registerSubagentOutputAdvisor } from "../subagent-output-advisor.ts";
-import { freshState, recordingPi } from "./helpers.ts";
-
-function logMessages(pi: any): string[] {
-	return pi.appended
-		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE)
-		.map((entry: any) => entry.data.message);
-}
+import { freshState, logMessages, recordingPi } from "./helpers.ts";
 
 function freshRecordingState(pi: any, overrides = {}) {
 	return freshState({ logger: createLogger(pi), ...overrides });

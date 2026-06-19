@@ -28,7 +28,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.ts";
 import { recordCommandStatus } from "./history.ts";
-import { getActiveCommand, type LifecycleEvent, type LifecycleState, transition } from "./phase-machine.ts";
+import { getActiveCommand, type LifecycleState, logTransition, transition } from "./phase-machine.ts";
 import type {
 	CommandStatusNextStep,
 	CommandStatusPayload,
@@ -61,23 +61,6 @@ const OUT_OF_PHASE_ERROR =
 const CONTINUE_LIMIT_ERROR =
 	`You have reported "continuing" ${MAX_CONSECUTIVE_CONTINUES} times without completing the command. ` +
 	"Report your actual status: completed, blocked, or incomplete.";
-
-function logTransition(
-	state: ScramjetState,
-	from: LifecycleState,
-	to: LifecycleState,
-	event: LifecycleEvent["type"],
-	detail?: Record<string, unknown>,
-): void {
-	const command = getActiveCommand(from) ?? getActiveCommand(to);
-	state.logger.lifecycle("lifecycle transition", {
-		from: from.phase,
-		to: to.phase,
-		event,
-		...(command ? { command } : {}),
-		...(detail ? { detail } : {}),
-	});
-}
 
 // F6: single source of truth for the next-step wire shape. The TypeBox schema
 // below and the CommandStatusNextStep TS interface (types.ts) are two

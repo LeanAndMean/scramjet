@@ -8,13 +8,13 @@ import { parseCommandFile } from "../commands/loader.ts";
 import { registerDelegateTool } from "../delegate.ts";
 import { registerHistory } from "../history.ts";
 import scramjet from "../index.ts";
-import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
+import { createLogger } from "../logger.ts";
 import { getActiveCommand } from "../phase-machine.ts";
 import { registerScramjetCommand } from "../scramjet-command.ts";
 import { registerToolCallAdvisor } from "../tool-scope-advisory.ts";
 import type { CommandDef, NextStepPolicy, ScramjetState } from "../types.ts";
 import { registerUserInputTool } from "../user-input.ts";
-import { freshState, recordingPi } from "./helpers.ts";
+import { freshState, logMessages, recordingPi } from "./helpers.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
@@ -46,12 +46,6 @@ function loadCommand(basename: string): CommandDef {
 
 function seedRegistry(defs: CommandDef[]): ScramjetState {
 	return freshState({ registry: new Map(defs.map((d) => [d.name, d])) });
-}
-
-function logMessages(pi: any): string[] {
-	return pi.appended
-		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE)
-		.map((entry: any) => entry.data.message);
 }
 
 describe("integration smoke — delegate against real mach12 subroutines", () => {

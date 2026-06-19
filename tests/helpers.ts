@@ -1,4 +1,4 @@
-import { createLogger } from "../logger.ts";
+import { createLogger, SCRAMJET_LOG_TYPE } from "../logger.ts";
 import type { LifecycleState } from "../phase-machine.ts";
 import type { ScramjetState } from "../types.ts";
 
@@ -112,4 +112,10 @@ export function recordingPi(): RecordingPi {
 		for (const h of handlers.get(event) ?? []) await h(payload, ctx);
 	}
 	return { pi, tools, commands, handlers, emit };
+}
+
+export function logMessages(pi: any, level?: string): string[] {
+	return pi.appended
+		.filter((entry: any) => entry.customType === SCRAMJET_LOG_TYPE && (level ? entry.data.level === level : true))
+		.map((entry: any) => entry.data.message);
 }

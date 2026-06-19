@@ -46,7 +46,13 @@ import { recordCommandStatus } from "./history.ts";
 import { buildProbeMessage } from "./next-step.ts";
 import { dispatchNextStep } from "./next-step-dispatch.ts";
 import { selectNextStep } from "./next-step-selector.ts";
-import { getActiveCommand, type LifecycleEvent, type LifecycleState, transition } from "./phase-machine.ts";
+import {
+	getActiveCommand,
+	type LifecycleEvent,
+	type LifecycleState,
+	logTransition,
+	transition,
+} from "./phase-machine.ts";
 import type {
 	CommandStatusNextStep,
 	CommandStatusPayload,
@@ -119,14 +125,7 @@ function applyTransition(
 ): void {
 	const from = state.lifecycle;
 	state.lifecycle = result.state;
-	const command = getActiveCommand(from) ?? getActiveCommand(result.state);
-	state.logger.lifecycle("lifecycle transition", {
-		from: from.phase,
-		to: result.state.phase,
-		event,
-		...(command ? { command } : {}),
-		...(detail ? { detail } : {}),
-	});
+	logTransition(state, from, result.state, event, detail);
 }
 
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {

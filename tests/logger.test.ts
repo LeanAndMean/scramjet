@@ -120,4 +120,29 @@ describe("createLogger", () => {
 		const data = appended[0].data as any;
 		expect(data).not.toHaveProperty("data");
 	});
+
+	it("swallows appendEntry failures without propagating", () => {
+		const pi = {
+			appendEntry() {
+				throw new Error("disk full");
+			},
+		};
+		const logger = createLogger(pi as any);
+		expect(() => logger.warn("scope", "should not throw")).not.toThrow();
+		expect(() => logger.debug("discovery", "should not throw")).not.toThrow();
+		expect(() => logger.lifecycle("transition", { from: "idle", to: "running" })).not.toThrow();
+	});
+
+	it("still writes stderr when appendEntry throws and hasUI is false", () => {
+		const pi = {
+			appendEntry() {
+				throw new Error("disk full");
+			},
+		};
+		const logger = createLogger(pi as any);
+		logger.warn("scope", "visible warning");
+		expect(stderrSpy).toHaveBeenCalledOnce();
+		const written = stderrSpy.mock.calls[0][0];
+		expect(written).toContain("visible warning");
+	});
 });
