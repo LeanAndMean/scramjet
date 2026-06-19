@@ -186,13 +186,16 @@ Regenerate `docs/pi-api-surface.md` with `node scripts/generate-pi-api-surface.j
 
 ## Version pinning
 
-Scramjet intentionally consumes a LeanAndMean-patched Pi coding-agent package through an npm alias:
+Scramjet intentionally consumes LeanAndMean-patched Pi packages through npm aliases:
 
 ```json
-"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.1"
+"@earendil-works/pi-agent-core": "npm:@leanandmean/pi-agent-core@0.74.0-scramjet.4",
+"@earendil-works/pi-ai": "npm:@leanandmean/pi-ai@0.74.0-scramjet.4",
+"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.4",
+"@earendil-works/pi-tui": "npm:@leanandmean/pi-tui@0.74.0-scramjet.4"
 ```
 
-The alias preserves existing imports while installing the patched package at the upstream dependency key. The patched package is based on upstream Pi `pi.piBaseVersion` with Scramjet patch flavor `pi.piPatchFlavor`; `pi.piTestedVersion` is the combined `${piBaseVersion}-${piPatchFlavor}`. `@earendil-works/pi-tui` remains the upstream `pi.piBaseVersion` package. CI enforces that all of these fields stay in sync - bump the base version, patch flavor/tested version, coding-agent alias, and pi-tui pin together.
+The aliases preserve existing `@earendil-works/` imports while installing the patched packages at the upstream dependency keys. The patched packages are based on upstream Pi `pi.piBaseVersion` with Scramjet patch flavor `pi.piPatchFlavor`; `pi.piTestedVersion` is the combined `${piBaseVersion}-${piPatchFlavor}`. CI enforces that all of these fields stay in sync - bump the base version, patch flavor/tested version, and all four aliases together.
 
 ## Release process
 

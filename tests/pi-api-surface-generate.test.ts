@@ -63,6 +63,6 @@ describe("scripts/generate-pi-api-surface.js", () => {
 	}, 15_000);
 
 	it("includes the Pi version header", () => {
-		expect(output).toContain("Generated from Pi 0.74.0 / pi-coding-agent 0.74.0-scramjet.1.");
+		expect(output).toContain("Generated from Pi 0.74.0 / pi-coding-agent 0.74.0-scramjet.4.");
 	});
 });

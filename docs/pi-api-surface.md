@@ -1,6 +1,6 @@
 # Pi API Surface
 
-Generated from Pi 0.74.0 / pi-coding-agent 0.74.0-scramjet.1.
+Generated from Pi 0.74.0 / pi-coding-agent 0.74.0-scramjet.4.
 
 This file is generated from installed TypeScript declaration files. Do not edit it directly; run `node scripts/generate-pi-api-surface.js` instead.
 
@@ -337,7 +337,7 @@ Kind: interface
 /** Context snapshot passed into the low-level agent loop. */
 export interface AgentContext {
     /** System prompt included with the request. */
-    systemPrompt: string;
+    systemPrompt: string | SystemPromptSection[];
     /** Transcript visible to the model. */
     messages: AgentMessage[];
     /** Tools available for this run. */
@@ -556,7 +556,7 @@ Kind: interface
  */
 export interface AgentState {
     /** System prompt sent with each model request. */
-    systemPrompt: string;
+    systemPrompt: string | SystemPromptSection[];
     /** Active model used for future turns. */
     model: Model<any>;
     /** Requested reasoning level for future turns. */
@@ -783,6 +783,14 @@ export interface ApiProvider<TApi extends Api = Api, TOptions extends StreamOpti
     api: TApi;
     stream: StreamFunction<TApi, TOptions>;
     streamSimple: StreamFunction<TApi, SimpleStreamOptions>;
+    /**
+     * Declares that this provider accepts `SystemPromptSection[]` in
+     * `Context.systemPrompt`. When omitted, the registry flattens a sections
+     * array to the equivalent single string (on a shallow context copy) before
+     * dispatching, so providers written against the legacy `string` contract
+     * keep working unchanged.
+     */
+    handlesSystemPromptSections?: boolean;
 }
 ```
 
@@ -1727,7 +1735,7 @@ Kind: interface
 
 ```ts
 export interface Context {
-    systemPrompt?: string;
+    systemPrompt?: string | SystemPromptSection[];
     messages: Message[];
     tools?: Tool[];
 }
@@ -2066,6 +2074,33 @@ export interface StreamOptions {
      * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.
      */
     metadata?: Record<string, unknown>;
+}
+```
+
+#### SystemPromptSection
+
+Kind: interface
+
+```ts
+/**
+ * One ordered section of a structured system prompt.
+ *
+ * Each section's `text` must include its own leading separator, so that
+ * concatenating all sections produces the equivalent single-string prompt.
+ *
+ * Fields are `readonly` because section objects are shared across the
+ * session/extension boundary; build a new section instead of mutating one.
+ */
+export interface SystemPromptSection {
+    /** Informational label for diagnostics and display. Ids are not deduplicated or looked up. */
+    readonly id: string;
+    readonly text: string;
+    /**
+     * "none" marks volatile content that providers should exclude from the
+     * stable cached prefix. Omit for stable sections — per-section TTLs are
+     * not supported (the request-level cache retention applies).
+     */
+    readonly cacheRetention?: "none";
 }
 ```
 
@@ -2578,6 +2613,26 @@ Kind: function
 export declare function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean;
 ```
 
+### utils/system-prompt
+
+#### flattenSystemPrompt
+
+Kind: function
+
+```ts
+/**
+ * Flattens a system prompt to a single string.
+ *
+ * Sections are joined with no inserted separator: each section's `text`
+ * carries its own leading separator, so flattening an array of sections is
+ * byte-identical to the equivalent single-string prompt. String prompts pass
+ * through unchanged.
+ */
+export declare function flattenSystemPrompt(prompt: string | SystemPromptSection[]): string;
+
+export declare function flattenSystemPrompt(prompt: string | SystemPromptSection[] | undefined): string | undefined;
+```
+
 ### utils/typebox-helpers
 
 #### StringEnum
@@ -2707,7 +2762,7 @@ export declare class AgentSession {
     private _toolDefinitions;
     private _toolPromptSnippets;
     private _toolPromptGuidelines;
-    private _baseSystemPrompt;
+    private _baseSystemPromptSections;
     private _baseSystemPromptOptions;
     constructor(config: AgentSessionConfig);
     /** Model registry for API key resolution and model discovery */
@@ -2769,7 +2824,7 @@ export declare class AgentSession {
     get thinkingLevel(): ThinkingLevel;
     /** Whether agent is currently streaming a response */
     get isStreaming(): boolean;
-    /** Current effective system prompt (includes any per-turn extension modifications) */
+    /** Current effective system prompt (includes any per-turn extension modifications), flattened to a string */
     get systemPrompt(): string;
     /** Current retry attempt (0 if not retrying) */
     get retryAttempt(): number;
@@ -2818,6 +2873,7 @@ export declare class AgentSession {
     get promptTemplates(): ReadonlyArray<PromptTemplate>;
     private _normalizePromptSnippet;
     private _normalizePromptGuidelines;
+    /** Rebuild `_baseSystemPromptSections` from the current resources and tool set and apply it to agent state. */
     private _rebuildSystemPrompt;
     /**
      * Send a prompt to the agent.
@@ -2873,7 +2929,7 @@ export declare class AgentSession {
      */
     sendCustomMessage<T = unknown>(message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">, options?: {
         triggerTurn?: boolean;
-        deliverAs?: "steer" | "followUp" | "nextTurn";
+        deliverAs?: SendMessageDeliverAs;
     }): Promise<void>;
     /**
      * Send a user message to the agent. Always triggers a turn.
@@ -2883,8 +2939,18 @@ export declare class AgentSession {
      * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
      */
     sendUserMessage(content: string | (TextContent | ImageContent)[], options?: {
-        deliverAs?: "steer" | "followUp";
+        deliverAs?: DeliverAs;
     }): Promise<void>;
+    /**
+     * Dispatch input through the same pipeline as typed editor input:
+     * extension-registered slash commands, prompt templates, and skills all
+     * resolve as if the user had typed the text (source: "extension").
+     *
+     * @param options.deliverAs Delivery mode when streaming: "steer" or "followUp"
+     * @throws Error if streaming and no deliverAs specified, unless the input is
+     *   handled before reaching the prompt queue (extension commands execute
+     *   immediately; input consumed by an `input` handler returns normally)
+     */
     dispatchUserInput(input: string, options?: DispatchUserInputOptions): Promise<void>;
     /**
      * Clear all queued messages and return them.
@@ -3248,8 +3314,14 @@ export interface PromptOptions {
     expandPromptTemplates?: boolean;
     /** Image attachments */
     images?: ImageContent[];
-    /** When streaming, how to queue the message: "steer" (interrupt) or "followUp" (wait). Required if streaming. */
-    streamingBehavior?: "steer" | "followUp";
+    /**
+     * When streaming, how to queue the message: "steer" (interrupt) or
+     * "followUp" (wait). Prompting while streaming without it rejects, unless
+     * the text is handled before it reaches the prompt queue (extension
+     * commands execute immediately; input consumed by an `input` handler
+     * returns without rejecting).
+     */
+    streamingBehavior?: DeliverAs;
     /** Source of input for extension input event handlers. Defaults to "interactive". */
     source?: InputSource;
     /** Internal hook used by RPC mode to observe prompt preflight acceptance or rejection. */
@@ -3494,6 +3566,7 @@ export interface CreateAgentSessionFromServicesOptions {
         model: Model<any>;
         thinkingLevel?: ThinkingLevel;
     }>;
+    cacheRetention?: CacheRetention;
     tools?: string[];
     noTools?: CreateAgentSessionOptions["noTools"];
     customTools?: ToolDefinition[];
@@ -4229,7 +4302,7 @@ export declare class ExtensionRunner {
     emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined>;
     emitContext(messages: AgentMessage[]): Promise<AgentMessage[]>;
     emitBeforeProviderRequest(payload: unknown): Promise<unknown>;
-    emitBeforeAgentStart(prompt: string, images: ImageContent[] | undefined, systemPrompt: string, systemPromptOptions: BuildSystemPromptOptions): Promise<BeforeAgentStartCombinedResult | undefined>;
+    emitBeforeAgentStart(prompt: string, images: ImageContent[] | undefined, systemPromptSections: SystemPromptSection[], systemPromptOptions: BuildSystemPromptOptions): Promise<BeforeAgentStartCombinedResult | undefined>;
     emitResourcesDiscover(cwd: string, reason: ResourcesDiscoverEvent["reason"]): Promise<{
         skillPaths: Array<{
             path: string;
@@ -4308,6 +4381,8 @@ export interface BeforeAgentStartEvent {
     images?: ImageContent[];
     /** The fully assembled system prompt string. */
     systemPrompt: string;
+    /** Read-only view of the base system prompt sections for this turn, before extension contributions. The volatile environment tail is the section with `cacheRetention: "none"`. */
+    systemPromptSections: readonly SystemPromptSection[];
     /** Structured options used to build the system prompt. Extensions can inspect this to understand what Pi loaded without re-discovering resources. */
     systemPromptOptions: BuildSystemPromptOptions;
 }
@@ -4320,8 +4395,10 @@ Kind: interface
 ```ts
 export interface BeforeAgentStartEventResult {
     message?: Pick<CustomMessage, "customType" | "content" | "display" | "details">;
-    /** Replace the system prompt for this turn. If multiple extensions return this, they are chained. */
+    /** Replace the system prompt for this turn. If multiple extensions return this, they are chained. If any extension returns this, the final string wins for the whole prompt and all contributed `systemPromptSection`s are dropped for the turn. */
     systemPrompt?: string;
+    /** Contribute a system prompt section for this turn. Sections accumulate in extension load order and are inserted before the volatile environment tail. Section texts are joined without separators, so `text` should start with its own separator (typically `\n\n`). */
+    systemPromptSection?: SystemPromptSection;
 }
 ```
 
@@ -4526,14 +4603,14 @@ export interface ExtensionAPI {
     /** Send a custom message to the session. */
     sendMessage<T = unknown>(message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">, options?: {
         triggerTurn?: boolean;
-        deliverAs?: "steer" | "followUp" | "nextTurn";
+        deliverAs?: SendMessageDeliverAs;
     }): void;
     /**
      * Send a user message to the agent. Always triggers a turn.
      * When the agent is streaming, use deliverAs to specify how to queue the message.
      */
     sendUserMessage(content: string | (TextContent | ImageContent)[], options?: {
-        deliverAs?: "steer" | "followUp";
+        deliverAs?: DeliverAs;
     }): void;
     /** Append a custom entry to the session for state persistence (not sent to LLM). */
     appendEntry<T = unknown>(customType: string, data?: T): void;
@@ -4748,9 +4825,19 @@ export interface ExtensionContext {
     compact(options?: CompactOptions): void;
     /** Get the current effective system prompt. */
     getSystemPrompt(): string;
-    /** Dispatch input through the same command/skill/template pipeline as typed editor input. */
+    /**
+     * Dispatch input through the same pipeline as typed editor input:
+     * extension-registered slash commands, prompt templates, and skills all
+     * resolve as if the user had typed the text. Built-in interactive commands
+     * (`/model`, `/login`, ...) are not part of this pipeline — dispatching one
+     * sends the text to the LLM as a literal user message.
+     */
     dispatchUserInput(input: string, options?: DispatchUserInputOptions): Promise<void>;
-    /** Start a new session, optionally with initialization. */
+    /**
+     * Start a new session, optionally with initialization. Available under the
+     * built-in modes (interactive, print, RPC); in SDK embeddings that never
+     * bind a command context, calling it rejects with an error.
+     */
     newSession(options?: {
         parentSession?: string;
         setup?: (sessionManager: SessionManager) => Promise<void>;
@@ -4952,12 +5039,12 @@ export interface ExtensionUIContext {
      * - `keybindings`: KeybindingsManager for app-level keybindings
      *
      * For full app keybinding support (escape, ctrl+d, model switching, etc.),
-     * extend `CustomEditor` from `@earendil-works/pi-coding-agent` and call
+     * extend `CustomEditor` from `@leanandmean/pi-coding-agent` and call
      * `super.handleInput(data)` for keys you don't handle.
      *
      * @example
      * ```ts
-     * import { CustomEditor } from "@earendil-works/pi-coding-agent";
+     * import { CustomEditor } from "@leanandmean/pi-coding-agent";
      *
      * class VimEditor extends CustomEditor {
      *   private mode: "normal" | "insert" = "insert";
@@ -5255,6 +5342,13 @@ export interface ProviderConfig {
     api?: Api;
     /** Optional streamSimple handler for custom APIs. */
     streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream;
+    /**
+     * Declares that `streamSimple` accepts `SystemPromptSection[]` in
+     * `Context.systemPrompt`. When omitted, a sections array is flattened to
+     * the equivalent single string before dispatch, so handlers written
+     * against the legacy `string` contract keep working unchanged.
+     */
+    handlesSystemPromptSections?: boolean;
     /** Custom headers to include in requests. */
     headers?: Record<string, string>;
     /** If true, adds Authorization: Bearer header with the resolved API key. */
@@ -6323,6 +6417,13 @@ export interface CreateAgentSessionOptions {
         model: Model<any>;
         thinkingLevel?: ThinkingLevel;
     }>;
+    /**
+     * Prompt-cache retention for provider requests.
+     *
+     * Precedence: this option, then the PI_CACHE_RETENTION environment variable,
+     * then "long". Pass "short" for short-lived sessions such as subagents.
+     */
+    cacheRetention?: CacheRetention;
     /**
      * Optional default tool suppression mode when no explicit allowlist is provided.
      *
@@ -8986,6 +9087,7 @@ export declare class InteractiveMode {
     private bindCurrentSessionExtensions;
     private applyRuntimeSettings;
     private rebindCurrentSession;
+    private handleExtensionNewSession;
     private handleFatalRuntimeError;
     private renderCurrentSessionState;
     /**
