@@ -8,7 +8,8 @@ Wrap all 17 command bodies in `<scramjet-command name="...">` tags to structural
 
 - All 17 Mach 12 command `.md` files — added `<scramjet-command>` outer wrapper and `<user-context>` / `<caller-context>` argument tags.
 - 5 multi-reference commands (`issue-create`, `pr-create`, `push`, `pr-review-fix`, `issue-implement`) — deduplicated `$ARGUMENTS` to a single substitution point.
-- `docs/command-authoring.md` — documented XML framing convention, context tag distinction, single-substitution rule, and close-tag escaping note.
+- `base-directives.ts` — added `# Command framing` system prompt block orienting the agent on the meaning of `<scramjet-command>`, `<user-context>`, and `<caller-context>` tags.
+- `docs/command-authoring.md` — documented XML framing convention, context tag distinction, single-substitution rule, agent orientation, and close-tag escaping note.
 
 ## 0.25.1 — Inline arrow indicator for select renderResult
 
