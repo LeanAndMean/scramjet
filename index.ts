@@ -54,6 +54,7 @@ export default function scramjet(pi: ExtensionAPI) {
 		currentModel: null,
 		modelHistory: [],
 		autonomyConfigPath: defaultConfigPath(),
+		subdirLoadedPaths: new Set(),
 		logger,
 	};
 

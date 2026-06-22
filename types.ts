@@ -126,5 +126,6 @@ export interface ScramjetState {
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
+	subdirLoadedPaths: Set<string>;
 	logger: ScramjetLogger;
 }
