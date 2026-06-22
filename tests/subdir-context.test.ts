@@ -1,13 +1,14 @@
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	CANDIDATES,
 	directoriesToCheck,
 	discoverContextFiles,
 	formatContextBlocks,
 	MAX_DEPTH,
-	MAX_FILES,
+	MAX_DIRS,
 	registerSubdirContext,
 } from "../subdir-context.ts";
 import { freshState, recordingPi } from "./helpers.ts";
@@ -31,7 +32,7 @@ describe("directoriesToCheck", () => {
 	it("caps at MAX_DEPTH", () => {
 		const deep = `${Array.from({ length: 15 }, (_, i) => `d${i}`).join("/")}/file.ts`;
 		const result = directoriesToCheck(deep, "/project");
-		expect(result.length).toBe(MAX_DEPTH);
+		expect(result).toHaveLength(MAX_DEPTH);
 	});
 
 	it("handles absolute paths inside cwd", () => {
@@ -45,7 +46,7 @@ describe("directoriesToCheck", () => {
 	});
 
 	it("handles ~/ paths by expanding to homedir", () => {
-		const home = require("node:os").homedir();
+		const home = homedir();
 		const result = directoriesToCheck("~/sub/dir/file.ts", home);
 		expect(result).toEqual([join(home, "sub"), join(home, "sub/dir")]);
 	});
@@ -153,10 +154,10 @@ describe("discoverContextFiles", () => {
 		await chmod(join(subDir, "CLAUDE.md"), 0o644);
 	});
 
-	it("respects MAX_FILES cap", async () => {
+	it("respects MAX_DIRS cap", async () => {
 		const loaded = new Set<string>();
 		const dirs: string[] = [];
-		for (let i = 0; i < MAX_FILES + 5; i++) {
+		for (let i = 0; i < MAX_DIRS + 5; i++) {
 			const subDir = join(tmpDir, `dir${i}`);
 			await mkdir(subDir);
 			await writeFile(join(subDir, "CLAUDE.md"), `content ${i}`);
@@ -164,8 +165,8 @@ describe("discoverContextFiles", () => {
 		}
 
 		const result = await discoverContextFiles(dirs, loaded, tmpDir);
-		expect(result.length).toBeLessThanOrEqual(MAX_FILES);
-		expect(loaded.size).toBeLessThanOrEqual(MAX_FILES);
+		expect(result.length).toBeLessThanOrEqual(MAX_DIRS * CANDIDATES.length);
+		expect(loaded.size).toBeLessThanOrEqual(MAX_DIRS);
 	});
 
 	it("returns files ordered shallowest-first", async () => {
@@ -210,7 +211,7 @@ describe("formatContextBlocks", () => {
 
 	it("formats a single file with header, content, and separator", () => {
 		const result = formatContextBlocks(
-			[{ dir: "/project/sub", realpath: "/project/sub", filename: "CLAUDE.md", content: "hello world" }],
+			[{ dir: "/project/sub", filename: "CLAUDE.md", content: "hello world" }],
 			"/project",
 		);
 		expect(result).toBe("# Project context: sub/CLAUDE.md\n\nhello world\n\n---");
@@ -219,8 +220,8 @@ describe("formatContextBlocks", () => {
 	it("formats multiple files separated by double newline", () => {
 		const result = formatContextBlocks(
 			[
-				{ dir: "/project/a", realpath: "/project/a", filename: "CLAUDE.md", content: "aaa" },
-				{ dir: "/project/a/b", realpath: "/project/a/b", filename: "AGENTS.md", content: "bbb" },
+				{ dir: "/project/a", filename: "CLAUDE.md", content: "aaa" },
+				{ dir: "/project/a/b", filename: "AGENTS.md", content: "bbb" },
 			],
 			"/project",
 		);
@@ -376,8 +377,8 @@ describe("registerSubdirContext", () => {
 		expect(text.indexOf("level-a")).toBeLessThan(text.indexOf("level-abc"));
 	});
 
-	it("respects MAX_FILES cap across multiple reads", async () => {
-		for (let i = 0; i < MAX_FILES + 3; i++) {
+	it("respects MAX_DIRS cap across multiple reads", async () => {
+		for (let i = 0; i < MAX_DIRS + 3; i++) {
 			const d = join(tmpDir, `d${i}`);
 			await mkdir(d);
 			await writeFile(join(d, "CLAUDE.md"), `content ${i}`);
@@ -389,10 +390,10 @@ describe("registerSubdirContext", () => {
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("tool_result")![0];
-		for (let i = 0; i < MAX_FILES + 3; i++) {
+		for (let i = 0; i < MAX_DIRS + 3; i++) {
 			await handler(makeReadEvent(`d${i}/file.ts`), makeCtx(tmpDir));
 		}
-		expect(state.subdirLoadedPaths.size).toBeLessThanOrEqual(MAX_FILES);
+		expect(state.subdirLoadedPaths.size).toBeLessThanOrEqual(MAX_DIRS);
 	});
 
 	it("skips symlinks pointing outside cwd", async () => {

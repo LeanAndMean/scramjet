@@ -8,7 +8,7 @@ When the agent reads a file in a subdirectory of cwd, Scramjet now discovers `CL
 
 - `subdir-context.ts` — new module implementing lazy subdirectory context discovery via `tool_result` hook.
 - `directoriesToCheck(filePath, cwd)` — returns intermediate directories between cwd and a file's directory, shallowest-first, with `~/` expansion and MAX_DEPTH=10 cap.
-- `discoverContextFiles(dirs, loadedPaths, cwd)` — filesystem discovery with realpath dedup, symlink-outside-cwd safety, MAX_FILES=20 cap, and synchronous claim for parallel-read safety.
+- `discoverContextFiles(dirs, loadedPaths, cwd, logger?)` — filesystem discovery with realpath dedup, symlink-outside-cwd safety, MAX_DIRS=20 directory cap, error discrimination (ENOENT suppressed, other errors logged), and synchronous claim for parallel-read safety.
 - `formatContextBlocks(files, cwd)` — formats discovered files into `# Project context: <relpath>` content blocks.
 - `registerSubdirContext(pi, state)` — wires `tool_result` (read-only trigger, prepends context) and `session_compact` (clears loaded set for re-discovery).
 - `subdirLoadedPaths` field on `ScramjetState` — tracks realpaths of loaded directories.
