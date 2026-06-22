@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.26.0 — Lazy-load subdirectory CLAUDE.md files on read
+
+When the agent reads a file in a subdirectory of cwd, Scramjet now discovers `CLAUDE.md` and `AGENTS.md` files in that directory (and all intermediate directories between cwd and the file) and prepends their content to the read tool result. Content is available within the same turn, works for subagents, and is deduped by realpath (issue #194).
+
+### Added
+
+- `subdir-context.ts` — new module implementing lazy subdirectory context discovery via `tool_result` hook.
+- `directoriesToCheck(filePath, cwd)` — returns intermediate directories between cwd and a file's directory, shallowest-first, with `~/` expansion and MAX_DEPTH=10 cap.
+- `discoverContextFiles(dirs, loadedPaths, cwd)` — filesystem discovery with realpath dedup, symlink-outside-cwd safety, MAX_FILES=20 cap, and synchronous claim for parallel-read safety.
+- `formatContextBlocks(files, cwd)` — formats discovered files into `# Project context: <relpath>` content blocks.
+- `registerSubdirContext(pi, state)` — wires `tool_result` (read-only trigger, prepends context) and `session_compact` (clears loaded set for re-discovery).
+- `subdirLoadedPaths` field on `ScramjetState` — tracks realpaths of loaded directories.
+- 36 tests covering path geometry, filesystem discovery, hook integration, dedup, compact reset, symlink safety, and cap enforcement.
+
+### Design
+
+- **Read tool only**: grep/find/ls/bash do not trigger (matches Claude Code CLI behavior).
+- **Prepend to tool result**: content appears immediately (no next-turn delay), works for subagents within their single `prompt()` call.
+- **Flag-independent**: loads regardless of `/scramjet on|off`.
+- **No content size cap**: files loaded in full (CLI parity).
+- **Symlink safety**: directories whose realpath falls outside realpath(cwd) are skipped.
+
 ## 0.25.5 — Migrate prompt hooks to systemPromptSection for cache-aware prompts
 
 Migrate `base-directives.ts`, `agent-catalog.ts`, and `model-identity.ts` from full `systemPrompt` string replacement to named `systemPromptSection` returns, enabling Pi's cache-aware sectioned prompt support available since `0.74.0-scramjet.4` (issue #192).
