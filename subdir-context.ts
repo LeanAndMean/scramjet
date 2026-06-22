@@ -2,6 +2,9 @@ import { constants } from "node:fs";
 import { access, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, relative, resolve, sep } from "node:path";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { isReadToolResult } from "@earendil-works/pi-coding-agent";
+import type { ScramjetState } from "./types.ts";
 
 export const MAX_FILES = 20;
 export const MAX_DEPTH = 10;
@@ -35,6 +38,15 @@ export interface DiscoveredFile {
 	realpath: string;
 	filename: string;
 	content: string;
+}
+
+export function formatContextBlocks(files: DiscoveredFile[], cwd: string): string {
+	return files
+		.map((f) => {
+			const relPath = relative(cwd, resolve(f.dir, f.filename));
+			return `# Project context: ${relPath}\n\n${f.content}\n\n---`;
+		})
+		.join("\n\n");
 }
 
 export async function discoverContextFiles(
@@ -76,4 +88,28 @@ export async function discoverContextFiles(
 	}
 
 	return results;
+}
+
+export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): void {
+	pi.on("tool_result", async (event, ctx) => {
+		if (!isReadToolResult(event)) return;
+		if (event.isError) return;
+		const path = event.input.path;
+		if (typeof path !== "string") return;
+
+		const cwd = (ctx as { cwd?: string }).cwd ?? process.cwd();
+		const dirs = directoriesToCheck(path, cwd);
+		if (dirs.length === 0) return;
+
+		const discovered = await discoverContextFiles(dirs, state.subdirLoadedPaths, cwd);
+		if (discovered.length === 0) return;
+
+		const contextText = formatContextBlocks(discovered, cwd);
+		const contextContent = { type: "text" as const, text: contextText };
+		return { content: [contextContent, ...event.content] };
+	});
+
+	pi.on("session_compact", () => {
+		state.subdirLoadedPaths.clear();
+	});
 }

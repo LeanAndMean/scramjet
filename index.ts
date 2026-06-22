@@ -37,6 +37,7 @@ import { registerModelIdentity } from "./model-identity.ts";
 import { registerPrIndicator } from "./pr-indicator.ts";
 import { registerScramjetCommand } from "./scramjet-command.ts";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.ts";
+import { registerSubdirContext } from "./subdir-context.ts";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.ts";
 import type { ScramjetState } from "./types.ts";
 import { registerUserInputTool } from "./user-input.ts";
@@ -77,4 +78,5 @@ export default function scramjet(pi: ExtensionAPI) {
 	registerPrIndicator(pi);
 	registerBaseDirectives(pi);
 	registerAgentCatalog(pi, state);
+	registerSubdirContext(pi, state);
 }
