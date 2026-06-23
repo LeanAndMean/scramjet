@@ -4,7 +4,7 @@
 	"type": "module",
 	"workspaces": ["packages/*"],
 	"scripts": {
-		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
+		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build && cd ../scramjet && npm run build",
 		"typecheck": "tsgo --noEmit",
 		"test": "npm run test --workspaces --if-present",
 		"lint": "biome check .",

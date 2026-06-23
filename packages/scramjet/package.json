@@ -1,0 +1,49 @@
+{
+	"name": "@leanandmean/scramjet",
+	"version": "0.26.0",
+	"description": "Smart auto-continuation and command-set harness for Pi",
+	"license": "MIT",
+	"repository": "github:LeanAndMean/scramjet",
+	"type": "module",
+	"bin": {
+		"scramjet": "./bin/scramjet.js"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"bin/",
+		"dist/",
+		"mach12/",
+		"scripts/",
+		"docs/",
+		"CHANGELOG.md",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=20"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"typecheck": "tsgo --noEmit -p tsconfig.build.json",
+		"build": "tsgo -p tsconfig.build.json",
+		"test": "vitest --run",
+		"lint": "biome check .",
+		"postinstall": "node scripts/postinstall.js",
+		"prepack": "npm run build"
+	},
+	"dependencies": {
+		"@scramjet/agent": "*",
+		"@scramjet/ai": "*",
+		"@scramjet/coding-agent": "*",
+		"@scramjet/tui": "*",
+		"typebox": "1.1.24",
+		"yaml": "^2.9.0"
+	}
+}

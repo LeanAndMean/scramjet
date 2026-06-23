@@ -15,22 +15,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import type {
-	Agent,
-	AgentEvent,
-	AgentMessage,
-	AgentState,
-	AgentTool,
-	ThinkingLevel,
-} from "@scramjet/agent";
-import type {
-	AssistantMessage,
-	ImageContent,
-	Message,
-	Model,
-	SystemPromptSection,
-	TextContent,
-} from "@scramjet/ai";
+import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@scramjet/agent";
+import type { AssistantMessage, ImageContent, Message, Model, SystemPromptSection, TextContent } from "@scramjet/ai";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
