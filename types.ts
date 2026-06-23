@@ -126,5 +126,15 @@ export interface ScramjetState {
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
+	subdirLoadedPaths: Set<string>;
+	subdirDiscoveries: SubdirDiscovery[];
 	logger: ScramjetLogger;
+}
+
+export interface SubdirDiscovery {
+	toolCallId: string;
+	dirRealpath: string;
+	filename: "CLAUDE.md" | "AGENTS.md";
+	displayPath: string;
+	content: string;
 }

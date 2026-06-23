@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.26.0 — Lazy-load subdirectory CLAUDE.md files on read
+
+When the agent reads a file in a subdirectory of cwd, Scramjet discovers `CLAUDE.md` and `AGENTS.md` files in intermediate directories between cwd and the file (shallowest-first, capped at `MAX_DEPTH=10`) and injects them as synthetic read tool call/result pairs via Pi's `context` event. Very deep reads only check directories that fall within the cap. Discovered files appear to the model as structurally separate reads positioned before the triggering read. Discovery state is journaled and reconstructed on resume/fork/branch-switch (issue #194).
+
+### Added
+
+- `subdir-context.ts` — new module implementing lazy subdirectory context discovery and synthetic read-pair injection.
+- `directoriesToCheck(filePath, cwd)` — returns `{ dirs, outsideCwd }`: intermediate directories between cwd and a file's directory (shallowest-first, with one leading `@` stripped like Pi's read tool, `~/` expansion, and `MAX_DEPTH=10` cap) plus a flag indicating whether the path is outside cwd. Outside-cwd paths (absolute paths outside cwd, `~/`-prefixed outside cwd, or relative escapes) return only the target file's immediate directory.
+- `discoverContextFiles(dirs, loadedPaths, cwd, logger?, options?)` — filesystem discovery with directory-realpath dedup, inside-cwd symlink safety, MAX_DIRS=20 directory cap, error discrimination (ENOENT suppressed, other errors logged), and synchronous claim for parallel-read safety.
+- `createStableId(displayPath)` — generates deterministic, provider-safe synthetic tool call IDs (`scrctx-<hash>`, 19 chars).
+- `reconstructSubdirState(entries)` — replays journal entries to rebuild loaded paths and discovery records on resume, with compaction reset and defensive schema guards for corrupt entries.
+- `findAnchorIndex(messages, toolCallId)` — locates the assistant message containing a triggering tool call for synthetic pair placement.
+- `buildSyntheticPair(discovery, anchor)` — constructs matching assistant/tool-result message pairs with `api`/`provider`/`model` copied from the anchor message and zero-valued usage/timestamps.
+- `formatContextBlocks(discoveries, messages, logger?)` — groups discoveries by anchor, deduplicates already-injected synthetics, and builds the transformed message array for the `context` hook.
+- `registerSubdirContext(pi, state)` — wires `tool_result` (discovery-only, returns undefined), `context` (synthetic pair injection), `session_compact` (clears state), and `session_start`/`session_tree` (replay reconstruction).
+- `subdirLoadedPaths` and `subdirDiscoveries` fields on `ScramjetState` — track discovered directory realpaths and retained discovery records for re-injection.
+- `SubdirDiscovery` type on `ScramjetState` — carries tool call ID, directory realpath, filename, display path, and content per discovered file; synthetic IDs are derived from display paths.
+
+### Design
+
+- **Read tool only**: grep/find/ls/bash do not trigger (matches Claude Code CLI behavior).
+- **Synthetic read pairs via `context`**: discovered files are injected as structurally separate read tool call/result message pairs, positioned before the triggering assistant message. The original read result is never modified.
+- **Retained until compact**: discoveries are re-injected on every `context` call (output is ephemeral); `session_compact` is the reset boundary.
+- **Journaled for resume**: discovery records are persisted via `pi.appendEntry()` so resume/fork/branch-switch can reconstruct injection state without re-reading files from disk.
+- **Flag-independent**: loads regardless of `/scramjet on|off`.
+- **No content size cap**: files loaded in full (CLI parity).
+- **Symlink safety**: inside-cwd traversal skips directories whose realpath falls outside `realpath(cwd)`.
+- **Outside-cwd reads**: outside-cwd paths (absolute paths outside cwd, `~/`-prefixed outside cwd, or relative escapes) check only the target file's immediate directory; Scramjet does not walk parent directories outside cwd.
+
 ## 0.25.5 — Migrate prompt hooks to systemPromptSection for cache-aware prompts
 
 Migrate `base-directives.ts`, `agent-catalog.ts`, and `model-identity.ts` from full `systemPrompt` string replacement to named `systemPromptSection` returns, enabling Pi's cache-aware sectioned prompt support available since `0.74.0-scramjet.4` (issue #192).
