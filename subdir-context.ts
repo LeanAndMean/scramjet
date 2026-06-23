@@ -12,7 +12,7 @@ export const MAX_DEPTH = 10;
 export const CANDIDATES = ["CLAUDE.md", "AGENTS.md"] as const;
 export const SUBDIR_CONTEXT_DISCOVERY_TYPE = "scramjet:subdir-context-discovery";
 
-export function directoriesToCheck(filePath: string, cwd: string): string[] {
+export function directoriesToCheck(filePath: string, cwd: string): { dirs: string[]; outsideCwd: boolean } {
 	const normalizedCwd = resolve(cwd);
 	let resolved: string;
 	if (filePath.startsWith("~/")) {
@@ -24,10 +24,10 @@ export function directoriesToCheck(filePath: string, cwd: string): string[] {
 	const fileDir = dirname(resolved);
 	const rel = relative(normalizedCwd, fileDir);
 
-	if (!rel) return [];
+	if (!rel) return { dirs: [], outsideCwd: false };
 
 	if (rel.startsWith("..") || resolve(normalizedCwd, rel) !== fileDir) {
-		return [fileDir];
+		return { dirs: [fileDir], outsideCwd: true };
 	}
 
 	const parts = rel.split(sep).filter(Boolean);
@@ -35,7 +35,7 @@ export function directoriesToCheck(filePath: string, cwd: string): string[] {
 	for (let i = 0; i < Math.min(parts.length, MAX_DEPTH); i++) {
 		dirs.push(resolve(normalizedCwd, ...parts.slice(0, i + 1)));
 	}
-	return dirs;
+	return { dirs, outsideCwd: false };
 }
 
 export interface DiscoveredFile {
@@ -107,19 +107,6 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 	return err instanceof Error && "code" in err;
 }
 
-function isOutsideCwd(filePath: string, cwd: string): boolean {
-	const normalizedCwd = resolve(cwd);
-	let resolved: string;
-	if (filePath.startsWith("~/")) {
-		resolved = resolve(homedir(), filePath.slice(2));
-	} else {
-		resolved = resolve(normalizedCwd, filePath);
-	}
-	const fileDir = dirname(resolved);
-	const rel = relative(normalizedCwd, fileDir);
-	return rel !== "" && (rel.startsWith("..") || resolve(normalizedCwd, rel) !== fileDir);
-}
-
 interface DiscoveryJournalEntry {
 	toolCallId: string;
 	realpath: string;
@@ -149,7 +136,7 @@ export function reconstructSubdirState(entries: readonly SessionEntry[]): {
 			!data ||
 			typeof data.toolCallId !== "string" ||
 			typeof data.realpath !== "string" ||
-			typeof data.filename !== "string" ||
+			(data.filename !== "CLAUDE.md" && data.filename !== "AGENTS.md") ||
 			typeof data.displayPath !== "string" ||
 			typeof data.content !== "string" ||
 			typeof data.syntheticId !== "string"
@@ -284,10 +271,9 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 		if (typeof path !== "string") return;
 
 		const cwd = ctx.cwd;
-		const dirs = directoriesToCheck(path, cwd);
+		const { dirs, outsideCwd } = directoriesToCheck(path, cwd);
 		if (dirs.length === 0) return;
 
-		const outsideCwd = isOutsideCwd(path, cwd);
 		const discovered = await discoverContextFiles(dirs, state.subdirLoadedPaths, cwd, state.logger, outsideCwd);
 		if (discovered.length === 0) return;
 

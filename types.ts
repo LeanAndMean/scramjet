@@ -134,7 +134,7 @@ export interface ScramjetState {
 export interface SubdirDiscovery {
 	toolCallId: string;
 	realpath: string;
-	filename: string;
+	filename: "CLAUDE.md" | "AGENTS.md";
 	displayPath: string;
 	content: string;
 	syntheticId: string;

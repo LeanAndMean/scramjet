@@ -23,55 +23,56 @@ import { freshState, recordingPi } from "./helpers.ts";
 describe("directoriesToCheck", () => {
 	it("returns intermediate dirs for inside-cwd paths", () => {
 		const result = directoriesToCheck("a/b/c/file.ts", "/project");
-		expect(result).toEqual(["/project/a", "/project/a/b", "/project/a/b/c"]);
+		expect(result).toEqual({ dirs: ["/project/a", "/project/a/b", "/project/a/b/c"], outsideCwd: false });
 	});
 
 	it("returns empty at cwd level", () => {
 		const result = directoriesToCheck("file.ts", "/project");
-		expect(result).toEqual([]);
+		expect(result).toEqual({ dirs: [], outsideCwd: false });
 	});
 
 	it("returns [fileDir] for file outside cwd", () => {
 		const result = directoriesToCheck("/other/path/file.ts", "/project");
-		expect(result).toEqual(["/other/path"]);
+		expect(result).toEqual({ dirs: ["/other/path"], outsideCwd: true });
 	});
 
 	it("caps at MAX_DEPTH", () => {
 		const deep = `${Array.from({ length: 15 }, (_, i) => `d${i}`).join("/")}/file.ts`;
 		const result = directoriesToCheck(deep, "/project");
-		expect(result).toHaveLength(MAX_DEPTH);
+		expect(result.dirs).toHaveLength(MAX_DEPTH);
+		expect(result.outsideCwd).toBe(false);
 	});
 
 	it("handles absolute paths inside cwd", () => {
 		const result = directoriesToCheck("/project/sub/dir/file.ts", "/project");
-		expect(result).toEqual(["/project/sub", "/project/sub/dir"]);
+		expect(result).toEqual({ dirs: ["/project/sub", "/project/sub/dir"], outsideCwd: false });
 	});
 
 	it("normalizes .. segments", () => {
 		const result = directoriesToCheck("a/b/../c/file.ts", "/project");
-		expect(result).toEqual(["/project/a", "/project/a/c"]);
+		expect(result).toEqual({ dirs: ["/project/a", "/project/a/c"], outsideCwd: false });
 	});
 
 	it("handles ~/ paths by expanding to homedir", () => {
 		const home = homedir();
 		const result = directoriesToCheck("~/sub/dir/file.ts", home);
-		expect(result).toEqual([join(home, "sub"), join(home, "sub/dir")]);
+		expect(result).toEqual({ dirs: [join(home, "sub"), join(home, "sub/dir")], outsideCwd: false });
 	});
 
 	it("returns [fileDir] for ~/ paths when cwd is not homedir", () => {
 		const home = homedir();
 		const result = directoriesToCheck("~/sub/file.ts", "/project");
-		expect(result).toEqual([join(home, "sub")]);
+		expect(result).toEqual({ dirs: [join(home, "sub")], outsideCwd: true });
 	});
 
 	it("returns single dir for one-level deep file", () => {
 		const result = directoriesToCheck("sub/file.ts", "/project");
-		expect(result).toEqual(["/project/sub"]);
+		expect(result).toEqual({ dirs: ["/project/sub"], outsideCwd: false });
 	});
 
 	it("handles trailing slashes in cwd", () => {
 		const result = directoriesToCheck("a/b/file.ts", "/project/");
-		expect(result).toEqual(["/project/a", "/project/a/b"]);
+		expect(result).toEqual({ dirs: ["/project/a", "/project/a/b"], outsideCwd: false });
 	});
 });
 
