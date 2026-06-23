@@ -1,60 +1,30 @@
 {
-	"name": "@leanandmean/scramjet",
-	"version": "0.26.0",
-	"description": "Smart auto-continuation and command-set harness for Pi",
-	"license": "MIT",
-	"repository": "github:LeanAndMean/scramjet",
+	"name": "scramjet-monorepo",
+	"private": true,
 	"type": "module",
-	"bin": {
-		"scramjet": "./bin/scramjet.js"
-	},
-	"exports": {
-		".": {
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js"
-		}
-	},
-	"files": [
-		"bin/",
-		"dist/",
-		"mach12/",
-		"scripts/",
-		"docs/",
-		"CHANGELOG.md",
-		"README.md",
-		"LICENSE"
-	],
-	"engines": {
-		"node": ">=20"
-	},
-	"pi": {
-		"piBaseVersion": "0.74.0",
-		"piPatchFlavor": "scramjet.4",
-		"piTestedVersion": "0.74.0-scramjet.4"
-	},
-	"publishConfig": {
-		"access": "public"
-	},
+	"workspaces": ["packages/*"],
 	"scripts": {
-		"typecheck": "tsc --noEmit",
-		"build": "tsc -p tsconfig.build.json",
-		"test": "vitest --run",
+		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
+		"typecheck": "tsgo --noEmit",
+		"test": "npm run test --workspaces --if-present",
 		"lint": "biome check .",
-		"postinstall": "node scripts/postinstall.js",
-		"prepack": "npm run build"
-	},
-	"dependencies": {
-		"@earendil-works/pi-agent-core": "npm:@leanandmean/pi-agent-core@0.74.0-scramjet.4",
-		"@earendil-works/pi-ai": "npm:@leanandmean/pi-ai@0.74.0-scramjet.4",
-		"@earendil-works/pi-coding-agent": "npm:@leanandmean/pi-coding-agent@0.74.0-scramjet.4",
-		"@earendil-works/pi-tui": "npm:@leanandmean/pi-tui@0.74.0-scramjet.4",
-		"typebox": "1.1.24",
-		"yaml": "^2.9.0"
+		"clean": "npm run clean --workspaces --if-present"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.5",
-		"@types/node": "22.10.5",
-		"typescript": "5.7.3",
-		"vitest": "3.2.4"
+		"@types/node": "^22.10.5",
+		"@typescript/native-preview": "7.0.0-dev.20260120.1",
+		"typescript": "^5.9.2",
+		"vitest": "^3.2.4",
+		"shx": "^0.4.0"
+	},
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"overrides": {
+		"rimraf": "6.1.2",
+		"gaxios": {
+			"rimraf": "6.1.2"
+		}
 	}
 }

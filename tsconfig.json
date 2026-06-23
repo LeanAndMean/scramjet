@@ -1,18 +1,22 @@
 {
+	"extends": "./tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ES2022",
-		"module": "Node16",
-		"moduleResolution": "Node16",
-		"lib": ["ES2022"],
-		"types": ["node"],
-		"strict": true,
-		"esModuleInterop": true,
-		"skipLibCheck": true,
-		"forceConsistentCasingInFileNames": true,
-		"resolveJsonModule": true,
-		"allowImportingTsExtensions": true,
-		"noEmit": true
+		"noEmit": true,
+		"paths": {
+			"@scramjet/tui": ["./packages/tui/src/index.ts"],
+			"@scramjet/tui/*": ["./packages/tui/src/*"],
+			"@scramjet/ai": ["./packages/ai/src/index.ts"],
+			"@scramjet/ai/oauth": ["./packages/ai/src/oauth.ts"],
+			"@scramjet/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+			"@scramjet/ai/dist/*": ["./packages/ai/src/*"],
+			"@scramjet/agent": ["./packages/agent/src/index.ts"],
+			"@scramjet/agent/*": ["./packages/agent/src/*"],
+			"@scramjet/coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"@scramjet/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
+			"@scramjet/coding-agent/*": ["./packages/coding-agent/src/*"],
+			"typebox": ["./node_modules/typebox"]
+		}
 	},
-	"include": ["**/*.ts"],
-	"exclude": ["node_modules"]
+	"include": ["packages/*/src/**/*"],
+	"exclude": ["**/dist/**", "**/node_modules/**"]
 }

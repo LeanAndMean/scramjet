@@ -12,7 +12,8 @@
 			"recommended": true,
 			"style": {
 				"noNonNullAssertion": "off",
-				"useNodejsImportProtocol": "off"
+				"useNodejsImportProtocol": "off",
+				"useConst": "error"
 			},
 			"suspicious": {
 				"noExplicitAny": "off",
@@ -22,6 +23,14 @@
 		}
 	},
 	"files": {
-		"includes": ["**/*.ts", "**/*.mjs", "**/*.js", "!node_modules", "!dist", "!**/*.tgz"]
+		"includes": [
+			"packages/*/src/**/*.ts",
+			"packages/*/tests/**/*.ts",
+			"packages/*/test/**/*.ts",
+			"packages/coding-agent/examples/**/*.ts",
+			"!**/node_modules/**/*",
+			"!**/dist/**/*",
+			"!**/models.generated.ts"
+		]
 	}
 }
