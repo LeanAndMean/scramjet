@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@scramjet/agent";
-import type { Transport } from "@scramjet/ai";
+import type { ThinkingLevel } from "@leanandmean/agent";
+import type { Transport } from "@leanandmean/ai";
 import {
 	Container,
 	getCapabilities,
@@ -10,7 +10,7 @@ import {
 	SettingsList,
 	Spacer,
 	Text,
-} from "@scramjet/tui";
+} from "@leanandmean/tui";
 import type { WarningSettings } from "../../../core/settings-manager.js";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";

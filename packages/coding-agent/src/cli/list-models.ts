@@ -2,8 +2,8 @@
  * List available models with optional fuzzy search
  */
 
-import type { Api, Model } from "@scramjet/ai";
-import { fuzzyFilter } from "@scramjet/tui";
+import type { Api, Model } from "@leanandmean/ai";
+import { fuzzyFilter } from "@leanandmean/tui";
 import chalk from "chalk";
 import { formatNoModelsAvailableMessage } from "../core/auth-guidance.js";
 import type { ModelRegistry } from "../core/model-registry.js";

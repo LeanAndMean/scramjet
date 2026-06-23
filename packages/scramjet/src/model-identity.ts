@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@scramjet/coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
 import type { ModelRecord, ScramjetState } from "./types.js";
 
 type ActiveModel = NonNullable<ExtensionContext["model"]>;

@@ -1,6 +1,6 @@
-import type { ExtensionAPI, ExtensionContext } from "@scramjet/coding-agent";
-import type { Component } from "@scramjet/tui";
-import { type SettingItem, SettingsList, type SettingsListTheme } from "@scramjet/tui";
+import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
+import type { Component } from "@leanandmean/tui";
+import { type SettingItem, SettingsList, type SettingsListTheme } from "@leanandmean/tui";
 import { defaultConfigPath, loadAutonomyConfig, lookupEdge, saveAutonomyConfig } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
 import type { AutonomyConfig, NextStepPolicy, ScramjetState } from "./types.js";

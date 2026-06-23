@@ -1,4 +1,4 @@
-import type { ImageContent, Message, TextContent } from "@scramjet/ai";
+import type { ImageContent, Message, TextContent } from "@leanandmean/ai";
 import type { AgentMessage } from "../types.js";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:

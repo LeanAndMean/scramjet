@@ -8,11 +8,11 @@ import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as _bundledPiAgentCore from "@scramjet/agent";
-import * as _bundledPiAi from "@scramjet/ai";
-import * as _bundledPiAiOauth from "@scramjet/ai/oauth";
-import type { KeyId } from "@scramjet/tui";
-import * as _bundledPiTui from "@scramjet/tui";
+import * as _bundledPiAgentCore from "@leanandmean/agent";
+import * as _bundledPiAi from "@leanandmean/ai";
+import * as _bundledPiAiOauth from "@leanandmean/ai/oauth";
+import type { KeyId } from "@leanandmean/tui";
+import * as _bundledPiTui from "@leanandmean/tui";
 import { createJiti } from "jiti/static";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
@@ -22,7 +22,7 @@ import * as _bundledTypeboxCompile from "typebox/compile";
 import * as _bundledTypeboxValue from "typebox/value";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary } from "../../config.js";
 // NOTE: This import works because loader.ts exports are NOT re-exported from index.ts,
-// avoiding a circular dependency. Extensions can import from @scramjet/coding-agent
+// avoiding a circular dependency. Extensions can import from @leanandmean/coding-agent
 // (or the legacy @mariozechner scopes, kept as back-compat aliases below).
 import * as _bundledPiCodingAgent from "../../index.js";
 import { createEventBus, type EventBus } from "../event-bus.js";
@@ -49,11 +49,11 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@sinclair/typebox": _bundledTypebox,
 	"@sinclair/typebox/compile": _bundledTypeboxCompile,
 	"@sinclair/typebox/value": _bundledTypeboxValue,
-	"@scramjet/coding-agent": _bundledPiCodingAgent,
-	"@scramjet/agent": _bundledPiAgentCore,
-	"@scramjet/tui": _bundledPiTui,
-	"@scramjet/ai": _bundledPiAi,
-	"@scramjet/ai/oauth": _bundledPiAiOauth,
+	"@leanandmean/coding-agent": _bundledPiCodingAgent,
+	"@leanandmean/agent": _bundledPiAgentCore,
+	"@leanandmean/tui": _bundledPiTui,
+	"@leanandmean/ai": _bundledPiAi,
+	"@leanandmean/ai/oauth": _bundledPiAiOauth,
 	"@mariozechner/pi-agent-core": _bundledPiAgentCore,
 	"@mariozechner/pi-tui": _bundledPiTui,
 	"@mariozechner/pi-ai": _bundledPiAi,
@@ -89,17 +89,17 @@ function getAliases(): Record<string, string> {
 	};
 
 	const piCodingAgentEntry = packageIndex;
-	const piAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@scramjet/agent");
-	const piTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@scramjet/tui");
-	const piAiEntry = resolveWorkspaceOrImport("ai/dist/index.js", "@scramjet/ai");
-	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@scramjet/ai/oauth");
+	const piAgentCoreEntry = resolveWorkspaceOrImport("agent/dist/index.js", "@leanandmean/agent");
+	const piTuiEntry = resolveWorkspaceOrImport("tui/dist/index.js", "@leanandmean/tui");
+	const piAiEntry = resolveWorkspaceOrImport("ai/dist/index.js", "@leanandmean/ai");
+	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@leanandmean/ai/oauth");
 
 	_aliases = {
-		"@scramjet/coding-agent": piCodingAgentEntry,
-		"@scramjet/agent": piAgentCoreEntry,
-		"@scramjet/tui": piTuiEntry,
-		"@scramjet/ai": piAiEntry,
-		"@scramjet/ai/oauth": piAiOauthEntry,
+		"@leanandmean/coding-agent": piCodingAgentEntry,
+		"@leanandmean/agent": piAgentCoreEntry,
+		"@leanandmean/tui": piTuiEntry,
+		"@leanandmean/ai": piAiEntry,
+		"@leanandmean/ai/oauth": piAiOauthEntry,
 		"@mariozechner/pi-coding-agent": piCodingAgentEntry,
 		"@mariozechner/pi-agent-core": piAgentCoreEntry,
 		"@mariozechner/pi-tui": piTuiEntry,

@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { registerAgentCatalog } from "./agent-catalog.js";
 import { registerAutoContinue } from "./auto-continue.js";
 import { defaultConfigPath } from "./autonomy-settings.js";

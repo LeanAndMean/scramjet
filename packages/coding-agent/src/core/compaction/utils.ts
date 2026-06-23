@@ -2,8 +2,8 @@
  * Shared utilities for compaction and branch summarization.
  */
 
-import type { AgentMessage } from "@scramjet/agent";
-import type { Message } from "@scramjet/ai";
+import type { AgentMessage } from "@leanandmean/agent";
+import type { Message } from "@leanandmean/ai";
 
 // ============================================================================
 // File Operation Tracking

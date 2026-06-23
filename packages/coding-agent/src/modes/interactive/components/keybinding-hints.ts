@@ -2,7 +2,7 @@
  * Utilities for formatting keybinding hints in the UI.
  */
 
-import { getKeybindings, type Keybinding, type KeyId } from "@scramjet/tui";
+import { getKeybindings, type Keybinding, type KeyId } from "@leanandmean/tui";
 import { theme } from "../theme/theme.js";
 
 export interface KeyTextFormatOptions {

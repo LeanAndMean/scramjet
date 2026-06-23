@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { parseFrontmatter } from "@scramjet/coding-agent";
+import { parseFrontmatter } from "@leanandmean/coding-agent";
 import type { AgentDef, AgentRegistry, CommandDef, CommandRegistry } from "../types.js";
 import { parseNextStepPolicy } from "./parse-next-step.js";
 

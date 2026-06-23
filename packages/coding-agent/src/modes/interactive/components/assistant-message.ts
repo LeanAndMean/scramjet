@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@scramjet/ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@scramjet/tui";
+import type { AssistantMessage } from "@leanandmean/ai";
+import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@leanandmean/tui";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";

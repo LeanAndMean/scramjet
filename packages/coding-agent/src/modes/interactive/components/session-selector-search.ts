@@ -1,4 +1,4 @@
-import { fuzzyMatch } from "@scramjet/tui";
+import { fuzzyMatch } from "@leanandmean/tui";
 import type { SessionInfo } from "../../../core/session-manager.js";
 
 export type SortMode = "threaded" | "recent" | "relevance";

@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import type { ThinkingLevel } from "@scramjet/agent";
-import type { CacheRetention, Model } from "@scramjet/ai";
+import type { ThinkingLevel } from "@leanandmean/agent";
+import type { CacheRetention, Model } from "@leanandmean/ai";
 import { getAgentDir } from "../config.js";
 import { AuthStorage } from "./auth-storage.js";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.js";

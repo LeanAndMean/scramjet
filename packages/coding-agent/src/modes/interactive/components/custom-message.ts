@@ -1,6 +1,6 @@
-import type { TextContent } from "@scramjet/ai";
-import type { Component } from "@scramjet/tui";
-import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@scramjet/tui";
+import type { TextContent } from "@leanandmean/ai";
+import type { Component } from "@leanandmean/tui";
+import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@leanandmean/tui";
 import type { MessageRenderer } from "../../../core/extensions/types.js";
 import type { CustomMessage } from "../../../core/messages.js";
 import { getMarkdownTheme, theme } from "../theme/theme.js";

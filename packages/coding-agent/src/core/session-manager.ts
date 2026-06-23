@@ -1,5 +1,5 @@
-import { type AgentMessage, uuidv7 } from "@scramjet/agent";
-import type { ImageContent, Message, TextContent } from "@scramjet/ai";
+import { type AgentMessage, uuidv7 } from "@leanandmean/agent";
+import type { ImageContent, Message, TextContent } from "@leanandmean/ai";
 import { randomUUID } from "crypto";
 import {
 	appendFileSync,

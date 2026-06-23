@@ -1,4 +1,4 @@
-import { getKeybindings, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@scramjet/tui";
+import { getKeybindings, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@leanandmean/tui";
 
 export interface MultiLineSelectItem {
 	value: string;

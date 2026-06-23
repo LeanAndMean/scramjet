@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import type { AgentMessage } from "@scramjet/agent";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@scramjet/ai";
-import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@scramjet/coding-agent";
-import { isReadToolResult } from "@scramjet/coding-agent";
+import type { AgentMessage } from "@leanandmean/agent";
+import type { AssistantMessage, ToolResultMessage, Usage } from "@leanandmean/ai";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
+import { isReadToolResult } from "@leanandmean/coding-agent";
 import type { ScramjetState, SubdirDiscovery } from "./types.js";
 
 export const MAX_DIRS = 20;

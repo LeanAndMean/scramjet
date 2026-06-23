@@ -38,7 +38,7 @@
  * See CLAUDE.md "MVP design rationales".
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@scramjet/coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";

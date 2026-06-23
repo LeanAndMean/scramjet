@@ -3,8 +3,8 @@
  * and returns an inline image via Pi's terminal image support.
  */
 
-import type { ExtensionAPI } from "@scramjet/coding-agent";
-import { Image, Text } from "@scramjet/tui";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
+import { Image, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { type DiagramFormat, detectRenderers, renderDiagram } from "./renderers.js";
 

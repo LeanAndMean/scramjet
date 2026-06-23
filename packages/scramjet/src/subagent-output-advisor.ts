@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { SIDEBAR_MAX } from "./history.js";
 import type { ScramjetState, SidebarEntry } from "./types.js";
 

@@ -1,4 +1,4 @@
-import { setBedrockProviderModule } from "@scramjet/ai";
-import { bedrockProviderModule } from "@scramjet/ai/bedrock-provider";
+import { setBedrockProviderModule } from "@leanandmean/ai";
+import { bedrockProviderModule } from "@leanandmean/ai/bedrock-provider";
 
 setBedrockProviderModule(bedrockProviderModule);

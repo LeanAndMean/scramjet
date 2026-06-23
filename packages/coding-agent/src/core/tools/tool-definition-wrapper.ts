@@ -1,4 +1,4 @@
-import type { AgentTool } from "@scramjet/agent";
+import type { AgentTool } from "@leanandmean/agent";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.js";
 
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */

@@ -3,17 +3,17 @@
 	"compilerOptions": {
 		"noEmit": true,
 		"paths": {
-			"@scramjet/tui": ["./packages/tui/src/index.ts"],
-			"@scramjet/tui/*": ["./packages/tui/src/*"],
-			"@scramjet/ai": ["./packages/ai/src/index.ts"],
-			"@scramjet/ai/oauth": ["./packages/ai/src/oauth.ts"],
-			"@scramjet/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
-			"@scramjet/ai/dist/*": ["./packages/ai/src/*"],
-			"@scramjet/agent": ["./packages/agent/src/index.ts"],
-			"@scramjet/agent/*": ["./packages/agent/src/*"],
-			"@scramjet/coding-agent": ["./packages/coding-agent/src/index.ts"],
-			"@scramjet/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
-			"@scramjet/coding-agent/*": ["./packages/coding-agent/src/*"],
+			"@leanandmean/tui": ["./packages/tui/src/index.ts"],
+			"@leanandmean/tui/*": ["./packages/tui/src/*"],
+			"@leanandmean/ai": ["./packages/ai/src/index.ts"],
+			"@leanandmean/ai/oauth": ["./packages/ai/src/oauth.ts"],
+			"@leanandmean/ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+			"@leanandmean/ai/dist/*": ["./packages/ai/src/*"],
+			"@leanandmean/agent": ["./packages/agent/src/index.ts"],
+			"@leanandmean/agent/*": ["./packages/agent/src/*"],
+			"@leanandmean/coding-agent": ["./packages/coding-agent/src/index.ts"],
+			"@leanandmean/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
+			"@leanandmean/coding-agent/*": ["./packages/coding-agent/src/*"],
 			"typebox": ["./node_modules/typebox"]
 		}
 	},

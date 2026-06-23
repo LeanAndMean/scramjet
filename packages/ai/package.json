@@ -1,7 +1,9 @@
 {
-	"name": "@scramjet/ai",
+	"name": "@leanandmean/ai",
 	"version": "0.74.1-scramjet.4",
-	"private": true,
+	"publishConfig": {
+		"access": "public"
+	},
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"type": "module",
 	"main": "./dist/index.js",

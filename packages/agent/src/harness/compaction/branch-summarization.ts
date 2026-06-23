@@ -1,5 +1,5 @@
-import type { Model } from "@scramjet/ai";
-import { completeSimple } from "@scramjet/ai";
+import type { Model } from "@leanandmean/ai";
+import { completeSimple } from "@leanandmean/ai";
 import type { AgentMessage } from "../../types.js";
 import {
 	convertToLlm,

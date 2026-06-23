@@ -1,7 +1,9 @@
 {
-	"name": "@scramjet/coding-agent",
+	"name": "@leanandmean/coding-agent",
 	"version": "0.74.1-scramjet.4",
-	"private": true,
+	"publishConfig": {
+		"access": "public"
+	},
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
@@ -32,9 +34,9 @@
 		"test": "vitest --run"
 	},
 	"dependencies": {
-		"@scramjet/agent": "*",
-		"@scramjet/ai": "*",
-		"@scramjet/tui": "*",
+		"@leanandmean/agent": "*",
+		"@leanandmean/ai": "*",
+		"@leanandmean/tui": "*",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"chalk": "^5.5.0",
 		"diff": "^8.0.2",

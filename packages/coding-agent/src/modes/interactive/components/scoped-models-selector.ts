@@ -1,4 +1,4 @@
-import type { Model } from "@scramjet/ai";
+import type { Model } from "@leanandmean/ai";
 import {
 	Container,
 	type Focusable,
@@ -9,7 +9,7 @@ import {
 	matchesKey,
 	Spacer,
 	Text,
-} from "@scramjet/tui";
+} from "@leanandmean/tui";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyText } from "./keybinding-hints.js";

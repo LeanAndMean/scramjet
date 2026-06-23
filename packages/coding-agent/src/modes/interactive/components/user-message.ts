@@ -1,4 +1,4 @@
-import { Box, Container, Markdown, type MarkdownTheme } from "@scramjet/tui";
+import { Box, Container, Markdown, type MarkdownTheme } from "@leanandmean/tui";
 import { getMarkdownTheme, theme } from "../theme/theme.js";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";

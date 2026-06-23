@@ -17,8 +17,8 @@ import {
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
-} from "@scramjet/ai";
-import { registerOAuthProvider, resetOAuthProviders } from "@scramjet/ai/oauth";
+} from "@leanandmean/ai";
+import { registerOAuthProvider, resetOAuthProviders } from "@leanandmean/ai/oauth";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { type Static, Type } from "typebox";

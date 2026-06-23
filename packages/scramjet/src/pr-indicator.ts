@@ -12,7 +12,7 @@
  * widget in auto-continue.ts.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@scramjet/coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 
 const STATUS_KEY = "scramjet-pr";
 export const EXEC_TIMEOUT_MS = 3000;

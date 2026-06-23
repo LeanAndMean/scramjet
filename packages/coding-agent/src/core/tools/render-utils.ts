@@ -1,6 +1,6 @@
 import * as os from "node:os";
-import type { ImageContent, TextContent } from "@scramjet/ai";
-import { getCapabilities, getImageDimensions, imageFallback } from "@scramjet/tui";
+import type { ImageContent, TextContent } from "@leanandmean/ai";
+import { getCapabilities, getImageDimensions, imageFallback } from "@leanandmean/tui";
 import { stripAnsi } from "../../utils/ansi.js";
 import { sanitizeBinaryOutput } from "../../utils/shell.js";
 

@@ -1,4 +1,4 @@
-import type { SessionEntry } from "@scramjet/coding-agent";
+import type { SessionEntry } from "@leanandmean/coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reconstructModelState, registerModelIdentity } from "../src/model-identity.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";

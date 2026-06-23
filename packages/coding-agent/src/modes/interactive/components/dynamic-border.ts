@@ -1,4 +1,4 @@
-import type { Component } from "@scramjet/tui";
+import type { Component } from "@leanandmean/tui";
 import { theme } from "../theme/theme.js";
 
 /**

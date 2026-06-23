@@ -2,10 +2,10 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
-import type { AgentMessage } from "@scramjet/agent";
-import type { ImageContent, Model, SystemPromptSection } from "@scramjet/ai";
-import { flattenSystemPrompt } from "@scramjet/ai";
-import type { KeyId } from "@scramjet/tui";
+import type { AgentMessage } from "@leanandmean/agent";
+import type { ImageContent, Model, SystemPromptSection } from "@leanandmean/ai";
+import { flattenSystemPrompt } from "@leanandmean/ai";
+import type { KeyId } from "@leanandmean/tui";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";

@@ -23,7 +23,7 @@
  * that colors every response.
  */
 
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { DOCS_BY_KEY } from "./docs-registry.js";
 
 const scramjetReadmePath = DOCS_BY_KEY.readme.path;

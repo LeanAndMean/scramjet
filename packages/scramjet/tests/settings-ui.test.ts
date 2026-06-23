@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Component } from "@scramjet/tui";
+import type { Component } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../src/autonomy-settings.js";
 import { buildCommandItems, buildEdgeItems, buildTopLevelItems, showSettingsPage } from "../src/settings-ui.js";

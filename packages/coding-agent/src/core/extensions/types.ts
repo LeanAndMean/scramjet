@@ -14,7 +14,7 @@ import type {
 	AgentToolUpdateCallback,
 	ThinkingLevel,
 	ToolExecutionMode,
-} from "@scramjet/agent";
+} from "@leanandmean/agent";
 import type {
 	Api,
 	AssistantMessageEvent,
@@ -28,7 +28,7 @@ import type {
 	SystemPromptSection,
 	TextContent,
 	ToolResultMessage,
-} from "@scramjet/ai";
+} from "@leanandmean/ai";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -39,7 +39,7 @@ import type {
 	OverlayHandle,
 	OverlayOptions,
 	TUI,
-} from "@scramjet/tui";
+} from "@leanandmean/tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type { BashResult } from "../bash-executor.js";
@@ -227,12 +227,12 @@ export interface ExtensionUIContext {
 	 * - `keybindings`: KeybindingsManager for app-level keybindings
 	 *
 	 * For full app keybinding support (escape, ctrl+d, model switching, etc.),
-	 * extend `CustomEditor` from `@scramjet/coding-agent` and call
+	 * extend `CustomEditor` from `@leanandmean/coding-agent` and call
 	 * `super.handleInput(data)` for keys you don't handle.
 	 *
 	 * @example
 	 * ```ts
-	 * import { CustomEditor } from "@scramjet/coding-agent";
+	 * import { CustomEditor } from "@leanandmean/coding-agent";
 	 *
 	 * class VimEditor extends CustomEditor {
 	 *   private mode: "normal" | "insert" = "insert";

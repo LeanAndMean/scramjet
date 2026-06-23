@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import type { AgentRegistry, ScramjetState } from "./types.js";
 
 export function buildAgentCatalogBlock(registry: AgentRegistry): string {

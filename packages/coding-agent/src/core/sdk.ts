@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, type ThinkingLevel } from "@scramjet/agent";
-import { type CacheRetention, clampThinkingLevel, type Message, type Model, streamSimple } from "@scramjet/ai";
+import { Agent, type AgentMessage, type ThinkingLevel } from "@leanandmean/agent";
+import { type CacheRetention, clampThinkingLevel, type Message, type Model, streamSimple } from "@leanandmean/ai";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
@@ -203,7 +203,7 @@ function getAttributionHeaders(
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@scramjet/ai';
+ * import { getModel } from '@leanandmean/ai';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',

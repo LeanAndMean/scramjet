@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@scramjet/ai";
+import type { ImageContent, TextContent } from "@leanandmean/ai";
 import type { AgentMessage } from "../../types.js";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "../messages.js";
 import type {

@@ -1,4 +1,4 @@
-import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@scramjet/tui";
+import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@leanandmean/tui";
 import { getSelectListTheme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 

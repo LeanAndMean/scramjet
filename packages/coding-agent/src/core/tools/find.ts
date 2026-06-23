@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline";
-import type { AgentTool } from "@scramjet/agent";
-import { Text } from "@scramjet/tui";
+import type { AgentTool } from "@leanandmean/agent";
+import { Text } from "@leanandmean/tui";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import path from "path";

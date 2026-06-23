@@ -1,8 +1,8 @@
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentMessage } from "@scramjet/agent";
-import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@scramjet/ai";
+import type { AgentMessage } from "@leanandmean/agent";
+import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@leanandmean/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	buildSyntheticPair,

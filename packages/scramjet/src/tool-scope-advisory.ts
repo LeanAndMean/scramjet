@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import type { ScramjetState } from "./types.js";
 
 // Advisory-only in the MVP per CLAUDE.md design rationale: log out-of-scope

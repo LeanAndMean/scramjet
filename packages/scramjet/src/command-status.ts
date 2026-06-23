@@ -24,7 +24,7 @@
  * answer turn anymore, so that failure mode is removed structurally.
  */
 
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.js";
 import { recordCommandStatus } from "./history.js";

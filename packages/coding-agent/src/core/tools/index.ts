@@ -68,7 +68,7 @@ export {
 	type WriteToolOptions,
 } from "./write.js";
 
-import type { AgentTool } from "@scramjet/agent";
+import type { AgentTool } from "@leanandmean/agent";
 import type { ToolDefinition } from "../extensions/types.js";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.js";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.js";

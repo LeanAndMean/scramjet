@@ -1,4 +1,4 @@
-import { initTheme, ToolExecutionComponent } from "@scramjet/coding-agent";
+import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { USER_INPUT_PARKED_TYPE } from "../src/history.js";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";

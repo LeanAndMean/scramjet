@@ -1,7 +1,7 @@
 import { lstatSync, mkdirSync, readdirSync, readlinkSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { getAgentDir } from "@scramjet/coding-agent";
+import { getAgentDir } from "@leanandmean/coding-agent";
 import type { AgentRegistry } from "../types.js";
 
 export interface BridgeResult {

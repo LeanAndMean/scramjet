@@ -1,5 +1,5 @@
-import type { AgentTool } from "@scramjet/agent";
-import { Text } from "@scramjet/tui";
+import type { AgentTool } from "@leanandmean/agent";
+import { Text } from "@leanandmean/tui";
 import { existsSync, readdirSync, statSync } from "fs";
 import nodePath from "path";
 import { type Static, Type } from "typebox";

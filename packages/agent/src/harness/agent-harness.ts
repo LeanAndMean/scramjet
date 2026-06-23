@@ -1,4 +1,4 @@
-import { type AssistantMessage, type ImageContent, type Model, streamSimple, type UserMessage } from "@scramjet/ai";
+import { type AssistantMessage, type ImageContent, type Model, streamSimple, type UserMessage } from "@leanandmean/ai";
 import { runAgentLoop } from "../agent-loop.js";
 import type {
 	AgentContext,

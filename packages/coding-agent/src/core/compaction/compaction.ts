@@ -5,9 +5,9 @@
  * and after compaction the session is reloaded.
  */
 
-import type { AgentMessage, ThinkingLevel } from "@scramjet/agent";
-import type { AssistantMessage, Model, Usage } from "@scramjet/ai";
-import { completeSimple } from "@scramjet/ai";
+import type { AgentMessage, ThinkingLevel } from "@leanandmean/agent";
+import type { AssistantMessage, Model, Usage } from "@leanandmean/ai";
+import { completeSimple } from "@leanandmean/ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,

@@ -5,9 +5,9 @@
  * a summary of the branch being left so context isn't lost.
  */
 
-import type { AgentMessage } from "@scramjet/agent";
-import type { Model } from "@scramjet/ai";
-import { completeSimple } from "@scramjet/ai";
+import type { AgentMessage } from "@leanandmean/agent";
+import type { Model } from "@leanandmean/ai";
+import { completeSimple } from "@leanandmean/ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,

@@ -1,4 +1,4 @@
-import type { Transport } from "@scramjet/ai";
+import type { Transport } from "@leanandmean/ai";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join } from "path";

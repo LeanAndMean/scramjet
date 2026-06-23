@@ -1,5 +1,5 @@
-import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "@scramjet/ai";
-import { completeSimple } from "@scramjet/ai";
+import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "@leanandmean/ai";
+import { completeSimple } from "@leanandmean/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
 	convertToLlm,

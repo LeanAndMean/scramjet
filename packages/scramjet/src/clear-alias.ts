@@ -1,6 +1,6 @@
 /** /clear — muscle-memory alias for Pi's /new. */
 
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 
 export function registerClearAlias(pi: ExtensionAPI): void {
 	pi.registerCommand("clear", {

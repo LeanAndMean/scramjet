@@ -1,5 +1,5 @@
-import type { ThinkingLevel } from "@scramjet/agent";
-import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@scramjet/tui";
+import type { ThinkingLevel } from "@leanandmean/agent";
+import { Container, type SelectItem, SelectList, type SelectListLayoutOptions } from "@leanandmean/tui";
 import { getSelectListTheme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { EditorTheme, MarkdownTheme, SelectListTheme } from "@scramjet/tui";
+import type { EditorTheme, MarkdownTheme, SelectListTheme } from "@leanandmean/tui";
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
@@ -657,8 +657,8 @@ function getDefaultTheme(): string {
 // ============================================================================
 
 // Use globalThis to share theme across module loaders (tsx + jiti in dev mode)
-const THEME_KEY = Symbol.for("@scramjet/coding-agent:theme");
-const THEME_KEY_OLD = Symbol.for("@scramjet/coding-agent:theme");
+const THEME_KEY = Symbol.for("@leanandmean/coding-agent:theme");
+const THEME_KEY_OLD = Symbol.for("@leanandmean/coding-agent:theme");
 
 // Export theme as a getter that reads from globalThis
 // This ensures all module instances (tsx, jiti) see the same theme
@@ -1132,7 +1132,7 @@ export function getEditorTheme(): EditorTheme {
 	};
 }
 
-export function getSettingsListTheme(): import("@scramjet/tui").SettingsListTheme {
+export function getSettingsListTheme(): import("@leanandmean/tui").SettingsListTheme {
 	return {
 		label: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : text),
 		value: (text: string, selected: boolean) => (selected ? theme.fg("accent", text) : theme.fg("muted", text)),

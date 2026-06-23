@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@scramjet/coding-agent";
+import type { ExtensionContext } from "@leanandmean/coding-agent";
 import type { ValidatedNextStep } from "./commands/validator.js";
 import { MultiLineSelectList } from "./multi-line-select.js";
 

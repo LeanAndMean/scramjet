@@ -1,7 +1,7 @@
 /** /scramjet on|off — gates `closed`/`open`/`ask` decisions. `forced`
  *  fires regardless; see CLAUDE.md "MVP design rationales". */
 
-import type { ExtensionAPI, ExtensionContext } from "@scramjet/coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
 import { showSettingsPage } from "./settings-ui.js";
 import type { ScramjetState } from "./types.js";

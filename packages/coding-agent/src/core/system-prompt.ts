@@ -2,7 +2,7 @@
  * System prompt construction and project context loading
  */
 
-import { flattenSystemPrompt, type SystemPromptSection } from "@scramjet/ai";
+import { flattenSystemPrompt, type SystemPromptSection } from "@leanandmean/ai";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
 import { formatSkillsForPrompt, type Skill } from "./skills.js";
 

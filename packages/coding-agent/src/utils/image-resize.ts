@@ -1,4 +1,4 @@
-import type { ImageContent } from "@scramjet/ai";
+import type { ImageContent } from "@leanandmean/ai";
 import { applyExifOrientation } from "./exif-orientation.js";
 import { loadPhoton } from "./photon.js";
 

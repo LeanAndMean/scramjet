@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@scramjet/coding-agent";
+import type { ExtensionContext } from "@leanandmean/coding-agent";
 import type { NextStep, ScramjetState } from "./types.js";
 
 export type NextStepDispatchOrigin = "agent" | "forced";

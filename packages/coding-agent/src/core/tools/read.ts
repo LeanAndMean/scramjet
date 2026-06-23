@@ -1,7 +1,7 @@
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { AgentTool } from "@scramjet/agent";
-import type { Api, ImageContent, Model, TextContent } from "@scramjet/ai";
-import { Text } from "@scramjet/tui";
+import type { AgentTool } from "@leanandmean/agent";
+import type { Api, ImageContent, Model, TextContent } from "@leanandmean/ai";
+import { Text } from "@leanandmean/tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";

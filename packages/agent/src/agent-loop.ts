@@ -10,7 +10,7 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
-} from "@scramjet/ai";
+} from "@leanandmean/ai";
 import type {
 	AgentContext,
 	AgentEvent,

@@ -1,5 +1,5 @@
-import type { AgentTool } from "@scramjet/agent";
-import { Container, Text } from "@scramjet/tui";
+import type { AgentTool } from "@leanandmean/agent";
+import { Container, Text } from "@leanandmean/tui";
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
 import { type Static, Type } from "typebox";

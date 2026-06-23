@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 
 export const SCRAMJET_LOG_TYPE = "scramjet:log";
 

@@ -1,5 +1,5 @@
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@scramjet/coding-agent";
-import { Text, wrapTextWithAnsi } from "@scramjet/tui";
+import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@leanandmean/coding-agent";
+import { Text, wrapTextWithAnsi } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
 import { USER_INPUT_PARKED_TYPE } from "./history.js";
 import { MultiLineSelectList } from "./multi-line-select.js";

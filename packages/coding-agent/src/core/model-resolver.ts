@@ -2,8 +2,8 @@
  * Model resolution, scoping, and initial selection
  */
 
-import type { ThinkingLevel } from "@scramjet/agent";
-import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@scramjet/ai";
+import type { ThinkingLevel } from "@leanandmean/agent";
+import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@leanandmean/ai";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.js";

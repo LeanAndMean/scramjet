@@ -1,5 +1,5 @@
-import type { AgentState } from "@scramjet/agent";
-import { flattenSystemPrompt } from "@scramjet/ai";
+import type { AgentState } from "@leanandmean/agent";
+import { flattenSystemPrompt } from "@leanandmean/ai";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { basename, join } from "path";
 import { APP_NAME, getExportTemplateDir } from "../../config.js";

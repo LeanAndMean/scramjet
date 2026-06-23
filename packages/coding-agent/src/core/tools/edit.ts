@@ -1,5 +1,5 @@
-import type { AgentTool } from "@scramjet/agent";
-import { Box, Container, Spacer, Text } from "@scramjet/tui";
+import type { AgentTool } from "@leanandmean/agent";
+import { Box, Container, Spacer, Text } from "@leanandmean/tui";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";

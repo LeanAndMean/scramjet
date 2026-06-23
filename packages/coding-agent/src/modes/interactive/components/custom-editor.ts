@@ -1,4 +1,4 @@
-import { Editor, type EditorOptions, type EditorTheme, type TUI } from "@scramjet/tui";
+import { Editor, type EditorOptions, type EditorTheme, type TUI } from "@leanandmean/tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.js";
 
 /**

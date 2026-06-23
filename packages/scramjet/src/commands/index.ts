@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import type { ScramjetState } from "../types.js";
 import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";

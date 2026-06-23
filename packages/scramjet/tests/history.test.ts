@@ -1,4 +1,4 @@
-import type { SessionEntry } from "@scramjet/coding-agent";
+import type { SessionEntry } from "@leanandmean/coding-agent";
 import { describe, expect, it } from "vitest";
 import {
 	appendSidebarEntry,

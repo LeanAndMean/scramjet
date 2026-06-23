@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@scramjet/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { Type } from "typebox";
 import { parseDelegateArgs, substituteArguments } from "./commands/substitute.js";
 import { recordCommandInvocation } from "./history.js";

@@ -1,4 +1,4 @@
-import type { ImageContent } from "@scramjet/ai";
+import type { ImageContent } from "@leanandmean/ai";
 import type { Args } from "./args.js";
 
 export interface InitialMessageInput {

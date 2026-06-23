@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
-import type { AgentTool } from "@scramjet/agent";
-import { Container, Text, truncateToWidth } from "@scramjet/tui";
+import type { AgentTool } from "@leanandmean/agent";
+import { Container, Text, truncateToWidth } from "@leanandmean/tui";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
