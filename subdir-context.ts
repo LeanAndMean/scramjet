@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, relative, resolve, sep } from "node:path";
+import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isReadToolResult } from "@earendil-works/pi-coding-agent";
 import type { ScramjetState, SubdirDiscovery } from "./types.ts";
@@ -170,7 +171,112 @@ export function reconstructSubdirState(entries: readonly SessionEntry[]): {
 	return { loadedPaths, discoveries };
 }
 
+const ZERO_USAGE: Usage = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+export function findAnchorIndex(messages: readonly Message[], toolCallId: string): number {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role !== "assistant") continue;
+		const assistant = msg as AssistantMessage;
+		if (!assistant.content) continue;
+		for (const block of assistant.content) {
+			if (block.type === "toolCall" && block.id === toolCallId) return i;
+		}
+	}
+	return -1;
+}
+
+export function buildSyntheticPair(
+	discovery: SubdirDiscovery,
+	anchor: AssistantMessage,
+): [AssistantMessage, ToolResultMessage] {
+	const assistantMsg: AssistantMessage = {
+		role: "assistant",
+		content: [
+			{ type: "toolCall", id: discovery.syntheticId, name: "read", arguments: { path: discovery.displayPath } },
+		],
+		api: anchor.api,
+		provider: anchor.provider,
+		model: anchor.model,
+		usage: ZERO_USAGE,
+		stopReason: "toolUse",
+		timestamp: 0,
+	};
+	const resultMsg: ToolResultMessage = {
+		role: "toolResult",
+		toolCallId: discovery.syntheticId,
+		toolName: "read",
+		content: [{ type: "text", text: `# Project context: ${discovery.displayPath}\n\n${discovery.content}` }],
+		isError: false,
+		timestamp: 0,
+	};
+	return [assistantMsg, resultMsg];
+}
+
+export function formatContextBlocks(
+	discoveries: SubdirDiscovery[],
+	messages: Message[],
+	logger?: ScramjetState["logger"],
+): Message[] | undefined {
+	if (discoveries.length === 0) return undefined;
+
+	const anchorGroups = new Map<number, SubdirDiscovery[]>();
+	for (const d of discoveries) {
+		if (
+			messages.some(
+				(m) =>
+					m.role === "assistant" &&
+					(m as AssistantMessage).content?.some((b) => b.type === "toolCall" && b.id === d.syntheticId),
+			)
+		) {
+			continue;
+		}
+
+		const idx = findAnchorIndex(messages, d.toolCallId);
+		if (idx === -1) {
+			logger?.debug("subdir-context", `anchor missing for ${d.displayPath} (toolCallId=${d.toolCallId})`);
+			continue;
+		}
+		const group = anchorGroups.get(idx) ?? [];
+		group.push(d);
+		anchorGroups.set(idx, group);
+	}
+
+	if (anchorGroups.size === 0) return undefined;
+
+	const sortedIndices = [...anchorGroups.keys()].sort((a, b) => a - b);
+	const result: Message[] = [];
+	let lastInserted = 0;
+
+	for (const anchorIdx of sortedIndices) {
+		result.push(...messages.slice(lastInserted, anchorIdx));
+		const anchor = messages[anchorIdx] as AssistantMessage;
+		const group = anchorGroups.get(anchorIdx)!;
+		for (const d of group) {
+			const [synAssistant, synResult] = buildSyntheticPair(d, anchor);
+			result.push(synAssistant, synResult);
+		}
+		lastInserted = anchorIdx;
+	}
+	result.push(...messages.slice(lastInserted));
+
+	return result;
+}
+
 export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): void {
+	pi.on("context", (event) => {
+		const modified = formatContextBlocks(state.subdirDiscoveries, event.messages as Message[], state.logger);
+		if (!modified) return;
+		return { messages: modified };
+	});
+
 	pi.on("tool_result", async (event, ctx) => {
 		if (!isReadToolResult(event)) return;
 		if (event.isError) return;

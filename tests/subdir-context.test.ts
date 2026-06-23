@@ -1,18 +1,23 @@
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	buildSyntheticPair,
 	CANDIDATES,
 	createStableId,
 	directoriesToCheck,
 	discoverContextFiles,
+	findAnchorIndex,
+	formatContextBlocks,
 	MAX_DEPTH,
 	MAX_DIRS,
 	reconstructSubdirState,
 	registerSubdirContext,
 	SUBDIR_CONTEXT_DISCOVERY_TYPE,
 } from "../subdir-context.ts";
+import type { SubdirDiscovery } from "../types.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
 describe("directoriesToCheck", () => {
@@ -771,5 +776,435 @@ describe("registerSubdirContext", () => {
 
 		expect(state.subdirLoadedPaths.size).toBe(0);
 		expect(state.subdirDiscoveries).toHaveLength(0);
+	});
+});
+
+const ZERO_USAGE: Usage = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function makeAssistant(toolCallId: string, toolName = "read", path = "file.ts"): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: { path } }],
+		api: "anthropic" as any,
+		provider: "anthropic" as any,
+		model: "claude-test",
+		usage: ZERO_USAGE,
+		stopReason: "toolUse",
+		timestamp: 100,
+	};
+}
+
+function makeToolResult(toolCallId: string, text = "result"): ToolResultMessage {
+	return {
+		role: "toolResult",
+		toolCallId,
+		toolName: "read",
+		content: [{ type: "text", text }],
+		isError: false,
+		timestamp: 101,
+	};
+}
+
+function makeDiscovery(overrides: Partial<SubdirDiscovery> = {}): SubdirDiscovery {
+	return {
+		toolCallId: "tc_real",
+		realpath: "/project/sub",
+		filename: "CLAUDE.md",
+		displayPath: "sub/CLAUDE.md",
+		content: "# Sub rules",
+		syntheticId: "scrctx-abc123456789",
+		...overrides,
+	};
+}
+
+describe("findAnchorIndex", () => {
+	it("finds the assistant message containing the tool call id", () => {
+		const messages: Message[] = [
+			{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 0 },
+			makeAssistant("tc_real"),
+			makeToolResult("tc_real"),
+		];
+		expect(findAnchorIndex(messages, "tc_real")).toBe(1);
+	});
+
+	it("returns -1 when tool call id not found", () => {
+		const messages: Message[] = [makeAssistant("tc_other"), makeToolResult("tc_other")];
+		expect(findAnchorIndex(messages, "tc_missing")).toBe(-1);
+	});
+
+	it("finds the last matching anchor (reverse scan)", () => {
+		const messages: Message[] = [
+			makeAssistant("tc_1"),
+			makeToolResult("tc_1"),
+			makeAssistant("tc_1"),
+			makeToolResult("tc_1"),
+		];
+		expect(findAnchorIndex(messages, "tc_1")).toBe(2);
+	});
+
+	it("finds anchor in multi-tool-call assistant message", () => {
+		const msg: AssistantMessage = {
+			...makeAssistant("tc_a"),
+			content: [
+				{ type: "toolCall", id: "tc_a", name: "read", arguments: { path: "a.ts" } },
+				{ type: "toolCall", id: "tc_b", name: "read", arguments: { path: "b.ts" } },
+			],
+		};
+		const messages: Message[] = [msg, makeToolResult("tc_a"), makeToolResult("tc_b")];
+		expect(findAnchorIndex(messages, "tc_b")).toBe(0);
+	});
+});
+
+describe("buildSyntheticPair", () => {
+	it("creates valid matching assistant/toolResult messages", () => {
+		const discovery = makeDiscovery();
+		const anchor = makeAssistant("tc_real");
+		const [synAssistant, synResult] = buildSyntheticPair(discovery, anchor);
+
+		expect(synAssistant.role).toBe("assistant");
+		expect(synAssistant.content).toHaveLength(1);
+		expect(synAssistant.content[0]).toEqual({
+			type: "toolCall",
+			id: discovery.syntheticId,
+			name: "read",
+			arguments: { path: discovery.displayPath },
+		});
+		expect(synAssistant.stopReason).toBe("toolUse");
+		expect(synAssistant.timestamp).toBe(0);
+
+		expect(synResult.role).toBe("toolResult");
+		expect(synResult.toolCallId).toBe(discovery.syntheticId);
+		expect(synResult.toolName).toBe("read");
+		expect(synResult.isError).toBe(false);
+		expect(synResult.timestamp).toBe(0);
+		expect(synResult.content[0]).toEqual({
+			type: "text",
+			text: `# Project context: ${discovery.displayPath}\n\n${discovery.content}`,
+		});
+	});
+
+	it("copies api/provider/model from anchor", () => {
+		const anchor = makeAssistant("tc_real");
+		const [synAssistant] = buildSyntheticPair(makeDiscovery(), anchor);
+
+		expect(synAssistant.api).toBe(anchor.api);
+		expect(synAssistant.provider).toBe(anchor.provider);
+		expect(synAssistant.model).toBe(anchor.model);
+	});
+
+	it("uses zero usage", () => {
+		const [synAssistant] = buildSyntheticPair(makeDiscovery(), makeAssistant("tc_real"));
+		expect(synAssistant.usage.input).toBe(0);
+		expect(synAssistant.usage.output).toBe(0);
+		expect(synAssistant.usage.totalTokens).toBe(0);
+		expect(synAssistant.usage.cost.total).toBe(0);
+	});
+});
+
+describe("formatContextBlocks", () => {
+	it("returns undefined when no discoveries", () => {
+		const result = formatContextBlocks([], [makeAssistant("tc_1"), makeToolResult("tc_1")]);
+		expect(result).toBeUndefined();
+	});
+
+	it("injects synthetic pairs before the triggering assistant message", () => {
+		const messages: Message[] = [
+			{ role: "user", content: [{ type: "text", text: "read file" }], timestamp: 0 },
+			makeAssistant("tc_real"),
+			makeToolResult("tc_real"),
+		];
+		const discovery = makeDiscovery({ toolCallId: "tc_real" });
+		const result = formatContextBlocks([discovery], messages);
+
+		expect(result).toBeDefined();
+		expect(result!).toHaveLength(5);
+		expect(result![0].role).toBe("user");
+		expect(result![1].role).toBe("assistant");
+		expect((result![1] as AssistantMessage).content[0]).toMatchObject({
+			type: "toolCall",
+			id: discovery.syntheticId,
+			name: "read",
+		});
+		expect(result![2].role).toBe("toolResult");
+		expect((result![2] as ToolResultMessage).toolCallId).toBe(discovery.syntheticId);
+		expect(result![3].role).toBe("assistant");
+		expect(result![4].role).toBe("toolResult");
+	});
+
+	it("returns undefined when anchor is missing", () => {
+		const messages: Message[] = [makeAssistant("tc_other"), makeToolResult("tc_other")];
+		const discovery = makeDiscovery({ toolCallId: "tc_missing" });
+		const result = formatContextBlocks([discovery], messages);
+		expect(result).toBeUndefined();
+	});
+
+	it("skips discoveries whose synthetic ID is already in messages (idempotence)", () => {
+		const discovery = makeDiscovery({ toolCallId: "tc_real", syntheticId: "scrctx-already" });
+		const messages: Message[] = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "scrctx-already", name: "read", arguments: { path: "sub/CLAUDE.md" } }],
+				api: "anthropic" as any,
+				provider: "anthropic" as any,
+				model: "claude-test",
+				usage: ZERO_USAGE,
+				stopReason: "toolUse",
+				timestamp: 0,
+			},
+			makeToolResult("scrctx-already"),
+			makeAssistant("tc_real"),
+			makeToolResult("tc_real"),
+		];
+		const result = formatContextBlocks([discovery], messages);
+		expect(result).toBeUndefined();
+	});
+
+	it("coalesces multiple discoveries at the same anchor", () => {
+		const multiToolAssistant: AssistantMessage = {
+			...makeAssistant("tc_a"),
+			content: [
+				{ type: "toolCall", id: "tc_a", name: "read", arguments: { path: "a/file.ts" } },
+				{ type: "toolCall", id: "tc_b", name: "read", arguments: { path: "b/file.ts" } },
+			],
+		};
+		const messages: Message[] = [multiToolAssistant, makeToolResult("tc_a"), makeToolResult("tc_b")];
+		const d1 = makeDiscovery({ toolCallId: "tc_a", syntheticId: "scrctx-aaa", displayPath: "a/CLAUDE.md" });
+		const d2 = makeDiscovery({ toolCallId: "tc_b", syntheticId: "scrctx-bbb", displayPath: "b/CLAUDE.md" });
+		const result = formatContextBlocks([d1, d2], messages);
+
+		expect(result).toBeDefined();
+		expect(result!).toHaveLength(7);
+		expect(result![0].role).toBe("assistant");
+		expect((result![0] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-aaa" });
+		expect(result![1].role).toBe("toolResult");
+		expect(result![2].role).toBe("assistant");
+		expect((result![2] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-bbb" });
+		expect(result![3].role).toBe("toolResult");
+		expect(result![4]).toBe(multiToolAssistant);
+		expect(result![5].role).toBe("toolResult");
+		expect(result![6].role).toBe("toolResult");
+	});
+
+	it("handles discoveries at different anchors", () => {
+		const messages: Message[] = [
+			makeAssistant("tc_1"),
+			makeToolResult("tc_1"),
+			makeAssistant("tc_2"),
+			makeToolResult("tc_2"),
+		];
+		const d1 = makeDiscovery({ toolCallId: "tc_1", syntheticId: "scrctx-111", displayPath: "a/CLAUDE.md" });
+		const d2 = makeDiscovery({ toolCallId: "tc_2", syntheticId: "scrctx-222", displayPath: "b/CLAUDE.md" });
+		const result = formatContextBlocks([d1, d2], messages);
+
+		expect(result).toBeDefined();
+		expect(result!).toHaveLength(8);
+		expect((result![0] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-111" });
+		expect((result![2] as AssistantMessage).content[0]).toMatchObject({ id: "tc_1" });
+		expect((result![4] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-222" });
+		expect((result![6] as AssistantMessage).content[0]).toMatchObject({ id: "tc_2" });
+	});
+
+	it("preserves original messages when no anchor matches", () => {
+		const messages: Message[] = [makeAssistant("tc_x"), makeToolResult("tc_x")];
+		const d = makeDiscovery({ toolCallId: "tc_nonexistent" });
+		const result = formatContextBlocks([d], messages);
+		expect(result).toBeUndefined();
+	});
+});
+
+describe("registerSubdirContext — context handler", () => {
+	let tmpDir: string;
+
+	beforeEach(async () => {
+		tmpDir = await mkdtemp(join(tmpdir(), "subdir-ctx-"));
+	});
+
+	afterEach(async () => {
+		await rm(tmpDir, { recursive: true, force: true });
+	});
+
+	function makeReadEvent(path: string, content = "file content", isError = false, toolCallId = "tc_1") {
+		return {
+			type: "tool_result" as const,
+			toolName: "read" as const,
+			toolCallId,
+			input: { path } as Record<string, unknown>,
+			content: [{ type: "text" as const, text: content }],
+			isError,
+			details: undefined,
+		};
+	}
+
+	function makeCtx(cwd: string) {
+		return { cwd, hasUI: false, ui: {}, sessionManager: { getBranch: () => [] } };
+	}
+
+	it("registers a context handler", () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+		expect(handlers.get("context")?.length).toBe(1);
+	});
+
+	it("context handler returns undefined when no discoveries", () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const contextHandler = handlers.get("context")![0];
+		const event = { type: "context", messages: [makeAssistant("tc_1"), makeToolResult("tc_1")] };
+		const result = contextHandler(event, makeCtx(tmpDir));
+		expect(result).toBeUndefined();
+	});
+
+	it("context handler injects synthetic pairs when discoveries exist", () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		state.subdirDiscoveries.push(makeDiscovery({ toolCallId: "tc_1" }));
+
+		const contextHandler = handlers.get("context")![0];
+		const messages = [makeAssistant("tc_1"), makeToolResult("tc_1")];
+		const result = contextHandler({ type: "context", messages }, makeCtx(tmpDir)) as any;
+
+		expect(result).toBeDefined();
+		expect(result.messages).toHaveLength(4);
+		expect(result.messages[0].role).toBe("assistant");
+		expect((result.messages[0] as AssistantMessage).content[0]).toMatchObject({
+			id: "scrctx-abc123456789",
+			name: "read",
+		});
+		expect(result.messages[1].role).toBe("toolResult");
+		expect((result.messages[1] as ToolResultMessage).toolCallId).toBe("scrctx-abc123456789");
+		expect(result.messages[2]).toBe(messages[0]);
+		expect(result.messages[3]).toBe(messages[1]);
+	});
+
+	it("repeated context calls with unchanged state are idempotent", () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const discovery = makeDiscovery({ toolCallId: "tc_1" });
+		state.subdirDiscoveries.push(discovery);
+
+		const contextHandler = handlers.get("context")![0];
+
+		const messages1 = [makeAssistant("tc_1"), makeToolResult("tc_1")];
+		const result1 = contextHandler({ type: "context", messages: messages1 }, makeCtx(tmpDir)) as any;
+		expect(result1.messages).toHaveLength(4);
+
+		const result2 = contextHandler({ type: "context", messages: result1.messages }, makeCtx(tmpDir)) as any;
+		expect(result2).toBeUndefined();
+	});
+
+	it("end-to-end: tool_result discovery followed by context injection", async () => {
+		const subDir = join(tmpDir, "pkg");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "# Package rules");
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const toolHandler = handlers.get("tool_result")![0];
+		await toolHandler(makeReadEvent("pkg/file.ts", "export {}", false, "tc_read_1"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(1);
+		expect(state.subdirDiscoveries[0].toolCallId).toBe("tc_read_1");
+
+		const contextHandler = handlers.get("context")![0];
+		const messages = [makeAssistant("tc_read_1", "read", "pkg/file.ts"), makeToolResult("tc_read_1", "export {}")];
+		const result = contextHandler({ type: "context", messages }, makeCtx(tmpDir)) as any;
+
+		expect(result).toBeDefined();
+		expect(result.messages).toHaveLength(4);
+
+		const synAssistant = result.messages[0] as AssistantMessage;
+		expect(synAssistant.content[0]).toMatchObject({ name: "read" });
+
+		const synResult = result.messages[1] as ToolResultMessage;
+		expect(synResult.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("# Package rules") });
+		expect(synResult.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("# Project context:") });
+
+		expect(result.messages[2]).toBe(messages[0]);
+		expect(result.messages[3]).toBe(messages[1]);
+	});
+
+	it("reconstructed discoveries are re-injected by context when anchor exists", async () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const branchEntries = [
+			{
+				type: "custom",
+				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
+				data: {
+					toolCallId: "tc_old",
+					realpath: "/project/sub",
+					filename: "CLAUDE.md",
+					displayPath: "sub/CLAUDE.md",
+					content: "# Restored rules",
+					syntheticId: "scrctx-restored000",
+				},
+				id: "e1",
+				timestamp: 0,
+			},
+		];
+
+		const sessionStartHandler = handlers.get("session_start")![0];
+		await sessionStartHandler({}, { sessionManager: { getBranch: () => branchEntries } });
+
+		expect(state.subdirDiscoveries).toHaveLength(1);
+
+		const contextHandler = handlers.get("context")![0];
+		const messages = [makeAssistant("tc_old"), makeToolResult("tc_old")];
+		const result = contextHandler({ type: "context", messages }, makeCtx(tmpDir)) as any;
+
+		expect(result).toBeDefined();
+		expect(result.messages).toHaveLength(4);
+		const synResult = result.messages[1] as ToolResultMessage;
+		expect(synResult.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("# Restored rules") });
+	});
+
+	it("reconstructed discoveries with missing anchors are skipped", async () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const branchEntries = [
+			{
+				type: "custom",
+				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
+				data: {
+					toolCallId: "tc_compacted_away",
+					realpath: "/project/sub",
+					filename: "CLAUDE.md",
+					displayPath: "sub/CLAUDE.md",
+					content: "# Lost",
+					syntheticId: "scrctx-lost00000000",
+				},
+				id: "e1",
+				timestamp: 0,
+			},
+		];
+
+		const sessionStartHandler = handlers.get("session_start")![0];
+		await sessionStartHandler({}, { sessionManager: { getBranch: () => branchEntries } });
+
+		const contextHandler = handlers.get("context")![0];
+		const messages = [makeAssistant("tc_different"), makeToolResult("tc_different")];
+		const result = contextHandler({ type: "context", messages }, makeCtx(tmpDir));
+
+		expect(result).toBeUndefined();
 	});
 });
