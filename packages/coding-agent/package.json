@@ -5,6 +5,7 @@
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
 	"type": "module",
 	"piConfig": {
+		"name": "scramjet",
 		"configDir": ".pi"
 	},
 	"bin": {

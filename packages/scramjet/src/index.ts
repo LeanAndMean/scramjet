@@ -19,7 +19,7 @@ import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
 import type { ScramjetState } from "./types.js";
 import { registerUserInputTool } from "./user-input.js";
 
-export default function scramjet(pi: ExtensionAPI) {
+export function initScramjet(pi: ExtensionAPI) {
 	const logger = createLogger(pi);
 	const state: ScramjetState = {
 		enabled: false,

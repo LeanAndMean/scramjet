@@ -38,39 +38,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Pi API surface staleness guard
-        run: |
-          node scripts/generate-pi-api-surface.js
-          git diff --exit-code docs/pi-api-surface.md
-
-      - name: Pi dependency metadata drift guard
-        run: |
-          BASE=$(jq -r '.pi.piBaseVersion' package.json)
-          FLAVOR=$(jq -r '.pi.piPatchFlavor' package.json)
-          TESTED=$(jq -r '.pi.piTestedVersion' package.json)
-          AGENT_PIN=$(jq -r '.dependencies["@earendil-works/pi-coding-agent"]' package.json)
-          TUI_PIN=$(jq -r '.dependencies["@earendil-works/pi-tui"]' package.json)
-          EXPECTED_AGENT="npm:@leanandmean/pi-coding-agent@${BASE}-${FLAVOR}"
-          EXPECTED_TESTED="${BASE}-${FLAVOR}"
-          if [ "$TESTED" != "$EXPECTED_TESTED" ] || [ "$AGENT_PIN" != "$EXPECTED_AGENT" ] || [ "$TUI_PIN" != "$BASE" ]; then
-            echo "Error: Pi dependency metadata drifted." >&2
-            echo "  pi.piBaseVersion:                         $BASE" >&2
-            echo "  pi.piPatchFlavor:                         $FLAVOR" >&2
-            echo "  pi.piTestedVersion:                       $TESTED (expected $EXPECTED_TESTED)" >&2
-            echo "  dependencies[@earendil-works/pi-coding-agent]: $AGENT_PIN (expected $EXPECTED_AGENT)" >&2
-            echo "  dependencies[@earendil-works/pi-tui]:          $TUI_PIN (expected $BASE)" >&2
-            echo "Keep the Pi base version, Scramjet patch flavor, npm alias, and upstream pi-tui pin in sync." >&2
-            exit 1
-          fi
-          echo "OK: Pi dependency metadata matches patched coding-agent alias $EXPECTED_AGENT and upstream pi-tui $BASE."
-
       - name: npm pack round-trip smoke
-        # Pack the package, install the resulting tarball globally, verify
-        # the bin entry executes Pi's main() (--help is non-interactive,
+        # Pack the scramjet package, install the resulting tarball globally,
+        # verify the bin entry executes main() (--help is non-interactive,
         # exits 0), and uninstall. Catches packaging regressions: missing
         # entries in `files`, broken `bin`, postinstall failures.
         run: |
           set -euo pipefail
+          cd packages/scramjet
           npm pack
           TARBALL=$(ls leanandmean-scramjet-*.tgz | head -n1)
           test -n "$TARBALL" || { echo "no tarball produced" >&2; exit 1; }
@@ -95,12 +70,12 @@ jobs:
         run: |
           set -euo pipefail
           TMP=$(mktemp -d)
-          XDG_DATA_HOME="$TMP" node scripts/postinstall.js
+          XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
           test -d "$TMP/scramjet/mach12/commands"
           test -d "$TMP/scramjet/mach12/agents"
           test -f "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
           # Second run: idempotent (no-op, preserves user edits).
           echo "user edit" > "$TMP/scramjet/mach12/USER-MARKER"
-          XDG_DATA_HOME="$TMP" node scripts/postinstall.js
+          XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
           test -f "$TMP/scramjet/mach12/USER-MARKER"
           rm -rf "$TMP"

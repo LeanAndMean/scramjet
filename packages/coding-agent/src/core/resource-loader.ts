@@ -11,7 +11,13 @@ export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
 import { createExtensionRuntime, loadExtensionFromFactory, loadExtensions } from "./extensions/loader.js";
-import type { Extension, ExtensionFactory, ExtensionRuntime, LoadExtensionsResult } from "./extensions/types.js";
+import type {
+	Extension,
+	ExtensionAPI,
+	ExtensionFactory,
+	ExtensionRuntime,
+	LoadExtensionsResult,
+} from "./extensions/types.js";
 import { DefaultPackageManager, type PathMetadata } from "./package-manager.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
@@ -123,6 +129,7 @@ export interface DefaultResourceLoaderOptions {
 	additionalPromptTemplatePaths?: string[];
 	additionalThemePaths?: string[];
 	extensionFactories?: ExtensionFactory[];
+	builtinInit?: (pi: ExtensionAPI) => void | Promise<void>;
 	noExtensions?: boolean;
 	noSkills?: boolean;
 	noPromptTemplates?: boolean;
@@ -161,6 +168,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private additionalPromptTemplatePaths: string[];
 	private additionalThemePaths: string[];
 	private extensionFactories: ExtensionFactory[];
+	private builtinInit?: (pi: ExtensionAPI) => void | Promise<void>;
 	private noExtensions: boolean;
 	private noSkills: boolean;
 	private noPromptTemplates: boolean;
@@ -219,6 +227,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.additionalPromptTemplatePaths = options.additionalPromptTemplatePaths ?? [];
 		this.additionalThemePaths = options.additionalThemePaths ?? [];
 		this.extensionFactories = options.extensionFactories ?? [];
+		this.builtinInit = options.builtinInit;
 		this.noExtensions = options.noExtensions ?? false;
 		this.noSkills = options.noSkills ?? false;
 		this.noPromptTemplates = options.noPromptTemplates ?? false;
@@ -397,6 +406,21 @@ export class DefaultResourceLoader implements ResourceLoader {
 			: this.mergePaths(cliEnabledExtensions, enabledExtensions);
 
 		const extensionsResult = await loadExtensions(extensionPaths, this.cwd, this.eventBus);
+		if (this.builtinInit) {
+			try {
+				const builtin = await loadExtensionFromFactory(
+					this.builtinInit,
+					this.cwd,
+					this.eventBus,
+					extensionsResult.runtime,
+					"<builtin>",
+				);
+				extensionsResult.extensions.unshift(builtin);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : "failed to load builtin";
+				extensionsResult.errors.push({ path: "<builtin>", error: message });
+			}
+		}
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
 		extensionsResult.extensions.push(...inlineExtensions.extensions);
 		extensionsResult.errors.push(...inlineExtensions.errors);

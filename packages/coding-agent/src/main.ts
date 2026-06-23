@@ -25,7 +25,7 @@ import {
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.js";
 import { AuthStorage } from "./core/auth-storage.js";
 import { exportFromFile } from "./core/export-html/index.js";
-import type { ExtensionFactory } from "./core/extensions/types.js";
+import type { ExtensionAPI, ExtensionFactory } from "./core/extensions/types.js";
 import { KeybindingsManager } from "./core/keybindings.js";
 import type { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
@@ -423,6 +423,7 @@ async function promptForMissingSessionCwd(
 
 export interface MainOptions {
 	extensionFactories?: ExtensionFactory[];
+	builtinInit?: (pi: ExtensionAPI) => void | Promise<void>;
 }
 
 export async function main(args: string[], options?: MainOptions) {
@@ -548,6 +549,7 @@ export async function main(args: string[], options?: MainOptions) {
 				systemPrompt: parsed.systemPrompt,
 				appendSystemPrompt: parsed.appendSystemPrompt,
 				extensionFactories: options?.extensionFactories,
+				builtinInit: options?.builtinInit,
 			},
 		});
 		const { settingsManager, modelRegistry, resourceLoader } = services;

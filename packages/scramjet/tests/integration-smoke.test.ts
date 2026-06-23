@@ -7,7 +7,7 @@ import { registerCommandStatusTool } from "../src/command-status.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import { registerDelegateTool } from "../src/delegate.js";
 import { registerHistory } from "../src/history.js";
-import scramjet from "../src/index.js";
+import { initScramjet } from "../src/index.js";
 import { createLogger } from "../src/logger.js";
 import { getActiveCommand } from "../src/phase-machine.js";
 import { registerScramjetCommand } from "../src/scramjet-command.js";
@@ -170,7 +170,7 @@ describe("integration smoke — advisory warning against real subroutine scope",
 describe("integration smoke — base directives wired into the extension factory", () => {
 	it("scramjet() registers the injector so before_agent_start contributes the directives section", async () => {
 		const { pi, handlers } = recordingPi();
-		scramjet(pi);
+		initScramjet(pi);
 
 		const beforeAgentStart = handlers.get("before_agent_start") ?? [];
 		expect(beforeAgentStart.length).toBeGreaterThan(0);
