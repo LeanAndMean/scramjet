@@ -40,7 +40,7 @@ export function directoriesToCheck(filePath: string, cwd: string): { dirs: strin
 
 export interface DiscoveredFile {
 	dir: string;
-	realpath: string;
+	dirRealpath: string;
 	filename: (typeof CANDIDATES)[number];
 	content: string;
 }
@@ -50,11 +50,12 @@ export async function discoverContextFiles(
 	loadedPaths: Set<string>,
 	cwd: string,
 	logger?: ScramjetState["logger"],
-	skipCwdCheck?: boolean,
+	options?: { enforceCwdBoundary?: boolean },
 ): Promise<DiscoveredFile[]> {
 	const results: DiscoveredFile[] = [];
+	const enforceCwdBoundary = options?.enforceCwdBoundary ?? true;
 	let realCwd: string | null = null;
-	if (!skipCwdCheck) {
+	if (enforceCwdBoundary) {
 		try {
 			realCwd = await realpath(cwd);
 		} catch (err: unknown) {
@@ -86,7 +87,7 @@ export async function discoverContextFiles(
 			const filePath = resolve(dir, candidate);
 			try {
 				const content = await readFile(filePath, "utf-8");
-				results.push({ dir, realpath: realDir, filename: candidate, content });
+				results.push({ dir, dirRealpath: realDir, filename: candidate, content });
 			} catch (err: unknown) {
 				if (logger && isNodeError(err) && err.code !== "ENOENT") {
 					logger.warn("subdir-context", `readFile failed: ${err.code}`, { path: filePath });
@@ -109,8 +110,8 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
 
 interface DiscoveryJournalEntry {
 	toolCallId: string;
-	realpath: string;
-	filename: string;
+	dirRealpath: string;
+	filename: SubdirDiscovery["filename"];
 	displayPath: string;
 	content: string;
 	syntheticId: string;
@@ -135,7 +136,7 @@ export function reconstructSubdirState(entries: readonly SessionEntry[]): {
 		if (
 			!data ||
 			typeof data.toolCallId !== "string" ||
-			typeof data.realpath !== "string" ||
+			typeof data.dirRealpath !== "string" ||
 			(data.filename !== "CLAUDE.md" && data.filename !== "AGENTS.md") ||
 			typeof data.displayPath !== "string" ||
 			typeof data.content !== "string" ||
@@ -144,10 +145,10 @@ export function reconstructSubdirState(entries: readonly SessionEntry[]): {
 			continue;
 		}
 
-		loadedPaths.add(data.realpath);
+		loadedPaths.add(data.dirRealpath);
 		discoveries.push({
 			toolCallId: data.toolCallId,
-			realpath: data.realpath,
+			dirRealpath: data.dirRealpath,
 			filename: data.filename,
 			displayPath: data.displayPath,
 			content: data.content,
@@ -274,7 +275,10 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 		const { dirs, outsideCwd } = directoriesToCheck(path, cwd);
 		if (dirs.length === 0) return;
 
-		const discovered = await discoverContextFiles(dirs, state.subdirLoadedPaths, cwd, state.logger, outsideCwd);
+		const enforceCwdBoundary = !outsideCwd;
+		const discovered = await discoverContextFiles(dirs, state.subdirLoadedPaths, cwd, state.logger, {
+			enforceCwdBoundary,
+		});
 		if (discovered.length === 0) return;
 
 		for (const file of discovered) {
@@ -282,7 +286,7 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 			const syntheticId = createStableId(displayPath);
 			const discovery: SubdirDiscovery = {
 				toolCallId: event.toolCallId,
-				realpath: file.realpath,
+				dirRealpath: file.dirRealpath,
 				filename: file.filename,
 				displayPath,
 				content: file.content,
@@ -292,7 +296,7 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 
 			pi.appendEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
 				toolCallId: event.toolCallId,
-				realpath: file.realpath,
+				dirRealpath: file.dirRealpath,
 				filename: file.filename,
 				displayPath,
 				content: file.content,

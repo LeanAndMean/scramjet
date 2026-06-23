@@ -97,7 +97,7 @@ describe("discoverContextFiles", () => {
 		expect(result).toHaveLength(1);
 		expect(result[0].filename).toBe("CLAUDE.md");
 		expect(result[0].content).toBe("# Sub instructions");
-		expect(result[0].realpath).toBeDefined();
+		expect(result[0].dirRealpath).toBeDefined();
 	});
 
 	it("finds AGENTS.md in directory", async () => {
@@ -151,16 +151,39 @@ describe("discoverContextFiles", () => {
 		await rm(outsideDir, { recursive: true, force: true });
 	});
 
-	it("discovers outside-cwd dirs when skipCwdCheck is true", async () => {
+	it("discovers outside-cwd dirs when cwd boundary enforcement is disabled", async () => {
 		const outsideDir = await mkdtemp(join(tmpdir(), "outside-"));
 		await writeFile(join(outsideDir, "CLAUDE.md"), "outside content");
 
 		const loaded = new Set<string>();
-		const result = await discoverContextFiles([outsideDir], loaded, "/nonexistent-cwd", undefined, true);
+		const result = await discoverContextFiles([outsideDir], loaded, "/nonexistent-cwd", undefined, {
+			enforceCwdBoundary: false,
+		});
 		expect(result).toHaveLength(1);
 		expect(result[0].content).toBe("outside content");
 
 		await rm(outsideDir, { recursive: true, force: true });
+	});
+
+	it("logs non-ENOENT readFile errors", async () => {
+		const subDir = join(tmpDir, "sub");
+		await mkdir(join(subDir, "CLAUDE.md"), { recursive: true });
+
+		const warnings: Array<{ category: string; message: string; data?: Record<string, unknown> }> = [];
+		const logger = {
+			warn: (category: string, message: string, data?: Record<string, unknown>) => {
+				warnings.push({ category, message, data });
+			},
+		} as any;
+
+		const loaded = new Set<string>();
+		const result = await discoverContextFiles([subDir], loaded, tmpDir, logger);
+		expect(result).toHaveLength(0);
+		expect(warnings).toContainEqual({
+			category: "subdir-context",
+			message: "readFile failed: EISDIR",
+			data: { path: join(subDir, "CLAUDE.md") },
+		});
 	});
 
 	it("skips unreadable files", async () => {
@@ -276,7 +299,7 @@ describe("reconstructSubdirState", () => {
 		const entries = [
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
 				toolCallId: "tc_1",
-				realpath: "/project/sub",
+				dirRealpath: "/project/sub",
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "# Rules",
@@ -294,7 +317,7 @@ describe("reconstructSubdirState", () => {
 		const entries = [
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
 				toolCallId: "tc_1",
-				realpath: "/project/sub",
+				dirRealpath: "/project/sub",
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "old content",
@@ -303,7 +326,7 @@ describe("reconstructSubdirState", () => {
 			makeCompactionEntry(),
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
 				toolCallId: "tc_2",
-				realpath: "/project/pkg",
+				dirRealpath: "/project/pkg",
 				filename: "AGENTS.md",
 				displayPath: "pkg/AGENTS.md",
 				content: "new content",
@@ -323,7 +346,7 @@ describe("reconstructSubdirState", () => {
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, null),
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
 				toolCallId: "tc_2",
-				realpath: "/project/sub",
+				dirRealpath: "/project/sub",
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "valid",
@@ -339,7 +362,7 @@ describe("reconstructSubdirState", () => {
 		const entries = [
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
 				toolCallId: 123,
-				realpath: "/project/sub",
+				dirRealpath: "/project/sub",
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "x",
@@ -355,7 +378,7 @@ describe("reconstructSubdirState", () => {
 			makeCustomEntry("scramjet:command-start", { command: "test:cmd" }),
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
 				toolCallId: "tc_1",
-				realpath: "/project/sub",
+				dirRealpath: "/project/sub",
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "content",
@@ -694,7 +717,7 @@ describe("registerSubdirContext", () => {
 				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
 				data: {
 					toolCallId: "tc_1",
-					realpath: "/project/sub",
+					dirRealpath: "/project/sub",
 					filename: "CLAUDE.md",
 					displayPath: "sub/CLAUDE.md",
 					content: "# Restored",
@@ -724,7 +747,7 @@ describe("registerSubdirContext", () => {
 				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
 				data: {
 					toolCallId: "tc_2",
-					realpath: "/project/pkg",
+					dirRealpath: "/project/pkg",
 					filename: "AGENTS.md",
 					displayPath: "pkg/AGENTS.md",
 					content: "agents",
@@ -753,7 +776,7 @@ describe("registerSubdirContext", () => {
 				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
 				data: {
 					toolCallId: "tc_1",
-					realpath: "/project/old",
+					dirRealpath: "/project/old",
 					filename: "CLAUDE.md",
 					displayPath: "old/CLAUDE.md",
 					content: "old",
@@ -816,7 +839,7 @@ function makeToolResult(toolCallId: string, text = "result"): ToolResultMessage 
 function makeDiscovery(overrides: Partial<SubdirDiscovery> = {}): SubdirDiscovery {
 	return {
 		toolCallId: "tc_real",
-		realpath: "/project/sub",
+		dirRealpath: "/project/sub",
 		filename: "CLAUDE.md",
 		displayPath: "sub/CLAUDE.md",
 		content: "# Sub rules",
@@ -1151,7 +1174,7 @@ describe("registerSubdirContext — context handler", () => {
 				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
 				data: {
 					toolCallId: "tc_old",
-					realpath: "/project/sub",
+					dirRealpath: "/project/sub",
 					filename: "CLAUDE.md",
 					displayPath: "sub/CLAUDE.md",
 					content: "# Restored rules",
@@ -1188,7 +1211,7 @@ describe("registerSubdirContext — context handler", () => {
 				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
 				data: {
 					toolCallId: "tc_compacted_away",
-					realpath: "/project/sub",
+					dirRealpath: "/project/sub",
 					filename: "CLAUDE.md",
 					displayPath: "sub/CLAUDE.md",
 					content: "# Lost",
