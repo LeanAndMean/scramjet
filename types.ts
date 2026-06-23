@@ -137,5 +137,4 @@ export interface SubdirDiscovery {
 	filename: "CLAUDE.md" | "AGENTS.md";
 	displayPath: string;
 	content: string;
-	syntheticId: string;
 }

@@ -1,26 +1,3 @@
-/**
- * Scramjet — smart auto-continuation and command-set harness for Pi.
- *
- * Scramjet doesn't know about workflows. Each command independently
- * declares its own next step in YAML frontmatter; the workflow is
- * whatever emerges from following those edges. No queue, no DAG, no
- * resumable state. Scramjet is invisible when it has nothing to
- * suggest.
- *
- * Pi extension entry point. Distributed as an npm package
- * (@leanandmean/scramjet); bin/scramjet.js imports the default export
- * below and hands it to Pi via main()'s extensionFactories option. The
- * function registers the tools the harness owns (report_scramjet_command_status,
- * delegate, and draw_diagram when a renderer is available), the
- * agent_end listener (drives the countdown widget
- * and next-step dispatch), command-set discovery, history journaling,
- * advisory tool-scope warnings, draw_diagram, and the /scramjet on|off
- * toggle.
- *
- * See README.md for the pitch and CLAUDE.md for the design principles
- * that constrain what gets added here.
- */
-
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerAgentCatalog } from "./agent-catalog.ts";
 import { registerAutoContinue } from "./auto-continue.ts";

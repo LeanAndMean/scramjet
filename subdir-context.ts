@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, relative, resolve, sep } from "node:path";
-import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isReadToolResult } from "@earendil-works/pi-coding-agent";
 import type { ScramjetState, SubdirDiscovery } from "./types.ts";
@@ -12,13 +13,27 @@ export const MAX_DEPTH = 10;
 export const CANDIDATES = ["CLAUDE.md", "AGENTS.md"] as const;
 export const SUBDIR_CONTEXT_DISCOVERY_TYPE = "scramjet:subdir-context-discovery";
 
+function normalizeReadPathInput(filePath: string): string {
+	return filePath.startsWith("@") ? filePath.slice(1) : filePath;
+}
+
+function isOutsideRelativePath(rel: string): boolean {
+	return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
+
+function isPathInsideOrEqual(parent: string, child: string): boolean {
+	const rel = relative(parent, child);
+	return rel === "" || !isOutsideRelativePath(rel);
+}
+
 export function directoriesToCheck(filePath: string, cwd: string): { dirs: string[]; outsideCwd: boolean } {
 	const normalizedCwd = resolve(cwd);
+	const normalizedInput = normalizeReadPathInput(filePath);
 	let resolved: string;
-	if (filePath.startsWith("~/")) {
-		resolved = resolve(homedir(), filePath.slice(2));
+	if (normalizedInput.startsWith("~/")) {
+		resolved = resolve(homedir(), normalizedInput.slice(2));
 	} else {
-		resolved = resolve(normalizedCwd, filePath);
+		resolved = resolve(normalizedCwd, normalizedInput);
 	}
 
 	const fileDir = dirname(resolved);
@@ -26,7 +41,7 @@ export function directoriesToCheck(filePath: string, cwd: string): { dirs: strin
 
 	if (!rel) return { dirs: [], outsideCwd: false };
 
-	if (rel.startsWith("..") || resolve(normalizedCwd, rel) !== fileDir) {
+	if (isOutsideRelativePath(rel)) {
 		return { dirs: [fileDir], outsideCwd: true };
 	}
 
@@ -79,7 +94,7 @@ export async function discoverContextFiles(
 			continue;
 		}
 
-		if (realCwd && !realDir.startsWith(realCwd + sep) && realDir !== realCwd) continue;
+		if (realCwd && !isPathInsideOrEqual(realCwd, realDir)) continue;
 		if (loadedPaths.has(realDir)) continue;
 		loadedPaths.add(realDir);
 
@@ -114,7 +129,6 @@ interface DiscoveryJournalEntry {
 	filename: SubdirDiscovery["filename"];
 	displayPath: string;
 	content: string;
-	syntheticId: string;
 }
 
 export function reconstructSubdirState(entries: readonly SessionEntry[]): {
@@ -139,8 +153,7 @@ export function reconstructSubdirState(entries: readonly SessionEntry[]): {
 			typeof data.dirRealpath !== "string" ||
 			(data.filename !== "CLAUDE.md" && data.filename !== "AGENTS.md") ||
 			typeof data.displayPath !== "string" ||
-			typeof data.content !== "string" ||
-			typeof data.syntheticId !== "string"
+			typeof data.content !== "string"
 		) {
 			continue;
 		}
@@ -152,7 +165,6 @@ export function reconstructSubdirState(entries: readonly SessionEntry[]): {
 			filename: data.filename,
 			displayPath: data.displayPath,
 			content: data.content,
-			syntheticId: data.syntheticId,
 		});
 	}
 
@@ -168,13 +180,15 @@ const ZERO_USAGE: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export function findAnchorIndex(messages: readonly Message[], toolCallId: string): number {
+function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
+	return message.role === "assistant" && Array.isArray((message as AssistantMessage).content);
+}
+
+export function findAnchorIndex(messages: readonly AgentMessage[], toolCallId: string): number {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
-		if (msg.role !== "assistant") continue;
-		const assistant = msg as AssistantMessage;
-		if (!assistant.content) continue;
-		for (const block of assistant.content) {
+		if (!isAssistantMessage(msg)) continue;
+		for (const block of msg.content) {
 			if (block.type === "toolCall" && block.id === toolCallId) return i;
 		}
 	}
@@ -185,11 +199,10 @@ export function buildSyntheticPair(
 	discovery: SubdirDiscovery,
 	anchor: AssistantMessage,
 ): [AssistantMessage, ToolResultMessage] {
+	const syntheticId = createStableId(discovery.displayPath);
 	const assistantMsg: AssistantMessage = {
 		role: "assistant",
-		content: [
-			{ type: "toolCall", id: discovery.syntheticId, name: "read", arguments: { path: discovery.displayPath } },
-		],
+		content: [{ type: "toolCall", id: syntheticId, name: "read", arguments: { path: discovery.displayPath } }],
 		api: anchor.api,
 		provider: anchor.provider,
 		model: anchor.model,
@@ -199,7 +212,7 @@ export function buildSyntheticPair(
 	};
 	const resultMsg: ToolResultMessage = {
 		role: "toolResult",
-		toolCallId: discovery.syntheticId,
+		toolCallId: syntheticId,
 		toolName: "read",
 		content: [{ type: "text", text: `# Project context: ${discovery.displayPath}\n\n${discovery.content}` }],
 		isError: false,
@@ -209,19 +222,18 @@ export function buildSyntheticPair(
 }
 
 export function formatContextBlocks(
-	discoveries: SubdirDiscovery[],
-	messages: Message[],
+	discoveries: readonly SubdirDiscovery[],
+	messages: readonly AgentMessage[],
 	logger?: ScramjetState["logger"],
-): Message[] | undefined {
+): AgentMessage[] | undefined {
 	if (discoveries.length === 0) return undefined;
 
 	const anchorGroups = new Map<number, SubdirDiscovery[]>();
 	for (const d of discoveries) {
+		const syntheticId = createStableId(d.displayPath);
 		if (
 			messages.some(
-				(m) =>
-					m.role === "assistant" &&
-					(m as AssistantMessage).content?.some((b) => b.type === "toolCall" && b.id === d.syntheticId),
+				(m) => isAssistantMessage(m) && m.content.some((b) => b.type === "toolCall" && b.id === syntheticId),
 			)
 		) {
 			continue;
@@ -240,12 +252,16 @@ export function formatContextBlocks(
 	if (anchorGroups.size === 0) return undefined;
 
 	const sortedIndices = [...anchorGroups.keys()].sort((a, b) => a - b);
-	const result: Message[] = [];
+	const result: AgentMessage[] = [];
 	let lastInserted = 0;
 
 	for (const anchorIdx of sortedIndices) {
 		result.push(...messages.slice(lastInserted, anchorIdx));
-		const anchor = messages[anchorIdx] as AssistantMessage;
+		const anchor = messages[anchorIdx];
+		if (!isAssistantMessage(anchor)) {
+			lastInserted = anchorIdx;
+			continue;
+		}
 		const group = anchorGroups.get(anchorIdx)!;
 		for (const d of group) {
 			const [synAssistant, synResult] = buildSyntheticPair(d, anchor);
@@ -260,7 +276,7 @@ export function formatContextBlocks(
 
 export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("context", (event) => {
-		const modified = formatContextBlocks(state.subdirDiscoveries, event.messages as Message[], state.logger);
+		const modified = formatContextBlocks(state.subdirDiscoveries, event.messages, state.logger);
 		if (!modified) return;
 		return { messages: modified };
 	});
@@ -283,14 +299,12 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 
 		for (const file of discovered) {
 			const displayPath = relative(cwd, resolve(file.dir, file.filename)) || file.filename;
-			const syntheticId = createStableId(displayPath);
 			const discovery: SubdirDiscovery = {
 				toolCallId: event.toolCallId,
 				dirRealpath: file.dirRealpath,
 				filename: file.filename,
 				displayPath,
 				content: file.content,
-				syntheticId,
 			};
 			state.subdirDiscoveries.push(discovery);
 
@@ -300,7 +314,6 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 				filename: file.filename,
 				displayPath,
 				content: file.content,
-				syntheticId,
 			} satisfies DiscoveryJournalEntry);
 		}
 	});

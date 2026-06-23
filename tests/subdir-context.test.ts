@@ -1,6 +1,7 @@
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -48,6 +49,11 @@ describe("directoriesToCheck", () => {
 		expect(result).toEqual({ dirs: ["/project/sub", "/project/sub/dir"], outsideCwd: false });
 	});
 
+	it("treats inside-cwd dot-dot-prefixed directory names as inside cwd", () => {
+		const result = directoriesToCheck("..data/file.ts", "/project");
+		expect(result).toEqual({ dirs: ["/project/..data"], outsideCwd: false });
+	});
+
 	it("normalizes .. segments", () => {
 		const result = directoriesToCheck("a/b/../c/file.ts", "/project");
 		expect(result).toEqual({ dirs: ["/project/a", "/project/a/c"], outsideCwd: false });
@@ -73,6 +79,11 @@ describe("directoriesToCheck", () => {
 	it("handles trailing slashes in cwd", () => {
 		const result = directoriesToCheck("a/b/file.ts", "/project/");
 		expect(result).toEqual({ dirs: ["/project/a", "/project/a/b"], outsideCwd: false });
+	});
+
+	it("normalizes one leading at-prefix like Pi's read tool", () => {
+		const result = directoriesToCheck("@pkg/file.ts", "/project");
+		expect(result).toEqual({ dirs: ["/project/pkg"], outsideCwd: false });
 	});
 });
 
@@ -149,6 +160,17 @@ describe("discoverContextFiles", () => {
 		expect(result).toHaveLength(0);
 
 		await rm(outsideDir, { recursive: true, force: true });
+	});
+
+	it("treats root cwd as containing its subdirectories", async () => {
+		const subDir = join(tmpDir, "sub");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "root-contained");
+
+		const loaded = new Set<string>();
+		const result = await discoverContextFiles([subDir], loaded, "/");
+		expect(result).toHaveLength(1);
+		expect(result[0].content).toBe("root-contained");
 	});
 
 	it("discovers outside-cwd dirs when cwd boundary enforcement is disabled", async () => {
@@ -303,7 +325,6 @@ describe("reconstructSubdirState", () => {
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "# Rules",
-				syntheticId: "scrctx-abc123456789",
 			}),
 		];
 		const result = reconstructSubdirState(entries as any);
@@ -321,7 +342,6 @@ describe("reconstructSubdirState", () => {
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "old content",
-				syntheticId: "scrctx-old000000000",
 			}),
 			makeCompactionEntry(),
 			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
@@ -330,7 +350,6 @@ describe("reconstructSubdirState", () => {
 				filename: "AGENTS.md",
 				displayPath: "pkg/AGENTS.md",
 				content: "new content",
-				syntheticId: "scrctx-new000000000",
 			}),
 		];
 		const result = reconstructSubdirState(entries as any);
@@ -350,7 +369,6 @@ describe("reconstructSubdirState", () => {
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "valid",
-				syntheticId: "scrctx-val000000000",
 			}),
 		];
 		const result = reconstructSubdirState(entries as any);
@@ -366,7 +384,6 @@ describe("reconstructSubdirState", () => {
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "x",
-				syntheticId: "scrctx-aaa",
 			}),
 		];
 		const result = reconstructSubdirState(entries as any);
@@ -382,7 +399,6 @@ describe("reconstructSubdirState", () => {
 				filename: "CLAUDE.md",
 				displayPath: "sub/CLAUDE.md",
 				content: "content",
-				syntheticId: "scrctx-abc123456789",
 			}),
 		];
 		const result = reconstructSubdirState(entries as any);
@@ -461,7 +477,23 @@ describe("registerSubdirContext", () => {
 		expect(state.subdirDiscoveries[0].content).toBe("# Package rules");
 		expect(state.subdirDiscoveries[0].toolCallId).toBe("tc_1");
 		expect(state.subdirDiscoveries[0].displayPath).toBe("pkg/CLAUDE.md");
-		expect(state.subdirDiscoveries[0].syntheticId).toMatch(/^scrctx-/);
+	});
+
+	it("normalizes at-prefixed read paths before discovery", async () => {
+		const subDir = join(tmpDir, "pkg");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "# Package rules");
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const handler = handlers.get("tool_result")![0];
+		await handler(makeReadEvent("@pkg/file.ts"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(1);
+		expect(state.subdirDiscoveries[0].displayPath).toBe("pkg/CLAUDE.md");
+		expect(state.subdirDiscoveries[0].content).toBe("# Package rules");
 	});
 
 	it("tool_result journals discoveries", async () => {
@@ -480,6 +512,7 @@ describe("registerSubdirContext", () => {
 		expect(pi.appended[0].customType).toBe(SUBDIR_CONTEXT_DISCOVERY_TYPE);
 		expect(pi.appended[0].data.toolCallId).toBe("tc_1");
 		expect(pi.appended[0].data.content).toBe("# Rules");
+		expect(pi.appended[0].data).not.toHaveProperty("syntheticId");
 	});
 
 	it("dedup: second read in same directory does not add more discoveries", async () => {
@@ -629,6 +662,26 @@ describe("registerSubdirContext", () => {
 		await rm(outsideDir, { recursive: true, force: true });
 	});
 
+	it("keeps dot-dot-prefixed symlinks under the inside-cwd boundary check", async () => {
+		const outsideDir = await mkdtemp(join(tmpdir(), "outside-"));
+		await writeFile(join(outsideDir, "CLAUDE.md"), "escape");
+
+		const linkDir = join(tmpDir, "..data");
+		await symlink(outsideDir, linkDir);
+		await writeFile(join(linkDir, "file.ts"), "x");
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const handler = handlers.get("tool_result")![0];
+		await handler(makeReadEvent("..data/file.ts"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(0);
+
+		await rm(outsideDir, { recursive: true, force: true });
+	});
+
 	it("skips unreadable CLAUDE.md without error", async () => {
 		const subDir = join(tmpDir, "pkg");
 		await mkdir(subDir);
@@ -721,7 +774,6 @@ describe("registerSubdirContext", () => {
 					filename: "CLAUDE.md",
 					displayPath: "sub/CLAUDE.md",
 					content: "# Restored",
-					syntheticId: "scrctx-abc123456789",
 				},
 				id: "e1",
 				timestamp: 0,
@@ -751,7 +803,6 @@ describe("registerSubdirContext", () => {
 					filename: "AGENTS.md",
 					displayPath: "pkg/AGENTS.md",
 					content: "agents",
-					syntheticId: "scrctx-def000000000",
 				},
 				id: "e2",
 				timestamp: 0,
@@ -780,7 +831,6 @@ describe("registerSubdirContext", () => {
 					filename: "CLAUDE.md",
 					displayPath: "old/CLAUDE.md",
 					content: "old",
-					syntheticId: "scrctx-old000000000",
 				},
 				id: "e1",
 				timestamp: 0,
@@ -843,7 +893,6 @@ function makeDiscovery(overrides: Partial<SubdirDiscovery> = {}): SubdirDiscover
 		filename: "CLAUDE.md",
 		displayPath: "sub/CLAUDE.md",
 		content: "# Sub rules",
-		syntheticId: "scrctx-abc123456789",
 		...overrides,
 	};
 }
@@ -891,12 +940,13 @@ describe("buildSyntheticPair", () => {
 		const discovery = makeDiscovery();
 		const anchor = makeAssistant("tc_real");
 		const [synAssistant, synResult] = buildSyntheticPair(discovery, anchor);
+		const syntheticId = createStableId(discovery.displayPath);
 
 		expect(synAssistant.role).toBe("assistant");
 		expect(synAssistant.content).toHaveLength(1);
 		expect(synAssistant.content[0]).toEqual({
 			type: "toolCall",
-			id: discovery.syntheticId,
+			id: syntheticId,
 			name: "read",
 			arguments: { path: discovery.displayPath },
 		});
@@ -904,7 +954,7 @@ describe("buildSyntheticPair", () => {
 		expect(synAssistant.timestamp).toBe(0);
 
 		expect(synResult.role).toBe("toolResult");
-		expect(synResult.toolCallId).toBe(discovery.syntheticId);
+		expect(synResult.toolCallId).toBe(syntheticId);
 		expect(synResult.toolName).toBe("read");
 		expect(synResult.isError).toBe(false);
 		expect(synResult.timestamp).toBe(0);
@@ -946,6 +996,7 @@ describe("formatContextBlocks", () => {
 		];
 		const discovery = makeDiscovery({ toolCallId: "tc_real" });
 		const result = formatContextBlocks([discovery], messages);
+		const syntheticId = createStableId(discovery.displayPath);
 
 		expect(result).toBeDefined();
 		expect(result!).toHaveLength(5);
@@ -953,11 +1004,11 @@ describe("formatContextBlocks", () => {
 		expect(result![1].role).toBe("assistant");
 		expect((result![1] as AssistantMessage).content[0]).toMatchObject({
 			type: "toolCall",
-			id: discovery.syntheticId,
+			id: syntheticId,
 			name: "read",
 		});
 		expect(result![2].role).toBe("toolResult");
-		expect((result![2] as ToolResultMessage).toolCallId).toBe(discovery.syntheticId);
+		expect((result![2] as ToolResultMessage).toolCallId).toBe(syntheticId);
 		expect(result![3].role).toBe("assistant");
 		expect(result![4].role).toBe("toolResult");
 	});
@@ -970,11 +1021,12 @@ describe("formatContextBlocks", () => {
 	});
 
 	it("skips discoveries whose synthetic ID is already in messages (idempotence)", () => {
-		const discovery = makeDiscovery({ toolCallId: "tc_real", syntheticId: "scrctx-already" });
+		const discovery = makeDiscovery({ toolCallId: "tc_real" });
+		const syntheticId = createStableId(discovery.displayPath);
 		const messages: Message[] = [
 			{
 				role: "assistant",
-				content: [{ type: "toolCall", id: "scrctx-already", name: "read", arguments: { path: "sub/CLAUDE.md" } }],
+				content: [{ type: "toolCall", id: syntheticId, name: "read", arguments: { path: "sub/CLAUDE.md" } }],
 				api: "anthropic" as any,
 				provider: "anthropic" as any,
 				model: "claude-test",
@@ -982,7 +1034,7 @@ describe("formatContextBlocks", () => {
 				stopReason: "toolUse",
 				timestamp: 0,
 			},
-			makeToolResult("scrctx-already"),
+			makeToolResult(syntheticId),
 			makeAssistant("tc_real"),
 			makeToolResult("tc_real"),
 		];
@@ -999,17 +1051,17 @@ describe("formatContextBlocks", () => {
 			],
 		};
 		const messages: Message[] = [multiToolAssistant, makeToolResult("tc_a"), makeToolResult("tc_b")];
-		const d1 = makeDiscovery({ toolCallId: "tc_a", syntheticId: "scrctx-aaa", displayPath: "a/CLAUDE.md" });
-		const d2 = makeDiscovery({ toolCallId: "tc_b", syntheticId: "scrctx-bbb", displayPath: "b/CLAUDE.md" });
+		const d1 = makeDiscovery({ toolCallId: "tc_a", displayPath: "a/CLAUDE.md" });
+		const d2 = makeDiscovery({ toolCallId: "tc_b", displayPath: "b/CLAUDE.md" });
 		const result = formatContextBlocks([d1, d2], messages);
 
 		expect(result).toBeDefined();
 		expect(result!).toHaveLength(7);
 		expect(result![0].role).toBe("assistant");
-		expect((result![0] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-aaa" });
+		expect((result![0] as AssistantMessage).content[0]).toMatchObject({ id: createStableId(d1.displayPath) });
 		expect(result![1].role).toBe("toolResult");
 		expect(result![2].role).toBe("assistant");
-		expect((result![2] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-bbb" });
+		expect((result![2] as AssistantMessage).content[0]).toMatchObject({ id: createStableId(d2.displayPath) });
 		expect(result![3].role).toBe("toolResult");
 		expect(result![4]).toBe(multiToolAssistant);
 		expect(result![5].role).toBe("toolResult");
@@ -1023,16 +1075,35 @@ describe("formatContextBlocks", () => {
 			makeAssistant("tc_2"),
 			makeToolResult("tc_2"),
 		];
-		const d1 = makeDiscovery({ toolCallId: "tc_1", syntheticId: "scrctx-111", displayPath: "a/CLAUDE.md" });
-		const d2 = makeDiscovery({ toolCallId: "tc_2", syntheticId: "scrctx-222", displayPath: "b/CLAUDE.md" });
+		const d1 = makeDiscovery({ toolCallId: "tc_1", displayPath: "a/CLAUDE.md" });
+		const d2 = makeDiscovery({ toolCallId: "tc_2", displayPath: "b/CLAUDE.md" });
 		const result = formatContextBlocks([d1, d2], messages);
 
 		expect(result).toBeDefined();
 		expect(result!).toHaveLength(8);
-		expect((result![0] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-111" });
+		expect((result![0] as AssistantMessage).content[0]).toMatchObject({ id: createStableId(d1.displayPath) });
 		expect((result![2] as AssistantMessage).content[0]).toMatchObject({ id: "tc_1" });
-		expect((result![4] as AssistantMessage).content[0]).toMatchObject({ id: "scrctx-222" });
+		expect((result![4] as AssistantMessage).content[0]).toMatchObject({ id: createStableId(d2.displayPath) });
 		expect((result![6] as AssistantMessage).content[0]).toMatchObject({ id: "tc_2" });
+	});
+
+	it("preserves custom context messages while inspecting assistant anchors", () => {
+		const custom = {
+			role: "custom",
+			customType: "notice",
+			content: "internal",
+			display: false,
+			timestamp: 0,
+		} as AgentMessage;
+		const messages: AgentMessage[] = [custom, makeAssistant("tc_real"), makeToolResult("tc_real")];
+		const discovery = makeDiscovery({ toolCallId: "tc_real" });
+		const result = formatContextBlocks([discovery], messages);
+
+		expect(result).toBeDefined();
+		expect(result!).toHaveLength(5);
+		expect(result![0]).toBe(custom);
+		expect(result![3]).toBe(messages[1]);
+		expect(result![4]).toBe(messages[2]);
 	});
 
 	it("preserves original messages when no anchor matches", () => {
@@ -1094,6 +1165,7 @@ describe("registerSubdirContext — context handler", () => {
 		registerSubdirContext(pi, state);
 
 		state.subdirDiscoveries.push(makeDiscovery({ toolCallId: "tc_1" }));
+		const syntheticId = createStableId("sub/CLAUDE.md");
 
 		const contextHandler = handlers.get("context")![0];
 		const messages = [makeAssistant("tc_1"), makeToolResult("tc_1")];
@@ -1103,11 +1175,11 @@ describe("registerSubdirContext — context handler", () => {
 		expect(result.messages).toHaveLength(4);
 		expect(result.messages[0].role).toBe("assistant");
 		expect((result.messages[0] as AssistantMessage).content[0]).toMatchObject({
-			id: "scrctx-abc123456789",
+			id: syntheticId,
 			name: "read",
 		});
 		expect(result.messages[1].role).toBe("toolResult");
-		expect((result.messages[1] as ToolResultMessage).toolCallId).toBe("scrctx-abc123456789");
+		expect((result.messages[1] as ToolResultMessage).toolCallId).toBe(syntheticId);
 		expect(result.messages[2]).toBe(messages[0]);
 		expect(result.messages[3]).toBe(messages[1]);
 	});
@@ -1197,6 +1269,8 @@ describe("registerSubdirContext — context handler", () => {
 		expect(result).toBeDefined();
 		expect(result.messages).toHaveLength(4);
 		const synResult = result.messages[1] as ToolResultMessage;
+		expect(synResult.toolCallId).toBe(createStableId("sub/CLAUDE.md"));
+		expect(synResult.toolCallId).not.toBe("scrctx-restored000");
 		expect(synResult.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("# Restored rules") });
 	});
 
@@ -1215,7 +1289,6 @@ describe("registerSubdirContext — context handler", () => {
 					filename: "CLAUDE.md",
 					displayPath: "sub/CLAUDE.md",
 					content: "# Lost",
-					syntheticId: "scrctx-lost00000000",
 				},
 				id: "e1",
 				timestamp: 0,
