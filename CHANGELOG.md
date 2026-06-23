@@ -2,25 +2,32 @@
 
 ## 0.26.0 — Lazy-load subdirectory CLAUDE.md files on read
 
-When the agent reads a file in a subdirectory of cwd, Scramjet now discovers `CLAUDE.md` and `AGENTS.md` files in that directory (and all intermediate directories between cwd and the file) and prepends their content to the read tool result. Content is available within the same turn, works for subagents, and is deduped by realpath (issue #194).
+When the agent reads a file in a subdirectory of cwd, Scramjet discovers `CLAUDE.md` and `AGENTS.md` files in that directory (and all intermediate directories between cwd and the file) and injects them as synthetic read tool call/result pairs via Pi's `context` event. Discovered files appear to the model as structurally separate reads positioned before the triggering read. Discovery state is journaled and reconstructed on resume/fork/branch-switch (issue #194).
 
 ### Added
 
-- `subdir-context.ts` — new module implementing lazy subdirectory context discovery via `tool_result` hook.
-- `directoriesToCheck(filePath, cwd)` — returns intermediate directories between cwd and a file's directory, shallowest-first, with `~/` expansion and MAX_DEPTH=10 cap.
+- `subdir-context.ts` — new module implementing lazy subdirectory context discovery and synthetic read-pair injection.
+- `directoriesToCheck(filePath, cwd)` — returns intermediate directories between cwd and a file's directory, shallowest-first, with `~/` expansion and MAX_DEPTH=10 cap. Outside-cwd absolute reads return only the target file's immediate directory.
 - `discoverContextFiles(dirs, loadedPaths, cwd, logger?)` — filesystem discovery with realpath dedup, symlink-outside-cwd safety, MAX_DIRS=20 directory cap, error discrimination (ENOENT suppressed, other errors logged), and synchronous claim for parallel-read safety.
-- `formatContextBlocks(files, cwd)` — formats discovered files into `# Project context: <relpath>` content blocks.
-- `registerSubdirContext(pi, state)` — wires `tool_result` (read-only trigger, prepends context) and `session_compact` (clears loaded set for re-discovery).
-- `subdirLoadedPaths` field on `ScramjetState` — tracks realpaths of loaded directories.
-- 36 tests covering path geometry, filesystem discovery, hook integration, dedup, compact reset, symlink safety, and cap enforcement.
+- `createStableId(displayPath)` — generates deterministic, provider-safe synthetic tool call IDs (`scrctx-<hash>`, max 20 chars).
+- `reconstructSubdirState(entries)` — replays journal entries to rebuild loaded paths and discovery records on resume, with compaction reset and defensive schema guards for corrupt entries.
+- `findAnchorIndex(messages, toolCallId)` — locates the assistant message containing a triggering tool call for synthetic pair placement.
+- `buildSyntheticPair(discovery, anchor)` — constructs matching assistant/tool-result message pairs with metadata copied from the anchor message and zero-valued usage.
+- `formatContextBlocks(discoveries, messages, logger?)` — groups discoveries by anchor, deduplicates already-injected synthetics, and builds the transformed message array for the `context` hook.
+- `registerSubdirContext(pi, state)` — wires `tool_result` (discovery-only, returns undefined), `context` (synthetic pair injection), `session_compact` (clears state), and `session_start`/`session_tree` (replay reconstruction).
+- `subdirLoadedPaths` and `subdirDiscoveries` fields on `ScramjetState` — track discovered directory realpaths and retained discovery records for re-injection.
+- `SubdirDiscovery` type on `ScramjetState` — carries tool call ID, realpath, filename, display path, content, and synthetic ID per discovered file.
 
 ### Design
 
 - **Read tool only**: grep/find/ls/bash do not trigger (matches Claude Code CLI behavior).
-- **Prepend to tool result**: content appears immediately (no next-turn delay), works for subagents within their single `prompt()` call.
+- **Synthetic read pairs via `context`**: discovered files are injected as structurally separate read tool call/result message pairs, positioned before the triggering assistant message. The original read result is never modified.
+- **Retained until compact**: discoveries are re-injected on every `context` call (output is ephemeral); `session_compact` is the reset boundary.
+- **Journaled for resume**: discovery records are persisted via `pi.appendEntry()` so resume/fork/branch-switch can reconstruct injection state without re-reading files from disk.
 - **Flag-independent**: loads regardless of `/scramjet on|off`.
 - **No content size cap**: files loaded in full (CLI parity).
 - **Symlink safety**: directories whose realpath falls outside realpath(cwd) are skipped.
+- **Outside-cwd reads**: explicit absolute-path reads check only the target file's immediate directory (the agent already read a file there, so the context file is no more sensitive).
 
 ## 0.25.5 — Migrate prompt hooks to systemPromptSection for cache-aware prompts
 
