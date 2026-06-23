@@ -9,7 +9,7 @@ When the agent reads a file in a subdirectory of cwd, Scramjet discovers `CLAUDE
 - `subdir-context.ts` — new module implementing lazy subdirectory context discovery and synthetic read-pair injection.
 - `directoriesToCheck(filePath, cwd)` — returns `{ dirs, outsideCwd }`: intermediate directories between cwd and a file's directory (shallowest-first, with one leading `@` stripped like Pi's read tool, `~/` expansion, and `MAX_DEPTH=10` cap) plus a flag indicating whether the path is outside cwd. Outside-cwd paths (absolute paths outside cwd, `~/`-prefixed outside cwd, or relative escapes) return only the target file's immediate directory.
 - `discoverContextFiles(dirs, loadedPaths, cwd, logger?, options?)` — filesystem discovery with directory-realpath dedup, inside-cwd symlink safety, MAX_DIRS=20 directory cap, error discrimination (ENOENT suppressed, other errors logged), and synchronous claim for parallel-read safety.
-- `createStableId(displayPath)` — generates deterministic, provider-safe synthetic tool call IDs (`scrctx-<hash>`, max 20 chars).
+- `createStableId(displayPath)` — generates deterministic, provider-safe synthetic tool call IDs (`scrctx-<hash>`, 19 chars).
 - `reconstructSubdirState(entries)` — replays journal entries to rebuild loaded paths and discovery records on resume, with compaction reset and defensive schema guards for corrupt entries.
 - `findAnchorIndex(messages, toolCallId)` — locates the assistant message containing a triggering tool call for synthetic pair placement.
 - `buildSyntheticPair(discovery, anchor)` — constructs matching assistant/tool-result message pairs with `api`/`provider`/`model` copied from the anchor message and zero-valued usage/timestamps.

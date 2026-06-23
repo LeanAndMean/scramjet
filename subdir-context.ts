@@ -74,8 +74,12 @@ export async function discoverContextFiles(
 		try {
 			realCwd = await realpath(cwd);
 		} catch (err: unknown) {
-			if (logger && isNodeError(err) && err.code !== "ENOENT") {
-				logger.warn("subdir-context", `realpath(cwd) failed: ${err.code}`, { cwd });
+			if (logger && isNodeError(err)) {
+				if (err.code === "ENOENT") {
+					logger.debug("subdir-context", "realpath(cwd) failed: ENOENT (deleted working directory?)", { cwd });
+				} else {
+					logger.warn("subdir-context", `realpath(cwd) failed: ${err.code}`, { cwd });
+				}
 			}
 			return results;
 		}
@@ -98,16 +102,25 @@ export async function discoverContextFiles(
 		if (loadedPaths.has(realDir)) continue;
 		loadedPaths.add(realDir);
 
+		let anySuccess = false;
+		let allFailuresTransient = true;
 		for (const candidate of CANDIDATES) {
 			const filePath = resolve(dir, candidate);
 			try {
 				const content = await readFile(filePath, "utf-8");
 				results.push({ dir, dirRealpath: realDir, filename: candidate, content });
+				anySuccess = true;
 			} catch (err: unknown) {
-				if (logger && isNodeError(err) && err.code !== "ENOENT") {
+				if (isNodeError(err) && err.code === "ENOENT") {
+					allFailuresTransient = false;
+				} else if (logger && isNodeError(err)) {
 					logger.warn("subdir-context", `readFile failed: ${err.code}`, { path: filePath });
 				}
 			}
+		}
+
+		if (!anySuccess && allFailuresTransient) {
+			loadedPaths.delete(realDir);
 		}
 	}
 
@@ -131,7 +144,10 @@ interface DiscoveryJournalEntry {
 	content: string;
 }
 
-export function reconstructSubdirState(entries: readonly SessionEntry[]): {
+export function reconstructSubdirState(
+	entries: readonly SessionEntry[],
+	logger?: ScramjetState["logger"],
+): {
 	loadedPaths: Set<string>;
 	discoveries: SubdirDiscovery[];
 } {
@@ -155,6 +171,10 @@ export function reconstructSubdirState(entries: readonly SessionEntry[]): {
 			typeof data.displayPath !== "string" ||
 			typeof data.content !== "string"
 		) {
+			logger?.debug("subdir-context", "skipping malformed journal entry during reconstruction", {
+				entryId: (entry as any).id,
+				reason: !data ? "null data" : "invalid field types",
+			});
 			continue;
 		}
 
@@ -307,14 +327,7 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 				content: file.content,
 			};
 			state.subdirDiscoveries.push(discovery);
-
-			pi.appendEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
-				toolCallId: event.toolCallId,
-				dirRealpath: file.dirRealpath,
-				filename: file.filename,
-				displayPath,
-				content: file.content,
-			} satisfies DiscoveryJournalEntry);
+			pi.appendEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, discovery satisfies DiscoveryJournalEntry);
 		}
 	});
 
@@ -324,7 +337,7 @@ export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): v
 	});
 
 	const rebuild = (_event: unknown, ctx: ExtensionContext) => {
-		const result = reconstructSubdirState(ctx.sessionManager.getBranch());
+		const result = reconstructSubdirState(ctx.sessionManager.getBranch(), state.logger);
 		state.subdirLoadedPaths = result.loadedPaths;
 		state.subdirDiscoveries = result.discoveries;
 	};

@@ -187,6 +187,53 @@ describe("discoverContextFiles", () => {
 		await rm(outsideDir, { recursive: true, force: true });
 	});
 
+	it("retries directory on next call when all candidates fail with transient errors", async () => {
+		const subDir = join(tmpDir, "sub");
+		// Create CLAUDE.md as a directory so readFile fails with EISDIR (a transient, non-ENOENT error)
+		await mkdir(join(subDir, "CLAUDE.md"), { recursive: true });
+		await mkdir(join(subDir, "AGENTS.md"), { recursive: true });
+
+		const loaded = new Set<string>();
+		const result1 = await discoverContextFiles([subDir], loaded, tmpDir);
+		expect(result1).toHaveLength(0);
+		// Directory should NOT be permanently claimed — loadedPaths should not contain it
+		expect(loaded.size).toBe(0);
+
+		// Fix the directory: replace dirs with files
+		await rm(join(subDir, "CLAUDE.md"), { recursive: true });
+		await rm(join(subDir, "AGENTS.md"), { recursive: true });
+		await writeFile(join(subDir, "CLAUDE.md"), "recovered");
+
+		const result2 = await discoverContextFiles([subDir], loaded, tmpDir);
+		expect(result2).toHaveLength(1);
+		expect(result2[0].content).toBe("recovered");
+		expect(loaded.size).toBe(1);
+	});
+
+	it("keeps directory claimed when all candidates are ENOENT (genuinely no context files)", async () => {
+		const subDir = join(tmpDir, "sub");
+		await mkdir(subDir);
+		// No CLAUDE.md or AGENTS.md — both readFile calls will ENOENT
+
+		const loaded = new Set<string>();
+		const result = await discoverContextFiles([subDir], loaded, tmpDir);
+		expect(result).toHaveLength(0);
+		// Directory should stay claimed (ENOENT is not transient)
+		expect(loaded.size).toBe(1);
+	});
+
+	it("keeps directory claimed when at least one candidate succeeds", async () => {
+		const subDir = join(tmpDir, "sub");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "found");
+		// AGENTS.md will ENOENT — but CLAUDE.md succeeds, so directory stays claimed
+
+		const loaded = new Set<string>();
+		const result = await discoverContextFiles([subDir], loaded, tmpDir);
+		expect(result).toHaveLength(1);
+		expect(loaded.size).toBe(1);
+	});
+
 	it("logs non-ENOENT readFile errors", async () => {
 		const subDir = join(tmpDir, "sub");
 		await mkdir(join(subDir, "CLAUDE.md"), { recursive: true });
@@ -268,6 +315,23 @@ describe("discoverContextFiles", () => {
 		const loaded = new Set<string>();
 		const result = await discoverContextFiles([join(tmpDir, "nonexistent")], loaded, tmpDir);
 		expect(result).toHaveLength(0);
+	});
+
+	it("logs cwd ENOENT at debug level", async () => {
+		const debugCalls: Array<{ category: string; message: string; data?: Record<string, unknown> }> = [];
+		const logger = {
+			warn: () => {},
+			debug: (category: string, message: string, data?: Record<string, unknown>) => {
+				debugCalls.push({ category, message, data });
+			},
+		} as any;
+
+		const loaded = new Set<string>();
+		const result = await discoverContextFiles([join(tmpDir, "sub")], loaded, join(tmpDir, "nonexistent-cwd"), logger);
+		expect(result).toHaveLength(0);
+		expect(debugCalls).toHaveLength(1);
+		expect(debugCalls[0].message).toContain("ENOENT");
+		expect(debugCalls[0].data?.cwd).toBe(join(tmpDir, "nonexistent-cwd"));
 	});
 });
 
@@ -374,6 +438,26 @@ describe("reconstructSubdirState", () => {
 		const result = reconstructSubdirState(entries as any);
 		expect(result.discoveries).toHaveLength(1);
 		expect(result.discoveries[0].toolCallId).toBe("tc_2");
+	});
+
+	it("logs dropped entries at debug level when logger is provided", () => {
+		const debugCalls: Array<{ category: string; message: string; data?: Record<string, unknown> }> = [];
+		const logger = {
+			debug: (category: string, message: string, data?: Record<string, unknown>) => {
+				debugCalls.push({ category, message, data });
+			},
+		} as any;
+
+		const entries = [
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, null),
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, { toolCallId: 123 }),
+		];
+		reconstructSubdirState(entries as any, logger);
+
+		expect(debugCalls).toHaveLength(2);
+		expect(debugCalls[0].category).toBe("subdir-context");
+		expect(debugCalls[0].data?.reason).toBe("null data");
+		expect(debugCalls[1].data?.reason).toBe("invalid field types");
 	});
 
 	it("skips entries with wrong types for fields", () => {
