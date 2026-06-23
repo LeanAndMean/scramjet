@@ -4,12 +4,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	CANDIDATES,
+	createStableId,
 	directoriesToCheck,
 	discoverContextFiles,
-	formatContextBlocks,
 	MAX_DEPTH,
 	MAX_DIRS,
+	reconstructSubdirState,
 	registerSubdirContext,
+	SUBDIR_CONTEXT_DISCOVERY_TYPE,
 } from "../subdir-context.ts";
 import { freshState, recordingPi } from "./helpers.ts";
 
@@ -24,9 +26,9 @@ describe("directoriesToCheck", () => {
 		expect(result).toEqual([]);
 	});
 
-	it("returns empty for file outside cwd", () => {
+	it("returns [fileDir] for file outside cwd", () => {
 		const result = directoriesToCheck("/other/path/file.ts", "/project");
-		expect(result).toEqual([]);
+		expect(result).toEqual(["/other/path"]);
 	});
 
 	it("caps at MAX_DEPTH", () => {
@@ -51,9 +53,10 @@ describe("directoriesToCheck", () => {
 		expect(result).toEqual([join(home, "sub"), join(home, "sub/dir")]);
 	});
 
-	it("returns empty for ~/ paths when cwd is not homedir", () => {
+	it("returns [fileDir] for ~/ paths when cwd is not homedir", () => {
+		const home = homedir();
 		const result = directoriesToCheck("~/sub/file.ts", "/project");
-		expect(result).toEqual([]);
+		expect(result).toEqual([join(home, "sub")]);
 	});
 
 	it("returns single dir for one-level deep file", () => {
@@ -88,6 +91,7 @@ describe("discoverContextFiles", () => {
 		expect(result).toHaveLength(1);
 		expect(result[0].filename).toBe("CLAUDE.md");
 		expect(result[0].content).toBe("# Sub instructions");
+		expect(result[0].realpath).toBeDefined();
 	});
 
 	it("finds AGENTS.md in directory", async () => {
@@ -137,6 +141,18 @@ describe("discoverContextFiles", () => {
 		const loaded = new Set<string>();
 		const result = await discoverContextFiles([linkDir], loaded, tmpDir);
 		expect(result).toHaveLength(0);
+
+		await rm(outsideDir, { recursive: true, force: true });
+	});
+
+	it("discovers outside-cwd dirs when skipCwdCheck is true", async () => {
+		const outsideDir = await mkdtemp(join(tmpdir(), "outside-"));
+		await writeFile(join(outsideDir, "CLAUDE.md"), "outside content");
+
+		const loaded = new Set<string>();
+		const result = await discoverContextFiles([outsideDir], loaded, "/nonexistent-cwd", undefined, true);
+		expect(result).toHaveLength(1);
+		expect(result[0].content).toBe("outside content");
 
 		await rm(outsideDir, { recursive: true, force: true });
 	});
@@ -204,30 +220,144 @@ describe("discoverContextFiles", () => {
 	});
 });
 
-describe("formatContextBlocks", () => {
-	it("returns empty string for empty array", () => {
-		expect(formatContextBlocks([], "/project")).toBe("");
+describe("createStableId", () => {
+	it("produces a stable deterministic id", () => {
+		const id1 = createStableId("pkg/sub/CLAUDE.md");
+		const id2 = createStableId("pkg/sub/CLAUDE.md");
+		expect(id1).toBe(id2);
 	});
 
-	it("formats a single file with header, content, and separator", () => {
-		const result = formatContextBlocks(
-			[{ dir: "/project/sub", filename: "CLAUDE.md", content: "hello world" }],
-			"/project",
-		);
-		expect(result).toBe("# Project context: sub/CLAUDE.md\n\nhello world\n\n---");
+	it("produces different ids for different paths", () => {
+		const id1 = createStableId("a/CLAUDE.md");
+		const id2 = createStableId("b/CLAUDE.md");
+		expect(id1).not.toBe(id2);
 	});
 
-	it("formats multiple files separated by double newline", () => {
-		const result = formatContextBlocks(
-			[
-				{ dir: "/project/a", filename: "CLAUDE.md", content: "aaa" },
-				{ dir: "/project/a/b", filename: "AGENTS.md", content: "bbb" },
-			],
-			"/project",
-		);
-		expect(result).toContain("# Project context: a/CLAUDE.md");
-		expect(result).toContain("# Project context: a/b/AGENTS.md");
-		expect(result.indexOf("a/CLAUDE.md")).toBeLessThan(result.indexOf("a/b/AGENTS.md"));
+	it("starts with scrctx- prefix", () => {
+		const id = createStableId("some/path/CLAUDE.md");
+		expect(id).toMatch(/^scrctx-[a-f0-9]{12}$/);
+	});
+
+	it("is provider-safe (alphanumeric and hyphen)", () => {
+		const id = createStableId("path/with/special chars/CLAUDE.md");
+		expect(id).toMatch(/^[A-Za-z0-9_-]+$/);
+	});
+});
+
+describe("reconstructSubdirState", () => {
+	function makeCustomEntry(customType: string, data: unknown) {
+		return { type: "custom" as const, customType, data, id: "e1", timestamp: 0 };
+	}
+
+	function makeCompactionEntry() {
+		return {
+			type: "compaction" as const,
+			summary: "compacted",
+			firstKeptEntryId: "e0",
+			tokensBefore: 1000,
+			id: "c1",
+			timestamp: 0,
+		};
+	}
+
+	it("returns empty state for no entries", () => {
+		const result = reconstructSubdirState([]);
+		expect(result.loadedPaths.size).toBe(0);
+		expect(result.discoveries).toHaveLength(0);
+	});
+
+	it("restores discoveries from journal entries", () => {
+		const entries = [
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
+				toolCallId: "tc_1",
+				realpath: "/project/sub",
+				filename: "CLAUDE.md",
+				displayPath: "sub/CLAUDE.md",
+				content: "# Rules",
+				syntheticId: "scrctx-abc123456789",
+			}),
+		];
+		const result = reconstructSubdirState(entries as any);
+		expect(result.loadedPaths.has("/project/sub")).toBe(true);
+		expect(result.discoveries).toHaveLength(1);
+		expect(result.discoveries[0].toolCallId).toBe("tc_1");
+		expect(result.discoveries[0].content).toBe("# Rules");
+	});
+
+	it("resets state at compaction entries", () => {
+		const entries = [
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
+				toolCallId: "tc_1",
+				realpath: "/project/sub",
+				filename: "CLAUDE.md",
+				displayPath: "sub/CLAUDE.md",
+				content: "old content",
+				syntheticId: "scrctx-old000000000",
+			}),
+			makeCompactionEntry(),
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
+				toolCallId: "tc_2",
+				realpath: "/project/pkg",
+				filename: "AGENTS.md",
+				displayPath: "pkg/AGENTS.md",
+				content: "new content",
+				syntheticId: "scrctx-new000000000",
+			}),
+		];
+		const result = reconstructSubdirState(entries as any);
+		expect(result.loadedPaths.size).toBe(1);
+		expect(result.loadedPaths.has("/project/pkg")).toBe(true);
+		expect(result.discoveries).toHaveLength(1);
+		expect(result.discoveries[0].content).toBe("new content");
+	});
+
+	it("skips corrupt entries with missing fields", () => {
+		const entries = [
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, { toolCallId: "tc_1" }),
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, null),
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
+				toolCallId: "tc_2",
+				realpath: "/project/sub",
+				filename: "CLAUDE.md",
+				displayPath: "sub/CLAUDE.md",
+				content: "valid",
+				syntheticId: "scrctx-val000000000",
+			}),
+		];
+		const result = reconstructSubdirState(entries as any);
+		expect(result.discoveries).toHaveLength(1);
+		expect(result.discoveries[0].toolCallId).toBe("tc_2");
+	});
+
+	it("skips entries with wrong types for fields", () => {
+		const entries = [
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
+				toolCallId: 123,
+				realpath: "/project/sub",
+				filename: "CLAUDE.md",
+				displayPath: "sub/CLAUDE.md",
+				content: "x",
+				syntheticId: "scrctx-aaa",
+			}),
+		];
+		const result = reconstructSubdirState(entries as any);
+		expect(result.discoveries).toHaveLength(0);
+	});
+
+	it("ignores unrelated custom entries", () => {
+		const entries = [
+			makeCustomEntry("scramjet:command-start", { command: "test:cmd" }),
+			makeCustomEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, {
+				toolCallId: "tc_1",
+				realpath: "/project/sub",
+				filename: "CLAUDE.md",
+				displayPath: "sub/CLAUDE.md",
+				content: "content",
+				syntheticId: "scrctx-abc123456789",
+			}),
+		];
+		const result = reconstructSubdirState(entries as any);
+		expect(result.discoveries).toHaveLength(1);
 	});
 });
 
@@ -242,11 +372,11 @@ describe("registerSubdirContext", () => {
 		await rm(tmpDir, { recursive: true, force: true });
 	});
 
-	function makeReadEvent(path: string, content = "file content", isError = false) {
+	function makeReadEvent(path: string, content = "file content", isError = false, toolCallId = "tc_1") {
 		return {
 			type: "tool_result" as const,
 			toolName: "read" as const,
-			toolCallId: "tc_1",
+			toolCallId,
 			input: { path } as Record<string, unknown>,
 			content: [{ type: "text" as const, text: content }],
 			isError,
@@ -255,18 +385,20 @@ describe("registerSubdirContext", () => {
 	}
 
 	function makeCtx(cwd: string) {
-		return { cwd, hasUI: false, ui: {}, sessionManager: {} };
+		return { cwd, hasUI: false, ui: {}, sessionManager: { getBranch: () => [] } };
 	}
 
-	it("registers exactly one tool_result and one session_compact handler", () => {
+	it("registers tool_result, session_compact, session_start, and session_tree handlers", () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshState();
 		registerSubdirContext(pi, state);
 		expect(handlers.get("tool_result")?.length).toBe(1);
 		expect(handlers.get("session_compact")?.length).toBe(1);
+		expect(handlers.get("session_start")?.length).toBe(1);
+		expect(handlers.get("session_tree")?.length).toBe(1);
 	});
 
-	it("discovers CLAUDE.md and prepends to content", async () => {
+	it("tool_result returns undefined (does not modify content)", async () => {
 		const subDir = join(tmpDir, "pkg");
 		await mkdir(subDir);
 		await writeFile(join(subDir, "CLAUDE.md"), "# Package rules");
@@ -280,16 +412,48 @@ describe("registerSubdirContext", () => {
 		const handler = handlers.get("tool_result")![0];
 		const result = await handler(event, makeCtx(tmpDir));
 
-		expect(result).toBeDefined();
-		const content = (result as any).content;
-		expect(content).toHaveLength(2);
-		expect(content[0].type).toBe("text");
-		expect(content[0].text).toContain("# Project context: pkg/CLAUDE.md");
-		expect(content[0].text).toContain("# Package rules");
-		expect(content[1].text).toBe("export {}");
+		expect(result).toBeUndefined();
 	});
 
-	it("second read in same directory does NOT prepend again", async () => {
+	it("tool_result records discoveries in state", async () => {
+		const subDir = join(tmpDir, "pkg");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "# Package rules");
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const handler = handlers.get("tool_result")![0];
+		await handler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(1);
+		expect(state.subdirDiscoveries[0].filename).toBe("CLAUDE.md");
+		expect(state.subdirDiscoveries[0].content).toBe("# Package rules");
+		expect(state.subdirDiscoveries[0].toolCallId).toBe("tc_1");
+		expect(state.subdirDiscoveries[0].displayPath).toBe("pkg/CLAUDE.md");
+		expect(state.subdirDiscoveries[0].syntheticId).toMatch(/^scrctx-/);
+	});
+
+	it("tool_result journals discoveries", async () => {
+		const subDir = join(tmpDir, "pkg");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "# Rules");
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const handler = handlers.get("tool_result")![0];
+		await handler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
+
+		expect(pi.appended).toHaveLength(1);
+		expect(pi.appended[0].customType).toBe(SUBDIR_CONTEXT_DISCOVERY_TYPE);
+		expect(pi.appended[0].data.toolCallId).toBe("tc_1");
+		expect(pi.appended[0].data.content).toBe("# Rules");
+	});
+
+	it("dedup: second read in same directory does not add more discoveries", async () => {
 		const subDir = join(tmpDir, "pkg");
 		await mkdir(subDir);
 		await writeFile(join(subDir, "CLAUDE.md"), "rules");
@@ -302,21 +466,25 @@ describe("registerSubdirContext", () => {
 
 		const handler = handlers.get("tool_result")![0];
 		await handler(makeReadEvent("pkg/a.ts", "a"), makeCtx(tmpDir));
-		const result2 = await handler(makeReadEvent("pkg/b.ts", "b"), makeCtx(tmpDir));
-		expect(result2).toBeUndefined();
+		await handler(makeReadEvent("pkg/b.ts", "b"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(1);
+		expect(pi.appended).toHaveLength(1);
 	});
 
-	it("read outside cwd does not trigger discovery", async () => {
+	it("discovers outside-cwd reads (immediate directory only)", async () => {
 		const outsideDir = await mkdtemp(join(tmpdir(), "outside-"));
-		await writeFile(join(outsideDir, "CLAUDE.md"), "outside");
+		await writeFile(join(outsideDir, "CLAUDE.md"), "outside rules");
 
 		const { pi, handlers } = recordingPi();
 		const state = freshState();
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("tool_result")![0];
-		const result = await handler(makeReadEvent(join(outsideDir, "file.ts")), makeCtx(tmpDir));
-		expect(result).toBeUndefined();
+		await handler(makeReadEvent(join(outsideDir, "file.ts")), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(1);
+		expect(state.subdirDiscoveries[0].content).toBe("outside rules");
 
 		await rm(outsideDir, { recursive: true, force: true });
 	});
@@ -329,11 +497,12 @@ describe("registerSubdirContext", () => {
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("tool_result")![0];
-		const result = await handler(makeReadEvent("file.ts"), makeCtx(tmpDir));
-		expect(result).toBeUndefined();
+		await handler(makeReadEvent("file.ts"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(0);
 	});
 
-	it("session_compact clears state so subsequent read re-discovers", async () => {
+	it("session_compact clears both state fields", async () => {
 		const subDir = join(tmpDir, "pkg");
 		await mkdir(subDir);
 		await writeFile(join(subDir, "CLAUDE.md"), "rules");
@@ -347,13 +516,30 @@ describe("registerSubdirContext", () => {
 
 		await toolHandler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
 		expect(state.subdirLoadedPaths.size).toBeGreaterThan(0);
+		expect(state.subdirDiscoveries.length).toBeGreaterThan(0);
 
 		await compactHandler({}, {});
 		expect(state.subdirLoadedPaths.size).toBe(0);
+		expect(state.subdirDiscoveries).toHaveLength(0);
+	});
 
-		const result = await toolHandler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
-		expect(result).toBeDefined();
-		expect((result as any).content[0].text).toContain("# Project context: pkg/CLAUDE.md");
+	it("session_compact allows re-discovery on next read", async () => {
+		const subDir = join(tmpDir, "pkg");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "rules");
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const toolHandler = handlers.get("tool_result")![0];
+		const compactHandler = handlers.get("session_compact")![0];
+
+		await toolHandler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
+		await compactHandler({}, {});
+		await toolHandler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(1);
 	});
 
 	it("discovers all intermediate directories ordered shallowest-first", async () => {
@@ -368,13 +554,11 @@ describe("registerSubdirContext", () => {
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("tool_result")![0];
-		const result = await handler(makeReadEvent("a/b/c/file.ts"), makeCtx(tmpDir));
+		await handler(makeReadEvent("a/b/c/file.ts"), makeCtx(tmpDir));
 
-		expect(result).toBeDefined();
-		const text = (result as any).content[0].text;
-		expect(text).toContain("level-a");
-		expect(text).toContain("level-abc");
-		expect(text.indexOf("level-a")).toBeLessThan(text.indexOf("level-abc"));
+		expect(state.subdirDiscoveries).toHaveLength(2);
+		expect(state.subdirDiscoveries[0].content).toBe("level-a");
+		expect(state.subdirDiscoveries[1].content).toBe("level-abc");
 	});
 
 	it("respects MAX_DIRS cap across multiple reads", async () => {
@@ -396,7 +580,7 @@ describe("registerSubdirContext", () => {
 		expect(state.subdirLoadedPaths.size).toBeLessThanOrEqual(MAX_DIRS);
 	});
 
-	it("skips symlinks pointing outside cwd", async () => {
+	it("skips symlinks pointing outside cwd (lexical-inside escape)", async () => {
 		const outsideDir = await mkdtemp(join(tmpdir(), "outside-"));
 		await writeFile(join(outsideDir, "CLAUDE.md"), "escape");
 
@@ -409,8 +593,9 @@ describe("registerSubdirContext", () => {
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("tool_result")![0];
-		const result = await handler(makeReadEvent("linked/file.ts"), makeCtx(tmpDir));
-		expect(result).toBeUndefined();
+		await handler(makeReadEvent("linked/file.ts"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(0);
 
 		await rm(outsideDir, { recursive: true, force: true });
 	});
@@ -426,8 +611,9 @@ describe("registerSubdirContext", () => {
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("tool_result")![0];
-		const result = await handler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
-		expect(result).toBeUndefined();
+		await handler(makeReadEvent("pkg/file.ts"), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(0);
 
 		await chmod(join(subDir, "CLAUDE.md"), 0o644);
 	});
@@ -442,8 +628,9 @@ describe("registerSubdirContext", () => {
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("tool_result")![0];
-		const result = await handler(makeReadEvent("pkg/file.ts", "error text", true), makeCtx(tmpDir));
-		expect(result).toBeUndefined();
+		await handler(makeReadEvent("pkg/file.ts", "error text", true), makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(0);
 	});
 
 	it("does not trigger when event.input.path is not a string", async () => {
@@ -461,8 +648,9 @@ describe("registerSubdirContext", () => {
 			isError: false,
 			details: undefined,
 		};
-		const result = await handler(event, makeCtx(tmpDir));
-		expect(result).toBeUndefined();
+		await handler(event, makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(0);
 	});
 
 	it("does not trigger for non-read tools", async () => {
@@ -484,7 +672,104 @@ describe("registerSubdirContext", () => {
 			isError: false,
 			details: undefined,
 		};
-		const result = await handler(event, makeCtx(tmpDir));
-		expect(result).toBeUndefined();
+		await handler(event, makeCtx(tmpDir));
+
+		expect(state.subdirDiscoveries).toHaveLength(0);
+	});
+
+	it("session_start reconstructs state from journal entries", async () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const branchEntries = [
+			{
+				type: "custom",
+				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
+				data: {
+					toolCallId: "tc_1",
+					realpath: "/project/sub",
+					filename: "CLAUDE.md",
+					displayPath: "sub/CLAUDE.md",
+					content: "# Restored",
+					syntheticId: "scrctx-abc123456789",
+				},
+				id: "e1",
+				timestamp: 0,
+			},
+		];
+
+		const sessionStartHandler = handlers.get("session_start")![0];
+		await sessionStartHandler({}, { sessionManager: { getBranch: () => branchEntries } });
+
+		expect(state.subdirLoadedPaths.has("/project/sub")).toBe(true);
+		expect(state.subdirDiscoveries).toHaveLength(1);
+		expect(state.subdirDiscoveries[0].content).toBe("# Restored");
+	});
+
+	it("session_tree reconstructs state from journal entries", async () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const branchEntries = [
+			{
+				type: "custom",
+				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
+				data: {
+					toolCallId: "tc_2",
+					realpath: "/project/pkg",
+					filename: "AGENTS.md",
+					displayPath: "pkg/AGENTS.md",
+					content: "agents",
+					syntheticId: "scrctx-def000000000",
+				},
+				id: "e2",
+				timestamp: 0,
+			},
+		];
+
+		const sessionTreeHandler = handlers.get("session_tree")![0];
+		await sessionTreeHandler({}, { sessionManager: { getBranch: () => branchEntries } });
+
+		expect(state.subdirLoadedPaths.has("/project/pkg")).toBe(true);
+		expect(state.subdirDiscoveries).toHaveLength(1);
+	});
+
+	it("replay reconstruction resets at compaction boundary", async () => {
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const branchEntries = [
+			{
+				type: "custom",
+				customType: SUBDIR_CONTEXT_DISCOVERY_TYPE,
+				data: {
+					toolCallId: "tc_1",
+					realpath: "/project/old",
+					filename: "CLAUDE.md",
+					displayPath: "old/CLAUDE.md",
+					content: "old",
+					syntheticId: "scrctx-old000000000",
+				},
+				id: "e1",
+				timestamp: 0,
+			},
+			{
+				type: "compaction",
+				summary: "compacted",
+				firstKeptEntryId: "e0",
+				tokensBefore: 1000,
+				id: "c1",
+				timestamp: 1,
+			},
+		];
+
+		const sessionStartHandler = handlers.get("session_start")![0];
+		await sessionStartHandler({}, { sessionManager: { getBranch: () => branchEntries } });
+
+		expect(state.subdirLoadedPaths.size).toBe(0);
+		expect(state.subdirDiscoveries).toHaveLength(0);
 	});
 });

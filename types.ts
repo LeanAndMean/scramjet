@@ -127,5 +127,15 @@ export interface ScramjetState {
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
 	subdirLoadedPaths: Set<string>;
+	subdirDiscoveries: SubdirDiscovery[];
 	logger: ScramjetLogger;
+}
+
+export interface SubdirDiscovery {
+	toolCallId: string;
+	realpath: string;
+	filename: string;
+	displayPath: string;
+	content: string;
+	syntheticId: string;
 }
