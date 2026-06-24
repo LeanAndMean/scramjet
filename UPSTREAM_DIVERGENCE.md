@@ -24,7 +24,7 @@ Package names in `package.json` files were also renamed:
 
 | File | Change | Why |
 |------|--------|-----|
-| `packages/coding-agent/package.json` | Added `piConfig: { name: "scramjet", configDir: ".pi" }` | Rebrands TUI to "scramjet", sets config/agent dir names |
+| `packages/coding-agent/package.json` | Added `piConfig: { name: "scramjet", configDir: ".scramjet" }` | Rebrands TUI to "scramjet", sets config/agent dir names |
 | `packages/coding-agent/src/config.ts` | `VERSION` reads `SCRAMJET_VERSION` env var first | Product binary shows its own version, not runtime version |
 | `packages/coding-agent/src/main.ts` | Added `builtinInit` to `MainOptions` interface | Direct product wiring without extension directory discovery |
 | `packages/coding-agent/src/core/resource-loader.ts` | `builtinInit` field + loading logic (unshift before disk extensions) | Loads Scramjet as builtin before user-installed extensions |
@@ -39,10 +39,10 @@ All shipped documentation (`README.md`, `docs/*.md`, `examples/`) is being rebra
 - Environment variables: `PI_CODING_AGENT_DIR` → `SCRAMJET_CODING_AGENT_DIR` (in documentation; runtime derivation is via `piConfig.name`)
 - Install instructions: `curl pi.dev/install.sh` → `npm install -g @leanandmean/scramjet`
 - Removed pi.dev URLs (domain, logo, session sharing, Discord badge)
+- Config directory: `.pi/` → `.scramjet/` (issue #201)
 
 Preserved:
 - `pi.` API variable names (`pi.on()`, `pi.registerTool()`, etc.)
-- `.pi` config directory path (`~/.pi/agent/`)
 - `pi-package` npm keyword
 - `pi` key in package.json manifests
 

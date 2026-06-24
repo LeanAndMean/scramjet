@@ -52,7 +52,7 @@ export function registerSubagentOutputAdvisor(pi: ExtensionAPI, state: ScramjetS
 
 		state.logger.warn(
 			"subagent",
-			`advisory: subagent '${agentName}' returned no output (subprocess exited cleanly with no assistant text; check ~/.pi/agent/agents/ for the agent definition and rerun with verbose output if reproducing)`,
+			`advisory: subagent '${agentName}' returned no output (subprocess exited cleanly with no assistant text; check ~/.scramjet/agent/agents/ for the agent definition and rerun with verbose output if reproducing)`,
 			{ agentName },
 		);
 

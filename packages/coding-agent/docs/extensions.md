@@ -4,7 +4,7 @@
 
 Extensions are TypeScript modules that extend scramjet's behavior. They can subscribe to lifecycle events, register custom tools callable by the LLM, add commands, and more.
 
-> **Placement for /reload:** Put extensions in `~/.pi/agent/extensions/` (global) or `.pi/extensions/` (project-local) for auto-discovery. Use `scramjet -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
+> **Placement for /reload:** Put extensions in `~/.scramjet/agent/extensions/` (global) or `.scramjet/extensions/` (project-local) for auto-discovery. Use `scramjet -e ./path.ts` only for quick tests. Extensions in auto-discovered locations can be hot-reloaded with `/reload`.
 
 **Key capabilities:**
 - **Custom tools** - Register tools the LLM can call via `pi.registerTool()`
@@ -54,7 +54,7 @@ See [examples/extensions/](../examples/extensions/) for working implementations.
 
 ## Quick Start
 
-Create `~/.pi/agent/extensions/my-extension.ts`:
+Create `~/.scramjet/agent/extensions/my-extension.ts`:
 
 ```typescript
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
@@ -113,10 +113,10 @@ Extensions are auto-discovered from:
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/extensions/*.ts` | Global (all projects) |
-| `~/.pi/agent/extensions/*/index.ts` | Global (subdirectory) |
-| `.pi/extensions/*.ts` | Project-local |
-| `.pi/extensions/*/index.ts` | Project-local (subdirectory) |
+| `~/.scramjet/agent/extensions/*.ts` | Global (all projects) |
+| `~/.scramjet/agent/extensions/*/index.ts` | Global (subdirectory) |
+| `.scramjet/extensions/*.ts` | Project-local |
+| `.scramjet/extensions/*/index.ts` | Project-local (subdirectory) |
 
 Additional paths via `settings.json`:
 
@@ -223,14 +223,14 @@ This pattern makes the fetched models available during normal startup and to `sc
 **Single file** - simplest, for small extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.scramjet/agent/extensions/
 └── my-extension.ts
 ```
 
 **Directory with index.ts** - for multi-file extensions:
 
 ```
-~/.pi/agent/extensions/
+~/.scramjet/agent/extensions/
 └── my-extension/
     ├── index.ts        # Entry point (exports default function)
     ├── tools.ts        # Helper module
@@ -240,7 +240,7 @@ This pattern makes the fetched models available during normal startup and to `sc
 **Package with dependencies** - for extensions that need npm packages:
 
 ```
-~/.pi/agent/extensions/
+~/.scramjet/agent/extensions/
 └── my-extension/
     ├── package.json    # Declares dependencies and entry points
     ├── package-lock.json

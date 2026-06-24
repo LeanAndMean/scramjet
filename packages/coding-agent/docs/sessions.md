@@ -4,7 +4,7 @@ Scramjet saves conversations as sessions so you can continue work, branch from e
 
 ## Session Storage
 
-Sessions auto-save to `~/.pi/agent/sessions/`, organized by working directory. Each session is a JSONL file with a tree structure.
+Sessions auto-save to `~/.scramjet/agent/sessions/`, organized by working directory. Each session is a JSONL file with a tree structure.
 
 ```bash
 scramjet -c                  # Continue most recent session

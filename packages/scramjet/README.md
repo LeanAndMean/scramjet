@@ -162,7 +162,7 @@ The seeded Mach 12 directory at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/`
 
 If you route API calls through a corporate proxy or gateway like Palantir Foundry, Pi by default still calls `api.anthropic.com` directly — its Anthropic provider pins the base URL and its SDK does not read `ANTHROPIC_BASE_URL`.
 
-To route through your proxy, edit `~/.pi/agent/models.json`:
+To route through your proxy, edit `~/.scramjet/agent/models.json`:
 
 ```json
 {

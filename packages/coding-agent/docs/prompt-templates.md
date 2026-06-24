@@ -8,8 +8,8 @@ Prompt templates are Markdown snippets that expand into full prompts. Type `/nam
 
 Scramjet loads prompt templates from:
 
-- Global: `~/.pi/agent/prompts/*.md`
-- Project: `.pi/prompts/*.md`
+- Global: `~/.scramjet/agent/prompts/*.md`
+- Project: `.scramjet/prompts/*.md`
 - Packages: `prompts/` directories or `pi.prompts` entries in `package.json`
 - Settings: `prompts` array with files or directories
 - CLI: `--prompt-template <path>` (repeatable)
