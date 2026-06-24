@@ -1,6 +1,6 @@
 # Scramjet
 
-A high-velocity harness for agentic development. Built on [Pi](https://github.com/earendil-works/pi-mono).
+A high-velocity harness for agentic development. Uses the [Pi](https://github.com/earendil-works/pi-mono) runtime.
 
 ## Status
 
@@ -23,7 +23,7 @@ npm install -g @leanandmean/scramjet
 scramjet
 ```
 
-`scramjet` launches Pi with Scramjet loaded as an extension. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged. Running plain `pi` still works — `scramjet` is a wrapper that registers the extension at startup.
+`scramjet` is a standalone CLI that uses Pi as its runtime. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged.
 
 Scramjet ships with the **Mach 12** command set as a starting point — ten top-level commands for the issue → plan → review → implement → PR → ship methodology. But the harness is designed for your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
@@ -187,7 +187,7 @@ export ANTHROPIC_API_KEY="$ANTHROPIC_AUTH_TOKEN"
 
 ## Compatibility
 
-Tested against **Pi `0.74.0-scramjet.1`** (see `pi.piTestedVersion` in `package.json`). Scramjet uses a LeanAndMean-patched Pi coding-agent package based on upstream Pi `0.74.0`; the patch flavor is `scramjet.1`.
+Scramjet vendors the Pi runtime (base version `0.74.1`) as workspace packages within its monorepo. See `UPSTREAM_DIVERGENCE.md` at the repository root for details on the vendored Pi version and modifications.
 
 ## Feedback
 

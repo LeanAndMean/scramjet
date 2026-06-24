@@ -129,6 +129,7 @@ export interface DefaultResourceLoaderOptions {
 	additionalPromptTemplatePaths?: string[];
 	additionalThemePaths?: string[];
 	extensionFactories?: ExtensionFactory[];
+	// SCRAMJET-DIVERGENCE: added builtinInit — loaded before disk extensions via loadExtensionFromFactory.
 	builtinInit?: (pi: ExtensionAPI) => void | Promise<void>;
 	noExtensions?: boolean;
 	noSkills?: boolean;

@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.27.0 — Monorepo migration
+
+Merge the Pi fork and Scramjet into a single product monorepo (issue #197). Scramjet is the product; Pi packages are vendored runtime dependencies modified directly where appropriate. The extension boundary is removed — Scramjet uses `builtinInit` instead of `extensionFactories`.
+
+### Changed
+
+- **Monorepo structure**: Pi runtime packages (`@leanandmean/{tui,ai,agent,coding-agent}`) live in `packages/` alongside `packages/scramjet/`. One workspace, one CI, atomic PRs.
+- **Entry point**: `bin/scramjet.js` uses `builtinInit` instead of `extensionFactories` — Scramjet loads as a builtin before disk-discoverable extensions.
+- **Version display**: `scramjet --version` now shows Scramjet's own version (0.27.0) instead of the coding-agent runtime version.
+- **Publishing**: all five packages publish independently via the release workflow. Runtime packages maintain their own versions.
+- **CLAUDE.md**: comprehensive rewrite reflecting monorepo structure, commands, and development workflow.
+- **README.md**: updated product identity (Scramjet is the product, not a Pi extension).
+
+### Added
+
+- `UPSTREAM_DIVERGENCE.md` — tracks modifications to vendored Pi packages relative to upstream, with cherry-pick workflow instructions.
+- `SCRAMJET-DIVERGENCE` markers in behaviorally-divergent Pi source files.
+
+### Removed
+
+- npm alias dependency pattern (`@earendil-works/pi-*: npm:@leanandmean/pi-*@...`).
+- `docs/pi-api-surface.md` generation script and staleness guard.
+- Pi dependency metadata drift guard from CI.
+- `extensionFactories` usage in Scramjet (retained in Pi for backward compatibility).
+
 ## 0.26.0 — Lazy-load subdirectory CLAUDE.md files on read
 
 When the agent reads a file in a subdirectory of cwd, Scramjet discovers `CLAUDE.md` and `AGENTS.md` files in intermediate directories between cwd and the file (shallowest-first, capped at `MAX_DEPTH=10`) and injects them as synthetic read tool call/result pairs via Pi's `context` event. Very deep reads only check directories that fall within the cap. Discovered files appear to the model as structurally separate reads positioned before the triggering read. Discovery state is journaled and reconstructed on resume/fork/branch-switch (issue #194).

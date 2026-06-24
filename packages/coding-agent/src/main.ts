@@ -421,6 +421,7 @@ async function promptForMissingSessionCwd(
 	});
 }
 
+// SCRAMJET-DIVERGENCE: added builtinInit for direct product wiring without extension discovery.
 export interface MainOptions {
 	extensionFactories?: ExtensionFactory[];
 	builtinInit?: (pi: ExtensionAPI) => void | Promise<void>;
