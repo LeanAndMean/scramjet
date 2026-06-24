@@ -1,4 +1,4 @@
-> pi can create prompt templates. Ask it to build one for your workflow.
+> scramjet can create prompt templates. Ask it to build one for your workflow.
 
 # Prompt Templates
 
@@ -6,7 +6,7 @@ Prompt templates are Markdown snippets that expand into full prompts. Type `/nam
 
 ## Locations
 
-Pi loads prompt templates from:
+Scramjet loads prompt templates from:
 
 - Global: `~/.pi/agent/prompts/*.md`
 - Project: `.pi/prompts/*.md`
