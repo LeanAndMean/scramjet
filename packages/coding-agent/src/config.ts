@@ -269,7 +269,8 @@ export function getSelfUpdateUnavailableInstruction(
 ): string {
 	const method = detectInstallMethod();
 	if (method === "bun-binary") {
-		return `Download from: https://github.com/earendil-works/pi-mono/releases/latest`;
+		// SCRAMJET-DIVERGENCE: point to Scramjet releases, not upstream Pi.
+		return `Download from: https://github.com/LeanAndMean/scramjet/releases/latest`;
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
 	if (command) {
@@ -378,6 +379,10 @@ export function getExamplesPath(): string {
 
 /** Get path to CHANGELOG.md */
 export function getChangelogPath(): string {
+	// SCRAMJET-DIVERGENCE: prefer SCRAMJET_CHANGELOG_PATH so the product displays
+	// its own changelog instead of the runtime package's Pi upstream history.
+	const envPath = process.env.SCRAMJET_CHANGELOG_PATH;
+	if (envPath) return resolve(envPath);
 	return resolve(join(getPackageDir(), "CHANGELOG.md"));
 }
 
@@ -434,14 +439,6 @@ export function expandTildePath(path: string): string {
 	if (path === "~") return homedir();
 	if (path.startsWith("~/")) return homedir() + path.slice(1);
 	return path;
-}
-
-const DEFAULT_SHARE_VIEWER_URL = "https://pi.dev/session/";
-
-/** Get the share viewer URL for a gist ID */
-export function getShareViewerUrl(gistId: string): string {
-	const baseUrl = process.env.PI_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
-	return `${baseUrl}#${gistId}`;
 }
 
 // =============================================================================

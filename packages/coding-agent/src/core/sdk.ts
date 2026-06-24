@@ -151,14 +151,15 @@ function resolveCacheRetention(option: CacheRetention | undefined): CacheRetenti
 	if (option) {
 		return option;
 	}
-	const env = process.env.PI_CACHE_RETENTION;
+	// SCRAMJET-DIVERGENCE: prefer SCRAMJET_CACHE_RETENTION, fall back to PI_CACHE_RETENTION.
+	const env = process.env.SCRAMJET_CACHE_RETENTION || process.env.PI_CACHE_RETENTION;
 	if (env) {
 		if (isCacheRetention(env)) {
 			return env;
 		}
 		if (!warnedInvalidCacheRetention) {
 			warnedInvalidCacheRetention = true;
-			console.warn(`Invalid PI_CACHE_RETENTION "${env}". Valid values: none, short, long. Using "long".`);
+			console.warn(`Invalid SCRAMJET_CACHE_RETENTION "${env}". Valid values: none, short, long. Using "long".`);
 		}
 	}
 	return "long";

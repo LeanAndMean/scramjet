@@ -11,8 +11,9 @@ const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
+// SCRAMJET-DIVERGENCE: prefer SCRAMJET_OFFLINE, fall back to PI_OFFLINE.
 function isOfflineModeEnabled(): boolean {
-	const value = process.env.PI_OFFLINE;
+	const value = process.env.SCRAMJET_OFFLINE || process.env.PI_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }

@@ -48,16 +48,7 @@ import {
 	visibleWidth,
 } from "@leanandmean/tui";
 import { spawn, spawnSync } from "child_process";
-import {
-	APP_NAME,
-	APP_TITLE,
-	getAgentDir,
-	getAuthPath,
-	getDebugLogPath,
-	getDocsPath,
-	getShareViewerUrl,
-	VERSION,
-} from "../../config.js";
+import { APP_NAME, APP_TITLE, getAgentDir, getAuthPath, getDebugLogPath, getDocsPath, VERSION } from "../../config.js";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.js";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.js";
 import type {
@@ -784,7 +775,8 @@ export class InteractiveMode {
 	}
 
 	private async checkForPackageUpdates(): Promise<string[]> {
-		if (process.env.PI_OFFLINE) {
+		// SCRAMJET-DIVERGENCE: prefer SCRAMJET_OFFLINE, fall back to PI_OFFLINE.
+		if (process.env.SCRAMJET_OFFLINE || process.env.PI_OFFLINE) {
 			return [];
 		}
 
@@ -880,7 +872,8 @@ export class InteractiveMode {
 	}
 
 	private reportInstallTelemetry(version: string): void {
-		if (process.env.PI_OFFLINE) {
+		// SCRAMJET-DIVERGENCE: prefer SCRAMJET_OFFLINE, fall back to PI_OFFLINE.
+		if (process.env.SCRAMJET_OFFLINE || process.env.PI_OFFLINE) {
 			return;
 		}
 
@@ -5100,7 +5093,7 @@ export class InteractiveMode {
 			}
 
 			// Create the preview URL
-			const previewUrl = getShareViewerUrl(gistId);
+			const previewUrl = `https://gist.github.com/${gistId}`;
 			this.showStatus(`Share URL: ${previewUrl}\nGist: ${gistUrl}`);
 		} catch (error: unknown) {
 			if (!loader.signal.aborted) {
