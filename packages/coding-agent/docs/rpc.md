@@ -1342,7 +1342,7 @@ for event in read_events():
         delta = event.get("assistantMessageEvent", {})
         if delta.get("type") == "text_delta":
             print(delta["delta"], end="", flush=True)
-    
+
     if event.get("type") == "agent_end":
         print()
         break

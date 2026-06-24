@@ -37,7 +37,7 @@ import { CURSOR_MARKER, type Component, type Focusable } from "@leanandmean/tui"
 
 class MyInput implements Component, Focusable {
   focused: boolean = false;  // Set by TUI when focus changes
-  
+
   render(width: number): string[] {
     const marker = this.focused ? CURSOR_MARKER : "";
     // Emit marker right before the fake cursor
@@ -168,7 +168,7 @@ await ctx.ui.custom((_, __, ___, done) => {
 setActiveComponent(menu);  // Disposed
 
 // Correct - re-call to re-show
-const showMenu = () => ctx.ui.custom((_, __, ___, done) => 
+const showMenu = () => ctx.ui.custom((_, __, ___, done) =>
   new MenuComponent(done), { overlay: true });
 
 await showMenu();  // First show
@@ -318,7 +318,7 @@ class MySelector {
   private selected = 0;
   private cachedWidth?: number;
   private cachedLines?: string[];
-  
+
   public onSelect?: (item: string) => void;
   public onCancel?: () => void;
 
@@ -368,9 +368,9 @@ pi.registerCommand("pick", {
   handler: async (args, ctx) => {
     const items = ["Option A", "Option B", "Option C"];
     const selector = new MySelector(items);
-    
+
     let handle: { close: () => void; requestRender: () => void };
-    
+
     await new Promise<void>((resolve) => {
       selector.onSelect = (item) => {
         ctx.ui.notify(`Selected: ${item}`, "info");
@@ -397,7 +397,7 @@ Components accept theme objects for styling.
 renderResult(result, options, theme, context) {
   // Use theme.fg() for foreground colors
   return new Text(theme.fg("success", "Done!"), 0, 0);
-  
+
   // Use theme.bg() for background colors
   const styled = theme.bg("toolPendingBg", theme.fg("accent", "text"));
 }

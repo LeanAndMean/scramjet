@@ -291,7 +291,7 @@ session.subscribe((event) => {
         // Thinking output (if thinking enabled)
       }
       break;
-    
+
     // Tool execution
     case "tool_execution_start":
       console.log(`Tool: ${event.toolName}`);
@@ -302,7 +302,7 @@ session.subscribe((event) => {
     case "tool_execution_end":
       console.log(`Result: ${event.isError ? "error" : "success"}`);
       break;
-    
+
     // Message lifecycle
     case "message_start":
       // New message starting
@@ -310,7 +310,7 @@ session.subscribe((event) => {
     case "message_end":
       // Message complete
       break;
-    
+
     // Agent lifecycle
     case "agent_start":
       // Agent started processing prompt
@@ -318,7 +318,7 @@ session.subscribe((event) => {
     case "agent_end":
       // Agent finished (event.messages contains new messages)
       break;
-    
+
     // Turn lifecycle (one LLM response + tool calls)
     case "turn_start":
       break;
@@ -326,7 +326,7 @@ session.subscribe((event) => {
       // event.message: assistant response
       // event.toolResults: tool results from this turn
       break;
-    
+
     // Session events (queue, compaction, retry)
     case "queue_update":
       console.log(event.steering, event.followUp);
@@ -348,7 +348,7 @@ session.subscribe((event) => {
 const { session } = await createAgentSession({
   // Working directory for DefaultResourceLoader discovery
   cwd: process.cwd(), // default
-  
+
   // Global config directory
   agentDir: "~/.pi/agent", // default (expands ~)
 });
@@ -401,13 +401,13 @@ const { session } = await createAgentSession({
   model: opus,
   thinkingLevel: "medium", // off, minimal, low, medium, high, xhigh
   cacheRetention: "long", // none, short, long (default: long)
-  
+
   // Models for cycling (Ctrl+P in interactive mode)
   scopedModels: [
     { model: opus, thinkingLevel: "high" },
     { model: haiku, thinkingLevel: "off" },
   ],
-  
+
   authStorage,
   modelRegistry,
 });
@@ -885,10 +885,10 @@ const contextFiles = loader.getAgentsFiles().agentsFiles;
 interface CreateAgentSessionResult {
   // The session
   session: AgentSession;
-  
+
   // Extensions result (for runner setup)
   extensionsResult: LoadExtensionsResult;
-  
+
   // Warning if session model couldn't be restored
   modelFallbackMessage?: string;
 }

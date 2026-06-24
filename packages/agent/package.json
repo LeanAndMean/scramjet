@@ -5,6 +5,7 @@
 		"access": "public"
 	},
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
+	"license": "MIT",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

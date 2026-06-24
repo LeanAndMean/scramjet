@@ -5,13 +5,11 @@
 		"access": "public"
 	},
 	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"license": "MIT",
 	"type": "module",
 	"piConfig": {
 		"name": "scramjet",
 		"configDir": ".pi"
-	},
-	"bin": {
-		"pi": "dist/cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

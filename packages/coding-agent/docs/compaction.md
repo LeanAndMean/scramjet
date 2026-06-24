@@ -313,7 +313,7 @@ import { convertToLlm, serializeConversation } from "@leanandmean/coding-agent";
 
 pi.on("session_before_compact", async (event, ctx) => {
   const { preparation } = event;
-  
+
   // Convert AgentMessage[] to Message[], then serialize to text
   const conversationText = serializeConversation(
     convertToLlm(preparation.messagesToSummarize)
@@ -327,7 +327,7 @@ pi.on("session_before_compact", async (event, ctx) => {
 
   // Now send to your model for summarization
   const summary = await myModel.summarize(conversationText);
-  
+
   return {
     compaction: {
       summary,

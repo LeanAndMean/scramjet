@@ -5,6 +5,7 @@
 		"access": "public"
 	},
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
+	"license": "MIT",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -53,9 +54,6 @@
 			"types": "./dist/bedrock-provider.d.ts",
 			"import": "./dist/bedrock-provider.js"
 		}
-	},
-	"bin": {
-		"pi-ai": "./dist/cli.js"
 	},
 	"files": ["dist"],
 	"scripts": {

@@ -1530,7 +1530,7 @@ const all = pi.getAllTools();
 // [{
 //   name: "read",
 //   description: "Read file contents...",
-//   parameters: ..., 
+//   parameters: ...,
 //   sourceInfo: { path: "<builtin:read>", source: "builtin", scope: "temporary", origin: "top-level" }
 // }, ...]
 const names = all.map(t => t.name);
