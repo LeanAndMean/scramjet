@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@leanandmean/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 
 const COMPACT_THRESHOLD_TOKENS = 100_000;
 

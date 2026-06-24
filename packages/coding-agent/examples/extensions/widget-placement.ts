@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@leanandmean/pi-coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 
 export default function widgetPlacementExtension(pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {

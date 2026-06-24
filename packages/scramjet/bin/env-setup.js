@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+process.env.SCRAMJET_PACKAGE_NAME = pkg.name;
 process.env.SCRAMJET_VERSION = pkg.version;
 
 // Honor legacy PI_-prefixed env vars for users with existing shell profiles.

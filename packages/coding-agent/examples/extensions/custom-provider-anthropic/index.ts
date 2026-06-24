@@ -43,8 +43,8 @@ import {
 	type Tool,
 	type ToolCall,
 	type ToolResultMessage,
-} from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@leanandmean/pi-coding-agent";
+} from "@leanandmean/ai";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 
 // =============================================================================
 // OAuth Implementation (copied from packages/ai/src/utils/oauth/anthropic.ts)

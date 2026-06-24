@@ -417,7 +417,8 @@ interface PackageJson {
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
 
 const piConfigName: string | undefined = pkg.piConfig?.name;
-export const PACKAGE_NAME: string = pkg.name || "@leanandmean/coding-agent";
+// SCRAMJET-DIVERGENCE: Scramjet self-updates the product package, not this runtime package.
+export const PACKAGE_NAME: string = process.env.SCRAMJET_PACKAGE_NAME || pkg.name || "@leanandmean/coding-agent";
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
 export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";

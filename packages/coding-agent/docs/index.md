@@ -13,7 +13,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 Or alternatively with npm:
 
 ```bash
-npm install -g @leanandmean/pi-coding-agent
+npm install -g @leanandmean/coding-agent
 ```
 
 Then run it in a project directory:

@@ -129,9 +129,9 @@ pi [options] [@files...] [messages...]
 pi install <source> [-l]     # Install package, -l for project-local
 pi remove <source> [-l]      # Remove package
 pi uninstall <source> [-l]   # Alias for remove
-pi update [source|self|pi]   # Update pi and packages; skips pinned packages
+pi update [source|self]      # Update the CLI and packages; skips pinned packages
 pi update --extensions       # Update packages only
-pi update --self             # Update pi only
+pi update --self             # Update the CLI only
 pi update --extension <src>  # Update one package
 pi list                      # List installed packages
 pi config                    # Enable/disable package resources

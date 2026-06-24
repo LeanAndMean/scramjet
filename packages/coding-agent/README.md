@@ -5,7 +5,7 @@
 </p>
 <p align="center">
   <a href="https://discord.com/invite/3cU7Bz4UPx"><img alt="Discord" src="https://img.shields.io/badge/discord-community-5865F2?style=flat-square&logo=discord&logoColor=white" /></a>
-  <a href="https://www.npmjs.com/package/@leanandmean/pi-coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@leanandmean/pi-coding-agent?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/@leanandmean/coding-agent"><img alt="npm" src="https://img.shields.io/npm/v/@leanandmean/coding-agent?style=flat-square" /></a>
 </p>
 <p align="center">
   <a href="https://pi.dev">pi.dev</a> domain graciously donated by
@@ -74,7 +74,7 @@ curl -fsSL https://pi.dev/install.sh | sh
 Or with npm:
 
 ```bash
-npm install -g @leanandmean/pi-coding-agent
+npm install -g @leanandmean/coding-agent
 ```
 
 Authenticate with an API key:
@@ -398,10 +398,10 @@ pi install ssh://git@github.com/user/repo@v1    # tag or commit
 pi remove npm:@foo/pi-tools
 pi uninstall npm:@foo/pi-tools          # alias for remove
 pi list
-pi update                               # update pi and packages (skips pinned packages)
+pi update                               # update the CLI and packages (skips pinned packages)
 pi update --extensions                  # update packages only
-pi update --self                        # update pi only
-pi update --self --force                # reinstall pi even if current
+pi update --self                        # update the CLI only
+pi update --self --force                # reinstall the CLI even if current
 pi update npm:@foo/pi-tools             # update one package
 pi config                               # enable/disable extensions, skills, prompts, themes
 ```
@@ -434,7 +434,7 @@ See [docs/packages.md](docs/packages.md).
 ### SDK
 
 ```typescript
-import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@leanandmean/pi-coding-agent";
+import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@leanandmean/coding-agent";
 
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
@@ -497,10 +497,10 @@ pi [options] [@files...] [messages...]
 pi install <source> [-l]     # Install package, -l for project-local
 pi remove <source> [-l]      # Remove package
 pi uninstall <source> [-l]   # Alias for remove
-pi update [source|self|pi]   # Update pi and packages (skips pinned packages)
+pi update [source|self]      # Update the CLI and packages (skips pinned packages)
 pi update --extensions       # Update packages only
-pi update --self             # Update pi only
-pi update --self --force     # Reinstall pi even if current
+pi update --self             # Update the CLI only
+pi update --self --force     # Reinstall the CLI even if current
 pi update --extension <src>  # Update one package
 pi list                      # List installed packages
 pi config                    # Enable/disable package resources
@@ -648,6 +648,6 @@ MIT
 
 ## See Also
 
-- [@earendil-works/pi-ai](https://www.npmjs.com/package/@earendil-works/pi-ai): Core LLM toolkit
-- [@earendil-works/pi-agent-core](https://www.npmjs.com/package/@earendil-works/pi-agent-core): Agent framework
-- [@earendil-works/pi-tui](https://www.npmjs.com/package/@earendil-works/pi-tui): Terminal UI components
+- [@leanandmean/ai](https://www.npmjs.com/package/@leanandmean/ai): Core LLM toolkit
+- [@leanandmean/agent](https://www.npmjs.com/package/@leanandmean/agent): Agent framework
+- [@leanandmean/tui](https://www.npmjs.com/package/@leanandmean/tui): Terminal UI components

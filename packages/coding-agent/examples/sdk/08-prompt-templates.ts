@@ -11,7 +11,7 @@ import {
 	getAgentDir,
 	type PromptTemplate,
 	SessionManager,
-} from "@leanandmean/pi-coding-agent";
+} from "@leanandmean/coding-agent";
 
 // Define custom templates
 const deployTemplate: PromptTemplate = {

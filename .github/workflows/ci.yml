@@ -38,6 +38,14 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Published coding-agent docs import guard
+        run: |
+          set -euo pipefail
+          if grep -R -nE '@leanandmean/pi-|@earendil-works/pi-|@mariozechner/pi-' packages/coding-agent/README.md packages/coding-agent/docs packages/coding-agent/examples; then
+            echo "Found stale package imports in published coding-agent docs/examples." >&2
+            exit 1
+          fi
+
       - name: npm pack round-trip smoke
         # Pack every publishable package, verify Scramjet tarball contents,
         # install the local tarballs, and run the installed binary.
