@@ -25,10 +25,20 @@ Package names in `package.json` files were also renamed:
 | File | Change | Why |
 |------|--------|-----|
 | `packages/coding-agent/package.json` | Added `piConfig: { name: "scramjet", configDir: ".scramjet" }` | Rebrands TUI to "scramjet", sets config/agent dir names |
-| `packages/coding-agent/src/config.ts` | `VERSION` reads `SCRAMJET_VERSION` env var first | Product binary shows its own version, not runtime version |
-| `packages/coding-agent/src/main.ts` | Added `builtinInit` to `MainOptions` interface | Direct product wiring without extension directory discovery |
+| `packages/coding-agent/src/config.ts` | `VERSION` reads `SCRAMJET_VERSION` env var first; `getChangelogPath()` reads `SCRAMJET_CHANGELOG_PATH`; `getPackageDir()` reads `SCRAMJET_PACKAGE_DIR` with `PI_PACKAGE_DIR` fallback; removed `getShareViewerUrl()`/`DEFAULT_SHARE_VIEWER_URL`; download URL points to `LeanAndMean/scramjet` | Product displays its own changelog, env vars, and URLs |
+| `packages/coding-agent/src/main.ts` | Added `builtinInit` to `MainOptions` interface; `--offline` sets `SCRAMJET_OFFLINE`; offline check reads `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback | Direct product wiring + rebranded env vars |
 | `packages/coding-agent/src/core/resource-loader.ts` | `builtinInit` field + loading logic (unshift before disk extensions) | Loads Scramjet as builtin before user-installed extensions |
 | `packages/coding-agent/src/core/system-prompt.ts` | Product identity in `buildDefaultCorePrompt` template (6 refs: Pi → Scramjet) | Agent system prompt references the correct product name |
+| `packages/coding-agent/src/core/sdk.ts` | `SCRAMJET_CACHE_RETENTION` with `PI_CACHE_RETENTION` fallback; OpenRouter headers identify as `scramjet`; Cloudflare User-Agent `scramjet-coding-agent` | Rebranded API identity and env vars |
+| `packages/coding-agent/src/core/telemetry.ts` | `SCRAMJET_TELEMETRY` with `PI_TELEMETRY` fallback | Rebranded env var |
+| `packages/coding-agent/src/core/package-manager.ts` | `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback | Rebranded env var |
+| `packages/coding-agent/src/core/slash-commands.ts` | Removed `/share` command entry | No Scramjet share viewer exists |
+| `packages/coding-agent/src/utils/user-agent.ts` | Renamed from `pi-user-agent.ts`; `getUserAgent` returns `scramjet/${version}` | Product identity in HTTP User-Agent |
+| `packages/coding-agent/src/utils/version-check.ts` | Removed `LATEST_VERSION_URL` (pi.dev); gutted network functions to return `undefined`; renamed `LatestPiRelease` → `LatestRelease`; removed dead exports (`checkForNewVersion`, `getLatestVersion`, `comparePackageVersions`) | No pi.dev network calls; version check disabled via `PI_SKIP_VERSION_CHECK=1` in env-setup; only `getLatestRelease` and `isNewerPackageVersion` exported |
+| `packages/coding-agent/src/utils/tools-manager.ts` | `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback | Rebranded env var |
+| `packages/coding-agent/src/modes/interactive/interactive-mode.ts` | Removed `reportInstallTelemetry()`, `showNewVersionNotification()`, `handleShareCommand()`; rebrand "Pi" → `APP_NAME` in onboarding/tmux warning; `SCRAMJET_OFFLINE` with fallback | No pi.dev telemetry/version check; product branding |
+| `packages/coding-agent/src/migrations.ts` | `MIGRATION_GUIDE_URL` and `EXTENSIONS_DOC_URL` point to `LeanAndMean/scramjet` | Product URLs |
+| `packages/coding-agent/src/cli/args.ts` | Env var docs rebranded to `SCRAMJET_*` with `(PI_* also accepted)` notes; removed `PI_SHARE_VIEWER_URL`; `--offline` references `SCRAMJET_OFFLINE` | Help text reflects product env vars |
 
 ### Documentation rebrand
 

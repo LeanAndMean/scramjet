@@ -20,5 +20,8 @@ if (process.env.PI_CODING_AGENT_SESSION_DIR && !process.env.SCRAMJET_CODING_AGEN
 	process.env.SCRAMJET_CODING_AGENT_SESSION_DIR = process.env.PI_CODING_AGENT_SESSION_DIR;
 }
 
+// Point the changelog at Scramjet's own CHANGELOG.md.
+process.env.SCRAMJET_CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
+
 process.env.PI_SKIP_VERSION_CHECK = "1";
 process.title = "scramjet";

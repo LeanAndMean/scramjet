@@ -151,14 +151,15 @@ function resolveCacheRetention(option: CacheRetention | undefined): CacheRetenti
 	if (option) {
 		return option;
 	}
-	const env = process.env.PI_CACHE_RETENTION;
+	// SCRAMJET-DIVERGENCE: prefer SCRAMJET_CACHE_RETENTION, fall back to PI_CACHE_RETENTION.
+	const env = process.env.SCRAMJET_CACHE_RETENTION || process.env.PI_CACHE_RETENTION;
 	if (env) {
 		if (isCacheRetention(env)) {
 			return env;
 		}
 		if (!warnedInvalidCacheRetention) {
 			warnedInvalidCacheRetention = true;
-			console.warn(`Invalid PI_CACHE_RETENTION "${env}". Valid values: none, short, long. Using "long".`);
+			console.warn(`Invalid SCRAMJET_CACHE_RETENTION "${env}". Valid values: none, short, long. Using "long".`);
 		}
 	}
 	return "long";
@@ -173,9 +174,10 @@ function getAttributionHeaders(
 	}
 
 	if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) {
+		// SCRAMJET-DIVERGENCE: Identify as Scramjet to OpenRouter
 		return {
-			"HTTP-Referer": "https://pi.dev",
-			"X-OpenRouter-Title": "pi",
+			"HTTP-Referer": "https://github.com/LeanAndMean/scramjet",
+			"X-OpenRouter-Title": "scramjet",
 			"X-OpenRouter-Categories": "cli-agent",
 		};
 	}
@@ -186,8 +188,9 @@ function getAttributionHeaders(
 		model.baseUrl.includes("api.cloudflare.com") ||
 		model.baseUrl.includes("gateway.ai.cloudflare.com")
 	) {
+		// SCRAMJET-DIVERGENCE: Identify as Scramjet to Cloudflare
 		return {
-			"User-Agent": "pi-coding-agent",
+			"User-Agent": "scramjet-coding-agent",
 		};
 	}
 
