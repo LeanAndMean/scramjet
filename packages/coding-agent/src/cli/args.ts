@@ -267,7 +267,7 @@ ${chalk.bold("Options:")}
   --export <file>                Export session file to HTML and exit
   --list-models [search]         List available models (with optional fuzzy search)
   --verbose                      Force verbose startup (overrides quietStartup setting)
-  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
+  --offline                      Disable startup network operations (same as SCRAMJET_OFFLINE=1)
   --help, -h                     Show this help
   --version, -v                  Show version number
 
@@ -358,11 +358,10 @@ ${chalk.bold("Environment Variables:")}
   AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
-  PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
-  PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  PI_CACHE_RETENTION               - Default prompt cache retention (none/short/long) when --cache-retention is not set
-  PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
-  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
+  SCRAMJET_PACKAGE_DIR             - Override package directory (PI_PACKAGE_DIR also accepted)
+  SCRAMJET_OFFLINE                 - Disable startup network operations when set to 1/true/yes (PI_OFFLINE also accepted)
+  SCRAMJET_CACHE_RETENTION         - Default prompt cache retention (none/short/long) (PI_CACHE_RETENTION also accepted)
+  SCRAMJET_TELEMETRY               - Override install telemetry when set to 1/true/yes or 0/false/no (PI_TELEMETRY also accepted)
 
 ${chalk.bold("Built-in Tool Names:")}
   read   - Read file contents

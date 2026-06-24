@@ -303,7 +303,8 @@ export function getUpdateInstruction(packageName: string): string {
  */
 export function getPackageDir(): string {
 	// Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
-	const envDir = process.env.PI_PACKAGE_DIR;
+	// SCRAMJET-DIVERGENCE: Prefer SCRAMJET_PACKAGE_DIR, fall back to PI_PACKAGE_DIR
+	const envDir = process.env.SCRAMJET_PACKAGE_DIR || process.env.PI_PACKAGE_DIR;
 	if (envDir) {
 		if (envDir === "~") return homedir();
 		if (envDir.startsWith("~/")) return homedir() + envDir.slice(1);

@@ -174,9 +174,10 @@ function getAttributionHeaders(
 	}
 
 	if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) {
+		// SCRAMJET-DIVERGENCE: Identify as Scramjet to OpenRouter
 		return {
-			"HTTP-Referer": "https://pi.dev",
-			"X-OpenRouter-Title": "pi",
+			"HTTP-Referer": "https://github.com/LeanAndMean/scramjet",
+			"X-OpenRouter-Title": "scramjet",
 			"X-OpenRouter-Categories": "cli-agent",
 		};
 	}
@@ -187,8 +188,9 @@ function getAttributionHeaders(
 		model.baseUrl.includes("api.cloudflare.com") ||
 		model.baseUrl.includes("gateway.ai.cloudflare.com")
 	) {
+		// SCRAMJET-DIVERGENCE: Identify as Scramjet to Cloudflare
 		return {
-			"User-Agent": "pi-coding-agent",
+			"User-Agent": "scramjet-coding-agent",
 		};
 	}
 
