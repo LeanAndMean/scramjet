@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 
 export default function (pi: ExtensionAPI) {
-	const logFile = join(process.cwd(), ".pi", "provider-payload.log");
+	const logFile = join(process.cwd(), ".scramjet", "provider-payload.log");
 
 	pi.on("before_provider_request", (event) => {
 		appendFileSync(logFile, `${JSON.stringify(event.payload, null, 2)}\n\n`, "utf8");

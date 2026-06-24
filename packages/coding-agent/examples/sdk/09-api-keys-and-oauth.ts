@@ -6,8 +6,8 @@
 
 import { AuthStorage, createAgentSession, ModelRegistry, SessionManager } from "@leanandmean/coding-agent";
 
-// Default: AuthStorage uses ~/.pi/agent/auth.json
-// ModelRegistry loads built-in + custom models from ~/.pi/agent/models.json
+// Default: AuthStorage uses ~/.scramjet/agent/auth.json
+// ModelRegistry loads built-in + custom models from ~/.scramjet/agent/models.json
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
 

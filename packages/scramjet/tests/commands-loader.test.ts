@@ -229,7 +229,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		originalCache = process.env.SCRAMJET_CACHE;
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 		// Isolate the agent bridge's symlink writes into a per-test tmp dir so
-		// fixture-backed runs never touch the user's real ~/.pi/agent/agents/.
+		// fixture-backed runs never touch the user's real ~/.scramjet/agent/agents/.
 		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-loader-agentdir-"));
 		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
 		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);

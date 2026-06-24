@@ -5,7 +5,7 @@
  * change agent behavior based on extension state.
  *
  * Usage:
- * 1. Copy this file to ~/.pi/agent/extensions/ or your project's .pi/extensions/
+ * 1. Copy this file to ~/.scramjet/agent/extensions/ or your project's .scramjet/extensions/
  * 2. Use /pirate to toggle pirate mode
  * 3. When enabled, the agent will respond like a pirate
  */

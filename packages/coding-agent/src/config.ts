@@ -421,7 +421,7 @@ const piConfigName: string | undefined = pkg.piConfig?.name;
 export const PACKAGE_NAME: string = process.env.SCRAMJET_PACKAGE_NAME || pkg.name || "@leanandmean/coding-agent";
 export const APP_NAME: string = piConfigName || "pi";
 export const APP_TITLE: string = piConfigName ? APP_NAME : "π";
-export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".pi";
+export const CONFIG_DIR_NAME: string = pkg.piConfig?.configDir || ".scramjet";
 // SCRAMJET-DIVERGENCE: prefer SCRAMJET_VERSION env var so the product binary
 // displays its own version rather than this runtime package's version.
 export const VERSION: string = process.env.SCRAMJET_VERSION || pkg.version || "0.0.0";
@@ -445,10 +445,10 @@ export function getShareViewerUrl(gistId: string): string {
 }
 
 // =============================================================================
-// User Config Paths (~/.pi/agent/*)
+// User Config Paths (~/.scramjet/agent/*)
 // =============================================================================
 
-/** Get the agent config directory (e.g., ~/.pi/agent/) */
+/** Get the agent config directory (e.g., ~/.scramjet/agent/) */
 export function getAgentDir(): string {
 	const envDir = process.env[ENV_AGENT_DIR];
 	if (envDir) {

@@ -2204,7 +2204,7 @@ export class DefaultPackageManager implements PackageManager {
 			}
 		};
 
-		// Project extensions from .pi/
+		// Project extensions from .scramjet/
 		addResources(
 			"extensions",
 			collectAutoExtensionEntries(projectDirs.extensions),
@@ -2213,7 +2213,7 @@ export class DefaultPackageManager implements PackageManager {
 			projectBaseDir,
 		);
 
-		// Project skills from .pi/
+		// Project skills from .scramjet/
 		addResources(
 			"skills",
 			collectAutoSkillEntries(projectDirs.skills, "pi"),
@@ -2253,7 +2253,7 @@ export class DefaultPackageManager implements PackageManager {
 			projectBaseDir,
 		);
 
-		// User extensions from ~/.pi/agent/
+		// User extensions from ~/.scramjet/agent/
 		addResources(
 			"extensions",
 			collectAutoExtensionEntries(userDirs.extensions),
@@ -2262,7 +2262,7 @@ export class DefaultPackageManager implements PackageManager {
 			globalBaseDir,
 		);
 
-		// User skills from ~/.pi/agent/
+		// User skills from ~/.scramjet/agent/
 		addResources(
 			"skills",
 			collectAutoSkillEntries(userDirs.skills, "pi"),
