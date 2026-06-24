@@ -17,7 +17,7 @@
  * is used automatically (syntax highlighting, line numbers, truncation warnings).
  *
  * Usage:
- *   pi -e ./tool-override.ts
+ *   scramjet -e ./tool-override.ts
  */
 
 import type { TextContent } from "@leanandmean/ai";
