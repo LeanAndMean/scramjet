@@ -1,9 +1,7 @@
-import { getPiUserAgent } from "./pi-user-agent.js";
+// SCRAMJET-DIVERGENCE: Removed pi.dev network code (LATEST_VERSION_URL, fetch calls);
+// renamed Pi-prefixed identifiers; network functions gutted to return undefined.
 
-const LATEST_VERSION_URL = "https://pi.dev/api/latest-version";
-const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 10000;
-
-export interface LatestPiRelease {
+export interface LatestRelease {
 	version: string;
 	packageName?: string;
 }
@@ -52,45 +50,20 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	return candidateVersion.trim() !== currentVersion.trim();
 }
 
-export async function getLatestPiRelease(
-	currentVersion: string,
-	options: { timeoutMs?: number } = {},
-): Promise<LatestPiRelease | undefined> {
-	if (process.env.PI_SKIP_VERSION_CHECK || process.env.PI_OFFLINE) return undefined;
-
-	const response = await fetch(LATEST_VERSION_URL, {
-		headers: {
-			"User-Agent": getPiUserAgent(currentVersion),
-			accept: "application/json",
-		},
-		signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS),
-	});
-	if (!response.ok) return undefined;
-
-	const data = (await response.json()) as { packageName?: unknown; version?: unknown };
-	if (typeof data.version !== "string" || !data.version.trim()) {
-		return undefined;
-	}
-	const packageName =
-		typeof data.packageName === "string" && data.packageName.trim() ? data.packageName.trim() : undefined;
-	return { version: data.version.trim(), packageName };
+export async function getLatestRelease(
+	_currentVersion: string,
+	_options: { timeoutMs?: number } = {},
+): Promise<LatestRelease | undefined> {
+	return undefined;
 }
 
-export async function getLatestPiVersion(
-	currentVersion: string,
-	options: { timeoutMs?: number } = {},
+export async function getLatestVersion(
+	_currentVersion: string,
+	_options: { timeoutMs?: number } = {},
 ): Promise<string | undefined> {
-	return (await getLatestPiRelease(currentVersion, options))?.version;
+	return undefined;
 }
 
-export async function checkForNewPiVersion(currentVersion: string): Promise<string | undefined> {
-	try {
-		const latestVersion = await getLatestPiVersion(currentVersion);
-		if (latestVersion && isNewerPackageVersion(latestVersion, currentVersion)) {
-			return latestVersion;
-		}
-		return undefined;
-	} catch {
-		return undefined;
-	}
+export async function checkForNewVersion(_currentVersion: string): Promise<string | undefined> {
+	return undefined;
 }
