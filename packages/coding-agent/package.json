@@ -19,10 +19,6 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
-		},
-		"./hooks": {
-			"types": "./dist/core/hooks/index.d.ts",
-			"import": "./dist/core/hooks/index.js"
 		}
 	},
 	"files": ["dist", "docs", "examples", "CHANGELOG.md"],
@@ -31,12 +27,12 @@
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
 		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js && npm run copy-assets",
 		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
-		"test": "vitest --run"
+		"test": "vitest --run --passWithNoTests"
 	},
 	"dependencies": {
-		"@leanandmean/agent": "*",
-		"@leanandmean/ai": "*",
-		"@leanandmean/tui": "*",
+		"@leanandmean/agent": "0.74.1-scramjet.4",
+		"@leanandmean/ai": "0.74.1-scramjet.4",
+		"@leanandmean/tui": "0.74.1-scramjet.4",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"chalk": "^5.5.0",
 		"diff": "^8.0.2",

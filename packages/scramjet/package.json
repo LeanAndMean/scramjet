@@ -39,10 +39,10 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@leanandmean/agent": "*",
-		"@leanandmean/ai": "*",
-		"@leanandmean/coding-agent": "*",
-		"@leanandmean/tui": "*",
+		"@leanandmean/agent": "0.74.1-scramjet.4",
+		"@leanandmean/ai": "0.74.1-scramjet.4",
+		"@leanandmean/coding-agent": "0.74.1-scramjet.4",
+		"@leanandmean/tui": "0.74.1-scramjet.4",
 		"typebox": "^1.1.24",
 		"yaml": "^2.9.0"
 	}

@@ -12,7 +12,6 @@
 			"@leanandmean/agent": ["./packages/agent/src/index.ts"],
 			"@leanandmean/agent/*": ["./packages/agent/src/*"],
 			"@leanandmean/coding-agent": ["./packages/coding-agent/src/index.ts"],
-			"@leanandmean/coding-agent/hooks": ["./packages/coding-agent/src/core/hooks/index.ts"],
 			"@leanandmean/coding-agent/*": ["./packages/coding-agent/src/*"],
 			"typebox": ["./node_modules/typebox"]
 		}
