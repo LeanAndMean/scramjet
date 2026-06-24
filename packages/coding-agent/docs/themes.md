@@ -19,8 +19,8 @@ Themes are JSON files that define colors for the TUI.
 Scramjet loads themes from:
 
 - Built-in: `dark`, `light`
-- Global: `~/.pi/agent/themes/*.json`
-- Project: `.pi/themes/*.json`
+- Global: `~/.scramjet/agent/themes/*.json`
+- Project: `.scramjet/themes/*.json`
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
 - Settings: `themes` array with files or directories
 - CLI: `--theme <path>` (repeatable)
@@ -44,8 +44,8 @@ On first run, scramjet detects your terminal background and defaults to `dark` o
 1. Create a theme file:
 
 ```bash
-mkdir -p ~/.pi/agent/themes
-vim ~/.pi/agent/themes/my-theme.json
+mkdir -p ~/.scramjet/agent/themes
+vim ~/.scramjet/agent/themes/my-theme.json
 ```
 
 2. Define the theme with all required colors (see [Color Tokens](#color-tokens)):

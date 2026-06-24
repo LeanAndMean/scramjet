@@ -40,7 +40,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 scramjet
 ```
 
-You can also run `/login` and select an API-key provider to store the key in `~/.pi/agent/auth.json`.
+You can also run `/login` and select an API-key provider to store the key in `~/.scramjet/agent/auth.json`.
 
 See [Providers](providers.md) for all supported providers, environment variables, and cloud-provider setup.
 
@@ -75,7 +75,7 @@ Scramjet loads context files at startup. Add an `AGENTS.md` file to tell it how 
 
 Scramjet loads:
 
-- `~/.pi/agent/AGENTS.md` for global instructions
+- `~/.scramjet/agent/AGENTS.md` for global instructions
 - `AGENTS.md` or `CLAUDE.md` from parent directories and the current directory
 
 Restart scramjet, or run `/reload`, after changing context files.

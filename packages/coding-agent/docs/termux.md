@@ -20,7 +20,7 @@ pkg install nodejs termux-api git
 npm install -g @leanandmean/scramjet
 
 # Create config directory
-mkdir -p ~/.pi/agent
+mkdir -p ~/.scramjet/agent
 
 # Run scramjet
 scramjet
@@ -34,7 +34,7 @@ Image clipboard is not supported on Termux (the `ctrl+v` image paste feature wil
 
 ## Example AGENTS.md for Termux
 
-Create `~/.pi/agent/AGENTS.md` to help the agent understand the Termux environment:
+Create `~/.scramjet/agent/AGENTS.md` to help the agent understand the Termux environment:
 
 ````markdown
 # Agent Environment: Termux on Android

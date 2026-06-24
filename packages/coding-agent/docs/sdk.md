@@ -350,23 +350,23 @@ const { session } = await createAgentSession({
   cwd: process.cwd(), // default
 
   // Global config directory
-  agentDir: "~/.pi/agent", // default (expands ~)
+  agentDir: "~/.scramjet/agent", // default (expands ~)
 });
 ```
 
 `cwd` is used by `DefaultResourceLoader` for:
-- Project extensions (`.pi/extensions/`)
+- Project extensions (`.scramjet/extensions/`)
 - Project skills:
-  - `.pi/skills/`
+  - `.scramjet/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
-- Project prompts (`.pi/prompts/`)
+- Project prompts (`.scramjet/prompts/`)
 - Context files (`AGENTS.md` walking up from cwd)
 - Session directory naming
 
 `agentDir` is used by `DefaultResourceLoader` for:
 - Global extensions (`extensions/`)
 - Global skills:
-  - `skills/` under `agentDir` (for example `~/.pi/agent/skills/`)
+  - `skills/` under `agentDir` (for example `~/.scramjet/agent/skills/`)
   - `~/.agents/skills/`
 - Global prompts (`prompts/`)
 - Global context file (`AGENTS.md`)
@@ -437,7 +437,7 @@ API key resolution priority (handled by AuthStorage):
 ```typescript
 import { AuthStorage, ModelRegistry } from "@leanandmean/coding-agent";
 
-// Default: uses ~/.pi/agent/auth.json and ~/.pi/agent/models.json
+// Default: uses ~/.scramjet/agent/auth.json and ~/.scramjet/agent/models.json
 const authStorage = AuthStorage.create();
 const modelRegistry = ModelRegistry.create(authStorage);
 
@@ -582,7 +582,7 @@ If you pass `tools`, include each custom or extension tool name you want enabled
 
 ### Extensions
 
-Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.pi/agent/extensions/`, `.pi/extensions/`, and settings.json extension sources.
+Extensions are loaded by the `ResourceLoader`. `DefaultResourceLoader` discovers extensions from `~/.scramjet/agent/extensions/`, `.scramjet/extensions/`, and settings.json extension sources.
 
 ```typescript
 import { createAgentSession, DefaultResourceLoader } from "@leanandmean/coding-agent";
@@ -840,8 +840,8 @@ const { session } = await createAgentSession({
 **Project-specific settings:**
 
 Settings load from two locations and merge:
-1. Global: `~/.pi/agent/settings.json`
-2. Project: `<cwd>/.pi/settings.json`
+1. Global: `~/.scramjet/agent/settings.json`
+2. Project: `<cwd>/.scramjet/settings.json`
 
 Project overrides global. Nested objects merge keys. Setters modify global settings by default.
 

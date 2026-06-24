@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.29.0 — Rename .pi/ config directory to .scramjet/
+
+Complete the product identity rebrand by renaming the user-facing config directory from `.pi/` to `.scramjet/` ([#201](https://github.com/LeanAndMean/scramjet/issues/201)).
+
+### Changed
+
+- `packages/coding-agent/package.json`: `configDir: ".pi"` → `".scramjet"`
+- `packages/tui/src/tui.ts`: 2 hardcoded debug/crash log paths updated
+- All source comments and display strings (~28 files)
+- All documentation references (~20 doc files, READMEs, examples)
+- `UPSTREAM_DIVERGENCE.md`: divergence table and rebrand section updated
+
+### Migration
+
+Existing installations must move their config directory manually:
+
+```bash
+mv ~/.pi ~/.scramjet
+```
+
+No automated migration — the directory is moved once and Scramjet resolves to the new path immediately.
+
 ## 0.28.0 — Documentation rebrand
 
 Rebrand all shipped `@leanandmean/coding-agent` documentation, examples, and system prompt from Pi identity to Scramjet identity ([#199](https://github.com/LeanAndMean/scramjet/issues/199)).
@@ -14,7 +36,7 @@ Rebrand all shipped `@leanandmean/coding-agent` documentation, examples, and sys
 
 ### Preserved
 
-- `pi.` API calls, `pi` parameter names, `.pi/` config directory paths
+- `pi.` API calls, `pi` parameter names, `.pi/` config directory paths (config dir later renamed in 0.29.0)
 - `pi-package` npm keyword convention
 - Functional code strings (temp dir prefixes, commit message prefixes, binary spawn commands)
 

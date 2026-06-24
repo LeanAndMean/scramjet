@@ -4,8 +4,8 @@ Scramjet uses JSON settings files with project settings overriding global settin
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/settings.json` | Global (all projects) |
-| `.pi/settings.json` | Project (current directory) |
+| `~/.scramjet/agent/settings.json` | Global (all projects) |
+| `.scramjet/settings.json` | Project (current directory) |
 
 Edit directly or use `/settings` for common options.
 
@@ -164,7 +164,7 @@ Normally the package manager's global modules location is queried using `root -g
 | `sessionDir` | string | - | Directory where session files are stored. Accepts absolute or relative paths, plus `~`. |
 
 ```json
-{ "sessionDir": ".pi/sessions" }
+{ "sessionDir": ".scramjet/sessions" }
 ```
 
 When multiple sources specify a session directory, precedence is `--session-dir`, `SCRAMJET_CODING_AGENT_SESSION_DIR`, then `sessionDir` in settings.json.
@@ -191,7 +191,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 These settings define where to load extensions, skills, prompts, and themes from.
 
-Paths in `~/.pi/agent/settings.json` resolve relative to `~/.pi/agent`. Paths in `.pi/settings.json` resolve relative to `.pi`. Absolute paths and `~` are supported.
+Paths in `~/.scramjet/agent/settings.json` resolve relative to `~/.scramjet/agent`. Paths in `.scramjet/settings.json` resolve relative to `.scramjet`. Absolute paths and `~` are supported.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -257,16 +257,16 @@ See [packages.md](packages.md) for package management details.
 
 ## Project Overrides
 
-Project settings (`.pi/settings.json`) override global settings. Nested objects are merged:
+Project settings (`.scramjet/settings.json`) override global settings. Nested objects are merged:
 
 ```json
-// ~/.pi/agent/settings.json (global)
+// ~/.scramjet/agent/settings.json (global)
 {
   "theme": "dark",
   "compaction": { "enabled": true, "reserveTokens": 16384 }
 }
 
-// .pi/settings.json (project)
+// .scramjet/settings.json (project)
 {
   "compaction": { "reserveTokens": 8192 }
 }
