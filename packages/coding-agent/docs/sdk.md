@@ -1,8 +1,8 @@
-> pi can help you use the SDK. Ask it to build an integration for your use case.
+> Scramjet can help you use the SDK. Ask it to build an integration for your use case.
 
 # SDK
 
-The SDK provides programmatic access to pi's agent capabilities. Use it to embed pi in other applications, build custom interfaces, or integrate with automated workflows.
+The SDK provides programmatic access to Scramjet's agent capabilities. Use it to embed Scramjet in other applications, build custom interfaces, or integrate with automated workflows.
 
 **Example use cases:**
 - Build a custom UI (web, desktop, mobile)
@@ -260,7 +260,7 @@ const state = session.agent.state;
 // state.model: Model - current model
 // state.thinkingLevel: ThinkingLevel - current thinking level
 // state.systemPrompt: string | SystemPromptSection[] - system prompt
-//   (pi builds ordered sections; session.systemPrompt flattens to a string)
+//   (scramjet builds ordered sections; session.systemPrompt flattens to a string)
 // state.tools: AgentTool[] - available tools
 // state.streamingMessage?: AgentMessage - current partial assistant message
 // state.errorMessage?: string - latest assistant error
@@ -420,7 +420,7 @@ If no model is provided:
 
 `cacheRetention` controls prompt-cache retention on providers that support it (Anthropic: `long` -> 1h cache TTL where the model supports it, `short` -> the default 5m TTL, `none` -> no caching). Precedence: the `cacheRetention` option (or the `--cache-retention` CLI flag), then the `PI_CACHE_RETENTION` environment variable, then the built-in default `long`. Short-lived sessions such as subagents should pass `short` since a 1h cache write costs more than a 5m one and rarely pays off for a single run.
 
-Pi builds the system prompt as ordered sections and isolates the volatile environment tail (current date, working directory) into a final uncached section. On Anthropic, the stable sections are folded into a single system block carrying the cache breakpoint, so the cached prefix survives across turns even though the tail varies between sessions. Extensions can contribute stable sections via `before_agent_start` — see [extensions.md](extensions.md#system-prompt-sections).
+Scramjet builds the system prompt as ordered sections and isolates the volatile environment tail (current date, working directory) into a final uncached section. On Anthropic, the stable sections are folded into a single system block carrying the cache breakpoint, so the cached prefix survives across turns even though the tail varies between sessions. Extensions can contribute stable sections via `before_agent_start` — see [extensions.md](extensions.md#system-prompt-sections).
 
 > Before sectioned system prompts landed, the effective default was `short` (the env var could only upgrade it to `long`). Sessions created through the SDK or CLI now default to `long`; set `PI_CACHE_RETENTION=short` or pass `cacheRetention: "short"` to restore the old behavior.
 
@@ -1101,7 +1101,7 @@ See [RPC documentation](rpc.md) for the JSON protocol.
 For subprocess-based integration without building with the SDK, use the CLI directly:
 
 ```bash
-pi --mode rpc --no-session
+scramjet --mode rpc --no-session
 ```
 
 See [RPC documentation](rpc.md) for the JSON protocol.

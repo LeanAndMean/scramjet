@@ -7,7 +7,7 @@ RPC mode enables headless operation of the coding agent via a JSON protocol over
 ## Starting RPC Mode
 
 ```bash
-pi --mode rpc [options]
+scramjet --mode rpc [options]
 ```
 
 Common options:
@@ -1132,7 +1132,7 @@ Set the terminal window/tab title. Fire-and-forget.
   "type": "extension_ui_request",
   "id": "uuid-8",
   "method": "setTitle",
-  "title": "pi - my project"
+  "title": "scramjet - my project"
 }
 ```
 
@@ -1319,7 +1319,7 @@ import subprocess
 import json
 
 proc = subprocess.Popen(
-    ["pi", "--mode", "rpc", "--no-session"],
+    ["scramjet", "--mode", "rpc", "--no-session"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     text=True
@@ -1358,7 +1358,7 @@ For a complete example of handling the extension UI protocol, see [`examples/rpc
 const { spawn } = require("child_process");
 const { StringDecoder } = require("string_decoder");
 
-const agent = spawn("pi", ["--mode", "rpc", "--no-session"]);
+const agent = spawn("scramjet", ["--mode", "rpc", "--no-session"]);
 
 function attachJsonlReader(stream, onLine) {
     const decoder = new StringDecoder("utf8");
