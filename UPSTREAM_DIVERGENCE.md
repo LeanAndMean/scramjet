@@ -28,6 +28,23 @@ Package names in `package.json` files were also renamed:
 | `packages/coding-agent/src/config.ts` | `VERSION` reads `SCRAMJET_VERSION` env var first | Product binary shows its own version, not runtime version |
 | `packages/coding-agent/src/main.ts` | Added `builtinInit` to `MainOptions` interface | Direct product wiring without extension directory discovery |
 | `packages/coding-agent/src/core/resource-loader.ts` | `builtinInit` field + loading logic (unshift before disk extensions) | Loads Scramjet as builtin before user-installed extensions |
+| `packages/coding-agent/src/core/system-prompt.ts` | Product identity in `buildDefaultCorePrompt` template (6 refs: Pi → Scramjet) | Agent system prompt references the correct product name |
+
+### Documentation rebrand
+
+All shipped documentation (`README.md`, `docs/*.md`, `examples/`) is being rebranded from Pi identity to Scramjet identity (issue #199). This is a prose-only change — no code behavior is modified. The rebrand covers:
+
+- Product name: "Pi" → "Scramjet"
+- Binary name: `pi` → `scramjet`
+- Environment variables: `PI_CODING_AGENT_DIR` → `SCRAMJET_CODING_AGENT_DIR` (in documentation; runtime derivation is via `piConfig.name`)
+- Install instructions: `curl pi.dev/install.sh` → `npm install -g @leanandmean/scramjet`
+- Removed pi.dev URLs (domain, logo, session sharing, Discord badge)
+
+Preserved:
+- `pi.` API variable names (`pi.on()`, `pi.registerTool()`, etc.)
+- `.pi` config directory path (`~/.pi/agent/`)
+- `pi-package` npm keyword
+- `pi` key in package.json manifests
 
 ### Unmodified packages
 
