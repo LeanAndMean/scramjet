@@ -30,7 +30,11 @@ function safeReaddir(dir: string, warnings: string[]): { name: string; isDirecto
 				isDirectory = statSync(join(dir, name)).isDirectory();
 			} catch (err) {
 				const code = (err as NodeJS.ErrnoException).code;
-				if (code !== "ENOENT") {
+				if (code === "ENOENT") {
+					warnings.push(
+						`[scramjet/discovery] symlink ${join(dir, name)} has a missing target; if you migrated from the single-repo layout, remove the old symlink and re-run: ln -sfn "$(pwd)/packages/scramjet/mach12" "${join(dir, name)}"`,
+					);
+				} else {
 					warnings.push(
 						`[scramjet/discovery] could not stat symlink ${join(dir, name)} (${code ?? "unknown"}: ${(err as Error).message}); treating as non-directory`,
 					);

@@ -5,7 +5,7 @@
 // and renames into place, so a partial copy can never poison the next run.
 // Never blocks `npm install` — any failure prints a warning and exits 0.
 
-import { cpSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,18 +24,28 @@ if (!existsSync(src)) {
 	process.exit(0);
 }
 
-const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
-if (!isAbsolute(dataHome)) {
-	// XDG spec requires absolute paths; a relative value would silently write
-	// mach12 next to whatever cwd npm install was invoked from.
-	console.warn(`[scramjet] XDG_DATA_HOME (${dataHome}) is not absolute; skipping Mach 12 seed.`);
+const destParent =
+	process.env.SCRAMJET_CACHE ??
+	join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "scramjet");
+if (!isAbsolute(destParent)) {
+	console.warn(`[scramjet] Computed data dir (${destParent}) is not absolute; skipping Mach 12 seed.`);
 	process.exit(0);
 }
-const destParent = join(dataHome, "scramjet");
 const dest = join(destParent, "mach12");
 
-if (existsSync(dest)) {
-	process.exit(0);
+// Detect dangling symlinks left over from the pre-monorepo layout where
+// mach12/ lived at repo root. existsSync follows symlinks and returns false
+// for a dangling one, so we use lstatSync which checks the link itself.
+try {
+	lstatSync(dest);
+	if (existsSync(dest)) {
+		process.exit(0);
+	}
+	// lstat succeeded (link exists) but existsSync failed (target missing) — dangling symlink.
+	console.warn(`[scramjet] Removing dangling symlink at ${dest}`);
+	unlinkSync(dest);
+} catch {
+	// lstat threw — dest doesn't exist at all, which is the normal first-install path.
 }
 
 const tmp = `${dest}.tmp-${process.pid}`;

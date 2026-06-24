@@ -30,7 +30,7 @@
 			"packages/coding-agent/examples/**/*.ts",
 			"!**/node_modules/**/*",
 			"!**/dist/**/*",
-			"!**/models.generated.ts"
+			"!**/*.generated.ts"
 		]
 	}
 }

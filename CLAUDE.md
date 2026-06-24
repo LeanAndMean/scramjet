@@ -42,6 +42,8 @@ Scramjet ships as the npm package `@leanandmean/scramjet`. The `scramjet` bin on
 
 **One-time dev setup (after `npm install`):**
 
+> **Migrating from the single-repo layout?** If you previously symlinked `mach12/` from the repo root (before the monorepo migration), remove the stale symlink first: `rm "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"`
+
 ```sh
 npm run build          # produce dist/ for all packages
 npm link -w packages/scramjet   # install `scramjet` globally as a symlink
