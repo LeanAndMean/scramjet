@@ -17,7 +17,7 @@ Run from source:
 /path/to/pi-mono/pi-test.sh
 ```
 
-The script can be run from any directory. Pi keeps the caller's current working directory.
+The script can be run from any directory. Scramjet keeps the caller's current working directory.
 
 ## Forking / Rebranding
 

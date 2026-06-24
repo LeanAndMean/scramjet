@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.28.0 — Documentation rebrand
+
+Rebrand all shipped `@leanandmean/coding-agent` documentation, examples, and system prompt from Pi identity to Scramjet identity ([#199](https://github.com/LeanAndMean/scramjet/issues/199)).
+
+### Changed
+
+- README, getting-started docs, extensions.md, customization docs, reference docs: product name, binary, env vars, install instructions rebranded
+- System prompt template: "Pi documentation" → "Scramjet documentation"
+- Example extension comments/descriptions: `pi --extension` / `pi -e` → `scramjet --extension` / `scramjet -e`
+- Example READMEs: usage instructions rebranded
+- `UPSTREAM_DIVERGENCE.md`: documentation rebrand category added
+
+### Preserved
+
+- `pi.` API calls, `pi` parameter names, `.pi/` config directory paths
+- `pi-package` npm keyword convention
+- Functional code strings (temp dir prefixes, commit message prefixes, binary spawn commands)
+
 ## 0.27.0 — Monorepo migration
 
 Merge the Pi fork and Scramjet into a single product monorepo (issue #197). Scramjet is the product; Pi packages are vendored runtime dependencies modified directly where appropriate. The extension boundary is removed — Scramjet uses `builtinInit` instead of `extensionFactories`.

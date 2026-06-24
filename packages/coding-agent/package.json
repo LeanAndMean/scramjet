@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/coding-agent",
-	"version": "0.74.1-scramjet.4",
+	"version": "0.74.1-scramjet.5",
 	"publishConfig": {
 		"access": "public"
 	},

@@ -1,10 +1,10 @@
 # JSON Event Stream Mode
 
 ```bash
-pi --mode json "Your prompt"
+scramjet --mode json "Your prompt"
 ```
 
-Outputs all session events as JSON lines to stdout. Useful for integrating pi into other tools or custom UIs.
+Outputs all session events as JSON lines to stdout. Useful for integrating Scramjet into other tools or custom UIs.
 
 ## Event Types
 
@@ -78,5 +78,5 @@ Followed by events as they occur:
 ## Example
 
 ```bash
-pi --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
+scramjet --mode json "List files" 2>/dev/null | jq -c 'select(.type == "message_end")'
 ```

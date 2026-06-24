@@ -4,6 +4,8 @@
 
 ### Changed
 
+- **Documentation rebrand**: Rebranded all shipped documentation, examples, and system prompt from Pi identity to Scramjet identity. Product name references, binary name (`pi` → `scramjet`), env var names (`PI_*` → `SCRAMJET_*`), and install instructions updated throughout. API variable names (`pi.on()`, `pi.registerTool()`) and `.pi/` config directory paths are preserved. ([#199](https://github.com/LeanAndMean/scramjet/issues/199))
+
 - Merged upstream v0.74.1: Together AI provider, image generation APIs, Node 26 fetch fixes, session affinity headers, provider compat improvements ([#14](https://github.com/LeanAndMean/pi/issues/14))
 
 ### Fixed
