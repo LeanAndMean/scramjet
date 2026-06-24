@@ -50,9 +50,9 @@ Edit directly or use `/settings` for common options.
 
 ### Telemetry and update checks
 
-`enableInstallTelemetry` only controls the anonymous install/update ping to `https://pi.dev/api/report-install`. Opting out of telemetry does not disable update checks; the runtime can still fetch `https://pi.dev/api/latest-version` to look for the latest version.
+`enableInstallTelemetry` only controls the anonymous install/update ping to `https://pi.dev/api/report-install`. Opting out of telemetry does not disable update checks.
 
-Set `PI_SKIP_VERSION_CHECK=1` to disable the version update check. This is set automatically by the Scramjet binary — the upstream check never runs. Use `--offline` or `PI_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
+The upstream runtime can check `https://pi.dev/api/latest-version` for updates, but Scramjet automatically sets `PI_SKIP_VERSION_CHECK=1`, so this check never runs. Use `--offline` or `PI_OFFLINE=1` to disable all startup network operations described here, including update checks, package update checks, and install/update telemetry.
 
 ### Warnings
 

@@ -43,7 +43,7 @@ await session.prompt("What files are in the current directory?");
 npm install @leanandmean/coding-agent
 ```
 
-The SDK is included in the main package. No separate installation needed.
+The SDK is included in the main package. No separate installation needed. If you have `@leanandmean/scramjet` installed, the SDK is available transitively — no additional install required.
 
 ## Core Concepts
 
