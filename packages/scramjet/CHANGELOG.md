@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.29.1 — Rebrand remaining Pi runtime references
+
+Remove all remaining Pi-specific references from the runtime: changelog display, pi.dev network calls, user-facing branding, API headers, and hardcoded upstream URLs ([#203](https://github.com/LeanAndMean/scramjet/issues/203)).
+
+### Changed
+
+- **Env vars**: Runtime reads `SCRAMJET_OFFLINE`, `SCRAMJET_CACHE_RETENTION`, `SCRAMJET_TELEMETRY`, `SCRAMJET_PACKAGE_DIR` with `PI_*` fallback at each call site. Help text documents `SCRAMJET_*` as primary.
+- **Changelog**: `getChangelogPath()` reads `SCRAMJET_CHANGELOG_PATH` (set by `env-setup.js` to Scramjet's own `CHANGELOG.md`)
+- **API headers**: OpenRouter identifies as `scramjet` (title + referer); Cloudflare User-Agent is `scramjet-coding-agent`
+- **User-Agent**: `pi-user-agent.ts` renamed to `user-agent.ts`; returns `scramjet/${version}`
+- **User-facing text**: Onboarding and tmux warning use `APP_NAME` instead of hardcoded "Pi"
+- **Migration URLs**: Point to `LeanAndMean/scramjet` instead of `earendil-works/pi-mono`
+- **Version check**: `LATEST_VERSION_URL` (pi.dev) removed; network functions gutted to return `undefined`
+- `UPSTREAM_DIVERGENCE.md` updated with all new divergences
+
+### Removed
+
+- `reportInstallTelemetry()` — pi.dev telemetry endpoint
+- `showNewVersionNotification()` — dead after version check gut
+- `/share` command and `handleShareCommand()` — no Scramjet share viewer
+- `getShareViewerUrl()` and `DEFAULT_SHARE_VIEWER_URL` from config
+- `PI_SHARE_VIEWER_URL` from help text
+
 ## 0.29.0 — Rename .pi/ config directory to .scramjet/
 
 Complete the product identity rebrand by renaming the user-facing config directory from `.pi/` to `.scramjet/` ([#201](https://github.com/LeanAndMean/scramjet/issues/201)).
