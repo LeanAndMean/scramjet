@@ -200,7 +200,10 @@ export default function presetExtension(pi: ExtensionAPI) {
 		const presetNames = Object.keys(presets);
 
 		if (presetNames.length === 0) {
-			ctx.ui.notify("No presets defined. Add presets to ~/.scramjet/agent/presets.json or .scramjet/presets.json", "warning");
+			ctx.ui.notify(
+				"No presets defined. Add presets to ~/.scramjet/agent/presets.json or .scramjet/presets.json",
+				"warning",
+			);
 			return;
 		}
 
@@ -308,7 +311,10 @@ export default function presetExtension(pi: ExtensionAPI) {
 	async function cyclePreset(ctx: ExtensionContext): Promise<void> {
 		const presetNames = getPresetOrder();
 		if (presetNames.length === 0) {
-			ctx.ui.notify("No presets defined. Add presets to ~/.scramjet/agent/presets.json or .scramjet/presets.json", "warning");
+			ctx.ui.notify(
+				"No presets defined. Add presets to ~/.scramjet/agent/presets.json or .scramjet/presets.json",
+				"warning",
+			);
 			return;
 		}
 
