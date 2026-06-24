@@ -26,7 +26,7 @@ function parsePackageVersion(version: string): ParsedVersion | undefined {
 	};
 }
 
-export function comparePackageVersions(leftVersion: string, rightVersion: string): number | undefined {
+function comparePackageVersions(leftVersion: string, rightVersion: string): number | undefined {
 	const left = parsePackageVersion(leftVersion);
 	const right = parsePackageVersion(rightVersion);
 	if (!left || !right) {
@@ -54,16 +54,5 @@ export async function getLatestRelease(
 	_currentVersion: string,
 	_options: { timeoutMs?: number } = {},
 ): Promise<LatestRelease | undefined> {
-	return undefined;
-}
-
-export async function getLatestVersion(
-	_currentVersion: string,
-	_options: { timeoutMs?: number } = {},
-): Promise<string | undefined> {
-	return undefined;
-}
-
-export async function checkForNewVersion(_currentVersion: string): Promise<string | undefined> {
 	return undefined;
 }

@@ -34,7 +34,7 @@ Package names in `package.json` files were also renamed:
 | `packages/coding-agent/src/core/package-manager.ts` | `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback | Rebranded env var |
 | `packages/coding-agent/src/core/slash-commands.ts` | Removed `/share` command entry | No Scramjet share viewer exists |
 | `packages/coding-agent/src/utils/user-agent.ts` | Renamed from `pi-user-agent.ts`; `getUserAgent` returns `scramjet/${version}` | Product identity in HTTP User-Agent |
-| `packages/coding-agent/src/utils/version-check.ts` | Removed `LATEST_VERSION_URL` (pi.dev); gutted network functions to return `undefined`; renamed `LatestPiRelease` → `LatestRelease` | No pi.dev network calls; version check disabled via `PI_SKIP_VERSION_CHECK=1` in env-setup |
+| `packages/coding-agent/src/utils/version-check.ts` | Removed `LATEST_VERSION_URL` (pi.dev); gutted network functions to return `undefined`; renamed `LatestPiRelease` → `LatestRelease`; removed dead exports (`checkForNewVersion`, `getLatestVersion`, `comparePackageVersions`) | No pi.dev network calls; version check disabled via `PI_SKIP_VERSION_CHECK=1` in env-setup; only `getLatestRelease` and `isNewerPackageVersion` exported |
 | `packages/coding-agent/src/utils/tools-manager.ts` | `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback | Rebranded env var |
 | `packages/coding-agent/src/modes/interactive/interactive-mode.ts` | Removed `reportInstallTelemetry()`, `showNewVersionNotification()`, `handleShareCommand()`; rebrand "Pi" → `APP_NAME` in onboarding/tmux warning; `SCRAMJET_OFFLINE` with fallback | No pi.dev telemetry/version check; product branding |
 | `packages/coding-agent/src/migrations.ts` | `MIGRATION_GUIDE_URL` and `EXTENSIONS_DOC_URL` point to `LeanAndMean/scramjet` | Product URLs |
