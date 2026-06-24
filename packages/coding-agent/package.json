@@ -1,0 +1,60 @@
+{
+	"name": "@leanandmean/coding-agent",
+	"version": "0.74.1-scramjet.4",
+	"publishConfig": {
+		"access": "public"
+	},
+	"description": "Coding agent CLI with read, bash, edit, write tools and session management",
+	"license": "MIT",
+	"type": "module",
+	"piConfig": {
+		"name": "scramjet",
+		"configDir": ".pi"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist", "docs", "examples", "CHANGELOG.md"],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
+		"build": "tsgo -p tsconfig.build.json && shx chmod +x dist/cli.js && npm run copy-assets",
+		"copy-assets": "shx mkdir -p dist/modes/interactive/theme && shx cp src/modes/interactive/theme/*.json dist/modes/interactive/theme/ && shx mkdir -p dist/modes/interactive/assets && shx cp src/modes/interactive/assets/*.png dist/modes/interactive/assets/ && shx mkdir -p dist/core/export-html/vendor && shx cp src/core/export-html/template.html src/core/export-html/template.css src/core/export-html/template.js dist/core/export-html/ && shx cp src/core/export-html/vendor/*.js dist/core/export-html/vendor/",
+		"test": "vitest --run --passWithNoTests"
+	},
+	"dependencies": {
+		"@leanandmean/agent": "0.74.1-scramjet.4",
+		"@leanandmean/ai": "0.74.1-scramjet.4",
+		"@leanandmean/tui": "0.74.1-scramjet.4",
+		"@silvia-odwyer/photon-node": "^0.3.4",
+		"chalk": "^5.5.0",
+		"diff": "^8.0.2",
+		"glob": "^13.0.1",
+		"highlight.js": "^10.7.3",
+		"hosted-git-info": "^9.0.2",
+		"ignore": "^7.0.5",
+		"jiti": "^2.7.0",
+		"minimatch": "^10.2.3",
+		"proper-lockfile": "^4.1.2",
+		"typebox": "^1.1.24",
+		"undici": "^7.19.1",
+		"yaml": "^2.8.2"
+	},
+	"optionalDependencies": {
+		"@mariozechner/clipboard": "^0.3.6"
+	},
+	"devDependencies": {
+		"@types/diff": "^7.0.2",
+		"@types/hosted-git-info": "^3.0.5",
+		"@types/ms": "^2.1.0",
+		"@types/proper-lockfile": "^4.1.4"
+	},
+	"engines": {
+		"node": ">=20.6.0"
+	}
+}

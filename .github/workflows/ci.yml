@@ -38,56 +38,43 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Pi API surface staleness guard
-        run: |
-          node scripts/generate-pi-api-surface.js
-          git diff --exit-code docs/pi-api-surface.md
-
-      - name: Pi dependency metadata drift guard
-        run: |
-          BASE=$(jq -r '.pi.piBaseVersion' package.json)
-          FLAVOR=$(jq -r '.pi.piPatchFlavor' package.json)
-          TESTED=$(jq -r '.pi.piTestedVersion' package.json)
-          AGENT_PIN=$(jq -r '.dependencies["@earendil-works/pi-coding-agent"]' package.json)
-          TUI_PIN=$(jq -r '.dependencies["@earendil-works/pi-tui"]' package.json)
-          EXPECTED_AGENT="npm:@leanandmean/pi-coding-agent@${BASE}-${FLAVOR}"
-          EXPECTED_TESTED="${BASE}-${FLAVOR}"
-          if [ "$TESTED" != "$EXPECTED_TESTED" ] || [ "$AGENT_PIN" != "$EXPECTED_AGENT" ] || [ "$TUI_PIN" != "$BASE" ]; then
-            echo "Error: Pi dependency metadata drifted." >&2
-            echo "  pi.piBaseVersion:                         $BASE" >&2
-            echo "  pi.piPatchFlavor:                         $FLAVOR" >&2
-            echo "  pi.piTestedVersion:                       $TESTED (expected $EXPECTED_TESTED)" >&2
-            echo "  dependencies[@earendil-works/pi-coding-agent]: $AGENT_PIN (expected $EXPECTED_AGENT)" >&2
-            echo "  dependencies[@earendil-works/pi-tui]:          $TUI_PIN (expected $BASE)" >&2
-            echo "Keep the Pi base version, Scramjet patch flavor, npm alias, and upstream pi-tui pin in sync." >&2
-            exit 1
-          fi
-          echo "OK: Pi dependency metadata matches patched coding-agent alias $EXPECTED_AGENT and upstream pi-tui $BASE."
-
-      - name: npm pack round-trip smoke
-        # Pack the package, install the resulting tarball globally, verify
-        # the bin entry executes Pi's main() (--help is non-interactive,
-        # exits 0), and uninstall. Catches packaging regressions: missing
-        # entries in `files`, broken `bin`, postinstall failures.
+      - name: Published coding-agent docs import guard
         run: |
           set -euo pipefail
-          npm pack
-          TARBALL=$(ls leanandmean-scramjet-*.tgz | head -n1)
-          test -n "$TARBALL" || { echo "no tarball produced" >&2; exit 1; }
+          if grep -R -nE '@leanandmean/pi-|@earendil-works/pi-|@mariozechner/pi-' packages/coding-agent/README.md packages/coding-agent/docs packages/coding-agent/examples; then
+            echo "Found stale package imports in published coding-agent docs/examples." >&2
+            exit 1
+          fi
+
+      - name: npm pack round-trip smoke
+        # Pack every publishable package, verify Scramjet tarball contents,
+        # install the local tarballs, and run the installed binary.
+        run: |
+          set -euo pipefail
+          PACK_DIR=$(mktemp -d)
           PREFIX=$(mktemp -d)
-          export PREFIX
-          npm install --prefix "$PREFIX" -g "./$TARBALL"
-          # Inspect tarball contents to confirm we shipped what we expect.
+          npm pack -w packages/tui --pack-destination "$PACK_DIR"
+          npm pack -w packages/ai --pack-destination "$PACK_DIR"
+          npm pack -w packages/agent --pack-destination "$PACK_DIR"
+          npm pack -w packages/coding-agent --pack-destination "$PACK_DIR"
+          npm pack -w packages/scramjet --pack-destination "$PACK_DIR"
+          SCRAMJET_TARBALL=$(ls "$PACK_DIR"/leanandmean-scramjet-*.tgz | head -n1)
+          test -n "$SCRAMJET_TARBALL" || { echo "no Scramjet tarball produced" >&2; exit 1; }
           TARBALL_CONTENTS=$(mktemp)
-          tar -tzf "$TARBALL" > "$TARBALL_CONTENTS"
+          tar -tzf "$SCRAMJET_TARBALL" > "$TARBALL_CONTENTS"
           grep -qF 'package/dist/index.js' "$TARBALL_CONTENTS"
           grep -qF 'package/bin/scramjet.js' "$TARBALL_CONTENTS"
           grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/commands/mach12:issue-create.md' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
-          # Run the installed bin in non-interactive --help mode.
-          "$PREFIX/bin/scramjet" --help >/dev/null
-          rm -rf "$PREFIX" "$TARBALL" "$TARBALL_CONTENTS"
+          XDG_DATA_HOME="$PREFIX/data" npm install --prefix "$PREFIX" -g \
+            "$PACK_DIR"/leanandmean-tui-*.tgz \
+            "$PACK_DIR"/leanandmean-ai-*.tgz \
+            "$PACK_DIR"/leanandmean-agent-*.tgz \
+            "$PACK_DIR"/leanandmean-coding-agent-*.tgz \
+            "$SCRAMJET_TARBALL"
+          XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --help >/dev/null
+          rm -rf "$PACK_DIR" "$PREFIX" "$TARBALL_CONTENTS"
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary
@@ -95,12 +82,12 @@ jobs:
         run: |
           set -euo pipefail
           TMP=$(mktemp -d)
-          XDG_DATA_HOME="$TMP" node scripts/postinstall.js
+          XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
           test -d "$TMP/scramjet/mach12/commands"
           test -d "$TMP/scramjet/mach12/agents"
           test -f "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
           # Second run: idempotent (no-op, preserves user edits).
           echo "user edit" > "$TMP/scramjet/mach12/USER-MARKER"
-          XDG_DATA_HOME="$TMP" node scripts/postinstall.js
+          XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
           test -f "$TMP/scramjet/mach12/USER-MARKER"
           rm -rf "$TMP"
