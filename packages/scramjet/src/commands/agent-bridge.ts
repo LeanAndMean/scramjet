@@ -31,11 +31,10 @@ function resolveSymlinkTarget(linkPath: string): string | null {
 	}
 }
 
-// Pi's subagent example extension scans `<getAgentDir()>/agents` directly
-// at every dispatch — there is no `agents_discover` hook or `registerAgent`
-// API to use, and the upstream README documents symlinking as the install
-// method. `ownershipRoots` is what makes the bridge non-destructive: a
-// symlink in the target dir is treated as scramjet-owned only when its
+// The built-in subagent tool scans `<getAgentDir()>/agents` directly at
+// every dispatch — there is no `agents_discover` hook or `registerAgent`
+// API to use. `ownershipRoots` is what makes the bridge non-destructive:
+// a symlink in the target dir is treated as scramjet-owned only when its
 // resolved target falls under one of these roots, so user-authored files
 // at the same name are preserved. Skipped on native Windows to mirror
 // `scripts/postinstall.js`: symlinks there require admin or developer

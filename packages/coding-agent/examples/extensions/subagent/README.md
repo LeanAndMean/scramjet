@@ -1,5 +1,7 @@
 # Subagent Example
 
+> **Deprecated:** The subagent tool is now bundled with Scramjet as a built-in and registered automatically by `initScramjet`. Manual extension installation is no longer needed. If you have an existing symlink at `~/.scramjet/agent/extensions/subagent`, remove it — the postinstall script will do this automatically on the next `npm install`, but leaving it in place produces a duplicate-tool conflict diagnostic.
+
 Delegate tasks to specialized subagents with isolated context windows.
 
 ## Features

@@ -5,7 +5,7 @@ import type { ScramjetState, SidebarEntry } from "./types.js";
 const NO_OUTPUT_TEXT = "(no output)";
 
 // Resolve a human-readable label for the subagent that produced the
-// `(no output)` payload. The upstream subagent tool accepts either
+// `(no output)` payload. The built-in subagent tool accepts either
 // `{ agent: string }` (single mode) or `{ chain: [{ agent: string }, ...] }`
 // (chain mode); both branches reach the no-output success path. Returns
 // `<unknown>` when the input doesn't match either shape (defensive: the
@@ -30,15 +30,15 @@ function resolveSubagentLabel(input: unknown): string {
 	return "<unknown>";
 }
 
-// Watches `tool_result` for the upstream subagent example tool returning a
-// literal `(no output)` payload on its success path (single mode and chain
-// mode emit this when the spawned subprocess exits 0 but produces no
-// assistant text — typically a crash before stdout flush, an unknown agent
-// model id, or a config error that left messages empty). Without this hook
-// the calling agent silently receives "(no output)" as the tool result and
-// the operator has no signal that a lens dropped. Advisory only: we never
-// modify the tool result content; the calling agent still receives whatever
-// upstream produced.
+// Watches `tool_result` for the built-in subagent tool returning a literal
+// `(no output)` payload on its success path (single mode and chain mode emit
+// this when the spawned subprocess exits 0 but produces no assistant text —
+// typically a crash before stdout flush, an unknown agent model id, or a
+// config error that left messages empty). Without this hook the calling
+// agent silently receives "(no output)" as the tool result and the operator
+// has no signal that a lens dropped. Advisory only: we never modify the
+// tool result content; the calling agent still receives whatever the
+// subagent tool produced.
 export function registerSubagentOutputAdvisor(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("tool_result", async (event) => {
 		if (event.toolName !== "subagent") return;
