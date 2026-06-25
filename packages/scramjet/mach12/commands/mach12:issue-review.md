@@ -186,7 +186,8 @@ If the user picks "Create revised plan", enter the revision loop:
    - **Addressed**: The revised plan resolves this finding. State how in one sentence.
    - **Remaining**: The revised plan does not resolve this finding, or only partially addresses it. State what is still missing.
    - **New issue**: The revised plan introduces a concern not present in the original review. Label with N-prefixed identifiers continuing from the highest prior N-number (e.g., if prior delta had N1–N3, new issues start at N4) and classify severity (Critical/Important/Suggestion) using the same criteria as Step 6.
-   - **Pitfalls completeness**: Does the revised plan's `## Pitfalls and Gotchas` section preserve pitfalls from the prior version (unless the corresponding plan aspect was removed) and incorporate any new pitfalls surfaced by the review? Flag dropped pitfalls or missing new ones.
+
+   Additionally, assess **pitfalls completeness**: does the revised plan's `## Pitfalls and Gotchas` section preserve pitfalls from the prior version (unless the corresponding plan aspect was removed) and incorporate any new pitfalls surfaced by the review? Flag dropped pitfalls or missing new ones.
 
    Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan or any prior iteration's delta — not a restatement of an existing finding under a different framing.
 
