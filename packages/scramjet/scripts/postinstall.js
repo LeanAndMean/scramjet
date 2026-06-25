@@ -48,6 +48,20 @@ try {
 	// lstat threw — dest doesn't exist at all, which is the normal first-install path.
 }
 
+// Clean up stale subagent extension symlink. The subagent tool is now a
+// builtin registered by initScramjet; the old extension symlink causes a
+// duplicate-tool conflict diagnostic if left in place.
+const extSubagent = join(destParent, "agent", "extensions", "subagent");
+try {
+	const extStat = lstatSync(extSubagent);
+	if (extStat.isSymbolicLink() || extStat.isDirectory()) {
+		console.warn(`[scramjet] Removing stale subagent extension at ${extSubagent}`);
+		rmSync(extSubagent, { recursive: true, force: true });
+	}
+} catch {
+	// ENOENT — nothing to clean up (normal case for fresh installs).
+}
+
 const tmp = `${dest}.tmp-${process.pid}`;
 try {
 	mkdirSync(destParent, { recursive: true });

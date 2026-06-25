@@ -61,13 +61,13 @@ describe("getPiInvocation — fallback", () => {
 		process.execPath = origExecPath;
 	});
 
-	it("falls back to 'pi' when argv[1] does not exist and execPath is a generic runtime", () => {
+	it("falls back to 'scramjet' when argv[1] does not exist and execPath is a generic runtime", () => {
 		process.argv[1] = "/nonexistent/path/to/script.js";
 		process.execPath = "/usr/bin/node";
 
 		const result = getPiInvocation(["--help"]);
 
-		expect(result.command).toBe("pi");
+		expect(result.command).toBe("scramjet");
 		expect(result.args).toEqual(["--help"]);
 	});
 });

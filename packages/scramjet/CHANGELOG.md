@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.30.0 — Register subagent tool as a Scramjet builtin
+
+The `subagent` tool is now registered directly by `initScramjet` instead of requiring manual symlink installation of the example extension. Every Scramjet session has the tool available out of the box ([#205](https://github.com/LeanAndMean/scramjet/issues/205)).
+
+### Added
+
+- `packages/scramjet/src/subagent/` — builtin subagent tool (agent discovery + subprocess runner + TUI rendering), registered alongside `delegate` and `get_scramjet_user_input`
+- Postinstall cleanup: removes stale `~/.scramjet/agent/extensions/subagent` symlinks left from the manual-install era to prevent duplicate-tool conflict diagnostics
+
+### Changed
+
+- `getPiInvocation` fallback: returns `"scramjet"` instead of `"pi"` when the binary cannot be inferred from `process.argv`
+- Temp-dir prefix: `pi-subagent-` renamed to `scramjet-subagent-`
+- Comments in `subagent-output-advisor.ts` and `agent-bridge.ts` updated to reference the built-in tool instead of the upstream example extension
+- Deprecation notice added to `packages/coding-agent/examples/extensions/subagent/README.md`
+
 ## 0.29.1 — Rebrand remaining Pi runtime references
 
 Remove all remaining Pi-specific references from the runtime: changelog display, pi.dev network calls, user-facing branding, API headers, and hardcoded upstream URLs ([#203](https://github.com/LeanAndMean/scramjet/issues/203)).
