@@ -47,6 +47,48 @@ describe("discoverAgents — empty directory", () => {
 	});
 });
 
+describe("discoverAgents — happy path with valid agent file", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-agent-test-"));
+		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(agentsDir, "test-agent.md"),
+			[
+				"---",
+				"name: test-agent",
+				"description: A test agent for validation",
+				"tools: read,bash",
+				"model: test-model",
+				"---",
+				"",
+				"You are a test agent.",
+			].join("\n"),
+		);
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("returns agent config with parsed frontmatter fields", () => {
+		const result = discoverAgents(tmpDir, "project");
+
+		expect(result.agents).toHaveLength(1);
+		expect(result.agents[0]).toMatchObject({
+			name: "test-agent",
+			description: "A test agent for validation",
+			tools: ["read", "bash"],
+			model: "test-model",
+			source: "project",
+			systemPrompt: expect.stringContaining("You are a test agent."),
+		});
+		expect(result.projectAgentsDir).toBe(path.join(tmpDir, ".scramjet", "agents"));
+	});
+});
+
 describe("getPiInvocation — fallback", () => {
 	let origArgv1: string;
 	let origExecPath: string;
