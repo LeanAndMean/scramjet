@@ -180,17 +180,17 @@ If the user picks "Create revised plan", enter the revision loop:
 
    Instruct the architect to produce a complete revised implementation plan that addresses the Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally.
 
-2. **Delta assessment.** After the architect returns, perform a lightweight delta assessment (not a full 6-lens re-exploration). For each finding from the original review (referencing stable F/S identifiers), classify into one of three categories:
+2. **Delta assessment.** After the architect returns, perform a lightweight delta assessment (not a full 6-lens re-exploration). For each finding from the original review (referencing stable F/S identifiers) and each N-prefixed item from prior iteration deltas, classify into one of three categories:
    - **Addressed**: The revised plan resolves this finding. State how in one sentence.
    - **Remaining**: The revised plan does not resolve this finding, or only partially addresses it. State what is still missing.
-   - **New issue**: The revised plan introduces a concern not present in the original review. Label with N-prefixed identifiers (N1, N2, ...) and classify severity (Critical/Important/Suggestion) using the same criteria as Step 6.
+   - **New issue**: The revised plan introduces a concern not present in the original review. Label with N-prefixed identifiers continuing from the highest prior N-number (e.g., if prior delta had N1–N3, new issues start at N4) and classify severity (Critical/Important/Suggestion) using the same criteria as Step 6.
 
-   Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan — not a restatement of an existing finding under a different framing.
+   Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan or any prior iteration's delta — not a restatement of an existing finding under a different framing.
 
 3. **Presentation.** Present to the user:
    1. The revised plan.
    2. The delta assessment (Addressed / Remaining / New).
-   3. A summary line: "X of Y findings addressed, Z remaining, W new issues."
+   3. A summary line: "X of Y findings addressed, Z remaining, W new issues" — where Y counts original F/S findings plus N-prefixed items carried from prior iterations.
 
 4. **Sub-options.** Ask the user how to proceed:
    - **Post revised plan**: Accept this revision and post it.
