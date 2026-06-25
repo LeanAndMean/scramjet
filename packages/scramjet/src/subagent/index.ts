@@ -2,13 +2,13 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@leanandmean/agent";
+import type { AgentToolUpdateCallback } from "@leanandmean/agent";
 import type { Message } from "@leanandmean/ai";
 import { StringEnum } from "@leanandmean/ai";
 import { type ExtensionAPI, getMarkdownTheme, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -159,7 +159,15 @@ function getFinalOutput(messages: Message[]): string {
 	return "";
 }
 
-type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, any> };
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isMessage(value: unknown): value is Message {
+	return isRecord(value) && typeof value.role === "string" && Array.isArray(value.content);
+}
+
+type DisplayItem = { type: "text"; text: string } | { type: "toolCall"; name: string; args: Record<string, unknown> };
 
 function getDisplayItems(messages: Message[]): DisplayItem[] {
 	const items: DisplayItem[] = [];
@@ -175,7 +183,30 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 }
 
 function isResultError(r: SingleResult): boolean {
-	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+	return (
+		(r.exitCode !== 0 && r.exitCode !== EXIT_CODE_RUNNING) || r.stopReason === "error" || r.stopReason === "aborted"
+	);
+}
+
+function getResultOutput(r: SingleResult): string {
+	return r.errorMessage || r.stderr || getFinalOutput(r.messages) || "(no output)";
+}
+
+function getSummaryOutput(r: SingleResult): string {
+	return isResultError(r) ? getResultOutput(r) : getFinalOutput(r.messages) || "(no output)";
+}
+
+function formatDiscoveryDiagnostics(diagnostics: string[]): string {
+	return diagnostics.length === 0
+		? ""
+		: `\n\nAgent discovery warnings:\n${diagnostics.map((d) => `- ${d}`).join("\n")}`;
+}
+
+function signalNameFromExitCode(code: number | null): string | undefined {
+	if (typeof code !== "number") return undefined;
+	const signalNumber = code - 128;
+	if (signalNumber <= 0) return undefined;
+	return Object.entries(os.constants.signals).find(([, value]) => value === signalNumber)?.[0];
 }
 
 async function mapWithConcurrencyLimit<TIn, TOut>(
@@ -224,8 +255,6 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 	return { command: "scramjet", args };
 }
 
-type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
-
 async function runSingleAgent(
 	defaultCwd: string,
 	agents: AgentConfig[],
@@ -234,8 +263,9 @@ async function runSingleAgent(
 	cwd: string | undefined,
 	step: number | undefined,
 	signal: AbortSignal | undefined,
-	onUpdate: OnUpdateCallback | undefined,
+	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	discoveryDiagnostics: string[],
 ): Promise<SingleResult> {
 	const agent = agents.find((a) => a.name === agentName);
 
@@ -247,7 +277,7 @@ async function runSingleAgent(
 			task,
 			exitCode: 1,
 			messages: [],
-			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
+			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.${formatDiscoveryDiagnostics(discoveryDiagnostics)}`,
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 			step,
 		};
@@ -300,18 +330,21 @@ async function runSingleAgent(
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			let buffer = "";
+			let exited = false;
+			let killTimer: ReturnType<typeof setTimeout> | undefined;
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
-				let event: any;
+				let event: unknown;
 				try {
 					event = JSON.parse(line);
 				} catch {
 					return;
 				}
+				if (!isRecord(event)) return;
 
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
+				if (event.type === "message_end" && isMessage(event.message)) {
+					const msg = event.message;
 					currentResult.messages.push(msg);
 
 					if (msg.role === "assistant") {
@@ -332,8 +365,8 @@ async function runSingleAgent(
 					emitUpdate();
 				}
 
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
+				if (event.type === "tool_result_end" && isMessage(event.message)) {
+					currentResult.messages.push(event.message);
 					emitUpdate();
 				}
 			};
@@ -350,12 +383,16 @@ async function runSingleAgent(
 			});
 
 			proc.on("close", (code, signal) => {
+				exited = true;
+				if (killTimer) clearTimeout(killTimer);
 				if (buffer.trim()) processLine(buffer);
+				const signalName = signal ?? signalNameFromExitCode(code);
+				if (signalName) currentResult.stderr += `Process killed by ${signalName}\n`;
 				resolve(code ?? (signal ? 1 : 0));
 			});
 
 			proc.on("error", (err) => {
-				currentResult.stderr += err.message;
+				currentResult.stderr += `Spawn failed: ${err.message}\n`;
 				resolve(1);
 			});
 
@@ -363,8 +400,8 @@ async function runSingleAgent(
 				const killProc = () => {
 					wasAborted = true;
 					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
+					killTimer = setTimeout(() => {
+						if (!exited) proc.kill("SIGKILL");
 					}, 5000);
 				};
 				if (signal.aborted) killProc();
@@ -403,7 +440,7 @@ const ChainItem = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
-const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
+const AgentScopeSchema = StringEnum(AGENT_SCOPES, {
 	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
 	default: "user",
 });
@@ -458,7 +495,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					content: [
 						{
 							type: "text",
-							text: `Invalid parameters. Provide exactly one mode.\nAvailable agents: ${available}`,
+							text: `Invalid parameters. Provide exactly one mode.\nAvailable agents: ${available}${formatDiscoveryDiagnostics(discovery.diagnostics)}`,
 						},
 					],
 					details: makeDetails("single")([]),
@@ -498,7 +535,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					const step = params.chain[i];
 					const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
 
-					const chainUpdate: OnUpdateCallback | undefined = onUpdate
+					const chainUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined = onUpdate
 						? (partial) => {
 								const currentResult = partial.details?.results[0];
 								if (currentResult) {
@@ -521,14 +558,18 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						discovery.diagnostics,
 					);
 					results.push(result);
 
 					if (isResultError(result)) {
-						const errorMsg =
-							result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
 						return {
-							content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
+							content: [
+								{
+									type: "text",
+									text: `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(result)}`,
+								},
+							],
 							details: makeDetails("chain")(results),
 							isError: true,
 						};
@@ -596,26 +637,29 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						discovery.diagnostics,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
 					return result;
 				});
 
-				const successCount = results.filter((r) => r.exitCode === 0).length;
+				const successCount = results.filter((r) => !isResultError(r)).length;
 				const summaries = results.map((r) => {
-					const output = getFinalOutput(r.messages);
-					return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${output || "(no output)"}`;
+					const failed = isResultError(r);
+					const output = getSummaryOutput(r);
+					return `[${r.agent}] ${failed ? "failed" : "completed"}: ${output}`;
 				});
-				return {
+				const parallelResult = {
 					content: [
 						{
-							type: "text",
+							type: "text" as const,
 							text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
 						},
 					],
 					details: makeDetails("parallel")(results),
 				};
+				return successCount === results.length ? parallelResult : { ...parallelResult, isError: true };
 			}
 
 			if (params.agent && params.task) {
@@ -629,12 +673,13 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					discovery.diagnostics,
 				);
 				if (isResultError(result)) {
-					const errorMsg =
-						result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
 					return {
-						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+						content: [
+							{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${getResultOutput(result)}` },
+						],
 						details: makeDetails("single")([result]),
 						isError: true,
 					};
@@ -647,7 +692,12 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
 			return {
-				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
+				content: [
+					{
+						type: "text",
+						text: `Invalid parameters. Available agents: ${available}${formatDiscoveryDiagnostics(discovery.diagnostics)}`,
+					},
+				],
 				details: makeDetails("single")([]),
 			};
 		},
@@ -740,7 +790,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Output ───"), 0, 0));
 					if (displayItems.length === 0 && !finalOutput) {
-						container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
+						container.addChild(new Text(theme.fg(isError ? "error" : "muted", getResultOutput(r).trim()), 0, 0));
 					} else {
 						for (const item of displayItems) {
 							if (item.type === "toolCall")
@@ -768,6 +818,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+				else if (isError && r.stderr) text += `\n${theme.fg("error", r.stderr.trim())}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 				else {
 					text += `\n${renderDisplayItems(displayItems, COLLAPSED_ITEM_COUNT)}`;
@@ -792,7 +843,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 			};
 
 			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
+				const successCount = details.results.filter((r) => !isResultError(r)).length;
 				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
 
 				if (expanded) {
@@ -809,7 +860,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
@@ -835,7 +886,10 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							}
 						}
 
-						if (finalOutput) {
+						if (isResultError(r)) {
+							container.addChild(new Spacer(1));
+							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
+						} else if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
@@ -858,10 +912,12 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("chain ")) +
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
 				for (const r of details.results) {
-					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
+					const isError = isResultError(r);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
-					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
+					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
+					else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
 				const usageStr = formatUsageStats(aggregateUsage(details.results));
@@ -872,8 +928,10 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 			if (details.mode === "parallel") {
 				const running = details.results.filter((r) => r.exitCode === EXIT_CODE_RUNNING).length;
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
-				const failCount = details.results.filter((r) => r.exitCode > 0).length;
+				const successCount = details.results.filter(
+					(r) => r.exitCode !== EXIT_CODE_RUNNING && !isResultError(r),
+				).length;
+				const failCount = details.results.filter((r) => isResultError(r)).length;
 				const isRunning = running > 0;
 				const icon = isRunning
 					? theme.fg("warning", "⏳")
@@ -895,7 +953,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
@@ -917,7 +975,10 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							}
 						}
 
-						if (finalOutput) {
+						if (isResultError(r)) {
+							container.addChild(new Spacer(1));
+							container.addChild(new Text(theme.fg("error", getResultOutput(r).trim()), 0, 0));
+						} else if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
 						}
@@ -939,14 +1000,17 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					const rIcon =
 						r.exitCode === EXIT_CODE_RUNNING
 							? theme.fg("warning", "⏳")
-							: r.exitCode === 0
-								? theme.fg("success", "✓")
-								: theme.fg("error", "✗");
+							: isResultError(r)
+								? theme.fg("error", "✗")
+								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
+					const isError = isResultError(r);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
-					if (displayItems.length === 0)
-						text += `\n${theme.fg("muted", r.exitCode === EXIT_CODE_RUNNING ? "(running...)" : "(no output)")}`;
-					else text += `\n${renderDisplayItems(displayItems, 5)}`;
+					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
+					else if (displayItems.length === 0) {
+						const output = r.exitCode === EXIT_CODE_RUNNING ? "(running...)" : "(no output)";
+						text += `\n${theme.fg("muted", output)}`;
+					} else text += `\n${renderDisplayItems(displayItems, 5)}`;
 				}
 				if (!isRunning) {
 					const usageStr = formatUsageStats(aggregateUsage(details.results));

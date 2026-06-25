@@ -1,10 +1,9 @@
 /**
- * Postinstall: bundled-tree seeding into XDG_DATA_HOME/scramjet/mach12.
+ * Postinstall integration tests for bundled-tree seeding and stale extension cleanup.
  *
  * The most important property — "user customizations survive npm install" —
  * was previously asserted only in prose. We exercise the script in a
- * subprocess against a controlled XDG_DATA_HOME so each run is hermetic.
- * (F30, S4)
+ * subprocess against controlled HOME and XDG_DATA_HOME directories so each run is hermetic.
  *
  * scripts/postinstall.js resolves its source by computing pkgRoot from
  * import.meta.url (relative to the script file), so re-running the *real*
@@ -16,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import {
 	cpSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -32,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
 const REAL_SCRIPT = join(REPO_ROOT, "scripts", "postinstall.js");
+const OLD_SUBAGENT_EXAMPLE = resolve(REPO_ROOT, "..", "coding-agent", "examples", "extensions", "subagent");
 
 interface RunResult {
 	stdout: string;
@@ -51,13 +52,26 @@ function runScript(scriptPath: string, env: NodeJS.ProcessEnv): RunResult {
 	};
 }
 
+function pathExists(p: string): boolean {
+	try {
+		lstatSync(p);
+		return true;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw err;
+	}
+}
+
 describe("scripts/postinstall.js — Mach 12 seeding", () => {
 	let workDir: string;
 	let xdgHome: string;
+	let fakeHome: string;
 
 	beforeEach(() => {
 		workDir = mkdtempSync(join(tmpdir(), "scramjet-postinstall-"));
 		xdgHome = join(workDir, "xdg");
+		fakeHome = join(workDir, "home");
+		mkdirSync(fakeHome, { recursive: true });
 	});
 
 	afterEach(() => {
@@ -65,7 +79,7 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 	});
 
 	it("fresh seed: writes mach12/ into XDG_DATA_HOME/scramjet/ on first run", () => {
-		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome });
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		const dest = join(xdgHome, "scramjet", "mach12");
 		expect(existsSync(dest)).toBe(true);
@@ -75,7 +89,7 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 	});
 
 	it("idempotent: second run is a silent skip; existing tree untouched", () => {
-		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome });
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		const dest = join(xdgHome, "scramjet", "mach12");
 		// Inject a user customization the script must not clobber.
 		const userFile = join(dest, "USER_EDIT.md");
@@ -83,7 +97,7 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 		const userMtime = statSync(userFile).mtimeMs;
 		const destMtime = statSync(dest).mtimeMs;
 
-		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome });
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		// Silent skip: no "Seeded" log on the second run.
 		expect(result.stdout).not.toContain("Seeded");
@@ -94,7 +108,7 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 	});
 
 	it("XDG guard: relative XDG_DATA_HOME is rejected with a warning and no writes", () => {
-		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: "relative/path" });
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: "relative/path", HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).toContain("is not absolute");
 		// Nothing should have been written anywhere we can check; the cwd is the
@@ -112,7 +126,7 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 		mkdirSync(join(fakePkg, "scripts"), { recursive: true });
 		cpSync(REAL_SCRIPT, join(fakePkg, "scripts", "postinstall.js"));
 
-		const result = runScript(join(fakePkg, "scripts", "postinstall.js"), { XDG_DATA_HOME: xdgHome });
+		const result = runScript(join(fakePkg, "scripts", "postinstall.js"), { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).toContain("Bundled Mach 12 source missing");
 		expect(existsSync(join(xdgHome, "scramjet", "mach12"))).toBe(false);
@@ -137,29 +151,96 @@ describe("scripts/postinstall.js — stale subagent extension cleanup", () => {
 
 	it("removes a dangling symlink at agent/extensions/subagent", () => {
 		const extDir = join(fakeHome, ".scramjet", "agent", "extensions");
+		const extSubagent = join(extDir, "subagent");
 		mkdirSync(extDir, { recursive: true });
-		symlinkSync("/nonexistent/target", join(extDir, "subagent"));
+		symlinkSync("/nonexistent/target", extSubagent);
 
 		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).toContain("Removing stale subagent extension");
-		expect(existsSync(join(extDir, "subagent"))).toBe(false);
+		expect(pathExists(extSubagent)).toBe(false);
 	});
 
-	it("removes a directory at agent/extensions/subagent", () => {
+	it("removes a stale manual-install directory at agent/extensions/subagent", () => {
 		const extSubagent = join(fakeHome, ".scramjet", "agent", "extensions", "subagent");
 		mkdirSync(extSubagent, { recursive: true });
-		writeFileSync(join(extSubagent, "index.ts"), "// old extension");
+		symlinkSync(join(OLD_SUBAGENT_EXAMPLE, "index.ts"), join(extSubagent, "index.ts"));
+		symlinkSync(join(OLD_SUBAGENT_EXAMPLE, "agents.ts"), join(extSubagent, "agents.ts"));
 
 		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).toContain("Removing stale subagent extension");
-		expect(existsSync(extSubagent)).toBe(false);
+		expect(pathExists(extSubagent)).toBe(false);
+	});
+
+	it("preserves user-owned directories at agent/extensions/subagent", () => {
+		const extSubagent = join(fakeHome, ".scramjet", "agent", "extensions", "subagent");
+		mkdirSync(extSubagent, { recursive: true });
+		writeFileSync(join(extSubagent, "index.ts"), "// custom extension");
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("Preserving");
+		expect(pathExists(extSubagent)).toBe(true);
+		expect(readFileSync(join(extSubagent, "index.ts"), "utf-8")).toBe("// custom extension");
+	});
+
+	it("cleans stale extensions even when mach12 already exists", () => {
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		const extDir = join(fakeHome, ".scramjet", "agent", "extensions");
+		const extSubagent = join(extDir, "subagent");
+		mkdirSync(extDir, { recursive: true });
+		symlinkSync("/nonexistent/target", extSubagent);
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("Removing stale subagent extension");
+		expect(result.stdout).not.toContain("Seeded");
+		expect(pathExists(extSubagent)).toBe(false);
+	});
+
+	it("cleans stale extensions before rejecting a relative XDG_DATA_HOME", () => {
+		const extDir = join(fakeHome, ".scramjet", "agent", "extensions");
+		const extSubagent = join(extDir, "subagent");
+		mkdirSync(extDir, { recursive: true });
+		symlinkSync("/nonexistent/target", extSubagent);
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: "relative/path", HOME: fakeHome });
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("Removing stale subagent extension");
+		expect(result.stderr).toContain("is not absolute");
+		expect(pathExists(extSubagent)).toBe(false);
+	});
+
+	it("cleans stale extensions even when the bundled source is missing", () => {
+		const fakePkg = join(workDir, "fake-pkg");
+		mkdirSync(join(fakePkg, "scripts"), { recursive: true });
+		cpSync(REAL_SCRIPT, join(fakePkg, "scripts", "postinstall.js"));
+		const extDir = join(fakeHome, ".scramjet", "agent", "extensions");
+		const extSubagent = join(extDir, "subagent");
+		mkdirSync(extDir, { recursive: true });
+		symlinkSync("/nonexistent/target", extSubagent);
+
+		const result = runScript(join(fakePkg, "scripts", "postinstall.js"), { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("Removing stale subagent extension");
+		expect(result.stderr).toContain("Bundled Mach 12 source missing");
+		expect(pathExists(extSubagent)).toBe(false);
+	});
+
+	it("warns when stale extension cleanup fails for a non-ENOENT error", () => {
+		rmSync(fakeHome, { recursive: true, force: true });
+		writeFileSync(fakeHome, "not a directory");
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("Stale extension check failed");
 	});
 
 	it("no-op when agent/extensions/subagent does not exist", () => {
 		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).not.toContain("Removing stale subagent extension");
+		expect(result.stderr).not.toContain("Stale extension check failed");
 	});
 });
