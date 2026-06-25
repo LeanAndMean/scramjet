@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.31.1 — Add pitfalls and gotchas sections to issue-plan and issue-review
+
+Both commands now instruct the agent to consolidate discovered pitfalls into dedicated sections, ensuring implementation sessions receive concrete warnings about things that could go wrong ([#212](https://github.com/LeanAndMean/scramjet/issues/212)).
+
+### Changed
+
+- `mach12:issue-plan` Step 8: new "Pitfalls consolidation" planning requirement directing the agent to review constraint and architecture findings and consolidate concrete pitfalls
+- `mach12:issue-plan` Step 9: plan comment format now includes `## Pitfalls and Gotchas` section between the staged breakdown and Decision Log
+- `mach12:issue-review` Step 7: new item 6 "Pitfalls for implementation" consolidating risk findings into actionable warnings; Recommendation renumbered to 7
+- `mach12:issue-review` revision loop: architect brief includes existing pitfalls section with preservation instructions; delta assessment checks pitfalls completeness
+
 ## 0.31.0 — Add architect-driven plan revision loop to issue-review
 
 The "Update the plan" option in `mach12:issue-review` Step 7 is replaced by "Create revised plan", which dispatches `mach12:code-architect` to draft revisions instead of having the reviewing agent do so inline. Adds a structured revision loop with delta assessment (addressed/remaining/new findings), user-controlled iteration, and single-comment posting ([#210](https://github.com/LeanAndMean/scramjet/issues/210)).

@@ -157,7 +157,8 @@ Present your review to the user, organized as:
    - **Important**: Genuine issues or significant risks that should be addressed before implementation.
    - **Suggestions**: Useful improvements or explicitly deferred/out-of-scope concerns that are not blockers.
 5. **Questions**: Any clarifying questions that came up during your review.
-6. **Recommendation**: State whether the plan should be approved, revised, discussed further, or abandoned.
+6. **Pitfalls for implementation**: Consolidate risk findings from Steps 4 and 5 into concrete, actionable warnings for the implementation session. Draw from the "Risks and pitfalls" exploration lens and the "Risks" assessment axis. Each item should be specific enough that an implementation session can act on it without re-exploring.
+7. **Recommendation**: State whether the plan should be approved, revised, discussed further, or abandoned.
 
 Ask the user how they want to proceed:
 
@@ -176,6 +177,7 @@ If the user picks "Create revised plan", enter the revision loop:
    - The full findings list from Step 5 (with F/S identifiers and current classifications from Step 6), identifying which are Critical, Important, and Suggestions.
    - The raw exploration context from Step 4 — key files, observations, and codebase patterns discovered by the exploration subagents.
    - Any contribution guidelines or project planning requirements from Step 3.
+   - The existing plan's `## Pitfalls and Gotchas` section (if present). Instruct the architect to preserve existing pitfalls unless the revision makes them irrelevant, and to add any new pitfalls discovered during review.
    - If this is a subsequent revision iteration, include the prior revised plan and the delta assessment that prompted re-revision.
 
    Instruct the architect to produce a complete revised implementation plan that addresses the Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally.
@@ -184,6 +186,8 @@ If the user picks "Create revised plan", enter the revision loop:
    - **Addressed**: The revised plan resolves this finding. State how in one sentence.
    - **Remaining**: The revised plan does not resolve this finding, or only partially addresses it. State what is still missing.
    - **New issue**: The revised plan introduces a concern not present in the original review. Label with N-prefixed identifiers continuing from the highest prior N-number (e.g., if prior delta had N1–N3, new issues start at N4) and classify severity (Critical/Important/Suggestion) using the same criteria as Step 6.
+
+   Additionally, assess **pitfalls completeness**: does the revised plan's `## Pitfalls and Gotchas` section preserve pitfalls from the prior version (unless the corresponding plan aspect was removed) and incorporate any new pitfalls surfaced by the review? Flag dropped pitfalls or missing new ones.
 
    Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan or any prior iteration's delta — not a restatement of an existing finding under a different framing.
 
