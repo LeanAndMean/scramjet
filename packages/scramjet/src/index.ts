@@ -13,6 +13,7 @@ import { createLogger } from "./logger.js";
 import { registerModelIdentity } from "./model-identity.js";
 import { registerPrIndicator } from "./pr-indicator.js";
 import { registerScramjetCommand } from "./scramjet-command.js";
+import { registerSubagentTool } from "./subagent/index.js";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.js";
 import { registerSubdirContext } from "./subdir-context.js";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
@@ -48,6 +49,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerSubagentOutputAdvisor(pi, state);
 	registerAutoContinue(pi, state);
 	registerDiagramTool(pi);
+	registerSubagentTool(pi);
 	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);
 	registerCommandLoader(pi, state);
