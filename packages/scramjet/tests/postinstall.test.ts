@@ -122,10 +122,13 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 describe("scripts/postinstall.js — stale subagent extension cleanup", () => {
 	let workDir: string;
 	let xdgHome: string;
+	let fakeHome: string;
 
 	beforeEach(() => {
 		workDir = mkdtempSync(join(tmpdir(), "scramjet-postinstall-subagent-"));
 		xdgHome = join(workDir, "xdg");
+		fakeHome = join(workDir, "home");
+		mkdirSync(fakeHome, { recursive: true });
 	});
 
 	afterEach(() => {
@@ -133,29 +136,29 @@ describe("scripts/postinstall.js — stale subagent extension cleanup", () => {
 	});
 
 	it("removes a dangling symlink at agent/extensions/subagent", () => {
-		const extDir = join(xdgHome, "scramjet", "agent", "extensions");
+		const extDir = join(fakeHome, ".scramjet", "agent", "extensions");
 		mkdirSync(extDir, { recursive: true });
 		symlinkSync("/nonexistent/target", join(extDir, "subagent"));
 
-		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome });
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).toContain("Removing stale subagent extension");
 		expect(existsSync(join(extDir, "subagent"))).toBe(false);
 	});
 
 	it("removes a directory at agent/extensions/subagent", () => {
-		const extSubagent = join(xdgHome, "scramjet", "agent", "extensions", "subagent");
+		const extSubagent = join(fakeHome, ".scramjet", "agent", "extensions", "subagent");
 		mkdirSync(extSubagent, { recursive: true });
 		writeFileSync(join(extSubagent, "index.ts"), "// old extension");
 
-		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome });
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).toContain("Removing stale subagent extension");
 		expect(existsSync(extSubagent)).toBe(false);
 	});
 
 	it("no-op when agent/extensions/subagent does not exist", () => {
-		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome });
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
 		expect(result.stderr).not.toContain("Removing stale subagent extension");
 	});

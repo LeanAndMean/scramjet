@@ -48,10 +48,12 @@ try {
 	// lstat threw — dest doesn't exist at all, which is the normal first-install path.
 }
 
-// Clean up stale subagent extension symlink. The subagent tool is now a
-// builtin registered by initScramjet; the old extension symlink causes a
-// duplicate-tool conflict diagnostic if left in place.
-const extSubagent = join(destParent, "agent", "extensions", "subagent");
+// Clean up stale subagent extension. The subagent tool is now a builtin
+// registered by initScramjet; the old extension causes a duplicate-tool
+// conflict diagnostic if left in place. Extensions live in the config dir
+// (~/.scramjet/agent/extensions/), not the data dir.
+const configDir = join(homedir(), ".scramjet");
+const extSubagent = join(configDir, "agent", "extensions", "subagent");
 try {
 	const extStat = lstatSync(extSubagent);
 	if (extStat.isSymbolicLink() || extStat.isDirectory()) {
