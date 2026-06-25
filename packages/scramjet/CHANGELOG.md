@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.30.1 — Add assumption-transparency directive to system prompt
+
+New `# Transparency` section in base directives instructs the agent to state beliefs before asking questions, distinguish observations from inferences, and ground assertions in concrete evidence ([#208](https://github.com/LeanAndMean/scramjet/issues/208)).
+
+### Added
+
+- Three imperative bullets in `SCRAMJET_BASE_DIRECTIVES` covering assumption-stating, observation vs. inference distinction, and evidence-grounding
+- Test anchor in `base-directives.test.ts`
+
 ## 0.30.0 — Register subagent tool as a Scramjet builtin
 
 The `subagent` tool is now registered directly by `initScramjet` instead of requiring manual symlink installation of the example extension. Every Scramjet session has the tool available out of the box ([#205](https://github.com/LeanAndMean/scramjet/issues/205)).
