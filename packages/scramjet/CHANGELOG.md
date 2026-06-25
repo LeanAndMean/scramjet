@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.31.0 — Add architect-driven plan revision loop to issue-review
+
+The "Update the plan" option in `mach12:issue-review` Step 7 is replaced by "Create revised plan", which dispatches `mach12:code-architect` to draft revisions instead of having the reviewing agent do so inline. Adds a structured revision loop with delta assessment (addressed/remaining/new findings), user-controlled iteration, and single-comment posting ([#210](https://github.com/LeanAndMean/scramjet/issues/210)).
+
+### Changed
+
+- `mach12:issue-review` Step 7: "Update the plan" renamed to "Create revised plan" with architect subagent dispatch
+- Revision loop includes comprehensive brief (plan, findings with F/S identifiers, exploration context, contribution guidelines)
+- Delta assessment classifies findings as Addressed/Remaining/New with N-prefixed identifiers for new issues
+- Sub-options after each revision: post / revise again / discuss findings
+- Fix: delta assessment tracks N-prefixed items across revision iterations
+
 ## 0.30.1 — Add assumption-transparency directive to system prompt
 
 New `# Transparency` section in base directives instructs the agent to state beliefs before asking questions, distinguish observations from inferences, and ground assertions in concrete evidence ([#208](https://github.com/LeanAndMean/scramjet/issues/208)).
