@@ -189,6 +189,8 @@ Before finalizing the plan, verify it satisfies the following:
 
 **Test coverage planning:** If Step 7 produced a test strategy, incorporate its per-stage test directives into the relevant stages. If Step 7 took the lightweight path, use its inline note. Each stage that introduces or modifies behavior must specify what tests to add or modify and what behaviors to cover. If the project has no testable runtime code (e.g., plugin definitions, documentation, configuration), note this and skip test planning.
 
+**Pitfalls consolidation:** Review findings from Step 4's "Constraints and edge cases" lens and Step 6's architecture analysis (including each lens's "What evidence would make this approach inappropriate" statement). Consolidate concrete pitfalls into a `## Pitfalls and Gotchas` section in the plan. Each item should be a specific, actionable warning — things that could go wrong, subtle constraints, non-obvious dependencies, or easy-to-miss edge cases that the implementation session needs to be aware of. Do not include boilerplate warnings or generic risk statements.
+
 **Each stage must be scoped to what can be implemented within a single session.** A stage that is too large should be split. Consider:
 - The amount of codebase exploration needed
 - The number of files to create or modify
@@ -211,7 +213,8 @@ After the user approves the plan:
    - `<!-- mach12-plan -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
    - The full implementation plan.
    - The staged breakdown.
-   - A `## Decision Log` section appended after the staged breakdown. This section captures the reasoning behind key decisions made during planning:
+   - A `## Pitfalls and Gotchas` section after the staged breakdown: concrete warnings discovered during exploration and architecture design — things that could go wrong, subtle constraints, non-obvious dependencies, easy-to-miss edge cases. Bullet list format; each item actionable and specific to this implementation.
+   - A `## Decision Log` section appended after the pitfalls section. This section captures the reasoning behind key decisions made during planning:
      - **Clarifying Questions (Step 5):** For each question asked and answered, include the question and a synthesized answer. Only include exchanges where the answer changed or constrained the plan. Omit exchanges where the user confirmed a default or said "whatever you think is best."
      - **Architecture Choice (Step 6):** The selected approach, the rationale for choosing it, and the alternatives considered with brief reasons for rejection.
      - **Omission condition:** Skip the Decision Log section entirely if Step 5 produced no questions AND Step 6 had no meaningful differentiation between approaches.
