@@ -196,6 +196,19 @@ function getSummaryOutput(r: SingleResult): string {
 	return isResultError(r) ? getResultOutput(r) : getFinalOutput(r.messages) || "(no output)";
 }
 
+function aggregateUsage(results: SingleResult[]) {
+	const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	for (const r of results) {
+		total.input += r.usage.input;
+		total.output += r.usage.output;
+		total.cacheRead += r.usage.cacheRead;
+		total.cacheWrite += r.usage.cacheWrite;
+		total.cost += r.usage.cost;
+		total.turns += r.usage.turns;
+	}
+	return total;
+}
+
 function formatDiscoveryDiagnostics(diagnostics: string[]): string {
 	return diagnostics.length === 0
 		? ""
@@ -828,19 +841,6 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				if (usageStr) text += `\n${theme.fg("dim", usageStr)}`;
 				return new Text(text, 0, 0);
 			}
-
-			const aggregateUsage = (results: SingleResult[]) => {
-				const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-				for (const r of results) {
-					total.input += r.usage.input;
-					total.output += r.usage.output;
-					total.cacheRead += r.usage.cacheRead;
-					total.cacheWrite += r.usage.cacheWrite;
-					total.cost += r.usage.cost;
-					total.turns += r.usage.turns;
-				}
-				return total;
-			};
 
 			if (details.mode === "chain") {
 				const successCount = details.results.filter((r) => !isResultError(r)).length;

@@ -389,6 +389,211 @@ describe("subagent tool — failure reporting", () => {
 	});
 });
 
+describe("subagent tool — chain mode", () => {
+	let tmpDir: string;
+	let origArgv1: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-subagent-test-"));
+		origArgv1 = process.argv[1];
+		writeProjectAgent(tmpDir, "echo-agent.md", ["name: echo-agent", "description: Echo agent"]);
+	});
+
+	afterEach(() => {
+		process.argv[1] = origArgv1;
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("substitutes {previous} placeholder with prior step output", async () => {
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			`const task = process.argv[process.argv.length - 1];
+			const match = task.match(/Task: (.*)/);
+			const text = match ? match[1] : task;
+			process.stdout.write(${JSON.stringify("")}+JSON.stringify({
+				type: "message_end",
+				message: { role: "assistant", content: [{ type: "text", text }] }
+			})+"\\n");
+			`,
+		);
+		const tool = registeredSubagentTool();
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{
+				chain: [
+					{ agent: "echo-agent", task: "step-one-output" },
+					{ agent: "echo-agent", task: "received: {previous}" },
+				],
+				agentScope: "project",
+				confirmProjectAgents: false,
+			},
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(textContent(result)).toContain("received: step-one-output");
+		expect(result.isError).toBeUndefined();
+	});
+
+	it("stops at first error and reports the failing step", async () => {
+		process.argv[1] = writeFakeInvocation(tmpDir, 'process.stderr.write("step failed\\n"); process.exit(1);\n');
+		const tool = registeredSubagentTool();
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{
+				chain: [
+					{ agent: "echo-agent", task: "will-fail" },
+					{ agent: "echo-agent", task: "should-not-run {previous}" },
+				],
+				agentScope: "project",
+				confirmProjectAgents: false,
+			},
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(result.isError).toBe(true);
+		expect(textContent(result)).toContain("Chain stopped at step 1");
+		expect(textContent(result)).toContain("step failed");
+		expect(result.details.results).toHaveLength(1);
+	});
+});
+
+describe("subagent tool — validation guards", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-subagent-test-"));
+		writeProjectAgent(tmpDir, "test-agent.md", ["name: test-agent", "description: Test agent"]);
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("rejects when multiple modes are specified", async () => {
+		const tool = registeredSubagentTool();
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{
+				agent: "test-agent",
+				task: "do something",
+				tasks: [{ agent: "test-agent", task: "also do something" }],
+				agentScope: "project",
+				confirmProjectAgents: false,
+			},
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(textContent(result)).toContain("Invalid parameters");
+		expect(textContent(result)).toContain("exactly one mode");
+	});
+
+	it("rejects when parallel tasks exceed MAX_PARALLEL_TASKS", async () => {
+		const tool = registeredSubagentTool();
+		const tasks = Array.from({ length: 9 }, (_, i) => ({ agent: "test-agent", task: `task-${i}` }));
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ tasks, agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(textContent(result)).toContain("Too many parallel tasks (9)");
+		expect(textContent(result)).toContain("Max is 8");
+	});
+});
+
+describe("discoverAgents — scope override", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-agent-test-"));
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("project agent with same name shadows user agent in 'both' scope", () => {
+		writeProjectAgent(tmpDir, "shared-agent.md", ["name: shared-agent", "description: project version"]);
+
+		const userDir = path.join(os.tmpdir(), `scramjet-agent-user-${Date.now()}`);
+		fs.mkdirSync(userDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(userDir, "shared-agent.md"),
+			["---", "name: shared-agent", "description: user version", "---", "", "body"].join("\n"),
+		);
+
+		vi.doMock("@leanandmean/coding-agent", async (importOriginal) => {
+			const original = (await importOriginal()) as any;
+			return {
+				...original,
+				getAgentDir: () => path.dirname(userDir),
+			};
+		});
+
+		return import("../src/subagent/agents.js").then(({ discoverAgents: discover }) => {
+			const result = discover(tmpDir, "both");
+
+			const sharedAgent = result.agents.find((a: any) => a.name === "shared-agent");
+			expect(sharedAgent).toBeDefined();
+			expect(sharedAgent!.description).toBe("project version");
+			expect(sharedAgent!.source).toBe("project");
+
+			fs.rmSync(userDir, { recursive: true, force: true });
+			vi.restoreAllMocks();
+		});
+	});
+});
+
+describe("discoverAgents — error diagnostics", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-agent-test-"));
+	});
+
+	afterEach(() => {
+		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
+		try {
+			fs.chmodSync(agentsDir, 0o755);
+		} catch {}
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("reports diagnostic when readdirSync fails on an existing directory", () => {
+		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.chmodSync(agentsDir, 0o000);
+
+		const result = discoverAgents(tmpDir, "project");
+
+		expect(result.agents).toEqual([]);
+		expect(result.diagnostics).toEqual([expect.stringContaining("failed to read agent directory")]);
+	});
+
+	it("reports diagnostic when readFileSync fails on a dangling symlink", () => {
+		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.symlinkSync("/nonexistent/target.md", path.join(agentsDir, "dangling.md"));
+
+		const result = discoverAgents(tmpDir, "project");
+
+		expect(result.agents).toEqual([]);
+		expect(result.diagnostics).toEqual([expect.stringContaining("failed to read agent file")]);
+	});
+});
+
 describe("getPiInvocation — fallback", () => {
 	let origArgv1: string;
 	let origExecPath: string;

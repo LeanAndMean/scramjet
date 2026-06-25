@@ -35,7 +35,8 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 	let entries: fs.Dirent[];
 	try {
 		entries = fs.readdirSync(dir, { withFileTypes: true });
-	} catch {
+	} catch (err) {
+		diagnostics.push(`${dir}: failed to read agent directory (${errorMessage(err)})`);
 		return agents;
 	}
 
@@ -47,7 +48,8 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 		let content: string;
 		try {
 			content = fs.readFileSync(filePath, "utf-8");
-		} catch {
+		} catch (err) {
+			diagnostics.push(`${filePath}: failed to read agent file (${errorMessage(err)})`);
 			continue;
 		}
 
