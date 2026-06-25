@@ -109,8 +109,10 @@ try {
 	// lstat succeeded (link exists) but existsSync failed (target missing) — dangling symlink.
 	console.warn(`[scramjet] Removing dangling symlink at ${dest}`);
 	unlinkSync(dest);
-} catch {
-	// lstat threw — dest doesn't exist at all, which is the normal first-install path.
+} catch (err) {
+	if (errorCode(err) !== "ENOENT") {
+		console.warn(`[scramjet] Cannot inspect ${dest}: ${errorMessage(err)}`);
+	}
 }
 
 const tmp = `${dest}.tmp-${process.pid}`;

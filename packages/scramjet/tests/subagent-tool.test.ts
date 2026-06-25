@@ -564,7 +564,11 @@ describe("discoverAgents — error diagnostics", () => {
 	});
 
 	afterEach(() => {
-		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
+		const scramjetDir = path.join(tmpDir, ".scramjet");
+		const agentsDir = path.join(scramjetDir, "agents");
+		try {
+			fs.chmodSync(scramjetDir, 0o755);
+		} catch {}
 		try {
 			fs.chmodSync(agentsDir, 0o755);
 		} catch {}
@@ -580,6 +584,19 @@ describe("discoverAgents — error diagnostics", () => {
 
 		expect(result.agents).toEqual([]);
 		expect(result.diagnostics).toEqual([expect.stringContaining("failed to read agent directory")]);
+	});
+
+	it("reports diagnostic when statSync fails with EACCES during directory walk", () => {
+		const scramjetDir = path.join(tmpDir, ".scramjet");
+		const agentsDir = path.join(scramjetDir, "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.chmodSync(scramjetDir, 0o000);
+
+		const result = discoverAgents(tmpDir, "project");
+
+		expect(result.agents).toEqual([]);
+		expect(result.projectAgentsDir).toBeNull();
+		expect(result.diagnostics).toEqual([expect.stringContaining("cannot check directory")]);
 	});
 
 	it("reports diagnostic when readFileSync fails on a dangling symlink", () => {

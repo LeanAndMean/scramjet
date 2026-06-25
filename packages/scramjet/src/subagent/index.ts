@@ -192,10 +192,6 @@ function getResultOutput(r: SingleResult): string {
 	return r.errorMessage || r.stderr || getFinalOutput(r.messages) || "(no output)";
 }
 
-function getSummaryOutput(r: SingleResult): string {
-	return isResultError(r) ? getResultOutput(r) : getFinalOutput(r.messages) || "(no output)";
-}
-
 function aggregateUsage(results: SingleResult[]) {
 	const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 	for (const r of results) {
@@ -471,7 +467,7 @@ const SubagentParams = Type.Object({
 });
 
 export function registerSubagentTool(pi: ExtensionAPI) {
-	pi.registerTool({
+	pi.registerTool<typeof SubagentParams, SubagentDetails>({
 		name: "subagent",
 		label: "Subagent",
 		description: [
@@ -660,7 +656,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				const successCount = results.filter((r) => !isResultError(r)).length;
 				const summaries = results.map((r) => {
 					const failed = isResultError(r);
-					const output = getSummaryOutput(r);
+					const output = failed ? getResultOutput(r) : getFinalOutput(r.messages) || "(no output)";
 					return `[${r.agent}] ${failed ? "failed" : "completed"}: ${output}`;
 				});
 				const parallelResult = {
@@ -759,7 +755,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 		},
 
 		renderResult(result, { expanded }, theme, _context) {
-			const details = result.details as SubagentDetails | undefined;
+			const details = result.details;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);

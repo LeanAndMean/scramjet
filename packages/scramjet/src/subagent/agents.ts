@@ -100,19 +100,18 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 	return agents;
 }
 
-function isDirectory(p: string): boolean {
-	try {
-		return fs.statSync(p).isDirectory();
-	} catch {
-		return false;
-	}
-}
-
-function findNearestProjectAgentsDir(cwd: string): string | null {
+function findNearestProjectAgentsDir(cwd: string, diagnostics: string[]): string | null {
 	let currentDir = cwd;
 	while (true) {
 		const candidate = path.join(currentDir, ".scramjet", "agents");
-		if (isDirectory(candidate)) return candidate;
+		try {
+			if (fs.statSync(candidate).isDirectory()) return candidate;
+		} catch (err) {
+			const code = (err as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && code !== "ENOTDIR") {
+				diagnostics.push(`${candidate}: cannot check directory (${errorMessage(err)})`);
+			}
+		}
 
 		const parentDir = path.dirname(currentDir);
 		if (parentDir === currentDir) return null;
@@ -122,8 +121,8 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
-	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 	const diagnostics: string[] = [];
+	const projectAgentsDir = findNearestProjectAgentsDir(cwd, diagnostics);
 
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user", diagnostics);
 	const projectAgents =
