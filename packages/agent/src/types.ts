@@ -81,6 +81,12 @@ export interface AfterToolCallResult {
 	terminate?: boolean;
 }
 
+/** Context passed to `beforeToolBatch`. */
+export interface BeforeToolBatchContext {
+	/** The assistant message whose tool calls are about to be extracted and executed. */
+	assistantMessage: AssistantMessage;
+}
+
 /** Context passed to `beforeToolCall`. */
 export interface BeforeToolCallContext {
 	/** The assistant message that requested the tool call. */
@@ -253,6 +259,20 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * Default: "parallel"
 	 */
 	toolExecution?: ToolExecutionMode;
+
+	// SCRAMJET-DIVERGENCE: beforeToolBatch hook allows async message_end handlers to
+	// complete before tool-call extraction, enabling message mutation (e.g., injecting
+	// additional tool calls) to be visible to the execution pipeline.
+	/**
+	 * Called after the assistant message is finalized and `message_end` has been emitted,
+	 * but before tool calls are extracted from the message content.
+	 *
+	 * Use this to ensure async event processing (e.g., queued `message_end` handlers that
+	 * mutate the assistant message in place) has completed before tool-call extraction.
+	 *
+	 * The hook receives the agent abort signal and is responsible for honoring it.
+	 */
+	beforeToolBatch?: (context: BeforeToolBatchContext, signal?: AbortSignal) => Promise<void>;
 
 	/**
 	 * Called before a tool is executed, after arguments have been validated.

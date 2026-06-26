@@ -19,6 +19,7 @@ import type {
 	AgentMessage,
 	AgentState,
 	AgentTool,
+	BeforeToolBatchContext,
 	BeforeToolCallContext,
 	BeforeToolCallResult,
 	QueueMode,
@@ -101,6 +102,7 @@ export interface AgentOptions {
 	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 	onPayload?: SimpleStreamOptions["onPayload"];
 	onResponse?: SimpleStreamOptions["onResponse"];
+	beforeToolBatch?: (context: BeforeToolBatchContext, signal?: AbortSignal) => Promise<void>;
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
 	prepareNextTurn?: (
@@ -172,6 +174,8 @@ export class Agent {
 	public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 	public onPayload?: SimpleStreamOptions["onPayload"];
 	public onResponse?: SimpleStreamOptions["onResponse"];
+	// SCRAMJET-DIVERGENCE: beforeToolBatch hook for pre-extraction queue drain
+	public beforeToolBatch?: (context: BeforeToolBatchContext, signal?: AbortSignal) => Promise<void>;
 	public beforeToolCall?: (
 		context: BeforeToolCallContext,
 		signal?: AbortSignal,
@@ -203,6 +207,7 @@ export class Agent {
 		this.getApiKey = options.getApiKey;
 		this.onPayload = options.onPayload;
 		this.onResponse = options.onResponse;
+		this.beforeToolBatch = options.beforeToolBatch;
 		this.beforeToolCall = options.beforeToolCall;
 		this.afterToolCall = options.afterToolCall;
 		this.prepareNextTurn = options.prepareNextTurn;
@@ -428,6 +433,7 @@ export class Agent {
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
+			beforeToolBatch: this.beforeToolBatch,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			prepareNextTurn: this.prepareNextTurn ? async () => await this.prepareNextTurn?.(this.signal) : undefined,

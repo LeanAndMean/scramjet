@@ -199,6 +199,10 @@ async function runLoop(
 				return;
 			}
 
+			// SCRAMJET-DIVERGENCE: beforeToolBatch drain ensures async message_end handlers
+			// (which may mutate the assistant message in place) complete before extraction.
+			await config.beforeToolBatch?.({ assistantMessage: message }, signal);
+
 			// Check for tool calls
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
