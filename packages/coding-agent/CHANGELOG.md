@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- `beforeToolBatch` hook on `AgentLoopConfig` / `Agent` — called after assistant `message_end` but before tool-call extraction, allowing async event handlers (e.g., queued `message_end` mutations) to settle before the execution pipeline reads tool calls ([#196](https://github.com/LeanAndMean/scramjet/issues/196))
+- `AgentSession._drainAgentEventQueue()` helper — awaits the queued extension event promise; wired into both `beforeToolBatch` (pre-extraction drain) and `beforeToolCall` (per-tool drain)
+
 ### Changed
 
 - **Documentation rebrand**: Rebranded all shipped documentation, examples, and system prompt from Pi identity to Scramjet identity. Product name references, binary name (`pi` → `scramjet`), env var names (`PI_*` → `SCRAMJET_*`), and install instructions updated throughout. API variable names (`pi.on()`, `pi.registerTool()`) and `.pi/` config directory paths are preserved. ([#199](https://github.com/LeanAndMean/scramjet/issues/199))

@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.32.0 — Surface subdirectory context discoveries as first-class reads
+
+Subdirectory `CLAUDE.md` and `AGENTS.md` files discovered during agent operation are now loaded via injected standard `read` tool calls instead of synthetic context hooks. Discovered files appear as normal read rows in the TUI, persist in session history, survive compaction, and reconstruct correctly on resume ([#196](https://github.com/LeanAndMean/scramjet/issues/196)).
+
+### Changed
+
+- `subdir-context.ts`: rewrote from `tool_result` synthetic injection to `message_end` handler that inserts normal `read` tool-call blocks before each triggering read
+- Reconstruction rebuilt from standard persisted read call/result pairs (no custom discovery entries)
+- Removed `subdirDiscoveries` / `SubdirDiscovery` from `ScramjetState` and `types.ts`
+
+### Runtime dependencies
+
+- `@leanandmean/agent` `0.74.1-scramjet.5`: new `beforeToolBatch` hook for pre-extraction queue drain
+- `@leanandmean/coding-agent` `0.74.1-scramjet.6`: `AgentSession` wires `beforeToolBatch` to drain event queue
+
+## 0.31.1 — Add pitfalls and gotchas sections to issue-plan and issue-review
+
+Both commands now instruct the agent to consolidate discovered pitfalls into dedicated sections, ensuring implementation sessions receive concrete warnings about things that could go wrong ([#212](https://github.com/LeanAndMean/scramjet/issues/212)).
+
+### Changed
+
+- `mach12:issue-plan` Step 8: new "Pitfalls consolidation" planning requirement directing the agent to review constraint and architecture findings and consolidate concrete pitfalls
+- `mach12:issue-plan` Step 9: plan comment format now includes `## Pitfalls and Gotchas` section between the staged breakdown and Decision Log
+- `mach12:issue-review` Step 7: new item 6 "Pitfalls for implementation" consolidating risk findings into actionable warnings; Recommendation renumbered to 7
+- `mach12:issue-review` revision loop: architect brief includes existing pitfalls section with preservation instructions; delta assessment checks pitfalls completeness
+
+## 0.31.0 — Add architect-driven plan revision loop to issue-review
+
+The "Update the plan" option in `mach12:issue-review` Step 7 is replaced by "Create revised plan", which dispatches `mach12:code-architect` to draft revisions instead of having the reviewing agent do so inline. Adds a structured revision loop with delta assessment (addressed/remaining/new findings), user-controlled iteration, and single-comment posting ([#210](https://github.com/LeanAndMean/scramjet/issues/210)).
+
+### Changed
+
+- `mach12:issue-review` Step 7: "Update the plan" renamed to "Create revised plan" with architect subagent dispatch
+- Revision loop includes comprehensive brief (plan, findings with F/S identifiers, exploration context, contribution guidelines)
+- Delta assessment classifies findings as Addressed/Remaining/New with N-prefixed identifiers for new issues
+- Sub-options after each revision: post / revise again / discuss findings
+- Fix: delta assessment tracks N-prefixed items across revision iterations
+
+## 0.30.1 — Add assumption-transparency directive to system prompt
+
+New `# Transparency` section in base directives instructs the agent to state beliefs before asking questions, distinguish observations from inferences, and ground assertions in concrete evidence ([#208](https://github.com/LeanAndMean/scramjet/issues/208)).
+
+### Added
+
+- Three imperative bullets in `SCRAMJET_BASE_DIRECTIVES` covering assumption-stating, observation vs. inference distinction, and evidence-grounding
+- Test anchor in `base-directives.test.ts`
+
 ## 0.30.0 — Register subagent tool as a Scramjet builtin
 
 The `subagent` tool is now registered directly by `initScramjet` instead of requiring manual symlink installation of the example extension. Every Scramjet session has the tool available out of the box ([#205](https://github.com/LeanAndMean/scramjet/issues/205)).

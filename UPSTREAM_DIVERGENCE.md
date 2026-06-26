@@ -24,6 +24,9 @@ Package names in `package.json` files were also renamed:
 
 | File | Change | Why |
 |------|--------|-----|
+| `packages/agent/src/types.ts` | Added `BeforeToolBatchContext` interface; added optional `beforeToolBatch` to `AgentLoopConfig` | Pre-extraction hook for async `message_end` mutation drain ([#196](https://github.com/LeanAndMean/scramjet/issues/196)) |
+| `packages/agent/src/agent.ts` | Added `beforeToolBatch` to `AgentOptions`, `Agent` class properties, constructor, and `createLoopConfig()` | Wires hook from options through to loop config ([#196](https://github.com/LeanAndMean/scramjet/issues/196)) |
+| `packages/agent/src/agent-loop.ts` | Awaits `config.beforeToolBatch?.(...)` after assistant `message_end` and before tool-call extraction | Ensures queued async handlers settle before pipeline reads tool calls ([#196](https://github.com/LeanAndMean/scramjet/issues/196)) |
 | `packages/coding-agent/package.json` | Added `piConfig: { name: "scramjet", configDir: ".scramjet" }` | Rebrands TUI to "scramjet", sets config/agent dir names |
 | `packages/coding-agent/src/config.ts` | `VERSION` reads `SCRAMJET_VERSION` env var first; `getChangelogPath()` reads `SCRAMJET_CHANGELOG_PATH`; `getPackageDir()` reads `SCRAMJET_PACKAGE_DIR` with `PI_PACKAGE_DIR` fallback; removed `getShareViewerUrl()`/`DEFAULT_SHARE_VIEWER_URL`; download URL points to `LeanAndMean/scramjet` | Product displays its own changelog, env vars, and URLs |
 | `packages/coding-agent/src/main.ts` | Added `builtinInit` to `MainOptions` interface; `--offline` sets `SCRAMJET_OFFLINE`; offline check reads `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback | Direct product wiring + rebranded env vars |
@@ -38,6 +41,7 @@ Package names in `package.json` files were also renamed:
 | `packages/coding-agent/src/utils/tools-manager.ts` | `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback | Rebranded env var |
 | `packages/coding-agent/src/modes/interactive/interactive-mode.ts` | Removed `reportInstallTelemetry()`, `showNewVersionNotification()`, `handleShareCommand()`; rebrand "Pi" → `APP_NAME` in onboarding/tmux warning; `SCRAMJET_OFFLINE` with fallback | No pi.dev telemetry/version check; product branding |
 | `packages/coding-agent/src/migrations.ts` | `MIGRATION_GUIDE_URL` and `EXTENSIONS_DOC_URL` point to `LeanAndMean/scramjet` | Product URLs |
+| `packages/coding-agent/src/core/agent-session.ts` | Added `_drainAgentEventQueue()` helper; set `this.agent.beforeToolBatch` to drain queue; refactored existing `beforeToolCall` to reuse helper | Pre-extraction queue drain ensures async `message_end` handlers complete before tool-call extraction ([#196](https://github.com/LeanAndMean/scramjet/issues/196)) |
 | `packages/coding-agent/src/cli/args.ts` | Env var docs rebranded to `SCRAMJET_*` with `(PI_* also accepted)` notes; removed `PI_SHARE_VIEWER_URL`; `--offline` references `SCRAMJET_OFFLINE` | Help text reflects product env vars |
 
 ### Documentation rebrand
@@ -60,6 +64,8 @@ Preserved:
 
 - `packages/tui/` — no source modifications
 - `packages/ai/` — no source modifications
+
+Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above.
 
 ## Cherry-Pick Workflow
 
