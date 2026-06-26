@@ -82,6 +82,8 @@ export async function discoverContextFilePaths(
 				} else {
 					logger.warn("subdir-context", `realpath(cwd) failed: ${err.code}`, { cwd });
 				}
+			} else if (logger) {
+				logger.warn("subdir-context", `realpath(cwd) failed: ${err}`, { cwd });
 			}
 			return results;
 		}
@@ -96,8 +98,12 @@ export async function discoverContextFilePaths(
 		try {
 			realDir = await realpath(dir);
 		} catch (err: unknown) {
-			if (logger && isNodeError(err) && err.code !== "ENOENT") {
-				logger.warn("subdir-context", `realpath(dir) failed: ${err.code}`, { dir });
+			if (isNodeError(err)) {
+				if (logger && err.code !== "ENOENT") {
+					logger.warn("subdir-context", `realpath(dir) failed: ${err.code}`, { dir });
+				}
+			} else if (logger) {
+				logger.warn("subdir-context", `realpath(dir) failed: ${err}`, { dir });
 			}
 			continue;
 		}
@@ -121,6 +127,8 @@ export async function discoverContextFilePaths(
 					allFailuresTransient = false;
 				} else if (logger && isNodeError(err)) {
 					logger.warn("subdir-context", `access check failed: ${err.code}`, { path: filePath });
+				} else if (logger) {
+					logger.warn("subdir-context", `access check failed: ${err}`, { path: filePath });
 				}
 			}
 		}
@@ -198,8 +206,14 @@ export async function reconstructSubdirState(
 		try {
 			const realDir = await realpath(dir);
 			loadedPaths.add(realDir);
-		} catch {
-			logger?.debug("subdir-context", `failed to resolve dir for reconstruction: ${filePath}`);
+		} catch (err: unknown) {
+			if (isNodeError(err) && err.code === "ENOENT") {
+				logger?.debug("subdir-context", `reconstruction skipped (dir removed): ${filePath}`);
+			} else {
+				logger?.warn("subdir-context", `reconstruction failed: ${isNodeError(err) ? err.code : err}`, {
+					path: filePath,
+				});
+			}
 		}
 	}
 

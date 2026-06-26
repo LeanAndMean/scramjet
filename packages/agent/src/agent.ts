@@ -174,7 +174,7 @@ export class Agent {
 	public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 	public onPayload?: SimpleStreamOptions["onPayload"];
 	public onResponse?: SimpleStreamOptions["onResponse"];
-	// SCRAMJET-DIVERGENCE: beforeToolBatch hook for pre-extraction queue drain
+	// SCRAMJET-DIVERGENCE: beforeToolBatch hook — async message_end mutations must settle before tool-call extraction
 	public beforeToolBatch?: (context: BeforeToolBatchContext, signal?: AbortSignal) => Promise<void>;
 	public beforeToolCall?: (
 		context: BeforeToolCallContext,
