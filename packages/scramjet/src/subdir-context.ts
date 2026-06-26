@@ -1,17 +1,15 @@
 import { createHash } from "node:crypto";
-import { readFile, realpath } from "node:fs/promises";
+import { access, constants, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentMessage } from "@leanandmean/agent";
-import type { AssistantMessage, ToolResultMessage, Usage } from "@leanandmean/ai";
+import type { AssistantMessage, ToolCall } from "@leanandmean/ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
-import { isReadToolResult } from "@leanandmean/coding-agent";
-import type { ScramjetState, SubdirDiscovery } from "./types.js";
+import type { ScramjetState } from "./types.js";
 
 export const MAX_DIRS = 20;
 export const MAX_DEPTH = 10;
 export const CANDIDATES = ["CLAUDE.md", "AGENTS.md"] as const;
-export const SUBDIR_CONTEXT_DISCOVERY_TYPE = "scramjet:subdir-context-discovery";
 
 function normalizeReadPathInput(filePath: string): string {
 	return filePath.startsWith("@") ? filePath.slice(1) : filePath;
@@ -53,21 +51,25 @@ export function directoriesToCheck(filePath: string, cwd: string): { dirs: strin
 	return { dirs, outsideCwd: false };
 }
 
-export interface DiscoveredFile {
+export interface DiscoveredPath {
 	dir: string;
 	dirRealpath: string;
 	filename: (typeof CANDIDATES)[number];
-	content: string;
+	displayPath: string;
 }
 
-export async function discoverContextFiles(
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+	return err instanceof Error && "code" in err;
+}
+
+export async function discoverContextFilePaths(
 	dirs: string[],
 	loadedPaths: Set<string>,
 	cwd: string,
 	logger?: ScramjetState["logger"],
 	options?: { enforceCwdBoundary?: boolean },
-): Promise<DiscoveredFile[]> {
-	const results: DiscoveredFile[] = [];
+): Promise<DiscoveredPath[]> {
+	const results: DiscoveredPath[] = [];
 	const enforceCwdBoundary = options?.enforceCwdBoundary ?? true;
 	let realCwd: string | null = null;
 	if (enforceCwdBoundary) {
@@ -80,10 +82,14 @@ export async function discoverContextFiles(
 				} else {
 					logger.warn("subdir-context", `realpath(cwd) failed: ${err.code}`, { cwd });
 				}
+			} else if (logger) {
+				logger.warn("subdir-context", `realpath(cwd) failed: ${err}`, { cwd });
 			}
 			return results;
 		}
 	}
+
+	const normalizedCwd = resolve(cwd);
 
 	for (const dir of dirs) {
 		if (loadedPaths.size >= MAX_DIRS) break;
@@ -92,8 +98,12 @@ export async function discoverContextFiles(
 		try {
 			realDir = await realpath(dir);
 		} catch (err: unknown) {
-			if (logger && isNodeError(err) && err.code !== "ENOENT") {
-				logger.warn("subdir-context", `realpath(dir) failed: ${err.code}`, { dir });
+			if (isNodeError(err)) {
+				if (logger && err.code !== "ENOENT") {
+					logger.warn("subdir-context", `realpath(dir) failed: ${err.code}`, { dir });
+				}
+			} else if (logger) {
+				logger.warn("subdir-context", `realpath(dir) failed: ${err}`, { dir });
 			}
 			continue;
 		}
@@ -102,24 +112,28 @@ export async function discoverContextFiles(
 		if (loadedPaths.has(realDir)) continue;
 		loadedPaths.add(realDir);
 
-		let anySuccess = false;
+		let anyAccessible = false;
 		let allFailuresTransient = true;
 		for (const candidate of CANDIDATES) {
 			const filePath = resolve(dir, candidate);
 			try {
-				const content = await readFile(filePath, "utf-8");
-				results.push({ dir, dirRealpath: realDir, filename: candidate, content });
-				anySuccess = true;
+				await access(filePath, constants.R_OK);
+				const rel = relative(normalizedCwd, filePath);
+				const displayPath = isOutsideRelativePath(rel) ? filePath : rel;
+				results.push({ dir, dirRealpath: realDir, filename: candidate, displayPath });
+				anyAccessible = true;
 			} catch (err: unknown) {
 				if (isNodeError(err) && err.code === "ENOENT") {
 					allFailuresTransient = false;
 				} else if (logger && isNodeError(err)) {
-					logger.warn("subdir-context", `readFile failed: ${err.code}`, { path: filePath });
+					logger.warn("subdir-context", `access check failed: ${err.code}`, { path: filePath });
+				} else if (logger) {
+					logger.warn("subdir-context", `access check failed: ${err}`, { path: filePath });
 				}
 			}
 		}
 
-		if (!anySuccess && allFailuresTransient) {
+		if (!anyAccessible && allFailuresTransient) {
 			loadedPaths.delete(realDir);
 		}
 	}
@@ -127,219 +141,151 @@ export async function discoverContextFiles(
 	return results;
 }
 
-export function createStableId(displayPath: string): string {
-	const hash = createHash("sha256").update(displayPath).digest("hex").slice(0, 12);
+export function createStableId(input: string): string {
+	const hash = createHash("sha256").update(input).digest("hex").slice(0, 12);
 	return `scrctx-${hash}`;
 }
-
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-	return err instanceof Error && "code" in err;
-}
-
-interface DiscoveryJournalEntry {
-	toolCallId: string;
-	dirRealpath: string;
-	filename: SubdirDiscovery["filename"];
-	displayPath: string;
-	content: string;
-}
-
-export function reconstructSubdirState(
-	entries: readonly SessionEntry[],
-	logger?: ScramjetState["logger"],
-): {
-	loadedPaths: Set<string>;
-	discoveries: SubdirDiscovery[];
-} {
-	let loadedPaths = new Set<string>();
-	let discoveries: SubdirDiscovery[] = [];
-
-	for (const entry of entries) {
-		if (entry.type === "compaction") {
-			loadedPaths = new Set();
-			discoveries = [];
-			continue;
-		}
-		if (entry.type !== "custom" || entry.customType !== SUBDIR_CONTEXT_DISCOVERY_TYPE) continue;
-
-		const data = entry.data as DiscoveryJournalEntry | undefined;
-		if (
-			!data ||
-			typeof data.toolCallId !== "string" ||
-			typeof data.dirRealpath !== "string" ||
-			(data.filename !== "CLAUDE.md" && data.filename !== "AGENTS.md") ||
-			typeof data.displayPath !== "string" ||
-			typeof data.content !== "string"
-		) {
-			logger?.debug("subdir-context", "skipping malformed journal entry during reconstruction", {
-				entryId: (entry as any).id,
-				reason: !data ? "null data" : "invalid field types",
-			});
-			continue;
-		}
-
-		loadedPaths.add(data.dirRealpath);
-		discoveries.push({
-			toolCallId: data.toolCallId,
-			dirRealpath: data.dirRealpath,
-			filename: data.filename,
-			displayPath: data.displayPath,
-			content: data.content,
-		});
-	}
-
-	return { loadedPaths, discoveries };
-}
-
-const ZERO_USAGE: Usage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
 	return message.role === "assistant" && Array.isArray((message as AssistantMessage).content);
 }
 
-export function findAnchorIndex(messages: readonly AgentMessage[], toolCallId: string): number {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const msg = messages[i];
-		if (!isAssistantMessage(msg)) continue;
-		for (const block of msg.content) {
-			if (block.type === "toolCall" && block.id === toolCallId) return i;
-		}
-	}
-	return -1;
+function isReadToolCall(block: ToolCall): boolean {
+	return block.name === "read" && typeof block.arguments?.path === "string";
 }
 
-export function buildSyntheticPair(
-	discovery: SubdirDiscovery,
-	anchor: AssistantMessage,
-): [AssistantMessage, ToolResultMessage] {
-	const syntheticId = createStableId(discovery.displayPath);
-	const assistantMsg: AssistantMessage = {
-		role: "assistant",
-		content: [{ type: "toolCall", id: syntheticId, name: "read", arguments: { path: discovery.displayPath } }],
-		api: anchor.api,
-		provider: anchor.provider,
-		model: anchor.model,
-		usage: ZERO_USAGE,
-		stopReason: "toolUse",
-		timestamp: 0,
-	};
-	const resultMsg: ToolResultMessage = {
-		role: "toolResult",
-		toolCallId: syntheticId,
-		toolName: "read",
-		content: [{ type: "text", text: `# Project context: ${discovery.displayPath}\n\n${discovery.content}` }],
-		isError: false,
-		timestamp: 0,
-	};
-	return [assistantMsg, resultMsg];
+function isCandidateFile(path: string): boolean {
+	const base = basename(path);
+	return CANDIDATES.includes(base as (typeof CANDIDATES)[number]);
 }
 
-export function formatContextBlocks(
-	discoveries: readonly SubdirDiscovery[],
-	messages: readonly AgentMessage[],
+export async function reconstructSubdirState(
+	entries: readonly SessionEntry[],
+	cwd: string,
 	logger?: ScramjetState["logger"],
-): AgentMessage[] | undefined {
-	if (discoveries.length === 0) return undefined;
+): Promise<Set<string>> {
+	let loadedPaths = new Set<string>();
 
-	const anchorGroups = new Map<number, SubdirDiscovery[]>();
-	for (const d of discoveries) {
-		const syntheticId = createStableId(d.displayPath);
-		if (
-			messages.some(
-				(m) => isAssistantMessage(m) && m.content.some((b) => b.type === "toolCall" && b.id === syntheticId),
-			)
-		) {
+	const toolCallPaths = new Map<string, string>();
+	const successfulToolCallIds = new Set<string>();
+
+	for (const entry of entries) {
+		if (entry.type === "compaction") {
+			loadedPaths = new Set();
+			toolCallPaths.clear();
+			successfulToolCallIds.clear();
 			continue;
 		}
 
-		const idx = findAnchorIndex(messages, d.toolCallId);
-		if (idx === -1) {
-			logger?.debug("subdir-context", `anchor missing for ${d.displayPath} (toolCallId=${d.toolCallId})`);
-			continue;
+		if (entry.type === "message") {
+			const msg = (entry as any).message;
+			if (!msg) continue;
+
+			if (msg.role === "assistant" && Array.isArray(msg.content)) {
+				for (const block of msg.content) {
+					if (block.type === "toolCall" && block.name === "read" && typeof block.arguments?.path === "string") {
+						if (isCandidateFile(block.arguments.path)) {
+							toolCallPaths.set(block.id, block.arguments.path);
+						}
+					}
+				}
+			}
+
+			if (msg.role === "toolResult" && !msg.isError && typeof msg.toolCallId === "string") {
+				if (toolCallPaths.has(msg.toolCallId)) {
+					successfulToolCallIds.add(msg.toolCallId);
+				}
+			}
 		}
-		const group = anchorGroups.get(idx) ?? [];
-		group.push(d);
-		anchorGroups.set(idx, group);
 	}
 
-	if (anchorGroups.size === 0) return undefined;
-
-	const sortedIndices = [...anchorGroups.keys()].sort((a, b) => a - b);
-	const result: AgentMessage[] = [];
-	let lastInserted = 0;
-
-	for (const anchorIdx of sortedIndices) {
-		result.push(...messages.slice(lastInserted, anchorIdx));
-		const anchor = messages[anchorIdx];
-		if (!isAssistantMessage(anchor)) {
-			lastInserted = anchorIdx;
-			continue;
+	for (const toolCallId of successfulToolCallIds) {
+		const filePath = toolCallPaths.get(toolCallId)!;
+		const resolved = resolve(cwd, filePath);
+		const dir = dirname(resolved);
+		try {
+			const realDir = await realpath(dir);
+			loadedPaths.add(realDir);
+		} catch (err: unknown) {
+			if (isNodeError(err) && err.code === "ENOENT") {
+				logger?.debug("subdir-context", `reconstruction skipped (dir removed): ${filePath}`);
+			} else {
+				logger?.warn("subdir-context", `reconstruction failed: ${isNodeError(err) ? err.code : err}`, {
+					path: filePath,
+				});
+			}
 		}
-		const group = anchorGroups.get(anchorIdx)!;
-		for (const d of group) {
-			const [synAssistant, synResult] = buildSyntheticPair(d, anchor);
-			result.push(synAssistant, synResult);
-		}
-		lastInserted = anchorIdx;
 	}
-	result.push(...messages.slice(lastInserted));
 
-	return result;
+	return loadedPaths;
 }
 
 export function registerSubdirContext(pi: ExtensionAPI, state: ScramjetState): void {
-	pi.on("context", (event) => {
-		const modified = formatContextBlocks(state.subdirDiscoveries, event.messages, state.logger);
-		if (!modified) return;
-		return { messages: modified };
-	});
-
-	pi.on("tool_result", async (event, ctx) => {
-		if (!isReadToolResult(event)) return;
-		if (event.isError) return;
-		const path = event.input.path;
-		if (typeof path !== "string") return;
+	pi.on("message_end", async (event, ctx) => {
+		const message = event.message;
+		if (!isAssistantMessage(message)) return;
 
 		const cwd = ctx.cwd;
-		const { dirs, outsideCwd } = directoriesToCheck(path, cwd);
-		if (dirs.length === 0) return;
+		const toolCalls = message.content.filter((b): b is ToolCall => b.type === "toolCall");
+		if (toolCalls.length === 0) return;
 
-		const enforceCwdBoundary = !outsideCwd;
-		const discovered = await discoverContextFiles(dirs, state.subdirLoadedPaths, cwd, state.logger, {
-			enforceCwdBoundary,
+		const readToolCalls = toolCalls.filter((tc) => {
+			if (!isReadToolCall(tc)) return false;
+			if (tc.id.startsWith("scrctx-")) return false;
+			if (isCandidateFile(tc.arguments.path)) return false;
+			return true;
 		});
-		if (discovered.length === 0) return;
 
-		for (const file of discovered) {
-			const displayPath = relative(cwd, resolve(file.dir, file.filename)) || file.filename;
-			const discovery: SubdirDiscovery = {
-				toolCallId: event.toolCallId,
-				dirRealpath: file.dirRealpath,
-				filename: file.filename,
-				displayPath,
-				content: file.content,
-			};
-			state.subdirDiscoveries.push(discovery);
-			pi.appendEntry(SUBDIR_CONTEXT_DISCOVERY_TYPE, discovery satisfies DiscoveryJournalEntry);
+		if (readToolCalls.length === 0) return;
+
+		const injections: { beforeIndex: number; newCalls: ToolCall[] }[] = [];
+
+		for (const tc of readToolCalls) {
+			const path = tc.arguments.path as string;
+			const { dirs, outsideCwd } = directoriesToCheck(path, cwd);
+			if (dirs.length === 0) continue;
+
+			const enforceCwdBoundary = !outsideCwd;
+			const discovered = await discoverContextFilePaths(dirs, state.subdirLoadedPaths, cwd, state.logger, {
+				enforceCwdBoundary,
+			});
+			if (discovered.length === 0) continue;
+
+			const newCalls: ToolCall[] = [];
+			for (const file of discovered) {
+				const stableId = createStableId(`${tc.id}\0${file.displayPath}`);
+				newCalls.push({
+					type: "toolCall",
+					id: stableId,
+					name: "read",
+					arguments: { path: file.displayPath },
+				});
+			}
+
+			const idx = message.content.indexOf(tc);
+			if (idx !== -1) {
+				injections.push({ beforeIndex: idx, newCalls });
+			}
 		}
+
+		if (injections.length === 0) return;
+
+		injections.sort((a, b) => b.beforeIndex - a.beforeIndex);
+		const newContent = [...message.content];
+		for (const { beforeIndex, newCalls } of injections) {
+			newContent.splice(beforeIndex, 0, ...newCalls);
+		}
+
+		const replacement: AssistantMessage = { ...message, content: newContent };
+		return { message: replacement };
 	});
 
 	pi.on("session_compact", () => {
 		state.subdirLoadedPaths.clear();
-		state.subdirDiscoveries = [];
 	});
 
-	const rebuild = (_event: unknown, ctx: ExtensionContext) => {
-		const result = reconstructSubdirState(ctx.sessionManager.getBranch(), state.logger);
-		state.subdirLoadedPaths = result.loadedPaths;
-		state.subdirDiscoveries = result.discoveries;
+	const rebuild = async (_event: unknown, ctx: ExtensionContext) => {
+		state.subdirLoadedPaths = await reconstructSubdirState(ctx.sessionManager.getBranch(), ctx.cwd, state.logger);
 	};
 
 	pi.on("session_start", rebuild);

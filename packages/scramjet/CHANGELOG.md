@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.32.0 — Surface subdirectory context discoveries as first-class reads
+
+Subdirectory `CLAUDE.md` and `AGENTS.md` files discovered during agent operation are now loaded via injected standard `read` tool calls instead of synthetic context hooks. Discovered files appear as normal read rows in the TUI, persist in session history, survive compaction, and reconstruct correctly on resume ([#196](https://github.com/LeanAndMean/scramjet/issues/196)).
+
+### Changed
+
+- `subdir-context.ts`: rewrote from `tool_result` synthetic injection to `message_end` handler that inserts normal `read` tool-call blocks before each triggering read
+- Reconstruction rebuilt from standard persisted read call/result pairs (no custom discovery entries)
+- Removed `subdirDiscoveries` / `SubdirDiscovery` from `ScramjetState` and `types.ts`
+
+### Runtime dependencies
+
+- `@leanandmean/agent` `0.74.1-scramjet.5`: new `beforeToolBatch` hook for pre-extraction queue drain
+- `@leanandmean/coding-agent` `0.74.1-scramjet.6`: `AgentSession` wires `beforeToolBatch` to drain event queue
+
 ## 0.31.1 — Add pitfalls and gotchas sections to issue-plan and issue-review
 
 Both commands now instruct the agent to consolidate discovered pitfalls into dedicated sections, ensuring implementation sessions receive concrete warnings about things that could go wrong ([#212](https://github.com/LeanAndMean/scramjet/issues/212)).

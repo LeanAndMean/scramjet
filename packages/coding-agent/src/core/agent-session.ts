@@ -372,6 +372,13 @@ export class AgentSession {
 		throw new Error(formatNoApiKeyFoundMessage(model.provider));
 	}
 
+	// SCRAMJET-DIVERGENCE: _drainAgentEventQueue ensures all queued async extension event
+	// processing has settled before proceeding. Used by beforeToolBatch (pre-extraction drain)
+	// and beforeToolCall (per-tool drain).
+	private async _drainAgentEventQueue(): Promise<void> {
+		await this._agentEventQueue;
+	}
+
 	/**
 	 * Install tool hooks once on the Agent instance.
 	 *
@@ -381,13 +388,19 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
+		// SCRAMJET-DIVERGENCE: beforeToolBatch drains queued extension event processing
+		// so async message_end handlers complete before tool-call extraction.
+		this.agent.beforeToolBatch = async () => {
+			await this._drainAgentEventQueue();
+		};
+
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
 			}
 
-			await this._agentEventQueue;
+			await this._drainAgentEventQueue();
 
 			try {
 				return await runner.emitToolCall({
