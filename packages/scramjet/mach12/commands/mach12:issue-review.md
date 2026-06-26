@@ -157,18 +157,59 @@ Present your review to the user, organized as:
    - **Important**: Genuine issues or significant risks that should be addressed before implementation.
    - **Suggestions**: Useful improvements or explicitly deferred/out-of-scope concerns that are not blockers.
 5. **Questions**: Any clarifying questions that came up during your review.
-6. **Recommendation**: State whether the plan should be approved, revised, discussed further, or abandoned.
+6. **Pitfalls for implementation**: Consolidate risk findings from Steps 4 and 5 into concrete, actionable warnings for the implementation session. Draw from the "Risks and pitfalls" exploration lens and the "Risks" assessment axis. Each item should be specific enough that an implementation session can act on it without re-exploring.
+7. **Recommendation**: State whether the plan should be approved, revised, discussed further, or abandoned.
 
 Ask the user how they want to proceed:
 
-- **Update the plan**: post a revised plan addressing the findings.
+- **Create revised plan**: dispatch the architect to produce a revised plan addressing the findings.
 - **Proceed as-is**: continue with the current plan despite findings.
 - **Discuss findings**: explore specific findings in more detail before deciding.
 - **Cancel**: stop here without updating or proceeding (a brief audit note will be posted).
 
-If the user picks "Update the plan", draft a revised plan incorporating the findings, and present it for review before posting. When posting the revised plan as a comment, include `<!-- mach12-plan -->` as the very first line of the comment body.
+If the user picks "Create revised plan", enter the revision loop:
 
-If the user picks "Discuss findings", walk through the specific findings they want to explore, then ask again how to proceed. This step remains active across all discussion iterations until the user picks a terminal option (Update, Proceed, or Cancel).
+### Revision loop
+
+1. **Architect dispatch.** Use the `subagent` tool to dispatch `mach12:code-architect` with a brief containing:
+   - The issue title, body, and requirements from Step 2.
+   - The current implementation plan being revised (original plan on first iteration, or most recent revision on subsequent iterations).
+   - The full findings list from Step 5 (with F/S identifiers and current classifications from Step 6), identifying which are Critical, Important, and Suggestions.
+   - The raw exploration context from Step 4 — key files, observations, and codebase patterns discovered by the exploration subagents.
+   - Any contribution guidelines or project planning requirements from Step 3.
+   - The existing plan's `## Pitfalls and Gotchas` section (if present). Instruct the architect to preserve existing pitfalls unless the revision makes them irrelevant, and to add any new pitfalls discovered during review.
+   - If this is a subsequent revision iteration, include the prior revised plan and the delta assessment that prompted re-revision.
+
+   Instruct the architect to produce a complete revised implementation plan that addresses the Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally.
+
+2. **Delta assessment.** After the architect returns, perform a lightweight delta assessment (not a full 6-lens re-exploration). For each finding from the original review (referencing stable F/S identifiers) and each N-prefixed item from prior iteration deltas, classify into one of three categories:
+   - **Addressed**: The revised plan resolves this finding. State how in one sentence.
+   - **Remaining**: The revised plan does not resolve this finding, or only partially addresses it. State what is still missing.
+   - **New issue**: The revised plan introduces a concern not present in the original review. Label with N-prefixed identifiers continuing from the highest prior N-number (e.g., if prior delta had N1–N3, new issues start at N4) and classify severity (Critical/Important/Suggestion) using the same criteria as Step 6.
+
+   Additionally, assess **pitfalls completeness**: does the revised plan's `## Pitfalls and Gotchas` section preserve pitfalls from the prior version (unless the corresponding plan aspect was removed) and incorporate any new pitfalls surfaced by the review? Flag dropped pitfalls or missing new ones.
+
+   Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan or any prior iteration's delta — not a restatement of an existing finding under a different framing.
+
+3. **Presentation.** Present to the user:
+   1. The revised plan.
+   2. The delta assessment (Addressed / Remaining / New).
+   3. A summary line: "X of Y findings addressed, Z remaining, W new issues" — where Y counts original F/S findings plus N-prefixed items carried from prior iterations.
+
+4. **Sub-options.** Ask the user how to proceed:
+   - **Post revised plan**: Accept this revision and post it.
+   - **Revise again**: Return to the architect dispatch step with the current revised plan and this delta assessment as additional context. Unbounded — user controls when to stop.
+   - **Discuss findings**: Same behavior as the main "Discuss findings" option — walk through specific findings or new issues, then return to these three options.
+
+   Only one comment is posted — the final accepted revision. Intermediate revisions are not posted.
+
+5. **Post.** When the user picks "Post revised plan", post the final revision as a comment. Include `<!-- mach12-plan -->` as the very first line of the comment body. Then delegate to:
+
+   ```
+   /mach12:gh-comment issue <issue-number>
+   ```
+
+If the user picks "Discuss findings", walk through the specific findings they want to explore, then ask again how to proceed. This step remains active across all discussion iterations until the user picks a terminal option (Create revised plan, Proceed, or Cancel).
 
 If the user picks "Proceed as-is" and at least one Critical or Important finding exists, post a decision comment on the issue to record the user's choice. Prepare a body with this shape:
 - First line: `<!-- mach12-decisions -->`

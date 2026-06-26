@@ -30,6 +30,7 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 	"anti-shortcut (no destructive shortcuts)": "do not use destructive actions as a shortcut",
 	"using tools — dedicated over shell": "Prefer dedicated tools over the shell",
 	"batch independent tool calls for parallelism": "make all independent tool calls in parallel",
+	"transparency — state beliefs before asking": "state what you believe and why",
 	"tone — emojis only if requested": "Only use emojis if the user explicitly requests it",
 	"tone — short and concise": "responses should be short and concise",
 	"code references navigable": "file_path:line_number",
