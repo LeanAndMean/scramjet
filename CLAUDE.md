@@ -9,8 +9,8 @@ Scramjet is a product monorepo. Pi runtime packages are vendored in `packages/` 
 ```
 scramjet/
 ├── packages/
-│   ├── tui/            Pi runtime: terminal UI (unmodified)
-│   ├── ai/             Pi runtime: LLM providers (unmodified)
+│   ├── tui/            Pi runtime: terminal UI
+│   ├── ai/             Pi runtime: LLM providers
 │   ├── agent/          Pi runtime: agent loop, state
 │   ├── coding-agent/   Pi runtime: CLI, tools, sessions
 │   └── scramjet/       The product: commands, orchestration
@@ -213,7 +213,9 @@ Before adding a dependency, utility, or custom implementation, check whether exi
 
 ## Upstream Pi sync
 
-Pi runtime packages are vendored from the LeanAndMean fork. Behavioral modifications are tracked in `UPSTREAM_DIVERGENCE.md` and marked with `// SCRAMJET-DIVERGENCE:` comments in source. Consult the divergence doc before modifying Pi files or syncing with upstream.
+Pi runtime packages are vendored from the LeanAndMean fork and modified directly when doing so simplifies Scramjet's implementation. A small change to a Pi package that dramatically reduces complexity in Scramjet is the intended path — not something to work around. Minimize unnecessary divergence, but do not treat Pi packages as read-only.
+
+Behavioral modifications are tracked in `UPSTREAM_DIVERGENCE.md` and marked with `// SCRAMJET-DIVERGENCE:` comments in source. Consult the divergence doc before modifying Pi files or syncing with upstream.
 
 ## Release process
 

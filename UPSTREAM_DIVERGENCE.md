@@ -60,7 +60,9 @@ Preserved:
 - `pi-package` npm keyword
 - `pi` key in package.json manifests
 
-### Unmodified packages
+### Currently unmodified packages
+
+These are current facts, not constraints. Pi packages are modified directly when doing so simplifies Scramjet's implementation (see CLAUDE.md "Upstream Pi sync").
 
 - `packages/tui/` — no source modifications
 - `packages/ai/` — no source modifications
