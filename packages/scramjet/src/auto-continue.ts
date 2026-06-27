@@ -111,7 +111,7 @@ function isExpectedSelectorCancellation(err: unknown): boolean {
 // safe() close-tag escaping is needed — notify text is never re-injected into a
 // prompt. Exported for direct unit testing of the boundary (NOTIFY_MAX - 1 +
 // "…") and the control-char/whitespace passes; the production callers are
-// routeNonCompleted's blocked/waiting notifies.
+// routeNonCompleted's blocked notify.
 export const NOTIFY_MAX = 200;
 export function cleanForNotify(text: string): string {
 	const collapsed = text

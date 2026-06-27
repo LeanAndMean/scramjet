@@ -116,8 +116,8 @@ export function recordCommandStart(
 }
 
 // Journal entry for a command-status report (issue 88). Records which command
-// reported and what status, so a rewind/resume can reconstruct the resumable
-// "waiting" lifecycle phase (see replayHistory).
+// reported and what status, so a rewind/resume can tell when a command completed
+// (reconstruct to idle) versus blocked/incomplete (reconstruct to dormant).
 export interface CommandStatusData {
 	commandName: string;
 	status: CommandStatusRestingStatus;
@@ -125,11 +125,11 @@ export interface CommandStatusData {
 
 // Journals the agent's report_scramjet_command_status report. Mirrors
 // recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
-// the live phase is owned by command-status.ts / auto-continue.ts; this only
-// persists the report so resume can rebuild the resting phase. Terminal/resting
-// terminal statuses are journaled — that is what lets a command
+// the live lifecycle facts are owned by command-status.ts / auto-continue.ts; this only
+// persists the report so resume can rebuild the resting lifecycle facts. Terminal
+// statuses are journaled — that is what lets a command
 // which waits, is answered, then completes without offering a next step reconstruct
-// to "idle" instead of resurrecting at "waiting" (the duplicate-work hazard).
+// to idle instead of resurrecting at dormant (the duplicate-work hazard).
 export function recordCommandStatus(pi: ExtensionAPI, commandName: string, status: CommandStatusRestingStatus): void {
 	const data: CommandStatusData = { commandName, status };
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
