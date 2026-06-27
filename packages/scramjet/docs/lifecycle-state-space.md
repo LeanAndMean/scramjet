@@ -106,7 +106,7 @@ The continue limit is a constant (`CONTINUE_LIMIT = 3`). A fourth consecutive `c
 The `agent_end` handler in `auto-continue.ts` evaluates lifecycle facts in this order:
 
 1. **Abort** (`stopReason === "aborted"`): clear all timers, enter dormant. Command stays associated but disarmed.
-2. **Error** (`stopReason === "error"`): if probe in flight, clear watchdog and enter dormant (error during probe is not retryable); if probe armed, leave armed (Pi retry safety — a successful retry probes naturally).
+2. **Error** (`stopReason === "error"`): leave armed/probing facts intact for Pi retry safety. If a probe turn errors, the existing generation- and command-guarded watchdog remains responsible for self-healing only when no retried report arrives.
 3. **Active command not in registry**: warn, clear active command, clear timers.
 4. **Probe due** (`isProbeDue`): if no next-step policy, journal completed and clear; otherwise begin probe and schedule deferred hidden probe message.
 5. **Probe in flight without report**: self-heal to dormant (probe turn ended without a status report).
@@ -134,7 +134,7 @@ Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = 
 ## Module ownership map
 
 - `lifecycle.ts`: defines `LifecycleState` (fact interface), invariant checks, query helpers, and mutation helpers with generation bumping and logging.
-- `types.ts`: defines status payloads, `ScramjetState` (with `lifecycle: LifecycleState` and `lifecycleGeneration: number`), and `LifecycleTimerAccessors`.
+- `types.ts`: defines status payloads, `ScramjetState` (extending `LifecycleHolder`), and `LifecycleTimerAccessors`.
 - `history.ts`: owns command-start journaling, replay reconstruction, interactive reply resume, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns `agent_end` decision tree, probe scheduling, timer management, status routing, selector/dispatch timers, and terminal resolution.
 - `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and status journaling.
@@ -154,4 +154,4 @@ Key behavioral changes from the phase machine:
 - `blocked` and `incomplete` statuses keep the command associated (dormant), rather than dropping to idle and losing the command.
 - Dormant commands resume only through explicit `continuing` via the status tool, not through any user reply.
 - Abort is a simple fact mutation (disarm and enter dormant), not a transition table edge.
-- Error handling is retry-safe: probe-armed state survives errors so Pi retries can naturally trigger probes on success.
+- Error handling is retry-safe: probe-armed and probe-in-flight state survive errors so Pi retries can naturally trigger probes or report status on success.

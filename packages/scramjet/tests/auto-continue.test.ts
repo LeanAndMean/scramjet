@@ -274,6 +274,23 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.lifecycleTimers?.isDispatchScheduled()).toBe(false);
 		});
 
+		it("session_compact drops a scheduled-but-unfired probe", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag } = bootstrap(state);
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			await bag.emit("session_compact", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(bag.pi.sent).toHaveLength(0);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(state.lifecycleTimers?.isProbeScheduled()).toBe(false);
+			expect(state.lifecycleTimers?.isWatchdogActive()).toBe(false);
+		});
+
 		it("sends no probe and resets to idle when the active command has no policy", async () => {
 			const def = defWithPolicy("terminus:cmd", undefined);
 			const state = runningState(def, { enabled: true });
@@ -304,7 +321,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.lifecycleTimers?.isWatchdogActive()).toBe(false);
 		});
 
-		it("self-heals to idle and pauses if the probe turn ends without a status report (no loop)", async () => {
+		it("self-heals to dormant and pauses if the probe turn ends without a status report (no loop)", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = bootstrap(state);
@@ -340,7 +357,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
-		it("resets to idle (not wedged at probing) when the deferred probe sendMessage throws (F1)", async () => {
+		it("resets to dormant (not wedged at probing) when the deferred probe sendMessage throws (F1)", async () => {
 			const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
 			const def = defWithPolicy("a:cmd", policy);
 			const state = runningState(def, { enabled: true });
@@ -366,7 +383,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(logMessages(bag.pi)[0]).toContain("status probe failed");
 		});
 
-		it("self-heals to idle via the watchdog if the probe turn never completes (F1)", async () => {
+		it("self-heals to dormant via the watchdog if the probe turn never completes (F1)", async () => {
 			const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "b:ok" }] };
 			const def = defWithPolicy("a:cmd", policy);
 			const state = runningState(def, { enabled: true });
@@ -454,15 +471,18 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
-		it("error during probing self-heals to dormant", async () => {
+		it("error during probing keeps the probe reportable for retry safety", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const target = defWithPolicy("b:target", undefined);
-			const state = runningState(def, {
-				enabled: true,
-				lifecycle: lifecycleFor("probing", "a:cmd"),
-				registry: registryWith(target),
-			});
-			const { bag, ctxBag } = bootstrap(state);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+			expect(state.lifecycleTimers?.isWatchdogActive()).toBe(true);
 
 			await bag.emit(
 				"agent_end",
@@ -470,8 +490,21 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				ctxBag.ctx,
 			);
 
-			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+			expect(state.lifecycleTimers?.isWatchdogActive()).toBe(true);
+
+			await report({ status: "completed", summary: "retried successfully" });
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(ctxBag.dispatchedWhileStreaming).toHaveLength(0);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("error while probe armed leaves armed for retry safety", async () => {
@@ -1255,7 +1288,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 		});
 
-		it("loop-safety: a resumed probe turn that never reports self-heals to idle (no loop)", async () => {
+		it("loop-safety: a resumed probe turn that never reports self-heals to dormant (no loop)", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
@@ -1508,6 +1541,52 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			await bag.emit("session_shutdown", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("session_compact prevents an in-flight selector countdown from dispatching", async () => {
+			const { bag, ctxBag } = await primeSelector();
+
+			await bag.emit("session_compact", {}, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
+
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("command replacement prevents a stale selector countdown from dispatching", async () => {
+			const { bag, ctxBag, state } = await primeSelector();
+			state.registry = registryWith(defWithPolicy("c:cmd", undefined));
+			registerHistory(bag.pi, state);
+
+			await bag.emit("input", { text: "/c:cmd", source: "interactive" }, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(10000);
+			await flushMicrotasks();
+
+			expect(activeCommandName(state.lifecycle)).toBe("c:cmd");
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("late selector resolution after a lifecycle generation change does not dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			let resolveSelector: (value: string | null) => void = () => {};
+			ctxBag.ctx.ui.custom = () =>
+				new Promise((resolve) => {
+					resolveSelector = resolve;
+				});
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ message: "/b:ok", reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			state.lifecycleGeneration++;
+			resolveSelector("0");
 			await flushMicrotasks();
 
 			expect(ctxBag.dispatched).toEqual([]);
@@ -1770,11 +1849,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 // strings in the existing tests, so the control-char strip, whitespace collapse,
 // and the off-by-one NOTIFY_MAX - 1 + "…" cap were entirely unexercised.
 // Bug reproduction: get_scramjet_user_input is unusable after a probe cycle because
-// the input handler only re-arms waiting→running, not idle→running. This means
-// that after the first turn ends (probe fires and self-heals to idle), the user
-// replies to a clarifying question, but the phase stays idle and the tool's
-// phase gate rejects it. Observed live in issue-plan sessions where the agent
-// asked clarifying questions via get_scramjet_user_input after subagent exploration.
+// ordinary user replies do not re-arm dormant commands. This means that after
+// the first turn ends (probe fires and self-heals to dormant), a user reply to a
+// clarifying question leaves the command dormant and the tool's phase gate still
+// rejects new input. Observed live in issue-plan sessions where the agent asked
+// clarifying questions via get_scramjet_user_input after subagent exploration.
 describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
@@ -2156,7 +2235,7 @@ describe("multi-path probe integration", () => {
 	});
 
 	describe("self-heal without tool call", () => {
-		it("probe turn ending without any tool call self-heals to idle", async () => {
+		it("probe turn ending without any tool call self-heals to dormant", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = fullBootstrap(state, { hasUI: false });
@@ -2183,7 +2262,7 @@ describe("multi-path probe integration", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			const sentAfterHeal = bag.pi.sent.length;
 
-			// Another agent_end at idle should NOT fire a new probe
+			// Another agent_end while dormant should NOT fire a new probe
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(0);
 			expect(bag.pi.sent.length).toBe(sentAfterHeal);

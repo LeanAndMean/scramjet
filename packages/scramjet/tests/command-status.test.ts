@@ -3,6 +3,7 @@ import {
 	buildDormantCommandNotice,
 	COMMAND_STATUS_PROBE_TYPE,
 	registerCommandStatusTool,
+	registerDormantCommandNotice,
 } from "../src/command-status.js";
 import { COMMAND_STATUS_TYPE } from "../src/history.js";
 import { isProbeDue, isProbeInFlight } from "../src/lifecycle.js";
@@ -33,10 +34,9 @@ describe("registerCommandStatusTool — registration", () => {
 		expect(tools[0].name).toBe("report_scramjet_command_status");
 	});
 
-	it("registers a before_agent_start handler for dormant notice", () => {
+	it("does not register the dormant notice handler", () => {
 		const { handlers } = toolFor();
-		expect(handlers.get("before_agent_start")).toBeDefined();
-		expect(handlers.get("before_agent_start")!.length).toBeGreaterThanOrEqual(1);
+		expect(handlers.get("before_agent_start")).toBeUndefined();
 	});
 
 	it("exposes the unified message-based next-step schema and recommended-index fields", () => {
@@ -311,10 +311,11 @@ describe("registerCommandStatusTool — dormant continuing", () => {
 	});
 });
 
-describe("registerCommandStatusTool — dormant notice", () => {
+describe("registerDormantCommandNotice", () => {
 	it("emits a dormant notice when command is dormant", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") });
-		const { handlers } = toolFor(state);
+		const { pi, handlers } = toolFor(state);
+		registerDormantCommandNotice(pi, state);
 
 		const handler = handlers.get("before_agent_start")![0];
 		const result = (await handler({})) as any;
@@ -331,7 +332,8 @@ describe("registerCommandStatusTool — dormant notice", () => {
 
 	it("does not emit when lifecycle is idle", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("idle") });
-		const { handlers } = toolFor(state);
+		const { pi, handlers } = toolFor(state);
+		registerDormantCommandNotice(pi, state);
 
 		const handler = handlers.get("before_agent_start")![0];
 		const result = await handler({});
@@ -341,7 +343,8 @@ describe("registerCommandStatusTool — dormant notice", () => {
 
 	it("does not emit when command is actively running", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
-		const { handlers } = toolFor(state);
+		const { pi, handlers } = toolFor(state);
+		registerDormantCommandNotice(pi, state);
 
 		const handler = handlers.get("before_agent_start")![0];
 		const result = await handler({});
@@ -351,7 +354,8 @@ describe("registerCommandStatusTool — dormant notice", () => {
 
 	it("does not emit when probe is in flight", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("probing", "mach12:test") });
-		const { handlers } = toolFor(state);
+		const { pi, handlers } = toolFor(state);
+		registerDormantCommandNotice(pi, state);
 
 		const handler = handlers.get("before_agent_start")![0];
 		const result = await handler({});
@@ -361,7 +365,8 @@ describe("registerCommandStatusTool — dormant notice", () => {
 
 	it("does not have content or message properties", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") });
-		const { handlers } = toolFor(state);
+		const { pi, handlers } = toolFor(state);
+		registerDormantCommandNotice(pi, state);
 
 		const handler = handlers.get("before_agent_start")![0];
 		const result = (await handler({})) as any;

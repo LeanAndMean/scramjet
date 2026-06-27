@@ -1,5 +1,5 @@
 import type { SessionEntry } from "@leanandmean/coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	appendSidebarEntry,
 	COMMAND_START_TYPE,
@@ -475,6 +475,29 @@ describe("registerHistory — input event", () => {
 		// Removed/internal or unknown slashes are not allow-listed.
 		await emit("input", { text: "/scramjet-exec-fresh foo", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBeNull();
+	});
+
+	it("logs and preserves the active workflow when pi.getCommands throws", async () => {
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn() };
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			lifecycle: lifecycleFor("dormant", "mach10:push"),
+			logger: logger as any,
+		});
+		const { pi, emit } = recordingPi();
+		(pi as any).getCommands = () => {
+			throw new Error("registry unavailable");
+		};
+		registerHistory(pi, state);
+
+		await emit("input", { text: "/other-extension:cmd", source: "interactive" });
+
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
+		expect(logger.warn).toHaveBeenCalledWith(
+			"history",
+			"slash command lookup failed; preserving active Scramjet workflow",
+			expect.objectContaining({ slashName: "other-extension:cmd", error: "registry unavailable" }),
+		);
 	});
 
 	it("leaves activeTopLevelCommand alone for non-slash input (continuing a conversation)", async () => {

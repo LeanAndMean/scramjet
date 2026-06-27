@@ -329,16 +329,15 @@ encouraged but optional.
   harness does not inject a next-step instruction block and does not
   auto-follow a legacy/free-form agent proposal.
 - **`waiting` is a resumable, not terminal, halt.** When a command needs
-  user input, it calls `get_scramjet_user_input` with `type: "freetext"`
-  (or cancels a confirm/select prompt). The harness parks the invocation
-  at a stable `waiting` state rather than ending it. A later interactive,
-  non-slash reply resumes the same command — the harness re-probes for
-  status, and a now-`completed` report chains its declared next step under
-  the usual policy. Chaining still requires an explicit `completed` report,
-  so an off-topic reply can only trigger a harmless re-probe, never a chain
-  (issue 88, issue 156). `get_scramjet_user_input` (§3) is the sole mechanism
-  for parking at `waiting` — both proactive mid-turn freetext and
-  probe-time freetext use the same tool and journal entry.
+  freetext user input, it calls `get_scramjet_user_input` with
+  `type: "freetext"`. The harness parks the invocation at a stable
+  `waiting` state rather than ending it. A later interactive, non-slash
+  reply resumes the same command — the harness re-probes for status, and a
+  now-`completed` report chains its declared next step under the usual
+  policy. Chaining still requires an explicit `completed` report, so an
+  off-topic reply can only trigger a harmless re-probe, never a chain
+  (issue 88, issue 156). Confirm/select cancellation does not park; it
+  terminates the turn and leaves the command dormant.
 
 #### 3. Intra-command interactions
 
@@ -362,7 +361,7 @@ Successful confirm/select input **does not end the agent's turn**. The harness
 displays the appropriate UI, blocks until the user responds, and returns the
 result as a normal tool result. The agent continues executing with the answer in
 context. If the user cancels a confirm/select prompt, the tool terminates the
-turn and parks the command in `waiting`.
+turn and leaves the command dormant.
 
 Freetext is intentionally a wait/resume path. It does not open a TUI text input
 and does not return `{ text: string }`. Instead, the tool call renderer makes
@@ -373,8 +372,8 @@ message editor on the next turn.
 This is the key distinction from `report_scramjet_command_status`: the status
 tool is a terminal lifecycle signal ("I'm done or stuck"), while
 `get_scramjet_user_input` is a user-input request. Confirm/select can be
-within-turn on success; freetext and cancellation park the command in `waiting`
-for a later user reply.
+within-turn on success; freetext parks the command in `waiting` for a later user
+reply; cancellation enters dormant.
 
 ##### The probe-as-router extension
 
@@ -418,8 +417,8 @@ The two tools are complementary:
 - **`get_scramjet_user_input`** — "I need something from the user to continue."
   Confirm/select collect input and return it as a tool result on success.
   Freetext renders the prompt in the tool row, ends the turn, and parks the
-  command in `waiting` for a later standard-editor reply. Cancellation also
-  parks in `waiting`.
+  command in `waiting` for a later standard-editor reply. Cancellation enters
+  dormant and does not journal a parked marker.
 - **`report_scramjet_command_status`** — "I'm done or stuck." Terminal lifecycle
   signal. The turn ends. Chaining may follow.
 
@@ -781,11 +780,12 @@ is universal.
   Cross-session workflow restore beyond the visible history is not a
   goal of the MVP, but is not explicitly forbidden either — if it falls
   out trivially, that's fine.
-- A command parked at `waiting` (via `get_scramjet_user_input` freetext or
-  cancellation; see §2.1) is reconstructed on resume: `scramjet:user-input-parked`
-  entries are journaled, and replay restores the stable `waiting` state
-  when a parked entry exists for the active command, so a `pi --resume` /
-  branch switch mid-question can still be answered and the command resumed.
+- A command parked at `waiting` (via `get_scramjet_user_input` freetext; see
+  §2.1) is reconstructed on resume: `scramjet:user-input-parked` entries are
+  journaled, and replay restores the stable `waiting` state when a parked entry
+  exists for the active command, so a `pi --resume` / branch switch mid-question
+  can still be answered and the command resumed. Confirm/select cancellation
+  enters dormant and is not reconstructed as parked input.
   The transient mid-turn phases are deliberately not journaled, and a
   command that already completed reconstructs to idle (never re-fired)
   (issue 88, issue 156).

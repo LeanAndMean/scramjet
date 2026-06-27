@@ -46,21 +46,20 @@ import {
 	activeCommandName,
 	beginProbe,
 	clearActiveCommand,
-	derivePhaseLabel as lp,
 	enterDormant,
 	hasTerminalReport,
 	isDormant,
 	isParkedForInput,
 	isProbeDue,
 	isProbeInFlight,
-	type LifecycleState,
+	derivePhaseLabel as lp,
 } from "./lifecycle.js";
 import { buildProbeMessage } from "./next-step.js";
 import { dispatchNextStep } from "./next-step-dispatch.js";
 import { selectNextStep } from "./next-step-selector.js";
 import type {
 	CommandStatusNextStep,
-	CommandStatusPayload,
+	CommandStatusRestingPayload,
 	EdgeSetting,
 	NextStep,
 	NextStepPolicy,
@@ -122,8 +121,6 @@ export function cleanForNotify(text: string): string {
 	return collapsed.length > NOTIFY_MAX ? `${collapsed.slice(0, NOTIFY_MAX - 1)}…` : collapsed;
 }
 
-
-
 // Extract stopReason from the last assistant message in an agent_end event.
 export function extractStopReason(event: { messages?: unknown[] }): string | undefined {
 	if (!Array.isArray(event.messages)) return undefined;
@@ -148,6 +145,19 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		isDispatchScheduled: () => dispatchTimer !== null,
 	};
 
+	function clearProbeTimer(reason = "cleared") {
+		if (probeTimer) {
+			clearTimeout(probeTimer);
+			probeTimer = null;
+			const command = activeCommandName(state.lifecycle);
+			state.logger.lifecycle("status probe timer cleared", {
+				phase: lp(state.lifecycle),
+				...(command ? { command } : {}),
+				detail: { reason },
+			});
+		}
+	}
+
 	function clearProbeWatchdog(reason = "cleared") {
 		if (probeWatchdog) {
 			clearTimeout(probeWatchdog);
@@ -165,13 +175,22 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		clearProbeWatchdog("rearm");
 		if (isProbeInFlight(state.lifecycle)) {
 			const command = state.lifecycle.activeCommand!;
+			const watchdogGeneration = state.lifecycleGeneration;
 			probeWatchdog = setTimeout(() => {
 				probeWatchdog = null;
+				if (state.lifecycleGeneration !== watchdogGeneration || activeCommandName(state.lifecycle) !== command) {
+					state.logger.lifecycle("probe watchdog stale", {
+						phase: lp(state.lifecycle),
+						command,
+						detail: { scheduledGeneration: watchdogGeneration, currentGeneration: state.lifecycleGeneration },
+					});
+					return;
+				}
 				if (isProbeInFlight(state.lifecycle)) {
 					state.logger.lifecycle("probe watchdog fired", {
 						phase: lp(state.lifecycle),
-						command: state.lifecycle.activeCommand,
-						detail: { timeoutMs: PROBE_WATCHDOG_MS },
+						command,
+						detail: { timeoutMs: PROBE_WATCHDOG_MS, generation: watchdogGeneration },
 					});
 					enterDormant(state, "watchdog-timeout");
 					state.logger.warn("probe", "status probe turn never completed; auto-continue paused", {
@@ -182,20 +201,18 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			state.logger.lifecycle("probe watchdog armed", {
 				phase: lp(state.lifecycle),
 				command,
-				detail: { timeoutMs: PROBE_WATCHDOG_MS },
+				detail: { timeoutMs: PROBE_WATCHDOG_MS, generation: watchdogGeneration },
 			});
 		}
 	}
 
 	state.suspendProbeWatchdog = () => clearProbeWatchdog("suspended");
 	state.rearmProbeWatchdog = armProbeWatchdog;
-	state.clearLifecycleTimers = () => {
-		if (probeTimer) {
-			clearTimeout(probeTimer);
-			probeTimer = null;
-		}
-		clearProbeWatchdog("lifecycle-reset");
-		clearDispatchTimer("lifecycle-reset");
+	state.clearLifecycleTimers = (reason = "lifecycle-reset") => {
+		cancelSelector();
+		clearProbeTimer(reason);
+		clearProbeWatchdog(reason);
+		clearDispatchTimer(reason);
 	};
 
 	function clearDispatchTimer(reason = "cleared") {
@@ -357,6 +374,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	) {
 		cancelSelector();
 		const selectorId = activeSelectorId;
+		const selectorGeneration = state.lifecycleGeneration;
+		const selectorCommand = activeCommandName(state.lifecycle);
 		const controller = new AbortController();
 		activeSelectorAbort = controller;
 		const autoSelect =
@@ -378,7 +397,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			signal: controller.signal,
 		})
 			.then((selected) => {
-				if (selectorId !== activeSelectorId) return;
+				if (
+					selectorId !== activeSelectorId ||
+					state.lifecycleGeneration !== selectorGeneration ||
+					activeCommandName(state.lifecycle) !== selectorCommand
+				) {
+					return;
+				}
 				activeSelectorAbort = null;
 				if (selected) {
 					runSelectedOption(selected, ctx);
@@ -390,7 +415,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				}
 			})
 			.catch((err) => {
-				if (selectorId !== activeSelectorId) {
+				if (
+					selectorId !== activeSelectorId ||
+					state.lifecycleGeneration !== selectorGeneration ||
+					activeCommandName(state.lifecycle) !== selectorCommand
+				) {
 					if (!isExpectedSelectorCancellation(err)) {
 						const message = selectorErrorMessage(err);
 						state.logger.warn("dispatch", `stale next-step selector failed (${message}); failure ignored`, {
@@ -482,7 +511,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 	function routeCompleted(
 		policy: NextStepPolicy,
-		status: CommandStatusPayload,
+		status: CommandStatusRestingPayload,
 		ctx: ExtensionContext,
 		sourceName: string,
 	) {
@@ -600,7 +629,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 	function scheduleCompletedDispatch(
 		policy: NextStepPolicy,
-		status: CommandStatusPayload,
+		status: CommandStatusRestingPayload,
 		ctx: ExtensionContext,
 		sourceName: string,
 	) {
@@ -613,11 +642,15 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		});
 		dispatchTimer = setTimeout(() => {
 			dispatchTimer = null;
-			if (state.lifecycleGeneration !== dispatchGeneration) {
+			if (state.lifecycleGeneration !== dispatchGeneration || activeCommandName(state.lifecycle) !== null) {
 				state.logger.lifecycle("completed dispatch timer stale", {
 					phase: lp(state.lifecycle),
 					command: sourceName,
-					detail: { scheduledGeneration: dispatchGeneration, currentGeneration: state.lifecycleGeneration },
+					detail: {
+						scheduledGeneration: dispatchGeneration,
+						currentGeneration: state.lifecycleGeneration,
+						activeCommand: activeCommandName(state.lifecycle),
+					},
 				});
 				return;
 			}
@@ -642,7 +675,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}, 0);
 	}
 
-	function routeNonCompleted(status: CommandStatusPayload, ctx: ExtensionContext) {
+	function routeNonCompleted(status: CommandStatusRestingPayload, ctx: ExtensionContext) {
 		switch (status.status) {
 			case "blocked":
 				ctx.ui.notify(`scramjet: command blocked — ${cleanForNotify(status.summary)}`, "warning");
@@ -674,27 +707,23 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				phase: lp(state.lifecycle),
 				command: activeName,
 			});
-			if (probeTimer) {
-				clearTimeout(probeTimer);
-				probeTimer = null;
-			}
+			clearProbeTimer("aborted");
 			clearProbeWatchdog("aborted");
 			clearDispatchTimer("aborted");
 			enterDormant(state, "aborted");
 			return;
 		}
 
-		// Error: if probe is in flight, self-heal to dormant.
-		// If probe is armed (work turn errored), leave armed for Pi retry safety.
+		// Error: keep probe state valid for Pi retry safety. The watchdog self-heals
+		// abandoned probes if no retried report arrives.
 		if (stopReason === "error" && activeName) {
 			if (isProbeInFlight(state.lifecycle)) {
-				clearProbeWatchdog("probe-error");
-				enterDormant(state, "probe-error");
-				state.logger.warn("probe", "status probe turn errored; auto-continue paused", {
+				state.logger.lifecycle("probe error observed", {
 					phase: lp(state.lifecycle),
+					command: activeName,
+					detail: { watchdogActive: probeWatchdog !== null },
 				});
 			}
-			// probeArmed left unchanged: if Pi retries and succeeds, next agent_end probes naturally
 			return;
 		}
 
@@ -706,7 +735,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			});
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
 			clearActiveCommand(state, "active-command-not-in-registry");
-			clearProbeWatchdog("active-command-missing");
+			state.clearLifecycleTimers?.("active-command-missing");
 			return;
 		}
 
@@ -790,19 +819,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	});
 
+	pi.on("session_compact", async () => {
+		const wasProbing = isProbeInFlight(state.lifecycle);
+		state.clearLifecycleTimers?.("session-compact");
+		if (wasProbing && isProbeInFlight(state.lifecycle)) enterDormant(state, "session-compact");
+	});
+
 	pi.on("session_shutdown", async () => {
-		cancelSelector();
-		if (probeTimer) {
-			clearTimeout(probeTimer);
-			probeTimer = null;
-			const command = activeCommandName(state.lifecycle);
-			state.logger.lifecycle("status probe timer cleared", {
-				phase: lp(state.lifecycle),
-				...(command ? { command } : {}),
-				detail: { reason: "session-shutdown" },
-			});
-		}
-		clearProbeWatchdog("session-shutdown");
-		clearDispatchTimer("session-shutdown");
+		state.clearLifecycleTimers?.("session-shutdown");
 	});
 }

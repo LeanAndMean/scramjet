@@ -120,7 +120,7 @@ export function buildDormantCommandNotice(commandName: string): string {
 	);
 }
 
-export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
+export function registerDormantCommandNotice(pi: ExtensionAPI, state: ScramjetState) {
 	pi.on("before_agent_start", async () => {
 		if (!isDormant(state.lifecycle)) return;
 		const command = state.lifecycle.activeCommand!;
@@ -132,7 +132,9 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			},
 		};
 	});
+}
 
+export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
 		name: "report_scramjet_command_status",
 		label: "Report Scramjet Command Status",

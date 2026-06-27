@@ -23,6 +23,9 @@ const NON_TUI_ERROR =
 	"get_scramjet_user_input requires a TUI environment. " +
 	"The current session does not support interactive UI — use prose-based interaction instead.";
 
+const STALE_RESULT_ERROR =
+	"The user input result arrived after the active Scramjet command changed. The stale result was ignored.";
+
 const PROMPT_SNIPPET =
 	"You have access to `get_scramjet_user_input` for requesting structured user input mid-turn " +
 	"(confirm, select, or freetext). Confirm/select block until the user responds and return their " +
@@ -119,6 +122,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					interactionType: params.type,
 					message: params.message,
 				});
+				if (isProbeInFlight(state.lifecycle)) state.suspendProbeWatchdog?.();
 				parkForFreetext(state);
 				const command = activeCommandName(state.lifecycle);
 				if (command) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: command });
@@ -137,6 +141,10 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			}
 
 			const wasProbing = isProbeInFlight(state.lifecycle);
+			const expectedCommand = activeCommandName(state.lifecycle);
+			const expectedGeneration = state.lifecycleGeneration;
+			const lifecycleUnchanged = () =>
+				activeCommandName(state.lifecycle) === expectedCommand && state.lifecycleGeneration === expectedGeneration;
 			if (wasProbing) state.suspendProbeWatchdog?.();
 
 			type InteractionResult = {
@@ -165,6 +173,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 						};
 				}
 			} catch (error) {
+				if (!lifecycleUnchanged()) return staleResult(expectedCommand, expectedGeneration, state);
 				if (wasProbing) state.rearmProbeWatchdog?.();
 				const message = error instanceof Error ? error.message : String(error);
 				return {
@@ -172,6 +181,8 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					details: { error: "ui-error", message },
 				};
 			}
+
+			if (!lifecycleUnchanged()) return staleResult(expectedCommand, expectedGeneration, state);
 
 			// Post-interaction lifecycle transitions
 			if (wasProbing && result) {
@@ -202,6 +213,26 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			return toolResult;
 		},
 	});
+}
+
+function staleResult(expectedCommand: string | null, expectedGeneration: number, state: ScramjetState) {
+	const currentCommand = activeCommandName(state.lifecycle);
+	state.logger.warn("input", "stale get_scramjet_user_input result ignored", {
+		expectedCommand,
+		currentCommand,
+		expectedGeneration,
+		currentGeneration: state.lifecycleGeneration,
+	});
+	return {
+		content: [{ type: "text" as const, text: STALE_RESULT_ERROR }],
+		details: {
+			error: "stale-result",
+			expectedCommand,
+			currentCommand,
+			expectedGeneration,
+			currentGeneration: state.lifecycleGeneration,
+		},
+	};
 }
 
 async function handleConfirm(message: string, ctx: ExtensionContext) {

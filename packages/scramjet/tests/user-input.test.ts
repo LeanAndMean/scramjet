@@ -631,6 +631,88 @@ describe("registerUserInputTool — cancellation behavior", () => {
 
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(1);
 	});
+
+	it.each([
+		["confirm", { type: "confirm", message: "Continue?" }, null],
+		[
+			"select",
+			{
+				type: "select",
+				message: "Pick one",
+				options: [{ value: "a", label: "A" }],
+			},
+			"a",
+		],
+	] as const)("ignores stale %s results after the lifecycle changes", async (_type, params, uiResult) => {
+		let resolveInput: (result: unknown) => void = () => {};
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn() };
+		const state = freshState({
+			lifecycle: lifecycleFor("running", "mach12:test"),
+			logger: logger as any,
+		});
+		const { execute, pi } = toolFor(state);
+		const promise = execute(params, {
+			ui: {
+				custom: () =>
+					new Promise((resolve) => {
+						resolveInput = resolve;
+					}),
+			},
+		});
+		await Promise.resolve();
+
+		state.lifecycle = lifecycleFor("running", "mach12:other");
+		state.lifecycleGeneration++;
+		resolveInput(uiResult);
+		const result = await promise;
+
+		expect(result.terminate).toBeUndefined();
+		expect(result.details.error).toBe("stale-result");
+		expect(state.lifecycle.activeCommand).toBe("mach12:other");
+		expect(isProbeDue(state.lifecycle)).toBe(true);
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
+		expect(logger.warn).toHaveBeenCalledWith(
+			"input",
+			"stale get_scramjet_user_input result ignored",
+			expect.objectContaining({ expectedCommand: "mach12:test", currentCommand: "mach12:other" }),
+		);
+	});
+
+	it("ignores stale probing results without resuming the replacement probe", async () => {
+		let resolveInput: (result: unknown) => void = () => {};
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn() };
+		const state = freshState({
+			lifecycle: lifecycleFor("probing", "mach12:test"),
+			logger: logger as any,
+			suspendProbeWatchdog: vi.fn(),
+			rearmProbeWatchdog: vi.fn(),
+		});
+		const { execute, pi } = toolFor(state);
+		const promise = execute(
+			{ type: "confirm", message: "Continue?" },
+			{
+				ui: {
+					custom: () =>
+						new Promise((resolve) => {
+							resolveInput = resolve;
+						}),
+				},
+			},
+		);
+		await Promise.resolve();
+
+		state.lifecycle = lifecycleFor("probing", "mach12:other");
+		state.lifecycleGeneration++;
+		resolveInput("yes");
+		const result = await promise;
+
+		expect(result.details.error).toBe("stale-result");
+		expect(state.lifecycle.activeCommand).toBe("mach12:other");
+		expect(isProbeInFlight(state.lifecycle)).toBe(true);
+		expect(state.suspendProbeWatchdog).toHaveBeenCalledTimes(1);
+		expect(state.rearmProbeWatchdog).not.toHaveBeenCalled();
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
+	});
 });
 
 describe("registerUserInputTool — UI interaction errors", () => {

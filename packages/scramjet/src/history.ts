@@ -30,7 +30,7 @@ function extractSlashName(text: string): string | null {
 	return name || null;
 }
 
-function isKnownSlashCommand(text: string, pi: ExtensionAPI): boolean {
+function isKnownSlashCommand(text: string, pi: ExtensionAPI, state: ScramjetState): boolean {
 	const name = extractSlashName(text);
 	if (!name) return false;
 	const getCommands = (pi as unknown as { getCommands?: () => Array<{ name: string }> }).getCommands;
@@ -40,8 +40,13 @@ function isKnownSlashCommand(text: string, pi: ExtensionAPI): boolean {
 				if (cmd.name === name) return true;
 			}
 			return false;
-		} catch {
-			// fall through to fallback set
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			state.logger.warn("history", "slash command lookup failed; preserving active Scramjet workflow", {
+				slashName: name,
+				error: message,
+			});
+			return true;
 		}
 	}
 	return FALLBACK_KNOWN_SLASH.has(name);
@@ -248,7 +253,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// checking /help should not silently break a forced next-step. Only
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
 			if (event.text.startsWith("/") && activeCommandName(state.lifecycle) !== null) {
-				if (!isKnownSlashCommand(event.text, pi)) {
+				if (!isKnownSlashCommand(event.text, pi, state)) {
 					state.clearLifecycleTimers?.();
 					clearActiveCommand(state, "unknown-slash");
 				}

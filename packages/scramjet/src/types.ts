@@ -1,5 +1,4 @@
-import type { LifecycleHolder, LifecycleState } from "./lifecycle.js";
-import type { ScramjetLogger } from "./logger.js";
+import type { LifecycleHolder } from "./lifecycle.js";
 
 export interface NextStep {
 	// Bare command name (no leading slash, no args). Matches against
@@ -115,7 +114,7 @@ export interface ScramjetState extends LifecycleHolder {
 	agentRegistry: AgentRegistry;
 	sidebarLog: SidebarEntry[];
 	delegateStack: DelegateFrame[];
-	clearLifecycleTimers?: () => void;
+	clearLifecycleTimers?: (reason?: string) => void;
 	// Set by the next-step dispatcher just before slash-input dispatch when
 	// firing a forced transition, so history's input handler can label the
 	// resulting entry as origin: "forced" instead of "agent".

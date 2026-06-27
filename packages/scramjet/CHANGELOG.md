@@ -16,9 +16,13 @@ The command lifecycle is now driven by orthogonal boolean facts (`activeCommand`
 ### Changed
 
 - `auto-continue.ts` — rewritten around lifecycle facts with explicit abort/error/retry branches and generation-guarded timer callbacks
+- `auto-continue.ts` — lifecycle cleanup now cancels next-step selectors, session compaction clears timers/selectors, and probe-turn errors keep `probeInFlight` valid for Pi retry safety until the guarded watchdog self-heals abandoned probes
 - `command-status.ts` — accepts `continuing` from both probe (increments counter) and dormant (resets counter) states; terminal reports require `probeInFlight`
+- `command-status.ts` — dormant volatile prompt notice is registered separately so stable prompt sections keep their cache prefix
 - `user-input.ts` — confirm/select cancellation enters dormant (no longer writes parked marker); freetext parks via `parkForFreetext`
+- `user-input.ts` — pending confirm/select UI results are ignored if the active command or lifecycle generation changes before the prompt resolves
 - `history.ts` — reconstruction uses `lifecycle.ts` helpers; dormant user replies are a no-op (no auto-resume)
+- `history.ts` — slash-command lookup failures are logged and preserve the active workflow instead of treating the slash as unknown
 - `model-identity.ts` — uses lifecycle facts instead of phase checks
 - `delegate.ts` — uses `activeCommandName()` instead of phase-machine accessor
 - `docs/lifecycle-state-space.md` — rewritten for fact-based design
