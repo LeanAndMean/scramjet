@@ -1,34 +1,39 @@
 /**
- * report_scramjet_command_status tool: the agent's structured report at the
- * end of an active Scramjet command, supplied in a *separate* turn from the
- * command's user-facing answer (issue 84, two-phase protocol).
+ * report_scramjet_command_status tool and dormant command notice.
  *
- * The command's normal answer turn injects nothing about completion. After that
- * turn goes idle, auto-continue.ts defers a hidden status-check probe (see
- * buildProbeMessage); the agent answers it by calling this tool. execute() is
- * phase-gated — it only accepts the report while lifecycle.phase === "probing".
+ * The tool is the agent's structured report at the end of an active Scramjet
+ * command, supplied in a *separate* turn from the command's user-facing answer
+ * (issue 84, two-phase protocol).
  *
- * Four statuses, two execution paths:
- * - "continuing": non-terminating. The agent has more work to do; the tool
- *   transitions probing → running and returns without terminate so the agent
- *   keeps working in the same turn. A local counter bounds consecutive
- *   continues (MAX_CONSECUTIVE_CONTINUES) to prevent infinite loops.
- * - "completed" / "blocked" / "incomplete": terminating.
- *   The tool stores the report on ScramjetState, advances the phase to
- *   "reported", and returns terminate: true. auto-continue.ts reads the stored
- *   status on the probe turn's agent_end and validates/dispatches/pauses.
+ * Four statuses, three execution paths:
+ * - "continuing" during a probe: non-terminating. Increments continueCount,
+ *   re-arms the probe, returns without terminate so the agent keeps working.
+ * - "continuing" while dormant: non-terminating. Resets continueCount, re-arms
+ *   the probe, returns without terminate. This is the only dormant resume path.
+ * - "completed" / "blocked" / "incomplete": terminating. Accepted only while
+ *   probe is in flight. Stores the report in lastReport and returns
+ *   terminate: true. auto-continue.ts reads the stored status on the probe
+ *   turn's agent_end and validates/dispatches/pauses.
  *
- * This replaces the old generic `task_complete` tool, whose same-turn,
- * summary-bearing shape invited the model to pour its answer into the tool
- * payload instead of writing prose. There is no completion tool during the
- * answer turn anymore, so that failure mode is removed structurally.
+ * The dormant notice is a volatile system prompt section that tells the agent
+ * about a dormant command and how to resume it (via `continuing`).
  */
 
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.js";
 import { recordCommandStatus } from "./history.js";
-import { getActiveCommand, type LifecycleState, logTransition, transition } from "./phase-machine.js";
+import {
+	acceptDormantContinuing,
+	acceptProbeContinuing,
+	acceptTerminalReport,
+	activeCommandName,
+	CONTINUE_LIMIT,
+	canAcceptDormantContinuing,
+	canAcceptTerminalReport,
+	isDormant,
+	isProbeInFlight,
+} from "./lifecycle.js";
 import type {
 	CommandStatusNextStep,
 	CommandStatusPayload,
@@ -38,7 +43,7 @@ import type {
 
 interface CommandStatusDetails {
 	error?: string;
-	phase?: LifecycleState["phase"];
+	phase?: string;
 	status?: CommandStatusPayload["status"];
 	summary?: string;
 	recommended_next_step?: number;
@@ -47,26 +52,27 @@ interface CommandStatusDetails {
 	reason?: string;
 }
 
-// customType for the hidden status-check probe message. display:false keeps it
-// out of the TUI; it still persists in the journal and reaches the model as a
-// user-role message that asks for exactly one report_scramjet_command_status call.
+// customType for the hidden status-check probe message.
 export const COMMAND_STATUS_PROBE_TYPE = "scramjet-command-status";
 
-const MAX_CONSECUTIVE_CONTINUES = 3;
+const NO_ACTIVE_COMMAND_ERROR =
+	"report_scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
+	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
+
+const TERMINAL_FROM_DORMANT_ERROR =
+	"Terminal status reports (completed/blocked/incomplete) are only accepted during a Scramjet status probe. " +
+	'The command is currently dormant. To resume work, call this tool with status: "continuing" first — ' +
+	"that re-arms the probe cycle, and you can report a terminal status on the next probe.";
+
+const CONTINUE_LIMIT_ERROR =
+	`You have reported "continuing" ${CONTINUE_LIMIT} times without completing the command. ` +
+	"Report your actual status: completed, blocked, or incomplete.";
 
 const OUT_OF_PHASE_ERROR =
 	"report_scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
 	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
 
-const CONTINUE_LIMIT_ERROR =
-	`You have reported "continuing" ${MAX_CONSECUTIVE_CONTINUES} times without completing the command. ` +
-	"Report your actual status: completed, blocked, or incomplete.";
-
-// F6: single source of truth for the next-step wire shape. The TypeBox schema
-// below and the CommandStatusNextStep TS interface (types.ts) are two
-// declarations of the same payload. The congruence guards underneath fail the
-// build if either side renames, adds, or drops a field — so a `fresh_session`
-// rename can't typecheck clean while silently breaking the runtime contract.
+// F6: single source of truth for the next-step wire shape.
 const NEXT_STEP_SCHEMA = Type.Object({
 	message: Type.String({
 		description:
@@ -84,18 +90,11 @@ const NEXT_STEP_SCHEMA = Type.Object({
 	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
 });
 
-// Bidirectional assignability: each direction fails to compile if the schema and
-// the interface diverge (a rename drops a required field from one side's view).
 type WireNextStep = Static<typeof NEXT_STEP_SCHEMA>;
 const _wireMatchesInterface = (step: WireNextStep): CommandStatusNextStep => step;
 const _interfaceMatchesWire = (step: CommandStatusNextStep): WireNextStep => step;
 
-// F3: single source of truth for the status enum, mirroring the next_steps
-// congruence guards above. The TypeBox union below and the
-// CommandStatusPayload["status"] TS union (types.ts) are two declarations of the
-// same four literals; the assignability pair underneath fails the build if
-// either side adds, drops, or renames a status (e.g. adding "cancelled" to one
-// side only), closing the last drift hole the rest of this file already guards.
+// F3: single source of truth for the status enum.
 const STATUS_SCHEMA = Type.Union(
 	[Type.Literal("completed"), Type.Literal("blocked"), Type.Literal("incomplete"), Type.Literal("continuing")],
 	{
@@ -110,6 +109,30 @@ const STATUS_SCHEMA = Type.Union(
 type WireStatus = Static<typeof STATUS_SCHEMA>;
 const _statusWireMatchesInterface = (status: WireStatus): CommandStatusPayload["status"] => status;
 const _statusInterfaceMatchesWire = (status: CommandStatusPayload["status"]): WireStatus => status;
+
+export function buildDormantCommandNotice(commandName: string): string {
+	return (
+		`The command \`${commandName}\` is dormant — it started but is not currently active.\n` +
+		"Ordinary user replies do NOT auto-resume a dormant command.\n" +
+		'To resume work on it, call `report_scramjet_command_status` with `status: "continuing"`.\n' +
+		"Terminal statuses (completed/blocked/incomplete) are only accepted during a Scramjet status probe — " +
+		"call `continuing` first to re-enter the probe cycle, then report your terminal status on the next probe."
+	);
+}
+
+export function registerDormantCommandNotice(pi: ExtensionAPI, state: ScramjetState) {
+	pi.on("before_agent_start", async () => {
+		if (!isDormant(state.lifecycle)) return;
+		const command = state.lifecycle.activeCommand!;
+		return {
+			systemPromptSection: {
+				id: "scramjet:dormant-command",
+				text: `\n\n# Dormant Scramjet Command\n\n${buildDormantCommandNotice(command)}`,
+				cacheRetention: "none",
+			},
+		};
+	});
+}
 
 export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
@@ -137,78 +160,125 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			),
 		}),
 		async execute(_toolCallId, params) {
-			if (state.lifecycle.phase !== "probing") {
-				const activeCommand = getActiveCommand(state.lifecycle);
+			const command = activeCommandName(state.lifecycle);
+
+			// Gate: no active command
+			if (!command) {
 				state.logger.lifecycle("status report rejected", {
-					phase: state.lifecycle.phase,
-					...(activeCommand ? { command: activeCommand } : {}),
+					phase: "idle",
+					detail: { reason: "no-active-command", status: params.status },
+				});
+				state.logger.warn(
+					"status",
+					"report_scramjet_command_status called with no active command; report ignored",
+					{},
+				);
+				const details: CommandStatusDetails = { error: "out-of-phase", phase: "idle" };
+				return {
+					content: [{ type: "text", text: NO_ACTIVE_COMMAND_ERROR }],
+					details,
+				};
+			}
+
+			// Continuing path — two valid contexts: probe in flight, or dormant
+			if (params.status === "continuing") {
+				// Probe continuing
+				if (isProbeInFlight(state.lifecycle)) {
+					if (state.lifecycle.continueCount >= CONTINUE_LIMIT) {
+						state.logger.lifecycle("status report rejected", {
+							command,
+							detail: { reason: "continue-limit", continueCount: state.lifecycle.continueCount },
+						});
+						const details: CommandStatusDetails = { error: "continue-limit" };
+						return {
+							content: [{ type: "text", text: CONTINUE_LIMIT_ERROR }],
+							details,
+						};
+					}
+					state.suspendProbeWatchdog?.();
+					const result = acceptProbeContinuing(state);
+					if (!result.ok) {
+						state.logger.lifecycle("status report rejected", {
+							command,
+							detail: { reason: "mutation-failed", error: result.reason },
+						});
+						const details: CommandStatusDetails = { error: "mutation-failed" };
+						return {
+							content: [{ type: "text", text: "Continuing transition failed." }],
+							details,
+						};
+					}
+					state.rearmProbeWatchdog?.();
+					const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
+					return {
+						content: [{ type: "text", text: "Continuing. Proceed with your work." }],
+						details,
+					};
+				}
+
+				// Dormant continuing
+				if (canAcceptDormantContinuing(state.lifecycle)) {
+					state.logger.lifecycle("dormant continuing accepted", {
+						command,
+						detail: { summary: params.summary },
+					});
+					const result = acceptDormantContinuing(state);
+					if (!result.ok) {
+						state.logger.lifecycle("status report rejected", {
+							command,
+							detail: { reason: "mutation-failed", error: result.reason },
+						});
+						const details: CommandStatusDetails = { error: "mutation-failed" };
+						return {
+							content: [{ type: "text", text: "Dormant continuing transition failed." }],
+							details,
+						};
+					}
+					const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
+					return {
+						content: [{ type: "text", text: "Continuing. Proceed with your work." }],
+						details,
+					};
+				}
+
+				// Continuing from any other state is rejected
+				state.logger.lifecycle("status report rejected", {
+					command,
 					detail: { reason: "out-of-phase", status: params.status },
 				});
 				state.logger.warn(
 					"status",
-					`report_scramjet_command_status called out of phase (phase=${state.lifecycle.phase}); report ignored`,
-					{ phase: state.lifecycle.phase },
+					"report_scramjet_command_status continuing called out of phase; report ignored",
+					{},
 				);
-				const details: CommandStatusDetails = { error: "out-of-phase", phase: state.lifecycle.phase };
+				const details: CommandStatusDetails = { error: "out-of-phase" };
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
 					details,
 				};
 			}
 
-			// Non-terminating path: the agent has more work to do.
-			if (params.status === "continuing") {
-				if (state.lifecycle.continueCount >= MAX_CONSECUTIVE_CONTINUES) {
+			// Terminal status path — only accepted during probe in flight
+			if (!canAcceptTerminalReport(state.lifecycle)) {
+				if (isDormant(state.lifecycle)) {
 					state.logger.lifecycle("status report rejected", {
-						phase: state.lifecycle.phase,
-						command: state.lifecycle.command,
-						detail: {
-							reason: "continue-limit",
-							status: params.status,
-							continueCount: state.lifecycle.continueCount,
-						},
+						command,
+						detail: { reason: "terminal-from-dormant", status: params.status },
 					});
-					const details: CommandStatusDetails = { error: "continue-limit", phase: state.lifecycle.phase };
+					const details: CommandStatusDetails = { error: "terminal-from-dormant" };
 					return {
-						content: [{ type: "text", text: CONTINUE_LIMIT_ERROR }],
+						content: [{ type: "text", text: TERMINAL_FROM_DORMANT_ERROR }],
 						details,
 					};
 				}
-				state.logger.lifecycle("status report accepted", {
-					phase: state.lifecycle.phase,
-					command: state.lifecycle.command,
-					detail: { status: params.status, summary: params.summary, continueCount: state.lifecycle.continueCount },
+				state.logger.lifecycle("status report rejected", {
+					command,
+					detail: { reason: "out-of-phase", status: params.status },
 				});
-				state.suspendProbeWatchdog?.();
-				const from = state.lifecycle;
-				const result = transition(state.lifecycle, { type: "continuing" });
-				if (!result.ok) {
-					state.logger.lifecycle("status report rejected", {
-						phase: state.lifecycle.phase,
-						command: state.lifecycle.command,
-						detail: {
-							reason: "transition-failed",
-							from: result.from,
-							event: result.event,
-							status: params.status,
-						},
-					});
-					state.logger.warn("status", `illegal lifecycle transition: ${result.from} + continuing`, {
-						from: result.from,
-						event: "continuing",
-					});
-					const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.lifecycle.phase };
-					return {
-						content: [{ type: "text", text: "Continuing transition failed." }],
-						details,
-					};
-				}
-				state.lifecycle = result.state;
-				logTransition(state, from, result.state, "continuing", { status: params.status });
-				state.rearmProbeWatchdog?.();
-				const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
+				state.logger.warn("status", "report_scramjet_command_status called out of phase; report ignored", {});
+				const details: CommandStatusDetails = { error: "out-of-phase" };
 				return {
-					content: [{ type: "text", text: "Continuing. Proceed with your work." }],
+					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
 					details,
 				};
 			}
@@ -219,9 +289,23 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				next_steps: params.next_steps,
 				recommended_next_step: params.recommended_next_step,
 			};
+
+			const reportResult = acceptTerminalReport(state, payload);
+			if (!reportResult.ok) {
+				state.logger.lifecycle("status report rejected", {
+					command,
+					detail: { reason: "mutation-failed", error: reportResult.reason },
+				});
+				const details: CommandStatusDetails = { error: "mutation-failed" };
+				return {
+					content: [{ type: "text", text: "Status report failed." }],
+					details,
+					terminate: true,
+				};
+			}
+
 			state.logger.lifecycle("status report accepted", {
-				phase: state.lifecycle.phase,
-				command: state.lifecycle.command,
+				command,
 				detail: {
 					status: params.status,
 					summary: params.summary,
@@ -229,44 +313,13 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 					recommendedNextStep: params.recommended_next_step,
 				},
 			});
-			const from = state.lifecycle;
-			const reportResult = transition(state.lifecycle, { type: "status-reported", status: payload });
-			if (!reportResult.ok) {
-				state.logger.lifecycle("status report rejected", {
-					phase: state.lifecycle.phase,
-					command: state.lifecycle.command,
-					detail: {
-						reason: "transition-failed",
-						from: reportResult.from,
-						event: reportResult.event,
-						status: params.status,
-					},
-				});
-				const details: CommandStatusDetails = { error: "phase-transition-failed", phase: state.lifecycle.phase };
-				return {
-					content: [{ type: "text", text: "Status recorded but phase transition to reported failed." }],
-					details,
-					terminate: true,
-				};
-			}
-			state.lifecycle = reportResult.state;
-			logTransition(state, from, reportResult.state, "status-reported", {
-				status: params.status,
-				nextStepCount: params.next_steps?.length ?? 0,
-				recommendedNextStep: params.recommended_next_step,
-			});
 
-			const activeCommand = getActiveCommand(state.lifecycle);
-			if (activeCommand) {
-				recordCommandStatus(pi, activeCommand, params.status);
-			}
+			recordCommandStatus(pi, command, params.status);
 
 			const next =
 				params.recommended_next_step === undefined
 					? params.next_steps?.[0]
 					: params.next_steps?.[params.recommended_next_step];
-			// Forward pointer only for slash-command messages: a non-command
-			// message is pasted, not dispatched, so an arrow would overstate it.
 			const text =
 				params.status === "completed" && next && parseSlashCommand(next.message)
 					? `→ ${next.message.trim()}`

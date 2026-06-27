@@ -418,7 +418,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
 2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
    - Call `report_scramjet_command_status` with a status and stop the probe turn.
-   - Call `get_scramjet_user_input` if structured input is needed before continuing. For **confirm/select**, the tool blocks until the user responds and returns the answer in the same turn — continue command work immediately. The phase returns to `running` without consuming the `continuing` status budget, so Scramjet will send another probe after the resumed work ends. For **freetext**, the tool terminates the turn and parks the command at `waiting`; the user replies in the standard editor, and the command resumes on a new turn.
+   - Call `get_scramjet_user_input` if structured input is needed before continuing. For **confirm/select**, the tool blocks until the user responds and returns the answer in the same turn — continue command work immediately. The probe is re-armed without consuming the `continuing` budget, so Scramjet will send another probe after the resumed work ends. For **freetext**, the tool terminates the turn and parks the command; the user replies in the standard editor, and the command resumes on a new turn.
 
 ### Tool parameters
 
@@ -431,7 +431,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 ### Status values
 
-- **`continuing`**: The command has more work to do in the current session. This is non-terminating: the tool returns control to the agent, transitions the phase back to `running`, and is bounded by the consecutive-continue limit.
+- **`continuing`**: The command has more work to do in the current session. This is non-terminating: the tool returns control to the agent, re-arms the probe, and is bounded by the consecutive-continue limit.
 - **`completed`**: The command's requested work is done. `next_steps` may propose continuations.
 - **`blocked`**: The command cannot proceed (error, missing dependency, authorization issue).
 - **`incomplete`**: None of the above — stopped without clean completion, question, or blocker.
@@ -477,7 +477,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ### Don't
 
-- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is phase-gated and will return an error.
+- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is gated to accept terminal reports only when a probe is in flight, and will return an error otherwise.
 - Don't instruct subroutine commands to call `report_scramjet_command_status`. Only the top-level command reports status; subroutines return control to their caller.
 - Don't put user-facing content in `summary`. The agent's answer was already delivered in the answer turn. `summary` is metadata for Scramjet's internal routing.
 - Don't omit `reason` from `next_steps` entries. The harness rejects entries without a non-empty `reason`.
@@ -486,7 +486,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. Freetext renders its `message` in the tool call row, then parks the command in `waiting` immediately so the user can reply through the standard editor.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. Freetext renders its `message` in the tool call row, then parks the command immediately so the user can reply through the standard editor.
 
 ### When to use it
 
@@ -531,25 +531,25 @@ Returns `{ "selected": "patch" }` or `{ "cancelled": true }`. The result row als
 { "type": "freetext", "message": "What should the release title be?", "placeholder": "v1.2.3" }
 ```
 
-The `message` is displayed in the tool call row before/alongside the parked result. Freetext always returns `terminate: true` and parks the command in `waiting`; the user replies in the standard message editor, and that reply arrives as the next normal user message rather than as a tool result. The `placeholder` field is accepted for compatibility but unused. If the user needs context, trade-offs, or consequences to answer well, state that context in assistant prose before calling the tool; keep `message` as the concise question.
+The `message` is displayed in the tool call row before/alongside the parked result. Freetext always returns `terminate: true` and parks the command; the user replies in the standard message editor, and that reply arrives as the next normal user message rather than as a tool result. The `placeholder` field is accepted for compatibility but unused. If the user needs context, trade-offs, or consequences to answer well, state that context in assistant prose before calling the tool; keep `message` as the concise question.
 
 ### Cancellation
 
-Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it always parks the command in `waiting` and ends the turn for a standard editor reply.
+Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `dormant`. Dormant commands resume only through explicit `continuing` via the status tool, not through any user reply; the user can also redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it parks the command and ends the turn for a standard editor reply.
 
-### Phase gating
+### Lifecycle gating
 
-The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the command transitions back to `running` without incrementing `continueCount` so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures leave the command in `probing` so the agent can still report `blocked` or `incomplete`. Freetext transitions directly to `waiting` from either phase.
+The tool is callable when an active command has a probe armed or in flight. Outside an active command, it returns a helpful error without terminating the turn. During a probe, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the probe is cleared and the probe re-armed without incrementing `continueCount`, so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures during a probe leave it reportable so the agent can still report `blocked` or `incomplete`. Freetext parks the command from either state.
 
 ### Journaling
 
-Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; select entries also record the presented options. Freetext records only the prompt. Freetext and cancellation with an active top-level command are also journaled as `scramjet:user-input-parked` entries so resume reconstruction preserves the waiting state.
+Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; select entries also record the presented options. Freetext records only the prompt. Freetext with an active top-level command is also journaled as a `scramjet:user-input-parked` entry so resume reconstruction preserves the parked state.
 
 ### Don't
 
 - Don't use `get_scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
 - Don't use `get_scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
-- Don't rely on handling `{ "cancelled": true }` in the same turn — cancellation terminates the turn and parks the command in `waiting`.
+- Don't rely on handling `{ "cancelled": true }` in the same turn — cancellation terminates the turn and enters dormant.
 
 ---
 
@@ -670,4 +670,4 @@ with <specific instructions for this command's reporting>.
 
 ### Diagnosing command behavior
 
-All lifecycle events (phase transitions, probe scheduling, dispatch decisions) are journaled as `scramjet:log` entries in the session JSONL. When a command doesn't chain as expected or a probe doesn't fire, query the session log to trace what happened. See `docs/logging.md` for the entry schema, `jq` query patterns, and a step-by-step diagnostic workflow.
+All lifecycle events (fact mutations, probe scheduling, dispatch decisions) are journaled as `scramjet:log` entries in the session JSONL. When a command doesn't chain as expected or a probe doesn't fire, query the session log to trace what happened. See `docs/logging.md` for the entry schema, `jq` query patterns, and a step-by-step diagnostic workflow.

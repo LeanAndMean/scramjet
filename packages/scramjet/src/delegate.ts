@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { Type } from "typebox";
 import { parseDelegateArgs, substituteArguments } from "./commands/substitute.js";
 import { recordCommandInvocation } from "./history.js";
-import { getActiveCommand } from "./phase-machine.js";
+import { activeCommandName } from "./lifecycle.js";
 import type { DelegateFrame, ScramjetState } from "./types.js";
 
 interface DelegateDetails {
@@ -71,7 +71,7 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 					details,
 				};
 			}
-			const activeCommand = getActiveCommand(state.lifecycle);
+			const activeCommand = activeCommandName(state.lifecycle);
 			const callerTools =
 				state.delegateStack.length > 0
 					? state.delegateStack[state.delegateStack.length - 1].effectiveAllowedTools

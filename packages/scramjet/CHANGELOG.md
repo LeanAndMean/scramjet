@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.33.0 — Replace lifecycle phase machine with event-reactive fact-based design
+
+The command lifecycle is now driven by orthogonal boolean facts (`activeCommand`, `probeArmed`, `probeInFlight`, `parkedForInput`, `continueCount`, `lastReport`) instead of a discriminated phase union with a transition table. This eliminates the growing transition-table maintenance burden and changes key behaviors: `blocked`/`incomplete` statuses now keep the command associated (dormant) instead of dropping to idle; dormant commands resume only through explicit `continuing` via the status tool (not any user reply); abort and error handling are direct fact mutations rather than transition edges ([#215](https://github.com/LeanAndMean/scramjet/issues/215)).
+
+### Added
+
+- `packages/scramjet/src/lifecycle.ts` — fact interface, invariant checks, query helpers, and named mutation helpers with generation-bumped logging
+- `packages/scramjet/tests/lifecycle.test.ts` — comprehensive invariant, query, and mutation coverage
+- `packages/coding-agent/tests/extension-runner-system-prompt.test.ts` — Pi runner prompt-section sanity tests
+- Dormant command notice via `before_agent_start` prompt section (`scramjet:dormant-command`) in `command-status.ts`
+- `lifecycleGeneration` counter on `ScramjetState` for timer/callback staleness detection
+- Agent-controlled dormant resumption: dormant `continuing` is the only path from dormant back to armed
+
+### Changed
+
+- `auto-continue.ts` — rewritten around lifecycle facts with explicit abort/error/retry branches and generation-guarded timer callbacks
+- `auto-continue.ts` — lifecycle cleanup now cancels next-step selectors, session compaction clears timers/selectors, and probe-turn errors keep `probeInFlight` valid for Pi retry safety until the guarded watchdog self-heals abandoned probes
+- `command-status.ts` — accepts `continuing` from both probe (increments counter) and dormant (resets counter) states; terminal reports require `probeInFlight`
+- `command-status.ts` — dormant volatile prompt notice is registered separately so stable prompt sections keep their cache prefix
+- `user-input.ts` — confirm/select cancellation enters dormant (no longer writes parked marker); freetext parks via `parkForFreetext`
+- `user-input.ts` — pending confirm/select UI results are ignored if the active command or lifecycle generation changes before the prompt resolves
+- `history.ts` — reconstruction uses `lifecycle.ts` helpers; dormant user replies are a no-op (no auto-resume)
+- `history.ts` — slash-command lookup failures are logged and preserve the active workflow instead of treating the slash as unknown
+- `model-identity.ts` — uses lifecycle facts instead of phase checks
+- `delegate.ts` — uses `activeCommandName()` instead of phase-machine accessor
+- `docs/lifecycle-state-space.md` — rewritten for fact-based design
+- `docs/command-authoring.md` — updated lifecycle gating and probe terminology
+- `docs/logging.md` — updated lifecycle event reference for new log message format
+- `docs/scramjet-vision.md` — removed phase-machine terminology
+
+### Removed
+
+- `packages/scramjet/src/phase-machine.ts` — replaced by `lifecycle.ts`
+- `packages/scramjet/tests/phase-machine.test.ts` — replaced by `lifecycle.test.ts`
+
 ## 0.32.0 — Surface subdirectory context discoveries as first-class reads
 
 Subdirectory `CLAUDE.md` and `AGENTS.md` files discovered during agent operation are now loaded via injected standard `read` tool calls instead of synthetic context hooks. Discovered files appear as normal read rows in the TUI, persist in session history, survive compaction, and reconstruct correctly on resume ([#196](https://github.com/LeanAndMean/scramjet/issues/196)).

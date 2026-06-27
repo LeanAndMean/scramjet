@@ -163,8 +163,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			if (!firstTurnStarted) {
 				initialModel = record;
 			} else {
-				const phase = state.lifecycle.phase;
-				if (phase === "running" || phase === "probing") {
+				if (state.lifecycle.probeArmed || state.lifecycle.probeInFlight) {
 					pendingForNextTurn = true;
 					pendingForInput = false;
 				} else {
@@ -192,7 +191,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			: undefined;
 
 		if (pendingForNextTurn) {
-			if (state.lifecycle.phase !== "probing") {
+			if (!state.lifecycle.probeInFlight) {
 				pendingForNextTurn = false;
 				return {
 					...(systemPromptSection ? { systemPromptSection } : {}),

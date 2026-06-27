@@ -1,6 +1,6 @@
+import { createLifecycle, type LifecycleHolder, type LifecycleState } from "../src/lifecycle.js";
 import { createLogger, SCRAMJET_LOG_TYPE } from "../src/logger.js";
-import type { LifecycleState } from "../src/phase-machine.js";
-import type { ScramjetState } from "../src/types.js";
+import type { CommandStatusRestingPayload, ScramjetState } from "../src/types.js";
 
 export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
 	return {
@@ -9,8 +9,9 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		agentRegistry: new Map(),
 		sidebarLog: [],
 		delegateStack: [],
+		lifecycleGeneration: 0,
 		pendingForcedDispatch: null,
-		lifecycle: { phase: "idle" },
+		lifecycle: createLifecycle(),
 		currentModel: null,
 		modelHistory: [],
 		suspendProbeWatchdog: undefined,
@@ -23,33 +24,48 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 }
 
 /**
- * Creates a lifecycle state for a given phase, providing sensible defaults.
- * Use this in tests that previously passed `commandPhase` / `activeTopLevelCommand`.
+ * Creates a lifecycle state for a given phase name, providing sensible defaults.
+ * Maps phase names to lifecycle facts for test convenience.
  */
 export function lifecycleFor(
-	phase: LifecycleState["phase"],
+	phase: "idle" | "dormant" | "running" | "probing" | "reported" | "waiting",
 	command = "test:cmd",
-	extra?: { continueCount?: number; status?: import("../src/types.js").CommandStatusRestingPayload },
+	extra?: { continueCount?: number; status?: CommandStatusRestingPayload },
 ): LifecycleState {
+	const lc = createLifecycle();
 	switch (phase) {
 		case "idle":
-			return { phase: "idle" };
+			return lc;
 		case "dormant":
-			return { phase: "dormant", command };
+			lc.activeCommand = command;
+			return lc;
 		case "running":
-			return { phase: "running", command, continueCount: extra?.continueCount ?? 0 };
+			lc.activeCommand = command;
+			lc.probeArmed = true;
+			lc.continueCount = extra?.continueCount ?? 0;
+			return lc;
 		case "probing":
-			return { phase: "probing", command, continueCount: extra?.continueCount ?? 0 };
+			lc.activeCommand = command;
+			lc.probeInFlight = true;
+			lc.continueCount = extra?.continueCount ?? 0;
+			return lc;
 		case "reported":
-			return {
-				phase: "reported",
-				command,
-				status: extra?.status ?? { status: "completed", summary: "done" },
-				continueCount: extra?.continueCount ?? 0,
-			};
+			lc.activeCommand = command;
+			lc.lastReport = extra?.status ?? { status: "completed", summary: "done" };
+			return lc;
 		case "waiting":
-			return { phase: "waiting", command };
+			lc.activeCommand = command;
+			lc.parkedForInput = true;
+			return lc;
 	}
+}
+
+export function freshLifecycleHolder(overrides: Partial<LifecycleState> = {}): LifecycleHolder {
+	return {
+		lifecycle: { ...createLifecycle(), ...overrides },
+		lifecycleGeneration: 0,
+		logger: createLogger({ appendEntry() {} } as any),
+	};
 }
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
@@ -62,29 +78,13 @@ export interface RecordingPi {
 	emit: (event: string, payload?: unknown, ctx?: unknown) => Promise<void>;
 }
 
-// Recording Pi stub used across hook-driven tests. Captures every
-// registerTool / registerCommand call and every on(event, handler)
-// registration; `emit` fires all handlers for an event in registration order.
-// Kept type-loose (`any` on `pi` and `tools`) so individual tests can adapt
-// without fighting the type system.
 export function recordingPi(): RecordingPi {
 	const tools: any[] = [];
 	const commands: { name: string; spec: unknown }[] = [];
 	const handlers = new Map<string, Handler[]>();
 	const pi: any = {
 		appended: [] as { customType: string; data: unknown }[],
-		// Records pi.sendMessage(message, options) calls. The two-phase
-		// command-status protocol (issue 84) sends the hidden status probe this
-		// way; tests assert it was sent (and, for the F1 deferral, that it fired
-		// off the timer rather than synchronously inside agent_end).
 		sent: [] as { message: unknown; options?: unknown }[],
-		// Messages dropped because they were sent while the run was still
-		// streaming. The real harness drops a sendMessage issued from inside an
-		// agent_end listener (isStreaming === true until the run settles — it clears
-		// when agent.prompt() resolves), so a synchronous probe would never reach the
-		// model. A
-		// test that models this catches a regression that sends the probe inline
-		// rather than deferring it past the streaming window.
 		dropped: [] as { message: unknown; options?: unknown }[],
 		isStreaming: false,
 		registerTool(tool: any) {
@@ -114,6 +114,8 @@ export function recordingPi(): RecordingPi {
 	}
 	return { pi, tools, commands, handlers, emit };
 }
+
+export { derivePhaseLabel as derivedPhase } from "../src/lifecycle.js";
 
 export function logMessages(pi: any, level?: string): string[] {
 	return pi.appended

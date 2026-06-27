@@ -1,6 +1,7 @@
 import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { USER_INPUT_PARKED_TYPE } from "../src/history.js";
+import { isDormant, isParkedForInput, isProbeDue, isProbeInFlight } from "../src/lifecycle.js";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
 
@@ -316,9 +317,9 @@ describe("registerUserInputTool — renderResult", () => {
 	});
 });
 
-describe("registerUserInputTool — phase gate", () => {
+describe("registerUserInputTool — gate", () => {
 	it.each(["idle", "dormant", "reported", "waiting"] as const)(
-		"rejects with a helpful error and no terminate when phase is %s",
+		"rejects with a helpful error and no terminate when lifecycle is %s",
 		async (phase) => {
 			const { execute } = toolFor(freshState({ lifecycle: lifecycleFor(phase) }));
 			const ctx = { ui: {} };
@@ -326,13 +327,20 @@ describe("registerUserInputTool — phase gate", () => {
 
 			expect(result.terminate).toBeUndefined();
 			expect(result.details.error).toBe("out-of-phase");
-			expect(result.details.phase).toBe(phase);
 			expect(String(result.content[0].text)).toContain("not available right now");
 		},
 	);
 
-	it.each(["running", "probing"] as const)("accepts calls when phase is %s", async (phase) => {
-		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor(phase) }));
+	it("accepts calls when probe is armed (running)", async () => {
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const ctx = mockUICtx("yes");
+		const result = await execute({ type: "confirm", message: "Proceed?" }, ctx);
+
+		expect(result.details.error).not.toBe("out-of-phase");
+	});
+
+	it("accepts calls when probe is in flight (probing)", async () => {
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 		const ctx = mockUICtx("yes");
 		const result = await execute({ type: "confirm", message: "Proceed?" }, ctx);
 
@@ -553,25 +561,20 @@ describe("registerUserInputTool — select interaction", () => {
 
 		const promise = execute({ ...selectParams, recommended: 1 }, ctx);
 
-		// Allow the factory to be captured, then simulate selection
 		await new Promise((r) => setTimeout(r, 0));
 		const factory = getFactory();
-		// The factory was created; we can't easily assert the internal selectedIndex
-		// but we verify it doesn't throw and the widget renders
 		expect(factory).toBeDefined();
 		expect(factory.render(80)).toBeDefined();
 
-		// Simulate a select to resolve the promise
 		factory.handleInput("\r");
 		const result = await promise;
-		// With recommended=1, pressing enter on default selection gives "minor"
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed.selected).toBe("minor");
 	});
 });
 
 describe("registerUserInputTool — freetext interaction", () => {
-	it.each(["running", "probing"] as const)("terminates and parks at waiting from %s", async (phase) => {
+	it.each(["running", "probing"] as const)("terminates and parks from %s", async (phase) => {
 		const state = freshState({ lifecycle: lifecycleFor(phase) });
 		const { execute } = toolFor(state);
 		const result = await execute({ type: "freetext", message: "Release title?", placeholder: "v1.2.3" });
@@ -580,7 +583,7 @@ describe("registerUserInputTool — freetext interaction", () => {
 		expect(parsed).toEqual({ parked: true });
 		expect(result.details).toEqual({ type: "freetext", parked: true });
 		expect(result.terminate).toBe(true);
-		expect(state.lifecycle.phase).toBe("waiting");
+		expect(isParkedForInput(state.lifecycle)).toBe(true);
 	});
 
 	it("works when ctx.ui is absent", async () => {
@@ -592,41 +595,128 @@ describe("registerUserInputTool — freetext interaction", () => {
 	});
 });
 
-describe("registerUserInputTool — cancellation phase handling", () => {
-	it("transitions running to waiting on cancellation", async () => {
-		const state = freshState({ lifecycle: lifecycleFor("running") });
+describe("registerUserInputTool — cancellation behavior", () => {
+	it("transitions running to dormant on cancellation (not waiting)", async () => {
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
 		const { execute } = toolFor(state);
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
-		expect(state.lifecycle.phase).toBe("waiting");
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.activeCommand).toBe("mach12:test");
 	});
 
-	it("transitions probing to waiting on cancellation", async () => {
-		const state = freshState({ lifecycle: lifecycleFor("probing") });
+	it("transitions probing to dormant on cancellation", async () => {
+		const state = freshState({ lifecycle: lifecycleFor("probing", "mach12:test") });
 		const { execute } = toolFor(state);
 		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(result.terminate).toBe(true);
-		expect(state.lifecycle.phase).toBe("waiting");
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.activeCommand).toBe("mach12:test");
 	});
 
-	it("journals user-input-parked on cancellation with active command", async () => {
+	it("does NOT journal user-input-parked on cancellation", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
 		const { execute, pi } = toolFor(state);
-		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
+		await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
-		expect(result.terminate).toBe(true);
-		expect(state.lifecycle.phase).toBe("waiting");
-		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE)).toHaveLength(1);
-		expect(pi.appended.find((e: any) => e.customType === USER_INPUT_PARKED_TYPE).data).toEqual({
-			commandName: "mach12:test",
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE)).toHaveLength(0);
+	});
+
+	it("journals user-input entry on cancellation", async () => {
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+		const { execute, pi } = toolFor(state);
+		await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
+
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(1);
+	});
+
+	it.each([
+		["confirm", { type: "confirm", message: "Continue?" }, null],
+		[
+			"select",
+			{
+				type: "select",
+				message: "Pick one",
+				options: [{ value: "a", label: "A" }],
+			},
+			"a",
+		],
+	] as const)("ignores stale %s results after the lifecycle changes", async (_type, params, uiResult) => {
+		let resolveInput: (result: unknown) => void = () => {};
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn() };
+		const state = freshState({
+			lifecycle: lifecycleFor("running", "mach12:test"),
+			logger: logger as any,
 		});
+		const { execute, pi } = toolFor(state);
+		const promise = execute(params, {
+			ui: {
+				custom: () =>
+					new Promise((resolve) => {
+						resolveInput = resolve;
+					}),
+			},
+		});
+		await Promise.resolve();
+
+		state.lifecycle = lifecycleFor("running", "mach12:other");
+		state.lifecycleGeneration++;
+		resolveInput(uiResult);
+		const result = await promise;
+
+		expect(result.terminate).toBeUndefined();
+		expect(result.details.error).toBe("stale-result");
+		expect(state.lifecycle.activeCommand).toBe("mach12:other");
+		expect(isProbeDue(state.lifecycle)).toBe(true);
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
+		expect(logger.warn).toHaveBeenCalledWith(
+			"input",
+			"stale get_scramjet_user_input result ignored",
+			expect.objectContaining({ expectedCommand: "mach12:test", currentCommand: "mach12:other" }),
+		);
+	});
+
+	it("ignores stale probing results without resuming the replacement probe", async () => {
+		let resolveInput: (result: unknown) => void = () => {};
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn() };
+		const state = freshState({
+			lifecycle: lifecycleFor("probing", "mach12:test"),
+			logger: logger as any,
+			suspendProbeWatchdog: vi.fn(),
+			rearmProbeWatchdog: vi.fn(),
+		});
+		const { execute, pi } = toolFor(state);
+		const promise = execute(
+			{ type: "confirm", message: "Continue?" },
+			{
+				ui: {
+					custom: () =>
+						new Promise((resolve) => {
+							resolveInput = resolve;
+						}),
+				},
+			},
+		);
+		await Promise.resolve();
+
+		state.lifecycle = lifecycleFor("probing", "mach12:other");
+		state.lifecycleGeneration++;
+		resolveInput("yes");
+		const result = await promise;
+
+		expect(result.details.error).toBe("stale-result");
+		expect(state.lifecycle.activeCommand).toBe("mach12:other");
+		expect(isProbeInFlight(state.lifecycle)).toBe(true);
+		expect(state.suspendProbeWatchdog).toHaveBeenCalledTimes(1);
+		expect(state.rearmProbeWatchdog).not.toHaveBeenCalled();
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
 	});
 });
 
 describe("registerUserInputTool — UI interaction errors", () => {
-	it("returns a structured non-terminating error when UI fails during running phase", async () => {
+	it("returns a structured non-terminating error when UI fails during running", async () => {
 		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const ctx = { ui: { custom: () => Promise.reject(new Error("UI crashed")) } };
 		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
@@ -652,10 +742,10 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		await execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		expect(suspended).toEqual(["suspended"]);
-		expect(state.lifecycle.phase).toBe("running");
+		expect(isProbeDue(state.lifecycle)).toBe(true);
 	});
 
-	it("keeps probing reportable and returns a structured error if UI throws", async () => {
+	it("keeps probe in flight and returns a structured error if UI throws", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("probing") });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
@@ -673,10 +763,10 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		expect(result.details.error).toBe("ui-error");
 		expect(result.details.message).toBe("UI crashed");
 		expect(suspended).toEqual(["suspended", "rearmed"]);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(isProbeInFlight(state.lifecycle)).toBe(true);
 	});
 
-	it("does not suspend watchdog when phase is running", async () => {
+	it("does not suspend watchdog when probe is armed (running)", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("running") });
 		const suspended: string[] = [];
 		state.suspendProbeWatchdog = () => suspended.push("suspended");
@@ -695,19 +785,21 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		expect(result.terminate).toBeUndefined();
-		expect(state.lifecycle.phase).toBe("running");
+		expect(isProbeDue(state.lifecycle)).toBe(true);
 	});
 
-	it("preserves continueCount when successful probe-time input resumes running", async () => {
+	it("preserves continueCount when successful probe-time input resumes", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("probing", "test:cmd", { continueCount: 2 }) });
 		const { execute } = toolFor(state);
 		const ctx = mockUICtx("yes");
 		await execute({ type: "confirm", message: "Continue?" }, ctx);
 
-		expect(state.lifecycle).toEqual({ phase: "running", command: "test:cmd", continueCount: 2 });
+		expect(state.lifecycle.probeArmed).toBe(true);
+		expect(state.lifecycle.continueCount).toBe(2);
+		expect(state.lifecycle.activeCommand).toBe("test:cmd");
 	});
 
-	it("phase stays probing past an armed watchdog timeout while UI is pending", async () => {
+	it("lifecycle stays probing past an armed watchdog timeout while UI is pending", async () => {
 		const { registerAutoContinue } = await import("../src/auto-continue.js");
 		const state = freshState({
 			lifecycle: lifecycleFor("running", "mach12:test"),
@@ -735,12 +827,12 @@ describe("registerUserInputTool — probing phase compatibility", () => {
 		const resultPromise = execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		await vi.advanceTimersByTimeAsync(35_000);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(isProbeInFlight(state.lifecycle)).toBe(true);
 
 		resolveUI!("yes");
 		const result = await resultPromise;
 		expect(result.terminate).toBeUndefined();
-		expect(state.lifecycle.phase).toBe("running");
+		expect(isProbeDue(state.lifecycle)).toBe(true);
 	});
 });
 
@@ -822,25 +914,16 @@ describe("registerUserInputTool — journaling", () => {
 		expect(parkedEntry.data).toEqual({ commandName: "mach12:test" });
 	});
 
-	it("journals a cancelled interaction and user-input-parked entry", async () => {
+	it("does not journal parked marker on cancellation (new behavior)", async () => {
 		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:test") }));
 		const ctx = mockUICtx(null);
 		await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
-		const entry = pi.appended.find((e: any) => e.customType === USER_INPUT_TYPE);
-		expect(entry).toBeDefined();
-		expect(entry.data).toMatchObject({
-			interactionType: "confirm",
-			message: "Deploy?",
-			cancelled: true,
-		});
-
-		const parkedEntry = pi.appended.find((e: any) => e.customType === USER_INPUT_PARKED_TYPE);
-		expect(parkedEntry).toBeDefined();
-		expect(parkedEntry.data).toEqual({ commandName: "mach12:test" });
+		const parkedEntries = pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE);
+		expect(parkedEntries).toHaveLength(0);
 	});
 
-	it("does not journal when phase gate rejects", async () => {
+	it("does not journal when gate rejects", async () => {
 		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("idle") }));
 		await execute({ type: "confirm", message: "Deploy?" }, { ui: {} });
 

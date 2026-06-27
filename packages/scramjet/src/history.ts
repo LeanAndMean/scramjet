@@ -1,12 +1,13 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
 import {
-	getActiveCommand,
-	isPhaseEntry,
+	activeCommandName,
+	clearActiveCommand,
+	isParkedForInput,
 	type LifecycleState,
-	logTransition,
-	reconstructPhase,
-	transition,
-} from "./phase-machine.js";
+	reconstructLifecycle,
+	resumeFromParkedInput,
+	startCommand,
+} from "./lifecycle.js";
 import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.js";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
@@ -29,7 +30,7 @@ function extractSlashName(text: string): string | null {
 	return name || null;
 }
 
-function isKnownSlashCommand(text: string, pi: ExtensionAPI): boolean {
+function isKnownSlashCommand(text: string, pi: ExtensionAPI, state: ScramjetState): boolean {
 	const name = extractSlashName(text);
 	if (!name) return false;
 	const getCommands = (pi as unknown as { getCommands?: () => Array<{ name: string }> }).getCommands;
@@ -39,8 +40,13 @@ function isKnownSlashCommand(text: string, pi: ExtensionAPI): boolean {
 				if (cmd.name === name) return true;
 			}
 			return false;
-		} catch {
-			// fall through to fallback set
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			state.logger.warn("history", "slash command lookup failed; preserving active Scramjet workflow", {
+				slashName: name,
+				error: message,
+			});
+			return true;
 		}
 	}
 	return FALLBACK_KNOWN_SLASH.has(name);
@@ -82,26 +88,19 @@ export function recordCommandInvocation(
 		depth,
 		timestamp: Date.now(),
 	};
-	let commandStartTransition: { from: LifecycleState; to: LifecycleState } | null = null;
 	if (depth === 0) {
-		const from = state.lifecycle;
-		const result = transition(state.lifecycle, { type: "command-start", command: name });
+		state.clearLifecycleTimers?.();
+		const result = startCommand(state, name);
 		if (!result.ok) {
-			state.logger.warn("lifecycle", `illegal lifecycle transition: ${result.from} + command-start`, {
-				from: result.from,
+			state.logger.warn("lifecycle", `lifecycle startCommand failed: ${result.reason}`, {
 				event: "command-start",
 				command: name,
 			});
 			return;
 		}
-		state.lifecycle = result.state;
-		commandStartTransition = { from, to: result.state };
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);
-	if (commandStartTransition) {
-		logTransition(state, commandStartTransition.from, commandStartTransition.to, "command-start", { origin, depth });
-	}
 }
 
 // Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
@@ -117,8 +116,8 @@ export function recordCommandStart(
 }
 
 // Journal entry for a command-status report (issue 88). Records which command
-// reported and what status, so a rewind/resume can reconstruct the resumable
-// "waiting" lifecycle phase (see replayHistory).
+// reported and what status, so a rewind/resume can tell when a command completed
+// (reconstruct to idle) versus blocked/incomplete (reconstruct to dormant).
 export interface CommandStatusData {
 	commandName: string;
 	status: CommandStatusRestingStatus;
@@ -126,11 +125,11 @@ export interface CommandStatusData {
 
 // Journals the agent's report_scramjet_command_status report. Mirrors
 // recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
-// the live phase is owned by command-status.ts / auto-continue.ts; this only
-// persists the report so resume can rebuild the resting phase. Terminal/resting
-// terminal statuses are journaled — that is what lets a command
+// the live lifecycle facts are owned by command-status.ts / auto-continue.ts; this only
+// persists the report so resume can rebuild the resting lifecycle facts. Terminal
+// statuses are journaled — that is what lets a command
 // which waits, is answered, then completes without offering a next step reconstruct
-// to "idle" instead of resurrecting at "waiting" (the duplicate-work hazard).
+// to idle instead of resurrecting at dormant (the duplicate-work hazard).
 export function recordCommandStatus(pi: ExtensionAPI, commandName: string, status: CommandStatusRestingStatus): void {
 	const data: CommandStatusData = { commandName, status };
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
@@ -144,10 +143,13 @@ export interface ReplayResult {
 	lifecycle: LifecycleState;
 }
 
+const VALID_RESTING_STATUSES: ReadonlySet<string> = new Set(["completed", "blocked", "incomplete"]);
+
 export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	let sidebarLog: SidebarEntry[] = [];
 	let enabled: boolean | null = null;
 	let activeTopLevelCommand: string | null = null;
+	let parkedForInput = false;
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
@@ -160,27 +162,35 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			sidebarLog = appendSidebarEntry(sidebarLog, data);
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
+				parkedForInput = false;
 			}
 		} else if (entry.customType === ENABLED_TOGGLE_TYPE) {
 			const data = entry.data as EnabledToggleData | undefined;
 			if (data && typeof data.enabled === "boolean") enabled = data.enabled;
+		} else if (entry.customType === COMMAND_STATUS_TYPE) {
+			const data = entry.data as { commandName?: unknown; status?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand) continue;
+			if (typeof data.status !== "string" || !VALID_RESTING_STATUSES.has(data.status)) continue;
+			if (data.status === "completed") {
+				activeTopLevelCommand = null;
+			}
+			// blocked/incomplete: command stays associated (dormant)
+			parkedForInput = false;
+		} else if (entry.customType === USER_INPUT_PARKED_TYPE) {
+			const data = entry.data as { commandName?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand) continue;
+			parkedForInput = true;
 		}
 	}
-	const reconstructed = reconstructPhase(entries.filter(isPhaseEntry));
-	if (reconstructed.activeCommandCleared) activeTopLevelCommand = null;
-	let lifecycle: LifecycleState;
-	if (reconstructed.phase === "waiting" && activeTopLevelCommand) {
-		lifecycle = { phase: "waiting", command: activeTopLevelCommand };
-	} else if (activeTopLevelCommand && reconstructed.phase === "idle") {
-		lifecycle = { phase: "dormant", command: activeTopLevelCommand };
-	} else {
-		lifecycle = { phase: "idle" };
-	}
+	const lifecycle = reconstructLifecycle(activeTopLevelCommand, parkedForInput);
 	return { sidebarLog, enabled, lifecycle };
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	const rebuild = async (_event: unknown, ctx: ExtensionContext) => {
+		state.clearLifecycleTimers?.();
 		const result = replayHistory(ctx.sessionManager.getBranch());
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
@@ -217,29 +227,12 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("input", async (event) => {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
-			// Resume the active command on an interactive non-slash reply. Two
-			// cases: (1) issue 88 — the command parked via user-input freetext
-			// and rests at "waiting"; the user's answer re-arms the probe path.
-			// (2) issue 128 — the probe self-healed to "dormant" (command
-			// still associated but not running); the user's reply is still
-			// engaging with the command. In both cases, flip to "running" so
-			// phase-gated tools (get_scramjet_user_input) work
-			// and agent_end fires the running→probing probe. Chaining still
-			// requires an explicit completed report, so an off-topic reply can
-			// only cause a harmless re-probe, never a chain. Gated on
-			// source === "interactive" so the hidden status probe (sent via
-			// triggerTurn, which bypasses the input pipeline) and
-			// extension-dispatched input can never self-resume.
-			if (
-				event.source === "interactive" &&
-				!event.text.startsWith("/") &&
-				(state.lifecycle.phase === "waiting" || state.lifecycle.phase === "dormant")
-			) {
-				const from = state.lifecycle;
-				const result = transition(state.lifecycle, { type: "user-reply" });
-				if (!result.ok) return;
-				state.lifecycle = result.state;
-				logTransition(state, from, result.state, "user-reply", { source: event.source });
+			// Resume a parked command on an interactive non-slash reply. Only
+			// parked-for-input (freetext park) auto-resumes; dormant commands
+			// require the agent to explicitly call `continuing` after seeing
+			// the dormant notice (issue 215).
+			if (event.source === "interactive" && !event.text.startsWith("/") && isParkedForInput(state.lifecycle)) {
+				resumeFromParkedInput(state);
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
@@ -253,18 +246,10 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// not a workflow exit — the user toggling /scramjet on mid-chain or
 			// checking /help should not silently break a forced next-step. Only
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
-			if (event.text.startsWith("/") && getActiveCommand(state.lifecycle) !== null) {
-				if (!isKnownSlashCommand(event.text, pi)) {
-					const from = state.lifecycle;
-					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
-					if (exitResult.ok) {
-						state.lifecycle = exitResult.state;
-						logTransition(state, from, exitResult.state, "workflow-exit", {
-							reason: "unknown-slash",
-							slash: extractSlashName(event.text),
-							source: event.source,
-						});
-					}
+			if (event.text.startsWith("/") && activeCommandName(state.lifecycle) !== null) {
+				if (!isKnownSlashCommand(event.text, pi, state)) {
+					state.clearLifecycleTimers?.();
+					clearActiveCommand(state, "unknown-slash");
 				}
 			}
 			return;

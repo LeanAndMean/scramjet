@@ -2,21 +2,29 @@ import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@le
 import { Text, wrapTextWithAnsi } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
 import { USER_INPUT_PARKED_TYPE } from "./history.js";
+import {
+	activeCommandName,
+	enterDormant,
+	isProbeDue,
+	isProbeInFlight,
+	parkForFreetext,
+	resumeAfterProbeInput,
+} from "./lifecycle.js";
 import { MultiLineSelectList } from "./multi-line-select.js";
-import { getActiveCommand, type LifecycleEvent, logTransition, transition } from "./phase-machine.js";
 import type { ScramjetState } from "./types.js";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
 
-const ALLOWED_PHASES = new Set<string>(["running", "probing"]);
-
 const OUT_OF_PHASE_ERROR =
 	"get_scramjet_user_input is not available right now. " +
-	"This tool can only be called during active command execution (running or probing phase).";
+	"This tool can only be called during active command work (probe armed or probe in flight).";
 
 const NON_TUI_ERROR =
 	"get_scramjet_user_input requires a TUI environment. " +
 	"The current session does not support interactive UI — use prose-based interaction instead.";
+
+const STALE_RESULT_ERROR =
+	"The user input result arrived after the active Scramjet command changed. The stale result was ignored.";
 
 const PROMPT_SNIPPET =
 	"You have access to `get_scramjet_user_input` for requesting structured user input mid-turn " +
@@ -60,6 +68,12 @@ type UserInputOption = Static<typeof USER_INPUT_OPTION_SCHEMA>;
 const _schemaMatchesParams = (params: Static<typeof USER_INPUT_SCHEMA>): UserInputParams => params;
 const _paramsMatchSchema = (params: UserInputParams): Static<typeof USER_INPUT_SCHEMA> => params;
 
+// Gate: tool is available when an active command has work in progress
+// (probe armed = working turn, probe in flight = status-check turn).
+function isToolAvailable(state: ScramjetState): boolean {
+	return isProbeDue(state.lifecycle) || isProbeInFlight(state.lifecycle);
+}
+
 export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
 		name: "get_scramjet_user_input",
@@ -85,17 +99,13 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			return renderUserInputResult(result, theme, context.args as Partial<UserInputParams> | null | undefined);
 		},
 		async execute(_toolCallId, params, _resource, _read, ctx) {
-			if (!ALLOWED_PHASES.has(state.lifecycle.phase)) {
-				state.logger.warn(
-					"input",
-					`get_scramjet_user_input called out of phase (phase=${state.lifecycle.phase}); rejected`,
-					{
-						phase: state.lifecycle.phase,
-					},
-				);
+			if (!isToolAvailable(state)) {
+				state.logger.warn("input", "get_scramjet_user_input called outside active command work; rejected", {
+					activeCommand: activeCommandName(state.lifecycle),
+				});
 				return {
 					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
-					details: { error: "out-of-phase", phase: state.lifecycle.phase },
+					details: { error: "out-of-phase", phase: "unavailable" },
 				};
 			}
 
@@ -112,14 +122,10 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					interactionType: params.type,
 					message: params.message,
 				});
-				const from = state.lifecycle;
-				const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
-				if (waitResult.ok) {
-					state.lifecycle = waitResult.state;
-					logTransition(state, from, waitResult.state, "waiting-parked", { inputType: params.type });
-				}
-				const activeCommand = getActiveCommand(state.lifecycle);
-				if (activeCommand) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: activeCommand });
+				if (isProbeInFlight(state.lifecycle)) state.suspendProbeWatchdog?.();
+				parkForFreetext(state);
+				const command = activeCommandName(state.lifecycle);
+				if (command) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: command });
 				return {
 					content: [{ type: "text", text: JSON.stringify({ parked: true }) }],
 					details: { type: "freetext", parked: true },
@@ -134,8 +140,12 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				};
 			}
 
-			const isProbing = state.lifecycle.phase === "probing";
-			if (isProbing) state.suspendProbeWatchdog?.();
+			const wasProbing = isProbeInFlight(state.lifecycle);
+			const expectedCommand = activeCommandName(state.lifecycle);
+			const expectedGeneration = state.lifecycleGeneration;
+			const lifecycleUnchanged = () =>
+				activeCommandName(state.lifecycle) === expectedCommand && state.lifecycleGeneration === expectedGeneration;
+			if (wasProbing) state.suspendProbeWatchdog?.();
 
 			type InteractionResult = {
 				content: { type: "text"; text: string }[];
@@ -163,26 +173,25 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 						};
 				}
 			} catch (error) {
-				if (isProbing) state.rearmProbeWatchdog?.();
+				if (!lifecycleUnchanged()) return staleResult(expectedCommand, expectedGeneration, state);
+				if (wasProbing) state.rearmProbeWatchdog?.();
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text", text: `UI interaction failed: ${message}` }],
 					details: { error: "ui-error", message },
 				};
-			} finally {
-				if (isProbing && result) {
-					const event: LifecycleEvent = result.cancelled
-						? { type: "waiting-parked" }
-						: { type: "probe-input-resumed" };
-					const from = state.lifecycle;
-					const transResult = transition(state.lifecycle, event);
-					if (transResult.ok) {
-						state.lifecycle = transResult.state;
-						logTransition(state, from, transResult.state, event.type, {
-							inputType: params.type,
-							cancelled: result.cancelled,
-						});
-					}
+			}
+
+			if (!lifecycleUnchanged()) return staleResult(expectedCommand, expectedGeneration, state);
+
+			// Post-interaction lifecycle transitions
+			if (wasProbing && result) {
+				if (result.cancelled) {
+					// Cancellation during probe → dormant (no parked marker)
+					enterDormant(state, "confirm/select-cancelled");
+				} else {
+					// Success during probe → resume with probe re-armed, preserving continueCount
+					resumeAfterProbeInput(state);
 				}
 			}
 
@@ -194,25 +203,36 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 
 			const toolResult = { content: result.content, details: result.details };
 			if (result.cancelled) {
-				if (!isProbing) {
-					const from = state.lifecycle;
-					const waitResult = transition(state.lifecycle, { type: "waiting-parked" });
-					if (waitResult.ok) {
-						state.lifecycle = waitResult.state;
-						logTransition(state, from, waitResult.state, "waiting-parked", {
-							inputType: params.type,
-							cancelled: true,
-						});
-					}
+				if (!wasProbing) {
+					// Cancellation during running (probe armed) → dormant (no parked marker)
+					enterDormant(state, "confirm/select-cancelled");
 				}
-				const activeCommand = getActiveCommand(state.lifecycle);
-				if (activeCommand) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: activeCommand });
 				return { ...toolResult, terminate: true };
 			}
 
 			return toolResult;
 		},
 	});
+}
+
+function staleResult(expectedCommand: string | null, expectedGeneration: number, state: ScramjetState) {
+	const currentCommand = activeCommandName(state.lifecycle);
+	state.logger.warn("input", "stale get_scramjet_user_input result ignored", {
+		expectedCommand,
+		currentCommand,
+		expectedGeneration,
+		currentGeneration: state.lifecycleGeneration,
+	});
+	return {
+		content: [{ type: "text" as const, text: STALE_RESULT_ERROR }],
+		details: {
+			error: "stale-result",
+			expectedCommand,
+			currentCommand,
+			expectedGeneration,
+			currentGeneration: state.lifecycleGeneration,
+		},
+	};
 }
 
 async function handleConfirm(message: string, ctx: ExtensionContext) {
