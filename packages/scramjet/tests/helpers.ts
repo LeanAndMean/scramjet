@@ -1,3 +1,4 @@
+import { createLifecycle, type LifecycleState as LifecycleFacts, type LifecycleHolder } from "../src/lifecycle.js";
 import { createLogger, SCRAMJET_LOG_TYPE } from "../src/logger.js";
 import type { LifecycleState } from "../src/phase-machine.js";
 import type { ScramjetState } from "../src/types.js";
@@ -9,6 +10,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		agentRegistry: new Map(),
 		sidebarLog: [],
 		delegateStack: [],
+		lifecycleGeneration: 0,
 		pendingForcedDispatch: null,
 		lifecycle: { phase: "idle" },
 		currentModel: null,
@@ -50,6 +52,14 @@ export function lifecycleFor(
 		case "waiting":
 			return { phase: "waiting", command };
 	}
+}
+
+export function freshLifecycleHolder(overrides: Partial<LifecycleFacts> = {}): LifecycleHolder {
+	return {
+		lifecycle: { ...createLifecycle(), ...overrides },
+		lifecycleGeneration: 0,
+		logger: createLogger({ appendEntry() {} } as any),
+	};
 }
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;

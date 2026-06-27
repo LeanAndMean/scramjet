@@ -28,6 +28,7 @@ export function initScramjet(pi: ExtensionAPI) {
 		agentRegistry: new Map(),
 		sidebarLog: [],
 		delegateStack: [],
+		lifecycleGeneration: 0,
 		pendingForcedDispatch: null,
 		lifecycle: { phase: "idle" },
 		currentModel: null,
