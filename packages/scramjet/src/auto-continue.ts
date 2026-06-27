@@ -46,6 +46,7 @@ import {
 	activeCommandName,
 	beginProbe,
 	clearActiveCommand,
+	derivePhaseLabel as lp,
 	enterDormant,
 	hasTerminalReport,
 	isDormant,
@@ -121,15 +122,7 @@ export function cleanForNotify(text: string): string {
 	return collapsed.length > NOTIFY_MAX ? `${collapsed.slice(0, NOTIFY_MAX - 1)}…` : collapsed;
 }
 
-// Derive a phase-like label from lifecycle facts for log entries.
-function lp(lifecycle: LifecycleState): string {
-	if (lifecycle.activeCommand === null) return "idle";
-	if (lifecycle.lastReport !== null) return "reported";
-	if (lifecycle.probeInFlight) return "probing";
-	if (lifecycle.probeArmed) return "running";
-	if (lifecycle.parkedForInput) return "waiting";
-	return "dormant";
-}
+
 
 // Extract stopReason from the last assistant message in an agent_end event.
 export function extractStopReason(event: { messages?: unknown[] }): string | undefined {
@@ -196,6 +189,14 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 	state.suspendProbeWatchdog = () => clearProbeWatchdog("suspended");
 	state.rearmProbeWatchdog = armProbeWatchdog;
+	state.clearLifecycleTimers = () => {
+		if (probeTimer) {
+			clearTimeout(probeTimer);
+			probeTimer = null;
+		}
+		clearProbeWatchdog("lifecycle-reset");
+		clearDispatchTimer("lifecycle-reset");
+	};
 
 	function clearDispatchTimer(reason = "cleared") {
 		if (dispatchTimer) {

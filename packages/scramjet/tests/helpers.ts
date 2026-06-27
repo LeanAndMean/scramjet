@@ -1,13 +1,4 @@
-import {
-	createLifecycle,
-	hasTerminalReport,
-	isDormant,
-	isParkedForInput,
-	isProbeDue,
-	isProbeInFlight,
-	type LifecycleHolder,
-	type LifecycleState,
-} from "../src/lifecycle.js";
+import { createLifecycle, type LifecycleHolder, type LifecycleState } from "../src/lifecycle.js";
 import { createLogger, SCRAMJET_LOG_TYPE } from "../src/logger.js";
 import type { CommandStatusRestingPayload, ScramjetState } from "../src/types.js";
 
@@ -124,18 +115,7 @@ export function recordingPi(): RecordingPi {
 	return { pi, tools, commands, handlers, emit };
 }
 
-/**
- * Derives a phase-like label from lifecycle facts for test assertions.
- */
-export function derivedPhase(lifecycle: LifecycleState): string {
-	if (lifecycle.activeCommand === null) return "idle";
-	if (hasTerminalReport(lifecycle)) return "reported";
-	if (isProbeInFlight(lifecycle)) return "probing";
-	if (isProbeDue(lifecycle)) return "running";
-	if (isParkedForInput(lifecycle)) return "waiting";
-	if (isDormant(lifecycle)) return "dormant";
-	return "idle";
-}
+export { derivePhaseLabel as derivedPhase } from "../src/lifecycle.js";
 
 export function logMessages(pi: any, level?: string): string[] {
 	return pi.appended

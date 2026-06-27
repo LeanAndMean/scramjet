@@ -486,7 +486,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. Freetext renders its `message` in the tool call row, then parks the command in `waiting` immediately so the user can reply through the standard editor.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. Freetext renders its `message` in the tool call row, then parks the command immediately so the user can reply through the standard editor.
 
 ### When to use it
 
@@ -531,11 +531,11 @@ Returns `{ "selected": "patch" }` or `{ "cancelled": true }`. The result row als
 { "type": "freetext", "message": "What should the release title be?", "placeholder": "v1.2.3" }
 ```
 
-The `message` is displayed in the tool call row before/alongside the parked result. Freetext always returns `terminate: true` and parks the command in `waiting`; the user replies in the standard message editor, and that reply arrives as the next normal user message rather than as a tool result. The `placeholder` field is accepted for compatibility but unused. If the user needs context, trade-offs, or consequences to answer well, state that context in assistant prose before calling the tool; keep `message` as the concise question.
+The `message` is displayed in the tool call row before/alongside the parked result. Freetext always returns `terminate: true` and parks the command; the user replies in the standard message editor, and that reply arrives as the next normal user message rather than as a tool result. The `placeholder` field is accepted for compatibility but unused. If the user needs context, trade-offs, or consequences to answer well, state that context in assistant prose before calling the tool; keep `message` as the concise question.
 
 ### Cancellation
 
-Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it always parks the command in `waiting` and ends the turn for a standard editor reply.
+Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `dormant`. Dormant commands resume only through explicit `continuing` via the status tool, not through any user reply; the user can also redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it parks the command and ends the turn for a standard editor reply.
 
 ### Lifecycle gating
 
@@ -543,13 +543,13 @@ The tool is callable when an active command has a probe armed or in flight. Outs
 
 ### Journaling
 
-Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; select entries also record the presented options. Freetext records only the prompt. Freetext and cancellation with an active top-level command are also journaled as `scramjet:user-input-parked` entries so resume reconstruction preserves the waiting state.
+Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; select entries also record the presented options. Freetext records only the prompt. Freetext with an active top-level command is also journaled as a `scramjet:user-input-parked` entry so resume reconstruction preserves the parked state.
 
 ### Don't
 
 - Don't use `get_scramjet_user_input` for complex multi-part discussions. End the turn and let the user respond in full.
 - Don't use `get_scramjet_user_input` from delegate-only subroutines that should not interact with the user directly. The calling command should own the interaction.
-- Don't rely on handling `{ "cancelled": true }` in the same turn — cancellation terminates the turn and parks the command in `waiting`.
+- Don't rely on handling `{ "cancelled": true }` in the same turn — cancellation terminates the turn and enters dormant.
 
 ---
 

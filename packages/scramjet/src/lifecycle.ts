@@ -31,9 +31,7 @@ export function createLifecycle(): LifecycleState {
 	};
 }
 
-export type InvariantResult = { ok: true } | { ok: false; reason: string };
-
-export function checkInvariants(lifecycle: LifecycleState): InvariantResult {
+export function checkInvariants(lifecycle: LifecycleState): MutationResult {
 	if (lifecycle.activeCommand === null) {
 		if (lifecycle.probeArmed) return { ok: false, reason: "probeArmed must be false when no active command" };
 		if (lifecycle.probeInFlight) return { ok: false, reason: "probeInFlight must be false when no active command" };
@@ -85,6 +83,15 @@ export function checkInvariants(lifecycle: LifecycleState): InvariantResult {
 	}
 
 	return { ok: true };
+}
+
+export function derivePhaseLabel(lifecycle: LifecycleState): string {
+	if (lifecycle.activeCommand === null) return "idle";
+	if (lifecycle.lastReport !== null) return "reported";
+	if (lifecycle.probeInFlight) return "probing";
+	if (lifecycle.probeArmed) return "running";
+	if (lifecycle.parkedForInput) return "waiting";
+	return "dormant";
 }
 
 // --- Query helpers ---

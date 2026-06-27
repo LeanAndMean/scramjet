@@ -430,28 +430,28 @@ A command that needs user input has two paths to get it:
 
 Both keep the command active. Confirm/select probe-time calls have one extra
 lifecycle step: while the UI is pending, the harness suspends the active probe
-watchdog; after a successful response, the phase transitions `probing → running`
-so the agent can continue work in that same turn. Freetext uses the same
-`waiting` park from either path.
+watchdog; after a successful response, the probe is cleared and the probe
+re-armed so the agent can continue work in that same turn. Freetext parks the
+command from either path.
 
-##### Phase machine implications
+##### Lifecycle implications
 
 For proactive calls during normal command work, successful confirm/select input
-does not change the phase: it remains `running`, no status report is generated,
-and the agent's turn continues after the tool result returns. Freetext and
-cancellation transition `running → waiting`, journal `scramjet:user-input-parked`,
-and terminate the turn.
+does not change lifecycle state: `probeArmed` remains true, no status report is
+generated, and the agent's turn continues after the tool result returns. Freetext
+parks the command (`parkedForInput = true`), journals `scramjet:user-input-parked`,
+and terminates the turn. Cancellation enters dormant and terminates the turn.
 
 For probe-time confirm/select calls, the tool is the handoff from status-check
 probing back to active command work:
 
-- Phase remains `probing` while the UI is pending.
+- `probeInFlight` remains true while the UI is pending.
 - The probe watchdog is suspended and is not re-armed after the response.
-- After a successful confirm/select response, the phase becomes `running`.
-- If the user cancels, the phase becomes `waiting` and the turn terminates.
+- After a successful confirm/select response, `probeInFlight` is cleared and `probeArmed` is set.
+- If the user cancels, the command enters dormant and the turn terminates.
 - The next `agent_end` schedules a fresh status probe only after successful input resumes command work.
 
-Probe-time freetext transitions `probing → waiting`, journals
+Probe-time freetext parks the command (`parkedForInput = true`), journals
 `scramjet:user-input-parked`, returns the parked marker with `terminate: true`,
 and resumes only when the user later replies normally.
 

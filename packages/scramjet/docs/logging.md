@@ -99,8 +99,8 @@ A successful command completion produces this sequence of lifecycle entries:
 3. `"lifecycle: beginProbe"` — fact mutation: `probeArmed → probeInFlight`
 4. `"status probe scheduled"` — deferred probe timer set
 5. `"status probe timer fired"` — timer callback ran
-6. `"probe watchdog armed"` — watchdog timeout set for probe turn
-7. `"status probe sent"` — `sendMessage` succeeded
+6. `"status probe sent"` — `sendMessage` succeeded
+7. `"probe watchdog armed"` — watchdog timeout set for probe turn
 8. `"status report accepted"` — `report_scramjet_command_status` called with valid payload
 9. `"lifecycle: acceptTerminalReport"` — fact mutation: `probeInFlight → lastReport`
 10. `"probe watchdog cleared"` — watchdog cancelled (report received in time)
