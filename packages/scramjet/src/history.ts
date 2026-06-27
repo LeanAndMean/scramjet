@@ -2,9 +2,9 @@ import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/
 import {
 	activeCommandName,
 	clearActiveCommand,
-	createLifecycle,
 	isParkedForInput,
 	type LifecycleState,
+	reconstructLifecycle,
 	resumeFromParkedInput,
 	startCommand,
 } from "./lifecycle.js";
@@ -184,13 +184,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			parkedForInput = true;
 		}
 	}
-	const lifecycle = createLifecycle();
-	if (activeTopLevelCommand) {
-		lifecycle.activeCommand = activeTopLevelCommand;
-		if (parkedForInput) {
-			lifecycle.parkedForInput = true;
-		}
-	}
+	const lifecycle = reconstructLifecycle(activeTopLevelCommand, parkedForInput);
 	return { sidebarLog, enabled, lifecycle };
 }
 

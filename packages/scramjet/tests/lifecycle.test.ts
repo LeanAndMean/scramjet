@@ -327,10 +327,9 @@ describe("acceptProbeContinuing", () => {
 	});
 
 	it("increments through the limit", () => {
-		const h = freshLifecycleHolder({ activeCommand: "cmd", probeInFlight: true, continueCount: 0 });
+		const h = freshLifecycleHolder({ activeCommand: "cmd", probeArmed: true });
 		for (let i = 0; i < CONTINUE_LIMIT; i++) {
-			h.lifecycle.probeInFlight = true;
-			h.lifecycle.probeArmed = false;
+			ok(beginProbe(h, "test cycle"));
 			ok(acceptProbeContinuing(h));
 			expect(h.lifecycle.continueCount).toBe(i + 1);
 		}

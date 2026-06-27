@@ -2,13 +2,15 @@ import type { ScramjetLogger } from "./logger.js";
 import type { CommandStatusRestingPayload } from "./types.js";
 
 export interface LifecycleState {
-	activeCommand: string | null;
-	probeArmed: boolean;
-	probeInFlight: boolean;
-	parkedForInput: boolean;
-	continueCount: number;
-	lastReport: CommandStatusRestingPayload | null;
+	readonly activeCommand: string | null;
+	readonly probeArmed: boolean;
+	readonly probeInFlight: boolean;
+	readonly parkedForInput: boolean;
+	readonly continueCount: number;
+	readonly lastReport: CommandStatusRestingPayload | null;
 }
+
+type MutableLifecycle = { -readonly [K in keyof LifecycleState]: LifecycleState[K] };
 
 export interface LifecycleHolder {
 	lifecycle: LifecycleState;
@@ -167,12 +169,13 @@ export function startCommand(holder: LifecycleHolder, command: string): Mutation
 	if (!command || command.trim() === "") {
 		return { ok: false, reason: "command must be a non-empty string" };
 	}
-	holder.lifecycle.activeCommand = command;
-	holder.lifecycle.probeArmed = true;
-	holder.lifecycle.probeInFlight = false;
-	holder.lifecycle.parkedForInput = false;
-	holder.lifecycle.continueCount = 0;
-	holder.lifecycle.lastReport = null;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.activeCommand = command;
+	lc.probeArmed = true;
+	lc.probeInFlight = false;
+	lc.parkedForInput = false;
+	lc.continueCount = 0;
+	lc.lastReport = null;
 	bumpAndLog(holder, "startCommand", { command });
 	assertPostCondition(holder.lifecycle, "startCommand");
 	return { ok: true };
@@ -182,13 +185,14 @@ export function clearActiveCommand(holder: LifecycleHolder, reason: string): Mut
 	if (holder.lifecycle.activeCommand === null) {
 		return { ok: false, reason: "no active command to clear" };
 	}
-	const prev = holder.lifecycle.activeCommand;
-	holder.lifecycle.activeCommand = null;
-	holder.lifecycle.probeArmed = false;
-	holder.lifecycle.probeInFlight = false;
-	holder.lifecycle.parkedForInput = false;
-	holder.lifecycle.continueCount = 0;
-	holder.lifecycle.lastReport = null;
+	const lc = holder.lifecycle as MutableLifecycle;
+	const prev = lc.activeCommand;
+	lc.activeCommand = null;
+	lc.probeArmed = false;
+	lc.probeInFlight = false;
+	lc.parkedForInput = false;
+	lc.continueCount = 0;
+	lc.lastReport = null;
 	bumpAndLog(holder, "clearActiveCommand", { previousCommand: prev, reason });
 	assertPostCondition(holder.lifecycle, "clearActiveCommand");
 	return { ok: true };
@@ -198,11 +202,12 @@ export function enterDormant(holder: LifecycleHolder, reason: string): MutationR
 	if (holder.lifecycle.activeCommand === null) {
 		return { ok: false, reason: "no active command; cannot enter dormant" };
 	}
-	holder.lifecycle.probeArmed = false;
-	holder.lifecycle.probeInFlight = false;
-	holder.lifecycle.parkedForInput = false;
-	holder.lifecycle.continueCount = 0;
-	holder.lifecycle.lastReport = null;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeArmed = false;
+	lc.probeInFlight = false;
+	lc.parkedForInput = false;
+	lc.continueCount = 0;
+	lc.lastReport = null;
 	bumpAndLog(holder, "enterDormant", { reason });
 	assertPostCondition(holder.lifecycle, "enterDormant");
 	return { ok: true };
@@ -221,7 +226,7 @@ export function armProbe(holder: LifecycleHolder, reason: string): MutationResul
 	if (holder.lifecycle.lastReport !== null) {
 		return { ok: false, reason: "terminal report pending; cannot arm probe" };
 	}
-	holder.lifecycle.probeArmed = true;
+	(holder.lifecycle as MutableLifecycle).probeArmed = true;
 	bumpAndLog(holder, "armProbe", { reason });
 	assertPostCondition(holder.lifecycle, "armProbe");
 	return { ok: true };
@@ -234,8 +239,9 @@ export function beginProbe(holder: LifecycleHolder, reason: string): MutationRes
 	if (!holder.lifecycle.probeArmed) {
 		return { ok: false, reason: "probe not armed; cannot begin" };
 	}
-	holder.lifecycle.probeArmed = false;
-	holder.lifecycle.probeInFlight = true;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeArmed = false;
+	lc.probeInFlight = true;
 	bumpAndLog(holder, "beginProbe", { reason });
 	assertPostCondition(holder.lifecycle, "beginProbe");
 	return { ok: true };
@@ -248,10 +254,11 @@ export function acceptProbeContinuing(holder: LifecycleHolder): MutationResult {
 	if (holder.lifecycle.continueCount >= CONTINUE_LIMIT) {
 		return { ok: false, reason: `continue limit reached (${CONTINUE_LIMIT})` };
 	}
-	holder.lifecycle.probeInFlight = false;
-	holder.lifecycle.probeArmed = true;
-	holder.lifecycle.continueCount++;
-	bumpAndLog(holder, "acceptProbeContinuing", { continueCount: holder.lifecycle.continueCount });
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeInFlight = false;
+	lc.probeArmed = true;
+	lc.continueCount++;
+	bumpAndLog(holder, "acceptProbeContinuing", { continueCount: lc.continueCount });
 	assertPostCondition(holder.lifecycle, "acceptProbeContinuing");
 	return { ok: true };
 }
@@ -260,8 +267,9 @@ export function acceptDormantContinuing(holder: LifecycleHolder): MutationResult
 	if (!isDormant(holder.lifecycle)) {
 		return { ok: false, reason: "not dormant; cannot accept dormant continuing" };
 	}
-	holder.lifecycle.probeArmed = true;
-	holder.lifecycle.continueCount = 0;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeArmed = true;
+	lc.continueCount = 0;
 	bumpAndLog(holder, "acceptDormantContinuing");
 	assertPostCondition(holder.lifecycle, "acceptDormantContinuing");
 	return { ok: true };
@@ -274,9 +282,10 @@ export function acceptTerminalReport(holder: LifecycleHolder, payload: CommandSt
 	if ((payload.status as string) === "continuing") {
 		return { ok: false, reason: "continuing is not a terminal status" };
 	}
-	holder.lifecycle.probeInFlight = false;
-	holder.lifecycle.lastReport = payload;
-	holder.lifecycle.continueCount = 0;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeInFlight = false;
+	lc.lastReport = payload;
+	lc.continueCount = 0;
 	bumpAndLog(holder, "acceptTerminalReport", { status: payload.status });
 	assertPostCondition(holder.lifecycle, "acceptTerminalReport");
 	return { ok: true };
@@ -286,11 +295,12 @@ export function parkForFreetext(holder: LifecycleHolder): MutationResult {
 	if (holder.lifecycle.activeCommand === null) {
 		return { ok: false, reason: "no active command; cannot park" };
 	}
-	holder.lifecycle.probeArmed = false;
-	holder.lifecycle.probeInFlight = false;
-	holder.lifecycle.parkedForInput = true;
-	holder.lifecycle.continueCount = 0;
-	holder.lifecycle.lastReport = null;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeArmed = false;
+	lc.probeInFlight = false;
+	lc.parkedForInput = true;
+	lc.continueCount = 0;
+	lc.lastReport = null;
 	bumpAndLog(holder, "parkForFreetext");
 	assertPostCondition(holder.lifecycle, "parkForFreetext");
 	return { ok: true };
@@ -300,9 +310,10 @@ export function resumeFromParkedInput(holder: LifecycleHolder): MutationResult {
 	if (!holder.lifecycle.parkedForInput) {
 		return { ok: false, reason: "not parked for input; cannot resume" };
 	}
-	holder.lifecycle.parkedForInput = false;
-	holder.lifecycle.probeArmed = true;
-	holder.lifecycle.continueCount = 0;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.parkedForInput = false;
+	lc.probeArmed = true;
+	lc.continueCount = 0;
 	bumpAndLog(holder, "resumeFromParkedInput");
 	assertPostCondition(holder.lifecycle, "resumeFromParkedInput");
 	return { ok: true };
@@ -312,9 +323,19 @@ export function resumeAfterProbeInput(holder: LifecycleHolder): MutationResult {
 	if (!holder.lifecycle.probeInFlight) {
 		return { ok: false, reason: "no probe in flight; cannot resume after probe input" };
 	}
-	holder.lifecycle.probeInFlight = false;
-	holder.lifecycle.probeArmed = true;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeInFlight = false;
+	lc.probeArmed = true;
 	bumpAndLog(holder, "resumeAfterProbeInput", { continueCount: holder.lifecycle.continueCount });
 	assertPostCondition(holder.lifecycle, "resumeAfterProbeInput");
 	return { ok: true };
+}
+
+export function reconstructLifecycle(activeCommand: string | null, parkedForInput: boolean): LifecycleState {
+	const lc = createLifecycle() as MutableLifecycle;
+	if (activeCommand) {
+		lc.activeCommand = activeCommand;
+		if (parkedForInput) lc.parkedForInput = true;
+	}
+	return lc;
 }
