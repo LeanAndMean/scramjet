@@ -94,7 +94,11 @@ export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, sc
 // user-controlled text is interpolated into the preamble; buildNextStepBlock
 // owns escaping for the policy portion. The probe fires in a separate turn
 // after the command's normal user-facing answer.
-export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scramjetEnabled = true): string {
+export function buildProbeMessage(
+	policy: NextStepPolicy | undefined,
+	commandId: string,
+	scramjetEnabled = true,
+): string {
 	const id = safe(commandId);
 	const preamble =
 		`Scramjet status check for \`${id}\`.\n\n` +
@@ -108,5 +112,12 @@ export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scr
 		"- successful `confirm`/`select` responses return in this probe turn; continue command work in this turn\n" +
 		"- `freetext` parks the command for the user's standard-editor reply; do not try to continue same-turn\n" +
 		"- cancelled `confirm`/`select` puts the command dormant; do not try to continue same-turn";
+	if (!policy) {
+		return (
+			`${preamble}\n\n` +
+			"This command has no next-step policy. " +
+			"When reporting `completed`, omit `next_steps` entirely \u2014 no chaining will occur."
+		);
+	}
 	return `${preamble}\n\n${buildNextStepBlock(policy, commandId, scramjetEnabled)}`;
 }

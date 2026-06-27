@@ -72,9 +72,8 @@ const WIRING: WiringRow[] = [
 	},
 	{
 		basename: "pr-merge",
-		// Intentional terminus: no `next:` is equivalent to ask-with-no-hint, so
-		// Scramjet pauses after merge instead of treating an empty open policy as
-		// a hidden stop convention.
+		// Intentional terminus: no `next:` means Scramjet probes until the agent
+		// reports completed, then clears to idle without dispatch.
 		expected: null,
 	},
 	// Subroutines.

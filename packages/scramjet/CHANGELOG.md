@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.33.1 — No-policy commands retain lifecycle for full execution
+
+Commands without a `next:` policy (like `mach12:pr-merge`) now go through the normal probe flow instead of being auto-completed on the first `agent_end`. The probe message omits the `<scramjet-next-step>` block and instructs the agent to omit `next_steps` when reporting `completed`. After completion, the lifecycle clears to idle with no dispatch. This fixes multi-turn interactions, `get_scramjet_user_input`, and dormant resume for terminus commands ([#217](https://github.com/LeanAndMean/scramjet/issues/217), [#155](https://github.com/LeanAndMean/scramjet/issues/155)).
+
+### Fixed
+
+- No-policy commands retain `activeCommand` association across multiple turns until the agent reports terminal status
+- `get_scramjet_user_input` works throughout a no-policy command's execution (lifecycle stays in probe-armed state)
+- Dormant resume via `continuing` works for no-policy commands (probe re-arms with no-policy message)
+- The previously-dead `no-next-policy-after-report` branch in `auto-continue.ts` is now reachable
+
+### Changed
+
+- `buildProbeMessage` accepts `policy: NextStepPolicy | undefined`; returns preamble + no-chaining instruction when undefined
+- `scheduleProbe` accepts `policy: NextStepPolicy | undefined`; log details use `policyMode: "none"` for no-policy commands
+- `mach12:pr-merge` command prose now includes explicit status-reporting instructions
+
 ## 0.33.0 — Replace lifecycle phase machine with event-reactive fact-based design
 
 The command lifecycle is now driven by orthogonal boolean facts (`activeCommand`, `probeArmed`, `probeInFlight`, `parkedForInput`, `continueCount`, `lastReport`) instead of a discriminated phase union with a transition table. This eliminates the growing transition-table maintenance burden and changes key behaviors: `blocked`/`incomplete` statuses now keep the command associated (dormant) instead of dropping to idle; dormant commands resume only through explicit `continuing` via the status tool (not any user reply); abort and error handling are direct fact mutations rather than transition edges ([#215](https://github.com/LeanAndMean/scramjet/issues/215)).

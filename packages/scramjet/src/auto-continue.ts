@@ -41,7 +41,6 @@ import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
-import { recordCommandStatus } from "./history.js";
 import {
 	activeCommandName,
 	beginProbe,
@@ -286,7 +285,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	// the run is idle (see file header). triggerTurn starts the short probe turn;
 	// display:false keeps the message out of the TUI while it still persists in
 	// the journal and reaches the model as user context.
-	function scheduleProbe(policy: NextStepPolicy, commandId: string) {
+	function scheduleProbe(policy: NextStepPolicy | undefined, commandId: string) {
 		if (probeTimer) {
 			clearTimeout(probeTimer);
 			state.logger.lifecycle("status probe timer cleared", {
@@ -301,7 +300,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		state.logger.lifecycle("status probe scheduled", {
 			phase: lp(state.lifecycle),
 			command: commandId,
-			detail: { policyMode: policy.mode, enabled: state.enabled, generation: probeGeneration },
+			detail: { policyMode: policy?.mode ?? "none", enabled: state.enabled, generation: probeGeneration },
 		});
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
@@ -744,20 +743,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		// Probe-armed (agent finished a work turn; probe is due)
 		if (isProbeDue(state.lifecycle)) {
 			clearDispatchTimer("new-probe-cycle");
-			if (!policy) {
-				state.logger.lifecycle("status probe skipped", {
-					phase: lp(state.lifecycle),
-					command: state.lifecycle.activeCommand,
-					detail: { reason: "no-next-policy" },
-				});
-				recordCommandStatus(pi, state.lifecycle.activeCommand!, "completed");
-				clearActiveCommand(state, "no-next-policy");
-				return;
-			}
 			state.logger.lifecycle("status probe preparing", {
 				phase: lp(state.lifecycle),
 				command: state.lifecycle.activeCommand,
-				detail: { policyMode: policy.mode },
+				detail: { policyMode: policy?.mode ?? "none" },
 			});
 			const result = beginProbe(state, "agent-end");
 			if (!result.ok) {
@@ -768,7 +757,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				});
 				return;
 			}
-			scheduleProbe(policy, def.name);
+			scheduleProbe(policy, def!.name);
 			return;
 		}
 

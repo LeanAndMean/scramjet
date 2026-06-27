@@ -351,4 +351,23 @@ describe("buildProbeMessage", () => {
 		expect((probe.match(/<\/scramjet-next-step>/g) ?? []).length).toBe(1);
 		expect(probe).toContain("<\\/scramjet-next-step>");
 	});
+
+	it("returns preamble with no-chaining instruction when policy is undefined (terminus command)", () => {
+		const probe = buildProbeMessage(undefined, "terminus:cmd");
+		expect(probe).toContain("Scramjet status check for `terminus:cmd`.");
+		expect(probe).toContain("`report_scramjet_command_status`");
+		expect(probe).toContain("`get_scramjet_user_input`");
+		expect(probe).toContain("`continuing`");
+		expect(probe).toContain("`completed`");
+		expect(probe).toContain("no next-step policy");
+		expect(probe).toContain("omit `next_steps`");
+		expect(probe).not.toContain("<scramjet-next-step>");
+	});
+
+	it("includes preamble tools and statuses for undefined policy", () => {
+		const probe = buildProbeMessage(undefined, "terminus:cmd");
+		expect(probe).toContain("Choose one route");
+		expect(probe).toContain("successful `confirm`/`select` responses");
+		expect(probe).toContain("`freetext` parks the command");
+	});
 });

@@ -5,13 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, extractStopReason, NOTIFY_MAX, registerAutoContinue } from "../src/auto-continue.js";
 import { resetCache } from "../src/autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../src/command-status.js";
-import {
-	COMMAND_START_TYPE,
-	COMMAND_STATUS_TYPE,
-	registerHistory,
-	replayHistory,
-	USER_INPUT_PARKED_TYPE,
-} from "../src/history.js";
+import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory, USER_INPUT_PARKED_TYPE } from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { buildProbeMessage } from "../src/next-step.js";
@@ -291,34 +285,76 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.lifecycleTimers?.isWatchdogActive()).toBe(false);
 		});
 
-		it("sends no probe and resets to idle when the active command has no policy", async () => {
+		it("probes normally when the active command has no policy (not immediate idle)", async () => {
 			const def = defWithPolicy("terminus:cmd", undefined);
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag } = bootstrap(state);
 
 			bag.pi.isStreaming = true;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(bag.pi.sent).toHaveLength(0);
+
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
 
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+			expect(bag.pi.sent).toHaveLength(1);
+			const probeMsg = (bag.pi.sent[0].message as any).content as string;
+			expect(probeMsg).toContain("Scramjet status check");
+			expect(probeMsg).toContain("no next-step policy");
+			expect(probeMsg).not.toContain("<scramjet-next-step>");
+		});
+
+		it("no-policy command clears to idle after completed report with no dispatch", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "completed", summary: "merge done" });
+
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
-			expect(bag.pi.appended).toContainEqual({
-				customType: COMMAND_STATUS_TYPE,
-				data: { commandName: "terminus:cmd", status: "completed" },
-			});
-			const replayed = replayHistory([
-				{
-					type: "custom",
-					customType: COMMAND_START_TYPE,
-					data: { command: "terminus:cmd", origin: "user", depth: 0, timestamp: 0 },
-				} as any,
-				...bag.pi.appended.map((entry: any) => ({ type: "custom", ...entry }) as any),
-			]);
-			expect(derivedPhase(replayed.lifecycle)).toBe("idle");
-			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(state.lifecycleTimers?.isProbeScheduled()).toBe(false);
-			expect(state.lifecycleTimers?.isWatchdogActive()).toBe(false);
+			expect(ctxBag.notifications).toEqual([]);
+		});
+
+		it("no-policy command ignores supplied next_steps after completed", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "done",
+				next_steps: [{ message: "/some:cmd", reason: "spurious" }],
+				recommended_next_step: 0,
+			});
+
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("no-policy command enters dormant on blocked", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "blocked", summary: "CI failing" });
+
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("blocked");
+		});
+
+		it("no-policy command enters dormant on incomplete", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "incomplete", summary: "stopped" });
+
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(ctxBag.dispatched).toEqual([]);
 		});
 
 		it("self-heals to dormant and pauses if the probe turn ends without a status report (no loop)", async () => {
@@ -2006,6 +2042,63 @@ describe("multi-path probe integration", () => {
 			await report({ status: "completed", summary: "done" });
 			await endProbeTurn(bag, ctxBag);
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
+		});
+
+		it("no-policy dormant command resumes via continuing and schedules another probe", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
+
+			// First probe → blocked → dormant
+			await fireProbe(bag, ctxBag);
+			await report({ status: "blocked", summary: "CI failing" });
+			await endProbeTurn(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+
+			// Agent resumes via continuing from dormant
+			const contResult = await report({ status: "continuing", summary: "CI fixed, resuming" });
+			expect(contResult.details.status).toBe("continuing");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+
+			// Next agent_end fires another no-policy probe
+			await fireProbe(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+			const lastProbe = bag.pi.sent[bag.pi.sent.length - 1];
+			expect((lastProbe.message as any).content).toContain("no next-step policy");
+
+			// Completes to idle with no dispatch
+			await report({ status: "completed", summary: "done" });
+			await endProbeTurn(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("no-policy freetext park/resume works end-to-end", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: true });
+
+			// First probe → agent asks freetext
+			await fireProbe(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+
+			const ftResult = await callUserInput({ type: "freetext", message: "Want to release?" });
+			expect(ftResult.terminate).toBe(true);
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
+
+			// User replies (interactive input handler)
+			await bag.emit("input", { text: "yes please", source: "interactive" }, ctxBag.ctx);
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+
+			// Next agent_end fires another probe
+			await fireProbe(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+
+			// Completes
+			await report({ status: "completed", summary: "released" });
+			await endProbeTurn(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(ctxBag.dispatched).toEqual([]);
 		});
 	});
 

@@ -106,9 +106,11 @@ A successful command completion produces this sequence of lifecycle entries:
 10. `"probe watchdog cleared"` — watchdog cancelled (report received in time)
 11. `"agent_end observed"` — second agent_end (probe turn completed)
 12. `"lifecycle: clearActiveCommand"` — fact mutation: command cleared (for completed)
-13. `"completed dispatch scheduled"` — deferred next-step dispatch timer set
-14. `"next-step policy evaluated"` — policy mode determined
+13. `"completed dispatch scheduled"` — deferred next-step dispatch timer set (policy commands only)
+14. `"next-step policy evaluated"` — policy mode determined (policy commands only)
 15. `"next step dispatching"` or `"next-step dispatch skipped"` — dispatch decision
+
+For no-policy commands (`policyMode: "none"` in log details), steps 13–15 are replaced by a single `"next-step dispatch skipped"` with `reason: "no-next-policy-after-report"`.
 
 ### Probe failure patterns
 
