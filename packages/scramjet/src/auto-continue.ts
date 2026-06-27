@@ -3,12 +3,11 @@
  *
  * A top-level Scramjet command produces its normal user-facing answer in one
  * turn (the answer turn injects nothing about completion). On that turn's
- * agent_end, if the command declares a next-step policy, this driver advances
- * the lifecycle to "probing" and DEFERS a hidden status-check probe — a custom
- * message that triggers a short second turn in which the agent calls
- * report_scramjet_command_status. The tool records the status and advances the phase
- * to "reported"; this driver reads it on the probe turn's agent_end and
- * validates/dispatches/pauses.
+ * agent_end, if the command declares a next-step policy, this driver begins the
+ * probe and DEFERS a hidden status-check probe — a custom message that triggers
+ * a short second turn in which the agent calls report_scramjet_command_status.
+ * The tool records the status; this driver reads it on the probe turn's
+ * agent_end and validates/dispatches/pauses.
  *
  * The probe MUST be deferred, not sent synchronously from the agent_end
  * listener: during agent_end the run is still streaming, so a synchronous
@@ -43,16 +42,21 @@ import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./auton
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
 import { recordCommandStatus } from "./history.js";
+import {
+	activeCommandName,
+	beginProbe,
+	clearActiveCommand,
+	enterDormant,
+	hasTerminalReport,
+	isDormant,
+	isParkedForInput,
+	isProbeDue,
+	isProbeInFlight,
+	type LifecycleState,
+} from "./lifecycle.js";
 import { buildProbeMessage } from "./next-step.js";
 import { dispatchNextStep } from "./next-step-dispatch.js";
 import { selectNextStep } from "./next-step-selector.js";
-import {
-	getActiveCommand,
-	type LifecycleEvent,
-	type LifecycleState,
-	logTransition,
-	transition,
-} from "./phase-machine.js";
 import type {
 	CommandStatusNextStep,
 	CommandStatusPayload,
@@ -65,14 +69,14 @@ import type {
 const COUNTDOWN_SECONDS = 3;
 // Liveness watchdog window. Generous on purpose — a live probe turn is a
 // single report_scramjet_command_status tool call and reports well within this,
-// and the guard inside the timer re-checks the phase so a turn that DID
+// and the guard inside the timer re-checks the facts so a turn that DID
 // complete (or already self-healed) is never clobbered. The value only bounds
 // how long a probe that never produced a turn at all (dropped triggerTurn
 // during run settle, Escape before the turn starts, session teardown mid-turn)
-// lingers at "probing" before self-healing; the next real command resets the
-// phase anyway. Kept comfortably longer than any plausible probe turn so it
-// cannot fire while the model is still thinking before its tool call (phase
-// still "probing"), which would otherwise drop a legitimate chain — worse than
+// lingers at probeInFlight before self-healing; the next real command resets
+// the lifecycle anyway. Kept comfortably longer than any plausible probe turn so
+// it cannot fire while the model is still thinking before its tool call (probe
+// still in flight), which would otherwise drop a legitimate chain — worse than
 // the stall it fixes.
 const PROBE_WATCHDOG_MS = 30_000;
 
@@ -117,15 +121,15 @@ export function cleanForNotify(text: string): string {
 	return collapsed.length > NOTIFY_MAX ? `${collapsed.slice(0, NOTIFY_MAX - 1)}…` : collapsed;
 }
 
-function applyTransition(
-	state: ScramjetState,
-	result: { ok: true; state: LifecycleState },
-	event: LifecycleEvent["type"],
-	detail?: Record<string, unknown>,
-): void {
-	const from = state.lifecycle;
-	state.lifecycle = result.state;
-	logTransition(state, from, result.state, event, detail);
+// Derive a phase-like label from lifecycle facts for log entries.
+// Temporary bridge — stage 4 replaces these with fact-native logging.
+function lp(lifecycle: LifecycleState): string {
+	if (lifecycle.activeCommand === null) return "idle";
+	if (lifecycle.lastReport !== null) return "reported";
+	if (lifecycle.probeInFlight) return "probing";
+	if (lifecycle.probeArmed) return "running";
+	if (lifecycle.parkedForInput) return "waiting";
+	return "dormant";
 }
 
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
@@ -146,9 +150,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (probeWatchdog) {
 			clearTimeout(probeWatchdog);
 			probeWatchdog = null;
-			const command = getActiveCommand(state.lifecycle);
+			const command = activeCommandName(state.lifecycle);
 			state.logger.lifecycle("probe watchdog cleared", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				...(command ? { command } : {}),
 				detail: { reason },
 			});
@@ -157,27 +161,24 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 	function armProbeWatchdog() {
 		clearProbeWatchdog("rearm");
-		if (state.lifecycle.phase === "probing") {
-			const command = state.lifecycle.command;
+		if (isProbeInFlight(state.lifecycle)) {
+			const command = state.lifecycle.activeCommand!;
 			probeWatchdog = setTimeout(() => {
 				probeWatchdog = null;
-				if (state.lifecycle.phase === "probing") {
+				if (isProbeInFlight(state.lifecycle)) {
 					state.logger.lifecycle("probe watchdog fired", {
-						phase: state.lifecycle.phase,
-						command: state.lifecycle.command,
+						phase: lp(state.lifecycle),
+						command: state.lifecycle.activeCommand,
 						detail: { timeoutMs: PROBE_WATCHDOG_MS },
 					});
-					const result = transition(state.lifecycle, { type: "probe-self-healed" });
-					if (result.ok) {
-						applyTransition(state, result, "probe-self-healed", { reason: "watchdog-timeout" });
-					}
+					enterDormant(state, "watchdog-timeout");
 					state.logger.warn("probe", "status probe turn never completed; auto-continue paused", {
-						phase: state.lifecycle.phase,
+						phase: lp(state.lifecycle),
 					});
 				}
 			}, PROBE_WATCHDOG_MS);
 			state.logger.lifecycle("probe watchdog armed", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command,
 				detail: { timeoutMs: PROBE_WATCHDOG_MS },
 			});
@@ -191,9 +192,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (dispatchTimer) {
 			clearTimeout(dispatchTimer);
 			dispatchTimer = null;
-			const command = getActiveCommand(state.lifecycle);
+			const command = activeCommandName(state.lifecycle);
 			state.logger.lifecycle("completed dispatch timer cleared", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				...(command ? { command } : {}),
 				detail: { reason },
 			});
@@ -202,7 +203,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 	function executeStep(step: NextStep, ctx: ExtensionContext) {
 		state.logger.lifecycle("next step dispatching", {
-			phase: state.lifecycle.phase,
+			phase: lp(state.lifecycle),
 			command: step.name,
 			detail: { args: step.args, freshSession: step.freshSession, reason: step.reason },
 		});
@@ -216,12 +217,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	function dispatchForced(target: string, handoff: NextStep | undefined, ctx: ExtensionContext): boolean {
-		const activeCommand = getActiveCommand(state.lifecycle);
+		const command = activeCommandName(state.lifecycle);
 		const def = state.registry.get(target);
 		if (!def) {
 			state.logger.lifecycle("forced dispatch skipped", {
-				phase: state.lifecycle.phase,
-				...(activeCommand ? { command: activeCommand } : {}),
+				phase: lp(state.lifecycle),
+				...(command ? { command } : {}),
 				detail: { target, reason: "target-not-in-registry" },
 			});
 			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
@@ -234,8 +235,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				step = { ...handoff, name: target };
 			} else {
 				state.logger.lifecycle("forced handoff ignored", {
-					phase: state.lifecycle.phase,
-					...(activeCommand ? { command: activeCommand } : {}),
+					phase: lp(state.lifecycle),
+					...(command ? { command } : {}),
 					detail: { target, supplied: handoff.name },
 				});
 				ctx.ui.notify(
@@ -246,7 +247,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 
 		state.logger.lifecycle("next step dispatching", {
-			phase: state.lifecycle.phase,
+			phase: lp(state.lifecycle),
 			command: step.name,
 			detail: { origin: "forced", args: step.args, freshSession: step.freshSession, reason: step.reason },
 		});
@@ -262,7 +263,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (probeTimer) {
 			clearTimeout(probeTimer);
 			state.logger.lifecycle("status probe timer cleared", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: commandId,
 				detail: { reason: "reschedule" },
 			});
@@ -270,30 +271,27 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		clearProbeWatchdog("probe-rescheduled");
 		const content = buildProbeMessage(policy, commandId, state.enabled);
 		state.logger.lifecycle("status probe scheduled", {
-			phase: state.lifecycle.phase,
+			phase: lp(state.lifecycle),
 			command: commandId,
 			detail: { policyMode: policy.mode, enabled: state.enabled },
 		});
-		// Deferred to land after the run settles; a throw here becomes an uncaughtException and leaves lifecycle wedged.
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
 			state.logger.lifecycle("status probe timer fired", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: commandId,
 			});
 			try {
 				pi.sendMessage({ customType: COMMAND_STATUS_PROBE_TYPE, content, display: false }, { triggerTurn: true });
 				state.logger.lifecycle("status probe sent", {
-					phase: state.lifecycle.phase,
+					phase: lp(state.lifecycle),
 					command: commandId,
 					detail: { triggerTurn: true },
 				});
 				armProbeWatchdog();
 			} catch (err) {
 				const message = (err as Error).message;
-				const result = transition(state.lifecycle, { type: "probe-self-healed" });
-				if (result.ok)
-					applyTransition(state, result, "probe-self-healed", { reason: "send-failure", error: message });
+				enterDormant(state, `send-failure: ${message}`);
 				state.logger.warn("probe", `status probe failed to send (${message}); auto-continue paused`, {
 					error: message,
 				});
@@ -320,7 +318,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			executeStep(toDispatchStep(option, option.parsedCommand), ctx);
 		} else {
 			state.logger.lifecycle("next step pasted", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				detail: { message: option.message, reason: option.reason },
 			});
 			ctx.ui.pasteToEditor(option.message);
@@ -345,7 +343,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const autoSelect =
 			!forcePause && state.enabled && result.recommended?.parsedCommand ? result.recommended : undefined;
 		state.logger.lifecycle("next-step selector shown", {
-			phase: state.lifecycle.phase,
+			phase: lp(state.lifecycle),
 			detail: {
 				validCount: result.valid.length,
 				recommended: result.recommended?.message,
@@ -367,7 +365,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					runSelectedOption(selected, ctx);
 				} else {
 					state.logger.lifecycle("next-step selector closed", {
-						phase: state.lifecycle.phase,
+						phase: lp(state.lifecycle),
 						detail: { reason: "no-selection" },
 					});
 				}
@@ -398,7 +396,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	) {
 		if (!result.recommended) {
 			state.logger.lifecycle("next-step dispatch skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				...(sourceName ? { command: sourceName } : {}),
 				detail: { reason: result.recommendedReason ?? "no-recommended-option", validCount: result.valid.length },
 			});
@@ -415,7 +413,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (!result.recommended.parsedCommand) {
 			const text = optionSummary(result.recommended);
 			state.logger.lifecycle("next-step dispatch skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				...(sourceName ? { command: sourceName } : {}),
 				detail: { reason: "recommended-not-command", message: text, enabled: state.enabled },
 			});
@@ -436,7 +434,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (edgeSetting === "pause") {
 			const fresh = result.recommended.freshSession ? " (fresh session)" : "";
 			state.logger.lifecycle("next-step dispatch skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				...(sourceName ? { command: sourceName } : {}),
 				detail: { reason: "edge-paused", message: result.recommended.message },
 			});
@@ -452,7 +450,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		} else {
 			const fresh = result.recommended.freshSession ? " (fresh session)" : "";
 			state.logger.lifecycle("next-step dispatch skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				...(sourceName ? { command: sourceName } : {}),
 				detail: { reason: "scramjet-disabled", message: result.recommended.message },
 			});
@@ -470,7 +468,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		sourceName: string,
 	) {
 		state.logger.lifecycle("next-step policy evaluated", {
-			phase: state.lifecycle.phase,
+			phase: lp(state.lifecycle),
 			command: sourceName,
 			detail: {
 				mode: policy.mode,
@@ -489,7 +487,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 		if (policy.mode === "ask") {
 			state.logger.lifecycle("next-step dispatch skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: sourceName,
 				detail: { reason: "ask-mode", proposedCount: status.next_steps?.length ?? 0 },
 			});
@@ -505,7 +503,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step);
 		if (!result.valid.length) {
 			state.logger.lifecycle("next-step dispatch skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: sourceName,
 				detail: { reason: result.reason ?? "no-valid-options" },
 			});
@@ -515,7 +513,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 		if (result.skipped.length) {
 			state.logger.lifecycle("next-step options skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: sourceName,
 				detail: { skippedCount: result.skipped.length, validCount: result.valid.length },
 			});
@@ -550,7 +548,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 		if (edgeSetting === "chain" && result.recommended?.parsedCommand) {
 			state.logger.lifecycle("next-step edge setting applied", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: sourceName,
 				detail: { edgeSetting, target: result.recommended.parsedCommand.name },
 			});
@@ -568,7 +566,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			}
 			if (edgeSetting === "pause") {
 				state.logger.lifecycle("next-step edge setting applied", {
-					phase: state.lifecycle.phase,
+					phase: lp(state.lifecycle),
 					command: sourceName,
 					detail: { edgeSetting },
 				});
@@ -589,15 +587,14 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	) {
 		clearDispatchTimer("reschedule");
 		state.logger.lifecycle("completed dispatch scheduled", {
-			phase: state.lifecycle.phase,
+			phase: lp(state.lifecycle),
 			command: sourceName,
 			detail: { policyMode: policy.mode, status: status.status },
 		});
-		// Deferred to land after the run settles; a throw here becomes an uncaughtException and leaves lifecycle wedged.
 		dispatchTimer = setTimeout(() => {
 			dispatchTimer = null;
 			state.logger.lifecycle("completed dispatch timer fired", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: sourceName,
 				detail: { policyMode: policy.mode, status: status.status },
 			});
@@ -605,7 +602,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				routeCompleted(policy, status, ctx, sourceName);
 			} catch (err) {
 				state.logger.lifecycle("completed dispatch failed", {
-					phase: state.lifecycle.phase,
+					phase: lp(state.lifecycle),
 					command: sourceName,
 					detail: { error: (err as Error).message },
 				});
@@ -628,10 +625,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	}
 
 	pi.on("agent_end", async (_event, ctx) => {
-		const activeName = getActiveCommand(state.lifecycle);
+		const activeName = activeCommandName(state.lifecycle);
 		const def = activeName ? state.registry.get(activeName) : undefined;
 		state.logger.lifecycle("agent_end observed", {
-			phase: state.lifecycle.phase,
+			phase: lp(state.lifecycle),
 			...(activeName ? { command: activeName } : {}),
 			detail: {
 				hasPolicy: Boolean(def?.next),
@@ -643,102 +640,93 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 		if (activeName && !def) {
 			state.logger.lifecycle("agent_end skipped", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				command: activeName,
 				detail: { reason: "active-command-not-in-registry" },
 			});
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
-			const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
-			if (exitResult.ok) {
-				applyTransition(state, exitResult, "workflow-exit", { reason: "active-command-not-in-registry" });
-			}
+			clearActiveCommand(state, "active-command-not-in-registry");
 			clearProbeWatchdog("active-command-missing");
 			return;
 		}
 
 		const policy = def?.next;
 
-		switch (state.lifecycle.phase) {
-			case "running": {
-				if (!policy) {
-					state.logger.lifecycle("status probe skipped", {
-						phase: state.lifecycle.phase,
-						command: state.lifecycle.command,
-						detail: { reason: "no-next-policy" },
-					});
-					recordCommandStatus(pi, state.lifecycle.command, "completed");
-					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
-					if (exitResult.ok) applyTransition(state, exitResult, "workflow-exit", { reason: "no-next-policy" });
-					return;
-				}
-				state.logger.lifecycle("status probe preparing", {
-					phase: state.lifecycle.phase,
-					command: state.lifecycle.command,
-					detail: { policyMode: policy.mode },
+		// Probe-armed (agent finished a work turn; probe is due)
+		if (isProbeDue(state.lifecycle)) {
+			clearDispatchTimer("new-probe-cycle");
+			if (!policy) {
+				state.logger.lifecycle("status probe skipped", {
+					phase: lp(state.lifecycle),
+					command: state.lifecycle.activeCommand,
+					detail: { reason: "no-next-policy" },
 				});
-				const result = transition(state.lifecycle, { type: "agent-end" });
-				if (!result.ok) {
-					state.logger.lifecycle("status probe skipped", {
-						phase: state.lifecycle.phase,
-						command: state.lifecycle.command,
-						detail: { reason: "transition-failed", from: result.from, event: result.event },
-					});
-					return;
-				}
-				applyTransition(state, result, "agent-end", { policyMode: policy.mode });
-				scheduleProbe(policy, def.name);
+				recordCommandStatus(pi, state.lifecycle.activeCommand!, "completed");
+				clearActiveCommand(state, "no-next-policy");
 				return;
 			}
-			case "probing": {
-				clearProbeWatchdog("probe-turn-ended");
-				const result = transition(state.lifecycle, { type: "probe-self-healed" });
-				if (result.ok) {
-					applyTransition(state, result, "probe-self-healed", { reason: "agent-end-without-status" });
-				}
-				state.logger.warn("probe", "status probe turn ended without a valid status report; auto-continue paused", {
-					phase: state.lifecycle.phase,
+			state.logger.lifecycle("status probe preparing", {
+				phase: lp(state.lifecycle),
+				command: state.lifecycle.activeCommand,
+				detail: { policyMode: policy.mode },
+			});
+			const result = beginProbe(state, "agent-end");
+			if (!result.ok) {
+				state.logger.lifecycle("status probe skipped", {
+					phase: lp(state.lifecycle),
+					command: state.lifecycle.activeCommand,
+					detail: { reason: "beginProbe-failed", error: result.reason },
 				});
 				return;
 			}
-			case "reported": {
-				clearProbeWatchdog("status-reported");
-				const lifecycle = state.lifecycle;
-				if (lifecycle.phase !== "reported") return;
-				const status = lifecycle.status;
-				const command = lifecycle.command;
+			scheduleProbe(policy, def.name);
+			return;
+		}
 
-				if (status.status === "completed") {
-					const termResult = transition(state.lifecycle, { type: "terminal-resolved", status: "completed" });
-					if (termResult.ok) applyTransition(state, termResult, "terminal-resolved", { status: "completed" });
-					if (policy) {
-						scheduleCompletedDispatch(policy, status, ctx, command);
-					} else {
-						state.logger.lifecycle("next-step dispatch skipped", {
-							phase: state.lifecycle.phase,
-							command,
-							detail: { reason: "no-next-policy-after-report" },
-						});
-					}
-					return;
-				}
+		// Probe in flight but agent_end arrived without a status report
+		if (isProbeInFlight(state.lifecycle)) {
+			clearProbeWatchdog("probe-turn-ended");
+			enterDormant(state, "agent-end-without-status");
+			state.logger.warn("probe", "status probe turn ended without a valid status report; auto-continue paused", {
+				phase: lp(state.lifecycle),
+			});
+			return;
+		}
 
-				const termResult = transition(state.lifecycle, {
-					type: "terminal-resolved",
-					status: status.status as "blocked" | "incomplete",
-				});
-				if (termResult.ok) applyTransition(state, termResult, "terminal-resolved", { status: status.status });
-				routeNonCompleted(status, ctx);
+		// Terminal report pending — route by status
+		if (hasTerminalReport(state.lifecycle)) {
+			clearProbeWatchdog("status-reported");
+			const report = state.lifecycle.lastReport!;
+			const command = state.lifecycle.activeCommand!;
+
+			if (report.status === "completed") {
+				clearActiveCommand(state, "completed");
+				if (policy) {
+					scheduleCompletedDispatch(policy, report, ctx, command);
+				} else {
+					state.logger.lifecycle("next-step dispatch skipped", {
+						phase: lp(state.lifecycle),
+						command,
+						detail: { reason: "no-next-policy-after-report" },
+					});
+				}
 				return;
 			}
-			case "waiting":
-			case "dormant":
-			case "idle":
-				state.logger.lifecycle("agent_end skipped", {
-					phase: state.lifecycle.phase,
-					...(activeName ? { command: activeName } : {}),
-					detail: { reason: "inactive-phase" },
-				});
-				return;
+
+			// blocked / incomplete → clear for now (stage 4 changes to dormant)
+			clearActiveCommand(state, report.status);
+			routeNonCompleted(report, ctx);
+			return;
+		}
+
+		// Parked for input, dormant, or idle — no action
+		if (isParkedForInput(state.lifecycle) || isDormant(state.lifecycle) || activeName === null) {
+			state.logger.lifecycle("agent_end skipped", {
+				phase: lp(state.lifecycle),
+				...(activeName ? { command: activeName } : {}),
+				detail: { reason: "inactive-lifecycle" },
+			});
+			return;
 		}
 	});
 
@@ -747,9 +735,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		if (probeTimer) {
 			clearTimeout(probeTimer);
 			probeTimer = null;
-			const command = getActiveCommand(state.lifecycle);
+			const command = activeCommandName(state.lifecycle);
 			state.logger.lifecycle("status probe timer cleared", {
-				phase: state.lifecycle.phase,
+				phase: lp(state.lifecycle),
 				...(command ? { command } : {}),
 				detail: { reason: "session-shutdown" },
 			});

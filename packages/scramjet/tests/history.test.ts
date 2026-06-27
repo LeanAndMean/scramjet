@@ -14,7 +14,7 @@ import {
 	SIDEBAR_MAX,
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
-import { getActiveCommand } from "../src/phase-machine.js";
+import { activeCommandName } from "../src/lifecycle.js";
 import type {
 	CommandDef,
 	CommandRegistry,
@@ -22,7 +22,7 @@ import type {
 	ScramjetState,
 	SidebarEntry,
 } from "../src/types.js";
-import { freshState } from "./helpers.js";
+import { derivedPhase, freshState, lifecycleFor } from "./helpers.js";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -139,10 +139,10 @@ describe("replayHistory", () => {
 		const result = replayHistory([]);
 		expect(result.sidebarLog).toEqual([]);
 		expect(result.enabled).toBeNull();
-		expect(getActiveCommand(result.lifecycle)).toBeNull();
+		expect(activeCommandName(result.lifecycle)).toBeNull();
 		// issue 88: with no journaled status, the resting phase reconstructs to idle.
-		expect(result.lifecycle.phase).toBe("idle");
-		expect(result.lifecycle).toEqual({ phase: "idle" });
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
 	});
 
 	it("ignores non-custom and unrelated custom entries", () => {
@@ -159,8 +159,9 @@ describe("replayHistory", () => {
 		const entries = [cmdStart("a"), cmdStart("b"), cmdStart("c")];
 		const result = replayHistory(entries);
 		expect(result.sidebarLog.map((e) => e.command)).toEqual(["a", "b", "c"]);
-		expect(getActiveCommand(result.lifecycle)).toBe("c");
-		expect(result.lifecycle).toEqual({ phase: "dormant", command: "c" });
+		expect(activeCommandName(result.lifecycle)).toBe("c");
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(result.lifecycle.activeCommand).toBe("c");
 	});
 
 	it("only updates activeTopLevelCommand from depth-0 entries (nested delegates don't overwrite the top level)", () => {
@@ -168,7 +169,7 @@ describe("replayHistory", () => {
 		// and must not be promoted to activeTopLevelCommand on replay.
 		const entries = [cmdStart("top", 0), cmdStart("nested", 1), cmdStart("deeper", 2)];
 		const result = replayHistory(entries);
-		expect(getActiveCommand(result.lifecycle)).toBe("top");
+		expect(activeCommandName(result.lifecycle)).toBe("top");
 		expect(result.sidebarLog.map((e) => e.command)).toEqual(["top", "nested", "deeper"]);
 	});
 
@@ -205,7 +206,7 @@ describe("replayHistory", () => {
 		];
 		const result = replayHistory(entries);
 		expect(result.sidebarLog.map((e) => e.command)).toEqual(["first"]);
-		expect(getActiveCommand(result.lifecycle)).toBe("first");
+		expect(activeCommandName(result.lifecycle)).toBe("first");
 	});
 
 	it("ignores enabled-toggle entries with missing or malformed data (F36)", () => {
@@ -249,9 +250,10 @@ describe("replayHistory", () => {
 describe("replayHistory — command-status phase reconstruction (issue 88)", () => {
 	it("reconstructs waiting when the active command has a user-input-parked entry", () => {
 		const result = replayHistory([cmdStart("a"), userInputParked("a")]);
-		expect(result.lifecycle.phase).toBe("waiting");
-		expect(getActiveCommand(result.lifecycle)).toBe("a");
-		expect(result.lifecycle).toEqual({ phase: "waiting", command: "a" });
+		expect(derivedPhase(result.lifecycle)).toBe("waiting");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+		expect(derivedPhase(result.lifecycle)).toBe("waiting");
+		expect(result.lifecycle.activeCommand).toBe("a");
 	});
 
 	it("reconstructs idle when a waiting command later completed without chaining (no resurrection)", () => {
@@ -261,17 +263,17 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		// issue 128: completed clears activeTopLevelCommand so a later reply
 		// doesn't re-arm the phase for a finished command.
 		const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStatus("a", "completed")]);
-		expect(result.lifecycle.phase).toBe("idle");
-		expect(getActiveCommand(result.lifecycle)).toBeNull();
-		expect(result.lifecycle).toEqual({ phase: "idle" });
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
+		expect(activeCommandName(result.lifecycle)).toBeNull();
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
 	});
 
 	it.each(["blocked", "incomplete"] as const)(
 		"keeps command associated (dormant) when a waiting command later reported %s (issue 215)",
 		(status) => {
 			const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStatus("a", status)]);
-			expect(result.lifecycle.phase).toBe("dormant");
-			expect(getActiveCommand(result.lifecycle)).toBe("a");
+			expect(derivedPhase(result.lifecycle)).toBe("dormant");
+			expect(activeCommandName(result.lifecycle)).toBe("a");
 		},
 	);
 
@@ -279,16 +281,17 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 		// start(B) supersedes A: B has reported nothing yet, so its resting phase is
 		// dormant (command associated but not actively running).
 		const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStart("b")]);
-		expect(result.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(result.lifecycle)).toBe("b");
-		expect(result.lifecycle).toEqual({ phase: "dormant", command: "b" });
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("b");
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(result.lifecycle.activeCommand).toBe("b");
 	});
 
 	it("ignores a user-input-parked entry whose commandName does not match the active command", () => {
 		// A stale entry from a since-superseded command must not move B's phase.
 		const result = replayHistory([cmdStart("b"), userInputParked("a")]);
-		expect(result.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(result.lifecycle)).toBe("b");
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("b");
 	});
 
 	it("skips a malformed status entry (missing commandName or out-of-union status)", () => {
@@ -301,13 +304,13 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "continuing" }),
 		]);
 		// None of the malformed entries reconstruct a waiting phase — remains dormant.
-		expect(result.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(result.lifecycle)).toBe("a");
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
 	});
 
 	it("reconstructs waiting only from the LAST entry when several are journaled", () => {
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "incomplete"), userInputParked("a")]);
-		expect(result.lifecycle.phase).toBe("waiting");
+		expect(derivedPhase(result.lifecycle)).toBe("waiting");
 	});
 });
 
@@ -331,18 +334,18 @@ describe("recordCommandInvocation", () => {
 
 		recordCommandInvocation(pi, state, "top", "user", 0);
 
-		expect(getActiveCommand(state.lifecycle)).toBe("top");
+		expect(activeCommandName(state.lifecycle)).toBe("top");
 		expect(state.sidebarLog[0]).toMatchObject({ command: "top", origin: "user", depth: 0 });
 		expect((appended[0].data as SidebarEntry).depth).toBe(0);
 	});
 
 	it("records delegated depth entries without replacing the lifecycle command", () => {
-		const state = freshState({ lifecycle: { phase: "dormant", command: "top" } });
+		const state = freshState({ lifecycle: lifecycleFor("dormant", "top") });
 		const { pi, appended } = recordingPi();
 
 		recordCommandInvocation(pi, state, "delegate", "agent", 1);
 
-		expect(getActiveCommand(state.lifecycle)).toBe("top");
+		expect(activeCommandName(state.lifecycle)).toBe("top");
 		expect(state.sidebarLog[0]).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
 		expect(appended[0].customType).toBe(COMMAND_START_TYPE);
 		expect(appended[0].data as SidebarEntry).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
@@ -350,30 +353,26 @@ describe("recordCommandInvocation", () => {
 
 	it("starts a depth-0 command in the running phase and clears any prior status (issue 84)", () => {
 		const state = freshState({
-			lifecycle: {
-				phase: "reported",
-				command: "old",
-				status: { status: "completed", summary: "old" },
-				continueCount: 0,
-			},
+			lifecycle: lifecycleFor("reported", "old"),
 		});
 		const { pi } = recordingPi();
 
 		recordCommandInvocation(pi, state, "top", "user", 0);
 
-		expect(state.lifecycle.phase).toBe("running");
-		expect(state.lifecycle).toEqual({ phase: "running", command: "top", continueCount: 0 });
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		expect(state.lifecycle.activeCommand).toBe("top");
 	});
 
 	it("does not touch the command phase for delegated depth entries (probe stays probing)", () => {
 		// The probe turn is not a command start; a delegate during it must not
 		// reset the phase, or the status report would be rejected as out-of-phase.
-		const state = freshState({ lifecycle: { phase: "probing", command: "top", continueCount: 0 } });
+		const state = freshState({ lifecycle: lifecycleFor("probing", "top") });
 		const { pi } = recordingPi();
 
 		recordCommandInvocation(pi, state, "delegate", "agent", 1);
 
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 	});
 });
 
@@ -399,7 +398,7 @@ describe("registerHistory — input event", () => {
 
 	it("records a sidebar entry and appendEntry call when a registered slash command is invoked interactively", async () => {
 		const { state, appended } = await fire({ text: "/mach10:push", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 		expect(state.sidebarLog).toHaveLength(1);
 		expect(state.sidebarLog[0].command).toBe("mach10:push");
 		expect(state.sidebarLog[0].origin).toBe("user");
@@ -432,12 +431,12 @@ describe("registerHistory — input event", () => {
 		// the agent produces next.
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "mach10:push" },
+			lifecycle: lifecycleFor("dormant", "mach10:push"),
 		});
 		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
 		await emit("input", { text: "/typo-or-removed", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBeNull();
+		expect(activeCommandName(state.lifecycle)).toBeNull();
 	});
 
 	it("does NOT clear activeTopLevelCommand for known Pi/scramjet built-in slash commands (F4)", async () => {
@@ -446,7 +445,7 @@ describe("registerHistory — input event", () => {
 		// must not silently break the forced chain.
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "mach10:push" },
+			lifecycle: lifecycleFor("dormant", "mach10:push"),
 		});
 		const { pi, emit } = recordingPi();
 		// Simulate pi.getCommands() returning known commands.
@@ -456,26 +455,26 @@ describe("registerHistory — input event", () => {
 		];
 		registerHistory(pi, state);
 		await emit("input", { text: "/scramjet on", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 		await emit("input", { text: "/clear", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 	});
 
 	it("falls back to allow-list when pi.getCommands is unavailable (F4)", async () => {
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "mach10:push" },
+			lifecycle: lifecycleFor("dormant", "mach10:push"),
 		});
 		const { pi, emit } = recordingPi();
 		// No getCommands on the fake pi — tests fallback allow-list path.
 		registerHistory(pi, state);
 		await emit("input", { text: "/scramjet on", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 		await emit("input", { text: "/clear", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 		// Removed/internal or unknown slashes are not allow-listed.
 		await emit("input", { text: "/scramjet-exec-fresh foo", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBeNull();
+		expect(activeCommandName(state.lifecycle)).toBeNull();
 	});
 
 	it("leaves activeTopLevelCommand alone for non-slash input (continuing a conversation)", async () => {
@@ -483,12 +482,12 @@ describe("registerHistory — input event", () => {
 		// any chat after the command would disable next-step auto-continue.
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "mach10:push" },
+			lifecycle: lifecycleFor("dormant", "mach10:push"),
 		});
 		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
 		await emit("input", { text: "plain follow-up", source: "interactive" });
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 	});
 
 	it("labels origin 'forced' and clears state.pendingForcedDispatch when the dispatched command matches", async () => {
@@ -508,7 +507,7 @@ describe("registerHistory — input event", () => {
 	it("does not set activeTopLevelCommand for a known non-Scramjet slash command", async () => {
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "mach10:push" },
+			lifecycle: lifecycleFor("dormant", "mach10:push"),
 		});
 		const { pi, emit } = recordingPi();
 		(pi as any).getCommands = () => [{ name: "other-extension:cmd" }];
@@ -516,7 +515,7 @@ describe("registerHistory — input event", () => {
 
 		await emit("input", { text: "/other-extension:cmd --flag", source: "extension" });
 
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 		expect(state.sidebarLog).toEqual([]);
 	});
 
@@ -528,7 +527,7 @@ describe("registerHistory — input event", () => {
 		function waitingState() {
 			return freshState({
 				registry: registryOf(["mach12:pr-create"]),
-				lifecycle: { phase: "waiting", command: "mach12:pr-create" },
+				lifecycle: lifecycleFor("waiting", "mach12:pr-create"),
 			});
 		}
 
@@ -537,9 +536,10 @@ describe("registerHistory — input event", () => {
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "approve", source: "interactive" });
-			expect(state.lifecycle.phase).toBe("running");
-			expect(getActiveCommand(state.lifecycle)).toBe("mach12:pr-create");
-			expect(state.lifecycle).toEqual({ phase: "running", command: "mach12:pr-create", continueCount: 0 });
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+			expect(state.lifecycle.activeCommand).toBe("mach12:pr-create");
 			// A resume is not a fresh command start: no sidebar/journal entry.
 			expect(state.sidebarLog).toHaveLength(0);
 		});
@@ -552,7 +552,7 @@ describe("registerHistory — input event", () => {
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "approve", source: "extension" });
-			expect(state.lifecycle.phase).toBe("waiting");
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
 		});
 
 		it("treats a registered slash command while waiting as a normal command start", async () => {
@@ -561,8 +561,8 @@ describe("registerHistory — input event", () => {
 			registerHistory(pi, state);
 			await emit("input", { text: "/mach12:pr-create", source: "interactive" });
 			// recordCommandStart fires: phase running, active set, journaled.
-			expect(state.lifecycle.phase).toBe("running");
-			expect(getActiveCommand(state.lifecycle)).toBe("mach12:pr-create");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
 			expect(appended).toHaveLength(1);
 		});
 
@@ -571,47 +571,49 @@ describe("registerHistory — input event", () => {
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "/typo-or-removed", source: "interactive" });
-			expect(getActiveCommand(state.lifecycle)).toBeNull();
-			expect(state.lifecycle.phase).toBe("idle");
-			expect(state.lifecycle).toEqual({ phase: "idle" });
+			expect(activeCommandName(state.lifecycle)).toBeNull();
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("does NOT auto-resume dormant on interactive non-slash reply (issue 215: agent-controlled resumption)", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
-				lifecycle: { phase: "dormant", command: "mach12:pr-create" },
+				lifecycle: lifecycleFor("dormant", "mach12:pr-create"),
 			});
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "just chatting", source: "interactive" });
-			expect(state.lifecycle.phase).toBe("dormant");
-			expect(getActiveCommand(state.lifecycle)).toBe("mach12:pr-create");
-			expect(state.lifecycle).toEqual({ phase: "dormant", command: "mach12:pr-create" });
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(state.lifecycle.activeCommand).toBe("mach12:pr-create");
 			expect(state.sidebarLog).toHaveLength(0);
 		});
 
 		it("does not re-arm idle→running when lifecycle is idle", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
-				lifecycle: { phase: "idle" },
+				lifecycle: lifecycleFor("idle"),
 			});
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "just chatting", source: "interactive" });
-			expect(state.lifecycle.phase).toBe("idle");
-			expect(state.lifecycle).toEqual({ phase: "idle" });
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("does not re-arm dormant→running on extension-source replies", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
-				lifecycle: { phase: "dormant", command: "mach12:pr-create" },
+				lifecycle: lifecycleFor("dormant", "mach12:pr-create"),
 			});
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "approve", source: "extension" });
-			expect(state.lifecycle.phase).toBe("dormant");
-			expect(state.lifecycle).toEqual({ phase: "dormant", command: "mach12:pr-create" });
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(state.lifecycle.activeCommand).toBe("mach12:pr-create");
 		});
 	});
 
@@ -644,14 +646,14 @@ describe("registerHistory — replay on session events", () => {
 		const { state, emit, ctx } = setup([cmdStart("a"), cmdStart("b")]);
 		await emit("session_start", {}, ctx);
 		expect(state.sidebarLog.map((e) => e.command)).toEqual(["a", "b"]);
-		expect(getActiveCommand(state.lifecycle)).toBe("b");
+		expect(activeCommandName(state.lifecycle)).toBe("b");
 	});
 
 	it("rebuilds state on session_tree the same way as session_start", async () => {
 		const { state, emit, ctx } = setup([cmdStart("only")]);
 		await emit("session_tree", {}, ctx);
 		expect(state.sidebarLog.map((e) => e.command)).toEqual(["only"]);
-		expect(getActiveCommand(state.lifecycle)).toBe("only");
+		expect(activeCommandName(state.lifecycle)).toBe("only");
 	});
 
 	it("applies the latest enabled toggle from the branch", async () => {
@@ -685,11 +687,11 @@ describe("registerHistory — replay on session events", () => {
 		// live probe turn behind it. Reset to idle so a stale status tool call is
 		// rejected by the phase guard instead of mis-dispatching.
 		const { state, emit, ctx } = setup([cmdStart("a")], {
-			lifecycle: { phase: "probing", command: "stale", continueCount: 0 },
+			lifecycle: lifecycleFor("probing", "stale"),
 		});
 		await emit("session_start", {}, ctx);
 		// Replay reconstructs to dormant (command-start "a" present, no terminal status).
-		expect(state.lifecycle.phase).toBe("dormant");
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
 	});
 
 	// issue 88 / issue 156: a paused command survives rewind/resume. The
@@ -697,19 +699,19 @@ describe("registerHistory — replay on session events", () => {
 	// so a later interactive reply can resume the command.
 	it("reconstructs the waiting phase on rebuild when the active command has a user-input-parked entry", async () => {
 		const { state, emit, ctx } = setup([cmdStart("a"), userInputParked("a")], {
-			lifecycle: { phase: "probing", command: "stale", continueCount: 0 },
+			lifecycle: lifecycleFor("probing", "stale"),
 		});
 		await emit("session_start", {}, ctx);
-		expect(state.lifecycle.phase).toBe("waiting");
-		expect(getActiveCommand(state.lifecycle)).toBe("a");
+		expect(derivedPhase(state.lifecycle)).toBe("waiting");
+		expect(activeCommandName(state.lifecycle)).toBe("a");
 	});
 
 	it("reconstructs idle on rebuild when a waiting command later completed (no resurrection)", async () => {
 		const { state, emit, ctx } = setup([cmdStart("a"), userInputParked("a"), cmdStatus("a", "completed")], {
-			lifecycle: { phase: "running", command: "stale", continueCount: 0 },
+			lifecycle: lifecycleFor("running", "stale"),
 		});
 		await emit("session_start", {}, ctx);
-		expect(state.lifecycle.phase).toBe("idle");
+		expect(derivedPhase(state.lifecycle)).toBe("idle");
 	});
 });
 
@@ -732,21 +734,21 @@ describe("replayHistory — blocked/incomplete keep command associated (issue 21
 		"reconstructs dormant (not idle) when active command reported %s",
 		(status) => {
 			const result = replayHistory([cmdStart("a"), cmdStatus("a", status)]);
-			expect(result.lifecycle.phase).toBe("dormant");
-			expect(getActiveCommand(result.lifecycle)).toBe("a");
+			expect(derivedPhase(result.lifecycle)).toBe("dormant");
+			expect(activeCommandName(result.lifecycle)).toBe("a");
 		},
 	);
 
 	it("reconstructs idle when active command reported completed", () => {
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "completed")]);
-		expect(result.lifecycle.phase).toBe("idle");
-		expect(getActiveCommand(result.lifecycle)).toBeNull();
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
+		expect(activeCommandName(result.lifecycle)).toBeNull();
 	});
 
 	it("reconstructs dormant when blocked is followed by a new command start", () => {
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "blocked"), cmdStart("b")]);
-		expect(result.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(result.lifecycle)).toBe("b");
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("b");
 	});
 
 	it("reconstructs idle when blocked command is followed by a completed command", () => {
@@ -756,8 +758,8 @@ describe("replayHistory — blocked/incomplete keep command associated (issue 21
 			cmdStart("b"),
 			cmdStatus("b", "completed"),
 		]);
-		expect(result.lifecycle.phase).toBe("idle");
-		expect(getActiveCommand(result.lifecycle)).toBeNull();
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
+		expect(activeCommandName(result.lifecycle)).toBeNull();
 	});
 });
 
@@ -766,19 +768,19 @@ describe("timer cleanup wiring (issue 215)", () => {
 		const calls: string[] = [];
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "old" },
+			lifecycle: lifecycleFor("dormant", "old"),
 			clearLifecycleTimers: () => calls.push("cleared"),
 		});
 		const { pi } = recordingPi();
 		recordCommandInvocation(pi, state, "mach10:push", "user", 0);
 		expect(calls).toEqual(["cleared"]);
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 	});
 
 	it("does not call clearLifecycleTimers for delegated (depth > 0) invocations", () => {
 		const calls: string[] = [];
 		const state = freshState({
-			lifecycle: { phase: "running", command: "top", continueCount: 0 },
+			lifecycle: lifecycleFor("running", "top"),
 			clearLifecycleTimers: () => calls.push("cleared"),
 		});
 		const { pi } = recordingPi();
@@ -790,20 +792,20 @@ describe("timer cleanup wiring (issue 215)", () => {
 		const calls: string[] = [];
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "mach10:push" },
+			lifecycle: lifecycleFor("dormant", "mach10:push"),
 			clearLifecycleTimers: () => calls.push("cleared"),
 		});
 		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
 		await emit("input", { text: "/typo-or-removed", source: "interactive" });
 		expect(calls).toEqual(["cleared"]);
-		expect(getActiveCommand(state.lifecycle)).toBeNull();
+		expect(activeCommandName(state.lifecycle)).toBeNull();
 	});
 
 	it("calls clearLifecycleTimers on session rebuild", async () => {
 		const calls: string[] = [];
 		const state = freshState({
-			lifecycle: { phase: "running", command: "stale", continueCount: 0 },
+			lifecycle: lifecycleFor("running", "stale"),
 			clearLifecycleTimers: () => calls.push("cleared"),
 		});
 		const { pi, emit } = recordingPi();
@@ -815,11 +817,11 @@ describe("timer cleanup wiring (issue 215)", () => {
 	it("does not call clearLifecycleTimers when it is not set", () => {
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
-			lifecycle: { phase: "dormant", command: "old" },
+			lifecycle: lifecycleFor("dormant", "old"),
 		});
 		const { pi } = recordingPi();
 		// Should not throw when clearLifecycleTimers is undefined
 		recordCommandInvocation(pi, state, "mach10:push", "user", 0);
-		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 	});
 });

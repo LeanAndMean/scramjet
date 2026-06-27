@@ -331,9 +331,9 @@ describe("buildProbeMessage", () => {
 		const probe = buildProbeMessage({ mode: "forced", target: "b:target" }, "a:cmd");
 		expect(probe).toContain("successful `confirm`/`select` responses");
 		expect(probe).toContain("continue command work in this turn");
-		expect(probe).toContain("`freetext` and cancelled `confirm`/`select` terminate this turn");
-		expect(probe).toContain("park the command at `waiting`");
-		expect(probe).toContain("do not try to continue same-turn after those paths");
+		expect(probe).toContain("`freetext` parks the command");
+		expect(probe).toContain("standard-editor reply");
+		expect(probe).toContain("cancelled `confirm`/`select` puts the command dormant");
 		expect(probe).not.toContain("confirm/select/freetext");
 	});
 

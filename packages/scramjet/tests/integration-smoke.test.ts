@@ -8,13 +8,13 @@ import { parseCommandFile } from "../src/commands/loader.js";
 import { registerDelegateTool } from "../src/delegate.js";
 import { registerHistory } from "../src/history.js";
 import { initScramjet } from "../src/index.js";
+import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
-import { getActiveCommand } from "../src/phase-machine.js";
 import { registerScramjetCommand } from "../src/scramjet-command.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
 import type { CommandDef, NextStepPolicy, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
-import { freshState, logMessages, recordingPi } from "./helpers.js";
+import { derivedPhase, freshState, lifecycleFor, logMessages, recordingPi } from "./helpers.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
@@ -298,8 +298,8 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		// 2. User types /int:start — the input handler records it as origin: "user",
 		//    sets activeTopLevelCommand, and starts the running phase.
 		await bag.emit("input", { text: "/int:start", source: "interactive" }, ctx);
-		expect(getActiveCommand(state.lifecycle)).toBe("int:start");
-		expect(state.lifecycle.phase).toBe("running");
+		expect(activeCommandName(state.lifecycle)).toBe("int:start");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 		expect(state.sidebarLog).toHaveLength(1);
 		expect(state.sidebarLog[0].command).toBe("int:start");
 		expect(state.sidebarLog[0].origin).toBe("user");
@@ -309,7 +309,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		//    must not send synchronously (that send would be dropped).
 		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 		expect(bag.probes).toHaveLength(0);
 		expect(bag.dispatched).toEqual([]);
 
@@ -327,23 +327,23 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		const statusTool = bag.tools.find((tool) => tool.name === "report_scramjet_command_status");
 		expect(statusTool).toBeDefined();
 		await statusTool.execute("status-call", { status: "completed", summary: "start complete" });
-		expect(state.lifecycle.phase).toBe("reported");
+		expect(derivedPhase(state.lifecycle)).toBe("reported");
 		// The probe turn's agent_end fires while the run is still streaming; the
 		// completed forced dispatch must defer past that window (issue 88) rather
 		// than queue a stale duplicate command body. Nothing dispatches inline.
 		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctx);
 		expect(bag.dispatched).toEqual([]);
-		expect(state.lifecycle.phase).toBe("idle");
+		expect(derivedPhase(state.lifecycle)).toBe("idle");
 		// Once the run settles, the deferred dispatch fires exactly once.
 		bag.pi.isStreaming = false;
 		await vi.advanceTimersByTimeAsync(0);
 		expect(bag.dispatched).toEqual([{ input: "/int:next", options: { deliverAs: "followUp" } }]);
 		expect(state.pendingForcedDispatch).toBeNull();
-		expect(state.lifecycle.phase).toBe("running"); // int:next started its own answer turn
+		expect(derivedPhase(state.lifecycle)).toBe("running"); // int:next started its own answer turn
 
 		// 6. The input event records the forced transition.
-		expect(getActiveCommand(state.lifecycle)).toBe("int:next");
+		expect(activeCommandName(state.lifecycle)).toBe("int:next");
 		expect(state.sidebarLog).toHaveLength(2);
 		expect(state.sidebarLog[1].command).toBe("int:next");
 		expect(state.sidebarLog[1].origin).toBe("forced");
@@ -465,23 +465,23 @@ describe("integration smoke — lifecycle event sequences", () => {
 
 		// User invokes the command
 		await bag.emit("input", { text: "/int:cmd", source: "interactive" }, ctx);
-		expect(state.lifecycle.phase).toBe("running");
-		expect(getActiveCommand(state.lifecycle)).toBe("int:cmd");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		expect(activeCommandName(state.lifecycle)).toBe("int:cmd");
 
 		// Answer turn ends → probe fires
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 		expect(bag.probes).toHaveLength(1);
 
 		// Probe turn ends WITHOUT a status report → self-heal to dormant
 		await bag.emit("agent_end", {}, ctx);
-		expect(state.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(state.lifecycle)).toBe("int:cmd");
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(activeCommandName(state.lifecycle)).toBe("int:cmd");
 
 		// User replies interactively → dormant stays dormant (no auto-resume)
 		await bag.emit("input", { text: "Use option B", source: "interactive" }, ctx);
-		expect(state.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(state.lifecycle)).toBe("int:cmd");
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(activeCommandName(state.lifecycle)).toBe("int:cmd");
 	});
 
 	it("freetext parks at waiting → replay/resume → interactive reply → completed", async () => {
@@ -501,13 +501,13 @@ describe("integration smoke — lifecycle event sequences", () => {
 
 		// User invokes the command
 		await bag.emit("input", { text: "/int:wait", source: "interactive" }, ctx);
-		expect(state.lifecycle.phase).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 
 		// Agent calls get_scramjet_user_input freetext → parks at waiting
 		const userInputTool = findTool(bag, "get_scramjet_user_input");
 		await userInputTool.execute("call-id", { type: "freetext", message: "Which approach?" });
-		expect(state.lifecycle.phase).toBe("waiting");
-		expect(getActiveCommand(state.lifecycle)).toBe("int:wait");
+		expect(derivedPhase(state.lifecycle)).toBe("waiting");
+		expect(activeCommandName(state.lifecycle)).toBe("int:wait");
 
 		// Simulate resume: reconstruct from journal entries via session_start
 		const entries = bag.appended.map((e) => ({
@@ -516,27 +516,27 @@ describe("integration smoke — lifecycle event sequences", () => {
 			data: e.data,
 		}));
 		// Reset state to simulate a fresh session
-		state.lifecycle = { phase: "idle" };
+		state.lifecycle = lifecycleFor("idle");
 		state.sidebarLog = [];
 		await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
 
 		// After replay, waiting phase should be reconstructed
-		expect(state.lifecycle.phase).toBe("waiting");
-		expect(getActiveCommand(state.lifecycle)).toBe("int:wait");
+		expect(derivedPhase(state.lifecycle)).toBe("waiting");
+		expect(activeCommandName(state.lifecycle)).toBe("int:wait");
 
 		// User replies interactively → resumes to running
 		await bag.emit("input", { text: "Go with approach A", source: "interactive" }, ctx);
-		expect(state.lifecycle.phase).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 
 		// New answer turn ends → fresh probe
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 		// Agent reports completed
 		const statusTool = findTool(bag, "report_scramjet_command_status");
 		await statusTool.execute("call-id", { status: "completed", summary: "done" });
 		await endProbeTurn(bag, ctx);
-		expect(state.lifecycle.phase).toBe("idle");
+		expect(derivedPhase(state.lifecycle)).toBe("idle");
 	});
 
 	it("continuing cycles preserve continueCount across probing transitions", async () => {
@@ -556,47 +556,52 @@ describe("integration smoke — lifecycle event sequences", () => {
 
 		// User invokes the command
 		await bag.emit("input", { text: "/int:multi", source: "interactive" }, ctx);
-		expect(state.lifecycle.phase).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 		expect(state.lifecycle).toMatchObject({ continueCount: 0 });
 
 		const statusTool = findTool(bag, "report_scramjet_command_status");
 
 		// First continue cycle
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 		expect(state.lifecycle).toMatchObject({ continueCount: 0 });
 
 		await statusTool.execute("call-id", { status: "continuing", summary: "more work" });
-		expect(state.lifecycle.phase).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 		expect(state.lifecycle).toMatchObject({ continueCount: 1 });
 
 		// Second continue cycle
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle).toMatchObject({ phase: "probing", continueCount: 1 });
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
+		expect(state.lifecycle.continueCount).toBe(1);
 
 		await statusTool.execute("call-id", { status: "continuing", summary: "still working" });
-		expect(state.lifecycle).toMatchObject({ phase: "running", continueCount: 2 });
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		expect(state.lifecycle.continueCount).toBe(2);
 
 		// Third continue cycle
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle).toMatchObject({ phase: "probing", continueCount: 2 });
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
+		expect(state.lifecycle.continueCount).toBe(2);
 
 		await statusTool.execute("call-id", { status: "continuing", summary: "almost done" });
-		expect(state.lifecycle).toMatchObject({ phase: "running", continueCount: 3 });
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		expect(state.lifecycle.continueCount).toBe(3);
 
 		// Fourth continue hits the limit
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle).toMatchObject({ phase: "probing", continueCount: 3 });
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
+		expect(state.lifecycle.continueCount).toBe(3);
 
 		const limited = await statusTool.execute("call-id", { status: "continuing", summary: "too many" });
 		expect(limited.details.error).toBe("continue-limit");
-		expect(state.lifecycle.phase).toBe("probing"); // stays probing, agent must report terminal
+		expect(derivedPhase(state.lifecycle)).toBe("probing"); // stays probing, agent must report terminal
 		expect(state.lifecycle).toMatchObject({ continueCount: 3 });
 
 		// Agent reports completed after hitting limit
 		await statusTool.execute("call-id", { status: "completed", summary: "finally done" });
 		await endProbeTurn(bag, ctx);
-		expect(state.lifecycle.phase).toBe("idle");
+		expect(derivedPhase(state.lifecycle)).toBe("idle");
 	});
 
 	it("structured user input during probing returns to running", async () => {
@@ -618,11 +623,11 @@ describe("integration smoke — lifecycle event sequences", () => {
 
 		// User invokes the command
 		await bag.emit("input", { text: "/int:ask", source: "interactive" }, ctx);
-		expect(state.lifecycle.phase).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 
 		// Answer turn ends → probe fires
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 		// Agent calls get_scramjet_user_input during probe phase
 		const userInputTool = findTool(bag, "get_scramjet_user_input");
@@ -637,16 +642,16 @@ describe("integration smoke — lifecycle event sequences", () => {
 		// Confirm succeeds and transitions back to running
 		expect(inputResult.details.error).toBeUndefined();
 		expect(inputResult.details.confirmed).toBe(true);
-		expect(state.lifecycle.phase).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 
 		// Agent does more work, turn ends → another probe
 		await fireProbe(bag, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 		// Agent reports completed
 		const statusTool = findTool(bag, "report_scramjet_command_status");
 		await statusTool.execute("call-id", { status: "completed", summary: "done" });
 		await endProbeTurn(bag, ctx);
-		expect(state.lifecycle.phase).toBe("idle");
+		expect(derivedPhase(state.lifecycle)).toBe("idle");
 	});
 });

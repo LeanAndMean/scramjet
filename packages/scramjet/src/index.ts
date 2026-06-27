@@ -9,6 +9,7 @@ import { registerCommandLoader } from "./commands/index.js";
 import { registerDelegateTool } from "./delegate.js";
 import { registerDiagramTool } from "./diagram/diagram-tool.js";
 import { registerHistory } from "./history.js";
+import { createLifecycle } from "./lifecycle.js";
 import { createLogger } from "./logger.js";
 import { registerModelIdentity } from "./model-identity.js";
 import { registerPrIndicator } from "./pr-indicator.js";
@@ -30,7 +31,7 @@ export function initScramjet(pi: ExtensionAPI) {
 		delegateStack: [],
 		lifecycleGeneration: 0,
 		pendingForcedDispatch: null,
-		lifecycle: { phase: "idle" },
+		lifecycle: createLifecycle(),
 		currentModel: null,
 		modelHistory: [],
 		autonomyConfigPath: defaultConfigPath(),

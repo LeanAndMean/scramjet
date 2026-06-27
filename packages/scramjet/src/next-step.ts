@@ -106,6 +106,7 @@ export function buildProbeMessage(policy: NextStepPolicy, commandId: string, scr
 		"- `incomplete` \u2014 stopped without clean completion\n\n" +
 		"`get_scramjet_user_input` \u2014 if you need user input before continuing:\n" +
 		"- successful `confirm`/`select` responses return in this probe turn; continue command work in this turn\n" +
-		"- `freetext` and cancelled `confirm`/`select` terminate this turn and park the command at `waiting`; do not try to continue same-turn after those paths";
+		"- `freetext` parks the command for the user's standard-editor reply; do not try to continue same-turn\n" +
+		"- cancelled `confirm`/`select` puts the command dormant; do not try to continue same-turn";
 	return `${preamble}\n\n${buildNextStepBlock(policy, commandId, scramjetEnabled)}`;
 }

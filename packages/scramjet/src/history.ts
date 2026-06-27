@@ -1,5 +1,13 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
-import { getActiveCommand, type LifecycleState, logTransition, transition } from "./phase-machine.js";
+import {
+	activeCommandName,
+	clearActiveCommand,
+	createLifecycle,
+	isParkedForInput,
+	type LifecycleState,
+	resumeFromParkedInput,
+	startCommand,
+} from "./lifecycle.js";
 import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.js";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
@@ -75,27 +83,19 @@ export function recordCommandInvocation(
 		depth,
 		timestamp: Date.now(),
 	};
-	let commandStartTransition: { from: LifecycleState; to: LifecycleState } | null = null;
 	if (depth === 0) {
 		state.clearLifecycleTimers?.();
-		const from = state.lifecycle;
-		const result = transition(state.lifecycle, { type: "command-start", command: name });
+		const result = startCommand(state, name);
 		if (!result.ok) {
-			state.logger.warn("lifecycle", `illegal lifecycle transition: ${result.from} + command-start`, {
-				from: result.from,
+			state.logger.warn("lifecycle", `lifecycle startCommand failed: ${result.reason}`, {
 				event: "command-start",
 				command: name,
 			});
 			return;
 		}
-		state.lifecycle = result.state;
-		commandStartTransition = { from, to: result.state };
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 	pi.appendEntry(COMMAND_START_TYPE, entry);
-	if (commandStartTransition) {
-		logTransition(state, commandStartTransition.from, commandStartTransition.to, "command-start", { origin, depth });
-	}
 }
 
 // Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
@@ -179,13 +179,12 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			parkedForInput = true;
 		}
 	}
-	let lifecycle: LifecycleState;
-	if (!activeTopLevelCommand) {
-		lifecycle = { phase: "idle" };
-	} else if (parkedForInput) {
-		lifecycle = { phase: "waiting", command: activeTopLevelCommand };
-	} else {
-		lifecycle = { phase: "dormant", command: activeTopLevelCommand };
+	const lifecycle = createLifecycle();
+	if (activeTopLevelCommand) {
+		lifecycle.activeCommand = activeTopLevelCommand;
+		if (parkedForInput) {
+			lifecycle.parkedForInput = true;
+		}
 	}
 	return { sidebarLog, enabled, lifecycle };
 }
@@ -230,15 +229,11 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
 			// Resume a parked command on an interactive non-slash reply. Only
-			// the "waiting" phase (freetext user-input park) auto-resumes;
-			// dormant commands require the agent to explicitly call
-			// `continuing` after seeing the dormant notice (issue 215).
-			if (event.source === "interactive" && !event.text.startsWith("/") && state.lifecycle.phase === "waiting") {
-				const from = state.lifecycle;
-				const result = transition(state.lifecycle, { type: "user-reply" });
-				if (!result.ok) return;
-				state.lifecycle = result.state;
-				logTransition(state, from, result.state, "user-reply", { source: event.source });
+			// parked-for-input (freetext park) auto-resumes; dormant commands
+			// require the agent to explicitly call `continuing` after seeing
+			// the dormant notice (issue 215).
+			if (event.source === "interactive" && !event.text.startsWith("/") && isParkedForInput(state.lifecycle)) {
+				resumeFromParkedInput(state);
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
@@ -252,19 +247,10 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// not a workflow exit — the user toggling /scramjet on mid-chain or
 			// checking /help should not silently break a forced next-step. Only
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
-			if (event.text.startsWith("/") && getActiveCommand(state.lifecycle) !== null) {
+			if (event.text.startsWith("/") && activeCommandName(state.lifecycle) !== null) {
 				if (!isKnownSlashCommand(event.text, pi)) {
 					state.clearLifecycleTimers?.();
-					const from = state.lifecycle;
-					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
-					if (exitResult.ok) {
-						state.lifecycle = exitResult.state;
-						logTransition(state, from, exitResult.state, "workflow-exit", {
-							reason: "unknown-slash",
-							slash: extractSlashName(event.text),
-							source: event.source,
-						});
-					}
+					clearActiveCommand(state, "unknown-slash");
 				}
 			}
 			return;

@@ -12,12 +12,12 @@ import {
 	replayHistory,
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
+import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { buildProbeMessage } from "../src/next-step.js";
-import { getActiveCommand } from "../src/phase-machine.js";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
-import { freshState, lifecycleFor, logMessages as logMessagesAll, recordingPi } from "./helpers.js";
+import { derivedPhase, freshState, lifecycleFor, logMessages as logMessagesAll, recordingPi } from "./helpers.js";
 
 type StatusParams = {
 	status: CommandStatusPayload["status"];
@@ -256,7 +256,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			bag.pi.isStreaming = true;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 			expect(bag.pi.sent).toHaveLength(0); // not sent synchronously
 
 			bag.pi.isStreaming = false;
@@ -284,7 +284,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
 
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			expect(bag.pi.appended).toContainEqual({
 				customType: COMMAND_STATUS_TYPE,
 				data: { commandName: "terminus:cmd", status: "completed" },
@@ -297,7 +297,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				} as any,
 				...bag.pi.appended.map((entry: any) => ({ type: "custom", ...entry }) as any),
 			]);
-			expect(replayed.lifecycle).toEqual({ phase: "idle" });
+			expect(derivedPhase(replayed.lifecycle)).toBe("idle");
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(state.lifecycleTimers?.isProbeScheduled()).toBe(false);
@@ -314,12 +314,12 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// Probe turn ends but the agent wrote prose instead of reporting (or Pi
 			// rejected a schema-invalid status call before execute ran).
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			expect(ctxBag.dispatched).toEqual([]);
 			// F1: the silent self-heal now leaves a log breadcrumb like its siblings.
 			expect(logMessages(bag.pi)).toHaveLength(1);
@@ -337,7 +337,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await vi.advanceTimersByTimeAsync(0);
 
 			expect(bag.pi.sent).toHaveLength(0);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("resets to idle (not wedged at probing) when the deferred probe sendMessage throws (F1)", async () => {
@@ -354,14 +354,14 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			bag.pi.isStreaming = true;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
 
 			// The throw is caught: the lifecycle self-heals to dormant (command
 			// stays associated for a later interactive reply).
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			expect(logMessages(bag.pi)).toHaveLength(1);
 			expect(logMessages(bag.pi)[0]).toContain("status probe failed");
 		});
@@ -377,7 +377,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 			expect(bag.pi.sent).toHaveLength(1);
 
 			// The probe turn never emits a terminal agent_end (dropped triggerTurn,
@@ -385,7 +385,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// window self-heals the phase instead of leaving it wedged at "probing".
 			await vi.advanceTimersByTimeAsync(30_000);
 
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(logMessages(bag.pi)).toHaveLength(1);
 			expect(logMessages(bag.pi)[0]).toContain("never completed");
@@ -404,7 +404,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				next_steps: [{ message: "/b:ok", reason: "continue" }],
 				recommended_next_step: 0,
 			});
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 
 			await vi.advanceTimersByTimeAsync(30_000);
 
@@ -436,7 +436,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.dispatched).toEqual([]);
 			// Phase stays dormant (command associated but not running) — no probe.
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 		});
 
 		it("does not probe on a non-Scramjet slash turn mid-chain (active command set, phase idle)", async () => {
@@ -450,7 +450,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.dispatched).toEqual([]);
 			// Phase stays dormant — no probe.
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 		});
 	});
 
@@ -469,7 +469,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			]);
 			expect(state.pendingForcedDispatch).toBe("b:target");
 			expect(ctxBag.notifications).toEqual([]);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("passes forced handoff args + fresh_session when the supplied name matches the target", async () => {
@@ -541,7 +541,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.pendingForcedDispatch).toBeNull();
 			// issue 128: completion clears the lifecycle command regardless of
 			// whether the forced target dispatched.
-			expect(getActiveCommand(state.lifecycle)).toBeNull();
+			expect(activeCommandName(state.lifecycle)).toBeNull();
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("b:missing");
 		});
@@ -580,7 +580,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// Report completed, then the probe turn's agent_end fires WHILE Pi is
 			// still streaming — the exact production window the incident describes.
@@ -591,7 +591,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// Nothing dispatched inline in that window (not delivered, not mis-queued).
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 
 			// Once the run settles, the forced target dispatches exactly once.
 			bag.pi.isStreaming = false;
@@ -921,7 +921,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications).toEqual([]);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("completed with no next_steps pauses quietly", async () => {
@@ -972,7 +972,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// The command's next-step policy disappears before the probe turn ends.
 			def.next = undefined;
@@ -984,7 +984,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("blocked");
 			expect(ctxBag.notifications[0].message).toContain("gh auth missing");
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("incomplete is a quiet pause (no dispatch, no notification)", async () => {
@@ -1005,11 +1005,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 				await simulateTwoTurns(bag, ctxBag, report, { status, summary: "not done" });
 
-				expect(state.lifecycle.phase).toBe("idle");
-				expect(getActiveCommand(state.lifecycle)).toBeNull();
+				expect(derivedPhase(state.lifecycle)).toBe("idle");
+				expect(activeCommandName(state.lifecycle)).toBeNull();
 
 				await bag.emit("input", { text: "unrelated follow-up", source: "interactive" }, ctxBag.ctx);
-				expect(state.lifecycle.phase).toBe("idle");
+				expect(derivedPhase(state.lifecycle)).toBe("idle");
 			},
 		);
 	});
@@ -1032,7 +1032,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
 
-			expect(state.lifecycle.phase).toBe("waiting");
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.dispatched).toEqual([]);
 		});
@@ -1047,14 +1047,14 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			registerHistory(bag.pi, state);
 
 			// First turn: draft + ask via freetext → park at waiting.
-			state.lifecycle = { phase: "waiting", command: "mach12:pr-create" };
-			expect(state.lifecycle.phase).toBe("waiting");
-			expect(getActiveCommand(state.lifecycle)).toBe("mach12:pr-create");
+			state.lifecycle = lifecycleFor("waiting", "mach12:pr-create");
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
+			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
 			expect(ctxBag.dispatched).toEqual([]);
 
 			// User approves: an interactive non-slash reply re-arms the probe path.
 			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 
 			// Resumed turn creates the PR, reports completed with the review next step.
 			await driveProbeTurn(bag, ctxBag, report, {
@@ -1067,7 +1067,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/mach12:pr-review", options: { deliverAs: "followUp" }, session: "current" },
 			]);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("re-arms across multiple clarification rounds: waiting → resume → waiting again", async () => {
@@ -1077,15 +1077,15 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			registerHistory(bag.pi, state);
 
 			// First freetext parks at waiting.
-			state.lifecycle = { phase: "waiting", command: "a:cmd" };
-			expect(state.lifecycle.phase).toBe("waiting");
+			state.lifecycle = lifecycleFor("waiting", "a:cmd");
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
 
 			await bag.emit("input", { text: "more info", source: "interactive" }, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 
 			// A resumed turn that still needs input returns to waiting (no chain).
-			state.lifecycle = { phase: "waiting", command: "a:cmd" };
-			expect(state.lifecycle.phase).toBe("waiting");
+			state.lifecycle = lifecycleFor("waiting", "a:cmd");
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
 			expect(ctxBag.dispatched).toEqual([]);
 		});
 
@@ -1096,23 +1096,23 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			registerHistory(bag.pi, state);
 
 			// Park at waiting via freetext.
-			state.lifecycle = { phase: "waiting", command: "a:cmd" };
-			expect(state.lifecycle.phase).toBe("waiting");
+			state.lifecycle = lifecycleFor("waiting", "a:cmd");
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
 
 			// Resume, then the resumed answer turn ends → probing + probe fires.
 			await bag.emit("input", { text: "reply", source: "interactive" }, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 			bag.pi.isStreaming = true;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			bag.pi.isStreaming = false;
 			await vi.advanceTimersByTimeAsync(0);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// The probe turn ends without a status report → self-heal to dormant, no
 			// re-probe (the existing probing self-heal, reached via the resume path).
 			const sentBefore = bag.pi.sent.length;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			await vi.advanceTimersByTimeAsync(0);
 			expect(bag.pi.sent.length).toBe(sentBefore);
 			expect(ctxBag.dispatched).toEqual([]);
@@ -1160,12 +1160,12 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 					},
 				]),
 			);
-			expect(state.lifecycle.phase).toBe("waiting");
-			expect(getActiveCommand(state.lifecycle)).toBe("mach12:pr-create");
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
+			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
 
 			// User answers in the resumed session → resume the command.
 			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 
 			// Resumed turn completes and offers the review next step → chain.
 			await driveProbeTurn(bag, ctxBag, report, {
@@ -1177,7 +1177,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/mach12:pr-review", options: { deliverAs: "followUp" }, session: "current" },
 			]);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("a completed-without-chain command reconstructs to idle and does not resurrect on resume", async () => {
@@ -1202,14 +1202,14 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 					{ customType: COMMAND_STATUS_TYPE, data: { commandName: "mach12:pr-create", status: "completed" } },
 				]),
 			);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			// issue 128: completed commands clear activeTopLevelCommand so a later
 			// reply doesn't re-arm the phase for a finished command.
-			expect(getActiveCommand(state.lifecycle)).toBeNull();
+			expect(activeCommandName(state.lifecycle)).toBeNull();
 
 			// A later interactive reply must NOT resume (lifecycle is idle).
 			await bag.emit("input", { text: "approve", source: "interactive" }, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 
 			// And the next turn fires no probe and dispatches nothing (no resurrection).
 			bag.pi.isStreaming = true;
@@ -1288,8 +1288,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 
 			expect(ctxBag.dispatched).toEqual([]);
-			expect(getActiveCommand(state.lifecycle)).toBeNull();
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(activeCommandName(state.lifecycle)).toBeNull();
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.notifications[0].message).toContain("a:missing");
 		});
@@ -1537,7 +1537,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
 			]);
 			expect(state.pendingForcedDispatch).toBeNull();
-			expect(getActiveCommand(state.lifecycle)).toBe("b:target");
+			expect(activeCommandName(state.lifecycle)).toBe("b:target");
 			expect(state.sidebarLog[state.sidebarLog.length - 1]).toMatchObject({
 				command: "b:target",
 				origin: "forced",
@@ -1572,7 +1572,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			];
 			await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
 			// Rebuild reconstructs to dormant (command-start present, no terminal status).
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 
 			// A stale report_scramjet_command_status call (the resumed model answering the
 			// dead probe) now hits the phase guard: rejected out-of-phase, no terminate,
@@ -1584,10 +1584,10 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				recommended_next_step: 0,
 			})) as any;
 			expect(result.terminate).toBeUndefined();
-			expect(result.details.error).toBe("out-of-phase");
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(result.details.error).toBe("terminal-from-dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 
-			// agent_end after the rejected call: phase is idle, so nothing dispatches
+			// agent_end after the rejected call: dormant, so nothing dispatches
 			// and no new probe is scheduled (no loop).
 			bag.pi.isStreaming = false;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
@@ -1635,27 +1635,27 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 		const { bag, ctxBag } = fullBootstrap(state);
 
 		// Step 1: command is running, agent works and ends its turn.
-		expect(state.lifecycle.phase).toBe("running");
+		expect(derivedPhase(state.lifecycle)).toBe("running");
 
 		// Step 2: answer turn ends → probe fires.
 		bag.pi.isStreaming = true;
 		await bag.emit("agent_end", {}, ctxBag.ctx);
 		bag.pi.isStreaming = false;
 		await vi.advanceTimersByTimeAsync(0);
-		expect(state.lifecycle.phase).toBe("probing");
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 		// Step 3: probe turn ends without a status report → self-heals to dormant
 		// (command stays associated).
 		await bag.emit("agent_end", {}, ctxBag.ctx);
-		expect(state.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(state.lifecycle)).toBe("a:cmd");
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
 
 		// Step 4: user replies (non-slash, interactive). Under issue 215,
 		// dormant user-reply is a no-op — only the agent can resume via
 		// `continuing` after seeing the dormant notice.
 		await bag.emit("input", { text: "Yes, go with option 2", source: "interactive" });
-		expect(state.lifecycle.phase).toBe("dormant");
-		expect(getActiveCommand(state.lifecycle)).toBe("a:cmd");
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
 	});
 });
 
@@ -1711,18 +1711,18 @@ describe("multi-path probe integration", () => {
 
 			// Answer turn ends → first probe
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 			expect(bag.pi.sent).toHaveLength(1);
 
 			// Agent reports continuing → phase back to running
 			const contResult = await report({ status: "continuing", summary: "more work" });
 			expect(contResult.terminate).toBeUndefined();
 			expect(contResult.details.status).toBe("continuing");
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 
 			// Agent does more work, turn ends → second probe
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 			expect(bag.pi.sent).toHaveLength(2);
 
 			// Agent reports completed with a next step
@@ -1732,11 +1732,11 @@ describe("multi-path probe integration", () => {
 				next_steps: [{ message: "/b:next", reason: "continue" }],
 				recommended_next_step: 0,
 			});
-			expect(state.lifecycle.phase).toBe("reported");
+			expect(derivedPhase(state.lifecycle)).toBe("reported");
 
 			// Probe turn ends → dispatches the next step
 			await endProbeTurn(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/b:next", options: { deliverAs: "followUp" }, session: "current" },
 			]);
@@ -1750,17 +1750,17 @@ describe("multi-path probe integration", () => {
 			// Two rounds of continue
 			for (let i = 0; i < 2; i++) {
 				await fireProbe(bag, ctxBag);
-				expect(state.lifecycle.phase).toBe("probing");
+				expect(derivedPhase(state.lifecycle)).toBe("probing");
 				const r = await report({ status: "continuing", summary: `round ${i + 1}` });
 				expect(r.details.status).toBe("continuing");
-				expect(state.lifecycle.phase).toBe("running");
+				expect(derivedPhase(state.lifecycle)).toBe("running");
 			}
 
 			// Final probe → completed
 			await fireProbe(bag, ctxBag);
 			await report({ status: "completed", summary: "done" });
 			await endProbeTurn(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 	});
 
@@ -1775,7 +1775,7 @@ describe("multi-path probe integration", () => {
 				await fireProbe(bag, ctxBag);
 				const r = await report({ status: "continuing", summary: `round ${i + 1}` });
 				expect(r.details.status).toBe("continuing");
-				expect(state.lifecycle.phase).toBe("running");
+				expect(derivedPhase(state.lifecycle)).toBe("running");
 			}
 
 			// 4th continue hits the limit — stays probing, not terminated
@@ -1784,12 +1784,12 @@ describe("multi-path probe integration", () => {
 			expect(limited.details.error).toBe("continue-limit");
 			expect(limited.terminate).toBeUndefined();
 			// Phase stays probing — agent must now report a terminal status
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// Agent heeds the error and reports completed
 			await report({ status: "completed", summary: "finally done" });
 			await endProbeTurn(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("counter resets after a terminal status allowing continues in a subsequent command", async () => {
@@ -1813,11 +1813,11 @@ describe("multi-path probe integration", () => {
 			await endProbeTurn(bag, ctxBag);
 
 			// Start a new command cycle — continues work again
-			state.lifecycle = { phase: "running", command: "a:cmd", continueCount: 0 };
+			state.lifecycle = lifecycleFor("running", "a:cmd");
 			await fireProbe(bag, ctxBag);
 			const fresh = await report({ status: "continuing", summary: "fresh" });
 			expect(fresh.details.status).toBe("continuing");
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 		});
 	});
 
@@ -1831,16 +1831,16 @@ describe("multi-path probe integration", () => {
 			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: false });
 
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
 			const inputResult = await callUserInput({ type: "confirm", message: "Proceed?" }, autoCtx);
 			expect(inputResult.details.error).toBeUndefined();
 			expect(inputResult.details.confirmed).toBe(true);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			await report({
 				status: "completed",
@@ -1849,7 +1849,7 @@ describe("multi-path probe integration", () => {
 				recommended_next_step: 0,
 			});
 			await endProbeTurn(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/b:next", options: { deliverAs: "followUp" }, session: "current" },
 			]);
@@ -1884,7 +1884,7 @@ describe("multi-path probe integration", () => {
 			expect(ctxBag.dispatched).toEqual([
 				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
 			]);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("blocked warns without dispatching (no regression)", async () => {
@@ -1900,7 +1900,7 @@ describe("multi-path probe integration", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("blocked");
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
 		it("incomplete pauses quietly (no regression)", async () => {
@@ -1915,7 +1915,7 @@ describe("multi-path probe integration", () => {
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications).toEqual([]);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 	});
 
@@ -1927,11 +1927,11 @@ describe("multi-path probe integration", () => {
 
 			// Answer turn ends → probe fires, watchdog armed
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// No tool call, no agent_end — watchdog fires, self-heals to dormant
 			await vi.advanceTimersByTimeAsync(30_000);
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			expect(logMessages(bag.pi).some((message) => message.includes("never completed"))).toBe(true);
 		});
 
@@ -1941,15 +1941,15 @@ describe("multi-path probe integration", () => {
 			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
 
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// Agent reports continuing — watchdog is suspended during transition
 			await report({ status: "continuing", summary: "working" });
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 
 			// Advancing past the watchdog window shouldn't fire it (phase is running)
 			await vi.advanceTimersByTimeAsync(30_000);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 			expect(logMessages(bag.pi)).toEqual([]);
 		});
 
@@ -1959,14 +1959,14 @@ describe("multi-path probe integration", () => {
 			const { bag, ctxBag, callUserInput } = fullBootstrap(state);
 
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
 			await callUserInput({ type: "confirm", message: "Continue?" }, autoCtx);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 
 			await vi.advanceTimersByTimeAsync(30_000);
-			expect(state.lifecycle.phase).toBe("running");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
 			expect(logMessages(bag.pi)).toEqual([]);
 		});
 
@@ -1979,10 +1979,10 @@ describe("multi-path probe integration", () => {
 				status: "completed",
 				summary: "done",
 			});
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 
 			await vi.advanceTimersByTimeAsync(30_000);
-			expect(state.lifecycle.phase).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			expect(logMessages(bag.pi)).toEqual([]);
 		});
 	});
@@ -1995,11 +1995,11 @@ describe("multi-path probe integration", () => {
 
 			// Answer turn ends → probe fires
 			await fireProbe(bag, ctxBag);
-			expect(state.lifecycle.phase).toBe("probing");
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
 
 			// Probe turn ends without a report → self-heals to dormant
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(logMessages(bag.pi).some((message) => message.includes("without a valid status report"))).toBe(true);
 		});
@@ -2012,7 +2012,7 @@ describe("multi-path probe integration", () => {
 			// Answer turn → probe → self-heal to dormant
 			await fireProbe(bag, ctxBag);
 			await bag.emit("agent_end", {}, ctxBag.ctx);
-			expect(state.lifecycle.phase).toBe("dormant");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			const sentAfterHeal = bag.pi.sent.length;
 
 			// Another agent_end at idle should NOT fire a new probe

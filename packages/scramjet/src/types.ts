@@ -1,5 +1,5 @@
+import type { LifecycleHolder, LifecycleState } from "./lifecycle.js";
 import type { ScramjetLogger } from "./logger.js";
-import type { LifecycleState } from "./phase-machine.js";
 
 export interface NextStep {
 	// Bare command name (no leading slash, no args). Matches against
@@ -109,7 +109,7 @@ export interface LifecycleTimerAccessors {
 	isDispatchScheduled(): boolean;
 }
 
-export interface ScramjetState {
+export interface ScramjetState extends LifecycleHolder {
 	enabled: boolean;
 	registry: CommandRegistry;
 	agentRegistry: AgentRegistry;
