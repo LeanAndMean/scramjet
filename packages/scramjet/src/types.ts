@@ -116,6 +116,7 @@ export interface ScramjetState {
 	sidebarLog: SidebarEntry[];
 	delegateStack: DelegateFrame[];
 	lifecycleGeneration: number;
+	clearLifecycleTimers?: () => void;
 	// Set by the next-step dispatcher just before slash-input dispatch when
 	// firing a forced transition, so history's input handler can label the
 	// resulting entry as origin: "forced" instead of "agent".

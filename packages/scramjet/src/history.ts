@@ -1,12 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
-import {
-	getActiveCommand,
-	isPhaseEntry,
-	type LifecycleState,
-	logTransition,
-	reconstructPhase,
-	transition,
-} from "./phase-machine.js";
+import { getActiveCommand, type LifecycleState, logTransition, transition } from "./phase-machine.js";
 import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.js";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
@@ -84,6 +77,7 @@ export function recordCommandInvocation(
 	};
 	let commandStartTransition: { from: LifecycleState; to: LifecycleState } | null = null;
 	if (depth === 0) {
+		state.clearLifecycleTimers?.();
 		const from = state.lifecycle;
 		const result = transition(state.lifecycle, { type: "command-start", command: name });
 		if (!result.ok) {
@@ -144,10 +138,13 @@ export interface ReplayResult {
 	lifecycle: LifecycleState;
 }
 
+const VALID_RESTING_STATUSES: ReadonlySet<string> = new Set(["completed", "blocked", "incomplete"]);
+
 export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	let sidebarLog: SidebarEntry[] = [];
 	let enabled: boolean | null = null;
 	let activeTopLevelCommand: string | null = null;
+	let parkedForInput = false;
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
@@ -160,27 +157,42 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			sidebarLog = appendSidebarEntry(sidebarLog, data);
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
+				parkedForInput = false;
 			}
 		} else if (entry.customType === ENABLED_TOGGLE_TYPE) {
 			const data = entry.data as EnabledToggleData | undefined;
 			if (data && typeof data.enabled === "boolean") enabled = data.enabled;
+		} else if (entry.customType === COMMAND_STATUS_TYPE) {
+			const data = entry.data as { commandName?: unknown; status?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand) continue;
+			if (typeof data.status !== "string" || !VALID_RESTING_STATUSES.has(data.status)) continue;
+			if (data.status === "completed") {
+				activeTopLevelCommand = null;
+			}
+			// blocked/incomplete: command stays associated (dormant)
+			parkedForInput = false;
+		} else if (entry.customType === USER_INPUT_PARKED_TYPE) {
+			const data = entry.data as { commandName?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand) continue;
+			parkedForInput = true;
 		}
 	}
-	const reconstructed = reconstructPhase(entries.filter(isPhaseEntry));
-	if (reconstructed.activeCommandCleared) activeTopLevelCommand = null;
 	let lifecycle: LifecycleState;
-	if (reconstructed.phase === "waiting" && activeTopLevelCommand) {
-		lifecycle = { phase: "waiting", command: activeTopLevelCommand };
-	} else if (activeTopLevelCommand && reconstructed.phase === "idle") {
-		lifecycle = { phase: "dormant", command: activeTopLevelCommand };
-	} else {
+	if (!activeTopLevelCommand) {
 		lifecycle = { phase: "idle" };
+	} else if (parkedForInput) {
+		lifecycle = { phase: "waiting", command: activeTopLevelCommand };
+	} else {
+		lifecycle = { phase: "dormant", command: activeTopLevelCommand };
 	}
 	return { sidebarLog, enabled, lifecycle };
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	const rebuild = async (_event: unknown, ctx: ExtensionContext) => {
+		state.clearLifecycleTimers?.();
 		const result = replayHistory(ctx.sessionManager.getBranch());
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
@@ -217,24 +229,11 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	pi.on("input", async (event) => {
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
-			// Resume the active command on an interactive non-slash reply. Two
-			// cases: (1) issue 88 — the command parked via user-input freetext
-			// and rests at "waiting"; the user's answer re-arms the probe path.
-			// (2) issue 128 — the probe self-healed to "dormant" (command
-			// still associated but not running); the user's reply is still
-			// engaging with the command. In both cases, flip to "running" so
-			// phase-gated tools (get_scramjet_user_input) work
-			// and agent_end fires the running→probing probe. Chaining still
-			// requires an explicit completed report, so an off-topic reply can
-			// only cause a harmless re-probe, never a chain. Gated on
-			// source === "interactive" so the hidden status probe (sent via
-			// triggerTurn, which bypasses the input pipeline) and
-			// extension-dispatched input can never self-resume.
-			if (
-				event.source === "interactive" &&
-				!event.text.startsWith("/") &&
-				(state.lifecycle.phase === "waiting" || state.lifecycle.phase === "dormant")
-			) {
+			// Resume a parked command on an interactive non-slash reply. Only
+			// the "waiting" phase (freetext user-input park) auto-resumes;
+			// dormant commands require the agent to explicitly call
+			// `continuing` after seeing the dormant notice (issue 215).
+			if (event.source === "interactive" && !event.text.startsWith("/") && state.lifecycle.phase === "waiting") {
 				const from = state.lifecycle;
 				const result = transition(state.lifecycle, { type: "user-reply" });
 				if (!result.ok) return;
@@ -255,6 +254,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
 			if (event.text.startsWith("/") && getActiveCommand(state.lifecycle) !== null) {
 				if (!isKnownSlashCommand(event.text, pi)) {
+					state.clearLifecycleTimers?.();
 					const from = state.lifecycle;
 					const exitResult = transition(state.lifecycle, { type: "workflow-exit" });
 					if (exitResult.ok) {

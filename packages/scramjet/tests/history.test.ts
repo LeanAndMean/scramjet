@@ -267,11 +267,11 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 	});
 
 	it.each(["blocked", "incomplete"] as const)(
-		"clears the active command when a waiting command later reported %s",
+		"keeps command associated (dormant) when a waiting command later reported %s (issue 215)",
 		(status) => {
 			const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStatus("a", status)]);
-			expect(result.lifecycle.phase).toBe("idle");
-			expect(getActiveCommand(result.lifecycle)).toBeNull();
+			expect(result.lifecycle.phase).toBe("dormant");
+			expect(getActiveCommand(result.lifecycle)).toBe("a");
 		},
 	);
 
@@ -576,7 +576,7 @@ describe("registerHistory — input event", () => {
 			expect(state.lifecycle).toEqual({ phase: "idle" });
 		});
 
-		it("re-arms dormant→running on an interactive non-slash reply when lifecycle is dormant (issue 128)", async () => {
+		it("does NOT auto-resume dormant on interactive non-slash reply (issue 215: agent-controlled resumption)", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
 				lifecycle: { phase: "dormant", command: "mach12:pr-create" },
@@ -584,10 +584,9 @@ describe("registerHistory — input event", () => {
 			const { pi, emit } = recordingPi();
 			registerHistory(pi, state);
 			await emit("input", { text: "just chatting", source: "interactive" });
-			expect(state.lifecycle.phase).toBe("running");
+			expect(state.lifecycle.phase).toBe("dormant");
 			expect(getActiveCommand(state.lifecycle)).toBe("mach12:pr-create");
-			expect(state.lifecycle).toEqual({ phase: "running", command: "mach12:pr-create", continueCount: 0 });
-			// A resume is not a fresh command start: no sidebar/journal entry.
+			expect(state.lifecycle).toEqual({ phase: "dormant", command: "mach12:pr-create" });
 			expect(state.sidebarLog).toHaveLength(0);
 		});
 
@@ -725,5 +724,102 @@ describe("registerHistory — before_agent_start turn boundary", () => {
 		registerHistory(pi, state);
 		await emit("before_agent_start", {}, {});
 		expect(state.pendingForcedDispatch).toBeNull();
+	});
+});
+
+describe("replayHistory — blocked/incomplete keep command associated (issue 215)", () => {
+	it.each(["blocked", "incomplete"] as const)(
+		"reconstructs dormant (not idle) when active command reported %s",
+		(status) => {
+			const result = replayHistory([cmdStart("a"), cmdStatus("a", status)]);
+			expect(result.lifecycle.phase).toBe("dormant");
+			expect(getActiveCommand(result.lifecycle)).toBe("a");
+		},
+	);
+
+	it("reconstructs idle when active command reported completed", () => {
+		const result = replayHistory([cmdStart("a"), cmdStatus("a", "completed")]);
+		expect(result.lifecycle.phase).toBe("idle");
+		expect(getActiveCommand(result.lifecycle)).toBeNull();
+	});
+
+	it("reconstructs dormant when blocked is followed by a new command start", () => {
+		const result = replayHistory([cmdStart("a"), cmdStatus("a", "blocked"), cmdStart("b")]);
+		expect(result.lifecycle.phase).toBe("dormant");
+		expect(getActiveCommand(result.lifecycle)).toBe("b");
+	});
+
+	it("reconstructs idle when blocked command is followed by a completed command", () => {
+		const result = replayHistory([
+			cmdStart("a"),
+			cmdStatus("a", "blocked"),
+			cmdStart("b"),
+			cmdStatus("b", "completed"),
+		]);
+		expect(result.lifecycle.phase).toBe("idle");
+		expect(getActiveCommand(result.lifecycle)).toBeNull();
+	});
+});
+
+describe("timer cleanup wiring (issue 215)", () => {
+	it("calls clearLifecycleTimers before depth-0 command-start transition", () => {
+		const calls: string[] = [];
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			lifecycle: { phase: "dormant", command: "old" },
+			clearLifecycleTimers: () => calls.push("cleared"),
+		});
+		const { pi } = recordingPi();
+		recordCommandInvocation(pi, state, "mach10:push", "user", 0);
+		expect(calls).toEqual(["cleared"]);
+		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
+	});
+
+	it("does not call clearLifecycleTimers for delegated (depth > 0) invocations", () => {
+		const calls: string[] = [];
+		const state = freshState({
+			lifecycle: { phase: "running", command: "top", continueCount: 0 },
+			clearLifecycleTimers: () => calls.push("cleared"),
+		});
+		const { pi } = recordingPi();
+		recordCommandInvocation(pi, state, "delegate", "agent", 1);
+		expect(calls).toEqual([]);
+	});
+
+	it("calls clearLifecycleTimers on unknown-slash workflow exit", async () => {
+		const calls: string[] = [];
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			lifecycle: { phase: "dormant", command: "mach10:push" },
+			clearLifecycleTimers: () => calls.push("cleared"),
+		});
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("input", { text: "/typo-or-removed", source: "interactive" });
+		expect(calls).toEqual(["cleared"]);
+		expect(getActiveCommand(state.lifecycle)).toBeNull();
+	});
+
+	it("calls clearLifecycleTimers on session rebuild", async () => {
+		const calls: string[] = [];
+		const state = freshState({
+			lifecycle: { phase: "running", command: "stale", continueCount: 0 },
+			clearLifecycleTimers: () => calls.push("cleared"),
+		});
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("session_start", {}, ctxWithEntries([cmdStart("a")]));
+		expect(calls).toEqual(["cleared"]);
+	});
+
+	it("does not call clearLifecycleTimers when it is not set", () => {
+		const state = freshState({
+			registry: registryOf(["mach10:push"]),
+			lifecycle: { phase: "dormant", command: "old" },
+		});
+		const { pi } = recordingPi();
+		// Should not throw when clearLifecycleTimers is undefined
+		recordCommandInvocation(pi, state, "mach10:push", "user", 0);
+		expect(getActiveCommand(state.lifecycle)).toBe("mach10:push");
 	});
 });

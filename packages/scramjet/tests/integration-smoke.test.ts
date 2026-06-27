@@ -448,7 +448,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 		await vi.advanceTimersByTimeAsync(0);
 	}
 
-	it("probe self-heal → dormant → interactive reply → running → complete", async () => {
+	it("probe self-heal → dormant → interactive reply stays dormant (issue 215: agent-controlled resumption)", async () => {
 		const cmd: CommandDef = {
 			name: "int:cmd",
 			filePath: "/fake/int:cmd.md",
@@ -478,22 +478,10 @@ describe("integration smoke — lifecycle event sequences", () => {
 		expect(state.lifecycle.phase).toBe("dormant");
 		expect(getActiveCommand(state.lifecycle)).toBe("int:cmd");
 
-		// User replies interactively → resumes to running
+		// User replies interactively → dormant stays dormant (no auto-resume)
 		await bag.emit("input", { text: "Use option B", source: "interactive" }, ctx);
-		expect(state.lifecycle.phase).toBe("running");
-
-		// New answer turn ends → fresh probe
-		await fireProbe(bag, ctx);
-		expect(state.lifecycle.phase).toBe("probing");
-
-		// Agent reports completed
-		const statusTool = findTool(bag, "report_scramjet_command_status");
-		await statusTool.execute("call-id", { status: "completed", summary: "done" });
-		expect(state.lifecycle.phase).toBe("reported");
-
-		// Probe turn ends → resolves to idle
-		await endProbeTurn(bag, ctx);
-		expect(state.lifecycle.phase).toBe("idle");
+		expect(state.lifecycle.phase).toBe("dormant");
+		expect(getActiveCommand(state.lifecycle)).toBe("int:cmd");
 	});
 
 	it("freetext parks at waiting → replay/resume → interactive reply → completed", async () => {

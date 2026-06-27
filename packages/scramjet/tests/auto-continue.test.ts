@@ -1628,11 +1628,11 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 		return { bag, ctxBag, callUserInput };
 	}
 
-	it("get_scramjet_user_input works after probe self-heals to idle and user replies (issue 128 fix)", async () => {
+	it("dormant user reply is a no-op; dormant command stays dormant (issue 215: agent-controlled resumption)", async () => {
 		const policy: NextStepPolicy = { mode: "open", candidates: [{ name: "b:next" }] };
 		const def = defWithPolicy("a:cmd", policy);
 		const state = runningState(def);
-		const { bag, ctxBag, callUserInput } = fullBootstrap(state);
+		const { bag, ctxBag } = fullBootstrap(state);
 
 		// Step 1: command is running, agent works and ends its turn.
 		expect(state.lifecycle.phase).toBe("running");
@@ -1645,22 +1645,17 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 		expect(state.lifecycle.phase).toBe("probing");
 
 		// Step 3: probe turn ends without a status report → self-heals to dormant
-		// (command stays associated for the later interactive reply).
+		// (command stays associated).
 		await bag.emit("agent_end", {}, ctxBag.ctx);
 		expect(state.lifecycle.phase).toBe("dormant");
 		expect(getActiveCommand(state.lifecycle)).toBe("a:cmd");
 
-		// Step 4: user replies to the clarifying question (non-slash, interactive).
+		// Step 4: user replies (non-slash, interactive). Under issue 215,
+		// dormant user-reply is a no-op — only the agent can resume via
+		// `continuing` after seeing the dormant notice.
 		await bag.emit("input", { text: "Yes, go with option 2", source: "interactive" });
-
-		// Fixed: phase re-arms to running so phase-gated tools work.
-		expect(state.lifecycle.phase).toBe("running");
-
-		// Step 5: agent calls get_scramjet_user_input → accepted (not out-of-phase).
-		// Use a mock UI ctx that auto-resolves to avoid blocking on TUI interaction.
-		const mockCtx = { ui: { custom: () => Promise.resolve("yes") } };
-		const result = await callUserInput({ type: "confirm", message: "Proceed with the plan?" }, mockCtx);
-		expect(result.details.error).not.toBe("out-of-phase");
+		expect(state.lifecycle.phase).toBe("dormant");
+		expect(getActiveCommand(state.lifecycle)).toBe("a:cmd");
 	});
 });
 
