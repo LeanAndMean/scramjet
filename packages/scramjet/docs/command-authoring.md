@@ -418,7 +418,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
 2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
    - Call `report_scramjet_command_status` with a status and stop the probe turn.
-   - Call `get_scramjet_user_input` if structured input is needed before continuing. For **confirm/select**, the tool blocks until the user responds and returns the answer in the same turn — continue command work immediately. The phase returns to `running` without consuming the `continuing` status budget, so Scramjet will send another probe after the resumed work ends. For **freetext**, the tool terminates the turn and parks the command at `waiting`; the user replies in the standard editor, and the command resumes on a new turn.
+   - Call `get_scramjet_user_input` if structured input is needed before continuing. For **confirm/select**, the tool blocks until the user responds and returns the answer in the same turn — continue command work immediately. The probe is re-armed without consuming the `continuing` budget, so Scramjet will send another probe after the resumed work ends. For **freetext**, the tool terminates the turn and parks the command; the user replies in the standard editor, and the command resumes on a new turn.
 
 ### Tool parameters
 
@@ -431,7 +431,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 ### Status values
 
-- **`continuing`**: The command has more work to do in the current session. This is non-terminating: the tool returns control to the agent, transitions the phase back to `running`, and is bounded by the consecutive-continue limit.
+- **`continuing`**: The command has more work to do in the current session. This is non-terminating: the tool returns control to the agent, re-arms the probe, and is bounded by the consecutive-continue limit.
 - **`completed`**: The command's requested work is done. `next_steps` may propose continuations.
 - **`blocked`**: The command cannot proceed (error, missing dependency, authorization issue).
 - **`incomplete`**: None of the above — stopped without clean completion, question, or blocker.
@@ -477,7 +477,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ### Don't
 
-- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is phase-gated and will return an error.
+- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is gated to accept terminal reports only when a probe is in flight, and will return an error otherwise.
 - Don't instruct subroutine commands to call `report_scramjet_command_status`. Only the top-level command reports status; subroutines return control to their caller.
 - Don't put user-facing content in `summary`. The agent's answer was already delivered in the answer turn. `summary` is metadata for Scramjet's internal routing.
 - Don't omit `reason` from `next_steps` entries. The harness rejects entries without a non-empty `reason`.
@@ -537,9 +537,9 @@ The `message` is displayed in the tool call row before/alongside the parked resu
 
 Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `waiting` so the user can resume with a normal reply or redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it always parks the command in `waiting` and ends the turn for a standard editor reply.
 
-### Phase gating
+### Lifecycle gating
 
-The tool is callable during the `running` and `probing` phases only. Outside an active command, it returns a helpful error without terminating the turn. During the `probing` phase, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the command transitions back to `running` without incrementing `continueCount` so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures leave the command in `probing` so the agent can still report `blocked` or `incomplete`. Freetext transitions directly to `waiting` from either phase.
+The tool is callable when an active command has a probe armed or in flight. Outside an active command, it returns a helpful error without terminating the turn. During a probe, confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the probe is cleared and the probe re-armed without incrementing `continueCount`, so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures during a probe leave it reportable so the agent can still report `blocked` or `incomplete`. Freetext parks the command from either state.
 
 ### Journaling
 
@@ -670,4 +670,4 @@ with <specific instructions for this command's reporting>.
 
 ### Diagnosing command behavior
 
-All lifecycle events (phase transitions, probe scheduling, dispatch decisions) are journaled as `scramjet:log` entries in the session JSONL. When a command doesn't chain as expected or a probe doesn't fire, query the session log to trace what happened. See `docs/logging.md` for the entry schema, `jq` query patterns, and a step-by-step diagnostic workflow.
+All lifecycle events (fact mutations, probe scheduling, dispatch decisions) are journaled as `scramjet:log` entries in the session JSONL. When a command doesn't chain as expected or a probe doesn't fire, query the session log to trace what happened. See `docs/logging.md` for the entry schema, `jq` query patterns, and a step-by-step diagnostic workflow.

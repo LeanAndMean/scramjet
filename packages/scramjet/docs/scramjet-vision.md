@@ -456,7 +456,7 @@ Probe-time freetext transitions `probing → waiting`, journals
 and resumes only when the user later replies normally.
 
 This keeps intra-command interactions within command execution while preserving
-the phase machine's turn-boundary lifecycle checks.
+the lifecycle's turn-boundary checks.
 
 ##### Auto-answer semantics
 
