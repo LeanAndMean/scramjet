@@ -34,7 +34,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 
 /**
  * Creates a lifecycle state for a given phase name, providing sensible defaults.
- * Maps phase-machine phase names to lifecycle facts.
+ * Maps phase names to lifecycle facts for test convenience.
  */
 export function lifecycleFor(
 	phase: "idle" | "dormant" | "running" | "probing" | "reported" | "waiting",

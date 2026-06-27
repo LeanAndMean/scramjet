@@ -122,7 +122,6 @@ export function cleanForNotify(text: string): string {
 }
 
 // Derive a phase-like label from lifecycle facts for log entries.
-// Temporary bridge — stage 4 replaces these with fact-native logging.
 function lp(lifecycle: LifecycleState): string {
 	if (lifecycle.activeCommand === null) return "idle";
 	if (lifecycle.lastReport !== null) return "reported";
@@ -130,6 +129,16 @@ function lp(lifecycle: LifecycleState): string {
 	if (lifecycle.probeArmed) return "running";
 	if (lifecycle.parkedForInput) return "waiting";
 	return "dormant";
+}
+
+// Extract stopReason from the last assistant message in an agent_end event.
+export function extractStopReason(event: { messages?: unknown[] }): string | undefined {
+	if (!Array.isArray(event.messages)) return undefined;
+	for (let i = event.messages.length - 1; i >= 0; i--) {
+		const msg = event.messages[i] as { role?: string; stopReason?: string } | undefined;
+		if (msg?.role === "assistant") return msg.stopReason;
+	}
+	return undefined;
 }
 
 export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
@@ -270,13 +279,22 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 		clearProbeWatchdog("probe-rescheduled");
 		const content = buildProbeMessage(policy, commandId, state.enabled);
+		const probeGeneration = state.lifecycleGeneration;
 		state.logger.lifecycle("status probe scheduled", {
 			phase: lp(state.lifecycle),
 			command: commandId,
-			detail: { policyMode: policy.mode, enabled: state.enabled },
+			detail: { policyMode: policy.mode, enabled: state.enabled, generation: probeGeneration },
 		});
 		probeTimer = setTimeout(() => {
 			probeTimer = null;
+			if (state.lifecycleGeneration !== probeGeneration || activeCommandName(state.lifecycle) !== commandId) {
+				state.logger.lifecycle("status probe timer stale", {
+					phase: lp(state.lifecycle),
+					command: commandId,
+					detail: { scheduledGeneration: probeGeneration, currentGeneration: state.lifecycleGeneration },
+				});
+				return;
+			}
 			state.logger.lifecycle("status probe timer fired", {
 				phase: lp(state.lifecycle),
 				command: commandId,
@@ -586,13 +604,22 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		sourceName: string,
 	) {
 		clearDispatchTimer("reschedule");
+		const dispatchGeneration = state.lifecycleGeneration;
 		state.logger.lifecycle("completed dispatch scheduled", {
 			phase: lp(state.lifecycle),
 			command: sourceName,
-			detail: { policyMode: policy.mode, status: status.status },
+			detail: { policyMode: policy.mode, status: status.status, generation: dispatchGeneration },
 		});
 		dispatchTimer = setTimeout(() => {
 			dispatchTimer = null;
+			if (state.lifecycleGeneration !== dispatchGeneration) {
+				state.logger.lifecycle("completed dispatch timer stale", {
+					phase: lp(state.lifecycle),
+					command: sourceName,
+					detail: { scheduledGeneration: dispatchGeneration, currentGeneration: state.lifecycleGeneration },
+				});
+				return;
+			}
 			state.logger.lifecycle("completed dispatch timer fired", {
 				phase: lp(state.lifecycle),
 				command: sourceName,
@@ -624,19 +651,51 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
-	pi.on("agent_end", async (_event, ctx) => {
+	pi.on("agent_end", async (event, ctx) => {
 		const activeName = activeCommandName(state.lifecycle);
 		const def = activeName ? state.registry.get(activeName) : undefined;
+		const stopReason = extractStopReason(event);
 		state.logger.lifecycle("agent_end observed", {
 			phase: lp(state.lifecycle),
 			...(activeName ? { command: activeName } : {}),
 			detail: {
+				stopReason,
 				hasPolicy: Boolean(def?.next),
 				probeScheduled: probeTimer !== null,
 				watchdogActive: probeWatchdog !== null,
 				dispatchScheduled: dispatchTimer !== null,
 			},
 		});
+
+		// Abort: user cancelled — enter dormant, clear all timers
+		if (stopReason === "aborted" && activeName) {
+			state.logger.lifecycle("agent_end abort", {
+				phase: lp(state.lifecycle),
+				command: activeName,
+			});
+			if (probeTimer) {
+				clearTimeout(probeTimer);
+				probeTimer = null;
+			}
+			clearProbeWatchdog("aborted");
+			clearDispatchTimer("aborted");
+			enterDormant(state, "aborted");
+			return;
+		}
+
+		// Error: if probe is in flight, self-heal to dormant.
+		// If probe is armed (work turn errored), leave armed for Pi retry safety.
+		if (stopReason === "error" && activeName) {
+			if (isProbeInFlight(state.lifecycle)) {
+				clearProbeWatchdog("probe-error");
+				enterDormant(state, "probe-error");
+				state.logger.warn("probe", "status probe turn errored; auto-continue paused", {
+					phase: lp(state.lifecycle),
+				});
+			}
+			// probeArmed left unchanged: if Pi retries and succeeds, next agent_end probes naturally
+			return;
+		}
 
 		if (activeName && !def) {
 			state.logger.lifecycle("agent_end skipped", {
@@ -713,8 +772,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				return;
 			}
 
-			// blocked / incomplete → clear for now (stage 4 changes to dormant)
-			clearActiveCommand(state, report.status);
+			// blocked / incomplete → dormant (command stays associated)
+			enterDormant(state, report.status);
 			routeNonCompleted(report, ctx);
 			return;
 		}

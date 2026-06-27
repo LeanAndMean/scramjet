@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanForNotify, NOTIFY_MAX, registerAutoContinue } from "../src/auto-continue.js";
+import { cleanForNotify, extractStopReason, NOTIFY_MAX, registerAutoContinue } from "../src/auto-continue.js";
 import { resetCache } from "../src/autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../src/command-status.js";
 import {
@@ -409,6 +409,170 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await vi.advanceTimersByTimeAsync(30_000);
 
 			expect(logMessages(bag.pi)).toEqual([]);
+		});
+	});
+
+	describe("stopReason handling", () => {
+		it("aborted enters dormant and clears all timers (command stays associated)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+			expect(state.lifecycleTimers!.isProbeScheduled()).toBe(false);
+			expect(state.lifecycleTimers!.isWatchdogActive()).toBe(false);
+			expect(state.lifecycleTimers!.isDispatchScheduled()).toBe(false);
+		});
+
+		it("aborted during probing clears probe and enters dormant", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, {
+				enabled: true,
+				lifecycle: lifecycleFor("probing", "a:cmd"),
+				registry: registryWith(target),
+			});
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+		});
+
+		it("aborted with no active command is a no-op", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, lifecycle: lifecycleFor("idle") });
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+		});
+
+		it("error during probing self-heals to dormant", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, {
+				enabled: true,
+				lifecycle: lifecycleFor("probing", "a:cmd"),
+				registry: registryWith(target),
+			});
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit(
+				"agent_end",
+				{ messages: [{ role: "assistant", stopReason: "error", errorMessage: "rate limit" }] },
+				ctxBag.ctx,
+			);
+
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+		});
+
+		it("error while probe armed leaves armed for retry safety", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag } = bootstrap(state);
+
+			// Running state has probeArmed=true
+			expect(state.lifecycle.probeArmed).toBe(true);
+
+			await bag.emit(
+				"agent_end",
+				{ messages: [{ role: "assistant", stopReason: "error", errorMessage: "500" }] },
+				ctxBag.ctx,
+			);
+
+			// probeArmed unchanged — if Pi retries and succeeds, next normal agent_end will probe
+			expect(state.lifecycle.probeArmed).toBe(true);
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+		});
+
+		it("error while dormant is a no-op", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, lifecycle: lifecycleFor("dormant", "a:cmd") });
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit(
+				"agent_end",
+				{ messages: [{ role: "assistant", stopReason: "error", errorMessage: "timeout" }] },
+				ctxBag.ctx,
+			);
+
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+		});
+
+		it("normal stopReason (stop) does not trigger abort/error paths", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag } = bootstrap(state);
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			// Normal probe fires as expected
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+			expect(bag.pi.sent).toHaveLength(1);
+		});
+	});
+
+	describe("generation guards", () => {
+		it("stale probe timer does not send when lifecycle generation changed", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag } = bootstrap(state);
+
+			// Schedule the probe
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] }, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+
+			// Simulate lifecycle change before timer fires (e.g. new command started)
+			state.lifecycleGeneration += 10;
+
+			await vi.advanceTimersByTimeAsync(0);
+
+			// Probe should NOT have sent
+			expect(bag.pi.sent).toHaveLength(0);
+		});
+
+		it("stale dispatch timer does not route when lifecycle generation changed", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const target = defWithPolicy("b:target", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			// Drive through to the completed report
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			await report({ status: "completed", summary: "done" });
+
+			// Reported agent_end schedules the dispatch timer
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+
+			// Simulate lifecycle change before dispatch timer fires
+			state.lifecycleGeneration += 10;
+
+			await vi.advanceTimersByTimeAsync(0);
+
+			// Dispatch should NOT have fired
+			expect(ctxBag.dispatched).toEqual([]);
 		});
 	});
 
@@ -984,7 +1148,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("blocked");
 			expect(ctxBag.notifications[0].message).toContain("gh auth missing");
-			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
 		});
 
 		it("incomplete is a quiet pause (no dispatch, no notification)", async () => {
@@ -997,7 +1162,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		});
 
 		it.each(["blocked", "incomplete"] as const)(
-			"%s resets to terminal idle and cannot be re-armed by a later reply",
+			"%s enters dormant (command stays associated) and does not re-arm on user reply",
 			async (status) => {
 				const state = nonCompletedState();
 				const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
@@ -1005,11 +1170,12 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 				await simulateTwoTurns(bag, ctxBag, report, { status, summary: "not done" });
 
-				expect(derivedPhase(state.lifecycle)).toBe("idle");
-				expect(activeCommandName(state.lifecycle)).toBeNull();
+				expect(derivedPhase(state.lifecycle)).toBe("dormant");
+				expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
 
+				// Dormant user reply is a no-op (harness never auto-resumes)
 				await bag.emit("input", { text: "unrelated follow-up", source: "interactive" }, ctxBag.ctx);
-				expect(derivedPhase(state.lifecycle)).toBe("idle");
+				expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			},
 		);
 	});
@@ -1887,7 +2053,7 @@ describe("multi-path probe integration", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
-		it("blocked warns without dispatching (no regression)", async () => {
+		it("blocked warns without dispatching and enters dormant", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
@@ -1900,10 +2066,11 @@ describe("multi-path probe integration", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("blocked");
-			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
 		});
 
-		it("incomplete pauses quietly (no regression)", async () => {
+		it("incomplete pauses quietly and enters dormant", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = fullBootstrap(state, { hasUI: false });
@@ -1915,7 +2082,8 @@ describe("multi-path probe integration", () => {
 
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications).toEqual([]);
-			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
 		});
 	});
 
@@ -2020,6 +2188,33 @@ describe("multi-path probe integration", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			expect(bag.pi.sent.length).toBe(sentAfterHeal);
 		});
+	});
+});
+
+describe("extractStopReason", () => {
+	it("returns stopReason from the last assistant message", () => {
+		expect(extractStopReason({ messages: [{ role: "assistant", stopReason: "aborted" }] })).toBe("aborted");
+	});
+
+	it("skips non-assistant messages", () => {
+		expect(
+			extractStopReason({
+				messages: [
+					{ role: "user", content: "hi" },
+					{ role: "assistant", stopReason: "error" },
+					{ role: "user", content: "ok" },
+				],
+			}),
+		).toBe("error");
+	});
+
+	it("returns undefined when no assistant message exists", () => {
+		expect(extractStopReason({ messages: [{ role: "user", content: "hi" }] })).toBeUndefined();
+	});
+
+	it("returns undefined for missing messages array", () => {
+		expect(extractStopReason({})).toBeUndefined();
+		expect(extractStopReason({ messages: "not-array" as any })).toBeUndefined();
 	});
 });
 
