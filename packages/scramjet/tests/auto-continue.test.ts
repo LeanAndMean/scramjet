@@ -36,7 +36,6 @@ function logMessages(pi: any): string[] {
 }
 
 // State as it stands when a top-level command's answer turn is in flight:
-// State as it stands when a top-level command's answer turn is in flight:
 // lifecycle is running with the command name. Any `registry` passed in `extra`
 // is merged with the command itself.
 function runningState(def: CommandDef, extra: Partial<ScramjetState> = {}): ScramjetState {

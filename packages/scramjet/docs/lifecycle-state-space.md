@@ -108,9 +108,9 @@ The `agent_end` handler in `auto-continue.ts` evaluates lifecycle facts in this 
 1. **Abort** (`stopReason === "aborted"`): clear all timers, enter dormant. Command stays associated but disarmed.
 2. **Error** (`stopReason === "error"`): leave armed/probing facts intact for Pi retry safety. If a probe turn errors, the existing generation- and command-guarded watchdog remains responsible for self-healing only when no retried report arrives.
 3. **Active command not in registry**: warn, clear active command, clear timers.
-4. **Probe due** (`isProbeDue`): begin probe and schedule deferred hidden probe message. Commands with no next-step policy probe identically — the probe message omits the `<scramjet-next-step>` block. After reporting `completed`, no-policy commands clear to idle without dispatch.
+4. **Probe due** (`isProbeDue`): begin probe and schedule deferred hidden probe message. Commands with no next-step policy probe identically — the probe message omits the `<scramjet-next-step>` block.
 5. **Probe in flight without report**: self-heal to dormant (probe turn ended without a status report).
-6. **Terminal report pending** (`hasTerminalReport`): route by status — completed dispatches next step, blocked/incomplete enter dormant.
+6. **Terminal report pending** (`hasTerminalReport`): route by status — completed dispatches next step (or clears to idle without dispatch when no policy exists), blocked/incomplete enter dormant.
 7. **Parked, dormant, or idle**: no-op.
 
 ## Timer and generation guards
