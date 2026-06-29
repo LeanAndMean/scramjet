@@ -63,7 +63,7 @@ class DiagramComponent implements Component {
 			let rendered: string | undefined;
 			let lastResult: string | undefined;
 			for (const tier of PADDING_TIERS) {
-				const result = renderMermaidASCII(this.source, { colorMode: "ansi256", ...tier });
+				const result = renderMermaidASCII(this.source, { colorMode: "none", ...tier });
 				lastResult = result;
 				if (maxLineWidth(result) <= width) {
 					rendered = result;

@@ -234,13 +234,13 @@ describe("DiagramComponent", () => {
 		tool = tools[0];
 	});
 
-	it("renders with colorMode ansi256", () => {
-		mockRenderMermaidASCII.mockReturnValue("colored output");
+	it("renders with colorMode none (no ANSI in TUI component)", () => {
+		mockRenderMermaidASCII.mockReturnValue("plain output");
 		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
 		component.render(120);
 		expect(mockRenderMermaidASCII).toHaveBeenCalledWith(
 			"graph LR; A-->B",
-			expect.objectContaining({ colorMode: "ansi256" }),
+			expect.objectContaining({ colorMode: "none" }),
 		);
 	});
 
@@ -261,7 +261,7 @@ describe("DiagramComponent", () => {
 		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
 		component.render(90);
 		expect(mockRenderMermaidASCII).toHaveBeenCalledTimes(2);
-		expect(mockRenderMermaidASCII.mock.calls[1][1]).toMatchObject({ colorMode: "ansi256", paddingX: 3 });
+		expect(mockRenderMermaidASCII.mock.calls[1][1]).toMatchObject({ colorMode: "none", paddingX: 3 });
 	});
 
 	it("falls back to tightest tier when all tiers exceed width", () => {
@@ -350,5 +350,30 @@ describe("integration with real library", () => {
 
 	it("throws on unsupported diagram type", () => {
 		expect(() => realRenderMermaidASCII("gantt\n  title Test", { colorMode: "none" })).toThrow();
+	});
+
+	it.fails("edge labels are not corrupted at junction points (openn bug)", () => {
+		// When a node has both a self-loop and an outgoing edge with the same label,
+		// and another node also feeds into the target, beautiful-mermaid duplicates
+		// the last character of the label at the junction point (e.g. "open" → "openn┬").
+		const source = [
+			"flowchart TD",
+			"    A[NodeA]",
+			"    B[NodeB]",
+			"    C[NodeC]",
+			"    A -->|open| B",
+			"    A -->|open| C",
+			"    B -->|open| B",
+			"    B -->|open| C",
+		].join("\n");
+		const result = realRenderMermaidASCII(source, {
+			colorMode: "none",
+			paddingX: 5,
+			paddingY: 3,
+			boxBorderPadding: 2,
+		});
+		for (const line of result.split("\n")) {
+			expect(line).not.toContain("openn");
+		}
 	});
 });
