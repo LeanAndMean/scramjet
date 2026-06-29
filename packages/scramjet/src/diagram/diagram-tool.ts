@@ -41,10 +41,10 @@ function classifyError(error: unknown): string {
 	return `Invalid Mermaid syntax: ${msg}`;
 }
 
-function maxLineWidth(text: string, colored: boolean): number {
+function maxLineWidth(text: string): number {
 	let max = 0;
 	for (const line of text.split("\n")) {
-		const w = colored ? visibleWidth(line) : line.length;
+		const w = visibleWidth(line);
 		if (w > max) max = w;
 	}
 	return max;
@@ -61,19 +61,20 @@ class DiagramComponent implements Component {
 	render(width: number): string[] {
 		try {
 			let rendered: string | undefined;
+			let lastResult: string | undefined;
 			for (const tier of PADDING_TIERS) {
 				const result = renderMermaidASCII(this.source, { colorMode: "ansi256", ...tier });
-				if (maxLineWidth(result, true) <= width) {
+				lastResult = result;
+				if (maxLineWidth(result) <= width) {
 					rendered = result;
 					break;
 				}
 			}
-			rendered ??= renderMermaidASCII(this.source, {
-				colorMode: "ansi256",
-				...PADDING_TIERS[PADDING_TIERS.length - 1],
-			});
+			rendered ??= lastResult!;
 			const lines: string[] = [];
-			if (this.title) lines.push(this.title, "");
+			if (this.title) {
+				lines.push(visibleWidth(this.title) > width ? truncateToWidth(this.title, width) : this.title, "");
+			}
 			for (const line of rendered.split("\n")) {
 				lines.push(visibleWidth(line) > width ? truncateToWidth(line, width) : line);
 			}
@@ -106,36 +107,34 @@ export function registerDiagramTool(pi: ExtensionAPI) {
 			const source = params.source as string;
 			const title = params.title as string | undefined;
 
+			let rendered: string | undefined;
+			let lastResult: string | undefined;
+			let usedTier = PADDING_TIERS.length - 1;
 			try {
-				let rendered: string | undefined;
-				let usedTier = PADDING_TIERS.length - 1;
 				for (let i = 0; i < PADDING_TIERS.length; i++) {
 					const result = renderMermaidASCII(source, { colorMode: "none", ...PADDING_TIERS[i] });
-					if (maxLineWidth(result, false) <= MAX_WIDTH) {
+					lastResult = result;
+					if (maxLineWidth(result) <= MAX_WIDTH) {
 						rendered = result;
 						usedTier = i;
 						break;
 					}
 				}
-				if (!rendered) {
-					const tightest = renderMermaidASCII(source, {
-						colorMode: "none",
-						...PADDING_TIERS[PADDING_TIERS.length - 1],
-					});
-					const actualWidth = maxLineWidth(tightest, false);
-					throw new Error(
-						`Diagram too wide for terminal display (${actualWidth} columns needed, max ${MAX_WIDTH}). Simplify the diagram: reduce nodes, shorten labels, or split into multiple diagrams.`,
-					);
-				}
-
-				const text = title ? `${title}\n\n${rendered}` : rendered;
-				return {
-					content: [{ type: "text" as const, text }],
-					details: { source, title, tier: usedTier } as DiagramDetails | undefined,
-				};
 			} catch (e) {
 				throw new Error(classifyError(e));
 			}
+			if (!rendered) {
+				const actualWidth = maxLineWidth(lastResult!);
+				throw new Error(
+					`Diagram too wide for terminal display (${actualWidth} columns needed, max ${MAX_WIDTH}). Simplify the diagram: reduce nodes, shorten labels, or split into multiple diagrams.`,
+				);
+			}
+
+			const text = title ? `${title}\n\n${rendered}` : rendered;
+			return {
+				content: [{ type: "text" as const, text }],
+				details: { source, title, tier: usedTier } as DiagramDetails | undefined,
+			};
 		},
 		renderResult(result) {
 			const details = result.details as DiagramDetails | undefined;

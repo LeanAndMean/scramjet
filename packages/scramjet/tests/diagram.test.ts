@@ -98,6 +98,12 @@ describe("execute", () => {
 		expect(result.content[0].text).toContain("x".repeat(110));
 	});
 
+	it("succeeds at exactly MAX_WIDTH (120 columns)", async () => {
+		mockRenderMermaidASCII.mockReturnValue(narrowOutput(120));
+		const result = await tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined);
+		expect(result.content[0].text).toContain("x".repeat(120));
+	});
+
 	it("rejects when all tiers exceed MAX_WIDTH", async () => {
 		mockRenderMermaidASCII.mockReturnValue(narrowOutput(150));
 		await expect(
@@ -110,6 +116,16 @@ describe("execute", () => {
 		await expect(
 			tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined),
 		).rejects.toThrow(/simplify/i);
+	});
+
+	it("width rejection error is NOT misclassified as syntax error (F1)", async () => {
+		mockRenderMermaidASCII.mockReturnValue(narrowOutput(150));
+		await expect(
+			tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined),
+		).rejects.toThrow(/too wide/i);
+		await expect(
+			tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined),
+		).rejects.not.toThrow(/invalid mermaid syntax/i);
 	});
 
 	it("classifies unsupported diagram type errors", async () => {
@@ -268,6 +284,18 @@ describe("DiagramComponent", () => {
 		expect(lines[0]).toBe("Architecture");
 		expect(lines[1]).toBe("");
 		expect(lines[2]).toBe("diagram");
+	});
+
+	it("truncates title that exceeds render width (F2)", () => {
+		mockRenderMermaidASCII.mockReturnValue("diagram");
+		const longTitle = "A".repeat(200);
+		const component = tool.renderResult({
+			details: { source: "graph LR; A-->B", title: longTitle, tier: 0 },
+			content: [],
+		});
+		const lines = component.render(80);
+		expect(visibleWidth(lines[0])).toBeLessThanOrEqual(80);
+		expect(lines[1]).toBe("");
 	});
 
 	it("returns error message on render failure without throwing", () => {
