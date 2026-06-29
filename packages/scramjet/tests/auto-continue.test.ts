@@ -2105,7 +2105,7 @@ describe("multi-path probe integration", () => {
 		it("get_scramjet_user_input works during the first work turn before any probe fires", async () => {
 			const def = defWithPolicy("terminus:cmd", undefined);
 			const state = runningState(def, { enabled: true });
-			const { bag, ctxBag, callUserInput } = fullBootstrap(state, { hasUI: true });
+			const { callUserInput } = fullBootstrap(state, { hasUI: true });
 
 			// Command is running, probeArmed — first work turn, no agent_end yet.
 			expect(derivedPhase(state.lifecycle)).toBe("running");
