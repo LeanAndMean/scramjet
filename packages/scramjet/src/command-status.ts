@@ -5,18 +5,23 @@
  * command, supplied in a *separate* turn from the command's user-facing answer
  * (issue 84, two-phase protocol).
  *
- * Four statuses, three execution paths:
+ * Four statuses, four execution paths:
  * - "continuing" during a probe: non-terminating. Increments continueCount,
  *   re-arms the probe, returns without terminate so the agent keeps working.
  * - "continuing" while dormant: non-terminating. Resets continueCount, re-arms
- *   the probe, returns without terminate. This is the only dormant resume path.
- * - "completed" / "blocked" / "incomplete": terminating. Accepted only while
- *   probe is in flight. Stores the report in lastReport and returns
- *   terminate: true. auto-continue.ts reads the stored status on the probe
- *   turn's agent_end and validates/dispatches/pauses.
+ *   the probe, returns without terminate. This is the only dormant resume path
+ *   for commands that need to do more work.
+ * - "completed" / "blocked" / "incomplete" during a probe: terminating. Stores
+ *   the report in lastReport and returns terminate: true.
+ * - "completed" / "blocked" / "incomplete" while dormant: terminating. Same
+ *   storage and terminate behavior. Enables dormant commands to report
+ *   completion directly without an extra continuing → probe cycle.
+ *
+ * auto-continue.ts reads the stored status on the subsequent agent_end and
+ * validates/dispatches/pauses.
  *
  * The dormant notice is a volatile system prompt section that tells the agent
- * about a dormant command and how to resume it (via `continuing`).
+ * about a dormant command and how to resume or complete it.
  */
 
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
@@ -58,11 +63,6 @@ export const COMMAND_STATUS_PROBE_TYPE = "scramjet-command-status";
 const NO_ACTIVE_COMMAND_ERROR =
 	"report_scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
 	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
-
-const TERMINAL_FROM_DORMANT_ERROR =
-	"Terminal status reports (completed/blocked/incomplete) are only accepted during a Scramjet status probe. " +
-	'The command is currently dormant. To resume work, call this tool with status: "continuing" first — ' +
-	"that re-arms the probe cycle, and you can report a terminal status on the next probe.";
 
 const CONTINUE_LIMIT_ERROR =
 	`You have reported "continuing" ${CONTINUE_LIMIT} times without completing the command. ` +
@@ -114,9 +114,11 @@ export function buildDormantCommandNotice(commandName: string): string {
 	return (
 		`The command \`${commandName}\` is dormant — it started but is not currently active.\n` +
 		"Ordinary user replies do NOT auto-resume a dormant command.\n" +
-		'To resume work on it, call `report_scramjet_command_status` with `status: "continuing"`.\n' +
-		"Terminal statuses (completed/blocked/incomplete) are only accepted during a Scramjet status probe — " +
-		"call `continuing` first to re-enter the probe cycle, then report your terminal status on the next probe."
+		"You have two options:\n" +
+		'- To resume work, call `report_scramjet_command_status` with `status: "continuing"`.\n' +
+		"- If the work is already done, report a terminal status directly " +
+		'(`status: "completed"`, `"blocked"`, or `"incomplete"`).\n' +
+		"Both paths are accepted from dormant state."
 	);
 }
 
@@ -258,19 +260,8 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				};
 			}
 
-			// Terminal status path — only accepted during probe in flight
+			// Terminal status path — accepted during probe or from dormant
 			if (!canAcceptTerminalReport(state.lifecycle)) {
-				if (isDormant(state.lifecycle)) {
-					state.logger.lifecycle("status report rejected", {
-						command,
-						detail: { reason: "terminal-from-dormant", status: params.status },
-					});
-					const details: CommandStatusDetails = { error: "terminal-from-dormant" };
-					return {
-						content: [{ type: "text", text: TERMINAL_FROM_DORMANT_ERROR }],
-						details,
-					};
-				}
 				state.logger.lifecycle("status report rejected", {
 					command,
 					detail: { reason: "out-of-phase", status: params.status },

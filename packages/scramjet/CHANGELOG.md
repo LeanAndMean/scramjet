@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.34.0 — Dormant commands can report terminal status directly
+
+Dormant commands can now report `completed`, `blocked`, or `incomplete` directly via `report_scramjet_command_status` without first calling `continuing` to re-enter the probe cycle. This enables commands whose work was already done (e.g., after resume or recovery) to complete cleanly and surface their declared next step without an unnecessary extra work cycle ([#221](https://github.com/LeanAndMean/scramjet/issues/221)).
+
+### Changed
+
+- `canAcceptTerminalReport` now returns `true` for dormant state in addition to `probeInFlight`
+- `acceptTerminalReport` precondition widened from `probeInFlight` to `probeInFlight || isDormant`
+- `buildDormantCommandNotice` updated to present both resume (`continuing`) and direct terminal report paths
+- Removed `TERMINAL_FROM_DORMANT_ERROR` constant and the dormant-specific rejection branch in `command-status.ts`
+- File-level docstring updated from "three execution paths" to "four execution paths"
+- Updated `lifecycle-state-space.md`, `command-authoring.md`, and `CLAUDE.md` to reflect the widened gate
+
 ## 0.33.2 — Test coverage for multi-turn no-policy commands with get_scramjet_user_input
 
 Adds tests covering the full lifecycle of `get_scramjet_user_input` in multi-turn no-policy commands: callable during the first work turn, correctly rejected after probe self-heals to dormant, correctly rejected after reporting blocked, and callable again after dormant → continuing resumes ([#219](https://github.com/LeanAndMean/scramjet/issues/219)).

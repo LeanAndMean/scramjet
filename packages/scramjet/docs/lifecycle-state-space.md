@@ -68,7 +68,7 @@ For logging and diagnostics, a phase label is derived from facts. This is a logg
 | `isProbeDue(lifecycle)` | Command associated, `probeArmed`, not parked |
 | `isProbeInFlight(lifecycle)` | Command associated and `probeInFlight` |
 | `hasTerminalReport(lifecycle)` | Command associated and `lastReport !== null` |
-| `canAcceptTerminalReport(lifecycle)` | `probeInFlight` (terminal reports require a probe in flight) |
+| `canAcceptTerminalReport(lifecycle)` | `probeInFlight` or dormant (terminal reports accepted during probe or from dormant) |
 | `canAcceptDormantContinuing(lifecycle)` | `isDormant(lifecycle)` |
 
 ## Mutation helpers
@@ -84,7 +84,7 @@ Every mutation validates post-conditions, bumps `lifecycleGeneration`, and logs 
 | `beginProbe(holder, reason)` | Active command, `probeArmed` | Clears `probeArmed`, sets `probeInFlight` |
 | `acceptProbeContinuing(holder)` | `probeInFlight`, under continue limit | Clears `probeInFlight`, arms probe, increments counter |
 | `acceptDormantContinuing(holder)` | Dormant | Arms probe, resets counter to 0 |
-| `acceptTerminalReport(holder, payload)` | `probeInFlight`, non-continuing status | Clears `probeInFlight`, stores report, resets counter |
+| `acceptTerminalReport(holder, payload)` | `probeInFlight` or dormant, non-continuing status | Clears `probeInFlight`, stores report, resets counter |
 | `parkForFreetext(holder)` | Active command | Sets `parkedForInput`, clears all other mode flags and counter |
 | `resumeFromParkedInput(holder)` | `parkedForInput` | Clears `parkedForInput`, arms probe, resets counter |
 | `resumeAfterProbeInput(holder)` | `probeInFlight` | Clears `probeInFlight`, arms probe, preserves counter |

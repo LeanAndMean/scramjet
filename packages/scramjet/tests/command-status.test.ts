@@ -92,14 +92,30 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(result.details.error).toBe("out-of-phase");
 	});
 
-	it("rejects terminal status from dormant with guidance to call continuing first", async () => {
-		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") }));
+	it("accepts terminal status from dormant", async () => {
+		const { state, pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") }));
 		const result = await execute({ status: "completed", summary: "done" });
 
-		expect(result.terminate).toBeUndefined();
-		expect(result.details.error).toBe("terminal-from-dormant");
-		expect(String(result.content[0].text)).toContain("continuing");
-		expect(String(result.content[0].text)).toContain("dormant");
+		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.lastReport).toMatchObject({ status: "completed", summary: "done" });
+		const statusEntries = pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE);
+		expect(statusEntries).toHaveLength(1);
+	});
+
+	it("accepts blocked from dormant", async () => {
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") }));
+		const result = await execute({ status: "blocked", summary: "missing dep" });
+
+		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.lastReport).toMatchObject({ status: "blocked", summary: "missing dep" });
+	});
+
+	it("accepts incomplete from dormant", async () => {
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") }));
+		const result = await execute({ status: "incomplete", summary: "stopped" });
+
+		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.lastReport).toMatchObject({ status: "incomplete", summary: "stopped" });
 	});
 
 	it("records the status, sets lastReport, and terminates when probe is in flight", async () => {
@@ -393,9 +409,10 @@ describe("buildDormantCommandNotice", () => {
 		expect(notice).toContain("continuing");
 	});
 
-	it("explains terminal statuses require a probe", () => {
+	it("explains both paths are accepted from dormant", () => {
 		const notice = buildDormantCommandNotice("test:cmd");
-		expect(notice).toContain("status probe");
+		expect(notice).toContain("terminal status directly");
+		expect(notice).toContain("Both paths are accepted");
 	});
 });
 

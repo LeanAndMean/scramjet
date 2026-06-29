@@ -188,10 +188,11 @@ describe("query helpers", () => {
 		);
 	});
 
-	it("canAcceptTerminalReport requires probeInFlight", () => {
+	it("canAcceptTerminalReport requires probeInFlight or dormant", () => {
 		expect(canAcceptTerminalReport(createLifecycle())).toBe(false);
 		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd", probeInFlight: true })).toBe(true);
 		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd", probeArmed: true })).toBe(false);
+		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd" })).toBe(true);
 	});
 
 	it("canAcceptDormantContinuing requires dormant", () => {
@@ -398,9 +399,16 @@ describe("acceptTerminalReport", () => {
 		fails(acceptTerminalReport(h, { status: "continuing" as any, summary: "x" }), "not a terminal");
 	});
 
-	it("rejects when no probe in flight", () => {
+	it("rejects from non-qualifying state", () => {
 		const h = freshLifecycleHolder({ activeCommand: "cmd", probeArmed: true });
-		fails(acceptTerminalReport(h, completedPayload), "no probe in flight");
+		fails(acceptTerminalReport(h, completedPayload), "not probing or dormant");
+	});
+
+	it("accepts from dormant state", () => {
+		const h = freshLifecycleHolder({ activeCommand: "cmd" });
+		ok(acceptTerminalReport(h, completedPayload));
+		expect(h.lifecycle.lastReport).toMatchObject({ status: "completed", summary: "done" });
+		expect(h.lifecycle.continueCount).toBe(0);
 	});
 });
 

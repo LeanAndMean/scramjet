@@ -436,6 +436,10 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 - **`blocked`**: The command cannot proceed (error, missing dependency, authorization issue).
 - **`incomplete`**: None of the above — stopped without clean completion, question, or blocker.
 
+### Dormant terminal reports
+
+A dormant command (one that started but has no active probe or parked input) can report a terminal status (`completed`, `blocked`, or `incomplete`) directly, without first calling `continuing` to re-enter the probe cycle. This enables a command whose work was already done (e.g., the agent resolved the task outside the probe flow) to complete cleanly and surface its declared next step. The report flows through the same `routeCompleted` dispatch path as probe-origin reports.
+
 ### Instructing the agent in command prose
 
 The command body must include explicit instructions for how to call `report_scramjet_command_status`. The instructions should specify:
@@ -477,7 +481,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ### Don't
 
-- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is gated to accept terminal reports only when a probe is in flight, and will return an error otherwise.
+- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is gated to accept terminal reports only when a probe is in flight or the command is dormant, and will return an error otherwise.
 - Don't instruct subroutine commands to call `report_scramjet_command_status`. Only the top-level command reports status; subroutines return control to their caller.
 - Don't put user-facing content in `summary`. The agent's answer was already delivered in the answer turn. `summary` is metadata for Scramjet's internal routing.
 - Don't omit `reason` from `next_steps` entries. The harness rejects entries without a non-empty `reason`.
