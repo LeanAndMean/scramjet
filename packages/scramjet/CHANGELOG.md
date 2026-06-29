@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.35.0 — Redesign draw_diagram for text-based terminal output
+
+Replaced the PNG-based diagram rendering pipeline (which required external `dot`/`mmdc`/`plantuml` CLI tools) with text-based Unicode rendering via `beautiful-mermaid`. Diagrams now render as box-drawing characters that display correctly in any terminal, with no external dependencies required ([#207](https://github.com/LeanAndMean/scramjet/issues/207)).
+
+### Changed
+
+- `draw_diagram` tool accepts Mermaid syntax only (DOT and PlantUML support removed — never worked reliably due to CLI dependency requirement)
+- Diagrams render as Unicode text instead of PNG images — works in all terminals, not just Kitty/iTerm2
+- Progressive padding compaction: tries 3 tiers (spacious → compact → tight) before rejecting diagrams too wide for terminal display
+- Custom `DiagramComponent` for TUI display with ANSI color and per-line truncation (no word-wrap of box-drawing characters)
+- Tool always registers unconditionally — no CLI detection gate since rendering is a bundled npm dependency
+- `format` parameter removed; `source` (required) and `title` (optional) are the only parameters
+
+### Added
+
+- `beautiful-mermaid` dependency for text-based Mermaid rendering
+- Error classification: unsupported diagram types get a clear message listing supported types; parse errors forwarded with detail
+- Comprehensive test suite (`tests/diagram.test.ts`) covering registration, progressive compaction, error classification, DiagramComponent behavior, and integration with real library
+
+### Removed
+
+- `renderers.ts` (external CLI subprocess rendering)
+- External CLI tool dependencies (`dot`, `mmdc`, `plantuml`)
+- PNG/image output and Kitty/iTerm2 image protocol support
+
 ## 0.34.1 — Allow get_scramjet_user_input in any lifecycle phase
 
 `get_scramjet_user_input` is no longer gated on active command work. The tool now works in all lifecycle phases (idle, dormant, waiting, running, probing) except "reported" (when a terminal status report is pending dispatch). When no command is active, the tool functions as a pure UI interaction with no lifecycle side effects. Existing lifecycle behaviors (probe watchdog suspension, parking, dormant transitions on cancel) are preserved unchanged during active command work ([#223](https://github.com/LeanAndMean/scramjet/issues/223)).
