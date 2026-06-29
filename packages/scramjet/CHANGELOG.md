@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.33.2 — Test coverage for multi-turn no-policy commands with get_scramjet_user_input
+
+Adds tests covering the full lifecycle of `get_scramjet_user_input` in multi-turn no-policy commands: callable during the first work turn, correctly rejected after probe self-heals to dormant, correctly rejected after reporting blocked, and callable again after dormant → continuing resumes ([#219](https://github.com/LeanAndMean/scramjet/issues/219)).
+
+### Added
+
+- Test: `get_scramjet_user_input` succeeds during first work turn of a no-policy command (probeArmed=true)
+- Test: `get_scramjet_user_input` rejected after probe self-heals to dormant
+- Test: `get_scramjet_user_input` rejected after reporting blocked (dormant state)
+- Test: `get_scramjet_user_input` succeeds after dormant → continuing re-arms the probe
+
 ## 0.33.1 — No-policy commands retain lifecycle for full execution
 
 Commands without a `next:` policy (like `mach12:pr-merge`) now go through the normal probe flow instead of being auto-completed on the first `agent_end`. The probe message omits the `<scramjet-next-step>` block and instructs the agent to omit `next_steps` when reporting `completed`. After completion, the lifecycle clears to idle with no dispatch. This fixes multi-turn interactions, `get_scramjet_user_input`, and dormant resume for terminus commands ([#217](https://github.com/LeanAndMean/scramjet/issues/217), [#155](https://github.com/LeanAndMean/scramjet/issues/155)).
