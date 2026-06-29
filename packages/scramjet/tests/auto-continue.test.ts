@@ -2101,6 +2101,85 @@ describe("multi-path probe integration", () => {
 		});
 	});
 
+	describe("no-policy multi-turn get_scramjet_user_input (pr-merge scenario)", () => {
+		it("get_scramjet_user_input works during the first work turn before any probe fires", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, callUserInput } = fullBootstrap(state, { hasUI: true });
+
+			// Command is running, probeArmed — first work turn, no agent_end yet.
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+
+			// Agent calls get_scramjet_user_input during the first work turn.
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			const result = await callUserInput({ type: "confirm", message: "Create release?" }, autoCtx);
+			expect(result.details.error).toBeUndefined();
+			expect(result.details.confirmed).toBe(true);
+		});
+
+		it("get_scramjet_user_input fails after probe self-heals to dormant (no continuing)", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, callUserInput } = fullBootstrap(state, { hasUI: true });
+
+			// First work turn ends → probe fires.
+			await fireProbe(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+
+			// Probe turn ends without a report → self-heals to dormant.
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+
+			// User sends a follow-up message, agent tries get_scramjet_user_input.
+			// This FAILS because dormant has no probeArmed/probeInFlight.
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			const result = await callUserInput({ type: "confirm", message: "Create release?" }, autoCtx);
+			expect(result.details.error).toBe("out-of-phase");
+		});
+
+		it("get_scramjet_user_input fails after reporting blocked (dormant)", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: true });
+
+			// First work turn ends → probe fires.
+			await fireProbe(bag, ctxBag);
+
+			// Agent reports blocked during probe → dormant.
+			await report({ status: "blocked", summary: "CI failing" });
+			await endProbeTurn(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+
+			// User says "continue anyway", agent tries get_scramjet_user_input.
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			const result = await callUserInput({ type: "confirm", message: "Create release?" }, autoCtx);
+			expect(result.details.error).toBe("out-of-phase");
+		});
+
+		it("get_scramjet_user_input works after dormant → continuing resumes the command", async () => {
+			const def = defWithPolicy("terminus:cmd", undefined);
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: true });
+
+			// First work turn ends → probe → blocked → dormant.
+			await fireProbe(bag, ctxBag);
+			await report({ status: "blocked", summary: "CI failing" });
+			await endProbeTurn(bag, ctxBag);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+
+			// Agent resumes via continuing.
+			const contResult = await report({ status: "continuing", summary: "user said continue" });
+			expect(contResult.details.status).toBe("continuing");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+
+			// NOW get_scramjet_user_input should work (probeArmed is true).
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			const result = await callUserInput({ type: "confirm", message: "Create release?" }, autoCtx);
+			expect(result.details.error).toBeUndefined();
+			expect(result.details.confirmed).toBe(true);
+		});
+	});
+
 	describe("continue loop bound", () => {
 		it("3 consecutive continues then 4th returns limit error without terminating", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
