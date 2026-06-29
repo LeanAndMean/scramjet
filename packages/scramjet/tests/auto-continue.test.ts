@@ -2145,7 +2145,7 @@ describe("multi-path probe integration", () => {
 			expect(result.details.confirmed).toBe(true);
 		});
 
-		it("get_scramjet_user_input fails after probe self-heals to dormant (no continuing)", async () => {
+		it("get_scramjet_user_input succeeds after probe self-heals to dormant", async () => {
 			const def = defWithPolicy("terminus:cmd", undefined);
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, callUserInput } = fullBootstrap(state, { hasUI: true });
@@ -2159,13 +2159,14 @@ describe("multi-path probe integration", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 
 			// User sends a follow-up message, agent tries get_scramjet_user_input.
-			// This FAILS because dormant has no probeArmed/probeInFlight.
+			// Now succeeds since the gate is removed.
 			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
 			const result = await callUserInput({ type: "confirm", message: "Create release?" }, autoCtx);
-			expect(result.details.error).toBe("out-of-phase");
+			expect(result.details.error).toBeUndefined();
+			expect(result.details.confirmed).toBe(true);
 		});
 
-		it("get_scramjet_user_input fails after reporting blocked (dormant)", async () => {
+		it("get_scramjet_user_input succeeds after reporting blocked (dormant)", async () => {
 			const def = defWithPolicy("terminus:cmd", undefined);
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: true });
@@ -2181,7 +2182,8 @@ describe("multi-path probe integration", () => {
 			// User says "continue anyway", agent tries get_scramjet_user_input.
 			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
 			const result = await callUserInput({ type: "confirm", message: "Create release?" }, autoCtx);
-			expect(result.details.error).toBe("out-of-phase");
+			expect(result.details.error).toBeUndefined();
+			expect(result.details.confirmed).toBe(true);
 		});
 
 		it("get_scramjet_user_input works after dormant → continuing resumes the command", async () => {
@@ -2299,17 +2301,34 @@ describe("multi-path probe integration", () => {
 			]);
 		});
 
-		it("user-input is rejected outside probing/running phase", async () => {
+		it("user-input succeeds in idle phase", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = freshState({
 				enabled: true,
 				registry: registryWith(def),
-				lifecycle: { phase: "idle" },
+				lifecycle: lifecycleFor("idle"),
 			});
-			const { callUserInput } = fullBootstrap(state);
+			const { callUserInput } = fullBootstrap(state, { hasUI: true });
 
-			const result = await callUserInput({ type: "confirm", message: "Should I?" });
-			expect(result.details.error).toBe("out-of-phase");
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			const result = await callUserInput({ type: "confirm", message: "Should I?" }, autoCtx);
+			expect(result.details.error).toBeUndefined();
+			expect(result.details.confirmed).toBe(true);
+		});
+
+		it("user-input is rejected when a terminal report is pending (reported phase)", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report, callUserInput } = fullBootstrap(state, { hasUI: true });
+
+			await fireProbe(bag, ctxBag);
+			await report({ status: "completed", summary: "done" });
+			expect(derivedPhase(state.lifecycle)).toBe("reported");
+
+			const autoCtx = { ui: { custom: () => Promise.resolve("yes") } };
+			const result = await callUserInput({ type: "confirm", message: "Should I?" }, autoCtx);
+			expect(result.details.error).toBe("report-pending");
+			expect(state.lifecycle.lastReport).not.toBeNull();
 		});
 	});
 
