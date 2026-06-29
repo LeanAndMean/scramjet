@@ -183,7 +183,7 @@ next:
 
 ### No `next` block
 
-When a command declares no `next` block, Scramjet does nothing after completion. The command is a terminus.
+When a command declares no `next` block, Scramjet still probes for completion status. The agent reports `completed` via `report_scramjet_command_status` (omitting `next_steps`) and the lifecycle clears to idle. No chaining occurs. The command retains its lifecycle association across multiple turns — `get_scramjet_user_input` and multi-turn tracking work normally until completion is reported. The command is a terminus: it ends the chain.
 
 ```yaml
 ---
