@@ -138,7 +138,7 @@ Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = 
 - `history.ts`: owns command-start journaling, replay reconstruction, interactive reply resume, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns `agent_end` decision tree, probe scheduling, timer management, status routing, selector/dispatch timers, and terminal resolution.
 - `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and status journaling.
-- `user-input.ts`: owns structured input gating and parking/resuming behavior.
+- `user-input.ts`: owns structured input parking/resuming behavior and guards against interaction during pending report dispatch.
 
 ## Runtime diagnosis
 

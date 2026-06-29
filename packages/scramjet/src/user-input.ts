@@ -5,7 +5,7 @@ import { USER_INPUT_PARKED_TYPE } from "./history.js";
 import {
 	activeCommandName,
 	enterDormant,
-	isProbeDue,
+	hasTerminalReport,
 	isProbeInFlight,
 	parkForFreetext,
 	resumeAfterProbeInput,
@@ -14,10 +14,6 @@ import { MultiLineSelectList } from "./multi-line-select.js";
 import type { ScramjetState } from "./types.js";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
-
-const OUT_OF_PHASE_ERROR =
-	"get_scramjet_user_input is not available right now. " +
-	"This tool can only be called during active command work (probe armed or probe in flight).";
 
 const NON_TUI_ERROR =
 	"get_scramjet_user_input requires a TUI environment. " +
@@ -68,18 +64,12 @@ type UserInputOption = Static<typeof USER_INPUT_OPTION_SCHEMA>;
 const _schemaMatchesParams = (params: Static<typeof USER_INPUT_SCHEMA>): UserInputParams => params;
 const _paramsMatchSchema = (params: UserInputParams): Static<typeof USER_INPUT_SCHEMA> => params;
 
-// Gate: tool is available when an active command has work in progress
-// (probe armed = working turn, probe in flight = status-check turn).
-function isToolAvailable(state: ScramjetState): boolean {
-	return isProbeDue(state.lifecycle) || isProbeInFlight(state.lifecycle);
-}
-
 export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
 		name: "get_scramjet_user_input",
 		label: "Get Scramjet User Input",
 		description:
-			"Request structured input from the user during command execution. " +
+			"Request structured input from the user. " +
 			"Supports confirm (yes/no), select (pick from options), and freetext (open-ended input). " +
 			"Confirm and select block until the user responds and return their answer as the tool result; " +
 			"freetext terminates the turn so the user replies in the standard editor. " +
@@ -99,13 +89,15 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			return renderUserInputResult(result, theme, context.args as Partial<UserInputParams> | null | undefined);
 		},
 		async execute(_toolCallId, params, _resource, _read, ctx) {
-			if (!isToolAvailable(state)) {
-				state.logger.warn("input", "get_scramjet_user_input called outside active command work; rejected", {
-					activeCommand: activeCommandName(state.lifecycle),
-				});
+			if (hasTerminalReport(state.lifecycle)) {
 				return {
-					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
-					details: { error: "out-of-phase", phase: "unavailable" },
+					content: [
+						{
+							type: "text",
+							text: "A command status report is pending dispatch. Please wait for it to complete before requesting user input.",
+						},
+					],
+					details: { error: "report-pending" },
 				};
 			}
 

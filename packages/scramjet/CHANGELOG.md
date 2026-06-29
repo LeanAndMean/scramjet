@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.34.1 — Allow get_scramjet_user_input in any lifecycle phase
+
+`get_scramjet_user_input` is no longer gated on active command work. The tool now works in all lifecycle phases (idle, dormant, waiting, running, probing) except "reported" (when a terminal status report is pending dispatch). When no command is active, the tool functions as a pure UI interaction with no lifecycle side effects. Existing lifecycle behaviors (probe watchdog suspension, parking, dormant transitions on cancel) are preserved unchanged during active command work ([#223](https://github.com/LeanAndMean/scramjet/issues/223)).
+
 ## 0.34.0 — Dormant commands can report terminal status directly
 
 Dormant commands can now report `completed`, `blocked`, or `incomplete` directly via `report_scramjet_command_status` without first calling `continuing` to re-enter the probe cycle. This enables commands whose work was already done (e.g., after resume or recovery) to complete cleanly and surface their declared next step without an unnecessary extra work cycle ([#221](https://github.com/LeanAndMean/scramjet/issues/221)).
