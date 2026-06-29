@@ -680,6 +680,44 @@ describe("registerUserInputTool — idle phase behavior", () => {
 	});
 });
 
+describe("registerUserInputTool — dormant phase behavior", () => {
+	it("confirm cancel when dormant: transitions to dormant idempotently", async () => {
+		const state = freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") });
+		const { execute } = toolFor(state);
+		const result = await execute({ type: "confirm", message: "Proceed?" }, mockUICtx(null));
+
+		expect(result.terminate).toBe(true);
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.activeCommand).toBe("mach12:test");
+	});
+
+	it("select cancel when dormant: transitions to dormant idempotently", async () => {
+		const state = freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") });
+		const { execute } = toolFor(state);
+		const result = await execute(
+			{ type: "select", message: "Pick", options: [{ value: "a", label: "A" }] },
+			mockUICtx(null),
+		);
+
+		expect(result.terminate).toBe(true);
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.activeCommand).toBe("mach12:test");
+	});
+
+	it("freetext when dormant: parks command and journals parked entry", async () => {
+		const state = freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") });
+		const { execute, pi } = toolFor(state);
+		const result = await execute({ type: "freetext", message: "Release title?" });
+
+		const parsed = JSON.parse(result.content[0].text);
+		expect(parsed).toEqual({ parked: true });
+		expect(result.terminate).toBe(true);
+		expect(isParkedForInput(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE)).toHaveLength(1);
+	});
+});
+
 describe("registerUserInputTool — cancellation behavior", () => {
 	it("transitions running to dormant on cancellation (not waiting)", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });

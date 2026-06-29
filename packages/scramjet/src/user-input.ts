@@ -196,7 +196,6 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			const toolResult = { content: result.content, details: result.details };
 			if (result.cancelled) {
 				if (!wasProbing) {
-					// Cancellation during running (probe armed) → dormant (no parked marker)
 					enterDormant(state, "confirm/select-cancelled");
 				}
 				return { ...toolResult, terminate: true };
