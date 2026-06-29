@@ -438,7 +438,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 ### Dormant terminal reports
 
-A dormant command (one that started but has no active probe or parked input) can report a terminal status (`completed`, `blocked`, or `incomplete`) directly, without first calling `continuing` to re-enter the probe cycle. This enables a command whose work was already done (e.g., the agent resolved the task outside the probe flow) to complete cleanly and surface its declared next step. The report flows through the same `routeCompleted` dispatch path as probe-origin reports.
+A dormant command (one that started but has no active probe or parked input) can report a terminal status (`completed`, `blocked`, or `incomplete`) directly, without first calling `continuing` to re-enter the probe cycle. This enables a command whose work was already done (e.g., the agent resolved the task outside the probe flow) to complete cleanly and surface its declared next step. The report flows through the same dispatch paths as probe-origin reports (`routeCompleted` for `completed`, `routeNonCompleted` for `blocked`/`incomplete`).
 
 ### Instructing the agent in command prose
 
@@ -539,7 +539,7 @@ The `message` is displayed in the tool call row before/alongside the parked resu
 
 ### Cancellation
 
-Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `dormant`. Dormant commands resume only through explicit `continuing` via the status tool, not through any user reply; the user can also redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it parks the command and ends the turn for a standard editor reply.
+Confirm and select return `{ "cancelled": true }` with `terminate: true` when the user presses Escape. Cancellation is not an error: Scramjet transitions the command to `dormant`. Dormant commands resume through explicit `continuing` via the status tool, not through any user reply; they can also report terminal status directly without resuming. The user can redirect with a slash command. Freetext does not open a TUI prompt and has no Escape/cancel tool result; it parks the command and ends the turn for a standard editor reply.
 
 ### Lifecycle gating
 

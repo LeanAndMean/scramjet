@@ -152,6 +152,6 @@ The fact-based lifecycle replaces the prior discriminated phase union (`phase-ma
 
 Key behavioral changes from the phase machine:
 - `blocked` and `incomplete` statuses keep the command associated (dormant), rather than dropping to idle and losing the command.
-- Dormant commands resume only through explicit `continuing` via the status tool, not through any user reply.
+- Dormant commands resume through explicit `continuing` via the status tool, not through any user reply. Dormant commands can also report terminal status directly without resuming.
 - Abort is a simple fact mutation (disarm and enter dormant), not a transition table edge.
 - Error handling is retry-safe: probe-armed and probe-in-flight state survive errors so Pi retries can naturally trigger probes or report status on success.
