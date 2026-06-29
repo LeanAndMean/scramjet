@@ -68,7 +68,7 @@ For logging and diagnostics, a phase label is derived from facts. This is a logg
 | `isProbeDue(lifecycle)` | Command associated, `probeArmed`, not parked |
 | `isProbeInFlight(lifecycle)` | Command associated and `probeInFlight` |
 | `hasTerminalReport(lifecycle)` | Command associated and `lastReport !== null` |
-| `canAcceptTerminalReport(lifecycle)` | `probeInFlight` (terminal reports require a probe in flight) |
+| `canAcceptTerminalReport(lifecycle)` | `probeInFlight` or dormant (terminal reports accepted during probe or from dormant) |
 | `canAcceptDormantContinuing(lifecycle)` | `isDormant(lifecycle)` |
 
 ## Mutation helpers
@@ -84,7 +84,7 @@ Every mutation validates post-conditions, bumps `lifecycleGeneration`, and logs 
 | `beginProbe(holder, reason)` | Active command, `probeArmed` | Clears `probeArmed`, sets `probeInFlight` |
 | `acceptProbeContinuing(holder)` | `probeInFlight`, under continue limit | Clears `probeInFlight`, arms probe, increments counter |
 | `acceptDormantContinuing(holder)` | Dormant | Arms probe, resets counter to 0 |
-| `acceptTerminalReport(holder, payload)` | `probeInFlight`, non-continuing status | Clears `probeInFlight`, stores report, resets counter |
+| `acceptTerminalReport(holder, payload)` | `probeInFlight` or dormant, non-continuing status | Clears `probeInFlight`, stores report, resets counter |
 | `parkForFreetext(holder)` | Active command | Sets `parkedForInput`, clears all other mode flags and counter |
 | `resumeFromParkedInput(holder)` | `parkedForInput` | Clears `parkedForInput`, arms probe, resets counter |
 | `resumeAfterProbeInput(holder)` | `probeInFlight` | Clears `probeInFlight`, arms probe, preserves counter |
@@ -152,6 +152,6 @@ The fact-based lifecycle replaces the prior discriminated phase union (`phase-ma
 
 Key behavioral changes from the phase machine:
 - `blocked` and `incomplete` statuses keep the command associated (dormant), rather than dropping to idle and losing the command.
-- Dormant commands resume only through explicit `continuing` via the status tool, not through any user reply.
+- Dormant commands resume through explicit `continuing` via the status tool, not through any user reply. Dormant commands can also report terminal status directly without resuming.
 - Abort is a simple fact mutation (disarm and enter dormant), not a transition table edge.
 - Error handling is retry-safe: probe-armed and probe-in-flight state survive errors so Pi retries can naturally trigger probes or report status on success.

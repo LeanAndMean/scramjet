@@ -1827,7 +1827,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 	});
 
 	describe("resume mid-probe self-heals (F5)", () => {
-		it("resets the phase to idle on resume so a stale status call is rejected and never dispatches or loops", async () => {
+		it("dormant command completes after resume and dispatches normally", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const target = defWithPolicy("b:target", undefined);
 			// State as captured mid-probe: the answer turn ended, the probe fired,
@@ -1854,26 +1854,54 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// Rebuild reconstructs to dormant (command-start present, no terminal status).
 			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 
-			// A stale report_scramjet_command_status call (the resumed model answering the
-			// dead probe) now hits the phase guard: rejected out-of-phase, no terminate,
-			// state untouched.
+			// A dormant terminal report is now accepted directly.
 			const result = (await report({
 				status: "completed",
-				summary: "stale",
+				summary: "done after resume",
 				next_steps: [{ message: "/b:target", reason: "continue" }],
 				recommended_next_step: 0,
 			})) as any;
-			expect(result.terminate).toBeUndefined();
-			expect(result.details.error).toBe("terminal-from-dormant");
-			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(result.terminate).toBe(true);
+			expect(result.details.error).toBeUndefined();
+			expect(state.lifecycle.lastReport).toMatchObject({ status: "completed" });
 
-			// agent_end after the rejected call: dormant, so nothing dispatches
-			// and no new probe is scheduled (no loop).
+			// agent_end routes the completed report normally (forced policy dispatches).
 			bag.pi.isStreaming = false;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(0);
-			expect(ctxBag.dispatched).toEqual([]);
-			expect(bag.pi.sent).toHaveLength(0);
+			expect(ctxBag.dispatched).toHaveLength(1);
+			expect(ctxBag.dispatched[0].input).toBe("/b:target");
+		});
+
+		it("dormant-origin completed report with closed policy filters invalid next_steps", async () => {
+			const valid = defWithPolicy("a:valid", undefined);
+			// Only a:valid is a declared candidate; a:offlist is not.
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "a:valid" }] });
+			const state = runningState(def, {
+				enabled: true,
+				registry: registryWith(valid),
+				lifecycle: lifecycleFor("dormant", def.name),
+			});
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			// Report completed from dormant with one valid and one off-list candidate.
+			await report({
+				status: "completed",
+				summary: "done",
+				next_steps: [
+					{ message: "/a:valid", reason: "valid" },
+					{ message: "/a:offlist", reason: "not in candidates" },
+				],
+				recommended_next_step: 0,
+			});
+
+			// agent_end routes: the valid candidate dispatches, off-list is skipped.
+			bag.pi.isStreaming = false;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+			// Closed policy with enabled=true + hasUI + recommended → shows selector.
+			// Verify the notification reports skipped options.
+			expect(ctxBag.notifications.some((n: any) => n.message.includes("skipped"))).toBe(true);
 		});
 	});
 });
