@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/scramjet",
-	"version": "0.35.0",
+	"version": "0.36.0",
 	"description": "A high-velocity harness for agentic development",
 	"license": "MIT",
 	"repository": "github:LeanAndMean/scramjet",
@@ -43,7 +43,6 @@
 		"@leanandmean/ai": "0.74.1-scramjet.4",
 		"@leanandmean/coding-agent": "0.74.1-scramjet.6",
 		"@leanandmean/tui": "0.74.1-scramjet.4",
-		"beautiful-mermaid": "^1.1.3",
 		"typebox": "^1.1.24",
 		"yaml": "^2.9.0"
 	}
