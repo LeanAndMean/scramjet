@@ -241,22 +241,6 @@ const cylinderRenderer: ShapeRenderer = {
 // State pseudo-states
 // ============================================================================
 
-function getSmallAttachmentPoint(
-	dir: GridDirection,
-	dimensions: ShapeDimensions,
-	baseCoord: DrawingCoord,
-): DrawingCoord {
-	const { width, height } = dimensions;
-	const centerX = baseCoord.x + Math.floor(width / 2);
-	const centerY = baseCoord.y + Math.floor(height / 2);
-
-	if (dirEquals(dir, Up)) return { x: centerX, y: baseCoord.y };
-	if (dirEquals(dir, Down)) return { x: centerX, y: baseCoord.y + height - 1 };
-	if (dirEquals(dir, Left)) return { x: baseCoord.x, y: centerY };
-	if (dirEquals(dir, Right)) return { x: baseCoord.x + width - 1, y: centerY };
-	return { x: centerX, y: centerY };
-}
-
 const statePointRenderer: ShapeRenderer = {
 	getDimensions() {
 		return {
@@ -268,7 +252,7 @@ const statePointRenderer: ShapeRenderer = {
 		};
 	},
 
-	getAttachmentPoint: getSmallAttachmentPoint,
+	getAttachmentPoint: getBoxAttachmentPoint,
 };
 
 // ============================================================================

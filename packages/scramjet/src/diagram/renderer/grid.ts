@@ -396,6 +396,11 @@ export function createMapping(graph: AsciiGraph): void {
 		if (placedCount === prevCount) break;
 	}
 
+	const unplaced = graph.nodes.filter((n) => n.gridCoord === null);
+	if (unplaced.length > 0) {
+		throw new Error(`Grid is too dense to place node — could not place: ${unplaced.map((n) => n.name).join(", ")}`);
+	}
+
 	for (const node of graph.nodes) {
 		setColumnWidth(graph, node);
 	}

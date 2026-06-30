@@ -1,6 +1,6 @@
 // Based on beautiful-mermaid by Craft Docs, MIT License.
 
-import { copyCanvas, drawText, mergeCanvases, mkCanvas, setRole } from "./canvas.js";
+import { copyCanvas, drawText, mergeCanvases, mkCanvas, setRole, visibleWidth } from "./canvas.js";
 import { determineDirection, dirEquals, getOpposite } from "./edge-routing.js";
 import { gridToDrawingCoord, lineToDrawing } from "./grid.js";
 import { splitLines } from "./multiline-utils.js";
@@ -36,7 +36,7 @@ import {
 // Node drawing
 // ============================================================================
 
-function drawBoxWithGridDimensions(node: AsciiNode, graph: AsciiGraph): Canvas {
+export function drawBox(node: AsciiNode, graph: AsciiGraph): Canvas {
 	const gc = node.gridCoord!;
 	const useAscii = graph.config.useAscii;
 
@@ -78,19 +78,22 @@ function drawBoxWithGridDimensions(node: AsciiNode, graph: AsciiGraph): Canvas {
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i]!;
-		const textX = from.x + Math.floor(w / 2) - Math.ceil(line.length / 2) + 1;
-		for (let j = 0; j < line.length; j++) {
-			if (textX + j >= 0 && textX + j < box.length && startY + i >= 0 && startY + i < box[0]!.length) {
-				box[textX + j]![startY + i] = line[j]!;
+		const lineVW = visibleWidth(line);
+		const textX = from.x + Math.floor(w / 2) - Math.ceil(lineVW / 2) + 1;
+		let col = textX;
+		for (const char of line) {
+			const charWidth = visibleWidth(char);
+			if (col >= 0 && col < box.length && startY + i >= 0 && startY + i < box[0]!.length) {
+				box[col]![startY + i] = char;
+				for (let cw = 1; cw < charWidth; cw++) {
+					if (col + cw < box.length) box[col + cw]![startY + i] = "";
+				}
 			}
+			col += charWidth;
 		}
 	}
 
 	return box;
-}
-
-export function drawBox(node: AsciiNode, graph: AsciiGraph): Canvas {
-	return drawBoxWithGridDimensions(node, graph);
 }
 
 // ============================================================================
@@ -132,6 +135,10 @@ function arrowChar(dir: GridDirection, useAscii: boolean, fallback?: string): st
 		if (dirEquals(dir, Down)) return "▼";
 		if (dirEquals(dir, Left)) return "◄";
 		if (dirEquals(dir, Right)) return "►";
+		if (dirEquals(dir, UpperRight)) return "◥";
+		if (dirEquals(dir, UpperLeft)) return "◤";
+		if (dirEquals(dir, LowerRight)) return "◢";
+		if (dirEquals(dir, LowerLeft)) return "◣";
 		return fallback ?? "▼";
 	}
 	if (dirEquals(dir, Up)) return "^";
@@ -352,37 +359,8 @@ function drawArrowHead(graph: AsciiGraph, lastLine: DrawingCoord[], fallbackDir:
 	let dir = determineDirection(from, lastPos);
 	if (lastLine.length === 1 || dirEquals(dir, Middle)) dir = fallbackDir;
 
-	let char: string;
-
-	if (!graph.config.useAscii) {
-		if (dirEquals(dir, Up)) char = "▲";
-		else if (dirEquals(dir, Down)) char = "▼";
-		else if (dirEquals(dir, Left)) char = "◄";
-		else if (dirEquals(dir, Right)) char = "►";
-		else if (dirEquals(dir, UpperRight)) char = "◥";
-		else if (dirEquals(dir, UpperLeft)) char = "◤";
-		else if (dirEquals(dir, LowerRight)) char = "◢";
-		else if (dirEquals(dir, LowerLeft)) char = "◣";
-		else {
-			if (dirEquals(fallbackDir, Up)) char = "▲";
-			else if (dirEquals(fallbackDir, Down)) char = "▼";
-			else if (dirEquals(fallbackDir, Left)) char = "◄";
-			else if (dirEquals(fallbackDir, Right)) char = "►";
-			else char = "●";
-		}
-	} else {
-		if (dirEquals(dir, Up)) char = "^";
-		else if (dirEquals(dir, Down)) char = "v";
-		else if (dirEquals(dir, Left)) char = "<";
-		else if (dirEquals(dir, Right)) char = ">";
-		else {
-			if (dirEquals(fallbackDir, Up)) char = "^";
-			else if (dirEquals(fallbackDir, Down)) char = "v";
-			else if (dirEquals(fallbackDir, Left)) char = "<";
-			else if (dirEquals(fallbackDir, Right)) char = ">";
-			else char = "*";
-		}
-	}
+	const useAscii = graph.config.useAscii;
+	const char = arrowChar(dir, useAscii, arrowChar(fallbackDir, useAscii, useAscii ? "*" : "●"));
 
 	canvas[lastPos.x]![lastPos.y] = char;
 	return canvas;
@@ -777,13 +755,20 @@ export function drawSubgraphLabel(sg: AsciiSubgraph, _graph: AsciiGraph): [Canva
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i]!;
 		const labelY = 1 + i;
-		let labelX = Math.floor(width / 2) - Math.floor(line.length / 2);
+		const lineVW = visibleWidth(line);
+		let labelX = Math.floor(width / 2) - Math.floor(lineVW / 2);
 		if (labelX < 1) labelX = 1;
 
-		for (let j = 0; j < line.length; j++) {
-			if (labelX + j < width && labelY < height) {
-				canvas[labelX + j]![labelY] = line[j]!;
+		let col = labelX;
+		for (const char of line) {
+			const charWidth = visibleWidth(char);
+			if (col < width && labelY < height) {
+				canvas[col]![labelY] = char;
+				for (let cw = 1; cw < charWidth; cw++) {
+					if (col + cw < width) canvas[col + cw]![labelY] = "";
+				}
 			}
+			col += charWidth;
 		}
 	}
 

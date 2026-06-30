@@ -1,6 +1,7 @@
 // Based on beautiful-mermaid by Craft Docs, MIT License.
 
 import { visibleWidth } from "@leanandmean/tui";
+export { visibleWidth };
 import type { Canvas, CharRole, DrawingCoord, RoleCanvas } from "./types.js";
 
 export function mkCanvas(x: number, y: number): Canvas {
