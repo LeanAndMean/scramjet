@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.36.1 — Skip draw_diagram tool registration
+
+Removed `draw_diagram` from the agent's available tools. The tool was producing oversized layouts and poor output quality; the implementation code in `src/diagram/` is preserved for future improvement work ([#232](https://github.com/LeanAndMean/scramjet/issues/232)).
+
+### Changed
+
+- `initScramjet` no longer calls `registerDiagramTool`, so `draw_diagram` is invisible to the agent and its `promptSnippet` is not injected into the system prompt
+
 ## 0.36.0 — Replace beautiful-mermaid with custom theme-aware diagram renderer
 
 Replaced the `beautiful-mermaid` dependency with a custom Mermaid renderer built from its parser and integer-grid layout engine (copied under MIT, attributed). The renderer produces uncolored text with per-character role annotations; `DiagramComponent` applies theme colors at render time via existing tokens (`border`, `muted`, `accent`). Fixes label collision bugs ("openn" junction corruption) and theme incompatibility (pre-baked ANSI illegible on TUI backgrounds). Scope narrowed to flowchart/graph and stateDiagram-v2 ([#228](https://github.com/LeanAndMean/scramjet/issues/228)).
