@@ -1,5 +1,11 @@
-import type { AgentToolResult, ExtensionAPI, ExtensionContext, Theme } from "@leanandmean/coding-agent";
-import { Text, wrapTextWithAnsi } from "@leanandmean/tui";
+import {
+	type AgentToolResult,
+	type ExtensionAPI,
+	type ExtensionContext,
+	getMarkdownTheme,
+	type Theme,
+} from "@leanandmean/coding-agent";
+import { Container, Markdown, Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
 import { USER_INPUT_PARKED_TYPE } from "./history.js";
 import {
@@ -79,11 +85,12 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 		renderCall(args, theme, context) {
 			const maybeArgs = args as Partial<UserInputParams> | null | undefined;
 			const message = typeof maybeArgs?.message === "string" ? maybeArgs.message : "";
-			let text = theme.fg("toolTitle", theme.bold("get_scramjet_user_input"));
-			if (message) text += ` ${theme.fg("muted", message)}`;
-			const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			component.setText(text);
-			return component;
+			const showMessage = message && !(context.executionStarted && !context.isPartial);
+			const container = (context.lastComponent as Container | undefined) ?? new Container();
+			container.clear();
+			container.addChild(new Text(theme.fg("toolTitle", theme.bold("get_scramjet_user_input")), 0, 0));
+			if (showMessage) container.addChild(new Markdown(message, 0, 0, getMarkdownTheme()));
+			return container;
 		},
 		renderResult(result, _options, theme, context) {
 			return renderUserInputResult(result, theme, context.args as Partial<UserInputParams> | null | undefined);
@@ -148,15 +155,10 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			try {
 				switch (params.type) {
 					case "confirm":
-						result = await handleConfirm(params.message, ctx as ExtensionContext);
+						result = await handleConfirm(ctx as ExtensionContext);
 						break;
 					case "select":
-						result = await handleSelect(
-							params.message,
-							params.options ?? [],
-							params.recommended,
-							ctx as ExtensionContext,
-						);
+						result = await handleSelect(params.options ?? [], params.recommended, ctx as ExtensionContext);
 						break;
 					default:
 						return {
@@ -226,7 +228,7 @@ function staleResult(expectedCommand: string | null, expectedGeneration: number,
 	};
 }
 
-async function handleConfirm(message: string, ctx: ExtensionContext) {
+async function handleConfirm(ctx: ExtensionContext) {
 	const result = await ctx.ui.custom<"yes" | "no" | null>((tui, theme, _keybindings, done) => {
 		const items = [
 			{ value: "yes", label: "Yes" },
@@ -242,11 +244,7 @@ async function handleConfirm(message: string, ctx: ExtensionContext) {
 
 		return {
 			render(width: number) {
-				return [
-					...wrapTextWithAnsi(theme.fg("accent", theme.bold(message)), width),
-					...selectList.render(width),
-					theme.fg("dim", "enter select \u2022 esc cancel"),
-				];
+				return [...selectList.render(width), theme.fg("dim", "enter select \u2022 esc cancel")];
 			},
 			invalidate() {
 				selectList.invalidate();
@@ -273,12 +271,7 @@ async function handleConfirm(message: string, ctx: ExtensionContext) {
 	};
 }
 
-async function handleSelect(
-	message: string,
-	options: UserInputOption[],
-	recommended: number | undefined,
-	ctx: ExtensionContext,
-) {
+async function handleSelect(options: UserInputOption[], recommended: number | undefined, ctx: ExtensionContext) {
 	const items = options.map((opt) => ({
 		value: opt.value,
 		label: opt.label,
@@ -305,7 +298,6 @@ async function handleSelect(
 		return {
 			render(width: number) {
 				return [
-					...wrapTextWithAnsi(theme.fg("accent", theme.bold(message)), width),
 					...selectList.render(width),
 					theme.fg("dim", "\u2191\u2193 navigate \u2022 enter select \u2022 esc cancel"),
 				];
@@ -337,7 +329,7 @@ async function handleSelect(
 
 function renderUserInputResult(
 	result: AgentToolResult<unknown>,
-	theme: Theme,
+	_theme: Theme,
 	args: Partial<UserInputParams> | null | undefined,
 ) {
 	const details = isRecord(result.details) ? result.details : null;
@@ -349,37 +341,52 @@ function renderUserInputResult(
 	}
 
 	const message = typeof args?.message === "string" ? args.message : "";
-	const messageLine = message ? theme.fg("accent", theme.bold(message)) : "";
 
 	if (details.type === "confirm") {
-		if (details.cancelled === true) return new Text(compactLines([messageLine, "Cancelled"]).join("\n"), 0, 0);
-		if (typeof details.confirmed === "boolean") {
-			return new Text(compactLines([messageLine, `Answer: ${details.confirmed ? "Yes" : "No"}`]).join("\n"), 0, 0);
-		}
-		return new Text("", 0, 0);
+		const outcome =
+			details.cancelled === true
+				? "Cancelled"
+				: typeof details.confirmed === "boolean"
+					? `Answer: ${details.confirmed ? "Yes" : "No"}`
+					: null;
+		if (!outcome) return new Text("", 0, 0);
+		const container = new Container();
+		if (message) container.addChild(new Markdown(message, 0, 0, getMarkdownTheme()));
+		container.addChild(new Text(outcome, 0, 0));
+		return container;
 	}
 
 	if (details.type === "select") {
 		const options = parseUserInputOptions(details.options);
 		if (!options) return new Text("", 0, 0);
+		const container = new Container();
+		if (message) container.addChild(new Markdown(message, 0, 0, getMarkdownTheme()));
 		if (details.cancelled === true) {
 			const optionLines = options.map((option) => {
 				const description = option.description ? ` — ${option.description}` : "";
 				return `- ${option.label}${description}`;
 			});
-			return new Text(compactLines([messageLine, "Options:", ...optionLines, "Cancelled"]).join("\n"), 0, 0);
+			container.addChild(new Text(["Options:", ...optionLines, "Cancelled"].join("\n"), 0, 0));
+		} else if (typeof details.selected === "string") {
+			const optionLines = options.map((option) => {
+				const description = option.description ? ` — ${option.description}` : "";
+				const prefix = option.value === details.selected ? "→ " : "  ";
+				return `${prefix}${option.label}${description}`;
+			});
+			container.addChild(new Text(optionLines.join("\n"), 0, 0));
+		} else {
+			return new Text("", 0, 0);
 		}
-		if (typeof details.selected !== "string") return new Text("", 0, 0);
-		const optionLines = options.map((option) => {
-			const description = option.description ? ` — ${option.description}` : "";
-			const prefix = option.value === details.selected ? "→ " : "  ";
-			return `${prefix}${option.label}${description}`;
-		});
-		return new Text(compactLines([messageLine, ...optionLines]).join("\n"), 0, 0);
+		return container;
 	}
 
 	if (details.type === "freetext") {
-		if (details.parked === true) return new Text(compactLines([messageLine, "Parked for reply"]).join("\n"), 0, 0);
+		if (details.parked === true) {
+			const container = new Container();
+			if (message) container.addChild(new Markdown(message, 0, 0, getMarkdownTheme()));
+			container.addChild(new Text("Parked for reply", 0, 0));
+			return container;
+		}
 		return new Text("", 0, 0);
 	}
 
@@ -403,10 +410,6 @@ function parseUserInputOptions(value: unknown): UserInputOption[] | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function compactLines(lines: string[]) {
-	return lines.filter((line) => line.length > 0);
 }
 
 function validateParams(params: UserInputParams): string | null {
