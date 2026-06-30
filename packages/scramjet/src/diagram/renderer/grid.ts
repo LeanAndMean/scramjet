@@ -1,6 +1,6 @@
 // Based on beautiful-mermaid by Craft Docs, MIT License.
 
-import { setCanvasSizeToGrid, setRoleCanvasSizeToGrid } from "./canvas.js";
+import { getCanvasSize, increaseRoleCanvasSize, increaseSize, setCanvasSizeToGrid, setRoleCanvasSizeToGrid } from "./canvas.js";
 import { drawBox } from "./draw.js";
 import { analyzeEdgeBundles, processBundles } from "./edge-bundling.js";
 import { determineLabelLine, determinePath } from "./edge-routing.js";
@@ -426,6 +426,12 @@ export function createMapping(graph: AsciiGraph): void {
 	setRoleCanvasSizeToGrid(graph.roleCanvas, graph.columnWidth, graph.rowHeight);
 	calculateSubgraphBoundingBoxes(graph);
 	offsetDrawingForSubgraphs(graph);
+
+	if (graph.offsetX > 0 || graph.offsetY > 0) {
+		const [curX, curY] = getCanvasSize(graph.canvas);
+		increaseSize(graph.canvas, curX + graph.offsetX, curY + graph.offsetY);
+		increaseRoleCanvasSize(graph.roleCanvas, curX + graph.offsetX, curY + graph.offsetY);
+	}
 }
 
 function getEdgesFromNode(graph: AsciiGraph, node: AsciiNode): AsciiGraph["edges"] {

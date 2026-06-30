@@ -288,8 +288,18 @@ describe("renderDiagram end-to-end", () => {
 		expect(text).toContain("pr-review-fix");
 	});
 
-	it("self-loop with long label at tight padding does not crash (zero-width grid cell bug)", () => {
+	it("self-loop with long label at tight padding does not crash", () => {
 		const source = 'flowchart TD\n    A[Node A] -->|"some long label text here"| A';
 		expect(() => renderDiagram(source, { paddingX: 1, paddingY: 1, boxBorderPadding: 1 })).not.toThrow();
+	});
+
+	it("self-loop inside subgraph does not crash", () => {
+		const source = [
+			"flowchart TD",
+			"    subgraph S[Group]",
+			'      A[Node] -->|"long label for self loop"| A',
+			"    end",
+		].join("\n");
+		expect(() => renderDiagram(source, { paddingX: 5, paddingY: 5, boxBorderPadding: 2 })).not.toThrow();
 	});
 });
