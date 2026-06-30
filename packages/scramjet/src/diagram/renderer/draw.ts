@@ -203,7 +203,9 @@ export function drawArrow(
 	}
 
 	drawArrowLabel(graph, edge, sharedLabelCanvas);
-	const [pathCanvas, linesDrawn, lineDirs] = drawPath(graph, edge.path, edge.style);
+	const sourceAttach = edge.from === edge.to ? null : getNodeAttachmentPoint(graph, edge.from, edge.startDir);
+	const targetAttach = edge.from === edge.to ? null : getNodeAttachmentPoint(graph, edge.to, edge.endDir);
+	const [pathCanvas, linesDrawn, lineDirs] = drawPath(graph, edge.path, edge.style, sourceAttach, targetAttach);
 	const boxStartCanvas = drawBoxStart(graph, edge.path, linesDrawn[0]!, edge.from.shape);
 
 	let arrowHeadEndCanvas: Canvas;
@@ -240,6 +242,8 @@ function drawPath(
 	graph: AsciiGraph,
 	path: GridCoord[],
 	style: EdgeStyle = "solid",
+	sourceAttach?: DrawingCoord | null,
+	targetAttach?: DrawingCoord | null,
 ): [Canvas, DrawingCoord[][], GridDirection[]] {
 	const canvas = copyCanvas(graph.canvas);
 	let previousCoord = path[0]!;
@@ -248,8 +252,11 @@ function drawPath(
 
 	for (let i = 1; i < path.length; i++) {
 		const nextCoord = path[i]!;
-		const prevDC = gridToDrawingCoord(graph, previousCoord);
-		const nextDC = gridToDrawingCoord(graph, nextCoord);
+		let prevDC = gridToDrawingCoord(graph, previousCoord);
+		let nextDC = gridToDrawingCoord(graph, nextCoord);
+
+		if (i === 1 && sourceAttach) prevDC = sourceAttach;
+		if (i === path.length - 1 && targetAttach) nextDC = targetAttach;
 
 		if (drawingCoordEquals(prevDC, nextDC)) {
 			previousCoord = nextCoord;

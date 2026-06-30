@@ -293,6 +293,24 @@ describe("renderDiagram end-to-end", () => {
 		expect(() => renderDiagram(source, { paddingX: 1, paddingY: 1, boxBorderPadding: 1 })).not.toThrow();
 	});
 
+	it("edge junction is adjacent to box border, not separated by label-expanded gap", () => {
+		const source = [
+			"flowchart TD",
+			'    A[issue-plan] -->|"open: Risky plan"| B[issue-review]',
+			'    A -->|"open: Small plan"| C[issue-implement]',
+			'    B -->|"open: Findings remain"| B',
+			'    B -->|"open: Plan approved"| C',
+		].join("\n");
+		const { chars } = renderDiagram(source, { paddingX: 5, paddingY: 5, boxBorderPadding: 2 });
+		const text = canvasToString(chars);
+		for (const line of text.split("\n")) {
+			const match = line.match(/│(\s+)├/);
+			if (match) {
+				expect(match[1]!.length, `excessive gap in: ${line.trimEnd()}`).toBeLessThanOrEqual(2);
+			}
+		}
+	});
+
 	it("self-loop inside subgraph does not crash", () => {
 		const source = [
 			"flowchart TD",
