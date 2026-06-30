@@ -131,24 +131,16 @@ export function isJunctionChar(c: string): boolean {
 	return JUNCTION_CHARS.has(c);
 }
 
-const LINE_CHARS = new Set(["─", "│", "━", "┃", "╌", "╎", "┄", "┆", "┈", "┊"]);
-
-function isLineChar(c: string): boolean {
-	return LINE_CHARS.has(c);
-}
-
 const ARROW_CHARS = new Set(["▲", "▼", "◄", "►", "△", "▽", "◁", "▷"]);
 
 function isArrowChar(c: string): boolean {
 	return ARROW_CHARS.has(c);
 }
 
-function isStructuralChar(c: string): boolean {
-	return isJunctionChar(c) || isLineChar(c) || isArrowChar(c);
-}
+const COMPOUND_JUNCTION_CHARS = new Set(["┌", "┐", "└", "┘", "├", "┤", "┬", "┴", "┼"]);
 
-function isAlphanumeric(c: string): boolean {
-	return /^[a-zA-Z0-9]$/.test(c);
+function isCompoundJunctionChar(c: string): boolean {
+	return COMPOUND_JUNCTION_CHARS.has(c);
 }
 
 const JUNCTION_MAP: Record<string, Record<string, string>> = {
@@ -280,10 +272,8 @@ export function mergeCanvases(base: Canvas, offset: DrawingCoord, useAscii: bool
 					const current = merged[mx]![my]!;
 					if (!useAscii && isJunctionChar(c) && isJunctionChar(current)) {
 						merged[mx]![my] = mergeJunctions(current, c);
-					} else if (isAlphanumeric(current) && isAlphanumeric(c)) {
-						// Don't overwrite existing label text
-					} else if (!isStructuralChar(c) && isStructuralChar(current)) {
-						// openn fix: don't overwrite structural chars with non-structural content
+					} else if (isCompoundJunctionChar(current) && !isJunctionChar(c) && !isArrowChar(c)) {
+						// openn fix: protect compound junction chars (┬┤├┼ etc.) from label text
 					} else {
 						merged[mx]![my] = c;
 					}

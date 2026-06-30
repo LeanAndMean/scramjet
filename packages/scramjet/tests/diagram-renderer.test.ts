@@ -7,6 +7,32 @@ import {
 	mkCanvas,
 	mkRoleCanvas,
 } from "../src/diagram/renderer/canvas.js";
+import { renderDiagram } from "../src/diagram/renderer/index.js";
+import type { CharRole } from "../src/diagram/renderer/types.js";
+
+function canvasToString(chars: string[][]): string {
+	const maxY = chars[0]?.length ?? 0;
+	const lines: string[] = [];
+	for (let y = 0; y < maxY; y++) {
+		let line = "";
+		for (let x = 0; x < chars.length; x++) {
+			line += chars[x]![y] || "";
+		}
+		lines.push(line.trimEnd());
+	}
+	while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+	return lines.join("\n");
+}
+
+function collectRoles(roles: (CharRole | null)[][]): Set<CharRole> {
+	const found = new Set<CharRole>();
+	for (const col of roles) {
+		for (const r of col) {
+			if (r !== null) found.add(r);
+		}
+	}
+	return found;
+}
 
 describe("canvas", () => {
 	describe("mergeCanvases junction protection", () => {
@@ -47,7 +73,7 @@ describe("canvas", () => {
 			expect(merged[0]![0]).toBe("▼");
 		});
 
-		it("does not overwrite line char with alphanumeric", () => {
+		it("allows label text to overwrite plain line chars", () => {
 			const base = mkCanvas(0, 0);
 			base[0]![0] = "│";
 
@@ -55,10 +81,10 @@ describe("canvas", () => {
 			overlay[0]![0] = "e";
 
 			const merged = mergeCanvases(base, { x: 0, y: 0 }, false, overlay);
-			expect(merged[0]![0]).toBe("│");
+			expect(merged[0]![0]).toBe("e");
 		});
 
-		it("does not overwrite arrow char with alphanumeric", () => {
+		it("allows label text to overwrite arrow chars", () => {
 			const base = mkCanvas(0, 0);
 			base[0]![0] = "▲";
 
@@ -66,7 +92,7 @@ describe("canvas", () => {
 			overlay[0]![0] = "x";
 
 			const merged = mergeCanvases(base, { x: 0, y: 0 }, false, overlay);
-			expect(merged[0]![0]).toBe("▲");
+			expect(merged[0]![0]).toBe("x");
 		});
 
 		it("does not overwrite structural char with CJK label text", () => {
@@ -157,5 +183,51 @@ describe("canvas", () => {
 			expect(rc[0]![1]).toBe("text");
 			expect(rc[0]![2]).toBe("border");
 		});
+	});
+});
+
+describe("renderDiagram end-to-end", () => {
+	it("renders a simple 3-node graph with expected labels", () => {
+		const { chars } = renderDiagram("graph TD\n  A[Start] --> B[Middle] --> C[End]");
+		const text = canvasToString(chars);
+		expect(text).toContain("Start");
+		expect(text).toContain("Middle");
+		expect(text).toContain("End");
+	});
+
+	it("produces edge and arrow roles in roleCanvas", () => {
+		const { roles } = renderDiagram("graph TD\n  A --> B");
+		const found = collectRoles(roles);
+		expect(found.has("line")).toBe(true);
+		expect(found.has("arrow")).toBe(true);
+		expect(found.has("border")).toBe(true);
+		expect(found.has("text")).toBe(true);
+	});
+
+	it("openn regression: 4-edge 'open' label produces no 'openn'", () => {
+		const source = [
+			"graph TD",
+			"  A[Router] -->|open| B[Handler]",
+			"  A -->|close| C[Closer]",
+			"  A -->|send| D[Sender]",
+			"  A -->|recv| E[Receiver]",
+		].join("\n");
+		const { chars } = renderDiagram(source);
+		const text = canvasToString(chars);
+		expect(text).toContain("open");
+		expect(text).not.toContain("openn");
+	});
+
+	it("self-loop renders without crash", () => {
+		const { chars } = renderDiagram("graph TD\n  A[Loop] --> A");
+		const text = canvasToString(chars);
+		expect(text).toContain("Loop");
+	});
+
+	it("BT direction: arrow characters point upward after flip", () => {
+		const { chars } = renderDiagram("graph BT\n  A --> B");
+		const text = canvasToString(chars);
+		// BT: arrows should point upward (▲) since flow goes bottom-to-top
+		expect(text).toContain("▲");
 	});
 });
