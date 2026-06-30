@@ -569,6 +569,23 @@ describe("registerUserInputTool — confirm interaction", () => {
 		expect(result.details.cancelled).toBe(true);
 		expect(result.terminate).toBe(true);
 	});
+
+	it("widget render does not contain the prompt message", async () => {
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const { ctx, getFactory } = mockUICtxWithFactory();
+
+		const promise = execute({ type: "confirm", message: "Deploy?" }, ctx);
+
+		await new Promise((r) => setTimeout(r, 0));
+		const factory = getFactory();
+		const rendered = factory.render(80).join("\n");
+		expect(rendered).not.toContain("Deploy?");
+		expect(rendered).toContain("Yes");
+		expect(rendered).toContain("cancel");
+
+		factory.handleInput("\r");
+		await promise;
+	});
 });
 
 describe("registerUserInputTool — select interaction", () => {

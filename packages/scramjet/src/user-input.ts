@@ -3,7 +3,6 @@ import {
 	type ExtensionAPI,
 	type ExtensionContext,
 	getMarkdownTheme,
-	type Theme,
 } from "@leanandmean/coding-agent";
 import { Container, Markdown, Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
@@ -92,8 +91,8 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			if (showMessage) container.addChild(new Markdown(message, 0, 0, getMarkdownTheme()));
 			return container;
 		},
-		renderResult(result, _options, theme, context) {
-			return renderUserInputResult(result, theme, context.args as Partial<UserInputParams> | null | undefined);
+		renderResult(result, _options, _theme, context) {
+			return renderUserInputResult(result, context.args as Partial<UserInputParams> | null | undefined);
 		},
 		async execute(_toolCallId, params, _resource, _read, ctx) {
 			if (hasTerminalReport(state.lifecycle)) {
@@ -327,11 +326,7 @@ async function handleSelect(options: UserInputOption[], recommended: number | un
 	};
 }
 
-function renderUserInputResult(
-	result: AgentToolResult<unknown>,
-	_theme: Theme,
-	args: Partial<UserInputParams> | null | undefined,
-) {
+function renderUserInputResult(result: AgentToolResult<unknown>, args: Partial<UserInputParams> | null | undefined) {
 	const details = isRecord(result.details) ? result.details : null;
 	if (!details) return new Text("", 0, 0);
 
