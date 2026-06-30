@@ -7,7 +7,6 @@ import { registerClearAlias } from "./clear-alias.js";
 import { registerCommandStatusTool, registerDormantCommandNotice } from "./command-status.js";
 import { registerCommandLoader } from "./commands/index.js";
 import { registerDelegateTool } from "./delegate.js";
-import { registerDiagramTool } from "./diagram/diagram-tool.js";
 import { registerHistory } from "./history.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createLogger } from "./logger.js";
@@ -49,7 +48,6 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerToolCallAdvisor(pi, state);
 	registerSubagentOutputAdvisor(pi, state);
 	registerAutoContinue(pi, state);
-	registerDiagramTool(pi);
 	registerSubagentTool(pi);
 	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);
