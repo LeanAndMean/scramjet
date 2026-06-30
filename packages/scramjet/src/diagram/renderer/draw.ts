@@ -206,6 +206,7 @@ export function drawArrow(
 	drawArrowLabel(graph, edge, sharedLabelCanvas, labelRegions);
 	const sourceAttach = getNodeAttachmentPoint(graph, edge.from, edge.startDir);
 	const targetAttach = getNodeAttachmentPoint(graph, edge.to, edge.endDir);
+	adjustAttachForOffsetPath(graph, edge, sourceAttach, targetAttach);
 	const [pathCanvas, linesDrawn, lineDirs] = drawPath(graph, edge.path, edge.style, sourceAttach, targetAttach);
 	const boxStartCanvas = drawBoxStart(graph, edge.path, linesDrawn[0]!, edge.from.shape);
 
@@ -456,6 +457,33 @@ function drawTextOnLine(
 // ============================================================================
 // Node attachment point
 // ============================================================================
+
+function adjustAttachForOffsetPath(
+	graph: AsciiGraph,
+	edge: AsciiEdge,
+	sourceAttach: DrawingCoord,
+	targetAttach: DrawingCoord,
+): void {
+	if (edge.path.length < 2) return;
+	const firstPoint = edge.path[0]!;
+	const lastPoint = edge.path[edge.path.length - 1]!;
+	const fromGc = edge.from.gridCoord!;
+	const toGc = edge.to.gridCoord!;
+
+	const expectedStartY = fromGc.y + edge.startDir.y;
+	if (firstPoint.y !== expectedStartY) {
+		const expectedDC = gridToDrawingCoord(graph, { x: firstPoint.x, y: expectedStartY });
+		const actualDC = gridToDrawingCoord(graph, firstPoint);
+		sourceAttach.y += actualDC.y - expectedDC.y;
+	}
+
+	const expectedEndY = toGc.y + edge.endDir.y;
+	if (lastPoint.y !== expectedEndY) {
+		const expectedDC = gridToDrawingCoord(graph, { x: lastPoint.x, y: expectedEndY });
+		const actualDC = gridToDrawingCoord(graph, lastPoint);
+		targetAttach.y += actualDC.y - expectedDC.y;
+	}
+}
 
 function getNodeAttachmentPoint(graph: AsciiGraph, node: AsciiNode, dir: GridDirection): DrawingCoord {
 	const gc = node.gridCoord!;

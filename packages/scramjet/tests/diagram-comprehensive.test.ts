@@ -602,3 +602,113 @@ describe("edge cases and stress tests", () => {
 		expect(text).toContain("Active");
 	});
 });
+
+// ============================================================================
+// 8. Attachment-Point Collision (junction adjacent to opposing arrowhead)
+// ============================================================================
+
+describe("attachment-point collision", () => {
+	const SELF_LOOP_AND_OUTGOING = ["flowchart TD", "  A -->|outgoing| B", "  A -->|loop| A"].join("\n");
+
+	const SELF_LOOP_WITH_PARENT = [
+		"flowchart TD",
+		"  P[Parent] --> A[Node]",
+		"  A -->|self| A",
+		"  A -->|next| B[Sibling]",
+	].join("\n");
+
+	// Minimal reproducer: same-rank siblings where self-loop and sibling edge share right side
+	const SIBLING_COLLISION = [
+		"flowchart TD",
+		"  A --> B",
+		"  A --> C",
+		"  B --> B",
+		"  B -->|x| C",
+	].join("\n");
+
+	it("no junction directly adjacent to opposing arrowhead (horizontal)", () => {
+		for (const src of [SELF_LOOP_AND_OUTGOING, SELF_LOOP_WITH_PARENT, SIBLING_COLLISION]) {
+			const { chars } = renderDiagram(src);
+			const text = canvasToString(chars);
+			const lines = text.split("\n");
+			for (let y = 0; y < lines.length; y++) {
+				const line = lines[y]!;
+				expect(line, `row ${y}: ├◄ collision`).not.toContain("├◄");
+				expect(line, `row ${y}: ►┤ collision`).not.toContain("►┤");
+			}
+		}
+	});
+
+	it("no junction directly adjacent to opposing arrowhead (vertical)", () => {
+		for (const src of [SELF_LOOP_AND_OUTGOING, SELF_LOOP_WITH_PARENT, SIBLING_COLLISION]) {
+			const { chars } = renderDiagram(src);
+			const maxY = chars[0]?.length ?? 0;
+			for (let x = 0; x < chars.length; x++) {
+				for (let y = 0; y < maxY - 1; y++) {
+					const curr = chars[x]?.[y];
+					const below = chars[x]?.[y + 1];
+					expect(curr === "┬" && below === "▲", `(${x},${y}): ┬▲ collision`).toBe(false);
+					expect(curr === "▼" && below === "┴", `(${x},${y}): ▼┴ collision`).toBe(false);
+				}
+			}
+		}
+	});
+
+	it("self-loop + outgoing edge: both labels present", () => {
+		const { chars } = renderDiagram(SELF_LOOP_AND_OUTGOING);
+		const text = canvasToString(chars);
+		expect(text, "outgoing edge label missing").toContain("outgoing");
+		expect(text, "self-loop label missing").toContain("loop");
+	});
+});
+
+// ============================================================================
+// 9. Horizontal Bidirectional Label Completeness
+// ============================================================================
+
+describe("horizontal bidirectional labels", () => {
+	const HORIZ_BIDIR = [
+		"flowchart TD",
+		"  P[Parent] --> A[Left]",
+		"  P --> B[Right]",
+		'  A -->|"alpha"| B',
+		'  B -->|"beta"| A',
+	].join("\n");
+
+	it("both labels appear in horizontal bidirectional edges between siblings", () => {
+		const { chars } = renderDiagram(HORIZ_BIDIR);
+		const text = canvasToString(chars);
+		expect(text, "label 'alpha' missing").toContain("alpha");
+		expect(text, "label 'beta' missing").toContain("beta");
+	});
+
+	it("bidirectional labels do not overlap", () => {
+		const { chars } = renderDiagram(HORIZ_BIDIR);
+		const alphaPositions = findText(chars, "alpha");
+		const betaPositions = findText(chars, "beta");
+		expect(alphaPositions.length, "alpha not found").toBeGreaterThan(0);
+		expect(betaPositions.length, "beta not found").toBeGreaterThan(0);
+		const alphaSet = new Set<string>();
+		for (const pos of alphaPositions) {
+			for (let i = 0; i < "alpha".length; i++) {
+				alphaSet.add(`${pos.x + i},${pos.y}`);
+			}
+		}
+		for (const pos of betaPositions) {
+			for (let i = 0; i < "beta".length; i++) {
+				expect(alphaSet.has(`${pos.x + i},${pos.y}`), `labels overlap at (${pos.x + i},${pos.y})`).toBe(false);
+			}
+		}
+	});
+
+	it("both arrowheads present for horizontal bidirectional edges", () => {
+		const { chars } = renderDiagram(HORIZ_BIDIR);
+		const left = findChar(chars, "◄");
+		const right = findChar(chars, "►");
+		const up = findChar(chars, "▲");
+		const down = findChar(chars, "▼");
+		const hasHorizPair = left.length > 0 && right.length > 0;
+		const hasVertPair = up.length > 0 && down.length > 0;
+		expect(hasHorizPair || hasVertPair, "need opposing arrowheads for bidirectional edges").toBe(true);
+	});
+});

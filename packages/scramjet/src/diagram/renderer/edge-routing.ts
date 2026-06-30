@@ -141,6 +141,17 @@ export function determineStartAndEndDir(
 	return [preferredDir, preferredOppositeDir, alternativeDir, alternativeOppositeDir];
 }
 
+function isSecondaryBidirectional(graph: AsciiGraph, edge: AsciiEdge, effectiveDir: string): boolean {
+	const fromGc = edge.from.gridCoord!;
+	const toGc = edge.to.gridCoord!;
+	const sameLevel = effectiveDir === "LR" ? fromGc.x === toGc.x : fromGc.y === toGc.y;
+	if (!sameLevel) return false;
+	const hasOpposing = graph.edges.some((e) => e.from === edge.to && e.to === edge.from);
+	if (!hasOpposing) return false;
+	if (effectiveDir === "LR") return fromGc.y > toGc.y;
+	return fromGc.x > toGc.x;
+}
+
 export function determinePath(graph: AsciiGraph, edge: AsciiEdge): void {
 	const sourceSg = getNodeSubgraph(graph, edge.from);
 	const targetSg = getNodeSubgraph(graph, edge.to);
@@ -154,6 +165,36 @@ export function determinePath(graph: AsciiGraph, edge: AsciiEdge): void {
 			edge.endDir = selfPath.endDir;
 			edge.path = selfPath.path;
 			return;
+		}
+	}
+
+	if (isSecondaryBidirectional(graph, edge, effectiveDir)) {
+		const fromGc = edge.from.gridCoord!;
+		const toGc = edge.to.gridCoord!;
+		if (effectiveDir === "TD") {
+			const shiftedFrom = { x: fromGc.x, y: fromGc.y };
+			const shiftedTo = { x: toGc.x + 2, y: toGc.y };
+			if (isFreeInGrid(graph.grid, { x: Math.min(shiftedFrom.x, shiftedTo.x) + 1, y: shiftedFrom.y })) {
+				const path = getPath(graph.grid, shiftedFrom, shiftedTo);
+				if (path) {
+					edge.startDir = Left;
+					edge.endDir = Right;
+					edge.path = mergePath(path);
+					return;
+				}
+			}
+		} else {
+			const shiftedFrom = { x: fromGc.x, y: fromGc.y };
+			const shiftedTo = { x: toGc.x, y: toGc.y + 2 };
+			if (isFreeInGrid(graph.grid, { x: shiftedFrom.x, y: Math.min(shiftedFrom.y, shiftedTo.y) + 1 })) {
+				const path = getPath(graph.grid, shiftedFrom, shiftedTo);
+				if (path) {
+					edge.startDir = Up;
+					edge.endDir = Down;
+					edge.path = mergePath(path);
+					return;
+				}
+			}
 		}
 	}
 
@@ -205,6 +246,15 @@ export function determinePath(graph: AsciiGraph, edge: AsciiEdge): void {
 	edge.path = [prefFrom, prefTo];
 }
 
+function hasSiblingEdgeOnSide(graph: AsciiGraph, node: typeof graph.nodes[number], side: GridDirection): boolean {
+	for (const e of graph.edges) {
+		if (e.from === e.to) continue;
+		if (e.from === node && e.to.gridCoord!.y === node.gridCoord!.y && dirEquals(side, Right)) return true;
+		if (e.from === node && e.to.gridCoord!.x === node.gridCoord!.x && dirEquals(side, Down)) return true;
+	}
+	return false;
+}
+
 function buildSelfLoopPath(
 	graph: AsciiGraph,
 	edge: AsciiEdge,
@@ -222,10 +272,20 @@ function buildSelfLoopPath(
 			isFreeInGrid(graph.grid, rightBelow) &&
 			isFreeInGrid(graph.grid, below)
 		) {
+			let entryCell = { x: gc.x + 1, y: gc.y + 2 };
+			let entryApproach = below;
+			if (hasSiblingEdgeOnSide(graph, edge.from, Down)) {
+				const shifted = { x: gc.x + 0, y: gc.y + 3 };
+				const shiftedEntry = { x: gc.x + 0, y: gc.y + 2 };
+				if (isFreeInGrid(graph.grid, shifted)) {
+					entryApproach = shifted;
+					entryCell = shiftedEntry;
+				}
+			}
 			return {
 				startDir: Right,
 				endDir: Down,
-				path: [{ x: gc.x + 1, y: gc.y + 1 }, right, rightBelow, below, { x: gc.x + 1, y: gc.y + 2 }],
+				path: [{ x: gc.x + 1, y: gc.y + 1 }, right, rightBelow, entryApproach, entryCell],
 			};
 		}
 		return null;
@@ -240,10 +300,20 @@ function buildSelfLoopPath(
 		isFreeInGrid(graph.grid, belowRight) &&
 		isFreeInGrid(graph.grid, right)
 	) {
+		let entryCell = { x: gc.x + 2, y: gc.y + 1 };
+		let entryApproach = right;
+		if (hasSiblingEdgeOnSide(graph, edge.from, Right)) {
+			const shifted = { x: gc.x + 3, y: gc.y + 0 };
+			const shiftedEntry = { x: gc.x + 2, y: gc.y + 0 };
+			if (isFreeInGrid(graph.grid, shifted)) {
+				entryApproach = shifted;
+				entryCell = shiftedEntry;
+			}
+		}
 		return {
 			startDir: Down,
 			endDir: Right,
-			path: [{ x: gc.x + 1, y: gc.y + 2 }, below, belowRight, right, { x: gc.x + 2, y: gc.y + 1 }],
+			path: [{ x: gc.x + 1, y: gc.y + 2 }, below, belowRight, entryApproach, entryCell],
 		};
 	}
 	return null;
@@ -275,10 +345,11 @@ export function determineLabelLine(graph: AsciiGraph, edge: AsciiEdge): void {
 	let largestLine: [GridCoord, GridCoord];
 
 	if (suitableSegments.length > 0) {
-		suitableSegments.sort((a, b) => b.index - a.index);
+		const isSelfLoop = edge.from === edge.to;
+		suitableSegments.sort((a, b) => isSelfLoop ? a.index - b.index : b.index - a.index);
 		largestLine = suitableSegments[0]!.line;
 	} else {
-		const fallbackSegments = segments.filter((s) => s.width >= lenLabel);
+		const fallbackSegments = segments.filter((s) => s.width >= lenLabel && s.index < maxSegmentIndex);
 		if (fallbackSegments.length > 0) {
 			fallbackSegments.sort((a, b) => b.index - a.index);
 			largestLine = fallbackSegments[0]!.line;
