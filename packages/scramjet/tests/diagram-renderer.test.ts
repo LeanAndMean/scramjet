@@ -287,4 +287,9 @@ describe("renderDiagram end-to-end", () => {
 		expect(text).toContain("issue-review");
 		expect(text).toContain("pr-review-fix");
 	});
+
+	it("self-loop with long label at tight padding does not crash (zero-width grid cell bug)", () => {
+		const source = 'flowchart TD\n    A[Node A] -->|"some long label text here"| A';
+		expect(() => renderDiagram(source, { paddingX: 1, paddingY: 1, boxBorderPadding: 1 })).not.toThrow();
+	});
 });

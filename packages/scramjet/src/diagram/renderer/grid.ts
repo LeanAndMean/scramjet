@@ -102,10 +102,10 @@ export function setColumnWidth(graph: AsciiGraph, node: AsciiNode): void {
 export function increaseGridSizeForPath(graph: AsciiGraph, path: GridCoord[]): void {
 	for (const c of path) {
 		if (!graph.columnWidth.has(c.x)) {
-			graph.columnWidth.set(c.x, Math.floor(graph.config.paddingX / 2));
+			graph.columnWidth.set(c.x, Math.max(1, Math.floor(graph.config.paddingX / 2)));
 		}
 		if (!graph.rowHeight.has(c.y)) {
-			graph.rowHeight.set(c.y, Math.floor(graph.config.paddingY / 2));
+			graph.rowHeight.set(c.y, Math.max(1, Math.floor(graph.config.paddingY / 2)));
 		}
 	}
 }
