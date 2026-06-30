@@ -192,13 +192,17 @@ export function drawLine(
 // Arrow drawing
 // ============================================================================
 
-export function drawArrow(graph: AsciiGraph, edge: AsciiEdge): [Canvas, Canvas, Canvas, Canvas, Canvas, Canvas] {
+export function drawArrow(
+	graph: AsciiGraph,
+	edge: AsciiEdge,
+	sharedLabelCanvas?: Canvas,
+): [Canvas, Canvas, Canvas, Canvas, Canvas] {
 	if (edge.path.length === 0) {
 		const empty = copyCanvas(graph.canvas);
-		return [empty, empty, empty, empty, empty, empty];
+		return [empty, empty, empty, empty, empty];
 	}
 
-	const labelCanvas = drawArrowLabel(graph, edge);
+	drawArrowLabel(graph, edge, sharedLabelCanvas);
 	const [pathCanvas, linesDrawn, lineDirs] = drawPath(graph, edge.path, edge.style);
 	const boxStartCanvas = drawBoxStart(graph, edge.path, linesDrawn[0]!, edge.from.shape);
 
@@ -229,7 +233,7 @@ export function drawArrow(graph: AsciiGraph, edge: AsciiEdge): [Canvas, Canvas, 
 
 	const cornersCanvas = drawCorners(graph, edge.path);
 
-	return [pathCanvas, boxStartCanvas, arrowHeadEndCanvas, arrowHeadStartCanvas, cornersCanvas, labelCanvas];
+	return [pathCanvas, boxStartCanvas, arrowHeadEndCanvas, arrowHeadStartCanvas, cornersCanvas];
 }
 
 function drawPath(
@@ -371,8 +375,8 @@ function drawCorners(graph: AsciiGraph, path: GridCoord[]): Canvas {
 	return canvas;
 }
 
-function drawArrowLabel(graph: AsciiGraph, edge: AsciiEdge): Canvas {
-	const canvas = copyCanvas(graph.canvas);
+function drawArrowLabel(graph: AsciiGraph, edge: AsciiEdge, sharedCanvas?: Canvas): Canvas {
+	const canvas = sharedCanvas ?? copyCanvas(graph.canvas);
 	if (edge.text.length === 0) return canvas;
 
 	const drawingLine = lineToDrawing(graph, edge.labelLine);
@@ -457,11 +461,11 @@ function drawBundledEdgeSegment(
 	graph: AsciiGraph,
 	edge: AsciiEdge,
 	bundle: EdgeBundle,
-): [Canvas, Canvas, Canvas, Canvas, Canvas, Canvas] {
+): [Canvas, Canvas, Canvas, Canvas, Canvas] {
 	const empty = copyCanvas(graph.canvas);
 
 	if (!edge.pathToJunction || edge.pathToJunction.length === 0) {
-		return [empty, empty, empty, empty, empty, empty];
+		return [empty, empty, empty, empty, empty];
 	}
 
 	const pathCanvas = copyCanvas(graph.canvas);
@@ -537,9 +541,7 @@ function drawBundledEdgeSegment(
 		}
 	}
 
-	const labelCanvas = copyCanvas(graph.canvas);
-
-	return [pathCanvas, boxStartCanvas, empty, empty, cornersCanvas, labelCanvas];
+	return [pathCanvas, boxStartCanvas, empty, empty, cornersCanvas];
 }
 
 function drawBundleSharedPath(graph: AsciiGraph, bundle: EdgeBundle): [Canvas, Canvas] {
@@ -884,7 +886,7 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 	const arrowHeadEndCanvases: Canvas[] = [];
 	const arrowHeadStartCanvases: Canvas[] = [];
 	const boxStartCanvases: Canvas[] = [];
-	const labelCanvases: Canvas[] = [];
+	const sharedLabelCanvas = copyCanvas(graph.canvas);
 	const junctionCanvases: Canvas[] = [];
 
 	const processedBundles = new Set<EdgeBundle>();
@@ -893,11 +895,10 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 		if (edge.bundle && edge.pathToJunction) {
 			const bundle = edge.bundle;
 
-			const [pathC, boxStartC, , , cornersC, labelC] = drawBundledEdgeSegment(graph, edge, bundle);
+			const [pathC, boxStartC, , , cornersC] = drawBundledEdgeSegment(graph, edge, bundle);
 			lineCanvases.push(pathC);
 			cornerCanvases.push(cornersC);
 			boxStartCanvases.push(boxStartC);
-			labelCanvases.push(labelC);
 
 			if (!processedBundles.has(bundle)) {
 				processedBundles.add(bundle);
@@ -920,13 +921,12 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 				arrowHeadEndCanvases.push(arrowHeadC);
 			}
 		} else {
-			const [pathC, boxStartC, arrowHeadEndC, arrowHeadStartC, cornersC, labelC] = drawArrow(graph, edge);
+			const [pathC, boxStartC, arrowHeadEndC, arrowHeadStartC, cornersC] = drawArrow(graph, edge, sharedLabelCanvas);
 			lineCanvases.push(pathC);
 			cornerCanvases.push(cornersC);
 			arrowHeadEndCanvases.push(arrowHeadEndC);
 			arrowHeadStartCanvases.push(arrowHeadStartC);
 			boxStartCanvases.push(boxStartC);
-			labelCanvases.push(labelC);
 		}
 	}
 
@@ -948,8 +948,8 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 	graph.canvas = mergeCanvases(graph.canvas, zero, useAscii, ...arrowHeadStartCanvases);
 	fillRolesFromCanvases(graph.roleCanvas, arrowHeadStartCanvases, zero, "arrow");
 
-	graph.canvas = mergeCanvases(graph.canvas, zero, useAscii, ...labelCanvases);
-	fillRolesFromCanvases(graph.roleCanvas, labelCanvases, zero, "text");
+	graph.canvas = mergeCanvases(graph.canvas, zero, useAscii, sharedLabelCanvas);
+	fillRolesFromCanvas(graph.roleCanvas, sharedLabelCanvas, zero, "text");
 
 	for (const sg of graph.subgraphs) {
 		if (sg.nodes.length === 0) continue;

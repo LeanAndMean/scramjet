@@ -293,17 +293,21 @@ export function drawText(canvas: Canvas, start: DrawingCoord, text: string, forc
 	const vw = visibleWidth(text);
 	increaseSize(canvas, start.x + vw - 1, start.y);
 
+	if (!forceOverwrite) {
+		let checkCol = start.x;
+		for (const char of text) {
+			if (canvas[checkCol]?.[start.y] !== undefined && canvas[checkCol]![start.y] !== " ") return;
+			checkCol += visibleWidth(char);
+		}
+	}
+
 	let col = start.x;
 	for (const char of text) {
 		const charWidth = visibleWidth(char);
-		const current = canvas[col]![start.y]!;
-		if (forceOverwrite || current === " ") {
-			canvas[col]![start.y] = char;
-			// Fill phantom cells for double-width chars
-			for (let w = 1; w < charWidth; w++) {
-				if (col + w < canvas.length) {
-					canvas[col + w]![start.y] = "";
-				}
+		canvas[col]![start.y] = char;
+		for (let w = 1; w < charWidth; w++) {
+			if (col + w < canvas.length) {
+				canvas[col + w]![start.y] = "";
 			}
 		}
 		col += charWidth;

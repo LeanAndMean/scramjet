@@ -108,7 +108,7 @@ describe("canvas", () => {
 	});
 
 	describe("drawText", () => {
-		it("only writes to empty cells (preserves existing content)", () => {
+		it("skips entire write when any target cell is occupied", () => {
 			const canvas = mkCanvas(4, 0);
 			canvas[0]![0] = "H";
 			canvas[1]![0] = "i";
@@ -116,9 +116,19 @@ describe("canvas", () => {
 			drawText(canvas, { x: 0, y: 0 }, "Bye!!");
 			expect(canvas[0]![0]).toBe("H");
 			expect(canvas[1]![0]).toBe("i");
-			expect(canvas[2]![0]).toBe("e");
+			expect(canvas[2]![0]).toBe(" ");
+			expect(canvas[3]![0]).toBe(" ");
+			expect(canvas[4]![0]).toBe(" ");
+		});
+
+		it("writes when all target cells are spaces", () => {
+			const canvas = mkCanvas(4, 0);
+
+			drawText(canvas, { x: 1, y: 0 }, "Hi!");
+			expect(canvas[0]![0]).toBe(" ");
+			expect(canvas[1]![0]).toBe("H");
+			expect(canvas[2]![0]).toBe("i");
 			expect(canvas[3]![0]).toBe("!");
-			expect(canvas[4]![0]).toBe("!");
 		});
 
 		it("overwrites when forceOverwrite is true", () => {
@@ -247,5 +257,34 @@ describe("renderDiagram end-to-end", () => {
 		const text = canvasToString(chars);
 		expect(text).toContain("Node A");
 		expect(text).toContain("Node B");
+	});
+
+	it("overlapping edge labels do not produce corruption", () => {
+		const source = [
+			"flowchart TD",
+			'    IC["issue-create"] -->|open| IP["issue-plan"]',
+			'    IP -->|open| IR["issue-review"]',
+			'    IP -->|open| II["issue-implement"]',
+			"    IR -->|open| IR",
+			"    IR -->|open| II",
+			"    II -->|open| II",
+			'    II -->|open| PC["pr-create"]',
+			'    PC -->|open| PRV["pr-review"]',
+			'    PRV -->|forced| PRA["pr-review-assessment"]',
+			'    PRA -->|closed| PRF["pr-review-fix"]',
+			'    PRA -->|closed| PPM["pr-pre-merge"]',
+			"    PRF -->|open| PRF",
+			"    PRF -->|open| PRV",
+			"    PRF -->|open| PPM",
+			'    PPM -->|open| PM["pr-merge"]',
+			"    PPM -->|open| PRF",
+		].join("\n");
+		const { chars } = renderDiagram(source, { paddingX: 5, paddingY: 5, boxBorderPadding: 2 });
+		const text = canvasToString(chars);
+		expect(text).not.toContain("oopen");
+		expect(text).not.toContain("openn");
+		expect(text).toContain("open");
+		expect(text).toContain("issue-review");
+		expect(text).toContain("pr-review-fix");
 	});
 });
