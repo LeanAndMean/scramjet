@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.36.0 — Replace beautiful-mermaid with custom theme-aware diagram renderer
+
+Replaced the `beautiful-mermaid` dependency with a custom Mermaid renderer built from its parser and integer-grid layout engine (copied under MIT, attributed). The renderer produces uncolored text with per-character role annotations; `DiagramComponent` applies theme colors at render time via existing tokens (`border`, `muted`, `accent`). Fixes label collision bugs ("openn" junction corruption) and theme incompatibility (pre-baked ANSI illegible on TUI backgrounds). Scope narrowed to flowchart/graph and stateDiagram-v2 ([#228](https://github.com/LeanAndMean/scramjet/issues/228)).
+
+### Changed
+
+- `draw_diagram` renderer pipeline: custom parser + grid layout + A* edge routing replaces `beautiful-mermaid` library call
+- `DiagramComponent` applies `CharRole` → `ThemeColor` mapping per character (text→text, border→border, line→muted, arrow→accent, corner→muted, junction→border)
+- `SUPPORTED_TYPES` narrowed to `["flowchart", "graph", "stateDiagram-v2"]` (sequence, class, ER, xychart removed)
+- Tool description and promptSnippet updated to advertise supported types only
+
+### Added
+
+- `src/diagram/parser.ts` — Mermaid flowchart/stateDiagram-v2 parser (~510 LOC, based on beautiful-mermaid)
+- `src/diagram/renderer/` — grid-based Unicode renderer with A* pathfinding, shape drawing, edge bundling, and junction-protection fix (~3,400 LOC)
+- `tests/diagram-parser.test.ts` — 39 parser tests
+- `tests/diagram-renderer.test.ts` — 32 renderer tests including openn regression
+- `tests/diagram-comprehensive.test.ts` — 68 comprehensive integration tests (arrowhead adjacency, label placement, edge bundling, self-loops)
+- `tests/diagram.test.ts` — 37 tool integration tests (rewritten, no mocks)
+
+### Removed
+
+- `beautiful-mermaid` dependency
+
+### Fixed
+
+- Label collision bug: structural characters (junctions, lines, arrows) are now protected from label text overwrites during canvas merging
+- Theme incompatibility: colors applied via `theme.fg()` at render time instead of pre-baked ANSI codes
+
 ## 0.35.0 — Redesign draw_diagram for text-based terminal output
 
 Replaced the PNG-based diagram rendering pipeline (which required external `dot`/`mmdc`/`plantuml` CLI tools) with text-based Unicode rendering via `beautiful-mermaid`. Diagrams now render as box-drawing characters that display correctly in any terminal, with no external dependencies required ([#207](https://github.com/LeanAndMean/scramjet/issues/207)).

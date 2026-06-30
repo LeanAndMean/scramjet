@@ -1,14 +1,7 @@
+import type { Theme } from "@leanandmean/coding-agent";
 import { visibleWidth } from "@leanandmean/tui";
-import type { AsciiRenderOptions } from "beautiful-mermaid";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const mockRenderMermaidASCII = vi.fn<(text: string, options?: AsciiRenderOptions) => string>();
-
-vi.mock("beautiful-mermaid", () => ({
-	renderMermaidASCII: (...args: Parameters<typeof mockRenderMermaidASCII>) => mockRenderMermaidASCII(...args),
-}));
-
-const { registerDiagramTool } = await import("../src/diagram/diagram-tool.js");
+import { beforeEach, describe, expect, it } from "vitest";
+import { registerDiagramTool } from "../src/diagram/diagram-tool.js";
 
 function recordingPi() {
 	const tools: any[] = [];
@@ -20,25 +13,44 @@ function recordingPi() {
 	return { pi, tools };
 }
 
-function narrowOutput(width: number): string {
-	return Array.from({ length: 5 }, () => "x".repeat(width)).join("\n");
+function mockTheme(): Theme {
+	return {
+		fg(_color: string, text: string) {
+			return `\x1b[38;5;1m${text}\x1b[39m`;
+		},
+	} as unknown as Theme;
+}
+
+function mockContext(lastComponent?: any) {
+	return {
+		lastComponent,
+		args: {},
+		toolCallId: "tc-1",
+		invalidate() {},
+		cwd: "/",
+		executionStarted: true,
+		argsComplete: true,
+		isPartial: false,
+		expanded: true,
+		showImages: false,
+		isError: false,
+	};
 }
 
 describe("registerDiagramTool", () => {
-	it("registers exactly one tool unconditionally", () => {
+	it("registers exactly one tool", () => {
 		const { pi, tools } = recordingPi();
 		registerDiagramTool(pi);
 		expect(tools).toHaveLength(1);
 		expect(tools[0].name).toBe("draw_diagram");
 	});
 
-	it("tool has correct parameter schema — source required, title optional, no format", () => {
+	it("tool has correct parameter schema — source required, title optional", () => {
 		const { pi, tools } = recordingPi();
 		registerDiagramTool(pi);
 		const params = tools[0].parameters;
 		expect(params.properties.source).toBeDefined();
 		expect(params.properties.title).toBeDefined();
-		expect(params.properties.format).toBeUndefined();
 		expect(params.required).toContain("source");
 		expect(params.required).not.toContain("title");
 	});
@@ -47,13 +59,15 @@ describe("registerDiagramTool", () => {
 		const { pi, tools } = recordingPi();
 		registerDiagramTool(pi);
 		expect(tools[0].description).toContain("flowchart");
-		expect(tools[0].description).toContain("sequenceDiagram");
+		expect(tools[0].description).toContain("stateDiagram-v2");
 	});
 
-	it("promptSnippet mentions Mermaid syntax", () => {
+	it("promptSnippet mentions Mermaid syntax and supported types", () => {
 		const { pi, tools } = recordingPi();
 		registerDiagramTool(pi);
 		expect(tools[0].promptSnippet).toMatch(/[Mm]ermaid/);
+		expect(tools[0].promptSnippet).toContain("flowchart");
+		expect(tools[0].promptSnippet).toContain("stateDiagram-v2");
 	});
 });
 
@@ -61,138 +75,95 @@ describe("execute", () => {
 	let tool: any;
 
 	beforeEach(() => {
-		mockRenderMermaidASCII.mockReset();
 		const { pi, tools } = recordingPi();
 		registerDiagramTool(pi);
 		tool = tools[0];
 	});
 
-	it("returns text content when diagram fits at spacious tier", async () => {
-		mockRenderMermaidASCII.mockReturnValue(narrowOutput(80));
-		const result = await tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined);
+	it("returns text content for valid flowchart, no ANSI", async () => {
+		const result = await tool.execute("call-1", { source: "graph LR\n  A --> B" });
 		expect(result.content).toHaveLength(1);
 		expect(result.content[0].type).toBe("text");
-		expect(result.content[0].text).toContain("x".repeat(80));
-		expect(mockRenderMermaidASCII).toHaveBeenCalledTimes(1);
-		expect(mockRenderMermaidASCII.mock.calls[0][1]).toMatchObject({ colorMode: "none", paddingX: 5 });
+		expect(result.content[0].text).toContain("A");
+		expect(result.content[0].text).toContain("B");
+		expect(result.content[0].text).not.toMatch(/\x1b\[/);
 	});
 
-	it("compacts to tier 2 when tier 1 exceeds MAX_WIDTH", async () => {
-		mockRenderMermaidASCII
-			.mockReturnValueOnce(narrowOutput(130)) // tier 1 too wide
-			.mockReturnValueOnce(narrowOutput(100)); // tier 2 fits
-		const result = await tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined);
-		expect(mockRenderMermaidASCII).toHaveBeenCalledTimes(2);
-		expect(mockRenderMermaidASCII.mock.calls[1][1]).toMatchObject({ colorMode: "none", paddingX: 3 });
-		expect(result.content[0].text).toContain("x".repeat(100));
-	});
-
-	it("compacts to tier 3 when tiers 1-2 exceed MAX_WIDTH", async () => {
-		mockRenderMermaidASCII
-			.mockReturnValueOnce(narrowOutput(130)) // tier 1
-			.mockReturnValueOnce(narrowOutput(125)) // tier 2
-			.mockReturnValueOnce(narrowOutput(110)); // tier 3 fits
-		const result = await tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined);
-		expect(mockRenderMermaidASCII).toHaveBeenCalledTimes(3);
-		expect(mockRenderMermaidASCII.mock.calls[2][1]).toMatchObject({ colorMode: "none", paddingX: 1 });
-		expect(result.content[0].text).toContain("x".repeat(110));
-	});
-
-	it("succeeds at exactly MAX_WIDTH (120 columns)", async () => {
-		mockRenderMermaidASCII.mockReturnValue(narrowOutput(120));
-		const result = await tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined);
-		expect(result.content[0].text).toContain("x".repeat(120));
-	});
-
-	it("rejects when all tiers exceed MAX_WIDTH", async () => {
-		mockRenderMermaidASCII.mockReturnValue(narrowOutput(150));
-		await expect(
-			tool.execute("call-1", { source: "graph LR; A-->B-->C-->D-->E" }, undefined, undefined, undefined),
-		).rejects.toThrow(/too wide.*150 columns.*max 120/i);
-	});
-
-	it("rejection error includes simplification guidance", async () => {
-		mockRenderMermaidASCII.mockReturnValue(narrowOutput(200));
-		await expect(
-			tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined),
-		).rejects.toThrow(/simplify/i);
-	});
-
-	it("width rejection error is NOT misclassified as syntax error (F1)", async () => {
-		mockRenderMermaidASCII.mockReturnValue(narrowOutput(150));
-		await expect(
-			tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined),
-		).rejects.toThrow(/too wide/i);
-		await expect(
-			tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined),
-		).rejects.not.toThrow(/invalid mermaid syntax/i);
-	});
-
-	it("classifies unsupported diagram type errors", async () => {
-		mockRenderMermaidASCII.mockImplementation(() => {
-			throw new Error('Invalid mermaid header: "gantt"');
-		});
-		await expect(
-			tool.execute("call-1", { source: "gantt\ntitle A" }, undefined, undefined, undefined),
-		).rejects.toThrow(/unsupported diagram type.*gantt.*supported types/i);
-	});
-
-	it("classifies parse errors", async () => {
-		mockRenderMermaidASCII.mockImplementation(() => {
-			throw new Error("Unexpected token at line 3");
-		});
-		await expect(
-			tool.execute("call-1", { source: "graph LR;\n  broken" }, undefined, undefined, undefined),
-		).rejects.toThrow(/invalid mermaid syntax/i);
-	});
-
-	it("classifies empty diagram errors", async () => {
-		mockRenderMermaidASCII.mockImplementation(() => {
-			throw new Error("Empty mermaid diagram");
-		});
-		await expect(tool.execute("call-1", { source: "" }, undefined, undefined, undefined)).rejects.toThrow(
-			/empty diagram source/i,
-		);
-	});
-
-	it("uses colorMode 'none' for model-facing content (no ANSI)", async () => {
-		mockRenderMermaidASCII.mockReturnValue("plain text output");
-		await tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined);
-		for (const call of mockRenderMermaidASCII.mock.calls) {
-			expect(call[1]).toMatchObject({ colorMode: "none" });
+	it("output width does not exceed MAX_WIDTH (120)", async () => {
+		const result = await tool.execute("call-1", { source: "graph TD\n  A --> B\n  B --> C\n  C --> D" });
+		for (const line of result.content[0].text.split("\n")) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(120);
 		}
 	});
 
-	it("includes title in content when provided", async () => {
-		mockRenderMermaidASCII.mockReturnValue(narrowOutput(80));
-		const result = await tool.execute(
-			"call-1",
-			{ source: "graph LR; A-->B", title: "My Diagram" },
-			undefined,
-			undefined,
-			undefined,
+	it("unsupported type sequenceDiagram → error", async () => {
+		await expect(tool.execute("call-1", { source: "sequenceDiagram\n  A->>B: hi" })).rejects.toThrow(
+			/unsupported diagram type/i,
 		);
+	});
+
+	it("unsupported type classDiagram → error", async () => {
+		await expect(tool.execute("call-1", { source: "classDiagram\n  class Animal" })).rejects.toThrow(
+			/unsupported diagram type/i,
+		);
+	});
+
+	it("unsupported type erDiagram → error", async () => {
+		await expect(tool.execute("call-1", { source: "erDiagram\n  CUSTOMER ||--o{ ORDER : places" })).rejects.toThrow(
+			/unsupported diagram type/i,
+		);
+	});
+
+	it("unsupported type xychart-beta → error", async () => {
+		await expect(tool.execute("call-1", { source: "xychart-beta\n  title Sales" })).rejects.toThrow(
+			/unsupported diagram type/i,
+		);
+	});
+
+	it("unsupported type error lists supported types", async () => {
+		await expect(tool.execute("call-1", { source: "gantt\n  title A" })).rejects.toThrow(
+			/supported types.*flowchart.*graph.*stateDiagram-v2/i,
+		);
+	});
+
+	it("invalid header → classified as unsupported type", async () => {
+		await expect(tool.execute("call-1", { source: "pie\n  title Budget" })).rejects.toThrow(
+			/unsupported diagram type.*pie/i,
+		);
+	});
+
+	it("empty source → classified error", async () => {
+		await expect(tool.execute("call-1", { source: "" })).rejects.toThrow(/empty diagram source/i);
+	});
+
+	it("whitespace-only source → classified error", async () => {
+		await expect(tool.execute("call-1", { source: "   \n\n  " })).rejects.toThrow(/empty diagram source/i);
+	});
+
+	it("includes title in content when provided", async () => {
+		const result = await tool.execute("call-1", { source: "graph LR\n  A --> B", title: "My Diagram" });
 		expect(result.content[0].text).toMatch(/^My Diagram\n/);
 	});
 
 	it("does not include title prefix when title is omitted", async () => {
-		mockRenderMermaidASCII.mockReturnValue("rendered");
-		const result = await tool.execute("call-1", { source: "graph LR; A-->B" }, undefined, undefined, undefined);
-		expect(result.content[0].text).toBe("rendered");
+		const result = await tool.execute("call-1", { source: "graph LR\n  A --> B" });
+		expect(result.content[0].text).not.toMatch(/^My Diagram/);
 	});
 
-	it("stores source, title, and tier in details for renderResult", async () => {
-		mockRenderMermaidASCII
-			.mockReturnValueOnce(narrowOutput(130)) // tier 1 too wide
-			.mockReturnValueOnce(narrowOutput(100)); // tier 2 fits
-		const result = await tool.execute(
-			"call-1",
-			{ source: "graph LR; A-->B", title: "Flow" },
-			undefined,
-			undefined,
-			undefined,
+	it("stores source, title, and tier in details", async () => {
+		const source = "graph LR\n  A --> B";
+		const result = await tool.execute("call-1", { source, title: "Flow" });
+		expect(result.details).toMatchObject({ source, title: "Flow" });
+		expect(typeof result.details.tier).toBe("number");
+	});
+
+	it("too-wide diagram → width error with guidance", async () => {
+		const nodes = Array.from({ length: 8 }, (_, i) => `N${i}[ThisIsAVeryLongNodeLabelThatForcesWidth${i}]`).join(
+			"\n  ",
 		);
-		expect(result.details).toEqual({ source: "graph LR; A-->B", title: "Flow", tier: 1 });
+		const edges = Array.from({ length: 7 }, (_, i) => `N${i} --> N${i + 1}`).join("\n  ");
+		const source = `graph LR\n  ${nodes}\n  ${edges}`;
+		await expect(tool.execute("call-1", { source })).rejects.toThrow(/too wide.*max 120.*simplify/i);
 	});
 });
 
@@ -200,27 +171,58 @@ describe("renderResult", () => {
 	let tool: any;
 
 	beforeEach(() => {
-		mockRenderMermaidASCII.mockReset();
 		const { pi, tools } = recordingPi();
 		registerDiagramTool(pi);
 		tool = tools[0];
 	});
 
 	it("returns a DiagramComponent when details.source is present", () => {
-		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
+		const component = tool.renderResult(
+			{ details: { source: "graph LR\n  A --> B", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			mockTheme(),
+			mockContext(),
+		);
 		expect(component).toBeDefined();
 		expect(typeof component.render).toBe("function");
 		expect(typeof component.invalidate).toBe("function");
 	});
 
 	it("returns a PlainTextComponent when no details", () => {
-		const component = tool.renderResult({ content: [{ type: "text", text: "fallback text" }] });
+		const component = tool.renderResult(
+			{ content: [{ type: "text", text: "fallback text" }] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
 		expect(component.render(80)).toEqual(["fallback text"]);
 	});
 
 	it("PlainTextComponent shows '[No diagram]' when content is empty", () => {
-		const component = tool.renderResult({ content: [] });
+		const component = tool.renderResult(
+			{ content: [] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
 		expect(component.render(80)).toEqual(["[No diagram]"]);
+	});
+
+	it("reuses context.lastComponent when source matches", () => {
+		const source = "graph LR\n  A --> B";
+		const first = tool.renderResult(
+			{ details: { source, tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			mockTheme(),
+			mockContext(),
+		);
+		const second = tool.renderResult(
+			{ details: { source, tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			mockTheme(),
+			mockContext(first),
+		);
+		expect(second).toBe(first);
 	});
 });
 
@@ -228,134 +230,157 @@ describe("DiagramComponent", () => {
 	let tool: any;
 
 	beforeEach(() => {
-		mockRenderMermaidASCII.mockReset();
 		const { pi, tools } = recordingPi();
 		registerDiagramTool(pi);
 		tool = tools[0];
 	});
 
-	it("renders with colorMode none (no ANSI in TUI component)", () => {
-		mockRenderMermaidASCII.mockReturnValue("plain output");
-		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
-		component.render(120);
-		expect(mockRenderMermaidASCII).toHaveBeenCalledWith(
-			"graph LR; A-->B",
-			expect.objectContaining({ colorMode: "none" }),
+	it("renders with theme coloring (ANSI in output)", () => {
+		const component = tool.renderResult(
+			{ details: { source: "graph LR\n  A --> B", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			mockTheme(),
+			mockContext(),
 		);
+		const lines = component.render(120);
+		const text = lines.join("\n");
+		expect(text).toMatch(/\x1b\[/);
+	});
+
+	it("renders without ANSI when theme not provided", () => {
+		const component = tool.renderResult(
+			{ details: { source: "graph LR\n  A --> B", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
+		const lines = component.render(120);
+		const text = lines.join("\n");
+		expect(text).not.toMatch(/\x1b\[/);
+		expect(text).toContain("A");
+		expect(text).toContain("B");
 	});
 
 	it("output lines do not exceed render width (visibleWidth)", () => {
-		const longLine = "x".repeat(200);
-		mockRenderMermaidASCII.mockReturnValue(`short\n${longLine}\nend`);
-		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
+		const component = tool.renderResult(
+			{ details: { source: "graph TD\n  A --> B\n  B --> C", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			mockTheme(),
+			mockContext(),
+		);
 		const lines = component.render(80);
-		for (const line of lines) {
-			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
-		}
-	});
-
-	it("selects tighter tier when spacious output exceeds width", () => {
-		mockRenderMermaidASCII
-			.mockReturnValueOnce(narrowOutput(100)) // spacious too wide for width=90
-			.mockReturnValueOnce(narrowOutput(85)); // compact fits
-		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
-		component.render(90);
-		expect(mockRenderMermaidASCII).toHaveBeenCalledTimes(2);
-		expect(mockRenderMermaidASCII.mock.calls[1][1]).toMatchObject({ colorMode: "none", paddingX: 3 });
-	});
-
-	it("falls back to tightest tier when all tiers exceed width", () => {
-		mockRenderMermaidASCII.mockReturnValue(narrowOutput(200));
-		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
-		const lines = component.render(80);
-		expect(lines.length).toBeGreaterThan(0);
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
 		}
 	});
 
 	it("includes title when provided", () => {
-		mockRenderMermaidASCII.mockReturnValue("diagram");
-		const component = tool.renderResult({
-			details: { source: "graph LR; A-->B", title: "Architecture", tier: 0 },
-			content: [],
-		});
+		const component = tool.renderResult(
+			{ details: { source: "graph LR\n  A --> B", title: "Architecture", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
 		const lines = component.render(120);
 		expect(lines[0]).toBe("Architecture");
 		expect(lines[1]).toBe("");
-		expect(lines[2]).toBe("diagram");
 	});
 
-	it("truncates title that exceeds render width (F2)", () => {
-		mockRenderMermaidASCII.mockReturnValue("diagram");
+	it("truncates title that exceeds render width", () => {
 		const longTitle = "A".repeat(200);
-		const component = tool.renderResult({
-			details: { source: "graph LR; A-->B", title: longTitle, tier: 0 },
-			content: [],
-		});
+		const component = tool.renderResult(
+			{ details: { source: "graph LR\n  A --> B", title: longTitle, tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
 		const lines = component.render(80);
 		expect(visibleWidth(lines[0])).toBeLessThanOrEqual(80);
-		expect(lines[1]).toBe("");
 	});
 
 	it("returns error message on render failure without throwing", () => {
-		mockRenderMermaidASCII.mockImplementation(() => {
-			throw new Error("render broke");
-		});
-		const component = tool.renderResult({ details: { source: "bad", tier: 0 }, content: [] });
+		const component = tool.renderResult(
+			{ details: { source: "totally broken {{{{", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
 		const lines = component.render(80);
 		expect(lines).toHaveLength(1);
 		expect(lines[0]).toContain("Diagram render error");
-		expect(lines[0]).toContain("render broke");
 	});
 
-	it("invalidate is callable without error", () => {
-		const component = tool.renderResult({ details: { source: "graph LR; A-->B", tier: 0 }, content: [] });
-		expect(() => component.invalidate()).not.toThrow();
+	it("cache hit: same (source, width) does not re-render", () => {
+		const component = tool.renderResult(
+			{ details: { source: "graph LR\n  A --> B", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
+		const lines1 = component.render(120);
+		const lines2 = component.render(120);
+		expect(lines1).toBe(lines2);
+	});
+
+	it("cache invalidated on invalidate()", () => {
+		const component = tool.renderResult(
+			{ details: { source: "graph LR\n  A --> B", tier: 0 }, content: [] },
+			{ expanded: true, isPartial: false },
+			undefined,
+			mockContext(),
+		);
+		const lines1 = component.render(120);
+		component.invalidate();
+		const lines2 = component.render(120);
+		expect(lines1).not.toBe(lines2);
+		expect(lines1).toEqual(lines2);
 	});
 });
 
-describe("integration with real library", () => {
-	let realRenderMermaidASCII: typeof import("beautiful-mermaid").renderMermaidASCII;
+describe("integration", () => {
+	let tool: any;
 
-	beforeEach(async () => {
-		const lib = await vi.importActual<typeof import("beautiful-mermaid")>("beautiful-mermaid");
-		realRenderMermaidASCII = lib.renderMermaidASCII;
+	beforeEach(() => {
+		const { pi, tools } = recordingPi();
+		registerDiagramTool(pi);
+		tool = tools[0];
 	});
 
-	it("renders a basic flowchart without error", () => {
-		const result = realRenderMermaidASCII("graph LR\n  A --> B\n  B --> C", {
-			colorMode: "none",
-			paddingX: 3,
-			paddingY: 2,
-			boxBorderPadding: 1,
-		});
-		expect(result).toContain("A");
-		expect(result).toContain("B");
-		expect(result).toContain("C");
-		expect(result.split("\n").length).toBeGreaterThan(1);
+	it("10-node flowchart renders with all labels readable", async () => {
+		const source = [
+			"flowchart TD",
+			"  Start[Start] --> Auth[Authentication]",
+			"  Auth --> Valid{Valid?}",
+			"  Valid -->|yes| Process[Process]",
+			"  Valid -->|no| Error[Error]",
+			"  Process --> Cache[Cache]",
+			"  Cache --> Store[Store]",
+			"  Store --> Notify[Notify]",
+			"  Notify --> Log[Log]",
+			"  Log --> End[End]",
+		].join("\n");
+		const result = await tool.execute("call-1", { source });
+		const text = result.content[0].text;
+		for (const label of [
+			"Start",
+			"Authentication",
+			"Valid?",
+			"Process",
+			"Error",
+			"Cache",
+			"Store",
+			"Notify",
+			"Log",
+			"End",
+		]) {
+			expect(text).toContain(label);
+		}
+		for (const line of text.split("\n")) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(120);
+		}
 	});
 
-	it("renders with ansi256 color mode", () => {
-		const result = realRenderMermaidASCII("graph LR\n  A-->B", {
-			colorMode: "ansi256",
-			paddingX: 3,
-			paddingY: 2,
-			boxBorderPadding: 1,
-		});
-		// ANSI escape sequences present
-		expect(result).toMatch(/\x1b\[/);
-		expect(result).toContain("A");
-	});
-
-	it("throws on unsupported diagram type", () => {
-		expect(() => realRenderMermaidASCII("gantt\n  title Test", { colorMode: "none" })).toThrow();
-	});
-
-	it.fails("edge labels are not corrupted at junction points (openn bug)", () => {
-		// When a node has both a self-loop and an outgoing edge with the same label,
-		// and another node also feeds into the target, beautiful-mermaid duplicates
-		// the last character of the label at the junction point (e.g. "open" → "openn┬").
+	it("openn junction bug is fixed — no 'openn' in output", async () => {
 		const source = [
 			"flowchart TD",
 			"    A[NodeA]",
@@ -366,14 +391,28 @@ describe("integration with real library", () => {
 			"    B -->|open| B",
 			"    B -->|open| C",
 		].join("\n");
-		const result = realRenderMermaidASCII(source, {
-			colorMode: "none",
-			paddingX: 5,
-			paddingY: 3,
-			boxBorderPadding: 2,
-		});
-		for (const line of result.split("\n")) {
+		const result = await tool.execute("call-1", { source });
+		for (const line of result.content[0].text.split("\n")) {
 			expect(line).not.toContain("openn");
 		}
+	});
+
+	it("stateDiagram-v2 renders successfully", async () => {
+		const source = [
+			"stateDiagram-v2",
+			"  [*] --> Idle",
+			"  Idle --> Running",
+			"  Running --> Idle",
+			"  Running --> [*]",
+		].join("\n");
+		const result = await tool.execute("call-1", { source });
+		expect(result.content[0].text).toContain("Idle");
+		expect(result.content[0].text).toContain("Running");
+	});
+
+	it("self-loop renders without crash", async () => {
+		const source = "graph TD\n  A[Loop] -->|repeat| A";
+		const result = await tool.execute("call-1", { source });
+		expect(result.content[0].text).toContain("Loop");
 	});
 });
