@@ -1,7 +1,7 @@
 // Based on beautiful-mermaid by Craft Docs, MIT License.
 
 import { getNodeSubgraph } from "./grid.js";
-import { getPath, mergePath } from "./pathfinder.js";
+import { getPath, isFreeInGrid, mergePath } from "./pathfinder.js";
 import type { AsciiEdge, AsciiGraph, GridCoord, GridDirection } from "./types.js";
 import {
 	Down,
@@ -147,6 +147,16 @@ export function determinePath(graph: AsciiGraph, edge: AsciiEdge): void {
 	const effectiveDir =
 		sourceSg && sourceSg === targetSg && sourceSg.direction ? sourceSg.direction : graph.config.graphDirection;
 
+	if (edge.from === edge.to) {
+		const selfPath = buildSelfLoopPath(graph, edge, effectiveDir);
+		if (selfPath) {
+			edge.startDir = selfPath.startDir;
+			edge.endDir = selfPath.endDir;
+			edge.path = selfPath.path;
+			return;
+		}
+	}
+
 	const [preferredDir, preferredOppositeDir, alternativeDir, alternativeOppositeDir] = determineStartAndEndDir(
 		edge,
 		effectiveDir,
@@ -195,6 +205,50 @@ export function determinePath(graph: AsciiGraph, edge: AsciiEdge): void {
 	edge.path = [prefFrom, prefTo];
 }
 
+function buildSelfLoopPath(
+	graph: AsciiGraph,
+	edge: AsciiEdge,
+	effectiveDir: string,
+): { startDir: GridDirection; endDir: GridDirection; path: GridCoord[] } | null {
+	const gc = edge.from.gridCoord!;
+
+	if (effectiveDir === "LR") {
+		// LR: exit Right, loop right and below, enter from Below
+		const right = { x: gc.x + 3, y: gc.y + 1 };
+		const rightBelow = { x: gc.x + 3, y: gc.y + 3 };
+		const below = { x: gc.x + 1, y: gc.y + 3 };
+		if (
+			isFreeInGrid(graph.grid, right) &&
+			isFreeInGrid(graph.grid, rightBelow) &&
+			isFreeInGrid(graph.grid, below)
+		) {
+			return {
+				startDir: Right,
+				endDir: Down,
+				path: [{ x: gc.x + 1, y: gc.y + 1 }, right, rightBelow, below, { x: gc.x + 1, y: gc.y + 2 }],
+			};
+		}
+		return null;
+	}
+
+	// TD: exit Down, loop below and to the right, enter from Right
+	const below = { x: gc.x + 1, y: gc.y + 3 };
+	const belowRight = { x: gc.x + 3, y: gc.y + 3 };
+	const right = { x: gc.x + 3, y: gc.y + 1 };
+	if (
+		isFreeInGrid(graph.grid, below) &&
+		isFreeInGrid(graph.grid, belowRight) &&
+		isFreeInGrid(graph.grid, right)
+	) {
+		return {
+			startDir: Down,
+			endDir: Right,
+			path: [{ x: gc.x + 1, y: gc.y + 2 }, below, belowRight, right, { x: gc.x + 2, y: gc.y + 1 }],
+		};
+	}
+	return null;
+}
+
 export function determineLabelLine(graph: AsciiGraph, edge: AsciiEdge): void {
 	if (edge.text.length === 0) return;
 
@@ -215,7 +269,8 @@ export function determineLabelLine(graph: AsciiGraph, edge: AsciiEdge): void {
 		segments.push({ line, width, index: i });
 	}
 
-	const suitableSegments = segments.filter((s) => s.width >= lenLabel && s.index > 1);
+	const maxSegmentIndex = edge.from === edge.to ? pathLen - 1 : pathLen;
+	const suitableSegments = segments.filter((s) => s.width >= lenLabel && s.index > 1 && s.index < maxSegmentIndex);
 
 	let largestLine: [GridCoord, GridCoord];
 

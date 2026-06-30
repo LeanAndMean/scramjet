@@ -81,7 +81,7 @@ const MOVE_DIRS: GridCoord[] = [
 	{ x: 0, y: -1 },
 ];
 
-function isFreeInGrid(grid: Map<string, AsciiNode>, c: GridCoord): boolean {
+export function isFreeInGrid(grid: Map<string, AsciiNode>, c: GridCoord): boolean {
 	if (c.x < 0 || c.y < 0) return false;
 	return !grid.has(gridKey(c));
 }

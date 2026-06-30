@@ -196,6 +196,74 @@ describe("canvas", () => {
 	});
 });
 
+describe("self-loop and bidirectional edge rendering", () => {
+	it("self-loop arrowhead is adjacent to box border (no gap)", () => {
+		const source = 'flowchart TD\n    A[Node] -->|"Loop"| A';
+		const { chars } = renderDiagram(source);
+		const text = canvasToString(chars);
+		// The self-loop arrowhead must connect to the box (no floating gap)
+		const lines = text.split("\n");
+		const arrowLine = lines.find((l) => l.includes("◄") || l.includes("▲"));
+		expect(arrowLine).toBeDefined();
+		// Arrowhead must be directly adjacent to a box border character
+		expect(
+			arrowLine,
+			`self-loop arrowhead has gap from box: ${arrowLine}`,
+		).toMatch(/[│├┤┬┴][◄▲]|[►▼][│├┤┬┴]/);
+	});
+
+	it("self-loop does not collide with outgoing edge to sibling node", () => {
+		const source = [
+			"flowchart TD",
+			'    P[Parent] -->|"Left"| A[Review]',
+			'    P -->|"Right"| B[Implement]',
+			'    A -->|"Retry"| A',
+			'    A -->|"Done"| B',
+		].join("\n");
+		const { chars } = renderDiagram(source);
+		const text = canvasToString(chars);
+		const lines = text.split("\n");
+		// No line should contain both the self-loop label and
+		// a right-pointing arrowhead (sibling edge entering Implement)
+		for (const line of lines) {
+			if (line.includes("Retry")) {
+				expect(line, `self-loop label collides with sibling edge: ${line}`).not.toMatch(/►/);
+			}
+		}
+	});
+
+	it("bidirectional edges place labels near their own arrowheads", () => {
+		const source = 'flowchart TD\n    A[Alpha] -->|"Forward"| B[Beta]\n    B -->|"Backward"| A';
+		const { chars } = renderDiagram(source);
+		const text = canvasToString(chars);
+		const lines = text.split("\n");
+
+		// Find row indices for arrowheads and labels
+		const upArrowRow = lines.findIndex((l) => l.includes("▲"));
+		const downArrowRow = lines.findIndex((l) => l.includes("▼"));
+		const forwardRow = lines.findIndex((l) => l.includes("Forward"));
+		const backwardRow = lines.findIndex((l) => l.includes("Backward"));
+
+		expect(upArrowRow).toBeGreaterThanOrEqual(0);
+		expect(downArrowRow).toBeGreaterThanOrEqual(0);
+		expect(forwardRow).toBeGreaterThanOrEqual(0);
+		expect(backwardRow).toBeGreaterThanOrEqual(0);
+
+		// ▲ is the B→A arrowhead (entering Alpha from below)
+		// ▼ is the A→B arrowhead (entering Beta from above)
+		// "Forward" (A→B) label should be closer to ▼ than to ▲
+		// "Backward" (B→A) label should be closer to ▲ than to ▼
+		expect(
+			Math.abs(forwardRow - downArrowRow),
+			`Forward label (row ${forwardRow}) should be near ▼ (row ${downArrowRow}), not ▲ (row ${upArrowRow})`,
+		).toBeLessThan(Math.abs(forwardRow - upArrowRow));
+		expect(
+			Math.abs(backwardRow - upArrowRow),
+			`Backward label (row ${backwardRow}) should be near ▲ (row ${upArrowRow}), not ▼ (row ${downArrowRow})`,
+		).toBeLessThan(Math.abs(backwardRow - downArrowRow));
+	});
+});
+
 describe("renderDiagram end-to-end", () => {
 	it("renders a simple 3-node graph with expected labels", () => {
 		const { chars } = renderDiagram("graph TD\n  A[Start] --> B[Middle] --> C[End]");
@@ -307,6 +375,24 @@ describe("renderDiagram end-to-end", () => {
 			const match = line.match(/│(\s+)├/);
 			if (match) {
 				expect(match[1]!.length, `excessive gap in: ${line.trimEnd()}`).toBeLessThanOrEqual(2);
+			}
+		}
+	});
+
+	it("edge labels do not contain line-drawing characters in place of spaces", () => {
+		const source = [
+			"flowchart TD",
+			'    IR[issue-review] -->|"open: Findings remain"| IR',
+			'    IR -->|"open: Plan approved"| II[issue-implement]',
+		].join("\n");
+		const { chars } = renderDiagram(source, { paddingX: 5, paddingY: 5, boxBorderPadding: 2 });
+		const text = canvasToString(chars);
+		for (const line of text.split("\n")) {
+			if (line.includes("Plan") && line.includes("approved")) {
+				expect(line, "line chars bleeding through label spaces").toContain("Plan approved");
+			}
+			if (line.includes("Findings") && line.includes("remain")) {
+				expect(line, "line chars bleeding through label spaces").toContain("Findings remain");
 			}
 		}
 	});

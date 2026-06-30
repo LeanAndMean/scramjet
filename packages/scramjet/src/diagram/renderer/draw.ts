@@ -196,15 +196,16 @@ export function drawArrow(
 	graph: AsciiGraph,
 	edge: AsciiEdge,
 	sharedLabelCanvas?: Canvas,
+	labelRegions?: LabelRegion[],
 ): [Canvas, Canvas, Canvas, Canvas, Canvas] {
 	if (edge.path.length === 0) {
 		const empty = copyCanvas(graph.canvas);
 		return [empty, empty, empty, empty, empty];
 	}
 
-	drawArrowLabel(graph, edge, sharedLabelCanvas);
-	const sourceAttach = edge.from === edge.to ? null : getNodeAttachmentPoint(graph, edge.from, edge.startDir);
-	const targetAttach = edge.from === edge.to ? null : getNodeAttachmentPoint(graph, edge.to, edge.endDir);
+	drawArrowLabel(graph, edge, sharedLabelCanvas, labelRegions);
+	const sourceAttach = getNodeAttachmentPoint(graph, edge.from, edge.startDir);
+	const targetAttach = getNodeAttachmentPoint(graph, edge.to, edge.endDir);
 	const [pathCanvas, linesDrawn, lineDirs] = drawPath(graph, edge.path, edge.style, sourceAttach, targetAttach);
 	const boxStartCanvas = drawBoxStart(graph, edge.path, linesDrawn[0]!, edge.from.shape);
 
@@ -382,7 +383,18 @@ function drawCorners(graph: AsciiGraph, path: GridCoord[]): Canvas {
 	return canvas;
 }
 
-function drawArrowLabel(graph: AsciiGraph, edge: AsciiEdge, sharedCanvas?: Canvas): Canvas {
+interface LabelRegion {
+	x: number;
+	y: number;
+	width: number;
+}
+
+function drawArrowLabel(
+	graph: AsciiGraph,
+	edge: AsciiEdge,
+	sharedCanvas?: Canvas,
+	labelRegions?: LabelRegion[],
+): Canvas {
 	const canvas = sharedCanvas ?? copyCanvas(graph.canvas);
 	if (edge.text.length === 0) return canvas;
 
@@ -399,11 +411,17 @@ function drawArrowLabel(graph: AsciiGraph, edge: AsciiEdge, sharedCanvas?: Canva
 		}
 	}
 
-	drawTextOnLine(canvas, drawingLine, edge.text, isUpwardEdge);
+	drawTextOnLine(canvas, drawingLine, edge.text, isUpwardEdge, labelRegions);
 	return canvas;
 }
 
-function drawTextOnLine(canvas: Canvas, line: DrawingCoord[], label: string, isUpwardEdge?: boolean): void {
+function drawTextOnLine(
+	canvas: Canvas,
+	line: DrawingCoord[],
+	label: string,
+	isUpwardEdge?: boolean,
+	labelRegions?: LabelRegion[],
+): void {
 	if (line.length < 2) return;
 	const minX = Math.min(line[0]!.x, line[1]!.x);
 	const maxX = Math.max(line[0]!.x, line[1]!.x);
@@ -416,9 +434,9 @@ function drawTextOnLine(canvas: Canvas, line: DrawingCoord[], label: string, isU
 		const segmentHeight = maxY - minY;
 		const offset = Math.max(1, Math.floor(segmentHeight / 4));
 		if (isUpwardEdge) {
-			middleY = middleY + offset;
-		} else {
 			middleY = middleY - offset;
+		} else {
+			middleY = middleY + offset;
 		}
 	}
 
@@ -429,6 +447,9 @@ function drawTextOnLine(canvas: Canvas, line: DrawingCoord[], label: string, isU
 		const lineText = lines[i]!;
 		const startX = middleX - Math.floor(lineText.length / 2);
 		drawText(canvas, { x: startX, y: startY + i }, lineText);
+		if (labelRegions) {
+			labelRegions.push({ x: startX, y: startY + i, width: lineText.length });
+		}
 	}
 }
 
@@ -839,16 +860,37 @@ function fillRolesFromCanvases(roleCanvas: RoleCanvas, canvases: Canvas[], offse
 }
 
 function fillRolesForNodeBox(roleCanvas: RoleCanvas, canvas: Canvas, offset: DrawingCoord): void {
-	const isBorderChar = (c: string) => /^[┌┐└┘├┤┬┴┼│─╭╮╰╯+\-|.':]$/.test(c);
+	const lastX = canvas.length - 1;
+	const lastY = (canvas[0]?.length ?? 1) - 1;
 
-	for (let x = 0; x < canvas.length; x++) {
-		for (let y = 0; y < (canvas[0]?.length ?? 0); y++) {
+	for (let x = 0; x <= lastX; x++) {
+		for (let y = 0; y <= lastY; y++) {
 			const char = canvas[x]?.[y];
-			if (char && char !== " ") {
-				const rx = x + offset.x;
-				const ry = y + offset.y;
-				if (rx >= 0 && ry >= 0) {
-					setRole(roleCanvas, rx, ry, isBorderChar(char) ? "border" : "text");
+			if (!char || char === " ") continue;
+			const rx = x + offset.x;
+			const ry = y + offset.y;
+			if (rx < 0 || ry < 0) continue;
+			const isPerimeter = x === 0 || x === lastX || y === 0 || y === lastY;
+			setRole(roleCanvas, rx, ry, isPerimeter ? "border" : "text");
+		}
+	}
+
+	for (let y = 1; y < lastY; y++) {
+		let first = -1;
+		let last = -1;
+		for (let x = 1; x < lastX; x++) {
+			const c = canvas[x]?.[y];
+			if (c && c !== " ") {
+				if (first === -1) first = x;
+				last = x;
+			}
+		}
+		if (first !== -1) {
+			for (let x = first; x <= last; x++) {
+				if (canvas[x]?.[y] === " ") {
+					const rx = x + offset.x;
+					const ry = y + offset.y;
+					if (rx >= 0 && ry >= 0) setRole(roleCanvas, rx, ry, "text");
 				}
 			}
 		}
@@ -894,6 +936,7 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 	const arrowHeadStartCanvases: Canvas[] = [];
 	const boxStartCanvases: Canvas[] = [];
 	const sharedLabelCanvas = copyCanvas(graph.canvas);
+	const labelRegions: LabelRegion[] = [];
 	const junctionCanvases: Canvas[] = [];
 
 	const processedBundles = new Set<EdgeBundle>();
@@ -928,7 +971,7 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 				arrowHeadEndCanvases.push(arrowHeadC);
 			}
 		} else {
-			const [pathC, boxStartC, arrowHeadEndC, arrowHeadStartC, cornersC] = drawArrow(graph, edge, sharedLabelCanvas);
+			const [pathC, boxStartC, arrowHeadEndC, arrowHeadStartC, cornersC] = drawArrow(graph, edge, sharedLabelCanvas, labelRegions);
 			lineCanvases.push(pathC);
 			cornerCanvases.push(cornersC);
 			arrowHeadEndCanvases.push(arrowHeadEndC);
@@ -954,6 +997,14 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 
 	graph.canvas = mergeCanvases(graph.canvas, zero, useAscii, ...arrowHeadStartCanvases);
 	fillRolesFromCanvases(graph.roleCanvas, arrowHeadStartCanvases, zero, "arrow");
+
+	for (const region of labelRegions) {
+		for (let x = region.x; x < region.x + region.width; x++) {
+			if (x >= 0 && x < graph.canvas.length) {
+				graph.canvas[x]![region.y] = " ";
+			}
+		}
+	}
 
 	graph.canvas = mergeCanvases(graph.canvas, zero, useAscii, sharedLabelCanvas);
 	fillRolesFromCanvas(graph.roleCanvas, sharedLabelCanvas, zero, "text");
