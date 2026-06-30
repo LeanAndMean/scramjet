@@ -13,7 +13,7 @@ Replaced the `beautiful-mermaid` dependency with a custom Mermaid renderer built
 
 ### Added
 
-- `src/diagram/parser.ts` — Mermaid flowchart/stateDiagram-v2 parser (~410 LOC, based on beautiful-mermaid)
+- `src/diagram/parser.ts` — Mermaid flowchart/stateDiagram-v2 parser (~510 LOC, based on beautiful-mermaid)
 - `src/diagram/renderer/` — grid-based Unicode renderer with A* pathfinding, shape drawing, edge bundling, and junction-protection fix (~4,100 LOC total)
 - `tests/diagram-parser.test.ts` — 39 parser tests
 - `tests/diagram-renderer.test.ts` — 17 renderer tests including openn regression

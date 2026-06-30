@@ -5,6 +5,7 @@ import { getPath, mergePath } from "./pathfinder.js";
 import type { AsciiEdge, AsciiGraph, GridCoord, GridDirection } from "./types.js";
 import {
 	Down,
+	dirEquals,
 	gridCoordDirection,
 	Left,
 	LowerLeft,
@@ -28,9 +29,7 @@ export function getOpposite(d: GridDirection): GridDirection {
 	return Middle;
 }
 
-export function dirEquals(a: GridDirection, b: GridDirection): boolean {
-	return a.x === b.x && a.y === b.y;
-}
+export { dirEquals } from "./types.js";
 
 export function determineDirection(from: { x: number; y: number }, to: { x: number; y: number }): GridDirection {
 	if (from.x === to.x) {

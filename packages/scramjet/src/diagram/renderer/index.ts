@@ -32,7 +32,11 @@ export function renderDiagram(source: string, options: RenderOptions = {}): Rend
 		graphDirection: "TD",
 	};
 
-	if (parsed.direction === "LR" || parsed.direction === "RL") {
+	if (parsed.direction === "RL") {
+		throw new Error("Unsupported direction: RL. Supported directions: TD, TB, LR, BT.");
+	}
+
+	if (parsed.direction === "LR") {
 		config.graphDirection = "LR";
 	} else {
 		config.graphDirection = "TD";

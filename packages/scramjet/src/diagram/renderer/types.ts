@@ -127,8 +127,6 @@ export interface AsciiStyleClass {
 	styles: Record<string, string>;
 }
 
-export type AsciiEdgeStyle = "solid" | "dotted" | "thick";
-
 export interface AsciiEdge {
 	from: AsciiNode;
 	to: AsciiNode;
@@ -137,7 +135,7 @@ export interface AsciiEdge {
 	labelLine: GridCoord[];
 	startDir: GridDirection;
 	endDir: GridDirection;
-	style: AsciiEdgeStyle;
+	style: EdgeStyle;
 	hasArrowStart: boolean;
 	hasArrowEnd: boolean;
 	bundle?: EdgeBundle;
@@ -197,6 +195,10 @@ export function gridCoordDirection(c: GridCoord, dir: GridDirection): GridCoord 
 
 export function gridKey(c: GridCoord): string {
 	return `${c.x},${c.y}`;
+}
+
+export function dirEquals(a: GridDirection, b: GridDirection): boolean {
+	return a.x === b.x && a.y === b.y;
 }
 
 export const EMPTY_STYLE: AsciiStyleClass = { name: "", styles: {} };

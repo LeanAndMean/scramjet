@@ -1,13 +1,12 @@
 // Based on beautiful-mermaid by Craft Docs, MIT License.
 
 import { copyCanvas, drawText, mergeCanvases, mkCanvas, setRole } from "./canvas.js";
-import { determineDirection, dirEquals } from "./edge-routing.js";
+import { determineDirection, dirEquals, getOpposite } from "./edge-routing.js";
 import { gridToDrawingCoord, lineToDrawing } from "./grid.js";
 import { splitLines } from "./multiline-utils.js";
-import { getShapeAttachmentPoint } from "./shapes.js";
+import { getCorners, getShapeAttachmentPoint } from "./shapes.js";
 import type {
 	AsciiEdge,
-	AsciiEdgeStyle,
 	AsciiGraph,
 	AsciiNode,
 	AsciiSubgraph,
@@ -15,6 +14,7 @@ import type {
 	CharRole,
 	DrawingCoord,
 	EdgeBundle,
+	EdgeStyle,
 	GridCoord,
 	GridDirection,
 	RoleCanvas,
@@ -53,7 +53,7 @@ function drawBoxWithGridDimensions(node: AsciiNode, graph: AsciiGraph): Canvas {
 	const to: DrawingCoord = { x: w, y: h };
 	const box = mkCanvas(Math.max(from.x, to.x), Math.max(from.y, to.y));
 
-	const corners = getShapeCorners(node.shape, useAscii);
+	const corners = getCorners(node.shape, useAscii);
 
 	const isDoubleBox = node.shape === "state-end";
 	const hChar = useAscii ? (isDoubleBox ? "=" : "-") : isDoubleBox ? "═" : "─";
@@ -89,32 +89,6 @@ function drawBoxWithGridDimensions(node: AsciiNode, graph: AsciiGraph): Canvas {
 	return box;
 }
 
-interface CornerChars {
-	tl: string;
-	tr: string;
-	bl: string;
-	br: string;
-}
-
-const SHAPE_CORNER_MAP: Record<string, { unicode: CornerChars; ascii: CornerChars }> = {
-	rectangle: { unicode: { tl: "┌", tr: "┐", bl: "└", br: "┘" }, ascii: { tl: "+", tr: "+", bl: "+", br: "+" } },
-	rounded: { unicode: { tl: "╭", tr: "╮", bl: "╰", br: "╯" }, ascii: { tl: ".", tr: ".", bl: "'", br: "'" } },
-	diamond: { unicode: { tl: "◇", tr: "◇", bl: "◇", br: "◇" }, ascii: { tl: "<", tr: ">", bl: "<", br: ">" } },
-	stadium: { unicode: { tl: "(", tr: ")", bl: "(", br: ")" }, ascii: { tl: "(", tr: ")", bl: "(", br: ")" } },
-	circle: { unicode: { tl: "◯", tr: "◯", bl: "◯", br: "◯" }, ascii: { tl: "o", tr: "o", bl: "o", br: "o" } },
-	subroutine: { unicode: { tl: "╟", tr: "╢", bl: "╟", br: "╢" }, ascii: { tl: "|", tr: "|", bl: "|", br: "|" } },
-	doublecircle: { unicode: { tl: "◎", tr: "◎", bl: "◎", br: "◎" }, ascii: { tl: "@", tr: "@", bl: "@", br: "@" } },
-	hexagon: { unicode: { tl: "⌜", tr: "⌝", bl: "⌞", br: "⌟" }, ascii: { tl: "*", tr: "*", bl: "*", br: "*" } },
-	cylinder: { unicode: { tl: "╭", tr: "╮", bl: "╰", br: "╯" }, ascii: { tl: ".", tr: ".", bl: "'", br: "'" } },
-	"state-start": { unicode: { tl: "●", tr: "●", bl: "●", br: "●" }, ascii: { tl: "*", tr: "*", bl: "*", br: "*" } },
-	"state-end": { unicode: { tl: "◉", tr: "◉", bl: "◉", br: "◉" }, ascii: { tl: "@", tr: "@", bl: "@", br: "@" } },
-};
-
-function getShapeCorners(shape: string, useAscii: boolean): CornerChars {
-	const entry = SHAPE_CORNER_MAP[shape] ?? SHAPE_CORNER_MAP.rectangle!;
-	return useAscii ? entry.ascii : entry.unicode;
-}
-
 export function drawBox(node: AsciiNode, graph: AsciiGraph): Canvas {
 	return drawBoxWithGridDimensions(node, graph);
 }
@@ -136,7 +110,7 @@ export function drawLine(
 	offsetFrom: number,
 	offsetTo: number,
 	useAscii: boolean,
-	style: AsciiEdgeStyle = "solid",
+	style: EdgeStyle = "solid",
 ): DrawingCoord[] {
 	const dir = determineDirection(from, to);
 	const drawnCoords: DrawingCoord[] = [];
@@ -239,7 +213,7 @@ export function drawArrow(graph: AsciiGraph, edge: AsciiEdge): [Canvas, Canvas, 
 	if (edge.hasArrowStart && linesDrawn.length > 0) {
 		const firstLine = linesDrawn[0]!;
 		const firstPoint = firstLine[0]!;
-		const startDir = reverseDirection(lineDirs[0]!);
+		const startDir = getOpposite(lineDirs[0]!);
 
 		const arrowPos: DrawingCoord = { x: firstPoint.x, y: firstPoint.y };
 		if (dirEquals(lineDirs[0]!, Right)) arrowPos.x = firstPoint.x - 1;
@@ -258,22 +232,10 @@ export function drawArrow(graph: AsciiGraph, edge: AsciiEdge): [Canvas, Canvas, 
 	return [pathCanvas, boxStartCanvas, arrowHeadEndCanvas, arrowHeadStartCanvas, cornersCanvas, labelCanvas];
 }
 
-function reverseDirection(dir: GridDirection): GridDirection {
-	if (dirEquals(dir, Up)) return Down;
-	if (dirEquals(dir, Down)) return Up;
-	if (dirEquals(dir, Left)) return Right;
-	if (dirEquals(dir, Right)) return Left;
-	if (dirEquals(dir, UpperLeft)) return LowerRight;
-	if (dirEquals(dir, UpperRight)) return LowerLeft;
-	if (dirEquals(dir, LowerLeft)) return UpperRight;
-	if (dirEquals(dir, LowerRight)) return UpperLeft;
-	return Middle;
-}
-
 function drawPath(
 	graph: AsciiGraph,
 	path: GridCoord[],
-	style: AsciiEdgeStyle = "solid",
+	style: EdgeStyle = "solid",
 ): [Canvas, DrawingCoord[][], GridDirection[]] {
 	const canvas = copyCanvas(graph.canvas);
 	let previousCoord = path[0]!;

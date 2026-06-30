@@ -33,6 +33,8 @@ export function lineToDrawing(graph: AsciiGraph, line: GridCoord[]): DrawingCoor
 	return line.map((c) => gridToDrawingCoord(graph, c));
 }
 
+const MAX_GRID_SEARCH = 100;
+
 export function reserveSpotInGrid(
 	graph: AsciiGraph,
 	node: AsciiNode,
@@ -41,23 +43,21 @@ export function reserveSpotInGrid(
 ): GridCoord {
 	const dir = effectiveDir ?? getEffectiveDirection(graph, node);
 
-	if (graph.grid.has(gridKey(requested))) {
-		if (dir === "LR") {
-			return reserveSpotInGrid(graph, node, { x: requested.x, y: requested.y + 4 }, dir);
-		} else {
-			return reserveSpotInGrid(graph, node, { x: requested.x + 4, y: requested.y }, dir);
+	let pos = requested;
+	for (let i = 0; i < MAX_GRID_SEARCH; i++) {
+		if (!graph.grid.has(gridKey(pos))) {
+			for (let dx = 0; dx < 3; dx++) {
+				for (let dy = 0; dy < 3; dy++) {
+					graph.grid.set(gridKey({ x: pos.x + dx, y: pos.y + dy }), node);
+				}
+			}
+			node.gridCoord = pos;
+			return pos;
 		}
+		pos = dir === "LR" ? { x: pos.x, y: pos.y + 4 } : { x: pos.x + 4, y: pos.y };
 	}
 
-	for (let dx = 0; dx < 3; dx++) {
-		for (let dy = 0; dy < 3; dy++) {
-			const reserved: GridCoord = { x: requested.x + dx, y: requested.y + dy };
-			graph.grid.set(gridKey(reserved), node);
-		}
-	}
-
-	node.gridCoord = requested;
-	return requested;
+	throw new Error("Grid is too dense to place node — exceeded search limit");
 }
 
 export function setColumnWidth(graph: AsciiGraph, node: AsciiNode): void {

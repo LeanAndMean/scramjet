@@ -86,6 +86,8 @@ function isFreeInGrid(grid: Map<string, AsciiNode>, c: GridCoord): boolean {
 	return !grid.has(gridKey(c));
 }
 
+const MAX_EXPLORED = 10_000;
+
 export function getPath(grid: Map<string, AsciiNode>, from: GridCoord, to: GridCoord): GridCoord[] | null {
 	const pq = new MinHeap();
 	pq.push({ coord: from, priority: 0 });
@@ -96,7 +98,9 @@ export function getPath(grid: Map<string, AsciiNode>, from: GridCoord, to: GridC
 	const cameFrom = new Map<string, GridCoord | null>();
 	cameFrom.set(gridKey(from), null);
 
+	let explored = 0;
 	while (pq.length > 0) {
+		if (++explored > MAX_EXPLORED) return null;
 		const current = pq.pop()!.coord;
 
 		if (gridCoordEquals(current, to)) {
