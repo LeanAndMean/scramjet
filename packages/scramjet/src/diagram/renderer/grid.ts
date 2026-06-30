@@ -1,6 +1,13 @@
 // Based on beautiful-mermaid by Craft Docs, MIT License.
 
-import { getCanvasSize, increaseRoleCanvasSize, increaseSize, setCanvasSizeToGrid, setRoleCanvasSizeToGrid } from "./canvas.js";
+import {
+	getCanvasSize,
+	increaseRoleCanvasSize,
+	increaseSize,
+	setCanvasSizeToGrid,
+	setRoleCanvasSizeToGrid,
+} from "./canvas.js";
+import { isAncestorOrSelf } from "./converter.js";
 import { drawBox } from "./draw.js";
 import { analyzeEdgeBundles, processBundles } from "./edge-bundling.js";
 import { determineLabelLine, determinePath } from "./edge-routing.js";
@@ -124,15 +131,6 @@ export function getNodeSubgraph(graph: AsciiGraph, node: AsciiNode): AsciiSubgra
 		}
 	}
 	return innermost;
-}
-
-function isAncestorOrSelf(candidate: AsciiSubgraph, target: AsciiSubgraph): boolean {
-	let current: AsciiSubgraph | null = target;
-	while (current !== null) {
-		if (current === candidate) return true;
-		current = current.parent;
-	}
-	return false;
 }
 
 export function getEffectiveDirection(graph: AsciiGraph, node: AsciiNode): "LR" | "TD" {

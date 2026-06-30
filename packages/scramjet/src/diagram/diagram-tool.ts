@@ -42,6 +42,9 @@ function classifyError(error: unknown): string {
 	if (msg.includes("Grid is too dense")) {
 		return `Diagram too complex: ${msg}`;
 	}
+	if (error instanceof TypeError || error instanceof RangeError) {
+		return `Internal diagram renderer error: ${msg}. This is a bug — please report it with the diagram source.`;
+	}
 	return `Diagram rendering failed: ${msg}`;
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderDiagram } from "../src/diagram/renderer/index.js";
-import type { CharRole, Canvas, RoleCanvas } from "../src/diagram/renderer/types.js";
+import type { Canvas, CharRole, RoleCanvas } from "../src/diagram/renderer/types.js";
 
 // ============================================================================
 // Helpers
@@ -200,7 +200,6 @@ describe("edge routing and arrowheads", () => {
 
 	it("TD upward (backward) edge has ▲ adjacent to target box bottom border", () => {
 		const { chars } = renderDiagram("graph TD\n  A[Top] --> B[Bottom]\n  B --> A");
-		const text = canvasToString(chars);
 		const arrows = findChar(chars, "▲");
 		expect(arrows.length).toBeGreaterThan(0);
 	});
@@ -306,10 +305,10 @@ describe("self-loop rendering", () => {
 	it("self-loop label does not collide with sibling edge", () => {
 		const source = [
 			"flowchart TD",
-			'  P[Parent] -->|Left| A[Review]',
-			'  P -->|Right| B[Implement]',
-			'  A -->|Retry| A',
-			'  A -->|Done| B',
+			"  P[Parent] -->|Left| A[Review]",
+			"  P -->|Right| B[Implement]",
+			"  A -->|Retry| A",
+			"  A -->|Done| B",
 		].join("\n");
 		const { chars } = renderDiagram(source);
 		const text = canvasToString(chars);
@@ -328,14 +327,14 @@ describe("self-loop rendering", () => {
 
 describe("bidirectional edge rendering", () => {
 	it("both arrowheads present for bidirectional edges", () => {
-		const { chars } = renderDiagram('graph TD\n  A[Alpha] -->|Fwd| B[Beta]\n  B -->|Bck| A');
+		const { chars } = renderDiagram("graph TD\n  A[Alpha] -->|Fwd| B[Beta]\n  B -->|Bck| A");
 		const text = canvasToString(chars);
 		expect(text).toContain("▲");
 		expect(text).toContain("▼");
 	});
 
 	it("labels are near their respective arrowheads", () => {
-		const { chars } = renderDiagram('flowchart TD\n  A[Alpha] -->|Forward| B[Beta]\n  B -->|Backward| A');
+		const { chars } = renderDiagram("flowchart TD\n  A[Alpha] -->|Forward| B[Beta]\n  B -->|Backward| A");
 		const text = canvasToString(chars);
 		const lines = text.split("\n");
 		const upRow = lines.findIndex((l) => l.includes("▲"));
@@ -618,13 +617,7 @@ describe("attachment-point collision", () => {
 	].join("\n");
 
 	// Minimal reproducer: same-rank siblings where self-loop and sibling edge share right side
-	const SIBLING_COLLISION = [
-		"flowchart TD",
-		"  A --> B",
-		"  A --> C",
-		"  B --> B",
-		"  B -->|x| C",
-	].join("\n");
+	const SIBLING_COLLISION = ["flowchart TD", "  A --> B", "  A --> C", "  B --> B", "  B -->|x| C"].join("\n");
 
 	it("no junction directly adjacent to opposing arrowhead (horizontal)", () => {
 		for (const src of [SELF_LOOP_AND_OUTGOING, SELF_LOOP_WITH_PARENT, SIBLING_COLLISION]) {

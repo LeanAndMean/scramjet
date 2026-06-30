@@ -94,6 +94,54 @@ export function drawBox(node: AsciiNode, graph: AsciiGraph): Canvas {
 }
 
 // ============================================================================
+// Shared direction-to-character helpers
+// ============================================================================
+
+function getCornerChar(prevDir: GridDirection, nextDir: GridDirection, useAscii: boolean): string {
+	if (useAscii) return "+";
+	if (
+		(dirEquals(prevDir, Right) && dirEquals(nextDir, Down)) ||
+		(dirEquals(prevDir, Up) && dirEquals(nextDir, Left))
+	) {
+		return "┐";
+	}
+	if (
+		(dirEquals(prevDir, Right) && dirEquals(nextDir, Up)) ||
+		(dirEquals(prevDir, Down) && dirEquals(nextDir, Left))
+	) {
+		return "┘";
+	}
+	if (
+		(dirEquals(prevDir, Left) && dirEquals(nextDir, Down)) ||
+		(dirEquals(prevDir, Up) && dirEquals(nextDir, Right))
+	) {
+		return "┌";
+	}
+	if (
+		(dirEquals(prevDir, Left) && dirEquals(nextDir, Up)) ||
+		(dirEquals(prevDir, Down) && dirEquals(nextDir, Right))
+	) {
+		return "└";
+	}
+	return "+";
+}
+
+function arrowChar(dir: GridDirection, useAscii: boolean, fallback?: string): string {
+	if (!useAscii) {
+		if (dirEquals(dir, Up)) return "▲";
+		if (dirEquals(dir, Down)) return "▼";
+		if (dirEquals(dir, Left)) return "◄";
+		if (dirEquals(dir, Right)) return "►";
+		return fallback ?? "▼";
+	}
+	if (dirEquals(dir, Up)) return "^";
+	if (dirEquals(dir, Down)) return "v";
+	if (dirEquals(dir, Left)) return "<";
+	if (dirEquals(dir, Right)) return ">";
+	return fallback ?? "v";
+}
+
+// ============================================================================
 // Line drawing
 // ============================================================================
 
@@ -348,37 +396,7 @@ function drawCorners(graph: AsciiGraph, path: GridCoord[]): Canvas {
 		const dc = gridToDrawingCoord(graph, coord);
 		const prevDir = determineDirection(path[idx - 1]!, coord);
 		const nextDir = determineDirection(coord, path[idx + 1]!);
-
-		let corner: string;
-		if (!graph.config.useAscii) {
-			if (
-				(dirEquals(prevDir, Right) && dirEquals(nextDir, Down)) ||
-				(dirEquals(prevDir, Up) && dirEquals(nextDir, Left))
-			) {
-				corner = "┐";
-			} else if (
-				(dirEquals(prevDir, Right) && dirEquals(nextDir, Up)) ||
-				(dirEquals(prevDir, Down) && dirEquals(nextDir, Left))
-			) {
-				corner = "┘";
-			} else if (
-				(dirEquals(prevDir, Left) && dirEquals(nextDir, Down)) ||
-				(dirEquals(prevDir, Up) && dirEquals(nextDir, Right))
-			) {
-				corner = "┌";
-			} else if (
-				(dirEquals(prevDir, Left) && dirEquals(nextDir, Up)) ||
-				(dirEquals(prevDir, Down) && dirEquals(nextDir, Right))
-			) {
-				corner = "└";
-			} else {
-				corner = "+";
-			}
-		} else {
-			corner = "+";
-		}
-
-		canvas[dc.x]![dc.y] = corner;
+		canvas[dc.x]![dc.y] = getCornerChar(prevDir, nextDir, graph.config.useAscii);
 	}
 
 	return canvas;
@@ -551,37 +569,7 @@ function drawBundledEdgeSegment(
 		const dc = gridToDrawingCoord(graph, coord);
 		const prevDir = determineDirection(edge.pathToJunction[idx - 1]!, coord);
 		const nextDir = determineDirection(coord, edge.pathToJunction[idx + 1]!);
-
-		let corner: string;
-		if (!useAscii) {
-			if (
-				(dirEquals(prevDir, Right) && dirEquals(nextDir, Down)) ||
-				(dirEquals(prevDir, Up) && dirEquals(nextDir, Left))
-			) {
-				corner = "┐";
-			} else if (
-				(dirEquals(prevDir, Right) && dirEquals(nextDir, Up)) ||
-				(dirEquals(prevDir, Down) && dirEquals(nextDir, Left))
-			) {
-				corner = "┘";
-			} else if (
-				(dirEquals(prevDir, Left) && dirEquals(nextDir, Down)) ||
-				(dirEquals(prevDir, Up) && dirEquals(nextDir, Right))
-			) {
-				corner = "┌";
-			} else if (
-				(dirEquals(prevDir, Left) && dirEquals(nextDir, Up)) ||
-				(dirEquals(prevDir, Down) && dirEquals(nextDir, Right))
-			) {
-				corner = "└";
-			} else {
-				corner = "+";
-			}
-		} else {
-			corner = "+";
-		}
-
-		cornersCanvas[dc.x]![dc.y] = corner;
+		cornersCanvas[dc.x]![dc.y] = getCornerChar(prevDir, nextDir, useAscii);
 	}
 
 	const boxStartCanvas = copyCanvas(graph.canvas);
@@ -637,37 +625,7 @@ function drawBundleSharedPath(graph: AsciiGraph, bundle: EdgeBundle): [Canvas, C
 		const dc = gridToDrawingCoord(graph, coord);
 		const prevDir = determineDirection(bundle.sharedPath[idx - 1]!, coord);
 		const nextDir = determineDirection(coord, bundle.sharedPath[idx + 1]!);
-
-		let corner: string;
-		if (!useAscii) {
-			if (
-				(dirEquals(prevDir, Right) && dirEquals(nextDir, Down)) ||
-				(dirEquals(prevDir, Up) && dirEquals(nextDir, Left))
-			) {
-				corner = "┐";
-			} else if (
-				(dirEquals(prevDir, Right) && dirEquals(nextDir, Up)) ||
-				(dirEquals(prevDir, Down) && dirEquals(nextDir, Left))
-			) {
-				corner = "┘";
-			} else if (
-				(dirEquals(prevDir, Left) && dirEquals(nextDir, Down)) ||
-				(dirEquals(prevDir, Up) && dirEquals(nextDir, Right))
-			) {
-				corner = "┌";
-			} else if (
-				(dirEquals(prevDir, Left) && dirEquals(nextDir, Up)) ||
-				(dirEquals(prevDir, Down) && dirEquals(nextDir, Right))
-			) {
-				corner = "└";
-			} else {
-				corner = "+";
-			}
-		} else {
-			corner = "+";
-		}
-
-		cornersCanvas[dc.x]![dc.y] = corner;
+		cornersCanvas[dc.x]![dc.y] = getCornerChar(prevDir, nextDir, useAscii);
 	}
 
 	return [pathCanvas, cornersCanvas];
@@ -689,22 +647,7 @@ function drawBundleArrowhead(graph: AsciiGraph, bundle: EdgeBundle): Canvas {
 	if (graphDir === "TD") dc.y -= 1;
 	else dc.x -= 1;
 
-	let char: string;
-	if (!graph.config.useAscii) {
-		if (dirEquals(dir, Up)) char = "▲";
-		else if (dirEquals(dir, Down)) char = "▼";
-		else if (dirEquals(dir, Left)) char = "◄";
-		else if (dirEquals(dir, Right)) char = "►";
-		else char = "▼";
-	} else {
-		if (dirEquals(dir, Up)) char = "^";
-		else if (dirEquals(dir, Down)) char = "v";
-		else if (dirEquals(dir, Left)) char = "<";
-		else if (dirEquals(dir, Right)) char = ">";
-		else char = "v";
-	}
-
-	canvas[dc.x]![dc.y] = char;
+	canvas[dc.x]![dc.y] = arrowChar(dir, graph.config.useAscii);
 	return canvas;
 }
 
@@ -724,22 +667,7 @@ function drawBundledEdgeArrowhead(graph: AsciiGraph, edge: AsciiEdge): Canvas {
 	if (graphDir === "TD") dc.y -= 1;
 	else dc.x -= 1;
 
-	let char: string;
-	if (!graph.config.useAscii) {
-		if (dirEquals(dir, Up)) char = "▲";
-		else if (dirEquals(dir, Down)) char = "▼";
-		else if (dirEquals(dir, Left)) char = "◄";
-		else if (dirEquals(dir, Right)) char = "►";
-		else char = "▼";
-	} else {
-		if (dirEquals(dir, Up)) char = "^";
-		else if (dirEquals(dir, Down)) char = "v";
-		else if (dirEquals(dir, Left)) char = "<";
-		else if (dirEquals(dir, Right)) char = ">";
-		else char = "v";
-	}
-
-	canvas[dc.x]![dc.y] = char;
+	canvas[dc.x]![dc.y] = arrowChar(dir, graph.config.useAscii);
 	return canvas;
 }
 
@@ -999,7 +927,12 @@ export function drawGraph(graph: AsciiGraph): Canvas {
 				arrowHeadEndCanvases.push(arrowHeadC);
 			}
 		} else {
-			const [pathC, boxStartC, arrowHeadEndC, arrowHeadStartC, cornersC] = drawArrow(graph, edge, sharedLabelCanvas, labelRegions);
+			const [pathC, boxStartC, arrowHeadEndC, arrowHeadStartC, cornersC] = drawArrow(
+				graph,
+				edge,
+				sharedLabelCanvas,
+				labelRegions,
+			);
 			lineCanvases.push(pathC);
 			cornerCanvases.push(cornersC);
 			arrowHeadEndCanvases.push(arrowHeadEndC);

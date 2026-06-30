@@ -206,10 +206,7 @@ describe("self-loop and bidirectional edge rendering", () => {
 		const arrowLine = lines.find((l) => l.includes("◄") || l.includes("▲"));
 		expect(arrowLine).toBeDefined();
 		// Arrowhead must be directly adjacent to a box border character
-		expect(
-			arrowLine,
-			`self-loop arrowhead has gap from box: ${arrowLine}`,
-		).toMatch(/[│├┤┬┴][◄▲]|[►▼][│├┤┬┴]/);
+		expect(arrowLine, `self-loop arrowhead has gap from box: ${arrowLine}`).toMatch(/[│├┤┬┴][◄▲]|[►▼][│├┤┬┴]/);
 	});
 
 	it("self-loop does not collide with outgoing edge to sibling node", () => {

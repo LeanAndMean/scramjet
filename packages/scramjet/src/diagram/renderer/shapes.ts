@@ -151,47 +151,7 @@ function getBoxAttachmentPoint(dir: GridDirection, dimensions: ShapeDimensions, 
 // Shape renderers
 // ============================================================================
 
-const rectangleRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const roundedRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const diamondRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const circleRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const hexagonRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const doublecircleRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const asymmetricRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const trapezoidRenderer: ShapeRenderer = {
-	getDimensions: getBoxDimensions,
-	getAttachmentPoint: getBoxAttachmentPoint,
-};
-
-const trapezoidAltRenderer: ShapeRenderer = {
+const boxRenderer: ShapeRenderer = {
 	getDimensions: getBoxDimensions,
 	getAttachmentPoint: getBoxAttachmentPoint,
 };
@@ -297,21 +257,7 @@ function getSmallAttachmentPoint(
 	return { x: centerX, y: centerY };
 }
 
-const stateStartRenderer: ShapeRenderer = {
-	getDimensions() {
-		return {
-			width: 5,
-			height: 3,
-			labelArea: { x: 2, y: 1, width: 1, height: 1 },
-			gridColumns: [1, 3, 1],
-			gridRows: [1, 1, 1],
-		};
-	},
-
-	getAttachmentPoint: getSmallAttachmentPoint,
-};
-
-const stateEndRenderer: ShapeRenderer = {
+const statePointRenderer: ShapeRenderer = {
 	getDimensions() {
 		return {
 			width: 5,
@@ -330,24 +276,15 @@ const stateEndRenderer: ShapeRenderer = {
 // ============================================================================
 
 const shapeRegistry = new Map<NodeShape, ShapeRenderer>([
-	["rectangle", rectangleRenderer],
-	["rounded", roundedRenderer],
-	["diamond", diamondRenderer],
-	["stadium", stadiumRenderer],
-	["circle", circleRenderer],
 	["subroutine", subroutineRenderer],
-	["doublecircle", doublecircleRenderer],
-	["hexagon", hexagonRenderer],
+	["stadium", stadiumRenderer],
 	["cylinder", cylinderRenderer],
-	["asymmetric", asymmetricRenderer],
-	["trapezoid", trapezoidRenderer],
-	["trapezoid-alt", trapezoidAltRenderer],
-	["state-start", stateStartRenderer],
-	["state-end", stateEndRenderer],
+	["state-start", statePointRenderer],
+	["state-end", statePointRenderer],
 ]);
 
 function getShapeRenderer(shape: NodeShape): ShapeRenderer {
-	return shapeRegistry.get(shape) ?? rectangleRenderer;
+	return shapeRegistry.get(shape) ?? boxRenderer;
 }
 
 export function getShapeDimensions(shape: NodeShape, label: string, options: ShapeRenderOptions): ShapeDimensions {

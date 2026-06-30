@@ -166,7 +166,7 @@ function deduplicateSubgraphNodes(mermaidSubgraphs: MermaidSubgraph[], asciiSubg
 	}
 }
 
-function isAncestorOrSelf(candidate: AsciiSubgraph, target: AsciiSubgraph): boolean {
+export function isAncestorOrSelf(candidate: AsciiSubgraph, target: AsciiSubgraph): boolean {
 	let current: AsciiSubgraph | null = target;
 	while (current !== null) {
 		if (current === candidate) return true;

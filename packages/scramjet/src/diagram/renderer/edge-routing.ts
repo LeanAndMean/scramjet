@@ -246,7 +246,7 @@ export function determinePath(graph: AsciiGraph, edge: AsciiEdge): void {
 	edge.path = [prefFrom, prefTo];
 }
 
-function hasSiblingEdgeOnSide(graph: AsciiGraph, node: typeof graph.nodes[number], side: GridDirection): boolean {
+function hasSiblingEdgeOnSide(graph: AsciiGraph, node: (typeof graph.nodes)[number], side: GridDirection): boolean {
 	for (const e of graph.edges) {
 		if (e.from === e.to) continue;
 		if (e.from === node && e.to.gridCoord!.y === node.gridCoord!.y && dirEquals(side, Right)) return true;
@@ -267,11 +267,7 @@ function buildSelfLoopPath(
 		const right = { x: gc.x + 3, y: gc.y + 1 };
 		const rightBelow = { x: gc.x + 3, y: gc.y + 3 };
 		const below = { x: gc.x + 1, y: gc.y + 3 };
-		if (
-			isFreeInGrid(graph.grid, right) &&
-			isFreeInGrid(graph.grid, rightBelow) &&
-			isFreeInGrid(graph.grid, below)
-		) {
+		if (isFreeInGrid(graph.grid, right) && isFreeInGrid(graph.grid, rightBelow) && isFreeInGrid(graph.grid, below)) {
 			let entryCell = { x: gc.x + 1, y: gc.y + 2 };
 			let entryApproach = below;
 			if (hasSiblingEdgeOnSide(graph, edge.from, Down)) {
@@ -295,11 +291,7 @@ function buildSelfLoopPath(
 	const below = { x: gc.x + 1, y: gc.y + 3 };
 	const belowRight = { x: gc.x + 3, y: gc.y + 3 };
 	const right = { x: gc.x + 3, y: gc.y + 1 };
-	if (
-		isFreeInGrid(graph.grid, below) &&
-		isFreeInGrid(graph.grid, belowRight) &&
-		isFreeInGrid(graph.grid, right)
-	) {
+	if (isFreeInGrid(graph.grid, below) && isFreeInGrid(graph.grid, belowRight) && isFreeInGrid(graph.grid, right)) {
 		let entryCell = { x: gc.x + 2, y: gc.y + 1 };
 		let entryApproach = right;
 		if (hasSiblingEdgeOnSide(graph, edge.from, Right)) {
@@ -346,7 +338,7 @@ export function determineLabelLine(graph: AsciiGraph, edge: AsciiEdge): void {
 
 	if (suitableSegments.length > 0) {
 		const isSelfLoop = edge.from === edge.to;
-		suitableSegments.sort((a, b) => isSelfLoop ? a.index - b.index : b.index - a.index);
+		suitableSegments.sort((a, b) => (isSelfLoop ? a.index - b.index : b.index - a.index));
 		largestLine = suitableSegments[0]!.line;
 	} else {
 		const fallbackSegments = segments.filter((s) => s.width >= lenLabel && s.index < maxSegmentIndex);

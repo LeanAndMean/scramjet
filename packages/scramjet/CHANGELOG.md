@@ -14,10 +14,11 @@ Replaced the `beautiful-mermaid` dependency with a custom Mermaid renderer built
 ### Added
 
 - `src/diagram/parser.ts` — Mermaid flowchart/stateDiagram-v2 parser (~510 LOC, based on beautiful-mermaid)
-- `src/diagram/renderer/` — grid-based Unicode renderer with A* pathfinding, shape drawing, edge bundling, and junction-protection fix (~3,200 LOC)
+- `src/diagram/renderer/` — grid-based Unicode renderer with A* pathfinding, shape drawing, edge bundling, and junction-protection fix (~3,400 LOC)
 - `tests/diagram-parser.test.ts` — 39 parser tests
-- `tests/diagram-renderer.test.ts` — 17 renderer tests including openn regression
-- `tests/diagram.test.ts` — 34 tool integration tests (rewritten, no mocks)
+- `tests/diagram-renderer.test.ts` — 32 renderer tests including openn regression
+- `tests/diagram-comprehensive.test.ts` — 68 comprehensive integration tests (arrowhead adjacency, label placement, edge bundling, self-loops)
+- `tests/diagram.test.ts` — 37 tool integration tests (rewritten, no mocks)
 
 ### Removed
 
