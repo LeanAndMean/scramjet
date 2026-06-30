@@ -301,7 +301,7 @@ export function createMapping(graph: AsciiGraph): void {
 		}
 	}
 
-	const rootNodes = initialRoots.filter((node) => {
+	const filteredRoots = initialRoots.filter((node) => {
 		const nodeSg = getNodeSubgraph(graph, node);
 		if (!nodeSg) return true;
 
@@ -315,6 +315,9 @@ export function createMapping(graph: AsciiGraph): void {
 		}
 		return true;
 	});
+
+	// Fall back to initialRoots when all candidates are filtered out (e.g., cross-subgraph cycles)
+	const rootNodes = filteredRoots.length > 0 ? filteredRoots : initialRoots;
 
 	let hasExternalRoots = false;
 	let hasSubgraphRootsWithEdges = false;

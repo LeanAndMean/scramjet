@@ -60,7 +60,7 @@ export function convertToAsciiGraph(parsed: MermaidGraph, config: AsciiConfig): 
 		convertSubgraph(mSg, null, nodeMap, subgraphs);
 	}
 
-	deduplicateSubgraphNodes(parsed.subgraphs, subgraphs, nodeMap);
+	deduplicateSubgraphNodes(parsed.subgraphs, subgraphs);
 
 	for (const [nodeId, className] of parsed.classAssignments) {
 		const node = nodeMap.get(nodeId);
@@ -131,11 +131,7 @@ function convertSubgraph(
 	return sg;
 }
 
-function deduplicateSubgraphNodes(
-	mermaidSubgraphs: MermaidSubgraph[],
-	asciiSubgraphs: AsciiSubgraph[],
-	nodeMap: Map<string, AsciiNode>,
-): void {
+function deduplicateSubgraphNodes(mermaidSubgraphs: MermaidSubgraph[], asciiSubgraphs: AsciiSubgraph[]): void {
 	const sgMap = new Map<MermaidSubgraph, AsciiSubgraph>();
 	buildSgMap(mermaidSubgraphs, asciiSubgraphs, sgMap);
 
@@ -162,16 +158,7 @@ function deduplicateSubgraphNodes(
 
 	for (const asciiSg of asciiSubgraphs) {
 		asciiSg.nodes = asciiSg.nodes.filter((node) => {
-			let nodeId: string | undefined;
-			for (const [id, n] of nodeMap) {
-				if (n === node) {
-					nodeId = id;
-					break;
-				}
-			}
-			if (!nodeId) return false;
-
-			const owner = nodeOwner.get(nodeId);
+			const owner = nodeOwner.get(node.name);
 			if (!owner) return true;
 
 			return isAncestorOrSelf(asciiSg, owner);

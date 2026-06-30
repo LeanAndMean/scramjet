@@ -9,7 +9,7 @@ this package.
 beautiful-mermaid
 https://github.com/lukilabs/beautiful-mermaid
 
-The diagram renderer in src/diagram/renderer/ is based on code from
+The diagram renderer in src/diagram/ is based on code from
 beautiful-mermaid by Craft Docs, used under the MIT License.
 
 MIT License

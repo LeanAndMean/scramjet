@@ -230,4 +230,22 @@ describe("renderDiagram end-to-end", () => {
 		// BT: arrows should point upward (▲) since flow goes bottom-to-top
 		expect(text).toContain("▲");
 	});
+
+	it("cross-subgraph cycle does not crash", () => {
+		const source = [
+			"flowchart TD",
+			"    subgraph S1",
+			"        A[Node A]",
+			"    end",
+			"    subgraph S2",
+			"        B[Node B]",
+			"    end",
+			"    A --> B",
+			"    B --> A",
+		].join("\n");
+		const { chars } = renderDiagram(source);
+		const text = canvasToString(chars);
+		expect(text).toContain("Node A");
+		expect(text).toContain("Node B");
+	});
 });

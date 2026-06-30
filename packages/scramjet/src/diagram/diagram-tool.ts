@@ -39,7 +39,10 @@ function classifyError(error: unknown): string {
 	if (msg.includes("Empty mermaid diagram") || msg.includes("Empty diagram")) {
 		return "Empty diagram source. Provide valid Mermaid syntax.";
 	}
-	return `Invalid Mermaid syntax: ${msg}`;
+	if (msg.includes("Grid is too dense")) {
+		return `Diagram too complex: ${msg}`;
+	}
+	return `Diagram rendering failed: ${msg}`;
 }
 
 function canvasToLines(chars: Canvas): string[] {
