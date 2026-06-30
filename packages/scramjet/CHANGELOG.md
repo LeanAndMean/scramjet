@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.36.2 — Deduplicate user-input prompt message and render as Markdown
+
+Fixed triple display of prompt message in `get_scramjet_user_input` — the message now appears once during interaction (in `renderCall`) and once in the final result row (in `renderResult`). Switched prompt rendering from plain-text ANSI styling to `Markdown` component for richer formatting. Fixes [#234](https://github.com/LeanAndMean/scramjet/issues/234).
+
+### Changed
+
+- `renderCall` displays the prompt message for all interaction types with conditional visibility (hidden after result arrives)
+- `renderResult` renders prompt message as Markdown alongside the outcome for all interaction types
+- Removed unused `compactLines` helper and `message` parameters from `handleConfirm`/`handleSelect`
+- Removed dead `_theme` parameter from `renderUserInputResult` helper
+
 ## 0.36.1 — Skip draw_diagram tool registration
 
 Removed `draw_diagram` from the agent's available tools. The tool was producing oversized layouts and poor output quality; the implementation code in `src/diagram/` is preserved for future improvement work ([#232](https://github.com/LeanAndMean/scramjet/issues/232)).

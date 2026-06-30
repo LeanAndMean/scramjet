@@ -5,6 +5,8 @@ import { isDormant, isParkedForInput, isProbeDue, isProbeInFlight } from "../src
 import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
 
+initTheme(undefined, false);
+
 type UserInputParams = {
 	type: "confirm" | "select" | "freetext";
 	message: string;
@@ -90,10 +92,34 @@ describe("registerUserInputTool — registration", () => {
 		const component = tool.renderCall(
 			{ type: "freetext", message: "What release title should I use?" },
 			renderTheme,
-			{},
+			{ executionStarted: false, isPartial: false },
 		);
 
 		expect(renderText(component)).toContain("What release title should I use?");
+	});
+
+	it("hides message from renderCall after result arrives", () => {
+		const { tool } = toolFor();
+		const component = tool.renderCall({ type: "confirm", message: "Deploy now?" }, renderTheme, {
+			executionStarted: true,
+			isPartial: false,
+		});
+
+		const output = renderText(component);
+		expect(output).toContain("get_scramjet_user_input");
+		expect(output).not.toContain("Deploy now?");
+	});
+
+	it("shows message in renderCall during execution", () => {
+		const { tool } = toolFor();
+		const component = tool.renderCall({ type: "confirm", message: "Deploy now?" }, renderTheme, {
+			executionStarted: true,
+			isPartial: true,
+		});
+
+		const output = renderText(component);
+		expect(output).toContain("get_scramjet_user_input");
+		expect(output).toContain("Deploy now?");
 	});
 
 	it("falls back to the tool name while args stream without a message", () => {
@@ -104,7 +130,6 @@ describe("registerUserInputTool — registration", () => {
 	});
 
 	it("renders a structured prompt summary in Pi's tool row after execution", () => {
-		initTheme(undefined, false);
 		const { tool } = toolFor();
 		const component = new ToolExecutionComponent(
 			"get_scramjet_user_input",
@@ -119,6 +144,7 @@ describe("registerUserInputTool — registration", () => {
 			{ requestRender: () => {} } as any,
 			process.cwd(),
 		);
+		component.markExecutionStarted();
 		component.updateResult(
 			{
 				content: [{ type: "text", text: JSON.stringify({ selected: "patch" }) }],
@@ -138,6 +164,8 @@ describe("registerUserInputTool — registration", () => {
 		expect(output).toContain("Bug fixes only");
 		expect(output).toContain("→ Patch");
 		expect(output.trim()).not.toBe(JSON.stringify({ selected: "patch" }));
+		const occurrences = output.split("Which bump level?").length - 1;
+		expect(occurrences).toBe(1);
 	});
 
 	it("has the expected schema shape with type enum and flat optional fields", () => {
@@ -541,6 +569,23 @@ describe("registerUserInputTool — confirm interaction", () => {
 		expect(result.details.cancelled).toBe(true);
 		expect(result.terminate).toBe(true);
 	});
+
+	it("widget render does not contain the prompt message", async () => {
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const { ctx, getFactory } = mockUICtxWithFactory();
+
+		const promise = execute({ type: "confirm", message: "Deploy?" }, ctx);
+
+		await new Promise((r) => setTimeout(r, 0));
+		const factory = getFactory();
+		const rendered = factory.render(80).join("\n");
+		expect(rendered).not.toContain("Deploy?");
+		expect(rendered).toContain("Yes");
+		expect(rendered).toContain("cancel");
+
+		factory.handleInput("\r");
+		await promise;
+	});
 });
 
 describe("registerUserInputTool — select interaction", () => {
@@ -593,6 +638,23 @@ describe("registerUserInputTool — select interaction", () => {
 		const result = await promise;
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed.selected).toBe("minor");
+	});
+
+	it("widget render does not contain the prompt message", async () => {
+		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const { ctx, getFactory } = mockUICtxWithFactory();
+
+		const promise = execute({ ...selectParams }, ctx);
+
+		await new Promise((r) => setTimeout(r, 0));
+		const factory = getFactory();
+		const rendered = factory.render(80).join("\n");
+		expect(rendered).not.toContain("Which bump?");
+		expect(rendered).toContain("Patch");
+		expect(rendered).toContain("navigate");
+
+		factory.handleInput("\r");
+		await promise;
 	});
 });
 
