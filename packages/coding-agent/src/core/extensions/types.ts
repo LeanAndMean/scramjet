@@ -667,6 +667,22 @@ export interface BeforeAgentStartEvent {
 	systemPromptOptions: BuildSystemPromptOptions;
 }
 
+// SCRAMJET-DIVERGENCE: prepare_next_turn extension event for intra-run message injection (#238)
+/** Fired after tool results are processed and before the next intra-run LLM call. */
+export interface PrepareNextTurnEvent {
+	type: "prepare_next_turn";
+}
+
+/** Result from prepare_next_turn event handler */
+export interface PrepareNextTurnEventResult {
+	/** Messages to inject before the next LLM call. Persisted as normal session messages. */
+	messages?: AgentMessage[];
+	/** Model to use for the next LLM call. Last non-undefined value wins. */
+	model?: Model<any>;
+	/** Thinking level for the next LLM call. Last non-undefined value wins. */
+	thinkingLevel?: ThinkingLevel;
+}
+
 /** Fired when an agent loop starts */
 export interface AgentStartEvent {
 	type: "agent_start";
@@ -988,6 +1004,7 @@ export type ExtensionEvent =
 	| BeforeProviderRequestEvent
 	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
+	| PrepareNextTurnEvent
 	| AgentStartEvent
 	| AgentEndEvent
 	| TurnStartEvent
@@ -1046,6 +1063,9 @@ export interface BeforeAgentStartEventResult {
 	systemPrompt?: string;
 	/** Contribute a system prompt section for this turn. Sections accumulate in extension load order and are inserted before the volatile environment tail. Section texts are joined without separators, so `text` should start with its own separator (typically `\n\n`). */
 	systemPromptSection?: SystemPromptSection;
+	// SCRAMJET-DIVERGENCE: preTurnMessages for synthetic message injection before the first LLM call (#238)
+	/** Messages to inject into the prompt flow before the first LLM call. These are persisted as normal session messages. Multiple extensions' contributions are concatenated in extension load order. */
+	preTurnMessages?: AgentMessage[];
 }
 
 export interface SessionBeforeSwitchResult {
@@ -1144,6 +1164,7 @@ export interface ExtensionAPI {
 	): void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
+	on(event: "prepare_next_turn", handler: ExtensionHandler<PrepareNextTurnEvent, PrepareNextTurnEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
 	on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;

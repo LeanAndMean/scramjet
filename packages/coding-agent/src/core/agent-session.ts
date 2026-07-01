@@ -15,7 +15,15 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
-import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@leanandmean/agent";
+import type {
+	Agent,
+	AgentContext,
+	AgentEvent,
+	AgentMessage,
+	AgentState,
+	AgentTool,
+	ThinkingLevel,
+} from "@leanandmean/agent";
 import type { AssistantMessage, ImageContent, Message, Model, SystemPromptSection, TextContent } from "@leanandmean/ai";
 import {
 	clampThinkingLevel,
@@ -442,6 +450,48 @@ export class AgentSession {
 				details: hookResult.details,
 				isError: hookResult.isError ?? isError,
 			};
+		};
+
+		// SCRAMJET-DIVERGENCE: prepare_next_turn extension event for intra-run injection (#238)
+		this.agent.prepareNextTurn = async () => {
+			const runner = this._extensionRunner;
+			if (!runner.hasHandlers("prepare_next_turn")) {
+				return undefined;
+			}
+
+			await this._drainAgentEventQueue();
+
+			const result = await runner.emitPrepareNextTurn();
+			if (!result) {
+				return undefined;
+			}
+
+			// Push to agent state and persist to session so messages survive resume.
+			// The returned context snapshot reads from agent.state.messages, so
+			// pushing first ensures the snapshot includes them without duplication.
+			if (result.messages?.length) {
+				for (const msg of result.messages) {
+					this.agent.state.messages.push(msg);
+					if (msg.role === "user" || msg.role === "assistant" || msg.role === "toolResult") {
+						this.sessionManager.appendMessage(msg);
+					}
+				}
+			}
+
+			return {
+				context: result.messages?.length ? this._createAgentContextSnapshot() : undefined,
+				model: result.model,
+				thinkingLevel: result.thinkingLevel,
+			};
+		};
+	}
+
+	// SCRAMJET-DIVERGENCE: context snapshot for prepare_next_turn (#238)
+	private _createAgentContextSnapshot(): AgentContext {
+		return {
+			systemPrompt: this.agent.state.systemPrompt,
+			messages: this.agent.state.messages.slice(),
+			tools: this.agent.state.tools.slice(),
 		};
 	}
 
@@ -1096,6 +1146,12 @@ export class AgentSession {
 				this._baseSystemPromptSections,
 				this._baseSystemPromptOptions,
 			);
+			// SCRAMJET-DIVERGENCE: inject preTurnMessages before custom messages (#238)
+			if (result?.preTurnMessages?.length) {
+				for (const msg of result.preTurnMessages) {
+					messages.push(msg);
+				}
+			}
 			// Add all custom messages from extensions
 			if (result?.messages) {
 				for (const msg of result.messages) {

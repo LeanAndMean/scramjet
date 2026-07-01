@@ -2,7 +2,7 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
-import type { AgentMessage } from "@leanandmean/agent";
+import type { AgentMessage, ThinkingLevel } from "@leanandmean/agent";
 import type { ImageContent, Model, SystemPromptSection } from "@leanandmean/ai";
 import { flattenSystemPrompt } from "@leanandmean/ai";
 import type { KeyId } from "@leanandmean/tui";
@@ -39,6 +39,8 @@ import type {
 	MessageEndEvent,
 	MessageEndEventResult,
 	MessageRenderer,
+	PrepareNextTurnEvent,
+	PrepareNextTurnEventResult,
 	ProviderConfig,
 	RegisteredCommand,
 	RegisteredTool,
@@ -110,6 +112,17 @@ interface BeforeAgentStartCombinedResult {
 	systemPrompt?: string;
 	/** Sections contributed via `systemPromptSection`, in extension load order. */
 	systemPromptSections?: SystemPromptSection[];
+	// SCRAMJET-DIVERGENCE: preTurnMessages for synthetic message injection (#238)
+	/** Messages to inject before the first LLM call, in extension load order. */
+	preTurnMessages?: AgentMessage[];
+}
+
+// SCRAMJET-DIVERGENCE: PrepareNextTurnCombinedResult for intra-run injection (#238)
+/** Combined result from all prepare_next_turn handlers */
+export interface PrepareNextTurnCombinedResult {
+	messages?: AgentMessage[];
+	model?: Model<any>;
+	thinkingLevel?: ThinkingLevel;
 }
 
 /**
@@ -124,6 +137,7 @@ type RunnerEmitEvent = Exclude<
 	| ContextEvent
 	| BeforeProviderRequestEvent
 	| BeforeAgentStartEvent
+	| PrepareNextTurnEvent
 	| MessageEndEvent
 	| ResourcesDiscoverEvent
 	| InputEvent
@@ -993,6 +1007,8 @@ export class ExtensionRunner {
 		};
 		const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
 		const contributedSections: SystemPromptSection[] = [];
+		// SCRAMJET-DIVERGENCE: collect preTurnMessages from extensions (#238)
+		const preTurnMessages: AgentMessage[] = [];
 		let systemPromptModified = false;
 		let replacedByExtensionPath: string | undefined;
 
@@ -1016,6 +1032,10 @@ export class ExtensionRunner {
 						const result = handlerResult as BeforeAgentStartEventResult;
 						if (result.message) {
 							messages.push(result.message);
+						}
+						// SCRAMJET-DIVERGENCE: collect preTurnMessages (#238)
+						if (result.preTurnMessages?.length) {
+							preTurnMessages.push(...result.preTurnMessages);
 						}
 						if (result.systemPrompt !== undefined) {
 							currentSystemPrompt = result.systemPrompt;
@@ -1093,11 +1113,64 @@ export class ExtensionRunner {
 			});
 		}
 
-		if (messages.length > 0 || systemPromptModified || contributedSections.length > 0) {
+		if (messages.length > 0 || systemPromptModified || contributedSections.length > 0 || preTurnMessages.length > 0) {
 			return {
 				messages: messages.length > 0 ? messages : undefined,
 				systemPrompt: systemPromptModified ? currentSystemPrompt : undefined,
 				systemPromptSections: contributedSections.length > 0 ? contributedSections : undefined,
+				preTurnMessages: preTurnMessages.length > 0 ? preTurnMessages : undefined,
+			};
+		}
+
+		return undefined;
+	}
+
+	// SCRAMJET-DIVERGENCE: emitPrepareNextTurn for intra-run message/model injection (#238)
+	async emitPrepareNextTurn(): Promise<PrepareNextTurnCombinedResult | undefined> {
+		const ctx = this.createContext();
+		const allMessages: AgentMessage[] = [];
+		let model: Model<any> | undefined;
+		let thinkingLevel: ThinkingLevel | undefined;
+
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("prepare_next_turn");
+			if (!handlers || handlers.length === 0) continue;
+
+			for (const handler of handlers) {
+				try {
+					const event: PrepareNextTurnEvent = { type: "prepare_next_turn" };
+					const handlerResult = await handler(event, ctx);
+
+					if (handlerResult) {
+						const result = handlerResult as PrepareNextTurnEventResult;
+						if (result.messages?.length) {
+							allMessages.push(...result.messages);
+						}
+						if (result.model !== undefined) {
+							model = result.model;
+						}
+						if (result.thinkingLevel !== undefined) {
+							thinkingLevel = result.thinkingLevel;
+						}
+					}
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					const stack = err instanceof Error ? err.stack : undefined;
+					this.emitError({
+						extensionPath: ext.path,
+						event: "prepare_next_turn",
+						error: message,
+						stack,
+					});
+				}
+			}
+		}
+
+		if (allMessages.length > 0 || model !== undefined || thinkingLevel !== undefined) {
+			return {
+				messages: allMessages.length > 0 ? allMessages : undefined,
+				model,
+				thinkingLevel,
 			};
 		}
 
