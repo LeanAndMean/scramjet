@@ -4,8 +4,10 @@
 
 ### Added
 
+- `prepare_next_turn` extension event — fired after tool results are processed and before the next intra-run LLM call. Handlers can return `messages` (persisted as normal session messages), `model` (override for the next LLM call), and `thinkingLevel`. Enables extensions to inject context or reroute the model mid-run without waiting for a new turn ([#238](https://github.com/LeanAndMean/scramjet/issues/238))
+- `preTurnMessages` field on `BeforeAgentStartEventResult` — allows extensions to inject synthetic messages before the first LLM call of a turn, persisted as normal session messages ([#238](https://github.com/LeanAndMean/scramjet/issues/238))
 - `beforeToolBatch` hook on `AgentLoopConfig` / `Agent` — called after assistant `message_end` but before tool-call extraction, allowing async event handlers (e.g., queued `message_end` mutations) to settle before the execution pipeline reads tool calls ([#196](https://github.com/LeanAndMean/scramjet/issues/196))
-- `AgentSession._drainAgentEventQueue()` helper — awaits the queued extension event promise; wired into both `beforeToolBatch` (pre-extraction drain) and `beforeToolCall` (per-tool drain)
+- `AgentSession._drainAgentEventQueue()` helper — awaits the queued extension event promise; wired into `beforeToolBatch` (pre-extraction drain), `beforeToolCall` (per-tool drain), and `prepareNextTurn` (intra-run injection)
 
 ### Changed
 

@@ -149,6 +149,24 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 	let latestTurnIndex = 0;
 	let initialModel: ModelRecord | null = null;
 	let firstTurnStarted = false;
+	let pendingModelObject: ActiveModel | null = null;
+
+	async function consumePendingChange(): Promise<{
+		model: ModelRecord;
+		previous: ModelRecord | null;
+		modelObject: ActiveModel | null;
+	} | null> {
+		await waitForModelStable(state);
+		if (!state.pendingModelChange) return null;
+		const model = state.pendingModelChange;
+		const previous = state.currentModel;
+		const modelObject = pendingModelObject;
+		state.currentModel = model;
+		state.modelHistory.push(model);
+		state.pendingModelChange = null;
+		pendingModelObject = null;
+		return { model, previous, modelObject };
+	}
 
 	pi.registerTool({
 		name: "notify_model_change",
@@ -185,6 +203,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		latestTurnIndex = 0;
 		firstTurnStarted = false;
 		state.pendingModelChange = null;
+		pendingModelObject = null;
 		state.lastModelSelectTime = 0;
 
 		const branch = ctx.sessionManager.getBranch();
@@ -196,6 +215,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			initialModel = result.modelHistory[0]!;
 			if (result.diverged) {
 				state.pendingModelChange = result.currentModel;
+				pendingModelObject = ctx.model ?? null;
 			}
 		} else if (ctx.model) {
 			const record = modelRecord(ctx.model, latestTurnIndex);
@@ -239,6 +259,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		const model = event.model;
 		if (state.currentModel && model.id === state.currentModel.id) {
 			state.pendingModelChange = null;
+			pendingModelObject = null;
 			return;
 		}
 
@@ -252,6 +273,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		}
 
 		state.pendingModelChange = record;
+		pendingModelObject = model;
 	});
 
 	pi.on("before_agent_start", async () => {
@@ -260,15 +282,10 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			: undefined;
 
 		if (state.pendingModelChange && !state.lifecycle.probeInFlight) {
-			await waitForModelStable(state);
-			if (!state.pendingModelChange) return systemPromptSection ? { systemPromptSection } : {};
-			const model = state.pendingModelChange;
-			const previous = state.currentModel;
-			state.currentModel = model;
-			state.modelHistory.push(model);
-			state.pendingModelChange = null;
-			const callId = generateCallId(model);
-			const [assistantMsg, resultMsg] = buildNotificationPair(model, previous, callId);
+			const change = await consumePendingChange();
+			if (!change) return systemPromptSection ? { systemPromptSection } : {};
+			const callId = generateCallId(change.model);
+			const [assistantMsg, resultMsg] = buildNotificationPair(change.model, change.previous, callId);
 			return {
 				...(systemPromptSection ? { systemPromptSection } : {}),
 				preTurnMessages: [assistantMsg, resultMsg],
@@ -289,16 +306,11 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		const hasToolCalls = assistantMsg.content.some((b) => b.type === "toolCall");
 		if (!hasToolCalls) return;
 
-		await waitForModelStable(state);
-		if (!state.pendingModelChange) return;
-		const model = state.pendingModelChange;
-		const previous = state.currentModel;
-		state.currentModel = model;
-		state.modelHistory.push(model);
-		state.pendingModelChange = null;
+		const change = await consumePendingChange();
+		if (!change) return;
 
-		const callId = generateCallId(model);
-		const toolCall = buildNotificationToolCall(model, callId);
+		const callId = generateCallId(change.model);
+		const toolCall = buildNotificationToolCall(change.model, callId);
 		const newContent = [...assistantMsg.content, toolCall];
 		return { message: { ...assistantMsg, content: newContent } };
 	});
@@ -307,16 +319,11 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		if (!state.pendingModelChange) return;
 		if (state.lifecycle.probeInFlight) return;
 
-		await waitForModelStable(state);
-		if (!state.pendingModelChange) return;
-		const model = state.pendingModelChange;
-		const previous = state.currentModel;
-		state.currentModel = model;
-		state.modelHistory.push(model);
-		state.pendingModelChange = null;
-		const callId = generateCallId(model);
-		const [assistantMsg, resultMsg] = buildNotificationPair(model, previous, callId);
-		return { messages: [assistantMsg, resultMsg] };
+		const change = await consumePendingChange();
+		if (!change) return;
+		const callId = generateCallId(change.model);
+		const [assistantMsg, resultMsg] = buildNotificationPair(change.model, change.previous, callId);
+		return { messages: [assistantMsg, resultMsg], ...(change.modelObject ? { model: change.modelObject } : {}) };
 	});
 
 	pi.on("turn_start", (event) => {

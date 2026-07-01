@@ -410,7 +410,7 @@ describe("prepare_next_turn handler", () => {
 		await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
 	}
 
-	it("delivers pending model change via messages", async () => {
+	it("delivers pending model change via messages and model object", async () => {
 		const { handlers, emit, state } = setup();
 		await initAndStartTurn(emit);
 
@@ -424,6 +424,7 @@ describe("prepare_next_turn handler", () => {
 		expect(result.messages).toHaveLength(2);
 		expect(result.messages[0].role).toBe("assistant");
 		expect(result.messages[1].role).toBe("toolResult");
+		expect(result.model).toBe(gpt5);
 		expect(state.pendingModelChange).toBeNull();
 		expect(state.currentModel!.id).toBe("gpt-5-5");
 	});

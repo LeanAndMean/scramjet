@@ -381,8 +381,8 @@ export class AgentSession {
 	}
 
 	// SCRAMJET-DIVERGENCE: _drainAgentEventQueue ensures all queued async extension event
-	// processing has settled before proceeding. Used by beforeToolBatch (pre-extraction drain)
-	// and beforeToolCall (per-tool drain).
+	// processing has settled before proceeding. Used by beforeToolBatch (pre-extraction drain),
+	// beforeToolCall (per-tool drain), and prepareNextTurn (intra-run injection).
 	private async _drainAgentEventQueue(): Promise<void> {
 		await this._agentEventQueue;
 	}

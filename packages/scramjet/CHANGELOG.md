@@ -4,11 +4,12 @@
 
 Replaces the model-identity notification mechanism (debounce timer + `input` transform / `before_agent_start` custom message) with **tool-call injection**. Model changes are now communicated to the agent exclusively via `notify_model_change` tool calls — never as user-role messages.
 
-**Two delivery paths:**
+**Three delivery paths:**
 - **Between-turns** (`before_agent_start`): returns `preTurnMessages` containing a synthetic assistant tool_use + tool_result pair, injected before the first LLM call of the new turn.
 - **Mid-run** (`message_end`): appends a `notify_model_change` tool call to assistant messages that already contain tool calls, so the notification executes in the same batch and appears in context for the next intra-run LLM call.
+- **Intra-run** (`prepare_next_turn`): returns messages containing a synthetic tool_use + tool_result pair after tool results are processed, injected before the next intra-run LLM call. Also returns the full `Model` object so the agent loop routes subsequent LLM calls to the new model.
 
-**Stability gate:** Both delivery paths block until 500ms of silence since the last `model_select` event, ensuring rapid model cycling (e.g., navigating a model list) never locks in intermediate selections.
+**Stability gate:** All three delivery paths block until 500ms of silence since the last `model_select` event (capped at 5s via `MAX_STABILITY_WAIT_MS`), ensuring rapid model cycling (e.g., navigating a model list) never locks in intermediate selections.
 
 **Breaking changes:**
 - The `input` handler for model change notifications is removed. Model changes no longer prepend text to user input.
@@ -17,7 +18,7 @@ Replaces the model-identity notification mechanism (debounce timer + `input` tra
 
 **New state fields:** `pendingModelChange: ModelRecord | null` and `lastModelSelectTime: number` on `ScramjetState`.
 
-**New exports:** `waitForModelStable`, `buildNotificationPair`, `buildNotificationToolCall`, `STABILITY_MS`.
+**New exports:** `waitForModelStable`, `buildNotificationPair`, `buildNotificationToolCall`, `STABILITY_MS`, `MAX_STABILITY_WAIT_MS`.
 
 Implements Stage 2 of [#238](https://github.com/LeanAndMean/scramjet/issues/238).
 
