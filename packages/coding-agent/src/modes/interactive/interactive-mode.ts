@@ -67,6 +67,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
 import type { ResourceDiagnostic } from "../../core/resource-loader.js";
+import { parseScramjetCommandBlock } from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: scramjet-command block parsing (issue 82)
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
@@ -99,6 +100,7 @@ import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
+import { ScramjetCommandMessageComponent } from "./components/scramjet-command-message.js"; // SCRAMJET-DIVERGENCE: scramjet-command block rendering (issue 82)
 import { SessionSelectorComponent } from "./components/session-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.js";
@@ -3027,29 +3029,51 @@ export class InteractiveMode {
 					if (this.chatContainer.children.length > 0) {
 						this.chatContainer.addChild(new Spacer(1));
 					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
+					// SCRAMJET-DIVERGENCE: scramjet-command block rendering (issue 82)
+					const scramjetBlock = parseScramjetCommandBlock(textContent);
+					if (scramjetBlock) {
+						const component = new ScramjetCommandMessageComponent(
+							scramjetBlock,
 							this.getMarkdownThemeWithSettings(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
+						if (scramjetBlock.userMessage) {
 							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
+								scramjetBlock.userMessage,
 								this.getMarkdownThemeWithSettings(),
 							);
 							this.chatContainer.addChild(userComponent);
 						}
+						if (options?.populateHistory) {
+							const compactForm = scramjetBlock.userContext
+								? `/${scramjetBlock.name} ${scramjetBlock.userContext}`
+								: `/${scramjetBlock.name}`;
+							this.editor.addToHistory?.(compactForm);
+						}
 					} else {
-						const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
-						this.chatContainer.addChild(userComponent);
-					}
-					if (options?.populateHistory) {
-						this.editor.addToHistory?.(textContent);
+						const skillBlock = parseSkillBlock(textContent);
+						if (skillBlock) {
+							const component = new SkillInvocationMessageComponent(
+								skillBlock,
+								this.getMarkdownThemeWithSettings(),
+							);
+							component.setExpanded(this.toolOutputExpanded);
+							this.chatContainer.addChild(component);
+							if (skillBlock.userMessage) {
+								const userComponent = new UserMessageComponent(
+									skillBlock.userMessage,
+									this.getMarkdownThemeWithSettings(),
+								);
+								this.chatContainer.addChild(userComponent);
+							}
+						} else {
+							const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
+							this.chatContainer.addChild(userComponent);
+						}
+						if (options?.populateHistory) {
+							this.editor.addToHistory?.(textContent);
+						}
 					}
 				}
 				break;

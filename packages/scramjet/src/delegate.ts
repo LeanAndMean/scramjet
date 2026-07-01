@@ -103,10 +103,14 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 				effectiveAllowedTools !== undefined && effectiveAllowedTools.length === 0
 					? `[scramjet/delegate] WARNING: effective allowed-tools scope for '${params.command}' is empty (caller and callee declare disjoint allowed-tools). This delegated frame cannot use any tools; consider widening the caller's scope or aborting the delegation.\n\n${body}`
 					: body;
+			const alreadyWrapped = bodyText.startsWith("<scramjet-command");
+			const wrappedBody = alreadyWrapped
+				? bodyText
+				: `<scramjet-command name="${params.command}">\n${bodyText}\n</scramjet-command>`;
 			const details: DelegateDetails = { command: params.command, depth: frame.depth };
 			if (effectiveAllowedTools !== undefined) details.effectiveAllowedTools = effectiveAllowedTools;
 			return {
-				content: [{ type: "text", text: bodyText }],
+				content: [{ type: "text", text: wrappedBody }],
 				details,
 			};
 		},

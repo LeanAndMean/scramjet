@@ -172,7 +172,9 @@ describe("registerDelegateTool — execute paths", () => {
 	it("returns the substituted body and pushes a frame for a valid call", async () => {
 		const { state, execute } = setupWithRegistry([def("mach12:push", "Run with: $ARGUMENTS")]);
 		const result = await execute({ command: "mach12:push", args: "ship it" });
-		expect(result.content[0].text).toBe("Run with: ship it");
+		expect(result.content[0].text).toBe(
+			'<scramjet-command name="mach12:push">\nRun with: ship it\n</scramjet-command>',
+		);
 		expect(state.delegateStack).toHaveLength(1);
 		expect(state.delegateStack[0].commandName).toBe("mach12:push");
 		expect(state.delegateStack[0].depth).toBe(1);
@@ -383,7 +385,9 @@ describe("registerDelegateTool — execute paths", () => {
 	it("parses bash-style args before substituting (quoted strings stay one positional)", async () => {
 		const { execute } = setupWithRegistry([def("a", "first=$1 second=$2")]);
 		const result = await execute({ command: "a", args: '"one two" three' });
-		expect(result.content[0].text).toBe("first=one two second=three");
+		expect(result.content[0].text).toBe(
+			'<scramjet-command name="a">\nfirst=one two second=three\n</scramjet-command>',
+		);
 	});
 
 	it("prepends an empty-scope warning to the body when intersected allowed-tools is empty", async () => {
@@ -414,8 +418,8 @@ describe("registerDelegateTool — execute paths", () => {
 	it("does not prepend the empty-scope warning when allowed-tools is undefined or non-empty", async () => {
 		const { execute } = setupWithRegistry([def("unrestricted", "body-u"), def("restricted", "body-r", ["Read"])]);
 		const r1 = await execute({ command: "unrestricted", args: "" });
-		expect(r1.content[0].text).toBe("body-u");
+		expect(r1.content[0].text).toBe('<scramjet-command name="unrestricted">\nbody-u\n</scramjet-command>');
 		const r2 = await execute({ command: "restricted", args: "" });
-		expect(r2.content[0].text).toBe("body-r");
+		expect(r2.content[0].text).toBe('<scramjet-command name="restricted">\nbody-r\n</scramjet-command>');
 	});
 });

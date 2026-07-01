@@ -5,8 +5,6 @@ allowed-tools:
   - bash
 ---
 
-<scramjet-command name="mach12:gh-comment">
-
 # Post Issue or PR Comment
 
 You are posting a comment on either a GitHub issue or pull request. The comment body has already been prepared by the caller and is present in your conversation context.
@@ -55,5 +53,3 @@ The numeric comment ID is the number after `issuecomment-` in the URL (e.g., if 
 ## Step 4: Return
 
 Return the full comment URL and the numeric comment ID to the caller.
-
-</scramjet-command>

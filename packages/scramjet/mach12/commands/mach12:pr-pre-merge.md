@@ -18,8 +18,6 @@ next:
       hint: Checklist surfaced issues that warrant code changes
 ---
 
-<scramjet-command name="mach12:pr-pre-merge">
-
 # Pre-Merge Checklist
 
 You are running the pre-merge checklist for a PR that has passed review. Walk through each checklist item, perform the necessary updates, and commit the results.
@@ -190,5 +188,3 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 - Always include an entry with `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a fix pass is warranted.
 - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-merge` (index 0) when the checklist passed cleanly and no issues remain; recommend `mach12:pr-review-fix` (index 1) when the checklist surfaced issues that warrant code changes.
 - Leave `next_steps` empty if the PR should be held open (waiting on an external decision, discussion ongoing, or no clear next action). If the checklist was not completed, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
-
-</scramjet-command>

@@ -7,8 +7,6 @@ allowed-tools:
   - glob
 ---
 
-<scramjet-command name="mach12:find-contribution-guidelines">
-
 # Find Contribution Guidelines
 
 You are locating the project's contribution guidelines and surfacing planning-relevant guidance to the caller.
@@ -40,5 +38,3 @@ If a section is absent from the guidelines file, omit it from the output -- do n
 Produce a concise summary organized under the headings above. The caller reads this summary and applies the guidance to whichever step is invoking the subroutine (planning, review, implementation, pre-merge checklist, etc.).
 
 If the guidelines file is short and a paraphrase would lose nuance, quote it directly.
-
-</scramjet-command>

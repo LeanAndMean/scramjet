@@ -9,8 +9,6 @@ allowed-tools:
   - delegate
 ---
 
-<scramjet-command name="mach12:push">
-
 # Push
 
 You are finalizing a batch of work: committing changes, pushing to remote, and documenting progress on the associated PR or issue.
@@ -123,5 +121,3 @@ Report to the user in CLI output:
 - Where the progress comment was posted (with URL), or that posting was skipped.
 
 Do not include next-step suggestions in the CLI output. The harness surfaces the caller's declared next-step.
-
-</scramjet-command>

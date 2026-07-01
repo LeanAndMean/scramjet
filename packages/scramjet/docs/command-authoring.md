@@ -338,8 +338,6 @@ allowed-tools:
 **Example subroutine body pattern:**
 
 ```markdown
-<scramjet-command name="mach12:gh-issue-read">
-
 # Read GitHub Issue
 
 You are reading a GitHub issue.
@@ -625,8 +623,6 @@ next:
   <mode-specific fields>
 ---
 
-<scramjet-command name="set-name:command-name">
-
 # Command Title
 
 <Brief statement of what the agent is doing.>
@@ -655,13 +651,11 @@ Delegate to:
 
 When Scramjet asks you to report command status, call `report_scramjet_command_status`
 with <specific instructions for this command's reporting>.
-
-</scramjet-command>
 ```
 
 ### Conventions
 
-- **XML framing** — the entire command body (everything after the frontmatter `---`) is wrapped in `<scramjet-command name="...">...</scramjet-command>`. The `name` attribute matches the command's qualified name (e.g., `mach12:issue-plan`). This structural boundary distinguishes command instructions from ordinary user messages.
+- **XML framing** — the harness dynamically wraps the command body in `<scramjet-command name="...">...</scramjet-command>` tags at expansion time. Command `.md` files contain only frontmatter and body prose — do not include these tags in the file itself. The `name` attribute is derived from the command's qualified name (e.g., `mach12:issue-plan`). This structural boundary distinguishes command instructions from ordinary user messages.
 - **User context tags** — user-provided arguments are wrapped in XML tags, not embedded inline in markdown bold text. The tag varies by command role:
   - `<user-context>$ARGUMENTS</user-context>` — top-level commands (arguments come from the end user).
   - `<caller-context>$ARGUMENTS</caller-context>` — delegate-only subroutines (arguments come from the calling command).

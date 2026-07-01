@@ -9,8 +9,6 @@ allowed-tools:
   - delegate
 ---
 
-<scramjet-command name="mach12:pr-merge">
-
 # Merge and Release
 
 You are merging a PR that has passed review and the pre-merge checklist, then optionally creating a release.
@@ -152,5 +150,3 @@ When Scramjet asks you to report command status:
 - After a successful merge (and optional release): report `status: "completed"` with a brief summary. Omit `next_steps` entirely — this command has no next-step policy and no chaining occurs.
 - If merge readiness checks fail (CI, conflicts, review): report `status: "blocked"` with a summary of the blocking issues. Omit `next_steps`.
 - If the command stopped before completing (user cancelled, unexpected error): report `status: "incomplete"` with a summary. Omit `next_steps`.
-
-</scramjet-command>

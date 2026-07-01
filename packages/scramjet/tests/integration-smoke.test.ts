@@ -77,11 +77,16 @@ describe("integration smoke — delegate against real mach12 subroutines", () =>
 			// All subroutines that take args reference $ARGUMENTS in their prose;
 			// find-contribution-guidelines takes no args so the probe just trails
 			// off into the body unchanged.
+			const commandName = `${SET_NAME}:${basename}`;
+			expect(body).toMatch(
+				new RegExp(`^<scramjet-command name="${commandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}">\n`),
+			);
+			expect(body).toMatch(/<\/scramjet-command>$/);
 			if (def.body.includes("$ARGUMENTS")) {
 				expect(body).toContain(probe);
 				expect(body).not.toContain("$ARGUMENTS");
 			} else {
-				expect(body).toEqual(def.body);
+				expect(body).toEqual(`<scramjet-command name="${commandName}">\n${def.body}\n</scramjet-command>`);
 			}
 			expect(state.delegateStack).toHaveLength(1);
 			expect(state.delegateStack[0].commandName).toBe(`${SET_NAME}:${basename}`);

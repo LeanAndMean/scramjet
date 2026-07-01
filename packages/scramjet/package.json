@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/scramjet",
-	"version": "0.36.2",
+	"version": "0.37.0",
 	"description": "A high-velocity harness for agentic development",
 	"license": "MIT",
 	"repository": "github:LeanAndMean/scramjet",
