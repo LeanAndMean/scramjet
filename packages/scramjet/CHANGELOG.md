@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.37.1 — Add fresh_session to issue-create and pr-create next-step instructions
+
+Both `mach12:issue-create` and `mach12:pr-create` now instruct the agent to set `fresh_session: true` on their `next_steps` entries, consistent with all other chaining commands in the Mach 12 set. This ensures `issue-plan` and `pr-review` start in clean sessions rather than inheriting the prior command's full context. Fixes [#239](https://github.com/LeanAndMean/scramjet/issues/239).
+
 ## 0.37.0 — Collapsible slash command rendering in TUI
 
 Slash command invocations now display as compact collapsed rows in the transcript instead of showing the full expanded command body. Press Ctrl+O to expand and inspect the full command prompt. Editor history (up-arrow) recalls the compact `/<name> <args>` form instead of the multi-page expanded body. Fixes [#82](https://github.com/LeanAndMean/scramjet/issues/82).
