@@ -5,8 +5,6 @@ allowed-tools:
   - bash
 ---
 
-<scramjet-command name="mach12:gh-assign">
-
 # Assign GitHub Issues
 
 You are assigning the current user to one or more GitHub issues. The subroutine handles three assignment states per issue (already assigned, no assignees, other assignees) and aggregates conflicts into a single bulk prompt at the end.
@@ -62,5 +60,3 @@ Record successes and failures per issue.
 ## Step 5: Report
 
 Return a summary to the caller listing, for each issue, the resolution (already-assigned, auto-assigned, conflict-add, conflict-skip, conflict-replace) and any failures. The caller decides whether to surface this to the user or continue silently.
-
-</scramjet-command>

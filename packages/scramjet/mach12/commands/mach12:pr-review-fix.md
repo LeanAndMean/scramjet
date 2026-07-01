@@ -30,8 +30,6 @@ next:
         that a subsequent review is unlikely to find anything new.
 ---
 
-<scramjet-command name="mach12:pr-review-fix">
-
 # Fix Review Issues
 
 You are fixing specific issues identified in a PR review. This command gathers context from the PR and its review comments, then walks through the implementation under the structured development workflow.
@@ -153,5 +151,3 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
    - Always include an entry with `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation that the PR is ready for the merge checklist.
    - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-review` (index 0) when the fixes were substantive enough that another full review may find issues; recommend `mach12:pr-pre-merge` (index 1) when the fixes were narrow and confidence is high.
    - Leave `next_steps` empty if the appropriate next action is unclear. If fixing hit a blocker or did not complete, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
-
-</scramjet-command>

@@ -17,8 +17,6 @@ next:
         implementation planning. The common path after issue creation.
 ---
 
-<scramjet-command name="mach12:issue-create">
-
 # Create Issue
 
 You are creating a structured GitHub issue. This may be invoked at any point in the workflow -- to capture deferred review findings, document refactoring needs, or track new feature ideas.
@@ -203,5 +201,3 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
 Set `recommended_next_step` to `0` when you include this entry so Scramjet can route to it automatically.
 
 Leave `next_steps` empty if issue creation was skipped, the issue is only a tracking/reference artifact, or the user asked not to continue to planning. If the command could not finish — hit a blocker or otherwise did not complete — report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
-
-</scramjet-command>

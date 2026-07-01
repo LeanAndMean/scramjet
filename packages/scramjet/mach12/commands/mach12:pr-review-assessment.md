@@ -23,8 +23,6 @@ next:
         for the merge checklist.
 ---
 
-<scramjet-command name="mach12:pr-review-assessment">
-
 # PR Review Assessment
 
 You are running an independent assessment of each finding produced by `/mach12:pr-review`, separating genuine issues from nitpicks and false positives. This is the due-diligence step before any code changes happen.
@@ -272,5 +270,3 @@ Set `recommended_next_step` to `0` (pre-merge).
 
 **General rules:**
 - Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
-
-</scramjet-command>

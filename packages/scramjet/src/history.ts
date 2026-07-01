@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
+import { parseDelegateArgs, substituteArguments } from "./commands/substitute.js";
 import {
 	activeCommandName,
 	clearActiveCommand,
@@ -8,7 +9,7 @@ import {
 	resumeFromParkedInput,
 	startCommand,
 } from "./lifecycle.js";
-import type { CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.js";
+import type { CommandDef, CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.js";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
@@ -61,6 +62,20 @@ export function parseSlashCommand(text: string, registry: CommandRegistry): stri
 	const name = extractSlashName(text);
 	if (!name) return null;
 	return registry.has(name) ? name : null;
+}
+
+// Extracts everything after the first whitespace character in a slash command.
+export function extractArgs(text: string): string {
+	const idx = text.search(/\s/);
+	return idx === -1 ? "" : text.slice(idx + 1);
+}
+
+// Substitutes arguments into a command body and wraps in <scramjet-command> tags.
+export function buildCommandExpansion(name: string, def: CommandDef, argsString: string): string {
+	const parsedArgs = parseDelegateArgs(argsString);
+	const body = substituteArguments(def.body, parsedArgs);
+	if (body.startsWith("<scramjet-command")) return body;
+	return `<scramjet-command name="${name}">\n${body}\n</scramjet-command>`;
 }
 
 // Pure push + trim-to-SIDEBAR_MAX from the right. Returns a new array.
@@ -262,5 +277,14 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			origin = event.source === "interactive" ? "user" : "agent";
 		}
 		recordCommandStart(pi, state, name, origin);
+
+		// Scramjet-side expansion: substitute args and wrap in <scramjet-command> tags.
+		// Returning {action: "transform"} replaces the input text before Pi's
+		// expandPromptTemplate runs — since the result no longer starts with "/",
+		// Pi's template expansion is a no-op.
+		const def = state.registry.get(name)!;
+		const argsString = extractArgs(event.text);
+		const wrapped = buildCommandExpansion(name, def, argsString);
+		return { action: "transform" as const, text: wrapped };
 	});
 }

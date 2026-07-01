@@ -24,8 +24,6 @@ next:
         existing open PR for this branch. Drafts and opens the PR.
 ---
 
-<scramjet-command name="mach12:issue-implement">
-
 # Implement Stage
 
 You are implementing a specific stage of a staged implementation plan. This command gathers context from a GitHub issue, then walks through the implementation under the structured development workflow.
@@ -173,5 +171,3 @@ When Scramjet asks you to report command status, call `report_scramjet_command_s
    - Example: `message`: `/mach12:issue-implement 55 2`, `reason`: `Stage 2 is the next planned implementation stage.`
 2. **Create the PR when all planned stages are landed.** If no open PR exists for this branch, include an entry with `message`: `/mach12:pr-create <issue-number>`, a chosen `fresh_session` value, and `reason`: a brief explanation that implementation is complete and ready for PR creation.
 3. **If the next stage is unclear, stop.** Leave `next_steps` empty rather than guessing. When you include any `next_steps`, set `recommended_next_step` to the zero-based index of the entry you recommend Scramjet route to automatically. If implementation hit a blocker or did not complete, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
-
-</scramjet-command>
