@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.37.0 — Collapsible slash command rendering in TUI
+
+Slash command invocations now display as compact collapsed rows in the transcript instead of showing the full expanded command body. Press Ctrl+O to expand and inspect the full command prompt. Editor history (up-arrow) recalls the compact `/<name> <args>` form instead of the multi-page expanded body. Fixes [#82](https://github.com/LeanAndMean/scramjet/issues/82).
+
+### Added
+
+- `ScramjetCommandMessageComponent` — collapsible TUI component for command invocations (collapsed shows `[command] /mach12:issue-plan 82`, expanded shows full Markdown body)
+- `parseScramjetCommandBlock` — render-time parser detecting `<scramjet-command>` tags in user messages
+- Input-hook expansion: Scramjet's `input` handler now performs argument substitution and `<scramjet-command>` tag wrapping, pre-empting Pi's `expandPromptTemplate`
+- `delegate` tool wraps substituted command bodies in `<scramjet-command>` tags
+
+### Changed
+
+- Removed static `<scramjet-command>` / `</scramjet-command>` tags from all 17 command `.md` files (wrapping is now dynamic)
+- `interactive-mode.ts` detects scramjet-command blocks before skill blocks and renders with collapsible component
+- Editor history pushes compact `/<name> <args>` for command invocations instead of full expanded text
+
 ## 0.36.2 — Deduplicate user-input prompt message and render as Markdown
 
 Fixed triple display of prompt message in `get_scramjet_user_input` — the message now appears once during interaction (in `renderCall`) and once in the final result row (in `renderResult`). Switched prompt rendering from plain-text ANSI styling to `Markdown` component for richer formatting. Fixes [#234](https://github.com/LeanAndMean/scramjet/issues/234).
