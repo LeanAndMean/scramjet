@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	buildNotificationPair,
 	buildNotificationToolCall,
+	MAX_STABILITY_WAIT_MS,
 	reconstructModelState,
 	registerModelIdentity,
 	STABILITY_MS,
@@ -55,13 +56,14 @@ function fakeToolCall(name = "bash", id = "tc-1"): ToolCall {
 }
 
 describe("registerModelIdentity", () => {
-	it("registers session_start, before_agent_start, turn_start, model_select, and message_end handlers", () => {
+	it("registers session_start, before_agent_start, turn_start, model_select, message_end, and prepare_next_turn handlers", () => {
 		const { handlers } = setup();
 		expect(handlers.get("session_start")).toHaveLength(1);
 		expect(handlers.get("before_agent_start")).toHaveLength(1);
 		expect(handlers.get("turn_start")).toHaveLength(1);
 		expect(handlers.get("model_select")).toHaveLength(1);
 		expect(handlers.get("message_end")).toHaveLength(1);
+		expect(handlers.get("prepare_next_turn")).toHaveLength(1);
 	});
 
 	it("does not register an input handler", () => {
@@ -397,6 +399,75 @@ describe("message_end injection guards", () => {
 	});
 });
 
+describe("prepare_next_turn handler", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	const gpt5 = fakeModel({ id: "gpt-5-5", name: "GPT 5.5", provider: "openai" });
+
+	async function initAndStartTurn(emit: any) {
+		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
+		await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
+	}
+
+	it("delivers pending model change via messages", async () => {
+		const { handlers, emit, state } = setup();
+		await initAndStartTurn(emit);
+
+		await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+		vi.advanceTimersByTime(STABILITY_MS);
+
+		const pntHandler = handlers.get("prepare_next_turn")![0];
+		const result = (await pntHandler({ type: "prepare_next_turn" })) as any;
+
+		expect(result).toBeDefined();
+		expect(result.messages).toHaveLength(2);
+		expect(result.messages[0].role).toBe("assistant");
+		expect(result.messages[1].role).toBe("toolResult");
+		expect(state.pendingModelChange).toBeNull();
+		expect(state.currentModel!.id).toBe("gpt-5-5");
+	});
+
+	it("returns undefined when no pending change", async () => {
+		const { handlers, emit } = setup();
+		await initAndStartTurn(emit);
+
+		const pntHandler = handlers.get("prepare_next_turn")![0];
+		const result = await pntHandler({ type: "prepare_next_turn" });
+		expect(result).toBeUndefined();
+	});
+
+	it("skips during probe (preserves pending)", async () => {
+		const { handlers, emit, state } = setup();
+		await initAndStartTurn(emit);
+		state.lifecycle = lifecycleFor("probing");
+
+		await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+		vi.advanceTimersByTime(STABILITY_MS);
+
+		const pntHandler = handlers.get("prepare_next_turn")![0];
+		const result = await pntHandler({ type: "prepare_next_turn" });
+		expect(result).toBeUndefined();
+		expect(state.pendingModelChange).not.toBeNull();
+	});
+
+	it("waits for stability before delivering", async () => {
+		const { handlers, emit, state } = setup();
+		await initAndStartTurn(emit);
+
+		await emit("model_select", { type: "model_select", model: gpt5, previousModel: fakeModel(), source: "set" });
+		// Don't advance timers — stability not yet reached
+
+		const pntHandler = handlers.get("prepare_next_turn")![0];
+		const promise = pntHandler({ type: "prepare_next_turn" });
+		vi.advanceTimersByTime(STABILITY_MS);
+		const result = (await promise) as any;
+
+		expect(result.messages).toHaveLength(2);
+		expect(state.pendingModelChange).toBeNull();
+	});
+});
+
 describe("tool execution", () => {
 	it("returns structured content with terminate: true", async () => {
 		const { tools } = setup();
@@ -654,6 +725,26 @@ describe("waitForModelStable", () => {
 		await promise;
 		expect(resolved).toBe(true);
 	});
+
+	it("resolves after MAX_STABILITY_WAIT_MS even if stamp keeps updating", async () => {
+		const state = freshState();
+		state.lastModelSelectTime = Date.now();
+		let resolved = false;
+		const promise = waitForModelStable(state).then(() => {
+			resolved = true;
+		});
+
+		// Keep resetting stamp every 400ms — without the cap this would loop forever
+		for (let i = 0; i < 12; i++) {
+			await vi.advanceTimersByTimeAsync(400);
+			state.lastModelSelectTime = Date.now();
+		}
+
+		// Should resolve once MAX_STABILITY_WAIT_MS is exceeded
+		await vi.advanceTimersByTimeAsync(MAX_STABILITY_WAIT_MS);
+		await promise;
+		expect(resolved).toBe(true);
+	});
 });
 
 // ─── Builder functions ────────────────────────────────────────────────────────
@@ -661,7 +752,7 @@ describe("waitForModelStable", () => {
 describe("buildNotificationToolCall", () => {
 	it("produces a ToolCall with correct shape", () => {
 		const model = { name: "GPT 5.5", id: "gpt-5-5", provider: "openai", fromTurnIndex: 0 };
-		const tc = buildNotificationToolCall(model, null, "scrmdl-abc123");
+		const tc = buildNotificationToolCall(model, "scrmdl-abc123");
 
 		expect(tc.type).toBe("toolCall");
 		expect(tc.id).toBe("scrmdl-abc123");
@@ -930,5 +1021,28 @@ describe("reconstructModelState", () => {
 
 		expect(result.currentModel).toBeNull();
 		expect(result.modelHistory).toEqual([]);
+	});
+
+	it("excludes synthetic (provider: scramjet) assistant messages from turn index count", () => {
+		const syntheticEntry = {
+			type: "message",
+			id: "synthetic-1",
+			parentId: null,
+			timestamp: "0",
+			message: { role: "assistant", content: [], provider: "scramjet" },
+		} as any;
+		const entries = [
+			modelChangeEntry("anthropic", "claude-opus-4-6"),
+			messageEntry("user"),
+			messageEntry("assistant"),
+			syntheticEntry,
+			messageEntry("user"),
+			messageEntry("assistant"),
+			modelChangeEntry("openai", "gpt-5-5"),
+		];
+		const result = reconstructModelState(entries, undefined);
+
+		// Without filtering, turnIndex would be 3 (counting synthetic). With filtering, it's 2.
+		expect(result.modelHistory[1]!.fromTurnIndex).toBe(2);
 	});
 });

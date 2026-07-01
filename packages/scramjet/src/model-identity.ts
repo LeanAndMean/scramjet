@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { AssistantMessage, ToolCall, ToolResultMessage } from "@leanandmean/ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
 import type { ModelRecord, ScramjetState } from "./types.js";
@@ -6,6 +5,7 @@ import type { ModelRecord, ScramjetState } from "./types.js";
 type ActiveModel = NonNullable<ExtensionContext["model"]>;
 
 export const STABILITY_MS = 500;
+export const MAX_STABILITY_WAIT_MS = 5000;
 
 export function buildModelIdentityBlock(model: ModelRecord): string {
 	return `# Model Identity
@@ -40,6 +40,8 @@ export function reconstructModelState(
 
 	for (const entry of entries) {
 		if (entry.type === "message" && (entry as any).message?.role === "assistant") {
+			const msg = (entry as any).message;
+			if (msg.provider === "scramjet") continue;
 			assistantCount++;
 		} else if (entry.type === "model_change") {
 			const mc = entry as { provider: string; modelId: string };
@@ -77,16 +79,18 @@ export function reconstructModelState(
 }
 
 export async function waitForModelStable(state: ScramjetState): Promise<void> {
+	const start = Date.now();
 	while (true) {
 		const elapsed = Date.now() - state.lastModelSelectTime;
 		if (elapsed >= STABILITY_MS) return;
+		if (Date.now() - start >= MAX_STABILITY_WAIT_MS) return;
 		await new Promise((resolve) => setTimeout(resolve, STABILITY_MS - elapsed));
 	}
 }
 
+let callCounter = 0;
 function generateCallId(model: ModelRecord): string {
-	const hash = createHash("sha256").update(`${model.id}\0${Date.now()}`).digest("hex").slice(0, 12);
-	return `scrmdl-${hash}`;
+	return `scrmdl-${model.id}-${++callCounter}`;
 }
 
 function notificationContent(model: ModelRecord, previous: ModelRecord | null): string {
@@ -98,7 +102,7 @@ function notificationContent(model: ModelRecord, previous: ModelRecord | null): 
 	return lines.join("\n");
 }
 
-export function buildNotificationToolCall(model: ModelRecord, _previous: ModelRecord | null, callId: string): ToolCall {
+export function buildNotificationToolCall(model: ModelRecord, callId: string): ToolCall {
 	return {
 		type: "toolCall",
 		id: callId,
@@ -112,7 +116,7 @@ export function buildNotificationPair(
 	previous: ModelRecord | null,
 	callId: string,
 ): [AssistantMessage, ToolResultMessage] {
-	const toolCall = buildNotificationToolCall(model, previous, callId);
+	const toolCall = buildNotificationToolCall(model, callId);
 	const assistantMsg: AssistantMessage = {
 		role: "assistant",
 		content: [toolCall],
@@ -242,7 +246,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 
 		if (!firstTurnStarted) {
 			state.currentModel = record;
-			state.modelHistory = state.modelHistory.length > 0 ? [record] : [record];
+			state.modelHistory = [record];
 			initialModel = record;
 			return;
 		}
@@ -294,9 +298,25 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		state.pendingModelChange = null;
 
 		const callId = generateCallId(model);
-		const toolCall = buildNotificationToolCall(model, previous, callId);
+		const toolCall = buildNotificationToolCall(model, callId);
 		const newContent = [...assistantMsg.content, toolCall];
 		return { message: { ...assistantMsg, content: newContent } };
+	});
+
+	pi.on("prepare_next_turn", async () => {
+		if (!state.pendingModelChange) return;
+		if (state.lifecycle.probeInFlight) return;
+
+		await waitForModelStable(state);
+		if (!state.pendingModelChange) return;
+		const model = state.pendingModelChange;
+		const previous = state.currentModel;
+		state.currentModel = model;
+		state.modelHistory.push(model);
+		state.pendingModelChange = null;
+		const callId = generateCallId(model);
+		const [assistantMsg, resultMsg] = buildNotificationPair(model, previous, callId);
+		return { messages: [assistantMsg, resultMsg] };
 	});
 
 	pi.on("turn_start", (event) => {
