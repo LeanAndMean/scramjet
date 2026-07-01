@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage, ToolCall, Usage } from "@leanandmean/ai";
@@ -369,7 +369,7 @@ describe("reconstructSubdirState", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "subdir-recon-"));
+		tmpDir = await realpath(await mkdtemp(join(tmpdir(), "subdir-recon-")));
 	});
 
 	afterEach(async () => {
@@ -559,7 +559,7 @@ describe("registerSubdirContext — message_end handler", () => {
 	let tmpDir: string;
 
 	beforeEach(async () => {
-		tmpDir = await mkdtemp(join(tmpdir(), "subdir-hook-"));
+		tmpDir = await realpath(await mkdtemp(join(tmpdir(), "subdir-hook-")));
 	});
 
 	afterEach(async () => {
