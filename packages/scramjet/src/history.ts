@@ -276,15 +276,15 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		} else {
 			origin = event.source === "interactive" ? "user" : "agent";
 		}
-		recordCommandStart(pi, state, name, origin);
-
-		// Scramjet-side expansion: substitute args and wrap in <scramjet-command> tags.
-		// Returning {action: "transform"} replaces the input text before Pi's
-		// expandPromptTemplate runs — since the result no longer starts with "/",
-		// Pi's template expansion is a no-op.
-		const def = state.registry.get(name)!;
+		// Compute the transform before recording the start — recordCommandStart
+		// mutates lifecycle state, so we must not leave it inconsistent if
+		// expansion fails.
+		const def = state.registry.get(name);
+		if (!def) return;
 		const argsString = extractArgs(event.text);
 		const wrapped = buildCommandExpansion(name, def, argsString);
+
+		recordCommandStart(pi, state, name, origin);
 		return { action: "transform" as const, text: wrapped };
 	});
 }

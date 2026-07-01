@@ -67,7 +67,7 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
 import type { ResourceDiagnostic } from "../../core/resource-loader.js";
-import { parseScramjetCommandBlock } from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: issue 82
+import { parseScramjetCommandBlock } from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: scramjet-command block parsing (issue 82)
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
@@ -100,7 +100,7 @@ import { LoginDialogComponent } from "./components/login-dialog.js";
 import { ModelSelectorComponent } from "./components/model-selector.js";
 import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/oauth-selector.js";
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
-import { ScramjetCommandMessageComponent } from "./components/scramjet-command-message.js"; // SCRAMJET-DIVERGENCE: issue 82
+import { ScramjetCommandMessageComponent } from "./components/scramjet-command-message.js"; // SCRAMJET-DIVERGENCE: scramjet-command block rendering (issue 82)
 import { SessionSelectorComponent } from "./components/session-selector.js";
 import { SettingsSelectorComponent } from "./components/settings-selector.js";
 import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.js";
