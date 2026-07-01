@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.38.0 — Redesign model change notifications: tool-call delivery
+
+Replaces the model-identity notification mechanism (debounce timer + `input` transform / `before_agent_start` custom message) with **tool-call injection**. Model changes are now communicated to the agent exclusively via `notify_model_change` tool calls — never as user-role messages.
+
+**Two delivery paths:**
+- **Between-turns** (`before_agent_start`): returns `preTurnMessages` containing a synthetic assistant tool_use + tool_result pair, injected before the first LLM call of the new turn.
+- **Mid-run** (`message_end`): appends a `notify_model_change` tool call to assistant messages that already contain tool calls, so the notification executes in the same batch and appears in context for the next intra-run LLM call.
+
+**Stability gate:** Both delivery paths block until 500ms of silence since the last `model_select` event, ensuring rapid model cycling (e.g., navigating a model list) never locks in intermediate selections.
+
+**Breaking changes:**
+- The `input` handler for model change notifications is removed. Model changes no longer prepend text to user input.
+- The `before_agent_start` custom message ("[scramjet] Model changed to: ...") is removed. Notifications are now tool calls, not user-role messages.
+- The system prompt now references "tool calls named notify_model_change" instead of "messages prefixed with [scramjet]".
+
+**New state fields:** `pendingModelChange: ModelRecord | null` and `lastModelSelectTime: number` on `ScramjetState`.
+
+**New exports:** `waitForModelStable`, `buildNotificationPair`, `buildNotificationToolCall`, `STABILITY_MS`.
+
+Implements Stage 2 of [#238](https://github.com/LeanAndMean/scramjet/issues/238).
+
 ## 0.37.1 — Add fresh_session to issue-create and pr-create next-step instructions
 
 Both `mach12:issue-create` and `mach12:pr-create` now instruct the agent to set `fresh_session: true` on their `next_steps` entries, consistent with all other chaining commands in the Mach 12 set. This ensures `issue-plan` and `pr-review` start in clean sessions rather than inheriting the prior command's full context. Fixes [#239](https://github.com/LeanAndMean/scramjet/issues/239).

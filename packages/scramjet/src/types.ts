@@ -121,6 +121,8 @@ export interface ScramjetState extends LifecycleHolder {
 	pendingForcedDispatch: string | null;
 	currentModel: ModelRecord | null;
 	modelHistory: ModelRecord[];
+	pendingModelChange: ModelRecord | null;
+	lastModelSelectTime: number;
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;

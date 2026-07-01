@@ -33,6 +33,8 @@ export function initScramjet(pi: ExtensionAPI) {
 		lifecycle: createLifecycle(),
 		currentModel: null,
 		modelHistory: [],
+		pendingModelChange: null,
+		lastModelSelectTime: 0,
 		autonomyConfigPath: defaultConfigPath(),
 		subdirLoadedPaths: new Set(),
 		logger,
