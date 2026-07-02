@@ -45,6 +45,7 @@ Package names in `package.json` files were also renamed:
 | `packages/coding-agent/src/migrations.ts` | `MIGRATION_GUIDE_URL` and `EXTENSIONS_DOC_URL` point to `LeanAndMean/scramjet` | Product URLs |
 | `packages/coding-agent/src/core/agent-session.ts` | Added `_drainAgentEventQueue()` helper; set `this.agent.beforeToolBatch` to drain queue; refactored existing `beforeToolCall` to reuse helper | Pre-extraction queue drain ensures async `message_end` handlers complete before tool-call extraction ([#196](https://github.com/LeanAndMean/scramjet/issues/196)) |
 | `packages/coding-agent/src/cli/args.ts` | Env var docs rebranded to `SCRAMJET_*` with `(PI_* also accepted)` notes; removed `PI_SHARE_VIEWER_URL`; `--offline` references `SCRAMJET_OFFLINE` | Help text reflects product env vars |
+| `packages/ai/src/providers/anthropic.ts` | `convertMessages` applies the idempotent `normalizeToolCallId` unconditionally at the three outgoing block sites (`tool_use.id`, both `tool_result.tool_use_id`) | `transform-messages.ts` only normalizes IDs for cross-model replay (`!isSameModel`), so a legacy same-model session carrying a provider-invalid tool-call ID would be sent verbatim and rejected by Anthropic's `^[a-zA-Z0-9_-]+$` constraint ([#244](https://github.com/LeanAndMean/scramjet/issues/244)) |
 
 ### Documentation rebrand
 
@@ -67,9 +68,8 @@ Preserved:
 These are current facts, not constraints. Pi packages are modified directly when doing so simplifies Scramjet's implementation (see CLAUDE.md "Upstream Pi sync").
 
 - `packages/tui/` — no source modifications
-- `packages/ai/` — no source modifications
 
-Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above.
+Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above. Similarly, `packages/ai/` previously had no source modifications; as of issue #244 it carries the unconditional tool-call-ID sanitization divergence listed in the table above.
 
 ## Cherry-Pick Workflow
 

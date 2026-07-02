@@ -29,7 +29,7 @@
 	},
 	"dependencies": {
 		"@leanandmean/agent": "0.74.1-scramjet.5",
-		"@leanandmean/ai": "0.74.1-scramjet.4",
+		"@leanandmean/ai": "0.74.1-scramjet.5",
 		"@leanandmean/tui": "0.74.1-scramjet.4",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"chalk": "^5.5.0",

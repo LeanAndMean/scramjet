@@ -1153,7 +1153,15 @@ function convertMessages(
 				} else if (block.type === "toolCall") {
 					blocks.push({
 						type: "tool_use",
-						id: block.id,
+						// SCRAMJET-DIVERGENCE: Sanitize tool-call IDs unconditionally on the outgoing
+						// request. `transform-messages.ts` only normalizes IDs for cross-model replay
+						// (`!isSameModel`), so a legacy session carrying a provider-invalid ID (e.g. one
+						// embedding a raw model id like `gpt-5.5`) replayed to the SAME model would be sent
+						// verbatim and rejected by Anthropic's `^[a-zA-Z0-9_-]+$` constraint. Applying the
+						// idempotent `normalizeToolCallId` here (and at the matching tool_result sites below)
+						// is harmless on already-clean IDs and preserves call/result correlation because the
+						// same deterministic function maps both halves to the same value.
+						id: normalizeToolCallId(block.id),
 						name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
 						input: block.arguments ?? {},
 					});
@@ -1171,7 +1179,8 @@ function convertMessages(
 			// Add the current tool result
 			toolResults.push({
 				type: "tool_result",
-				tool_use_id: msg.toolCallId,
+				// SCRAMJET-DIVERGENCE: sanitize to keep correlation with the tool_use id above.
+				tool_use_id: normalizeToolCallId(msg.toolCallId),
 				content: convertContentBlocks(msg.content),
 				is_error: msg.isError,
 			});
@@ -1182,7 +1191,8 @@ function convertMessages(
 				const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
 				toolResults.push({
 					type: "tool_result",
-					tool_use_id: nextMsg.toolCallId,
+					// SCRAMJET-DIVERGENCE: sanitize to keep correlation with the tool_use id above.
+					tool_use_id: normalizeToolCallId(nextMsg.toolCallId),
 					content: convertContentBlocks(nextMsg.content),
 					is_error: nextMsg.isError,
 				});
