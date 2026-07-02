@@ -124,8 +124,20 @@ export interface ScramjetState extends LifecycleHolder {
 	// Set by switch_scramjet_model just before pi.setModel (issue 244, Stage 4) so
 	// the model_select handler (Stage 5) can skip emitting a user-change notice for
 	// an agent-initiated switch. Read and cleared synchronously inside setModel's
-	// model_select emission; nothing consumes it until Stage 5 lands.
+	// model_select emission by model-change-notice.ts.
 	suppressNextModelNotify?: boolean;
+	// A user-initiated model change (issue 244, Stage 5) whose scramjet_model_change_notice
+	// delivery is deferred because a probe is armed/in-flight. Holds only the latest
+	// pending model (structural coalescing: intermediate models never reach delivery)
+	// and is drained on the next non-probe agent_end. Owned by model-change-notice.ts.
+	pendingNotifyModel: ModelRecord | null;
+	// True once the first user-originated `input` event has been observed this session
+	// (issue 244, Stage 5). Gates pre-first-turn behavior: before the first user message
+	// a model change updates the system prompt's # Model Identity section directly and
+	// fires no notice tool; after it, changes deliver via scramjet_model_change_notice.
+	// Live-session only in Stage 5 (reset unconditionally on rebuild); resume/fork
+	// reconstruction lands in Stage 6. Owned by model-change-notice.ts.
+	hasUserMessage: boolean;
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;

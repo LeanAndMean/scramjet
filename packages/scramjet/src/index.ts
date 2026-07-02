@@ -10,6 +10,7 @@ import { registerDelegateTool } from "./delegate.js";
 import { registerHistory } from "./history.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createLogger } from "./logger.js";
+import { registerModelChangeNotice } from "./model-change-notice.js";
 import { registerModelIdentity } from "./model-identity.js";
 import { registerModelSwitchTool } from "./model-switch-tool.js";
 import { registerPrIndicator } from "./pr-indicator.js";
@@ -34,6 +35,8 @@ export function initScramjet(pi: ExtensionAPI) {
 		lifecycle: createLifecycle(),
 		currentModel: null,
 		modelHistory: [],
+		pendingNotifyModel: null,
+		hasUserMessage: false,
 		autonomyConfigPath: defaultConfigPath(),
 		subdirLoadedPaths: new Set(),
 		logger,
@@ -55,6 +58,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerCommandLoader(pi, state);
 	registerModelIdentity(pi, state);
 	registerModelSwitchTool(pi, state);
+	registerModelChangeNotice(pi, state);
 	registerHistory(pi, state);
 	registerPrIndicator(pi);
 	registerBaseDirectives(pi);

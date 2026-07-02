@@ -3,28 +3,24 @@ import type { ModelRecord, ScramjetState } from "./types.js";
 
 type ActiveModel = NonNullable<ExtensionContext["model"]>;
 
-const DEBOUNCE_MS = 500;
-
 export function buildModelIdentityBlock(model: ModelRecord): string {
 	return `# Model Identity
 Your model is: ${model.name} (ID: ${model.id}, provider: ${model.provider}).
-When model changes occur during this session, they are communicated via messages prefixed with [scramjet].
+When model changes occur during this session, they are delivered as scramjet_model_change_notice tool results.
 When posting to GitHub, use this attribution:
 - Single model: "Reviewed by ${model.name}"
 - Multiple models: describe each model's contribution (e.g., "Reviewed by X (analysis) and Y (posting)")`;
 }
 
-function modelRecord(model: ActiveModel, fromTurnIndex: number): ModelRecord {
+// Exported so model-change-notice.ts can build the same ModelRecord shape when it
+// commits a user-initiated change to state.currentModel/modelHistory (issue 244, Stage 5).
+export function modelRecord(model: ActiveModel, fromTurnIndex: number): ModelRecord {
 	return {
 		name: model.name,
 		id: model.id,
 		provider: model.provider,
 		fromTurnIndex,
 	};
-}
-
-function changeMessage(model: ModelRecord): string {
-	return `[scramjet] Model changed to: ${model.name} (ID: ${model.id}).`;
 }
 
 export interface ReconstructedModelState {
@@ -81,22 +77,11 @@ export function reconstructModelState(
 export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): void {
 	let latestTurnIndex = 0;
 	let initialModel: ModelRecord | null = null;
-	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-	let pendingModel: ActiveModel | null = null;
-	let pendingForInput = false;
-	let pendingForNextTurn = false;
 	let firstTurnStarted = false;
 
 	const rebuild = (ctx: ExtensionContext) => {
 		latestTurnIndex = 0;
 		firstTurnStarted = false;
-		pendingForInput = false;
-		pendingForNextTurn = false;
-		if (debounceTimer !== null) {
-			clearTimeout(debounceTimer);
-			debounceTimer = null;
-		}
-		pendingModel = null;
 
 		const branch = ctx.sessionManager.getBranch();
 		const result = reconstructModelState(branch, ctx.model);
@@ -105,7 +90,6 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 			state.currentModel = result.currentModel;
 			state.modelHistory = result.modelHistory;
 			initialModel = result.modelHistory[0]!;
-			if (result.diverged) pendingForInput = true;
 		} else if (ctx.model) {
 			const record = modelRecord(ctx.model, latestTurnIndex);
 			state.currentModel = record;
@@ -140,72 +124,19 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		rebuild(ctx);
 	});
 
-	pi.on("model_select", (event) => {
-		if (event.source === "restore") return;
-
-		if (debounceTimer !== null) clearTimeout(debounceTimer);
-		pendingModel = event.model;
-
-		debounceTimer = setTimeout(() => {
-			debounceTimer = null;
-			if (!pendingModel) return;
-
-			if (state.currentModel && pendingModel.id === state.currentModel.id) {
-				pendingModel = null;
-				return;
-			}
-
-			const record = modelRecord(pendingModel, latestTurnIndex);
-			state.currentModel = record;
-			state.modelHistory.push(record);
-			pendingModel = null;
-
-			if (!firstTurnStarted) {
-				initialModel = record;
-			} else {
-				if (state.lifecycle.probeArmed || state.lifecycle.probeInFlight) {
-					pendingForNextTurn = true;
-					pendingForInput = false;
-				} else {
-					pendingForInput = true;
-					pendingForNextTurn = false;
-				}
-			}
-		}, DEBOUNCE_MS);
-	});
-
-	pi.on("input", (event) => {
-		if (!pendingForInput) return;
-		if (event.text.trimStart().startsWith("/")) {
-			pendingForInput = false;
-			pendingForNextTurn = true;
-			return;
-		}
-		pendingForInput = false;
-		return { action: "transform" as const, text: `${changeMessage(state.currentModel!)}\n\n${event.text}` };
-	});
-
+	// The # Model Identity section is frozen at the first user turn for provider
+	// cache stability. Before that turn (firstTurnStarted is false) it tracks the
+	// live model, so a pre-first-turn model change — committed to state.currentModel
+	// by model-change-notice.ts — is reflected here with no tool call (issue 244,
+	// Scenario 1). turn_start latches the section by setting firstTurnStarted.
 	pi.on("before_agent_start", () => {
-		const systemPromptSection = initialModel
-			? { id: "scramjet:model-identity", text: `\n\n${buildModelIdentityBlock(initialModel)}` }
-			: undefined;
-
-		if (pendingForNextTurn) {
-			if (!state.lifecycle.probeInFlight) {
-				pendingForNextTurn = false;
-				return {
-					...(systemPromptSection ? { systemPromptSection } : {}),
-					message: {
-						customType: "scramjet:model-change",
-						content: `${changeMessage(state.currentModel!)} Please continue.`,
-						display: true,
-					},
-				};
-			}
+		if (!firstTurnStarted && state.currentModel) {
+			initialModel = state.currentModel;
 		}
-
-		if (!systemPromptSection) return {};
-		return { systemPromptSection };
+		if (!initialModel) return {};
+		return {
+			systemPromptSection: { id: "scramjet:model-identity", text: `\n\n${buildModelIdentityBlock(initialModel)}` },
+		};
 	});
 
 	pi.on("turn_start", (event) => {
