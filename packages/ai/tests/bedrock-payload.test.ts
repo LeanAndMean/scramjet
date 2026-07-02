@@ -129,6 +129,12 @@ describe("Bedrock xhigh effort — new models", () => {
 		const payload = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
 		expect(payload.additionalModelRequestFields?.output_config?.effort).not.toBe("xhigh");
 	});
+
+	it("Sonnet 5 does not get native xhigh", async () => {
+		const model = makeModel("eu.anthropic.claude-sonnet-5-v1");
+		const payload = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
+		expect(payload.additionalModelRequestFields?.output_config?.effort).not.toBe("xhigh");
+	});
 });
 
 describe("Bedrock temperature gating — modelSupportsTemperature", () => {
@@ -154,6 +160,12 @@ describe("Bedrock temperature gating — modelSupportsTemperature", () => {
 		const model = makeModel("anthropic.claude-fable-5");
 		const payload = await capturePayload(model, minimalContext, { temperature: 0.7 });
 		expect(payload.inferenceConfig?.temperature).toBe(0.7);
+	});
+
+	it("Sonnet 5 preserves temperature", async () => {
+		const model = makeModel("eu.anthropic.claude-sonnet-5-v1");
+		const payload = await capturePayload(model, minimalContext, { temperature: 0.6 });
+		expect(payload.inferenceConfig?.temperature).toBe(0.6);
 	});
 
 	it("temperature: 0 is preserved for supported models", async () => {

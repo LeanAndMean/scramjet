@@ -10,6 +10,11 @@ import {
 	CLOUDFLARE_WORKERS_AI_BASE_URL,
 } from "../src/providers/cloudflare.js";
 import {
+	ADAPTIVE_THINKING_PATTERNS,
+	TEMPERATURE_UNSUPPORTED_PATTERNS,
+	normalizeForPatternMatch,
+} from "../src/providers/anthropic-model-patterns.js";
+import {
 	Api,
 	type AnthropicMessagesCompat,
 	KnownProvider,
@@ -154,28 +159,13 @@ function mergeThinkingLevelMap(model: Model<any>, map: NonNullable<Model<any>["t
 
 // SCRAMJET-DIVERGENCE: Anthropic adaptive-thinking and temperature compat predicates (issue 245)
 function isAnthropicAdaptiveThinkingModel(id: string): boolean {
-	return (
-		id.includes("opus-4-6") ||
-		id.includes("opus-4.6") ||
-		id.includes("opus-4-7") ||
-		id.includes("opus-4.7") ||
-		id.includes("opus-4-8") ||
-		id.includes("opus-4.8") ||
-		id.includes("fable-5") ||
-		id.includes("sonnet-5") ||
-		id.includes("sonnet.5") ||
-		id.includes("sonnet-4-6") ||
-		id.includes("sonnet-4.6")
-	);
+	const normalized = normalizeForPatternMatch(id);
+	return ADAPTIVE_THINKING_PATTERNS.some((p) => normalized.includes(p));
 }
 
 function isAnthropicTemperatureUnsupportedModel(id: string): boolean {
-	return (
-		id.includes("opus-4-7") ||
-		id.includes("opus-4.7") ||
-		id.includes("opus-4-8") ||
-		id.includes("opus-4.8")
-	);
+	const normalized = normalizeForPatternMatch(id);
+	return TEMPERATURE_UNSUPPORTED_PATTERNS.some((p) => normalized.includes(p));
 }
 
 function applyAnthropicAdaptiveCompat(model: Model<any>): void {

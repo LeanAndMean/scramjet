@@ -457,7 +457,7 @@ export interface AnthropicMessagesCompat {
 	 */
 	supportsCacheControlOnTools?: boolean;
 	// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking added for Opus 4.8/Fable 5 support
-	/** Whether the model accepts a temperature parameter. When false, the provider omits temperature. Default: true. */
+	/** Whether the model accepts a temperature parameter. When false, the Anthropic Messages provider omits temperature. Not consulted by the Bedrock provider (which uses its own string-matching predicate). Default: true. */
 	supportsTemperature?: boolean;
 	/** Metadata flag indicating this model uses adaptive thinking. Informational only — not used in runtime decisions. */
 	forceAdaptiveThinking?: boolean;
