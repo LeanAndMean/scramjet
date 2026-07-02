@@ -36,13 +36,13 @@
 import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { Type } from "typebox";
 import { modelRecord } from "./model-identity.js";
-import type { ModelRecord, ScramjetState } from "./types.js";
+import { MODEL_CHANGE_NOTICE_TOOL, type ModelRecord, type ScramjetState } from "./types.js";
 
 type ActiveModel = NonNullable<ExtensionContext["model"]>;
 
 const DEBOUNCE_MS = 500;
 
-export const MODEL_CHANGE_NOTICE_TOOL = "scramjet_model_change_notice";
+export { MODEL_CHANGE_NOTICE_TOOL };
 
 const PARAMETERS = Type.Object({
 	provider: Type.String({ description: "Provider of the newly-selected model." }),
@@ -192,13 +192,14 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 		latestTurnIndex = event.turnIndex;
 	});
 
-	// Transient delivery state is never reconstructed across rebuilds (Stage 5 keeps
-	// hasUserMessage live-session-only; resume/fork reconstruction lands in Stage 6).
+	// Transient delivery state is cleared across rebuilds. state.hasUserMessage is NOT
+	// reset here — it is a shared fact reconstructed from the branch by model-identity.ts's
+	// rebuild (which runs on these same events, registered first), so a resumed session
+	// past its first user message stays past the pre-first-turn boundary (issue 244, Stage 6).
 	pi.on("session_start", (event) => {
 		if (event.reason === "resume" || event.reason === "fork") {
 			clearDebounce();
 			state.pendingNotifyModel = null;
-			state.hasUserMessage = false;
 			latestTurnIndex = 0;
 		}
 	});
@@ -206,7 +207,6 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 	pi.on("session_tree", () => {
 		clearDebounce();
 		state.pendingNotifyModel = null;
-		state.hasUserMessage = false;
 		latestTurnIndex = 0;
 	});
 

@@ -94,6 +94,11 @@ export interface AutonomyConfig {
 	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;
 }
 
+// Name of the harness-only tool that records a user-initiated model change as a real
+// tool row (issue 244). Lives here (not in model-change-notice.ts, which owns the tool)
+// so model-identity.ts can match persisted notice entries without a circular import.
+export const MODEL_CHANGE_NOTICE_TOOL = "scramjet_model_change_notice";
+
 export interface ModelRecord {
 	name: string;
 	id: string;
@@ -131,12 +136,13 @@ export interface ScramjetState extends LifecycleHolder {
 	// pending model (structural coalescing: intermediate models never reach delivery)
 	// and is drained on the next non-probe agent_end. Owned by model-change-notice.ts.
 	pendingNotifyModel: ModelRecord | null;
-	// True once the first user-originated `input` event has been observed this session
-	// (issue 244, Stage 5). Gates pre-first-turn behavior: before the first user message
-	// a model change updates the system prompt's # Model Identity section directly and
-	// fires no notice tool; after it, changes deliver via scramjet_model_change_notice.
-	// Live-session only in Stage 5 (reset unconditionally on rebuild); resume/fork
-	// reconstruction lands in Stage 6. Owned by model-change-notice.ts.
+	// True once the first user message exists this session (issue 244). Gates the
+	// pre-first-turn boundary: before the first user message a model change updates the
+	// system prompt's # Model Identity section directly and fires no notice tool; after
+	// it, changes deliver via scramjet_model_change_notice. Latched live by
+	// model-change-notice.ts's `input` observer, and re-derived from the branch on
+	// resume/fork/session-tree by model-identity.ts's rebuild (Stage 6), so a resumed
+	// session past its first user message stays past the boundary.
 	hasUserMessage: boolean;
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
