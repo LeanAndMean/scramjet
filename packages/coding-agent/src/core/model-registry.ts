@@ -127,6 +127,9 @@ const OpenAIResponsesCompatSchema = Type.Object({
 const AnthropicMessagesCompatSchema = Type.Object({
 	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
 	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+	// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking for Opus 4.8/Fable 5 support
+	supportsTemperature: Type.Optional(Type.Boolean()),
+	forceAdaptiveThinking: Type.Optional(Type.Boolean()),
 });
 
 const ProviderCompatSchema = Type.Union([
