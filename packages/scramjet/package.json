@@ -40,7 +40,7 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
-		"@leanandmean/agent": "0.74.1-scramjet.5",
+		"@leanandmean/agent": "0.74.1-scramjet.6",
 		"@leanandmean/ai": "0.74.1-scramjet.5",
 		"@leanandmean/coding-agent": "0.74.1-scramjet.6",
 		"@leanandmean/tui": "0.74.1-scramjet.4",
