@@ -261,6 +261,141 @@ describe("probe safety (req 7)", () => {
 	});
 });
 
+describe("lifecycle reset handlers", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("clears pending deferred notice on session_start reason 'new' (F2)", async () => {
+		const state = seededState({ lifecycle: lifecycleFor("probing") });
+		const { emit, pi } = setup(state);
+
+		// Defer a notice behind the probe.
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+
+		// /clear fires session_start with reason "new".
+		await emit("session_start", { type: "session_start", reason: "new" });
+
+		// The pending notice must be cleared so it cannot drain into the new session.
+		expect(state.pendingNotifyModel).toBeNull();
+
+		state.lifecycle = lifecycleFor("idle");
+		await emit("agent_end", { messages: [] });
+		vi.runAllTimers();
+
+		expect(pi.harnessToolCalls).toHaveLength(0);
+	});
+
+	it("clears pending deferred notice on session_start reason 'resume'", async () => {
+		const state = seededState({ lifecycle: lifecycleFor("probing") });
+		const { emit, pi } = setup(state);
+
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+
+		await emit("session_start", { type: "session_start", reason: "resume" });
+		expect(state.pendingNotifyModel).toBeNull();
+
+		state.lifecycle = lifecycleFor("idle");
+		await emit("agent_end", { messages: [] });
+		vi.runAllTimers();
+
+		expect(pi.harnessToolCalls).toHaveLength(0);
+	});
+
+	it("clears pending deferred notice on session_tree", async () => {
+		const state = seededState({ lifecycle: lifecycleFor("probing") });
+		const { emit, pi } = setup(state);
+
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+
+		await emit("session_tree", { type: "session_tree" });
+		expect(state.pendingNotifyModel).toBeNull();
+
+		state.lifecycle = lifecycleFor("idle");
+		await emit("agent_end", { messages: [] });
+		vi.runAllTimers();
+
+		expect(pi.harnessToolCalls).toHaveLength(0);
+	});
+
+	it("does NOT clear on session_start reason 'reload'", async () => {
+		const state = seededState({ lifecycle: lifecycleFor("probing") });
+		const { emit } = setup(state);
+
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+
+		await emit("session_start", { type: "session_start", reason: "reload" });
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+	});
+
+	it("clears the debounce timer on session_shutdown", async () => {
+		const state = seededState();
+		const { emit, pi } = setup(state);
+
+		// Start a debounce but don't let it settle.
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(100); // < 500ms
+
+		await emit("session_shutdown", { type: "session_shutdown" });
+
+		// The debounce was cleared; advancing should not settle.
+		vi.advanceTimersByTime(500);
+		expect(pi.harnessToolCalls).toHaveLength(0);
+	});
+});
+
+describe("drain staleness guards", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("does not drain when pendingNotifyModel is superseded between agent_end and setTimeout tick (F6)", async () => {
+		const state = seededState({ lifecycle: lifecycleFor("probing") });
+		const { emit, pi } = setup(state);
+
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+
+		state.lifecycle = lifecycleFor("idle");
+		await emit("agent_end", { messages: [] });
+
+		// Between agent_end and the setTimeout(0) tick, supersede the pending model.
+		state.pendingNotifyModel = { name: "New", id: "new-model", provider: "p", fromTurnIndex: 0 };
+
+		vi.runAllTimers();
+
+		// The stale drain should not fire because pendingNotifyModel !== the captured record.
+		expect(pi.harnessToolCalls).toHaveLength(0);
+	});
+
+	it("does not drain when lifecycleGeneration changes between agent_end and setTimeout tick (F6)", async () => {
+		const state = seededState({ lifecycle: lifecycleFor("probing") });
+		const { emit, pi } = setup(state);
+
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+
+		state.lifecycle = lifecycleFor("idle");
+		await emit("agent_end", { messages: [] });
+
+		// Simulate a lifecycle mutation between agent_end and the 0ms tick.
+		state.lifecycleGeneration++;
+
+		vi.runAllTimers();
+
+		// The generation-changed guard should suppress the drain.
+		expect(pi.harnessToolCalls).toHaveLength(0);
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+	});
+});
+
 describe("suppression of agent-initiated switches", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());

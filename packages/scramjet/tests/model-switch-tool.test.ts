@@ -128,6 +128,26 @@ describe("switch_scramjet_model unauthorized model", () => {
 	});
 });
 
+describe("switch_scramjet_model same-model guard", () => {
+	it("returns a no-op when the target matches the current model, never setting the suppression flag", async () => {
+		const state = freshState({
+			currentModel: { name: CLAUDE.name, id: CLAUDE.id, provider: CLAUDE.provider, fromTurnIndex: 0 },
+			modelHistory: [{ name: CLAUDE.name, id: CLAUDE.id, provider: CLAUDE.provider, fromTurnIndex: 0 }],
+		});
+		const setModel = vi.fn(async () => true);
+		const { execute } = toolFor({ state, setModel });
+
+		const result = await execute({ provider: "anthropic", model: "claude-opus-4-8" });
+
+		expect(setModel).not.toHaveBeenCalled();
+		expect(result.details).toMatchObject({ switched: false, reason: "already-active" });
+		expect(resultText(result)).toContain("Already on");
+		// The suppression flag must never be set — a stranded flag would swallow
+		// the next user-initiated model-change notice.
+		expect(state.suppressNextModelNotify).toBe(false);
+	});
+});
+
 describe("switch_scramjet_model setModel throws", () => {
 	it("clears the suppression flag and returns a soft error", async () => {
 		const state = freshState();

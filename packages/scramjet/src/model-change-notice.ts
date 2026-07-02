@@ -197,11 +197,10 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 	// rebuild (which runs on these same events, registered first), so a resumed session
 	// past its first user message stays past the pre-first-turn boundary (issue 244, Stage 6).
 	pi.on("session_start", (event) => {
-		if (event.reason === "resume" || event.reason === "fork") {
-			clearDebounce();
-			state.pendingNotifyModel = null;
-			latestTurnIndex = 0;
-		}
+		if (event.reason === "reload") return;
+		clearDebounce();
+		state.pendingNotifyModel = null;
+		latestTurnIndex = 0;
 	});
 
 	pi.on("session_tree", () => {

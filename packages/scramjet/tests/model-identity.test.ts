@@ -351,6 +351,26 @@ describe("reconstructModelState", () => {
 		expect(result.diverged).toBe(false);
 	});
 
+	it("resolves display names from a registry when provided (F3)", () => {
+		const entries = [modelChangeEntry("anthropic", "claude-opus-4-6")];
+		const resolver = (provider: string, modelId: string) => {
+			if (provider === "anthropic" && modelId === "claude-opus-4-6") return "Claude Opus 4.6";
+			return undefined;
+		};
+		const result = reconstructModelState(entries, undefined, resolver);
+
+		expect(result.currentModel!.name).toBe("Claude Opus 4.6");
+		expect(result.currentModel!.id).toBe("claude-opus-4-6");
+	});
+
+	it("falls back to model id when the resolver returns undefined (F3)", () => {
+		const entries = [modelChangeEntry("anthropic", "unknown-model")];
+		const resolver = () => undefined;
+		const result = reconstructModelState(entries, undefined, resolver);
+
+		expect(result.currentModel!.name).toBe("unknown-model");
+	});
+
 	it("ignores non-model_change entries", () => {
 		const entries = [
 			messageEntry("assistant"),

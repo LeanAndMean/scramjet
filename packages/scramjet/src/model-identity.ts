@@ -77,6 +77,7 @@ function isModelChangeNoticeMessage(message: any): boolean {
 export function reconstructModelState(
 	entries: readonly SessionEntry[],
 	ctxModel: ActiveModel | undefined,
+	resolveDisplayName?: (provider: string, modelId: string) => string | undefined,
 ): ReconstructedModelState {
 	const history: ModelRecord[] = [];
 	let assistantCount = 0;
@@ -97,7 +98,7 @@ export function reconstructModelState(
 		} else if (entry.type === "model_change") {
 			const mc = entry as { provider: string; modelId: string };
 			history.push({
-				name: mc.modelId,
+				name: resolveDisplayName?.(mc.provider, mc.modelId) ?? mc.modelId,
 				id: mc.modelId,
 				provider: mc.provider,
 				fromTurnIndex: assistantCount,
@@ -143,7 +144,10 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 
 	const rebuild = (ctx: ExtensionContext) => {
 		const branch = ctx.sessionManager.getBranch();
-		const result = reconstructModelState(branch, ctx.model);
+		const resolveDisplayName = ctx.modelRegistry
+			? (provider: string, modelId: string) => ctx.modelRegistry.find(provider, modelId)?.name
+			: undefined;
+		const result = reconstructModelState(branch, ctx.model, resolveDisplayName);
 
 		if (result.currentModel) {
 			state.currentModel = result.currentModel;

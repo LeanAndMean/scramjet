@@ -7,11 +7,13 @@
  * `pi.setModel`, whose success/failure is surfaced back to the agent as the tool
  * result. The tool's own tool row is the transcript record of the change.
  *
- * Two failure modes, both reported as soft-text errors (never thrown, never a
+ * Three failure modes, all reported as soft-text errors (never thrown, never a
  * silent fallback), leaving the current model unchanged:
  * - Unknown model: `modelRegistry.find` returns nothing. No `pi.setModel` call is
  *   made (so no `model_select`, no history entry). The error lists the available
  *   catalog so the agent can retry with a valid target.
+ * - setModel throws: the target resolves but `pi.setModel` rejects (e.g. persist
+ *   failure). The error surfaces the exception message.
  * - Unauthorized model: the target resolves but has no configured auth, so
  *   `pi.setModel` returns false. The error explains the missing auth.
  *
@@ -74,6 +76,32 @@ export function registerModelSwitchTool(pi: ExtensionAPI, state: ScramjetState) 
 				return {
 					content: [{ type: "text", text }],
 					details: { error: "unknown-model", provider: params.provider, model: params.model },
+				};
+			}
+
+			// Same-model guard: if the target is already the active model, skip the
+			// switch entirely. Without this, setModel's modelsAreEqual early-return
+			// skips the model_select emission but the suppression flag would be
+			// stranded true, swallowing the next user-initiated model-change notice.
+			if (state.currentModel && state.currentModel.id === resolved.id) {
+				state.logger.debug("model-switch", "model already active, no-op", {
+					provider: resolved.provider,
+					model: resolved.id,
+				});
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Already on ${resolved.name} (${resolved.provider}/${resolved.id}). No switch needed.`,
+						},
+					],
+					details: {
+						switched: false,
+						provider: resolved.provider,
+						model: resolved.id,
+						name: resolved.name,
+						reason: "already-active",
+					},
 				};
 			}
 

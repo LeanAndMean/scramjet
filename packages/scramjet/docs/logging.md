@@ -39,7 +39,7 @@ The `hasUI` flag is captured on `session_start`. Before TUI detection completes,
 | `lifecycle` | Multiple | Lifecycle fact mutations (shared category for `lifecycle`-level entries) |
 | `input` | `user-input.ts` | User input tool warnings |
 | `subdir-context` | `subdir-context.ts` | Subdirectory context discovery warnings and debug traces |
-| `model-switch` | `model-switch-tool.ts` | Agent-initiated model switch outcomes (unknown/unauthorized target warnings, switch debug traces) |
+| `model-switch` | `model-switch-tool.ts` | Agent-initiated model switch outcomes (unknown/unauthorized/failed target warnings, switch debug traces) |
 | `model-notice` | `model-change-notice.ts` | Model-change notice delivery failures |
 
 ## Session JSONL location
