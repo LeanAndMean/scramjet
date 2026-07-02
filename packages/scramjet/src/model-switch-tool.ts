@@ -16,13 +16,10 @@
  *   `pi.setModel` returns false. The error explains the missing auth.
  *
  * Suppression-flag ordering: `pi.setModel` emits and awaits `model_select`
- * synchronously before it resolves, so `state.suppressNextModelNotify` must be
- * set *before* the call. The eventual `model_select` handler (issue 244, Stage 5)
- * reads and clears the flag synchronously — the same synchronous-suppression
- * pattern as the existing `source === "restore"` check — so an agent-initiated
- * switch does not also emit a redundant user-change notice. In this stage nothing
- * consumes the flag yet; the tool only sets it (found path, before the call) and
- * clears it when the switch does not take effect (no-auth or a thrown call).
+ * before it resolves, so `state.suppressNextModelNotify` must be set *before*
+ * the call. The `model_select` handler in `model-change-notice.ts` reads and
+ * clears the flag within that await — so an agent-initiated switch does not
+ * also emit a redundant user-change notice.
  */
 
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
