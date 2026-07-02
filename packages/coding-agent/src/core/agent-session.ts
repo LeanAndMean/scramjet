@@ -53,6 +53,7 @@ import {
 	ExtensionRunner,
 	type ExtensionUIContext,
 	type InputSource,
+	type InvokeHarnessToolOptions,
 	type MessageEndEvent,
 	type MessageStartEvent,
 	type MessageUpdateEvent,
@@ -842,6 +843,14 @@ export class AgentSession {
 		const tools: AgentTool[] = [];
 		const validToolNames: string[] = [];
 		for (const name of toolNames) {
+			// SCRAMJET-DIVERGENCE: harness-only tools are never placed in the provider-visible tool
+			// set, even when explicitly requested (#244). This is the single choke point for
+			// `agent.state.tools`, so filtering here structurally guarantees a harness-only tool can
+			// never masquerade as a model-callable one — while it stays resolvable in `_toolRegistry`
+			// for `invokeHarnessTool`.
+			if (this._toolDefinitions.get(name)?.definition.activation === "harness-only") {
+				continue;
+			}
 			const tool = this._toolRegistry.get(name);
 			if (tool) {
 				tools.push(tool);
@@ -852,6 +861,27 @@ export class AgentSession {
 
 		// Rebuild base system prompt with new tool set
 		this._rebuildSystemPrompt(validToolNames);
+	}
+
+	// SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
+	/**
+	 * Execute a registered tool as a harness-originated call (not requested by the model).
+	 *
+	 * Resolves the wrapped tool from the full registry — including `"harness-only"` tools that are
+	 * never provider-visible — so its `execute` still receives the extension context and its
+	 * `tool_call`/`tool_result` hooks still fire. Delegates to {@link Agent.runHarnessTool}, which
+	 * runs the call through the real prepare/execute/finalize pipeline: identical live
+	 * `tool_execution_*`/message events, persisted session entries, and extension hooks, but no
+	 * run/turn framing. The idle-vs-mid-run branch lives in `runHarnessTool` (keyed on the agent's
+	 * active run, which tracks `isStreaming`): idle calls execute immediately, mid-run calls queue
+	 * and drain before the next intra-run LLM call.
+	 */
+	async invokeHarnessTool(name: string, args: unknown, options?: InvokeHarnessToolOptions): Promise<void> {
+		const tool = this._toolRegistry.get(name);
+		if (!tool) {
+			throw new Error(`Cannot invoke harness tool "${name}": no tool with that name is registered.`);
+		}
+		await this.agent.runHarnessTool(tool, args, options);
 	}
 
 	/** Whether compaction or branch summarization is currently running */
@@ -2233,6 +2263,8 @@ export class AgentSession {
 				getActiveTools: () => this.getActiveToolNames(),
 				getAllTools: () => this.getAllTools(),
 				setActiveTools: (toolNames) => this.setActiveToolsByName(toolNames),
+				// SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
+				invokeHarnessTool: (name, args, options) => this.invokeHarnessTool(name, args, options),
 				refreshTools: () => this._refreshToolRegistry(),
 				getCommands,
 				setModel: async (model) => {

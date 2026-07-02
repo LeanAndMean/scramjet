@@ -471,6 +471,19 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	/** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
 	renderShell?: "default" | "self";
 
+	// SCRAMJET-DIVERGENCE: harness-only tool activation (#244).
+	/**
+	 * Controls whether the tool can be auto-activated into the LLM-visible tool set.
+	 *
+	 * - `"default"` (or omitted): the tool participates in normal activation and can be sent to the
+	 *   provider and called by the model.
+	 * - `"harness-only"`: the tool is never placed in `agent.state.tools` and is therefore never
+	 *   provider-visible or model-callable. It stays registered and resolvable (via the full tool
+	 *   registry) so the harness can execute it through `pi.invokeHarnessTool`. This is the
+	 *   structural guarantee that a system-generated tool cannot masquerade as a model-callable one.
+	 */
+	activation?: "default" | "harness-only";
+
 	/** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
 	prepareArguments?: (args: unknown) => Static<TParams>;
 
@@ -1250,6 +1263,19 @@ export interface ExtensionAPI {
 	/** Set the active tools by name. */
 	setActiveTools(toolNames: string[]): void;
 
+	// SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
+	/**
+	 * Execute a registered tool as a harness-originated call, without the model requesting it.
+	 *
+	 * The tool is resolved from the full tool registry (so `"harness-only"` tools that are never
+	 * provider-visible can still be executed) and run through the real execution pipeline: it
+	 * produces the same live `tool_execution_*`/message events, persisted session entries, and
+	 * `tool_call`/`tool_result` extension hooks as a normal tool call, but emits no run/turn
+	 * framing. When idle the call executes immediately; when a run is active it is queued and
+	 * drained before the next intra-run LLM call. Rejects if no tool with `name` is registered.
+	 */
+	invokeHarnessTool(name: string, args: unknown, options?: InvokeHarnessToolOptions): Promise<void>;
+
 	/** Get available slash commands in the current session. */
 	getCommands(): SlashCommandInfo[];
 
@@ -1479,6 +1505,19 @@ export type RefreshToolsHandler = () => void;
 
 export type SetModelHandler = (model: Model<any>) => Promise<boolean>;
 
+// SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
+/** Options for {@link ExtensionAPI.invokeHarnessTool}. */
+export interface InvokeHarnessToolOptions {
+	/** Explicit tool-call id. Defaults to a provider-safe generated id when omitted. */
+	toolCallId?: string;
+}
+
+export type InvokeHarnessToolHandler = (
+	name: string,
+	args: unknown,
+	options?: InvokeHarnessToolOptions,
+) => Promise<void>;
+
 export type GetThinkingLevelHandler = () => ThinkingLevel;
 
 export type SetThinkingLevelHandler = (level: ThinkingLevel) => void;
@@ -1521,6 +1560,8 @@ export interface ExtensionActions {
 	getActiveTools: GetActiveToolsHandler;
 	getAllTools: GetAllToolsHandler;
 	setActiveTools: SetActiveToolsHandler;
+	// SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
+	invokeHarnessTool: InvokeHarnessToolHandler;
 	refreshTools: RefreshToolsHandler;
 	getCommands: GetCommandsHandler;
 	setModel: SetModelHandler;

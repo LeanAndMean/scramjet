@@ -1,4 +1,5 @@
 import {
+	type AssistantMessage,
 	type ImageContent,
 	type Message,
 	type Model,
@@ -8,7 +9,7 @@ import {
 	type ThinkingBudgets,
 	type Transport,
 } from "@leanandmean/ai";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { executeHarnessToolCall, runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import type {
 	AfterToolCallContext,
 	AfterToolCallResult,
@@ -19,9 +20,11 @@ import type {
 	AgentMessage,
 	AgentState,
 	AgentTool,
+	AgentToolCall,
 	BeforeToolBatchContext,
 	BeforeToolCallContext,
 	BeforeToolCallResult,
+	PrepareNextTurnContext,
 	QueueMode,
 	StreamFn,
 	ToolExecutionMode,
@@ -56,6 +59,18 @@ const DEFAULT_MODEL = {
 	contextWindow: 0,
 	maxTokens: 0,
 } satisfies Model<any>;
+
+// SCRAMJET-DIVERGENCE: provider-safe tool-call id generation for harness-originated calls (#244).
+// The id must satisfy every provider's constraint (Anthropic's `^[a-zA-Z0-9_-]+$`, bounded length)
+// and must never embed raw model ids. A random suffix (not a bare counter) avoids collisions with
+// ids already present in a resumed transcript.
+function generateHarnessToolCallId(): string {
+	const uuid = globalThis.crypto?.randomUUID?.();
+	const suffix = uuid
+		? uuid.replace(/-/g, "")
+		: `${Date.now().toString(36)}${Math.floor(Math.random() * 1e9).toString(36)}`;
+	return `harness-tool-${suffix}`.slice(0, 64);
+}
 
 type MutableAgentState = Omit<AgentState, "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"> & {
 	isStreaming: boolean;
@@ -105,7 +120,10 @@ export interface AgentOptions {
 	beforeToolBatch?: (context: BeforeToolBatchContext, signal?: AbortSignal) => Promise<void>;
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+	// SCRAMJET-DIVERGENCE: prepareNextTurn receives the live turn context (previously the loop
+	// context it passes was discarded by the Agent adapter) (#244).
 	prepareNextTurn?: (
+		ctx: PrepareNextTurnContext,
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
 	steeringMode?: QueueMode;
@@ -185,9 +203,21 @@ export class Agent {
 		signal?: AbortSignal,
 	) => Promise<AfterToolCallResult | undefined>;
 	public prepareNextTurn?: (
+		ctx: PrepareNextTurnContext,
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
 	private activeRun?: ActiveRun;
+	// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive state (#244).
+	/** Harness tool calls queued while a run is active, drained at the next turn boundary. */
+	private readonly harnessToolQueue: Array<{ tool: AgentTool<any>; args: unknown; toolCallId: string }> = [];
+	/**
+	 * Markers for in-flight transient (idle) harness-tool runs; each resolves when its run settles.
+	 * A set (not a single field) keeps nested and overlapping transient runs valid, and lets a new
+	 * real run wait for transient work to finish before emitting its own events.
+	 */
+	private readonly transientRuns = new Set<Promise<void>>();
+	/** Shared, never-aborted signal delivered to listeners during transient harness-tool runs. */
+	private readonly transientRunAbort = new AbortController();
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
@@ -321,6 +351,7 @@ export class Agent {
 		this._state.errorMessage = undefined;
 		this.clearFollowUpQueue();
 		this.clearSteeringQueue();
+		this.harnessToolQueue.length = 0;
 	}
 
 	/** Start a new prompt from text, a single message, or a batch of messages. */
@@ -436,7 +467,14 @@ export class Agent {
 			beforeToolBatch: this.beforeToolBatch,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
-			prepareNextTurn: this.prepareNextTurn ? async () => await this.prepareNextTurn?.(this.signal) : undefined,
+			// SCRAMJET-DIVERGENCE: always run prepareNextTurn so mid-run harness tool calls drain
+			// into the live turn context before the next intra-run LLM call, and so the next call
+			// self-heals onto the current model (routing after a mid-run switch) (#244).
+			prepareNextTurn: async (ctx) => {
+				await this.drainHarnessToolQueue(ctx, this.signal);
+				const update = await this.prepareNextTurn?.(ctx, this.signal);
+				return { ...update, model: update?.model ?? this._state.model };
+			},
 			convertToLlm: this.convertToLlm,
 			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,
@@ -468,11 +506,23 @@ export class Agent {
 		this._state.errorMessage = undefined;
 
 		try {
+			// Wait for in-flight transient harness-tool runs so their events do not interleave
+			// with this run's transcript.
+			while (this.transientRuns.size > 0) {
+				await Promise.all(this.transientRuns);
+			}
 			await executor(abortController.signal);
 		} catch (error) {
 			await this.handleRunFailure(error, abortController.signal.aborted);
 		} finally {
-			this.finishRun();
+			try {
+				// Flush harness tool calls queued during the run's final turn — including failed or
+				// aborted runs — after the last prepareNextTurn drain point, so a queued call is
+				// never stranded. Emits messages/tool events but no run framing.
+				await this.drainHarnessToolQueue(undefined, abortController.signal);
+			} finally {
+				this.finishRun();
+			}
 		}
 	}
 
@@ -549,12 +599,119 @@ export class Agent {
 				break;
 		}
 
-		const signal = this.activeRun?.abortController.signal;
+		// SCRAMJET-DIVERGENCE: fall back to the shared transient-run signal while transient
+		// harness-tool work (which intentionally has no `activeRun`) is in flight (#244).
+		const signal =
+			this.activeRun?.abortController.signal ??
+			(this.transientRuns.size > 0 ? this.transientRunAbort.signal : undefined);
 		if (!signal) {
 			throw new Error("Agent listener invoked outside active run");
 		}
 		for (const listener of this.listeners) {
 			await listener(event, signal);
 		}
+	}
+
+	// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244).
+	/**
+	 * Execute a harness-originated tool call through the real execution pipeline.
+	 *
+	 * The tool object is supplied directly, so it need not appear in `state.tools` — this is what
+	 * lets LLM-invisible harness tools execute. The call produces the same `tool_execution_*` and
+	 * message events, persisted messages, and `beforeToolCall`/`afterToolCall` invocations as a
+	 * normal tool execution, but emits **no** run/turn framing events (`agent_start`, `turn_start`,
+	 * `turn_end`, `agent_end`). It is therefore intentionally invisible to every `agent_end`-keyed
+	 * consumer (probe scheduling, compaction bookkeeping).
+	 *
+	 * When idle, the call executes immediately in a transient run scope. When a run is active, it is
+	 * queued and drained at the next turn boundary — before the next intra-run LLM call — with an
+	 * end-of-run flush for calls queued during the run's final turn, so a queued call is never stranded.
+	 */
+	async runHarnessTool(tool: AgentTool<any>, args: unknown, options: { toolCallId?: string } = {}): Promise<void> {
+		const toolCallId = options.toolCallId ?? generateHarnessToolCallId();
+		if (this.activeRun) {
+			this.harnessToolQueue.push({ tool, args, toolCallId });
+			return;
+		}
+		// Register the marker before the first event so processEvents sees transient work in
+		// flight from the start, including for nested calls (a harness tool invoking another).
+		let settle!: () => void;
+		const marker = new Promise<void>((resolve) => {
+			settle = resolve;
+		});
+		this.transientRuns.add(marker);
+		try {
+			await this.emitHarnessToolCall(tool, args, toolCallId, this.transientRunAbort.signal, undefined);
+		} finally {
+			this.transientRuns.delete(marker);
+			settle();
+		}
+	}
+
+	/** Drain all queued harness tool calls, splicing them into `ctx` when draining mid-run. */
+	private async drainHarnessToolQueue(
+		ctx: PrepareNextTurnContext | undefined,
+		signal: AbortSignal | undefined,
+	): Promise<void> {
+		while (this.harnessToolQueue.length > 0) {
+			const item = this.harnessToolQueue.shift()!;
+			await this.emitHarnessToolCall(item.tool, item.args, item.toolCallId, signal, ctx);
+		}
+	}
+
+	/**
+	 * Emit the full event sequence for one harness tool call: a synthetic single-toolCall assistant
+	 * message, then the tool execution and its result message. When `ctx` is provided (mid-run drain),
+	 * the synthetic messages are also spliced into the live turn context and returned-message set so
+	 * the next intra-run LLM call includes them.
+	 */
+	private async emitHarnessToolCall(
+		tool: AgentTool<any>,
+		args: unknown,
+		toolCallId: string,
+		signal: AbortSignal | undefined,
+		ctx: PrepareNextTurnContext | undefined,
+	): Promise<void> {
+		const toolCall: AgentToolCall = {
+			type: "toolCall",
+			id: toolCallId,
+			name: tool.name,
+			arguments: (args ?? {}) as Record<string, any>,
+		};
+		const assistantMessage = this.createHarnessAssistantMessage(toolCall);
+		await this.processEvents({ type: "message_start", message: assistantMessage });
+		await this.processEvents({ type: "message_end", message: assistantMessage });
+		if (ctx) {
+			ctx.context.messages.push(assistantMessage);
+			ctx.newMessages.push(assistantMessage);
+		}
+
+		const hookContext = ctx?.context ?? this.createContextSnapshot();
+		const toolResultMessage = await executeHarnessToolCall(
+			tool,
+			toolCall,
+			hookContext,
+			assistantMessage,
+			{ beforeToolCall: this.beforeToolCall, afterToolCall: this.afterToolCall },
+			signal,
+			(event) => this.processEvents(event),
+		);
+		if (ctx) {
+			ctx.context.messages.push(toolResultMessage);
+			ctx.newMessages.push(toolResultMessage);
+		}
+	}
+
+	private createHarnessAssistantMessage(toolCall: AgentToolCall): AssistantMessage {
+		return {
+			role: "assistant",
+			content: [toolCall],
+			api: this._state.model.api,
+			provider: this._state.model.provider,
+			model: this._state.model.id,
+			usage: EMPTY_USAGE,
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		};
 	}
 }

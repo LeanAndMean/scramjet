@@ -87,6 +87,9 @@ export type {
 	InputEvent,
 	InputEventResult,
 	InputSource,
+	// Harness-tool invocation (#244)
+	InvokeHarnessToolHandler,
+	InvokeHarnessToolOptions,
 	KeybindingsManager,
 	LoadExtensionsResult,
 	LsToolCallEvent,

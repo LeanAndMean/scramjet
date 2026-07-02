@@ -553,11 +553,15 @@ function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall)
 	};
 }
 
+// SCRAMJET-DIVERGENCE: tool-call helpers narrowed to `ToolCallHooks` (from full `AgentLoopConfig`)
+// so the harness-tool execution path can reuse them without a full loop config (#244).
+type ToolCallHooks = Pick<AgentLoopConfig, "beforeToolCall" | "afterToolCall">;
+
 async function prepareToolCall(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
 	toolCall: AgentToolCall,
-	config: AgentLoopConfig,
+	config: ToolCallHooks,
 	signal: AbortSignal | undefined,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
@@ -569,6 +573,21 @@ async function prepareToolCall(
 		};
 	}
 
+	return prepareResolvedToolCall(tool, currentContext, assistantMessage, toolCall, config, signal);
+}
+
+/**
+ * Prepare a tool call whose tool has already been resolved (bypassing the active-tools lookup).
+ * Shared by the normal loop path (via {@link prepareToolCall}) and the harness-tool path.
+ */
+async function prepareResolvedToolCall(
+	tool: AgentTool<any>,
+	currentContext: AgentContext,
+	assistantMessage: AssistantMessage,
+	toolCall: AgentToolCall,
+	config: ToolCallHooks,
+	signal: AbortSignal | undefined,
+): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	try {
 		const preparedToolCall = prepareToolCallArguments(tool, toolCall);
 		const validatedArgs = validateToolArguments(tool, preparedToolCall);
@@ -647,7 +666,7 @@ async function finalizeExecutedToolCall(
 	assistantMessage: AssistantMessage,
 	prepared: PreparedToolCall,
 	executed: ExecutedToolCallOutcome,
-	config: AgentLoopConfig,
+	config: ToolCallHooks,
 	signal: AbortSignal | undefined,
 ): Promise<FinalizedToolCallOutcome> {
 	let result = executed.result;
@@ -719,4 +738,46 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 async function emitToolResultMessage(toolResultMessage: ToolResultMessage, emit: AgentEventSink): Promise<void> {
 	await emit({ type: "message_start", message: toolResultMessage });
 	await emit({ type: "message_end", message: toolResultMessage });
+}
+
+// SCRAMJET-DIVERGENCE: single resolved-tool execution path for harness-originated tool calls (#244).
+/**
+ * Execute a single, already-resolved tool call through the identical prepare/execute/finalize
+ * pipeline used for model-requested tool calls, emitting the same `tool_execution_*` and
+ * tool-result message events. The tool is supplied directly rather than looked up in the active
+ * tool set, which is what allows harness-only (LLM-invisible) tools to execute.
+ *
+ * The assistant message carrying the tool call is the caller's responsibility to emit; this
+ * function emits everything from `tool_execution_start` through the tool-result `message_end`.
+ * Returns the resulting tool-result message so the caller can splice it into a live turn context.
+ */
+export async function executeHarnessToolCall(
+	tool: AgentTool<any>,
+	toolCall: AgentToolCall,
+	context: AgentContext,
+	assistantMessage: AssistantMessage,
+	hooks: ToolCallHooks,
+	signal: AbortSignal | undefined,
+	emit: AgentEventSink,
+): Promise<ToolResultMessage> {
+	await emit({
+		type: "tool_execution_start",
+		toolCallId: toolCall.id,
+		toolName: toolCall.name,
+		args: toolCall.arguments,
+	});
+
+	const preparation = await prepareResolvedToolCall(tool, context, assistantMessage, toolCall, hooks, signal);
+	let finalized: FinalizedToolCallOutcome;
+	if (preparation.kind === "immediate") {
+		finalized = { toolCall, result: preparation.result, isError: preparation.isError };
+	} else {
+		const executed = await executePreparedToolCall(preparation, signal, emit);
+		finalized = await finalizeExecutedToolCall(context, assistantMessage, preparation, executed, hooks, signal);
+	}
+
+	await emitToolExecutionEnd(finalized, emit);
+	const toolResultMessage = createToolResultMessage(finalized);
+	await emitToolResultMessage(toolResultMessage, emit);
+	return toolResultMessage;
 }

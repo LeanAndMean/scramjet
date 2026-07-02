@@ -14,6 +14,9 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		lifecycle: createLifecycle(),
 		currentModel: null,
 		modelHistory: [],
+		pendingNotifyModel: null,
+		hasUserMessage: false,
+		suppressNextModelNotify: false,
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
@@ -86,9 +89,13 @@ export function recordingPi(): RecordingPi {
 		appended: [] as { customType: string; data: unknown }[],
 		sent: [] as { message: unknown; options?: unknown }[],
 		dropped: [] as { message: unknown; options?: unknown }[],
+		harnessToolCalls: [] as { name: string; args: unknown; options?: unknown }[],
 		isStreaming: false,
 		registerTool(tool: any) {
 			tools.push(tool);
+		},
+		async invokeHarnessTool(name: string, args: unknown, options?: unknown) {
+			pi.harnessToolCalls.push({ name, args, options });
 		},
 		registerCommand(name: string, spec: unknown) {
 			commands.push({ name, spec });
