@@ -98,19 +98,19 @@ describe("findInitialModel", () => {
 
 	it("prefers scoped models over defaults when not continuing", async () => {
 		const registry = createRegistry(["anthropic"]);
-		const scopedModel = getModel("anthropic", "claude-opus-4-8");
+		const scopedModel = getModel("anthropic", "claude-opus-4-7");
 		const result = await findInitialModel({
 			scopedModels: [{ model: scopedModel }],
 			isContinuing: false,
 			modelRegistry: registry,
 		});
 		expect(result.model).toBeDefined();
-		expect(result.model!.id).toBe("claude-opus-4-8");
+		expect(result.model!.id).toBe("claude-opus-4-7");
 	});
 
 	it("skips scoped models when continuing", async () => {
 		const registry = createRegistry(["anthropic"]);
-		const scopedModel = getModel("anthropic", "claude-opus-4-8");
+		const scopedModel = getModel("anthropic", "claude-opus-4-7");
 		const result = await findInitialModel({
 			scopedModels: [{ model: scopedModel }],
 			isContinuing: true,
@@ -159,16 +159,14 @@ describe("resolveCliModel", () => {
 		expect(result.model!.id).toBe("claude-opus-4-8");
 	});
 
-	it("resolves bare model ID to bedrock when ambiguous across providers", () => {
+	it("resolves bare model ID to anthropic when it is an exact match", () => {
 		const result = resolveCliModel({
 			cliModel: "claude-opus-4-8",
 			modelRegistry: registry,
 		});
-		// Bare "claude-opus-4-8" exists in both anthropic and amazon-bedrock,
-		// so exact-match is ambiguous; the resolver falls through to partial match
-		// which picks the first lexicographic or alias match.
 		expect(result.error).toBeUndefined();
 		expect(result.model).toBeDefined();
+		expect(result.model!.provider).toBe("anthropic");
 		expect(result.model!.id).toBe("claude-opus-4-8");
 	});
 

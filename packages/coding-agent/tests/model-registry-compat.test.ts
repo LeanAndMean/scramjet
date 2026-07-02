@@ -1,49 +1,35 @@
-import { Type } from "typebox";
-import { Compile } from "typebox/compile";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { AuthStorage } from "../src/core/auth-storage.js";
+import { ModelRegistry } from "../src/core/model-registry.js";
 
-const AnthropicMessagesCompatSchema = Type.Object({
-	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
-	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
-	supportsTemperature: Type.Optional(Type.Boolean()),
-	forceAdaptiveThinking: Type.Optional(Type.Boolean()),
-});
+function loadConfig(config: unknown): ModelRegistry {
+	const dir = mkdtempSync(join(tmpdir(), "model-registry-compat-"));
+	const modelsJsonPath = join(dir, "models.json");
+	writeFileSync(modelsJsonPath, JSON.stringify(config), "utf-8");
+	try {
+		return ModelRegistry.create(AuthStorage.inMemory(), modelsJsonPath);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
 
-const ProviderCompatSchema = Type.Union([
-	Type.Object({
-		openRouterRouting: Type.Optional(Type.Any()),
-		vercelGatewayRouting: Type.Optional(Type.Any()),
-	}),
-	Type.Object({}),
-	AnthropicMessagesCompatSchema,
-]);
+function expectValid(config: unknown): ModelRegistry {
+	const registry = loadConfig(config);
+	expect(registry.getError()).toBeUndefined();
+	return registry;
+}
 
-const ProviderConfigSchema = Type.Object({
-	providers: Type.Record(
-		Type.String(),
-		Type.Object({
-			compat: Type.Optional(ProviderCompatSchema),
-			models: Type.Optional(
-				Type.Array(
-					Type.Object({
-						id: Type.String({ minLength: 1 }),
-						compat: Type.Optional(ProviderCompatSchema),
-					}),
-				),
-			),
-			modelOverrides: Type.Optional(
-				Type.Record(Type.String(), Type.Object({ compat: Type.Optional(ProviderCompatSchema) })),
-			),
-		}),
-	),
-});
+function expectInvalid(config: unknown): void {
+	const registry = loadConfig(config);
+	expect(registry.getError()).toContain("Invalid models.json schema");
+}
 
-const validate = Compile(ProviderConfigSchema);
-const validateAnthropicCompat = Compile(AnthropicMessagesCompatSchema);
-
-describe("AnthropicMessagesCompat schema validation", () => {
+describe("AnthropicMessagesCompat models.json validation", () => {
 	it("accepts supportsTemperature and forceAdaptiveThinking on provider-level compat", () => {
-		const config = {
+		expectValid({
 			providers: {
 				anthropic: {
 					compat: {
@@ -52,17 +38,16 @@ describe("AnthropicMessagesCompat schema validation", () => {
 					},
 				},
 			},
-		};
-		expect(validate.Check(config)).toBe(true);
+		});
 	});
 
 	it("accepts both fields on a custom model compat", () => {
-		const config = {
+		const registry = expectValid({
 			providers: {
 				anthropic: {
 					models: [
 						{
-							id: "claude-opus-4-8",
+							id: "claude-opus-4-8-custom",
 							compat: {
 								supportsTemperature: false,
 								forceAdaptiveThinking: true,
@@ -71,12 +56,15 @@ describe("AnthropicMessagesCompat schema validation", () => {
 					],
 				},
 			},
-		};
-		expect(validate.Check(config)).toBe(true);
+		});
+		expect(registry.find("anthropic", "claude-opus-4-8-custom")?.compat).toMatchObject({
+			supportsTemperature: false,
+			forceAdaptiveThinking: true,
+		});
 	});
 
 	it("accepts both fields on per-model override compat", () => {
-		const config = {
+		const registry = expectValid({
 			providers: {
 				anthropic: {
 					modelOverrides: {
@@ -90,28 +78,50 @@ describe("AnthropicMessagesCompat schema validation", () => {
 					},
 				},
 			},
-		};
-		expect(validate.Check(config)).toBe(true);
+		});
+		expect(registry.find("anthropic", "claude-opus-4-8")?.compat).toMatchObject({
+			supportsTemperature: false,
+			forceAdaptiveThinking: true,
+			supportsEagerToolInputStreaming: true,
+		});
 	});
 
-	it("rejects non-boolean supportsTemperature", () => {
-		expect(validateAnthropicCompat.Check({ supportsTemperature: "false" })).toBe(false);
+	it("rejects non-boolean supportsTemperature through the real models.json loader", () => {
+		expectInvalid({
+			providers: {
+				anthropic: {
+					compat: {
+						supportsTemperature: "false",
+					},
+				},
+			},
+		});
 	});
 
-	it("rejects non-boolean forceAdaptiveThinking", () => {
-		expect(validateAnthropicCompat.Check({ forceAdaptiveThinking: 1 })).toBe(false);
+	it("rejects non-boolean forceAdaptiveThinking through the real models.json loader", () => {
+		expectInvalid({
+			providers: {
+				anthropic: {
+					compat: {
+						forceAdaptiveThinking: 1,
+					},
+				},
+			},
+		});
 	});
 
-	it("preserves unrelated compat fields when both new fields are present", () => {
-		const config = {
+	it("accepts existing Anthropic compat fields under strict union validation", () => {
+		const registry = expectValid({
 			providers: {
 				anthropic: {
 					models: [
 						{
-							id: "claude-opus-4-8",
+							id: "claude-opus-4-8-custom",
 							compat: {
 								supportsEagerToolInputStreaming: true,
 								supportsLongCacheRetention: false,
+								sendSessionAffinityHeaders: true,
+								supportsCacheControlOnTools: false,
 								supportsTemperature: false,
 								forceAdaptiveThinking: true,
 							},
@@ -119,7 +129,10 @@ describe("AnthropicMessagesCompat schema validation", () => {
 					],
 				},
 			},
-		};
-		expect(validate.Check(config)).toBe(true);
+		});
+		expect(registry.find("anthropic", "claude-opus-4-8-custom")?.compat).toMatchObject({
+			sendSessionAffinityHeaders: true,
+			supportsCacheControlOnTools: false,
+		});
 	});
 });

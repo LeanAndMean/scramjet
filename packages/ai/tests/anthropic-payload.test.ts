@@ -95,6 +95,14 @@ describe("forceAdaptiveThinking — metadata only, no runtime effect", () => {
 	});
 });
 
+describe("Anthropic xhigh effort — new models", () => {
+	it("Opus 4.8 sends native xhigh effort", async () => {
+		const model = makeModel("claude-opus-4-8");
+		const params = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
+		expect(params.output_config?.effort).toBe("xhigh");
+	});
+});
+
 describe("supportsTemperature — temperature gating", () => {
 	it("supportsTemperature: false omits temperature on a non-thinking request", async () => {
 		const model = makeModel("claude-opus-4-8", {

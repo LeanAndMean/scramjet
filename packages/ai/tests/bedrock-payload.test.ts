@@ -150,6 +150,14 @@ describe("Bedrock temperature gating — modelSupportsTemperature", () => {
 		expect(payload.inferenceConfig?.temperature).toBeUndefined();
 	});
 
+	it("Opus 4.8 omits temperature when matched by application inference profile name", async () => {
+		const model = makeModel("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", {
+			name: "Claude Opus 4.8",
+		});
+		const payload = await capturePayload(model, minimalContext, { temperature: 0.5 });
+		expect(payload.inferenceConfig?.temperature).toBeUndefined();
+	});
+
 	it("Sonnet 4.6 preserves temperature", async () => {
 		const model = makeModel("us.anthropic.claude-sonnet-4-6-v1");
 		const payload = await capturePayload(model, minimalContext, { temperature: 0.5 });

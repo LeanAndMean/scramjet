@@ -2,7 +2,7 @@
 
 ## 0.38.1 — Add model support for Claude Opus 4.8 and Claude Fable 5
 
-Ported upstream Pi model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5 into the vendored `packages/ai/` and `packages/coding-agent/` packages. This is the first behavioral source divergence in `packages/ai/`. Fixes [#245](https://github.com/LeanAndMean/scramjet/issues/245).
+Ported upstream Pi model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5 into the vendored `packages/ai/` and `packages/coding-agent/` packages. Fixes [#245](https://github.com/LeanAndMean/scramjet/issues/245).
 
 ### Added
 
@@ -11,7 +11,7 @@ Ported upstream Pi model support for Claude Opus 4.8, Claude Fable 5, and Claude
 - Temperature gating: Opus 4.7+ models that reject non-default temperature no longer receive it in either provider.
 - Bedrock `modelSupportsTemperature()` helper and extended `supportsNativeXhighEffort()` for Opus 4.8 and Fable 5.
 - Model generator predicates and `applyAnthropicAdaptiveCompat()` for generated catalog metadata (`forceAdaptiveThinking`, `supportsTemperature`, thinking level maps).
-- Test suites: `anthropic-payload.test.ts` (19 tests), `bedrock-payload.test.ts` (23 tests), `models-generated.test.ts` (18 tests), `model-registry-compat.test.ts` (6 tests), `model-resolver-defaults.test.ts` (14 tests).
+- Focused regression coverage for Anthropic and Bedrock payloads, generated model metadata, custom model schema validation, and default model resolution.
 
 ### Changed
 

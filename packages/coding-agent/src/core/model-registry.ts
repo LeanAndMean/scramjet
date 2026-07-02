@@ -91,46 +91,59 @@ const ThinkingLevelMapSchema = Type.Object({
 	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
-const OpenAICompletionsCompatSchema = Type.Object({
-	supportsStore: Type.Optional(Type.Boolean()),
-	supportsDeveloperRole: Type.Optional(Type.Boolean()),
-	supportsReasoningEffort: Type.Optional(Type.Boolean()),
-	supportsUsageInStreaming: Type.Optional(Type.Boolean()),
-	maxTokensField: Type.Optional(Type.Union([Type.Literal("max_completion_tokens"), Type.Literal("max_tokens")])),
-	requiresToolResultName: Type.Optional(Type.Boolean()),
-	requiresAssistantAfterToolResult: Type.Optional(Type.Boolean()),
-	requiresThinkingAsText: Type.Optional(Type.Boolean()),
-	requiresReasoningContentOnAssistantMessages: Type.Optional(Type.Boolean()),
-	thinkingFormat: Type.Optional(
-		Type.Union([
-			Type.Literal("openai"),
-			Type.Literal("openrouter"),
-			Type.Literal("together"),
-			Type.Literal("deepseek"),
-			Type.Literal("zai"),
-			Type.Literal("qwen"),
-			Type.Literal("qwen-chat-template"),
-		]),
-	),
-	cacheControlFormat: Type.Optional(Type.Literal("anthropic")),
-	openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
-	vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
-	supportsStrictMode: Type.Optional(Type.Boolean()),
-	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
-});
+const OpenAICompletionsCompatSchema = Type.Object(
+	{
+		supportsStore: Type.Optional(Type.Boolean()),
+		supportsDeveloperRole: Type.Optional(Type.Boolean()),
+		supportsReasoningEffort: Type.Optional(Type.Boolean()),
+		supportsUsageInStreaming: Type.Optional(Type.Boolean()),
+		maxTokensField: Type.Optional(Type.Union([Type.Literal("max_completion_tokens"), Type.Literal("max_tokens")])),
+		requiresToolResultName: Type.Optional(Type.Boolean()),
+		requiresAssistantAfterToolResult: Type.Optional(Type.Boolean()),
+		requiresThinkingAsText: Type.Optional(Type.Boolean()),
+		requiresReasoningContentOnAssistantMessages: Type.Optional(Type.Boolean()),
+		thinkingFormat: Type.Optional(
+			Type.Union([
+				Type.Literal("openai"),
+				Type.Literal("openrouter"),
+				Type.Literal("together"),
+				Type.Literal("deepseek"),
+				Type.Literal("zai"),
+				Type.Literal("qwen"),
+				Type.Literal("qwen-chat-template"),
+			]),
+		),
+		cacheControlFormat: Type.Optional(Type.Literal("anthropic")),
+		openRouterRouting: Type.Optional(OpenRouterRoutingSchema),
+		vercelGatewayRouting: Type.Optional(VercelGatewayRoutingSchema),
+		zaiToolStream: Type.Optional(Type.Boolean()),
+		supportsStrictMode: Type.Optional(Type.Boolean()),
+		sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
+		supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
 
-const OpenAIResponsesCompatSchema = Type.Object({
-	sendSessionIdHeader: Type.Optional(Type.Boolean()),
-	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
-});
+const OpenAIResponsesCompatSchema = Type.Object(
+	{
+		sendSessionIdHeader: Type.Optional(Type.Boolean()),
+		supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
 
-const AnthropicMessagesCompatSchema = Type.Object({
-	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
-	supportsLongCacheRetention: Type.Optional(Type.Boolean()),
-	// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking for Opus 4.8/Fable 5 support
-	supportsTemperature: Type.Optional(Type.Boolean()),
-	forceAdaptiveThinking: Type.Optional(Type.Boolean()),
-});
+const AnthropicMessagesCompatSchema = Type.Object(
+	{
+		supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
+		supportsLongCacheRetention: Type.Optional(Type.Boolean()),
+		sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
+		supportsCacheControlOnTools: Type.Optional(Type.Boolean()),
+		// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking for Opus 4.8/Fable 5 support
+		supportsTemperature: Type.Optional(Type.Boolean()),
+		forceAdaptiveThinking: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
 
 const ProviderCompatSchema = Type.Union([
 	OpenAICompletionsCompatSchema,
