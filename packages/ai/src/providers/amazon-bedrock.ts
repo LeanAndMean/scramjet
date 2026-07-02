@@ -185,13 +185,15 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 		try {
 			const client = new BedrockRuntimeClient(config);
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
+			// SCRAMJET-DIVERGENCE: gate temperature on modelSupportsTemperature (opus-4-7+ rejects non-default temperature)
 			let commandInput = {
 				modelId: model.id,
 				messages: convertMessages(context, model, cacheRetention),
 				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
 				inferenceConfig: {
 					...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-					...(options.temperature !== undefined && { temperature: options.temperature }),
+					...(options.temperature !== undefined &&
+						modelSupportsTemperature(model.id, model.name) && { temperature: options.temperature }),
 				},
 				toolConfig: convertToolConfig(context.tools, options.toolChoice),
 				additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
@@ -478,14 +480,30 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
 	});
 }
 
+// SCRAMJET-DIVERGENCE: extended with opus-4-8, fable-5, sonnet-5 patterns for new model support
 function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
 	const candidates = getModelMatchCandidates(modelId, modelName);
-	return candidates.some((s) => s.includes("opus-4-6") || s.includes("opus-4-7") || s.includes("sonnet-4-6"));
+	return candidates.some(
+		(s) =>
+			s.includes("opus-4-6") ||
+			s.includes("opus-4-7") ||
+			s.includes("opus-4-8") ||
+			s.includes("fable-5") ||
+			s.includes("sonnet-4-6") ||
+			s.includes("sonnet-5"),
+	);
 }
 
+// SCRAMJET-DIVERGENCE: extended with opus-4-8, fable-5 for native xhigh effort support
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
 	const candidates = getModelMatchCandidates(model.id, model.name);
-	return candidates.some((s) => s.includes("opus-4-7"));
+	return candidates.some((s) => s.includes("opus-4-7") || s.includes("opus-4-8") || s.includes("fable-5"));
+}
+
+// SCRAMJET-DIVERGENCE: temperature support predicate (opus-4-7+ rejects non-default temperature)
+function modelSupportsTemperature(modelId: string, modelName?: string): boolean {
+	const candidates = getModelMatchCandidates(modelId, modelName);
+	return !candidates.some((s) => s.includes("opus-4-7") || s.includes("opus-4-8"));
 }
 
 function mapThinkingLevelToEffort(
