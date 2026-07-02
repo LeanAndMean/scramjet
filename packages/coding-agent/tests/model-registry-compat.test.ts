@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { describe, expect, it } from "vitest";
 
 const AnthropicMessagesCompatSchema = Type.Object({
 	supportsEagerToolInputStreaming: Type.Optional(Type.Boolean()),
@@ -31,7 +31,9 @@ const ProviderConfigSchema = Type.Object({
 					}),
 				),
 			),
-			modelOverrides: Type.Optional(Type.Record(Type.String(), Type.Object({ compat: Type.Optional(ProviderCompatSchema) }))),
+			modelOverrides: Type.Optional(
+				Type.Record(Type.String(), Type.Object({ compat: Type.Optional(ProviderCompatSchema) })),
+			),
 		}),
 	),
 });

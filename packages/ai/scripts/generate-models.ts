@@ -152,6 +152,44 @@ function mergeThinkingLevelMap(model: Model<any>, map: NonNullable<Model<any>["t
 	model.thinkingLevelMap = { ...model.thinkingLevelMap, ...map };
 }
 
+// SCRAMJET-DIVERGENCE: Anthropic adaptive-thinking and temperature compat predicates (issue 245)
+function isAnthropicAdaptiveThinkingModel(id: string): boolean {
+	return (
+		id.includes("opus-4-6") ||
+		id.includes("opus-4.6") ||
+		id.includes("opus-4-7") ||
+		id.includes("opus-4.7") ||
+		id.includes("opus-4-8") ||
+		id.includes("opus-4.8") ||
+		id.includes("fable-5") ||
+		id.includes("sonnet-5") ||
+		id.includes("sonnet.5") ||
+		id.includes("sonnet-4-6") ||
+		id.includes("sonnet-4.6")
+	);
+}
+
+function isAnthropicTemperatureUnsupportedModel(id: string): boolean {
+	return (
+		id.includes("opus-4-7") ||
+		id.includes("opus-4.7") ||
+		id.includes("opus-4-8") ||
+		id.includes("opus-4.8")
+	);
+}
+
+function applyAnthropicAdaptiveCompat(model: Model<any>): void {
+	if (model.api !== "anthropic-messages") return;
+
+	if (isAnthropicAdaptiveThinkingModel(model.id)) {
+		model.compat = { ...model.compat, forceAdaptiveThinking: true };
+	}
+
+	if (isAnthropicTemperatureUnsupportedModel(model.id)) {
+		model.compat = { ...model.compat, supportsTemperature: false };
+	}
+}
+
 function getTogetherCompat(modelId: string, reasoning: boolean): OpenAICompletionsCompat {
 	if (!reasoning) return TOGETHER_BASE_COMPAT;
 	if (TOGETHER_REASONING_EFFORT_MODELS.has(modelId)) return TOGETHER_REASONING_EFFORT_COMPAT;
@@ -218,6 +256,13 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 	}
 	if (model.id.includes("opus-4-7") || model.id.includes("opus-4.7")) {
 		mergeThinkingLevelMap(model, { xhigh: "xhigh" });
+	}
+	// SCRAMJET-DIVERGENCE: Opus 4.8 and Fable 5 thinking level metadata (issue 245)
+	if (model.id.includes("opus-4-8") || model.id.includes("opus-4.8")) {
+		mergeThinkingLevelMap(model, { xhigh: "xhigh" });
+	}
+	if (model.id.includes("fable-5")) {
+		mergeThinkingLevelMap(model, { off: null, xhigh: "xhigh" });
 	}
 	if (model.api === "openai-completions" && model.id.includes("deepseek-v4")) {
 		mergeThinkingLevelMap(model, DEEPSEEK_V4_THINKING_LEVEL_MAP);
@@ -1887,6 +1932,7 @@ async function generateModels() {
 
 	for (const model of allModels) {
 		applyThinkingLevelMetadata(model);
+		applyAnthropicAdaptiveCompat(model);
 	}
 
 	// Group by provider and deduplicate by model ID

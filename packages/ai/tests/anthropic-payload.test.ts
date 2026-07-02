@@ -3,10 +3,7 @@ import { describe, expect, it } from "vitest";
 import { streamSimpleAnthropic } from "../src/providers/anthropic.js";
 import type { Context, Model, SimpleStreamOptions } from "../src/types.js";
 
-function makeModel(
-	id: string,
-	overrides?: Partial<Model<"anthropic-messages">>,
-): Model<"anthropic-messages"> {
+function makeModel(id: string, overrides?: Partial<Model<"anthropic-messages">>): Model<"anthropic-messages"> {
 	return {
 		id,
 		name: id,
@@ -57,17 +54,9 @@ describe("supportsAdaptiveThinking — new model patterns", () => {
 		"claude-sonnet.5",
 	];
 
-	const existingAdaptiveModels = [
-		"claude-opus-4-6",
-		"claude-opus-4-7",
-		"claude-sonnet-4-6",
-	];
+	const existingAdaptiveModels = ["claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-4-6"];
 
-	const nonAdaptiveModels = [
-		"claude-haiku-3-5-sonnet",
-		"claude-opus-4-5",
-		"claude-3-opus",
-	];
+	const nonAdaptiveModels = ["claude-haiku-3-5-sonnet", "claude-opus-4-5", "claude-3-opus"];
 
 	for (const id of adaptiveModels) {
 		it(`${id} uses adaptive thinking`, async () => {
@@ -102,9 +91,7 @@ describe("forceAdaptiveThinking — metadata only, no runtime effect", () => {
 			compat: { forceAdaptiveThinking: true },
 		});
 		const params = await capturePayload(model, minimalContext, { reasoning: "high" });
-		expect(params.thinking).toEqual(
-			expect.objectContaining({ type: "enabled", budget_tokens: expect.any(Number) }),
-		);
+		expect(params.thinking).toEqual(expect.objectContaining({ type: "enabled", budget_tokens: expect.any(Number) }));
 	});
 });
 

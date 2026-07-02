@@ -1003,7 +1003,11 @@ function buildParams(
 
 	// Temperature is incompatible with extended thinking (adaptive or budget-based).
 	// SCRAMJET-DIVERGENCE: gate on supportsTemperature compat (opus-4-7+ rejects non-default temperature)
-	if (options?.temperature !== undefined && !options?.thinkingEnabled && getAnthropicCompat(model).supportsTemperature) {
+	if (
+		options?.temperature !== undefined &&
+		!options?.thinkingEnabled &&
+		getAnthropicCompat(model).supportsTemperature
+	) {
 		params.temperature = options.temperature;
 	}
 

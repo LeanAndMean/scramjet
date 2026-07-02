@@ -59,10 +59,7 @@ describe("Bedrock supportsAdaptiveThinking — new model patterns", () => {
 		"us.anthropic.claude-sonnet-4-6-v1",
 	];
 
-	const nonAdaptiveModels = [
-		"anthropic.claude-3-5-haiku",
-		"anthropic.claude-3-opus",
-	];
+	const nonAdaptiveModels = ["anthropic.claude-3-5-haiku", "anthropic.claude-3-opus"];
 
 	for (const id of adaptiveModels) {
 		it(`${id} uses adaptive thinking`, async () => {
@@ -92,19 +89,17 @@ describe("Bedrock supportsAdaptiveThinking — new model patterns", () => {
 
 describe("Bedrock supportsAdaptiveThinking — application inference profile names", () => {
 	it("Sonnet 5 recognized via model name on profile ARN", async () => {
-		const model = makeModel(
-			"arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
-			{ name: "Claude Sonnet 5 (production)" },
-		);
+		const model = makeModel("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", {
+			name: "Claude Sonnet 5 (production)",
+		});
 		const payload = await capturePayload(model, minimalContext, { reasoning: "high" });
 		expect(payload.additionalModelRequestFields?.thinking?.type).toBe("adaptive");
 	});
 
 	it("Fable 5 recognized via model name on profile ARN", async () => {
-		const model = makeModel(
-			"arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/xyz789",
-			{ name: "Anthropic Claude Fable 5" },
-		);
+		const model = makeModel("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/xyz789", {
+			name: "Anthropic Claude Fable 5",
+		});
 		const payload = await capturePayload(model, minimalContext, { reasoning: "high" });
 		expect(payload.additionalModelRequestFields?.thinking?.type).toBe("adaptive");
 	});
