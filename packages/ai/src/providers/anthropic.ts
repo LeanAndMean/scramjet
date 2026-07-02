@@ -699,17 +699,22 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 };
 
 /**
- * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6)
+ * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+, Fable 5)
  */
+// SCRAMJET-DIVERGENCE: extended with opus-4-8, fable-5, sonnet-5 patterns for new model support
 function supportsAdaptiveThinking(modelId: string): boolean {
-	// Adaptive-thinking model IDs (with or without date suffix)
 	return (
 		modelId.includes("opus-4-6") ||
 		modelId.includes("opus-4.6") ||
 		modelId.includes("opus-4-7") ||
 		modelId.includes("opus-4.7") ||
+		modelId.includes("opus-4-8") ||
+		modelId.includes("opus-4.8") ||
+		modelId.includes("fable-5") ||
 		modelId.includes("sonnet-4-6") ||
-		modelId.includes("sonnet-4.6")
+		modelId.includes("sonnet-4.6") ||
+		modelId.includes("sonnet-5") ||
+		modelId.includes("sonnet.5")
 	);
 }
 
@@ -997,7 +1002,8 @@ function buildParams(
 	}
 
 	// Temperature is incompatible with extended thinking (adaptive or budget-based).
-	if (options?.temperature !== undefined && !options?.thinkingEnabled) {
+	// SCRAMJET-DIVERGENCE: gate on supportsTemperature compat (opus-4-7+ rejects non-default temperature)
+	if (options?.temperature !== undefined && !options?.thinkingEnabled && getAnthropicCompat(model).supportsTemperature) {
 		params.temperature = options.temperature;
 	}
 
