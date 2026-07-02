@@ -14,6 +14,7 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		lifecycle: createLifecycle(),
 		currentModel: null,
 		modelHistory: [],
+		suppressNextModelNotify: false,
 		suspendProbeWatchdog: undefined,
 		rearmProbeWatchdog: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",

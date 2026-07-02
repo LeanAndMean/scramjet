@@ -11,6 +11,7 @@ import { registerHistory } from "./history.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createLogger } from "./logger.js";
 import { registerModelIdentity } from "./model-identity.js";
+import { registerModelSwitchTool } from "./model-switch-tool.js";
 import { registerPrIndicator } from "./pr-indicator.js";
 import { registerScramjetCommand } from "./scramjet-command.js";
 import { registerSubagentTool } from "./subagent/index.js";
@@ -53,6 +54,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerClearAlias(pi);
 	registerCommandLoader(pi, state);
 	registerModelIdentity(pi, state);
+	registerModelSwitchTool(pi, state);
 	registerHistory(pi, state);
 	registerPrIndicator(pi);
 	registerBaseDirectives(pi);

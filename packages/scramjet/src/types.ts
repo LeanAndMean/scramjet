@@ -121,6 +121,11 @@ export interface ScramjetState extends LifecycleHolder {
 	pendingForcedDispatch: string | null;
 	currentModel: ModelRecord | null;
 	modelHistory: ModelRecord[];
+	// Set by switch_scramjet_model just before pi.setModel (issue 244, Stage 4) so
+	// the model_select handler (Stage 5) can skip emitting a user-change notice for
+	// an agent-initiated switch. Read and cleared synchronously inside setModel's
+	// model_select emission; nothing consumes it until Stage 5 lands.
+	suppressNextModelNotify?: boolean;
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
