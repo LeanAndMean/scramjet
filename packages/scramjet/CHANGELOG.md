@@ -16,6 +16,10 @@ Rebuilt model switching and model-change communication as first-class, tool-driv
 - `model-identity.ts` slimmed to two concerns: the frozen `# Model Identity` system-prompt section (latched at the first user message for prompt-cache stability) and the attribution ledger (`currentModel`/`modelHistory`), with resume/fork/session-tree reconstruction that skips synthetic notice messages to avoid double-counting.
 - Anthropic provider (`packages/ai`): `convertMessages` now applies the idempotent tool-call-ID sanitizer unconditionally at the outgoing block sites, so legacy same-model sessions carrying provider-invalid IDs no longer break Anthropic requests.
 
+### Fixed
+
+- `switch_scramjet_model` no longer strands `suppressNextModelNotify` when the agent switches to a model the user selected within the last 500ms. The same-model guard compares the attribution ledger, which lags the live model until the notice debounce settles, so an agent switch to that already-live model bypassed the guard, set the flag, and hit `setModel`'s `modelsAreEqual` early-return (no `model_select`, so the flag was never consumed). The next genuine user model change was then silently swallowed. The tool now clears the flag unconditionally on its success path.
+
 ## 0.37.1 — Add fresh_session to issue-create and pr-create next-step instructions
 
 Both `mach12:issue-create` and `mach12:pr-create` now instruct the agent to set `fresh_session: true` on their `next_steps` entries, consistent with all other chaining commands in the Mach 12 set. This ensures `issue-plan` and `pr-review` start in clean sessions rather than inheriting the prior command's full context. Fixes [#239](https://github.com/LeanAndMean/scramjet/issues/239).
