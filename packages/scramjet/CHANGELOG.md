@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.38.0 — Tool-driven model switching and model-change communication
+
+Rebuilt model switching and model-change communication as first-class, tool-driven harness behavior with real execution semantics — visible in the live TUI, persisted and replayable from session history, provider-safe, and actually routing the next completion to the selected model. Replaces the previous text-injection model-identity mechanism, which raced lifecycle transitions and could deliver stale or misplaced notifications. Fixes [#244](https://github.com/LeanAndMean/scramjet/issues/244).
+
+### Added
+
+- **Harness-tool-invocation primitive** (Pi runtime): `Agent.runHarnessTool` (`packages/agent`) executes any registered tool through the real prepare/execute/finalize pipeline — real `tool_execution_*`/message events, `ToolResultMessage`, persistence, and extension hooks — but emits no run/turn framing, so transient runs stay invisible to `agent_end`-keyed machinery (probes, `pr-indicator`, compaction). Idle calls run immediately; mid-run calls queue and drain in `prepareNextTurn` before the next intra-run LLM call, which is also routed to the current model (routing self-heal). Surfaced to extensions as `AgentSession.invokeHarnessTool` / `ExtensionAPI.invokeHarnessTool` (`packages/coding-agent`).
+- `ToolDefinition.activation: "default" | "harness-only"` — a `"harness-only"` tool stays registered/resolvable but never enters the provider-visible tool set (structural no-masquerade guarantee, enforced at the `setActiveToolsByName` choke point).
+- `switch_scramjet_model` — agent-callable tool that changes the active harness model through the canonical `pi.setModel` path; its own tool row is the transcript record. Unknown/unauthorized targets return actionable soft-text errors with no silent fallback and leave the model unchanged.
+- `scramjet_model_change_notice` — structurally harness-only tool that communicates user-initiated model changes to the agent as a real, replayable tool artifact (never a user-role message). Delivery debounces rapid cycling (500ms) to the final model, defers past probe turns, and respects the pre-first-turn boundary.
+
+### Changed
+
+- `model-identity.ts` slimmed to two concerns: the frozen `# Model Identity` system-prompt section (latched at the first user message for prompt-cache stability) and the attribution ledger (`currentModel`/`modelHistory`), with resume/fork/session-tree reconstruction that skips synthetic notice messages to avoid double-counting.
+- Anthropic provider (`packages/ai`): `convertMessages` now applies the idempotent tool-call-ID sanitizer unconditionally at the outgoing block sites, so legacy same-model sessions carrying provider-invalid IDs no longer break Anthropic requests.
+
 ## 0.37.1 — Add fresh_session to issue-create and pr-create next-step instructions
 
 Both `mach12:issue-create` and `mach12:pr-create` now instruct the agent to set `fresh_session: true` on their `next_steps` entries, consistent with all other chaining commands in the Mach 12 set. This ensures `issue-plan` and `pr-review` start in clean sessions rather than inheriting the prior command's full context. Fixes [#239](https://github.com/LeanAndMean/scramjet/issues/239).

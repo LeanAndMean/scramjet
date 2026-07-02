@@ -44,29 +44,45 @@ const testModel: Model<"openai-chat"> = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
-function assistantText(text: string): AssistantMessage {
+function assistantMessage(content: AssistantMessage["content"], stopReason: "stop" | "toolUse"): AssistantMessage {
 	return {
 		role: "assistant",
-		content: [{ type: "text", text }],
+		content,
 		api: "openai-chat",
 		provider: "openai",
 		model: "test-model",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		stopReason: "stop",
+		stopReason,
 		timestamp: Date.now(),
 	};
+}
+
+function assistantText(text: string): AssistantMessage {
+	return assistantMessage([{ type: "text", text }], "stop");
+}
+
+function assistantToolCall(name: string, id: string, args: Record<string, unknown>): AssistantMessage {
+	return assistantMessage([{ type: "toolCall", id, name, arguments: args }], "toolUse");
 }
 
 interface Fixture {
 	session: AgentSession;
 	sessionManager: SessionManager;
 	/** One snapshot per streamFn (LLM completion) call. */
-	streamContexts: Array<{ messages: Context["messages"]; toolNames: string[] }>;
+	streamContexts: Array<{ model: Model; messages: Context["messages"]; toolNames: string[] }>;
 	/** Drain AgentSession's async persistence queue so session entries can be asserted. */
 	drain: () => Promise<void>;
 }
 
-async function createFixture(customTools: ToolDefinition[] = []): Promise<Fixture> {
+/**
+ * @param responses Optional scripted assistant reply per LLM call (by 0-based call index). When a
+ *   call index is unscripted (or no script is supplied), the mock replies with plain "ok" text,
+ *   which terminates the run.
+ */
+async function createFixture(
+	customTools: ToolDefinition[] = [],
+	responses?: (callIndex: number) => AssistantMessage | undefined,
+): Promise<Fixture> {
 	const dir = mkdtempSync(join(tmpdir(), "harness-tool-"));
 	const cwd = join(dir, "cwd");
 	const agentDir = join(dir, "agent");
@@ -82,15 +98,17 @@ async function createFixture(customTools: ToolDefinition[] = []): Promise<Fixtur
 	const streamContexts: Fixture["streamContexts"] = [];
 	const agent = new Agent({
 		initialState: { systemPrompt: "", model: testModel, tools: [] },
-		streamFn: (_model, context) => {
+		streamFn: (model, context) => {
+			const callIndex = streamContexts.length;
 			streamContexts.push({
+				model,
 				messages: [...context.messages],
 				toolNames: (context.tools ?? []).map((t) => t.name),
 			});
-			const message = assistantText("ok");
+			const message = responses?.(callIndex) ?? assistantText("ok");
 			const stream = createAssistantMessageEventStream();
 			stream.push({ type: "start", partial: message });
-			stream.push({ type: "done", reason: "stop", message });
+			stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse", message });
 			return stream;
 		},
 		getApiKey: async () => "fake",
@@ -223,6 +241,52 @@ describe("AgentSession harness-tool invocation", () => {
 		// The first turn's context predates the harness call and must not contain it.
 		expect(hasHarnessToolCall(streamContexts[0].messages)).toBe(false);
 		// Issue test requirement 4: the next provider request carries the harness tool artifact.
+		expect(hasHarnessToolCall(streamContexts[1].messages)).toBe(true);
+		expect(hasHarnessToolResult(streamContexts[1].messages)).toBe(true);
+	});
+
+	it("delivers a mid-run notice and routes the next intra-run call to a model changed during the run", async () => {
+		// End-to-end mid-run scenario (issue 244 Scenario 5 / test requirement 3) at the AgentSession
+		// surface: while a run is streaming, a user-style model change plus a harness notice are issued
+		// from inside a tool. The notice must be spliced into the next intra-run provider request and
+		// that request must route to the newly selected model — verified through the real session,
+		// registry, and routing paths rather than a bare Agent.
+		const { tool: notice, calls } = makeNoticeTool();
+		const secondModel: Model<"openai-chat"> = { ...testModel, id: "second-model", name: "Second Model" };
+
+		let sessionRef!: AgentSession;
+		const trigger = defineTool({
+			name: "trigger_switch",
+			label: "Trigger Switch",
+			description: "A model-callable tool that switches the model and fires a notice mid-run.",
+			parameters: Type.Object({}),
+			execute: async () => {
+				// Simulate the harness reacting to a mid-run user model change: the model is switched
+				// through the canonical session path, and the change is narrated via a harness notice.
+				await sessionRef.setModel(secondModel);
+				await sessionRef.invokeHarnessTool("harness_notice", { note: "midrun" });
+				return { content: [{ type: "text", text: "switched" }], details: undefined };
+			},
+		});
+
+		const { session, streamContexts } = await createFixture([notice, trigger], (callIndex) =>
+			// First call: ask to run trigger_switch. Second call: finish with plain text.
+			callIndex === 0 ? assistantToolCall("trigger_switch", "call-1", {}) : undefined,
+		);
+		sessionRef = session;
+
+		await session.prompt("go");
+
+		// The notice actually executed, exactly once.
+		expect(calls).toEqual([{ note: "midrun" }]);
+
+		// Two provider calls: the initial one on the original model, the continuation on the new one.
+		expect(streamContexts).toHaveLength(2);
+		expect(streamContexts[0].model.id).toBe(testModel.id);
+		// Routing self-heal: the intra-run continuation goes to the model selected mid-run.
+		expect(streamContexts[1].model.id).toBe(secondModel.id);
+		// The harness notice pair is present in that continuation's context — before the next LLM call,
+		// not deferred to a later user turn.
 		expect(hasHarnessToolCall(streamContexts[1].messages)).toBe(true);
 		expect(hasHarnessToolResult(streamContexts[1].messages)).toBe(true);
 	});
