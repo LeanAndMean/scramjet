@@ -4,11 +4,13 @@
 
 ### Added
 
+- Custom `models.json` schema support for Anthropic Messages `supportsTemperature` and `forceAdaptiveThinking` compat fields used by the Opus 4.8 / Fable 5 / Sonnet 5 model support update, with effective-API validation that rejects compat fields outside the target API contract.
 - `beforeToolBatch` hook on `AgentLoopConfig` / `Agent` — called after assistant `message_end` but before tool-call extraction, allowing async event handlers (e.g., queued `message_end` mutations) to settle before the execution pipeline reads tool calls ([#196](https://github.com/LeanAndMean/scramjet/issues/196))
 - `AgentSession._drainAgentEventQueue()` helper — awaits the queued extension event promise; wired into both `beforeToolBatch` (pre-extraction drain) and `beforeToolCall` (per-tool drain)
 
 ### Changed
 
+- Default Anthropic model resolution now selects `claude-opus-4-8`; default Amazon Bedrock model resolution now selects `us.anthropic.claude-opus-4-8`. Unknown custom CLI model IDs no longer inherit model-specific `compat` or `thinkingLevelMap` metadata from those defaults.
 - **Documentation rebrand**: Rebranded all shipped documentation, examples, and system prompt from Pi identity to Scramjet identity. Product name references, binary name (`pi` → `scramjet`), env var names (`PI_*` → `SCRAMJET_*`), and install instructions updated throughout. API variable names (`pi.on()`, `pi.registerTool()`) and `.pi/` config directory paths are preserved. ([#199](https://github.com/LeanAndMean/scramjet/issues/199))
 
 - Merged upstream v0.74.1: Together AI provider, image generation APIs, Node 26 fetch fixes, session affinity headers, provider compat improvements ([#14](https://github.com/LeanAndMean/pi/issues/14))

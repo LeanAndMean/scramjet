@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.39.0 — Add model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5
+
+Ported upstream Pi model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5 into the vendored `packages/ai/` and `packages/coding-agent/` packages. Fixes [#245](https://github.com/LeanAndMean/scramjet/issues/245).
+
+### Added
+
+- Adaptive thinking detection for Opus 4.8, Fable 5, and Sonnet 5 in both direct Anthropic and Amazon Bedrock providers.
+- `supportsTemperature` and `forceAdaptiveThinking` fields on `AnthropicMessagesCompat` type, with defaults in `getAnthropicCompat()` and custom model schema validation.
+- Temperature gating: Opus 4.7+ models that reject non-default temperature no longer receive it in either provider.
+- Bedrock `modelSupportsTemperature()` helper and extended `supportsNativeXhighEffort()` for Opus 4.8 and Fable 5.
+- Model generator predicates and `applyAnthropicAdaptiveCompat()` for generated catalog metadata (`forceAdaptiveThinking`, `supportsTemperature`, thinking level maps).
+- Focused regression coverage for Anthropic and Bedrock payloads, generated model metadata, custom model schema validation, and default model resolution.
+
+### Changed
+
+- Default Anthropic model updated from `claude-opus-4-7` to `claude-opus-4-8`.
+- Default Bedrock model updated from `us.anthropic.claude-opus-4-6-v1` to `us.anthropic.claude-opus-4-8`.
+- Regenerated `models.generated.ts` with Opus 4.8, Fable 5, and Sonnet 5 catalog entries.
+- Removed `--passWithNoTests` from `packages/ai` test script now that AI tests exist.
+
 ## 0.38.0 — Tool-driven model switching and model-change communication
 
 Rebuilt model switching and model-change communication as first-class, tool-driven harness behavior with real execution semantics — visible in the live TUI, persisted and replayable from session history, provider-safe, and actually routing the next completion to the selected model. Replaces the previous text-injection model-identity mechanism, which raced lifecycle transitions and could deliver stale or misplaced notifications. Fixes [#244](https://github.com/LeanAndMean/scramjet/issues/244).

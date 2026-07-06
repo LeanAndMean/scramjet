@@ -33,6 +33,11 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import {
+	ADAPTIVE_THINKING_PATTERNS,
+	NATIVE_XHIGH_EFFORT_PATTERNS,
+	normalizeForPatternMatch,
+} from "./anthropic-model-patterns.js";
 
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -178,32 +183,35 @@ function getAnthropicCompat(model: Model<"anthropic-messages">): Required<Anthro
 	const isFireworks = model.provider === "fireworks";
 	const isCloudflareAiGatewayAnthropic =
 		model.provider === "cloudflare-ai-gateway" && model.baseUrl.includes("anthropic");
+	// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking defaults added for Opus 4.8/Fable 5/Sonnet 5 support
 	return {
 		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? !isFireworks,
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? !isFireworks,
 		sendSessionAffinityHeaders:
 			model.compat?.sendSessionAffinityHeaders ?? !!(isFireworks || isCloudflareAiGatewayAnthropic),
 		supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? !isFireworks,
+		supportsTemperature: model.compat?.supportsTemperature ?? true,
+		forceAdaptiveThinking: model.compat?.forceAdaptiveThinking ?? false,
 	};
 }
 
 export interface AnthropicOptions extends StreamOptions {
 	/**
 	 * Enable extended thinking.
-	 * For Opus 4.6 and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
+	 * For adaptive thinking models (Opus 4.6+, Sonnet 4.6+, Fable 5): model decides when/how much to think.
 	 * For older models: uses budget-based thinking with thinkingBudgetTokens.
 	 */
 	thinkingEnabled?: boolean;
 	/**
 	 * Token budget for extended thinking (older models only).
-	 * Ignored for Opus 4.6 and Sonnet 4.6, which use adaptive thinking.
+	 * Ignored for adaptive thinking models (Opus 4.6+, Sonnet 4.6+, Fable 5).
 	 */
 	thinkingBudgetTokens?: number;
 	/**
-	 * Effort level for adaptive thinking (Opus 4.6+ and Sonnet 4.6).
+	 * Effort level for adaptive thinking (Opus 4.6+, Sonnet 4.6+, Fable 5).
 	 * Controls how much thinking Claude allocates:
 	 * - "max": Always thinks with no constraints (Opus 4.6 only)
-	 * - "xhigh": Highest reasoning level (Opus 4.7)
+	 * - "xhigh": Highest reasoning level (Opus 4.7+, Fable 5)
 	 * - "high": Always thinks, deep reasoning (default)
 	 * - "medium": Moderate thinking, may skip for simple queries
 	 * - "low": Minimal thinking, skips for simple tasks
@@ -695,24 +703,21 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 	return stream;
 };
 
-/**
- * Check if a model supports adaptive thinking (Opus 4.6+, Sonnet 4.6)
- */
+// SCRAMJET-DIVERGENCE: extended with opus-4-8, fable-5, sonnet-5 patterns for new model support
 function supportsAdaptiveThinking(modelId: string): boolean {
-	// Adaptive-thinking model IDs (with or without date suffix)
-	return (
-		modelId.includes("opus-4-6") ||
-		modelId.includes("opus-4.6") ||
-		modelId.includes("opus-4-7") ||
-		modelId.includes("opus-4.7") ||
-		modelId.includes("sonnet-4-6") ||
-		modelId.includes("sonnet-4.6")
-	);
+	const normalized = normalizeForPatternMatch(modelId);
+	return ADAPTIVE_THINKING_PATTERNS.some((p) => normalized.includes(p));
+}
+
+// SCRAMJET-DIVERGENCE: native xhigh effort support for Opus 4.8/Fable 5 models
+function supportsNativeXhighEffort(modelId: string): boolean {
+	const normalized = normalizeForPatternMatch(modelId);
+	return NATIVE_XHIGH_EFFORT_PATTERNS.some((p) => normalized.includes(p));
 }
 
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
- * Note: effort "max" is only valid on Opus 4.6, while Opus 4.7 supports "xhigh".
+ * Note: effort "max" is only valid on Opus 4.6; Opus 4.7+ and Fable 5 support "xhigh".
  */
 function mapThinkingLevelToEffort(
 	model: Model<"anthropic-messages">,
@@ -729,6 +734,8 @@ function mapThinkingLevelToEffort(
 			return "medium";
 		case "high":
 			return "high";
+		case "xhigh":
+			return supportsNativeXhighEffort(model.id) ? "xhigh" : "high";
 		default:
 			return "high";
 	}
@@ -749,8 +756,8 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 		return streamAnthropic(model, context, { ...base, thinkingEnabled: false } satisfies AnthropicOptions);
 	}
 
-	// For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
-	// For older models: use budget-based thinking
+	// For adaptive-thinking models: use effort level.
+	// For older models: use budget-based thinking.
 	if (supportsAdaptiveThinking(model.id)) {
 		const effort = mapThinkingLevelToEffort(model, options.reasoning);
 		return streamAnthropic(model, context, {
@@ -788,8 +795,7 @@ function createClient(
 	dynamicHeaders?: Record<string, string>,
 	sessionId?: string,
 ): { client: Anthropic; isOAuthToken: boolean } {
-	// Adaptive thinking models (Opus 4.6, Sonnet 4.6) have interleaved thinking built-in.
-	// The beta header is deprecated on Opus 4.6 and redundant on Sonnet 4.6, so skip it.
+	// Adaptive-thinking models have interleaved thinking built in, so skip the beta header.
 	const needsInterleavedBeta = interleavedThinking && !supportsAdaptiveThinking(model.id);
 	const betaFeatures: string[] = [];
 	if (useFineGrainedToolStreamingBeta) {
@@ -994,7 +1000,12 @@ function buildParams(
 	}
 
 	// Temperature is incompatible with extended thinking (adaptive or budget-based).
-	if (options?.temperature !== undefined && !options?.thinkingEnabled) {
+	// SCRAMJET-DIVERGENCE: gate on supportsTemperature compat (opus-4-7+ rejects non-default temperature)
+	if (
+		options?.temperature !== undefined &&
+		!options?.thinkingEnabled &&
+		getAnthropicCompat(model).supportsTemperature
+	) {
 		params.temperature = options.temperature;
 	}
 
@@ -1008,8 +1019,8 @@ function buildParams(
 		);
 	}
 
-	// Configure thinking mode: adaptive (Opus 4.6+ and Sonnet 4.6),
-	// budget-based (older models), or explicitly disabled.
+	// Configure thinking mode: adaptive-thinking models,
+	// budget-based older models, or explicitly disabled.
 	if (model.reasoning) {
 		if (options?.thinkingEnabled) {
 			// Default to "summarized" so Opus 4.7 and Mythos Preview behave like
