@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.40.0 — Model selection in next-step selector
+
+The next-step selector now supports model cycling: left/right arrows cycle through available models before dispatching the selected next step. The chosen model is applied via `pi.setModel` before dispatch (fresh sessions inherit via issue 186 snapshot). Countdown auto-select and Escape never commit a model change. Fixes [#249](https://github.com/LeanAndMean/scramjet/issues/249).
+
+### Added
+
+- `selectNextStep` accepts optional `models` and `initialModel` parameters; returns `NextStepSelection { step, model }` where `model` is non-null only on explicit user cycling.
+- Model line rendered between the option list and footer when >1 model is available; footer shows `←→ model` hint.
+- Off-list sentinel (-1) handles current model absent from the available list (auth revoked / scoped).
+- `auto-continue.ts` snapshots `ctx.model` and `ctx.modelRegistry.getAvailable()`, calls `pi.setModel` on explicit selection before dispatch, warns on failure but proceeds with current model.
+- Stale guard re-runs after the `pi.setModel` await to prevent dispatch on lifecycle changes during the async gap.
+
+### Changed
+
+- `selectNextStep` return type widened from `ValidatedNextStep | null` to `NextStepSelection | null`.
+- `showSelector` `.then` callback is now async to support `await pi.setModel`.
+
 ## 0.39.1 — Model isolation for fresh-session dispatches
 
 Fresh-session next-step chaining, `/clear`, and `/new` now inherit the live session's model and thinking level instead of reading from the shared `settings.json`. This prevents cross-terminal contamination: a model switch in one Scramjet instance no longer silently changes the model used by fresh-session dispatches in other instances. Fixes [#186](https://github.com/LeanAndMean/scramjet/issues/186).
