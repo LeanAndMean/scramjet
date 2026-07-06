@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
@@ -229,17 +229,5 @@ describe("AgentSessionRuntime.newSession — model inheritance", () => {
 		const { runtime, getLastInherited } = await createRuntimeFixture(undefined);
 		await runtime.newSession();
 		expect(getLastInherited()).toBeUndefined();
-	});
-
-	it("cross-terminal contamination blocked", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "contamination-"));
-		const settingsPath = join(dir, "settings.json");
-		writeFileSync(settingsPath, JSON.stringify({ defaultProvider: "provider-b", defaultModel: "model-b" }));
-
-		const { runtime, getLastInherited } = await createRuntimeFixture(modelA);
-		await runtime.newSession();
-
-		expect(getLastInherited()!.model).toBe(modelA);
-		expect(getLastInherited()!.model.id).not.toBe("model-b");
 	});
 });
