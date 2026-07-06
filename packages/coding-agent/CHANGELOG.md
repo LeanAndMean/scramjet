@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Model isolation for in-process session replacement**: `newSession()` now inherits the live session's model and thinking level instead of reading the shared `settings.json`. Prevents cross-instance contamination when multiple terminals run concurrently — a model switch in one terminal no longer affects fresh-session dispatches (`/new`, `/clear`, next-step chaining) in other terminals. Inherited values take highest precedence, above CLI `--model` and `--thinking`. ([#186](https://github.com/LeanAndMean/scramjet/issues/186))
+
 ### Added
 
 - `beforeToolBatch` hook on `AgentLoopConfig` / `Agent` — called after assistant `message_end` but before tool-call extraction, allowing async event handlers (e.g., queued `message_end` mutations) to settle before the execution pipeline reads tool calls ([#196](https://github.com/LeanAndMean/scramjet/issues/196))

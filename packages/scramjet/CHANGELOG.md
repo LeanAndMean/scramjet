@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.38.1 — Model isolation for fresh-session dispatches
+
+Fresh-session next-step chaining, `/clear`, and `/new` now inherit the live session's model and thinking level instead of reading from the shared `settings.json`. This prevents cross-terminal contamination: a model switch in one Scramjet instance no longer silently changes the model used by fresh-session dispatches in other instances. Fixes [#186](https://github.com/LeanAndMean/scramjet/issues/186).
+
+### Changed
+
+- Pi runtime (`@leanandmean/coding-agent`): `AgentSessionRuntime.newSession()` snapshots the current model/thinkingLevel before teardown and forwards them through the factory to `buildSessionOptions` at highest precedence.
+- **Inherited thinking level overrides CLI `--thinking`** in fresh-session dispatches. Same rationale as the model: the user's latest in-session choice takes priority over the launch command's flags.
+
+### Added
+
+- Regression guard test (`model-inherit-regression.test.ts`) asserting that `next-step-dispatch.ts` and `clear-alias.ts` call `ctx.newSession()` with no explicit model options, documenting the deliberate reliance on inherit-by-default.
+
 ## 0.38.0 — Tool-driven model switching and model-change communication
 
 Rebuilt model switching and model-change communication as first-class, tool-driven harness behavior with real execution semantics — visible in the live TUI, persisted and replayable from session history, provider-safe, and actually routing the next completion to the selected model. Replaces the previous text-injection model-identity mechanism, which raced lifecycle transitions and could deliver stale or misplaced notifications. Fixes [#244](https://github.com/LeanAndMean/scramjet/issues/244).
