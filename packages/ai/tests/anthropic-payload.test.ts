@@ -101,6 +101,18 @@ describe("Anthropic xhigh effort — new models", () => {
 		const params = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
 		expect(params.output_config?.effort).toBe("xhigh");
 	});
+
+	it("Fable 5 sends native xhigh effort", async () => {
+		const model = makeModel("claude-fable-5");
+		const params = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
+		expect(params.output_config?.effort).toBe("xhigh");
+	});
+
+	it("Sonnet 5 clamps xhigh effort to high", async () => {
+		const model = makeModel("claude-sonnet-5");
+		const params = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
+		expect(params.output_config?.effort).toBe("high");
+	});
 });
 
 describe("supportsTemperature — temperature gating", () => {

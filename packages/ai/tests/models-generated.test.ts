@@ -120,17 +120,17 @@ describe("generated catalog - Bedrock Fable 5", () => {
 	});
 });
 
-describe("generated catalog - Sonnet 5 (conditional)", () => {
-	const models = getModels("anthropic");
-	const sonnet5 = models.filter(
-		(m) => m.api === "anthropic-messages" && (m.id.includes("sonnet-5") || m.id.includes("sonnet.5")),
-	);
+describe("generated catalog - Sonnet 5", () => {
+	const model = getModel("anthropic", "claude-sonnet-5");
 
-	it("if present, has forceAdaptiveThinking", () => {
-		for (const m of sonnet5) {
-			const compat = m.compat as AnthropicMessagesCompat;
-			expect(compat).toBeDefined();
-			expect(compat.forceAdaptiveThinking).toBe(true);
-		}
+	it("exists in catalog", () => {
+		expect(model).toBeDefined();
+		expect(model.api).toBe("anthropic-messages");
+	});
+
+	it("has forceAdaptiveThinking", () => {
+		const compat = model.compat as AnthropicMessagesCompat;
+		expect(compat).toBeDefined();
+		expect(compat.forceAdaptiveThinking).toBe(true);
 	});
 });

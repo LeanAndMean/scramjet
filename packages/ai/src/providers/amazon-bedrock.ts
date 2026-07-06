@@ -904,7 +904,7 @@ function buildAdditionalModelRequestFields(
 						low: 2048,
 						medium: 8192,
 						high: 16384,
-						xhigh: 16384, // Claude doesn't support xhigh, clamp to high
+						xhigh: 16384, // Budget-based thinking has no native xhigh, clamp to high
 					};
 
 					// Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)

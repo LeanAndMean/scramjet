@@ -27,6 +27,15 @@ function expectInvalid(config: unknown): void {
 	expect(registry.getError()).toContain("Invalid models.json schema");
 }
 
+function expectInvalidConfig(config: unknown, fragments: string[]): void {
+	const registry = loadConfig(config);
+	const error = registry.getError();
+	expect(error).toBeDefined();
+	for (const fragment of fragments) {
+		expect(error).toContain(fragment);
+	}
+}
+
 describe("AnthropicMessagesCompat models.json validation", () => {
 	it("accepts supportsTemperature and forceAdaptiveThinking on provider-level compat", () => {
 		expectValid({
@@ -134,5 +143,98 @@ describe("AnthropicMessagesCompat models.json validation", () => {
 			sendSessionAffinityHeaders: true,
 			supportsCacheControlOnTools: false,
 		});
+	});
+
+	it("rejects OpenAI-only compat on Anthropic provider config", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					anthropic: {
+						compat: {
+							supportsStore: false,
+						},
+					},
+				},
+			},
+			["providers.anthropic.compat.supportsStore", 'api "anthropic-messages"'],
+		);
+	});
+
+	it("rejects OpenAI-only compat on Anthropic custom model config", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					anthropic: {
+						models: [
+							{
+								id: "claude-custom",
+								compat: {
+									supportsStore: false,
+								},
+							},
+						],
+					},
+				},
+			},
+			["providers.anthropic.models[0].compat.supportsStore", 'api "anthropic-messages"'],
+		);
+	});
+
+	it("rejects provider-level compat that is invalid for built-in models when custom models are present", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					openai: {
+						compat: {
+							supportsStore: false,
+						},
+						models: [
+							{
+								id: "custom-completions-model",
+								api: "openai-completions",
+							},
+						],
+					},
+				},
+			},
+			["providers.openai.compat.supportsStore", 'api "openai-responses"'],
+		);
+	});
+
+	it("rejects Anthropic-only compat on Bedrock provider config", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					"amazon-bedrock": {
+						compat: {
+							supportsTemperature: false,
+						},
+					},
+				},
+			},
+			["providers.amazon-bedrock.compat.supportsTemperature", 'api "bedrock-converse-stream"'],
+		);
+	});
+
+	it("rejects Anthropic-only compat on Bedrock model override config", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					"amazon-bedrock": {
+						modelOverrides: {
+							"us.anthropic.claude-opus-4-8": {
+								compat: {
+									forceAdaptiveThinking: true,
+								},
+							},
+						},
+					},
+				},
+			},
+			[
+				"providers.amazon-bedrock.modelOverrides.us.anthropic.claude-opus-4-8.compat.forceAdaptiveThinking",
+				'api "bedrock-converse-stream"',
+			],
+		);
 	});
 });

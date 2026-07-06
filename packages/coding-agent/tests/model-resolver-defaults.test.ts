@@ -1,4 +1,4 @@
-import { getModel } from "@leanandmean/ai";
+import { getModel, getSupportedThinkingLevels } from "@leanandmean/ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -190,5 +190,21 @@ describe("resolveCliModel", () => {
 		expect(result.model).toBeDefined();
 		expect(result.model!.provider).toBe("amazon-bedrock");
 		expect(result.model!.id).toBe("us.anthropic.claude-opus-4-8");
+	});
+
+	it("does not inherit default model-specific capabilities for unknown custom Anthropic CLI models", () => {
+		const result = resolveCliModel({
+			cliProvider: "anthropic",
+			cliModel: "my-custom-claude",
+			modelRegistry: registry,
+		});
+		expect(result.error).toBeUndefined();
+		expect(result.warning).toContain("Using custom model id");
+		expect(result.model).toBeDefined();
+		expect(result.model!.provider).toBe("anthropic");
+		expect(result.model!.id).toBe("my-custom-claude");
+		expect(result.model!.compat).toBeUndefined();
+		expect(result.model!.thinkingLevelMap).toBeUndefined();
+		expect(getSupportedThinkingLevels(result.model!)).not.toContain("xhigh");
 	});
 });

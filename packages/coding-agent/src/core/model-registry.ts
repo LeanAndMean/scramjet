@@ -151,6 +151,35 @@ const ProviderCompatSchema = Type.Union([
 	AnthropicMessagesCompatSchema,
 ]);
 
+const OPENAI_COMPLETIONS_COMPAT_KEYS = new Set([
+	"supportsStore",
+	"supportsDeveloperRole",
+	"supportsReasoningEffort",
+	"supportsUsageInStreaming",
+	"maxTokensField",
+	"requiresToolResultName",
+	"requiresAssistantAfterToolResult",
+	"requiresThinkingAsText",
+	"requiresReasoningContentOnAssistantMessages",
+	"thinkingFormat",
+	"openRouterRouting",
+	"vercelGatewayRouting",
+	"zaiToolStream",
+	"supportsStrictMode",
+	"cacheControlFormat",
+	"sendSessionAffinityHeaders",
+	"supportsLongCacheRetention",
+]);
+const OPENAI_RESPONSES_COMPAT_KEYS = new Set(["sendSessionIdHeader", "supportsLongCacheRetention"]);
+const ANTHROPIC_MESSAGES_COMPAT_KEYS = new Set([
+	"supportsEagerToolInputStreaming",
+	"supportsLongCacheRetention",
+	"sendSessionAffinityHeaders",
+	"supportsCacheControlOnTools",
+	"supportsTemperature",
+	"forceAdaptiveThinking",
+]);
+
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
 const ModelDefinitionSchema = Type.Object({
@@ -272,6 +301,30 @@ interface CustomModelsResult {
 
 function emptyCustomModelsResult(error?: string): CustomModelsResult {
 	return { models: [], overrides: new Map(), modelOverrides: new Map(), error };
+}
+
+function compatKeysForApi(api: string): Set<string> | undefined {
+	switch (api) {
+		case "openai-completions":
+			return OPENAI_COMPLETIONS_COMPAT_KEYS;
+		case "openai-responses":
+			return OPENAI_RESPONSES_COMPAT_KEYS;
+		case "anthropic-messages":
+			return ANTHROPIC_MESSAGES_COMPAT_KEYS;
+		default:
+			return undefined;
+	}
+}
+
+function validateCompatForApi(compat: Model<Api>["compat"] | undefined, api: string, path: string): void {
+	if (!compat) return;
+
+	const allowedKeys = compatKeysForApi(api);
+	for (const key of Object.keys(compat)) {
+		if (!allowedKeys?.has(key)) {
+			throw new Error(`${path}.${key}: compat field is not valid for api "${api}".`);
+		}
+	}
 }
 
 function mergeCompat(
@@ -529,6 +582,8 @@ export class ModelRegistry {
 			const isBuiltIn = builtInProviders.has(providerName);
 			const hasProviderApi = !!providerConfig.api;
 			const models = providerConfig.models ?? [];
+			const builtInModels = isBuiltIn ? (getModels(providerName as KnownProvider) as Model<Api>[]) : [];
+			const builtInDefaultApi = builtInModels[0]?.api;
 			const hasModelOverrides =
 				providerConfig.modelOverrides && Object.keys(providerConfig.modelOverrides).length > 0;
 
@@ -551,8 +606,26 @@ export class ModelRegistry {
 			// Built-in providers with custom models: baseUrl/apiKey/api are optional,
 			// inherited from built-in models. Auth comes from env vars / auth storage.
 
-			for (const modelDef of models) {
+			if (providerConfig.compat) {
+				const providerCompatApis = new Set<string>();
+				for (const model of builtInModels) {
+					providerCompatApis.add(model.api);
+				}
+				for (const modelDef of models) {
+					const api = modelDef.api ?? providerConfig.api ?? builtInDefaultApi;
+					if (api) providerCompatApis.add(api);
+				}
+				if (!isBuiltIn && providerConfig.api) {
+					providerCompatApis.add(providerConfig.api);
+				}
+				for (const api of providerCompatApis) {
+					validateCompatForApi(providerConfig.compat, api, `providers.${providerName}.compat`);
+				}
+			}
+
+			for (const [modelIndex, modelDef] of models.entries()) {
 				const hasModelApi = !!modelDef.api;
+				const api = modelDef.api ?? providerConfig.api ?? builtInDefaultApi;
 
 				if (!hasProviderApi && !hasModelApi && !isBuiltIn) {
 					throw new Error(
@@ -567,6 +640,22 @@ export class ModelRegistry {
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
 				if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0)
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
+
+				if (api) {
+					validateCompatForApi(modelDef.compat, api, `providers.${providerName}.models[${modelIndex}].compat`);
+				}
+			}
+
+			for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides ?? {})) {
+				const api =
+					builtInModels.find((model) => model.id === modelId)?.api ?? providerConfig.api ?? builtInDefaultApi;
+				if (api) {
+					validateCompatForApi(
+						modelOverride.compat,
+						api,
+						`providers.${providerName}.modelOverrides.${modelId}.compat`,
+					);
+				}
 			}
 		}
 	}

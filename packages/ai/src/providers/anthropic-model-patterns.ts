@@ -17,7 +17,7 @@ export const TEMPERATURE_UNSUPPORTED_PATTERNS = ["opus-4-7", "opus-4-8"] as cons
 /** Canonical dash-separated model ID substrings for models supporting native xhigh effort. */
 export const NATIVE_XHIGH_EFFORT_PATTERNS = ["opus-4-7", "opus-4-8", "fable-5"] as const;
 
-/** Normalize a model identifier for pattern matching: lowercase, dots/spaces/underscores → dashes. */
+/** Normalize a model identifier for pattern matching: lowercase, dots/spaces/underscores/colons → dashes. */
 export function normalizeForPatternMatch(value: string): string {
 	return value.toLowerCase().replace(/[\s_.:]+/g, "-");
 }

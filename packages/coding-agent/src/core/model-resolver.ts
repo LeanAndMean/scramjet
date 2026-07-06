@@ -171,6 +171,8 @@ function buildFallbackModel(provider: string, modelId: string, availableModels: 
 		...baseModel,
 		id: modelId,
 		name: modelId,
+		compat: undefined,
+		thinkingLevelMap: undefined,
 	};
 }
 
