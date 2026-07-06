@@ -474,9 +474,8 @@ function handleContentBlockStop(
 }
 
 /**
- * Check if the model supports adaptive thinking (Opus 4.6+, Sonnet 4.6+, Fable 5).
- * Checks both model ID and model name to support application inference profiles
- * whose ARNs don't contain the model name.
+ * Build model-match candidates from model ID and optional display name.
+ * Returns lowercased and normalized variants for pattern matching against model-family arrays.
  */
 function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
 	const values = modelName ? [modelId, modelName] : [modelId];

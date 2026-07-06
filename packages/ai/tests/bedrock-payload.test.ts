@@ -127,13 +127,39 @@ describe("Bedrock xhigh effort — new models", () => {
 	it("Sonnet 4.6 does not get native xhigh", async () => {
 		const model = makeModel("us.anthropic.claude-sonnet-4-6-v1");
 		const payload = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
-		expect(payload.additionalModelRequestFields?.output_config?.effort).not.toBe("xhigh");
+		expect(payload.additionalModelRequestFields?.output_config?.effort).toBe("high");
 	});
 
 	it("Sonnet 5 does not get native xhigh", async () => {
 		const model = makeModel("eu.anthropic.claude-sonnet-5-v1");
 		const payload = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
-		expect(payload.additionalModelRequestFields?.output_config?.effort).not.toBe("xhigh");
+		expect(payload.additionalModelRequestFields?.output_config?.effort).toBe("high");
+	});
+});
+
+describe("Bedrock xhigh effort — application inference profile names", () => {
+	it("Opus 4.8 recognized via model name on profile ARN", async () => {
+		const model = makeModel("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", {
+			name: "Claude Opus 4.8 (production)",
+		});
+		const payload = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
+		expect(payload.additionalModelRequestFields?.output_config?.effort).toBe("xhigh");
+	});
+
+	it("Fable 5 recognized via model name on profile ARN", async () => {
+		const model = makeModel("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/xyz789", {
+			name: "Anthropic Claude Fable 5",
+		});
+		const payload = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
+		expect(payload.additionalModelRequestFields?.output_config?.effort).toBe("xhigh");
+	});
+
+	it("Sonnet 5 via profile ARN does not get native xhigh", async () => {
+		const model = makeModel("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/def456", {
+			name: "Claude Sonnet 5 (production)",
+		});
+		const payload = await capturePayload(model, minimalContext, { reasoning: "xhigh" });
+		expect(payload.additionalModelRequestFields?.output_config?.effort).toBe("high");
 	});
 });
 

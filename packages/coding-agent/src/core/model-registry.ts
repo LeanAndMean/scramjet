@@ -324,7 +324,10 @@ function validateProviderCompatForApis(
 			}
 		}
 		if (!validForAny) {
-			const apiList = [...apis].sort().map((a) => `"${a}"`).join(", ");
+			const apiList = [...apis]
+				.sort()
+				.map((a) => `"${a}"`)
+				.join(", ");
 			throw new Error(
 				`${path}.${key}: compat field is not valid for any of the provider's APIs (${apiList}). Use "modelOverrides" to target compat fields to specific models.`,
 			);
@@ -623,7 +626,11 @@ export class ModelRegistry {
 				if (!isBuiltIn && providerConfig.api) {
 					providerCompatApis.add(providerConfig.api);
 				}
-				validateProviderCompatForApis(providerConfig.compat, providerCompatApis, `providers.${providerName}.compat`);
+				validateProviderCompatForApis(
+					providerConfig.compat,
+					providerCompatApis,
+					`providers.${providerName}.compat`,
+				);
 			}
 
 			for (const [modelIndex, modelDef] of models.entries()) {
