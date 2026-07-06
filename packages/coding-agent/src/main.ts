@@ -7,7 +7,8 @@
 
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual } from "@leanandmean/ai";
+import type { ThinkingLevel } from "@leanandmean/agent";
+import { type ImageContent, type Model, modelsAreEqual } from "@leanandmean/ai";
 import { ProcessTerminal, setKeybindings, TUI } from "@leanandmean/tui";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
@@ -284,12 +285,14 @@ async function createSessionManager(
 	return SessionManager.create(cwd, sessionDir);
 }
 
-function buildSessionOptions(
+// SCRAMJET-DIVERGENCE: exported for direct unit testing (issue 186).
+export function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
 	hasExistingSession: boolean,
 	modelRegistry: ModelRegistry,
 	settingsManager: SettingsManager,
+	inherited?: { model: Model<any>; thinkingLevel: ThinkingLevel },
 ): {
 	options: CreateAgentSessionOptions;
 	cliThinkingFromModel: boolean;
@@ -299,10 +302,17 @@ function buildSessionOptions(
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	let cliThinkingFromModel = false;
 
+	// SCRAMJET-DIVERGENCE: inherited model/thinkingLevel from the previous session takes highest
+	// precedence, above CLI --model and scoped models. See issue 186.
+	if (inherited) {
+		options.model = inherited.model;
+		options.thinkingLevel = inherited.thinkingLevel;
+	}
+
 	// Model from CLI
 	// - supports --provider <name> --model <pattern>
 	// - supports --model <provider>/<pattern>
-	if (parsed.model) {
+	if (!options.model && parsed.model) {
 		const resolved = resolveCliModel({
 			cliProvider: parsed.provider,
 			cliModel: parsed.model,
@@ -347,8 +357,9 @@ function buildSessionOptions(
 		}
 	}
 
-	// Thinking level from CLI (takes precedence over scoped model thinking levels set above)
-	if (parsed.thinking) {
+	// Thinking level from CLI (takes precedence over scoped model thinking levels set above,
+	// but NOT over inherited thinking level — SCRAMJET-DIVERGENCE: issue 186)
+	if (options.thinkingLevel === undefined && parsed.thinking) {
 		options.thinkingLevel = parsed.thinking;
 	}
 
@@ -536,6 +547,7 @@ export async function main(args: string[], options?: MainOptions) {
 		agentDir,
 		sessionManager,
 		sessionStartEvent,
+		inherited, // SCRAMJET-DIVERGENCE: forward inherited model/thinkingLevel (issue 186)
 	}) => {
 		const services = await createAgentSessionServices({
 			cwd,
@@ -581,6 +593,7 @@ export async function main(args: string[], options?: MainOptions) {
 			sessionManager.buildSessionContext().messages.length > 0,
 			modelRegistry,
 			settingsManager,
+			inherited, // SCRAMJET-DIVERGENCE: pass inherited model/thinkingLevel (issue 186)
 		);
 		diagnostics.push(...sessionOptionDiagnostics);
 

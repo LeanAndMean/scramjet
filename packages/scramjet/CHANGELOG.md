@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.39.1 — Model isolation for fresh-session dispatches
+
+Fresh-session next-step chaining, `/clear`, and `/new` now inherit the live session's model and thinking level instead of reading from the shared `settings.json`. This prevents cross-terminal contamination: a model switch in one Scramjet instance no longer silently changes the model used by fresh-session dispatches in other instances. Fixes [#186](https://github.com/LeanAndMean/scramjet/issues/186).
+
+### Changed
+
+- Pi runtime (`@leanandmean/coding-agent`): `AgentSessionRuntime.newSession()` snapshots the current model/thinkingLevel before teardown and forwards them through the factory to `buildSessionOptions` at highest precedence.
+- **Inherited thinking level overrides CLI `--thinking`** in fresh-session dispatches. Same rationale as the model: the user's latest in-session choice takes priority over the launch command's flags.
+
+### Added
+
+- Regression guard test (`model-inherit-regression.test.ts`) asserting that `next-step-dispatch.ts` and `clear-alias.ts` call `ctx.newSession()` with no explicit model options, documenting the deliberate reliance on inherit-by-default.
+
 ## 0.39.0 — Add model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5
 
 Ported upstream Pi model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5 into the vendored `packages/ai/` and `packages/coding-agent/` packages. Fixes [#245](https://github.com/LeanAndMean/scramjet/issues/245).
