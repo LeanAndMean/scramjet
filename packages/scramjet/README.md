@@ -88,7 +88,7 @@ Scramjet doesn't define workflows. Each command independently declares its own n
 Scramjet is an autopilot, not a conveyor belt. At any transition:
 
 - **Escape** dismisses the selector — you're back in normal Pi
-- **Left/right arrows** cycle the model for the next command; **up/down + Enter** choose the option
+- **Left/right arrows** cycle the model for the next command; **up/down + Enter** choose the option — any interaction cancels the countdown
 - **Run a different command** — Scramjet doesn't interfere
 - **Close the terminal** — no workflow state to corrupt
 

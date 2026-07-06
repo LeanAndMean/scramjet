@@ -1,4 +1,4 @@
-import type { Api, Model } from "@leanandmean/ai";
+import { type Api, type Model, modelsAreEqual } from "@leanandmean/ai";
 import type { ExtensionContext } from "@leanandmean/coding-agent";
 import { getKeybindings } from "@leanandmean/tui";
 import type { ValidatedNextStep } from "./commands/validator.js";
@@ -168,10 +168,6 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 	return selected;
 }
 
-function modelsEqual(a: Model<any>, b: Model<any>): boolean {
-	return a.provider === b.provider && a.id === b.id;
-}
-
 export function selectNextStep(
 	ctx: ExtensionContext,
 	{ options, recommended, autoSelect, countdownSeconds = 0, signal, models, initialModel }: NextStepSelectorOptions,
@@ -194,7 +190,7 @@ export function selectNextStep(
 	}
 
 	const modelList = models!;
-	const initialIndex = modelList.findIndex((m) => modelsEqual(m, initialModel!));
+	const initialIndex = modelList.findIndex((m) => modelsAreEqual(m, initialModel!));
 	// -1 sentinel: current model is off-list (auth revoked / scoped)
 
 	if (signal?.aborted) return Promise.resolve(null);

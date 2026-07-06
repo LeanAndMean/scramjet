@@ -388,7 +388,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				forcePause,
 			},
 		});
-		const models = ctx.modelRegistry?.getAvailable() ?? [];
+		const models = ctx.modelRegistry.getAvailable();
 		const initialModel = ctx.model;
 		void selectNextStep(ctx, {
 			options: result.valid,
@@ -428,7 +428,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 						}
 					} catch (err) {
 						ctx.ui.notify(
-							`scramjet: model switch to ${selection.model.name} failed (${(err as Error).message}); dispatching with current model`,
+							`scramjet: model switch to ${selection.model.name} failed (${selectorErrorMessage(err)}); dispatching with current model`,
 							"warning",
 						);
 					}
