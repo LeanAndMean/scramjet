@@ -571,6 +571,8 @@ When a command completes with `next_steps`, the user sees a selector with:
 
 The `recommended_next_step` entry is highlighted as the default selection. If `/scramjet on` and the policy allows automatic dispatch, the recommended entry fires without user interaction.
 
+When multiple models are available, the selector also shows a model line below the options. The user can cycle models with left/right arrows before committing a selection; the chosen model is committed via `pi.setModel` before dispatch. This is transparent to command authors — it does not affect `next_steps` declarations or dispatch semantics.
+
 ### Implications for authors
 
 1. **`message` must be complete and correct.** Include all arguments the target command needs. The message is dispatched verbatim — no interpolation happens at dispatch time.

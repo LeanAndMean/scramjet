@@ -57,7 +57,7 @@ Scramjet supports both patterns:
        Reviews the plan before implementation.
     1: /mach12:issue-implement 55 2
        The plan is straightforward enough to continue.
-  ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
+  ←→ model • ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
 
   [fresh session starts, runs issue-review]
   [agent works, asks you questions, you answer, review posted]
@@ -65,7 +65,7 @@ Scramjet supports both patterns:
   Select next step
   > 0: /mach12:issue-implement 55 1 [recommended]
        Stage 1 is ready to build.
-  ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
+  ←→ model • ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
 
   [continues through the entire methodology...]
 ```
@@ -88,7 +88,7 @@ Scramjet doesn't define workflows. Each command independently declares its own n
 Scramjet is an autopilot, not a conveyor belt. At any transition:
 
 - **Escape** dismisses the selector — you're back in normal Pi
-- **Arrow keys + Enter** let you choose a different option before any countdown fires
+- **Left/right arrows** cycle the model for the next command; **up/down + Enter** choose the option — any interaction cancels the countdown
 - **Run a different command** — Scramjet doesn't interfere
 - **Close the terminal** — no workflow state to corrupt
 
