@@ -1,5 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import type { ThinkingLevel } from "@leanandmean/agent";
+import type { Model } from "@leanandmean/ai";
 import type { AgentSession } from "./agent-session.js";
 import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.js";
 import type { ReplacedSessionContext, SessionShutdownEvent, SessionStartEvent } from "./extensions/index.js";
@@ -31,6 +33,8 @@ export type CreateAgentSessionRuntimeFactory = (options: {
 	agentDir: string;
 	sessionManager: SessionManager;
 	sessionStartEvent?: SessionStartEvent;
+	// SCRAMJET-DIVERGENCE: model/thinkingLevel inherited from the previous session in newSession()
+	inherited?: { model: Model<any>; thinkingLevel: ThinkingLevel };
 }) => Promise<CreateAgentSessionRuntimeResult>;
 
 /**
@@ -207,6 +211,16 @@ export class AgentSessionRuntime {
 			return beforeResult;
 		}
 
+		// SCRAMJET-DIVERGENCE: snapshot model/thinkingLevel before teardown so the new session
+		// inherits them, preventing cross-instance contamination via shared settings.json (issue 186).
+		// Guard: Agent always has a model (DEFAULT_MODEL with provider "unknown" when none resolved);
+		// only inherit when a real model was selected.
+		const currentModel = this.session.model;
+		const inherited =
+			currentModel && currentModel.provider !== "unknown"
+				? { model: currentModel, thinkingLevel: this.session.thinkingLevel }
+				: undefined;
+
 		const previousSessionFile = this.session.sessionFile;
 		const sessionDir = this.session.sessionManager.getSessionDir();
 		const sessionManager = SessionManager.create(this.cwd, sessionDir);
@@ -221,6 +235,7 @@ export class AgentSessionRuntime {
 				agentDir: this.services.agentDir,
 				sessionManager,
 				sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
+				inherited,
 			}),
 		);
 		if (options?.setup) {
