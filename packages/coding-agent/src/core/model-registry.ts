@@ -91,6 +91,10 @@ const ThinkingLevelMapSchema = Type.Object({
 	xhigh: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
+// SCRAMJET-DIVERGENCE: strict additionalProperties: false on all compat schemas, compat-key derivation,
+// compatKeysForApi/validateCompatForApi/validateProviderCompatForApis, and validateConfig compat loops.
+// Upstream accepts unknown compat keys silently via permissive union; these changes reject invalid and
+// API-incompatible keys at load time. See also the compat-key sets below.
 const OpenAICompletionsCompatSchema = Type.Object(
 	{
 		supportsStore: Type.Optional(Type.Boolean()),
@@ -138,7 +142,7 @@ const AnthropicMessagesCompatSchema = Type.Object(
 		supportsLongCacheRetention: Type.Optional(Type.Boolean()),
 		sendSessionAffinityHeaders: Type.Optional(Type.Boolean()),
 		supportsCacheControlOnTools: Type.Optional(Type.Boolean()),
-		// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking for Opus 4.8/Fable 5 support
+		// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking for Opus 4.8/Fable 5/Sonnet 5 support
 		supportsTemperature: Type.Optional(Type.Boolean()),
 		forceAdaptiveThinking: Type.Optional(Type.Boolean()),
 	},
@@ -151,34 +155,10 @@ const ProviderCompatSchema = Type.Union([
 	AnthropicMessagesCompatSchema,
 ]);
 
-const OPENAI_COMPLETIONS_COMPAT_KEYS = new Set([
-	"supportsStore",
-	"supportsDeveloperRole",
-	"supportsReasoningEffort",
-	"supportsUsageInStreaming",
-	"maxTokensField",
-	"requiresToolResultName",
-	"requiresAssistantAfterToolResult",
-	"requiresThinkingAsText",
-	"requiresReasoningContentOnAssistantMessages",
-	"thinkingFormat",
-	"openRouterRouting",
-	"vercelGatewayRouting",
-	"zaiToolStream",
-	"supportsStrictMode",
-	"cacheControlFormat",
-	"sendSessionAffinityHeaders",
-	"supportsLongCacheRetention",
-]);
-const OPENAI_RESPONSES_COMPAT_KEYS = new Set(["sendSessionIdHeader", "supportsLongCacheRetention"]);
-const ANTHROPIC_MESSAGES_COMPAT_KEYS = new Set([
-	"supportsEagerToolInputStreaming",
-	"supportsLongCacheRetention",
-	"sendSessionAffinityHeaders",
-	"supportsCacheControlOnTools",
-	"supportsTemperature",
-	"forceAdaptiveThinking",
-]);
+// SCRAMJET-DIVERGENCE: compat-key sets derived from their TypeBox schemas to avoid lockstep duplication
+const OPENAI_COMPLETIONS_COMPAT_KEYS = new Set(Object.keys(OpenAICompletionsCompatSchema.properties));
+const OPENAI_RESPONSES_COMPAT_KEYS = new Set(Object.keys(OpenAIResponsesCompatSchema.properties));
+const ANTHROPIC_MESSAGES_COMPAT_KEYS = new Set(Object.keys(AnthropicMessagesCompatSchema.properties));
 
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
@@ -323,6 +303,31 @@ function validateCompatForApi(compat: Model<Api>["compat"] | undefined, api: str
 	for (const key of Object.keys(compat)) {
 		if (!allowedKeys?.has(key)) {
 			throw new Error(`${path}.${key}: compat field is not valid for api "${api}".`);
+		}
+	}
+}
+
+function validateProviderCompatForApis(
+	compat: Model<Api>["compat"] | undefined,
+	apis: Set<string>,
+	path: string,
+): void {
+	if (!compat) return;
+
+	for (const key of Object.keys(compat)) {
+		let validForAny = false;
+		for (const api of apis) {
+			const allowedKeys = compatKeysForApi(api);
+			if (allowedKeys?.has(key)) {
+				validForAny = true;
+				break;
+			}
+		}
+		if (!validForAny) {
+			const apiList = [...apis].sort().map((a) => `"${a}"`).join(", ");
+			throw new Error(
+				`${path}.${key}: compat field is not valid for any of the provider's APIs (${apiList}). Use "modelOverrides" to target compat fields to specific models.`,
+			);
 		}
 	}
 }
@@ -618,9 +623,7 @@ export class ModelRegistry {
 				if (!isBuiltIn && providerConfig.api) {
 					providerCompatApis.add(providerConfig.api);
 				}
-				for (const api of providerCompatApis) {
-					validateCompatForApi(providerConfig.compat, api, `providers.${providerName}.compat`);
-				}
+				validateProviderCompatForApis(providerConfig.compat, providerCompatApis, `providers.${providerName}.compat`);
 			}
 
 			for (const [modelIndex, modelDef] of models.entries()) {

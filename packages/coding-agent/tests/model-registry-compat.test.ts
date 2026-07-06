@@ -156,7 +156,7 @@ describe("AnthropicMessagesCompat models.json validation", () => {
 					},
 				},
 			},
-			["providers.anthropic.compat.supportsStore", 'api "anthropic-messages"'],
+			["providers.anthropic.compat.supportsStore", "not valid for any of the provider's APIs"],
 		);
 	});
 
@@ -180,13 +180,31 @@ describe("AnthropicMessagesCompat models.json validation", () => {
 		);
 	});
 
-	it("rejects provider-level compat that is invalid for built-in models when custom models are present", () => {
+	it("accepts provider-level compat valid for at least one of the provider's APIs", () => {
+		expectValid({
+			providers: {
+				openai: {
+					compat: {
+						supportsStore: false,
+					},
+					models: [
+						{
+							id: "custom-completions-model",
+							api: "openai-completions",
+						},
+					],
+				},
+			},
+		});
+	});
+
+	it("rejects provider-level compat not valid for any of the provider's APIs", () => {
 		expectInvalidConfig(
 			{
 				providers: {
 					openai: {
 						compat: {
-							supportsStore: false,
+							supportsEagerToolInputStreaming: true,
 						},
 						models: [
 							{
@@ -197,7 +215,7 @@ describe("AnthropicMessagesCompat models.json validation", () => {
 					},
 				},
 			},
-			["providers.openai.compat.supportsStore", 'api "openai-responses"'],
+			["providers.openai.compat.supportsEagerToolInputStreaming", "not valid for any of the provider's APIs"],
 		);
 	});
 
@@ -212,7 +230,22 @@ describe("AnthropicMessagesCompat models.json validation", () => {
 					},
 				},
 			},
-			["providers.amazon-bedrock.compat.supportsTemperature", 'api "bedrock-converse-stream"'],
+			["providers.amazon-bedrock.compat.supportsTemperature", "not valid for any of the provider's APIs"],
+		);
+	});
+
+	it("rejects universally-shared key on Bedrock provider config (no compat keys defined for Bedrock)", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					"amazon-bedrock": {
+						compat: {
+							supportsLongCacheRetention: true,
+						},
+					},
+				},
+			},
+			["providers.amazon-bedrock.compat.supportsLongCacheRetention", "not valid for any of the provider's APIs"],
 		);
 	});
 
@@ -235,6 +268,68 @@ describe("AnthropicMessagesCompat models.json validation", () => {
 				"providers.amazon-bedrock.modelOverrides.us.anthropic.claude-opus-4-8.compat.forceAdaptiveThinking",
 				'api "bedrock-converse-stream"',
 			],
+		);
+	});
+
+	it("accepts Anthropic-only compat on multi-API built-in provider at provider level", () => {
+		expectValid({
+			providers: {
+				"github-copilot": {
+					compat: {
+						supportsCacheControlOnTools: false,
+					},
+				},
+			},
+		});
+	});
+
+	it("rejects custom provider with api-mismatched provider compat", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					"my-provider": {
+						baseUrl: "http://localhost:8080",
+						apiKey: "test",
+						api: "openai-completions",
+						compat: {
+							supportsEagerToolInputStreaming: true,
+						},
+						models: [{ id: "my-model" }],
+					},
+				},
+			},
+			["providers.my-provider.compat.supportsEagerToolInputStreaming", "not valid for any of the provider's APIs"],
+		);
+	});
+
+	it("accepts cross-API shared key on OpenAI-family provider", () => {
+		expectValid({
+			providers: {
+				openai: {
+					compat: {
+						supportsLongCacheRetention: false,
+					},
+				},
+			},
+		});
+	});
+
+	it("validates modelOverrides compat against model-specific API (not provider default)", () => {
+		expectInvalidConfig(
+			{
+				providers: {
+					"github-copilot": {
+						modelOverrides: {
+							"gpt-4o": {
+								compat: {
+									supportsEagerToolInputStreaming: true,
+								},
+							},
+						},
+					},
+				},
+			},
+			["providers.github-copilot.modelOverrides.gpt-4o.compat.supportsEagerToolInputStreaming"],
 		);
 	});
 });

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.38.1 — Add model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5
+## 0.39.0 — Add model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5
 
 Ported upstream Pi model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5 into the vendored `packages/ai/` and `packages/coding-agent/` packages. Fixes [#245](https://github.com/LeanAndMean/scramjet/issues/245).
 

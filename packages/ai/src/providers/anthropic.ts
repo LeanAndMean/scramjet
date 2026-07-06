@@ -183,7 +183,7 @@ function getAnthropicCompat(model: Model<"anthropic-messages">): Required<Anthro
 	const isFireworks = model.provider === "fireworks";
 	const isCloudflareAiGatewayAnthropic =
 		model.provider === "cloudflare-ai-gateway" && model.baseUrl.includes("anthropic");
-	// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking defaults added for Opus 4.8/Fable 5 support
+	// SCRAMJET-DIVERGENCE: supportsTemperature and forceAdaptiveThinking defaults added for Opus 4.8/Fable 5/Sonnet 5 support
 	return {
 		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? !isFireworks,
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? !isFireworks,
