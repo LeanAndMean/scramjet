@@ -10,10 +10,11 @@ import { isValidThinkingLevel } from "../cli/args.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
 
+// SCRAMJET-DIVERGENCE: Default models updated to claude-opus-4-8 (upstream parity)
 /** Default model IDs for each known provider */
 export const defaultModelPerProvider: Record<KnownProvider, string> = {
-	"amazon-bedrock": "us.anthropic.claude-opus-4-6-v1",
-	anthropic: "claude-opus-4-7",
+	"amazon-bedrock": "us.anthropic.claude-opus-4-8",
+	anthropic: "claude-opus-4-8",
 	openai: "gpt-5.4",
 	"azure-openai-responses": "gpt-5.4",
 	"openai-codex": "gpt-5.5",
@@ -170,6 +171,10 @@ function buildFallbackModel(provider: string, modelId: string, availableModels: 
 		...baseModel,
 		id: modelId,
 		name: modelId,
+		// SCRAMJET-DIVERGENCE: clear model-specific quirks so unknown IDs don't inherit
+		// Opus 4.8's compat (wrong payloads) or thinkingLevelMap (wrong thinking levels)
+		compat: undefined,
+		thinkingLevelMap: undefined,
 	};
 }
 

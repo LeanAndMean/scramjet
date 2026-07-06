@@ -47,6 +47,12 @@ import { parseStreamingJson } from "../utils/json-parse.js";
 import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { flattenSystemPrompt } from "../utils/system-prompt.js";
+import {
+	ADAPTIVE_THINKING_PATTERNS,
+	NATIVE_XHIGH_EFFORT_PATTERNS,
+	normalizeForPatternMatch,
+	TEMPERATURE_UNSUPPORTED_PATTERNS,
+} from "./anthropic-model-patterns.js";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -185,13 +191,15 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 		try {
 			const client = new BedrockRuntimeClient(config);
 			const cacheRetention = resolveCacheRetention(options.cacheRetention);
+			// SCRAMJET-DIVERGENCE: gate temperature on modelSupportsTemperature (opus-4-7+ rejects non-default temperature)
 			let commandInput = {
 				modelId: model.id,
 				messages: convertMessages(context, model, cacheRetention),
 				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
 				inferenceConfig: {
 					...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-					...(options.temperature !== undefined && { temperature: options.temperature }),
+					...(options.temperature !== undefined &&
+						modelSupportsTemperature(model.id, model.name) && { temperature: options.temperature }),
 				},
 				toolConfig: convertToolConfig(context.tools, options.toolChoice),
 				additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
@@ -466,26 +474,31 @@ function handleContentBlockStop(
 }
 
 /**
- * Check if the model supports adaptive thinking (Opus 4.6+, Sonnet 4.6).
- * Checks both model ID and model name to support application inference profiles
- * whose ARNs don't contain the model name.
+ * Build model-match candidates from model ID and optional display name.
+ * Returns lowercased and normalized variants for pattern matching against model-family arrays.
  */
 function getModelMatchCandidates(modelId: string, modelName?: string): string[] {
 	const values = modelName ? [modelId, modelName] : [modelId];
-	return values.flatMap((value) => {
-		const lower = value.toLowerCase();
-		return [lower, lower.replace(/[\s_.:]+/g, "-")];
-	});
+	return values.flatMap((value) => [value.toLowerCase(), normalizeForPatternMatch(value)]);
 }
 
+// SCRAMJET-DIVERGENCE: extended with opus-4-8, fable-5, sonnet-5 patterns for new model support
 function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
 	const candidates = getModelMatchCandidates(modelId, modelName);
-	return candidates.some((s) => s.includes("opus-4-6") || s.includes("opus-4-7") || s.includes("sonnet-4-6"));
+	return candidates.some((s) => ADAPTIVE_THINKING_PATTERNS.some((p) => s.includes(p)));
 }
 
+// SCRAMJET-DIVERGENCE: extended with opus-4-8, fable-5 for native xhigh effort support
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
 	const candidates = getModelMatchCandidates(model.id, model.name);
-	return candidates.some((s) => s.includes("opus-4-7"));
+	return candidates.some((s) => NATIVE_XHIGH_EFFORT_PATTERNS.some((p) => s.includes(p)));
+}
+
+// SCRAMJET-DIVERGENCE: temperature support predicate (opus-4-7+ rejects non-default temperature)
+// Fable 5 and Sonnet 5 are intentionally absent — they accept temperature.
+function modelSupportsTemperature(modelId: string, modelName?: string): boolean {
+	const candidates = getModelMatchCandidates(modelId, modelName);
+	return !candidates.some((s) => TEMPERATURE_UNSUPPORTED_PATTERNS.some((p) => s.includes(p)));
 }
 
 function mapThinkingLevelToEffort(
@@ -890,7 +903,7 @@ function buildAdditionalModelRequestFields(
 						low: 2048,
 						medium: 8192,
 						high: 16384,
-						xhigh: 16384, // Claude doesn't support xhigh, clamp to high
+						xhigh: 16384, // Budget-based thinking has no native xhigh, clamp to high
 					};
 
 					// Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)

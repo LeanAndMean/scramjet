@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.38.1 — Model isolation for fresh-session dispatches
+## 0.39.1 — Model isolation for fresh-session dispatches
 
 Fresh-session next-step chaining, `/clear`, and `/new` now inherit the live session's model and thinking level instead of reading from the shared `settings.json`. This prevents cross-terminal contamination: a model switch in one Scramjet instance no longer silently changes the model used by fresh-session dispatches in other instances. Fixes [#186](https://github.com/LeanAndMean/scramjet/issues/186).
 
@@ -12,6 +12,26 @@ Fresh-session next-step chaining, `/clear`, and `/new` now inherit the live sess
 ### Added
 
 - Regression guard test (`model-inherit-regression.test.ts`) asserting that `next-step-dispatch.ts` and `clear-alias.ts` call `ctx.newSession()` with no explicit model options, documenting the deliberate reliance on inherit-by-default.
+
+## 0.39.0 — Add model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5
+
+Ported upstream Pi model support for Claude Opus 4.8, Claude Fable 5, and Claude Sonnet 5 into the vendored `packages/ai/` and `packages/coding-agent/` packages. Fixes [#245](https://github.com/LeanAndMean/scramjet/issues/245).
+
+### Added
+
+- Adaptive thinking detection for Opus 4.8, Fable 5, and Sonnet 5 in both direct Anthropic and Amazon Bedrock providers.
+- `supportsTemperature` and `forceAdaptiveThinking` fields on `AnthropicMessagesCompat` type, with defaults in `getAnthropicCompat()` and custom model schema validation.
+- Temperature gating: Opus 4.7+ models that reject non-default temperature no longer receive it in either provider.
+- Bedrock `modelSupportsTemperature()` helper and extended `supportsNativeXhighEffort()` for Opus 4.8 and Fable 5.
+- Model generator predicates and `applyAnthropicAdaptiveCompat()` for generated catalog metadata (`forceAdaptiveThinking`, `supportsTemperature`, thinking level maps).
+- Focused regression coverage for Anthropic and Bedrock payloads, generated model metadata, custom model schema validation, and default model resolution.
+
+### Changed
+
+- Default Anthropic model updated from `claude-opus-4-7` to `claude-opus-4-8`.
+- Default Bedrock model updated from `us.anthropic.claude-opus-4-6-v1` to `us.anthropic.claude-opus-4-8`.
+- Regenerated `models.generated.ts` with Opus 4.8, Fable 5, and Sonnet 5 catalog entries.
+- Removed `--passWithNoTests` from `packages/ai` test script now that AI tests exist.
 
 ## 0.38.0 — Tool-driven model switching and model-change communication
 

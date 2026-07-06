@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/ai",
-	"version": "0.74.1-scramjet.5",
+	"version": "0.74.1-scramjet.6",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -62,7 +62,7 @@
 		"generate-image-models": "npx tsx scripts/generate-image-models.ts",
 		"build": "tsgo -p tsconfig.build.json",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
-		"test": "vitest --run --passWithNoTests"
+		"test": "vitest --run"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.91.1",
