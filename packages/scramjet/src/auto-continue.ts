@@ -395,7 +395,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			countdownSeconds: autoSelect ? COUNTDOWN_SECONDS : 0,
 			signal: controller.signal,
 		})
-			.then((selected) => {
+			.then((selection) => {
 				if (
 					selectorId !== activeSelectorId ||
 					state.lifecycleGeneration !== selectorGeneration ||
@@ -404,8 +404,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					return;
 				}
 				activeSelectorAbort = null;
-				if (selected) {
-					runSelectedOption(selected, ctx);
+				if (selection) {
+					runSelectedOption(selection.step, ctx);
 				} else {
 					state.logger.lifecycle("next-step selector closed", {
 						phase: lp(state.lifecycle),

@@ -171,6 +171,7 @@ function bootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } =
 async function flushMicrotasks() {
 	await Promise.resolve();
 	await Promise.resolve();
+	await Promise.resolve();
 }
 
 // Drives the full two-phase protocol: the answer turn ends (while the run is
