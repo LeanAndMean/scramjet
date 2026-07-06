@@ -71,9 +71,13 @@ interface CtxBag {
 function fakeCtx({
 	hasUI = true,
 	isStreaming = () => false,
+	models = [],
+	model = undefined,
 }: {
 	hasUI?: boolean;
 	isStreaming?: () => boolean;
+	models?: any[];
+	model?: any;
 } = {}): CtxBag {
 	const bag: CtxBag = {
 		ctx: null,
@@ -100,6 +104,8 @@ function fakeCtx({
 	};
 	bag.ctx = {
 		hasUI,
+		model,
+		modelRegistry: { getAvailable: () => models },
 		ui: {
 			notify(message: string, type?: string) {
 				bag.notifications.push({ message, type });
@@ -156,10 +162,13 @@ function fakeCtx({
 	return bag;
 }
 
-function bootstrap(state: ScramjetState, { hasUI = true }: { hasUI?: boolean } = {}) {
+function bootstrap(
+	state: ScramjetState,
+	{ hasUI = true, models, model }: { hasUI?: boolean; models?: any[]; model?: any } = {},
+) {
 	const bag = recordingPi();
 	state.logger = createLogger(bag.pi);
-	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
+	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming, models, model });
 	registerCommandStatusTool(bag.pi, state);
 	registerAutoContinue(bag.pi, state);
 	const statusTool = bag.tools.find((t) => t.name === "report_scramjet_command_status");
@@ -2791,6 +2800,222 @@ describe("edge-level autonomy settings integration", () => {
 		});
 
 		// Edge setting resolved as chain — dispatched without selector
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+});
+
+describe("model selection at next-step dispatch", () => {
+	const ARROW_RIGHT = "\x1b[C";
+
+	const modelA = { provider: "anthropic", id: "claude-opus-4", name: "Claude Opus 4" };
+	const modelB = { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" };
+	const modelC = { provider: "anthropic", id: "claude-sonnet-4", name: "Claude Sonnet 4" };
+
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	function modelBootstrap(state: ScramjetState, models: any[] = [modelA, modelB, modelC], model: any = modelA) {
+		return bootstrap(state, { hasUI: true, models, model });
+	}
+
+	it("default Enter without cycling dispatches and never calls pi.setModel", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		// Enter without cycling
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(bag.pi.setModelCalls).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("cycling to a different model calls pi.setModel before dispatch (same session)", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		// Cycle right to modelB
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(bag.pi.setModelCalls).toHaveLength(1);
+		expect(bag.pi.setModelCalls[0].model).toBe(modelB);
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("cycling to a different model calls pi.setModel before newSession (fresh session)", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next", fresh_session: true }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		// setModel before newSession
+		expect(bag.pi.setModelCalls).toHaveLength(1);
+		expect(bag.pi.setModelCalls[0].model).toBe(modelB);
+		expect(ctxBag.newSessionCalls).toHaveLength(1);
+		// newSession receives only { withSession }, not model options
+		expect(ctxBag.newSessionCalls[0]).toHaveProperty("withSession");
+		expect(Object.keys(ctxBag.newSessionCalls[0] as object)).toEqual(["withSession"]);
+	});
+
+	it("pi.setModel returns false: warns but still dispatches", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+		bag.pi.setModelResult = false;
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(bag.pi.setModelCalls).toHaveLength(1);
+		expect(ctxBag.notifications.some((n) => n.message.includes("no API key") && n.type === "warning")).toBe(true);
+		// Still dispatches
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("pi.setModel throws: warns but still dispatches", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+		bag.pi.setModelResult = new Error("persist failure");
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(bag.pi.setModelCalls).toHaveLength(1);
+		expect(ctxBag.notifications.some((n) => n.message.includes("persist failure") && n.type === "warning")).toBe(
+			true,
+		);
+		// Still dispatches
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("null model (no cycling) skips pi.setModel", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		// Escape (cancel) — no model switch
+		ctxBag.customComponents[0].handleInput("\x1b");
+		await flushMicrotasks();
+
+		expect(bag.pi.setModelCalls).toHaveLength(0);
+		expect(ctxBag.dispatched).toHaveLength(0);
+	});
+
+	it("stale guard after pi.setModel await suppresses dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+
+		// Make setModel trigger a lifecycle generation bump (simulating external state change)
+		const originalSetModel = bag.pi.setModel.bind(bag.pi);
+		bag.pi.setModel = async (model: unknown) => {
+			state.lifecycleGeneration++;
+			return originalSetModel(model);
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		// Dispatch suppressed by stale guard
+		expect(ctxBag.dispatched).toHaveLength(0);
+	});
+
+	it("state.suppressNextModelNotify remains unset for selector switches", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(state.suppressNextModelNotify).toBe(false);
+	});
+
+	it("countdown zero-interaction calls no pi.setModel", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		// Let countdown expire
+		await vi.advanceTimersByTimeAsync(3000);
+		await flushMicrotasks();
+
+		expect(bag.pi.setModelCalls).toHaveLength(0);
 		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
 	});
 });

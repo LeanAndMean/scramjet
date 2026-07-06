@@ -90,12 +90,22 @@ export function recordingPi(): RecordingPi {
 		sent: [] as { message: unknown; options?: unknown }[],
 		dropped: [] as { message: unknown; options?: unknown }[],
 		harnessToolCalls: [] as { name: string; args: unknown; options?: unknown }[],
+		setModelCalls: [] as { model: unknown; result: boolean }[],
+		setModelResult: true as boolean | Error,
 		isStreaming: false,
 		registerTool(tool: any) {
 			tools.push(tool);
 		},
 		async invokeHarnessTool(name: string, args: unknown, options?: unknown) {
 			pi.harnessToolCalls.push({ name, args, options });
+		},
+		async setModel(model: unknown): Promise<boolean> {
+			if (pi.setModelResult instanceof Error) {
+				pi.setModelCalls.push({ model, result: false });
+				throw pi.setModelResult;
+			}
+			pi.setModelCalls.push({ model, result: pi.setModelResult });
+			return pi.setModelResult;
 		},
 		registerCommand(name: string, spec: unknown) {
 			commands.push({ name, spec });

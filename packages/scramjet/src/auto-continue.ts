@@ -388,14 +388,18 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				forcePause,
 			},
 		});
+		const models = ctx.modelRegistry?.getAvailable() ?? [];
+		const initialModel = ctx.model;
 		void selectNextStep(ctx, {
 			options: result.valid,
 			recommended: result.recommended,
 			autoSelect,
 			countdownSeconds: autoSelect ? COUNTDOWN_SECONDS : 0,
 			signal: controller.signal,
+			models,
+			initialModel,
 		})
-			.then((selection) => {
+			.then(async (selection) => {
 				if (
 					selectorId !== activeSelectorId ||
 					state.lifecycleGeneration !== selectorGeneration ||
@@ -404,14 +408,41 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					return;
 				}
 				activeSelectorAbort = null;
-				if (selection) {
-					runSelectedOption(selection.step, ctx);
-				} else {
+				if (!selection) {
 					state.logger.lifecycle("next-step selector closed", {
 						phase: lp(state.lifecycle),
 						detail: { reason: "no-selection" },
 					});
+					return;
 				}
+
+				if (selection.model) {
+					try {
+						// pi.setModel before dispatch — ordering matters for issue 186 model snapshot
+						const ok = await pi.setModel(selection.model);
+						if (!ok) {
+							ctx.ui.notify(
+								`scramjet: model switch to ${selection.model.name} failed (no API key); dispatching with current model`,
+								"warning",
+							);
+						}
+					} catch (err) {
+						ctx.ui.notify(
+							`scramjet: model switch to ${selection.model.name} failed (${(err as Error).message}); dispatching with current model`,
+							"warning",
+						);
+					}
+					// Re-run stale guard after awaiting pi.setModel
+					if (
+						selectorId !== activeSelectorId ||
+						state.lifecycleGeneration !== selectorGeneration ||
+						activeCommandName(state.lifecycle) !== selectorCommand
+					) {
+						return;
+					}
+				}
+
+				runSelectedOption(selection.step, ctx);
 			})
 			.catch((err) => {
 				if (
