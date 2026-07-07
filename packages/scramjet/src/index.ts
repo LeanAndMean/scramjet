@@ -4,6 +4,7 @@ import { registerAutoContinue } from "./auto-continue.js";
 import { defaultConfigPath } from "./autonomy-settings.js";
 import { registerBaseDirectives } from "./base-directives.js";
 import { registerClearAlias } from "./clear-alias.js";
+import { registerCommandCatalog } from "./command-catalog.js";
 import { registerCommandStatusTool, registerDormantCommandNotice } from "./command-status.js";
 import { registerCommandLoader } from "./commands/index.js";
 import { registerDelegateTool } from "./delegate.js";
@@ -63,6 +64,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerPrIndicator(pi);
 	registerBaseDirectives(pi);
 	registerAgentCatalog(pi, state);
+	registerCommandCatalog(pi, state);
 	registerDormantCommandNotice(pi, state);
 	registerSubdirContext(pi, state);
 }

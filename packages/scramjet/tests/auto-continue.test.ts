@@ -812,6 +812,25 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0].message).toContain("b:missing");
 		});
 
+		it("warns and does not dispatch when the forced target is delegate-only", async () => {
+			const delegateOnlyDef: CommandDef = {
+				name: "b:target",
+				filePath: "/fake/b:target.md",
+				body: "subroutine",
+				delegateOnly: true,
+			};
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(delegateOnlyDef) });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "completed", summary: "done" });
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(activeCommandName(state.lifecycle)).toBeNull();
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("delegate-only");
+		});
+
 		it("clears pending forced origin and warns if dispatch rejects", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
@@ -984,6 +1003,33 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("not in closed candidates");
+		});
+
+		it("skips delegate-only next_steps entries via commandCheck", async () => {
+			const delegateOnlyDef: CommandDef = {
+				name: "b:sub",
+				filePath: "/fake/b:sub.md",
+				body: "",
+				delegateOnly: true,
+			};
+			const okDef = defWithPolicy("b:ok", undefined);
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:sub" }, { name: "b:ok" }] });
+			const state = runningState(def, { enabled: true, registry: registryWith(delegateOnlyDef, okDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "done",
+				next_steps: [
+					{ message: "/b:sub", reason: "delegate target" },
+					{ message: "/b:ok", reason: "valid target" },
+				],
+				recommended_next_step: 1,
+			});
+
+			expect(ctxBag.dispatched).toHaveLength(1);
+			expect(ctxBag.dispatched[0].input).toBe("/b:ok");
+			expect(ctxBag.notifications.some((n: any) => n.message.includes("delegate-only"))).toBe(true);
 		});
 
 		it("user selection before countdown overrides the recommendation", async () => {

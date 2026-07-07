@@ -61,6 +61,8 @@ export interface CommandDef {
 	filePath: string;
 	body: string;
 	description?: string;
+	argumentHint?: string;
+	delegateOnly?: boolean;
 	allowedTools?: string[];
 	next?: NextStepPolicy;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseSlashCommand, validateNextStep, validateNextSteps } from "../src/commands/validator.js";
 import type { CommandStatusNextStep } from "../src/types.js";
 
@@ -100,6 +100,66 @@ describe("validateNextStep — ask mode", () => {
 		const result = validateNextStep("mach12:pr-merge", policy);
 		if (result.valid) throw new Error("expected invalid");
 		expect(result.reason).toContain("ask");
+	});
+});
+
+describe("validateNextSteps — commandCheck parameter", () => {
+	const closed = {
+		mode: "closed" as const,
+		candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
+	};
+
+	const entry = (over: Partial<CommandStatusNextStep>): CommandStatusNextStep => ({
+		message: "/mach12:pr-review-fix",
+		reason: "fix review findings",
+		...over,
+	});
+
+	it("passes all entries when no commandCheck is provided", () => {
+		const result = validateNextSteps([entry({})], closed, 0);
+		expect(result.valid).toHaveLength(1);
+		expect(result.skipped).toEqual([]);
+	});
+
+	it("passes entries when commandCheck returns null", () => {
+		const check = () => null;
+		const result = validateNextSteps([entry({})], closed, 0, check);
+		expect(result.valid).toHaveLength(1);
+		expect(result.skipped).toEqual([]);
+	});
+
+	it("skips entries when commandCheck returns a rejection reason", () => {
+		const check = (name: string) => (name === "mach12:pr-review-fix" ? "delegate-only command" : null);
+		const result = validateNextSteps(
+			[entry({}), entry({ message: "/mach12:pr-pre-merge", reason: "merge" })],
+			closed,
+			0,
+			check,
+		);
+		expect(result.valid).toHaveLength(1);
+		expect(result.valid[0].parsedCommand?.name).toBe("mach12:pr-pre-merge");
+		expect(result.skipped).toHaveLength(1);
+		expect(result.skipped[0].reason).toBe("delegate-only command");
+	});
+
+	it("demotes recommended index when it points to a command-checked entry", () => {
+		const check = (name: string) => (name === "mach12:pr-review-fix" ? "delegate-only" : null);
+		const result = validateNextSteps(
+			[entry({}), entry({ message: "/mach12:pr-pre-merge", reason: "merge" })],
+			closed,
+			0,
+			check,
+		);
+		expect(result.recommended).toBeNull();
+		expect(result.recommendedReason).toContain("points to invalid next step");
+	});
+
+	it("does not apply commandCheck to non-command messages", () => {
+		const open = { mode: "open" as const, candidates: [] };
+		const check = vi.fn(() => "should not be called");
+		const result = validateNextSteps([{ message: "Plain text suggestion", reason: "context" }], open, 0, check);
+		expect(check).not.toHaveBeenCalled();
+		expect(result.valid).toHaveLength(1);
 	});
 });
 

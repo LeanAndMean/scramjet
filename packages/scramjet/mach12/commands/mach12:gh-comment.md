@@ -1,6 +1,7 @@
 ---
 description: Post a comment on a GitHub issue or pull request and capture its URL
 argument-hint: "<issue|pr> <number>"
+delegate-only: true
 allowed-tools:
   - bash
 ---

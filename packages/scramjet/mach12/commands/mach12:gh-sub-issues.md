@@ -1,6 +1,7 @@
 ---
 description: Detect sub-issues of a GitHub issue using the two-strategy approach (API, then body-parse)
 argument-hint: "<issue-number> [--with-state]"
+delegate-only: true
 allowed-tools:
   - bash
   - grep

@@ -12,6 +12,7 @@ const SET_NAME = "mach12";
 interface WiringRow {
 	basename: string;
 	expected: NextStepPolicy | null;
+	delegateOnly?: true;
 }
 
 // Hints are intentionally not pinned: modes, targets, candidate names, and
@@ -76,14 +77,14 @@ const WIRING: WiringRow[] = [
 		// reports completed, then clears to idle without dispatch.
 		expected: null,
 	},
-	// Subroutines.
-	{ basename: "push", expected: null },
-	{ basename: "find-contribution-guidelines", expected: null },
-	{ basename: "gh-issue-read", expected: null },
-	{ basename: "gh-pr-read", expected: null },
-	{ basename: "gh-sub-issues", expected: null },
-	{ basename: "gh-assign", expected: null },
-	{ basename: "gh-comment", expected: null },
+	// Subroutines (delegate-only).
+	{ basename: "push", expected: null, delegateOnly: true },
+	{ basename: "find-contribution-guidelines", expected: null, delegateOnly: true },
+	{ basename: "gh-issue-read", expected: null, delegateOnly: true },
+	{ basename: "gh-pr-read", expected: null, delegateOnly: true },
+	{ basename: "gh-sub-issues", expected: null, delegateOnly: true },
+	{ basename: "gh-assign", expected: null, delegateOnly: true },
+	{ basename: "gh-comment", expected: null, delegateOnly: true },
 ];
 
 // Strip hint strings from a policy so the wiring test compares modes, targets,
@@ -135,17 +136,25 @@ describe("mach12 wiring — bundled command set", () => {
 		expect(found).toEqual(expected);
 	});
 
-	it.each(WIRING)("parses $basename via Stage 1 parser and wires it correctly", ({ basename, expected }) => {
-		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
-		const content = readFileSync(filePath, "utf-8");
-		const result = parseCommandFile(filePath, content, SET_NAME);
+	it.each(WIRING)(
+		"parses $basename via Stage 1 parser and wires it correctly",
+		({ basename, expected, delegateOnly }) => {
+			const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
+			const content = readFileSync(filePath, "utf-8");
+			const result = parseCommandFile(filePath, content, SET_NAME);
 
-		expect(result.ok).toBe(true);
-		if (!result.ok) return;
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
 
-		expect(result.def.name).toBe(`${SET_NAME}:${basename}`);
-		expect(stripHints(result.def.next ?? null)).toEqual(expected);
-	});
+			expect(result.def.name).toBe(`${SET_NAME}:${basename}`);
+			expect(stripHints(result.def.next ?? null)).toEqual(expected);
+			if (delegateOnly) {
+				expect(result.def.delegateOnly).toBe(true);
+			} else {
+				expect(result.def.delegateOnly).toBeUndefined();
+			}
+		},
+	);
 
 	it("pr-review is wired to invoke the bundled Mach 12 reviewer agents", () => {
 		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review.md`);

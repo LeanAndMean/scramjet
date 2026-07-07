@@ -66,14 +66,19 @@ export function parseCommandFile(filePath: string, content: string, setName: str
 	const def: CommandDef = { name, filePath, body: parsed.body };
 	const description = parsed.frontmatter.description;
 	if (typeof description === "string" && description.trim() !== "") def.description = description;
+	const argHint = parsed.frontmatter["argument-hint"];
+	if (typeof argHint === "string" && argHint.trim() !== "") def.argumentHint = argHint.trim();
+	const delegateOnly = parsed.frontmatter["delegate-only"];
+	if (delegateOnly === true) def.delegateOnly = true;
 	const allowedTools = parseAllowedTools(parsed.frontmatter["allowed-tools"]);
 	if (allowedTools !== undefined) def.allowedTools = allowedTools;
 	if (nextResult.policy !== null) def.next = nextResult.policy;
-	// S8: parseAllowedTools silently drops non-string array entries. Detect
-	// them here and surface a load warning so a typo'd YAML list (e.g. an
-	// unquoted `42`, a stray `null`) is visible at startup rather than
-	// shrinking the caller's tool scope without explanation.
 	const toolWarnings: string[] = [];
+	if (delegateOnly !== undefined && delegateOnly !== true) {
+		toolWarnings.push(
+			`${fileName}: "delegate-only" must be exactly true when present (got ${JSON.stringify(delegateOnly)}; treated as absent)`,
+		);
+	}
 	const rawTools = parsed.frontmatter["allowed-tools"];
 	if (Array.isArray(rawTools)) {
 		const nonStrings = rawTools.filter((x) => typeof x !== "string");

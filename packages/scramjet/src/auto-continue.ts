@@ -242,6 +242,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		return { name: parsed.name, args: parsed.args, freshSession: option.freshSession, reason: option.reason };
 	}
 
+	function delegateOnlyCheck(name: string): string | null {
+		const def = state.registry.get(name);
+		if (def?.delegateOnly) return `${name} is delegate-only (invoke via delegate, not top-level dispatch)`;
+		return null;
+	}
+
 	function dispatchForced(target: string, handoff: NextStep | undefined, ctx: ExtensionContext): boolean {
 		const command = activeCommandName(state.lifecycle);
 		const def = state.registry.get(target);
@@ -252,6 +258,15 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				detail: { target, reason: "target-not-in-registry" },
 			});
 			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
+			return false;
+		}
+		if (def.delegateOnly) {
+			state.logger.lifecycle("forced dispatch skipped", {
+				phase: lp(state.lifecycle),
+				...(command ? { command } : {}),
+				detail: { target, reason: "target-is-delegate-only" },
+			});
+			ctx.ui.notify(`scramjet: forced target "${target}" is delegate-only; auto-continue skipped`, "warning");
 			return false;
 		}
 
@@ -582,7 +597,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step);
+		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step, delegateOnlyCheck);
 		if (!result.valid.length) {
 			state.logger.lifecycle("next-step dispatch skipped", {
 				phase: lp(state.lifecycle),

@@ -1,6 +1,7 @@
 ---
 description: Commit, push, and post a progress comment using session context or branch detection
 argument-hint: "[context]"
+delegate-only: true
 allowed-tools:
   - bash
   - read

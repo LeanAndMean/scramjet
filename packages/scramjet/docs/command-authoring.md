@@ -14,8 +14,9 @@ Every command file starts with YAML frontmatter between `---` fences. All fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `description` | string | No | One-line description shown in command listings and help. |
-| `argument-hint` | string | No | Usage hint shown alongside the command name (e.g., `"<issue-number> [context]"`). |
+| `description` | string | No | One-line description shown in command listings and help. Feeds the command catalog in the system prompt. |
+| `argument-hint` | string | No | Usage hint shown alongside the command name (e.g., `"<issue-number> [context]"`). Feeds the command catalog. |
+| `delegate-only` | boolean | No | When `true`, marks the command as a subroutine that should only be invoked via delegation, not directly by the user. Hidden from the command catalog and refused by harness dispatch (forced/next-steps/suggestions), but remains user-typeable and in Pi autocomplete. Must be exactly `true`; any other value (including `false`) produces a load warning and is treated as absent. |
 | `allowed-tools` | string[] | No | Tools this command is permitted to use. Omit for unrestricted access. |
 | `next` | object | No | Next-step policy declaring what happens after the command completes. |
 
@@ -319,6 +320,7 @@ Design conventions:
 ### Writing a subroutine command
 
 A delegate-only subroutine:
+- Declares **`delegate-only: true`** in frontmatter — this hides it from the command catalog and prevents the harness from dispatching it top-level (forced transitions, next-step suggestions). It remains user-typeable and in Pi autocomplete — the harness constrains itself, never the user.
 - Has **no `next` block** — the caller's `next:` controls chaining, not the subroutine's.
 - Scopes `allowed-tools` tightly to what it actually needs.
 - Uses `$ARGUMENTS` or positional placeholders to receive caller-provided context.
@@ -330,6 +332,7 @@ A delegate-only subroutine:
 ---
 description: Read a GitHub issue's title, body, and all comments
 argument-hint: "<issue-number> [--marker <html-marker>]"
+delegate-only: true
 allowed-tools:
   - bash
 ---
