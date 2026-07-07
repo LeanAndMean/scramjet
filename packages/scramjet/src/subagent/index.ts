@@ -2,13 +2,21 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolUpdateCallback } from "@leanandmean/agent";
+import type { AgentToolUpdateCallback, ThinkingLevel } from "@leanandmean/agent";
 import type { Message } from "@leanandmean/ai";
 import { StringEnum } from "@leanandmean/ai";
 import { type ExtensionAPI, getMarkdownTheme, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+
+const THINKING_LEVEL_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+export function capThinkingLevel(requested: ThinkingLevel, parentLevel: ThinkingLevel): ThinkingLevel {
+	const requestedIdx = THINKING_LEVEL_ORDER.indexOf(requested);
+	const parentIdx = THINKING_LEVEL_ORDER.indexOf(parentLevel);
+	return requestedIdx <= parentIdx ? requested : parentLevel;
+}
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -264,18 +272,21 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 	return { command: "scramjet", args };
 }
 
-async function runSingleAgent(
-	defaultCwd: string,
-	agents: AgentConfig[],
-	agentName: string,
-	task: string,
-	cwd: string | undefined,
-	step: number | undefined,
-	signal: AbortSignal | undefined,
-	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
-	makeDetails: (results: SingleResult[]) => SubagentDetails,
-	discoveryDiagnostics: string[],
-): Promise<SingleResult> {
+interface RunSingleAgentOptions {
+	defaultCwd: string;
+	agents: AgentConfig[];
+	agentName: string;
+	task: string;
+	cwd: string | undefined;
+	step: number | undefined;
+	signal: AbortSignal | undefined;
+	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined;
+	makeDetails: (results: SingleResult[]) => SubagentDetails;
+	discoveryDiagnostics: string[];
+}
+
+async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult> {
+	const { defaultCwd, agents, agentName, task, cwd, step, signal, onUpdate, makeDetails, discoveryDiagnostics } = opts;
 	const agent = agents.find((a) => a.name === agentName);
 
 	if (!agent) {
@@ -557,18 +568,18 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							}
 						: undefined;
 
-					const result = await runSingleAgent(
-						ctx.cwd,
+					const result = await runSingleAgent({
+						defaultCwd: ctx.cwd,
 						agents,
-						step.agent,
-						taskWithContext,
-						step.cwd,
-						i + 1,
+						agentName: step.agent,
+						task: taskWithContext,
+						cwd: step.cwd,
+						step: i + 1,
 						signal,
-						chainUpdate,
-						makeDetails("chain"),
-						discovery.diagnostics,
-					);
+						onUpdate: chainUpdate,
+						makeDetails: makeDetails("chain"),
+						discoveryDiagnostics: discovery.diagnostics,
+					});
 					results.push(result);
 
 					if (isResultError(result)) {
@@ -631,23 +642,23 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				};
 
 				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-					const result = await runSingleAgent(
-						ctx.cwd,
+					const result = await runSingleAgent({
+						defaultCwd: ctx.cwd,
 						agents,
-						t.agent,
-						t.task,
-						t.cwd,
-						undefined,
+						agentName: t.agent,
+						task: t.task,
+						cwd: t.cwd,
+						step: undefined,
 						signal,
-						(partial) => {
+						onUpdate: (partial) => {
 							if (partial.details?.results[0]) {
 								allResults[index] = partial.details.results[0];
 								emitParallelUpdate();
 							}
 						},
-						makeDetails("parallel"),
-						discovery.diagnostics,
-					);
+						makeDetails: makeDetails("parallel"),
+						discoveryDiagnostics: discovery.diagnostics,
+					});
 					allResults[index] = result;
 					emitParallelUpdate();
 					return result;
@@ -672,18 +683,18 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 			}
 
 			if (params.agent && params.task) {
-				const result = await runSingleAgent(
-					ctx.cwd,
+				const result = await runSingleAgent({
+					defaultCwd: ctx.cwd,
 					agents,
-					params.agent,
-					params.task,
-					params.cwd,
-					undefined,
+					agentName: params.agent,
+					task: params.task,
+					cwd: params.cwd,
+					step: undefined,
 					signal,
 					onUpdate,
-					makeDetails("single"),
-					discovery.diagnostics,
-				);
+					makeDetails: makeDetails("single"),
+					discoveryDiagnostics: discovery.diagnostics,
+				});
 				if (isResultError(result)) {
 					return {
 						content: [
