@@ -742,23 +742,34 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "user";
+			let parentLevel: ThinkingLevel | undefined;
+			try {
+				parentLevel = pi.getThinkingLevel();
+			} catch {}
+			const effortTag = (explicit: string | undefined): string => {
+				const level = explicit
+					? parentLevel
+						? capThinkingLevel(explicit as ThinkingLevel, parentLevel)
+						: explicit
+					: parentLevel;
+				return level ? ` ${theme.fg("muted", `[Effort:${level}]`)}` : "";
+			};
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `chain (${args.chain.length} steps)`) +
 					theme.fg("muted", ` [${scope}]`);
-				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
+				for (let i = 0; i < args.chain.length; i++) {
 					const step = args.chain[i];
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
-					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 					text +=
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
 						theme.fg("accent", step.agent) +
-						theme.fg("dim", ` ${preview}`);
+						effortTag(step.effort) +
+						theme.fg("dim", ` ${cleanTask}`);
 				}
-				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
@@ -766,20 +777,19 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`);
-				for (const t of args.tasks.slice(0, 3)) {
-					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+				for (const t of args.tasks) {
+					text += `\n  ${theme.fg("accent", t.agent)}${effortTag(t.effort)}${theme.fg("dim", ` ${t.task}`)}`;
 				}
-				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			const agentName = args.agent || "...";
-			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
+			const taskText = args.task || "...";
 			let text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
+				effortTag(args.effort) +
 				theme.fg("muted", ` [${scope}]`);
-			text += `\n  ${theme.fg("dim", preview)}`;
+			text += `\n  ${theme.fg("dim", taskText)}`;
 			return new Text(text, 0, 0);
 		},
 

@@ -41,6 +41,14 @@ function textContent(result: any): string {
 	return first?.type === "text" ? first.text : "";
 }
 
+function renderToolCall(tool: any, args: any): string {
+	const theme = {
+		fg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	};
+	return tool.renderCall(args, theme, {}).render(120).join("\n");
+}
+
 function renderToolResult(tool: any, result: any, expanded: boolean): string {
 	const theme = {
 		fg: (_color: string, text: string) => text,
@@ -633,5 +641,121 @@ describe("getPiInvocation — fallback", () => {
 
 		expect(result.command).toBe("scramjet");
 		expect(result.args).toEqual(["--help"]);
+	});
+});
+
+describe("renderCall — parallel mode", () => {
+	it("shows all tasks without truncation for 5+ tasks", () => {
+		const tool = registeredSubagentTool();
+		const tasks = Array.from({ length: 6 }, (_, i) => ({
+			agent: `agent-${i}`,
+			task: `Task number ${i} with a long description that exceeds forty characters easily`,
+		}));
+
+		const rendered = renderToolCall(tool, { tasks });
+
+		for (let i = 0; i < 6; i++) {
+			expect(rendered).toContain(`agent-${i}`);
+			expect(rendered).toContain(`Task number ${i} with a long description that exceeds forty characters easily`);
+		}
+		expect(rendered).not.toContain("... +");
+		expect(rendered).not.toContain("more");
+	});
+
+	it("displays effort per task using resolved level", () => {
+		const tool = registeredSubagentTool();
+		const tasks = [
+			{ agent: "reviewer", task: "Review code", effort: "medium" },
+			{ agent: "analyzer", task: "Analyze types", effort: "xhigh" },
+		];
+
+		const rendered = renderToolCall(tool, { tasks });
+
+		expect(rendered).toContain("[Effort:medium]");
+		// xhigh is capped at parent level (high in recordingPi)
+		expect(rendered).toContain("[Effort:high]");
+	});
+
+	it("shows parent effort level when no explicit effort specified", () => {
+		const tool = registeredSubagentTool();
+		const tasks = [{ agent: "reviewer", task: "Review code" }];
+
+		const rendered = renderToolCall(tool, { tasks });
+
+		// Parent level from recordingPi is "high"
+		expect(rendered).toContain("[Effort:high]");
+	});
+});
+
+describe("renderCall — chain mode", () => {
+	it("shows all steps without truncation for 4+ steps", () => {
+		const tool = registeredSubagentTool();
+		const chain = Array.from({ length: 5 }, (_, i) => ({
+			agent: `step-agent-${i}`,
+			task: `Step ${i} task with enough text to verify no truncation occurs at all`,
+		}));
+
+		const rendered = renderToolCall(tool, { chain });
+
+		for (let i = 0; i < 5; i++) {
+			expect(rendered).toContain(`step-agent-${i}`);
+			expect(rendered).toContain(`Step ${i} task with enough text to verify no truncation occurs at all`);
+		}
+		expect(rendered).not.toContain("... +");
+		expect(rendered).not.toContain("more");
+	});
+
+	it("strips {previous} placeholder from chain task text", () => {
+		const tool = registeredSubagentTool();
+		const chain = [
+			{ agent: "first", task: "Initial task" },
+			{ agent: "second", task: "Process {previous} and continue" },
+		];
+
+		const rendered = renderToolCall(tool, { chain });
+
+		expect(rendered).toContain("Process  and continue");
+		expect(rendered).not.toContain("{previous}");
+	});
+
+	it("displays effort per step", () => {
+		const tool = registeredSubagentTool();
+		const chain = [
+			{ agent: "explorer", task: "Explore", effort: "low" },
+			{ agent: "architect", task: "Design", effort: "high" },
+		];
+
+		const rendered = renderToolCall(tool, { chain });
+
+		expect(rendered).toContain("[Effort:low]");
+		expect(rendered).toContain("[Effort:high]");
+	});
+});
+
+describe("renderCall — single mode", () => {
+	it("shows full task text without truncation", () => {
+		const tool = registeredSubagentTool();
+		const longTask = "Analyze the entire codebase architecture and provide a comprehensive report on patterns";
+
+		const rendered = renderToolCall(tool, { agent: "explorer", task: longTask });
+
+		expect(rendered).toContain(longTask);
+		expect(rendered).not.toContain("...");
+	});
+
+	it("displays effort for single mode", () => {
+		const tool = registeredSubagentTool();
+
+		const rendered = renderToolCall(tool, { agent: "explorer", task: "Explore", effort: "medium" });
+
+		expect(rendered).toContain("[Effort:medium]");
+	});
+
+	it("shows parent effort when no explicit effort", () => {
+		const tool = registeredSubagentTool();
+
+		const rendered = renderToolCall(tool, { agent: "explorer", task: "Explore" });
+
+		expect(rendered).toContain("[Effort:high]");
 	});
 });
