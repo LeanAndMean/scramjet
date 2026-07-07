@@ -133,6 +133,35 @@ describe("switch_scramjet_model unknown model", () => {
 		expect(text).not.toContain("openai/gpt-5.5");
 	});
 
+	it("filters out scoped models without configured auth from error catalog", async () => {
+		const registry = fakeModelRegistry([CLAUDE, GPT], [CLAUDE, GPT], (m: any) => m.provider === "anthropic");
+		const { execute } = toolFor({
+			registry,
+			scopedModels: [{ model: CLAUDE }, { model: GPT }],
+		});
+
+		const result = await execute({ provider: "anthropic", model: "no-such-model" });
+
+		const text = resultText(result);
+		expect(text).toContain("anthropic/claude-opus-4-8");
+		expect(text).not.toContain("openai/gpt-5.5");
+	});
+
+	it("falls back to empty catalog when all scoped models fail auth", async () => {
+		const registry = fakeModelRegistry([CLAUDE, GPT], [CLAUDE, GPT], () => false);
+		const { execute } = toolFor({
+			registry,
+			scopedModels: [{ model: CLAUDE }, { model: GPT }],
+		});
+
+		const result = await execute({ provider: "anthropic", model: "no-such-model" });
+
+		const text = resultText(result);
+		expect(result.details).toMatchObject({ error: "unknown-model" });
+		expect(text).not.toContain("anthropic/claude-opus-4-8");
+		expect(text).not.toContain("openai/gpt-5.5");
+	});
+
 	it("falls back to getAvailable() catalog when scopedModels is empty", async () => {
 		const registry = fakeModelRegistry([CLAUDE, GPT], [CLAUDE, GPT]);
 		const { execute } = toolFor({
