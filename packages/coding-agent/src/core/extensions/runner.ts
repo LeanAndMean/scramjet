@@ -2,7 +2,7 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
-import type { AgentMessage } from "@leanandmean/agent";
+import type { AgentMessage, ThinkingLevel } from "@leanandmean/agent";
 import type { ImageContent, Model, SystemPromptSection } from "@leanandmean/ai";
 import { flattenSystemPrompt } from "@leanandmean/ai";
 import type { KeyId } from "@leanandmean/tui";
@@ -257,6 +257,7 @@ export class ExtensionRunner {
 	private modelRegistry: ModelRegistry;
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
 	private getModel: () => Model<any> | undefined = () => undefined;
+	private getScopedModelsFn: () => ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }> = () => [];
 	private isIdleFn: () => boolean = () => true;
 	private getSignalFn: () => AbortSignal | undefined = () => undefined;
 	private waitForIdleFn: () => Promise<void> = async () => {};
@@ -331,6 +332,7 @@ export class ExtensionRunner {
 
 		// Context actions (required)
 		this.getModel = contextActions.getModel;
+		this.getScopedModelsFn = contextActions.getScopedModels;
 		this.isIdleFn = contextActions.isIdle;
 		this.getSignalFn = contextActions.getSignal;
 		this.abortFn = contextActions.abort;
@@ -626,6 +628,7 @@ export class ExtensionRunner {
 	createContext(): ExtensionContext {
 		const runner = this;
 		const getModel = this.getModel;
+		const getScopedModels = this.getScopedModelsFn;
 		return {
 			get ui() {
 				runner.assertActive();
@@ -650,6 +653,10 @@ export class ExtensionRunner {
 			get model() {
 				runner.assertActive();
 				return getModel();
+			},
+			get scopedModels() {
+				runner.assertActive();
+				return getScopedModels();
 			},
 			isIdle: () => {
 				runner.assertActive();
