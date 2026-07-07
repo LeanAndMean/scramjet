@@ -388,7 +388,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				forcePause,
 			},
 		});
-		const models = ctx.modelRegistry.getAvailable();
+		const scoped = ctx.scopedModels;
+		const models =
+			scoped.length > 0
+				? scoped.filter((s) => ctx.modelRegistry.hasConfiguredAuth(s.model)).map((s) => s.model)
+				: ctx.modelRegistry.getAvailable();
 		const initialModel = ctx.model;
 		void selectNextStep(ctx, {
 			options: result.valid,

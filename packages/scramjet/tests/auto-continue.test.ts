@@ -73,11 +73,15 @@ function fakeCtx({
 	isStreaming = () => false,
 	models = [],
 	model = undefined,
+	scopedModels = [],
+	hasConfiguredAuth = () => true,
 }: {
 	hasUI?: boolean;
 	isStreaming?: () => boolean;
 	models?: any[];
 	model?: any;
+	scopedModels?: any[];
+	hasConfiguredAuth?: (model: any) => boolean;
 } = {}): CtxBag {
 	const bag: CtxBag = {
 		ctx: null,
@@ -105,7 +109,8 @@ function fakeCtx({
 	bag.ctx = {
 		hasUI,
 		model,
-		modelRegistry: { getAvailable: () => models },
+		modelRegistry: { getAvailable: () => models, hasConfiguredAuth },
+		scopedModels,
 		ui: {
 			notify(message: string, type?: string) {
 				bag.notifications.push({ message, type });
@@ -164,11 +169,17 @@ function fakeCtx({
 
 function bootstrap(
 	state: ScramjetState,
-	{ hasUI = true, models, model }: { hasUI?: boolean; models?: any[]; model?: any } = {},
+	{
+		hasUI = true,
+		models,
+		model,
+		scopedModels,
+		hasConfiguredAuth,
+	}: { hasUI?: boolean; models?: any[]; model?: any; scopedModels?: any[]; hasConfiguredAuth?: (m: any) => boolean } = {},
 ) {
 	const bag = recordingPi();
 	state.logger = createLogger(bag.pi);
-	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming, models, model });
+	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming, models, model, scopedModels, hasConfiguredAuth });
 	registerCommandStatusTool(bag.pi, state);
 	registerAutoContinue(bag.pi, state);
 	const statusTool = bag.tools.find((t) => t.name === "report_scramjet_command_status");
@@ -3017,5 +3028,100 @@ describe("model selection at next-step dispatch", () => {
 
 		expect(bag.pi.setModelCalls).toHaveLength(0);
 		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+});
+
+describe("scoped model list at next-step dispatch", () => {
+	const ARROW_RIGHT = "\x1b[C";
+
+	const modelA = { provider: "anthropic", id: "claude-opus-4", name: "Claude Opus 4" };
+	const modelB = { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" };
+	const modelC = { provider: "anthropic", id: "claude-sonnet-4", name: "Claude Sonnet 4" };
+
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("cycles through scoped models when scope is active", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state, {
+			hasUI: true,
+			models: [modelA, modelB, modelC],
+			model: modelA,
+			scopedModels: [{ model: modelA }, { model: modelB }],
+		});
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		// Cycle right from modelA — should go to modelB (not modelC)
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		// Cycle right again — should wrap to modelA (modelC excluded)
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		// Wrapped back to modelA — same as initial, no setModel call
+		expect(bag.pi.setModelCalls).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("falls back to getAvailable() when scopedModels is empty", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state, {
+			hasUI: true,
+			models: [modelA, modelB, modelC],
+			model: modelA,
+			scopedModels: [],
+		});
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		// Cycle right twice from modelA — should go A→B→C (all three available)
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		// Landed on modelC — different from initial, setModel called
+		expect(bag.pi.setModelCalls).toHaveLength(1);
+		expect(bag.pi.setModelCalls[0].model).toBe(modelC);
+	});
+
+	it("filters out scoped models without configured auth", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state, {
+			hasUI: true,
+			models: [modelA, modelB, modelC],
+			model: modelA,
+			scopedModels: [{ model: modelA }, { model: modelB }, { model: modelC }],
+			hasConfiguredAuth: (m: any) => m.provider === "anthropic",
+		});
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		// Only anthropic models pass auth — cycle right should go to modelC, skip modelB
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(bag.pi.setModelCalls).toHaveLength(1);
+		expect(bag.pi.setModelCalls[0].model).toBe(modelC);
 	});
 });

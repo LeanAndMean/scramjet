@@ -76,7 +76,12 @@ export function registerModelSwitchTool(pi: ExtensionAPI, state: ScramjetState) 
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const resolved = ctx.modelRegistry.find(params.provider, params.model);
 			if (!resolved) {
-				const catalog = formatAvailableCatalog(ctx.modelRegistry.getAvailable());
+				const scoped = ctx.scopedModels;
+				const effectiveModels =
+					scoped.length > 0
+						? scoped.filter((s) => ctx.modelRegistry.hasConfiguredAuth(s.model)).map((s) => s.model)
+						: ctx.modelRegistry.getAvailable();
+				const catalog = formatAvailableCatalog(effectiveModels);
 				const text = `Unknown model "${params.provider}/${params.model}". The model was not switched.\n${catalog}`;
 				state.logger.warn("model-switch", "switch_scramjet_model called with unknown model", {
 					provider: params.provider,

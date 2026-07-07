@@ -11,11 +11,16 @@ interface FakeModel {
 	name: string;
 }
 
-// The registry surface the tool relies on: find(provider, id) and getAvailable().
-function fakeModelRegistry(models: FakeModel[], available: FakeModel[] = models) {
+// The registry surface the tool relies on: find(provider, id), getAvailable(), and hasConfiguredAuth().
+function fakeModelRegistry(
+	models: FakeModel[],
+	available: FakeModel[] = models,
+	hasConfiguredAuth: (m: any) => boolean = () => true,
+) {
 	return {
 		find: (provider: string, id: string) => models.find((m) => m.provider === provider && m.id === id),
 		getAvailable: () => available,
+		hasConfiguredAuth,
 	};
 }
 
@@ -27,6 +32,7 @@ function toolFor(
 		state?: ScramjetState;
 		setModel?: (model: unknown) => Promise<boolean>;
 		registry?: ReturnType<typeof fakeModelRegistry>;
+		scopedModels?: any[];
 	} = {},
 ) {
 	const state = options.state ?? freshState();
@@ -36,8 +42,9 @@ function toolFor(
 	const tool = tools.find((t: any) => t.name === "switch_scramjet_model");
 	if (!tool) throw new Error("switch_scramjet_model tool not registered");
 	const registry = options.registry ?? fakeModelRegistry([CLAUDE, GPT]);
+	const scopedModels = options.scopedModels ?? [];
 	const execute = (params: SwitchParams) =>
-		tool.execute("call-id", params, undefined, undefined, { modelRegistry: registry } as any) as Promise<any>;
+		tool.execute("call-id", params, undefined, undefined, { modelRegistry: registry, scopedModels } as any) as Promise<any>;
 	return { state, pi, tool, execute };
 }
 
@@ -109,6 +116,35 @@ describe("switch_scramjet_model unknown model", () => {
 		expect(text).toContain("anthropic/claude-opus-4-8");
 		// Catalog reflects getAvailable(), not the full registry.
 		expect(text).not.toContain("openai/gpt-5.5");
+	});
+
+	it("shows scoped models in error catalog when scope is active", async () => {
+		const registry = fakeModelRegistry([CLAUDE, GPT], [CLAUDE, GPT]);
+		const { execute } = toolFor({
+			registry,
+			scopedModels: [{ model: CLAUDE }],
+		});
+
+		const result = await execute({ provider: "anthropic", model: "no-such-model" });
+
+		const text = resultText(result);
+		expect(text).toContain("anthropic/claude-opus-4-8");
+		// GPT is available but not scoped — excluded from catalog.
+		expect(text).not.toContain("openai/gpt-5.5");
+	});
+
+	it("falls back to getAvailable() catalog when scopedModels is empty", async () => {
+		const registry = fakeModelRegistry([CLAUDE, GPT], [CLAUDE, GPT]);
+		const { execute } = toolFor({
+			registry,
+			scopedModels: [],
+		});
+
+		const result = await execute({ provider: "anthropic", model: "no-such-model" });
+
+		const text = resultText(result);
+		expect(text).toContain("anthropic/claude-opus-4-8");
+		expect(text).toContain("openai/gpt-5.5");
 	});
 });
 
