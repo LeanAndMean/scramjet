@@ -111,7 +111,9 @@ The `agent_end` handler in `auto-continue.ts` evaluates lifecycle facts in this 
 4. **Probe due** (`isProbeDue`): begin probe and schedule deferred hidden probe message. Commands with no next-step policy probe identically — the probe message omits the `<scramjet-next-step>` block.
 5. **Probe in flight without report**: self-heal to dormant (probe turn ended without a status report).
 6. **Terminal report pending** (`hasTerminalReport`): route by status — completed dispatches next step (or clears to idle without dispatch when no policy exists), blocked/incomplete enter dormant.
-7. **Parked, dormant, or idle**: no-op.
+7. **Parked or dormant**: no-op.
+8. **Idle with pending suggestion** (`activeName === null && state.pendingSuggestion`): own stopReason filtering (aborted drops, error retains), then generation/identity/UI/freetext guards, then deferred `scheduleSuggestionDispatch` (same `setTimeout(0)` pattern). The selector always uses `forcePause: true` — no countdown, no auto-dispatch. `pendingSuggestion` lives on `ScramjetState` outside `LifecycleState` (invariants require facts cleared at idle).
+9. **Idle without suggestion**: no-op.
 
 ## Timer and generation guards
 
