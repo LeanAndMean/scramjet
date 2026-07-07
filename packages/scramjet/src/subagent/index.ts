@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { AgentToolUpdateCallback, ThinkingLevel } from "@leanandmean/agent";
 import type { Message } from "@leanandmean/ai";
 import { StringEnum } from "@leanandmean/ai";
-import { type ExtensionAPI, getMarkdownTheme, withFileMutationQueue } from "@leanandmean/coding-agent";
+import { type ExtensionAPI, type ThemeColor, getMarkdownTheme, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
@@ -487,6 +487,27 @@ const SubagentParams = Type.Object({
 });
 
 export function registerSubagentTool(pi: ExtensionAPI) {
+	const getParentLevel = (): ThinkingLevel | undefined => {
+		try {
+			return pi.getThinkingLevel();
+		} catch {
+			return undefined;
+		}
+	};
+
+	const formatEffortTag = (
+		explicit: string | undefined,
+		parentLevel: ThinkingLevel | undefined,
+		theme: { fg: (color: ThemeColor, text: string) => string },
+	): string => {
+		const level = explicit
+			? parentLevel
+				? capThinkingLevel(explicit as ThinkingLevel, parentLevel)
+				: explicit
+			: parentLevel;
+		return level ? ` ${theme.fg("muted", `[Effort:${level}]`)}` : "";
+	};
+
 	pi.registerTool<typeof SubagentParams, SubagentDetails>({
 		name: "subagent",
 		label: "Subagent",
@@ -742,18 +763,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "user";
-			let parentLevel: ThinkingLevel | undefined;
-			try {
-				parentLevel = pi.getThinkingLevel();
-			} catch {}
-			const effortTag = (explicit: string | undefined): string => {
-				const level = explicit
-					? parentLevel
-						? capThinkingLevel(explicit as ThinkingLevel, parentLevel)
-						: explicit
-					: parentLevel;
-				return level ? ` ${theme.fg("muted", `[Effort:${level}]`)}` : "";
-			};
+			const parentLevel = getParentLevel();
+			const effortTag = (explicit: string | undefined) => formatEffortTag(explicit, parentLevel, theme);
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -800,18 +811,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 			}
 
-			let parentLevel: ThinkingLevel | undefined;
-			try {
-				parentLevel = pi.getThinkingLevel();
-			} catch {}
-			const effortTag = (explicit: string | undefined): string => {
-				const level = explicit
-					? parentLevel
-						? capThinkingLevel(explicit as ThinkingLevel, parentLevel)
-						: explicit
-					: parentLevel;
-				return level ? ` ${theme.fg("muted", `[Effort:${level}]`)}` : "";
-			};
+			const parentLevel = getParentLevel();
+			const effortTag = (explicit: string | undefined) => formatEffortTag(explicit, parentLevel, theme);
 			const modelTag = (model: string | undefined): string => {
 				return model ? ` ${theme.fg("dim", model)}` : "";
 			};

@@ -933,4 +933,78 @@ describe("renderResult model and effort", () => {
 		const rendered = renderToolResult(tool, singleResult(), false, {});
 		expect(rendered).toContain("[Effort:high]");
 	});
+
+	it("renders chain result when results has fewer entries than args.chain", () => {
+		const tool = registeredSubagentTool();
+		const result = {
+			content: [{ type: "text", text: "chain done" }],
+			details: {
+				mode: "chain",
+				agentScope: "user",
+				projectAgentsDir: null,
+				results: [
+					{
+						agent: "step-agent-0",
+						agentSource: "user",
+						task: "first task",
+						step: 1,
+						exitCode: 1,
+						messages: [{ role: "assistant", content: [{ type: "text", text: "failed" }] }],
+						stderr: "error occurred",
+						usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.01, contextTokens: 150, turns: 1 },
+						model: "claude-sonnet-4-20250514",
+						stopReason: "error",
+						errorMessage: "step failed",
+					},
+				],
+			},
+		};
+		const args = {
+			chain: [
+				{ agent: "step-agent-0", task: "first task", effort: "low" },
+				{ agent: "step-agent-1", task: "second task", effort: "medium" },
+				{ agent: "step-agent-2", task: "third task", effort: "high" },
+			],
+		};
+
+		const expanded = renderToolResult(tool, result, true, args);
+		const collapsed = renderToolResult(tool, result, false, args);
+
+		expect(expanded).toContain("step-agent-0");
+		expect(expanded).toContain("[Effort:low]");
+		expect(expanded).toContain("0/1 steps");
+		expect(expanded).not.toContain("step-agent-1");
+		expect(collapsed).toContain("step-agent-0");
+		expect(collapsed).toContain("0/1 steps");
+	});
+
+	it("shows explicit effort uncapped when getThinkingLevel throws", () => {
+		const { pi, tools } = recordingPi();
+		pi.getThinkingLevel = () => {
+			throw new Error("no thinking level available");
+		};
+		registerSubagentTool(pi);
+		const tool = tools[0];
+
+		const callRendered = renderToolCall(tool, { agent: "explorer", task: "Explore", effort: "xhigh" });
+		expect(callRendered).toContain("[Effort:xhigh]");
+
+		const resultRendered = renderToolResult(tool, singleResult(), true, { effort: "xhigh" });
+		expect(resultRendered).toContain("[Effort:xhigh]");
+	});
+
+	it("shows no effort badge when getThinkingLevel throws and no explicit effort", () => {
+		const { pi, tools } = recordingPi();
+		pi.getThinkingLevel = () => {
+			throw new Error("no thinking level available");
+		};
+		registerSubagentTool(pi);
+		const tool = tools[0];
+
+		const callRendered = renderToolCall(tool, { agent: "explorer", task: "Explore" });
+		expect(callRendered).not.toContain("[Effort:");
+
+		const resultRendered = renderToolResult(tool, singleResult(), true, {});
+		expect(resultRendered).not.toContain("[Effort:");
+	});
 });
