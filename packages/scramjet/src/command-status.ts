@@ -73,7 +73,7 @@ const OUT_OF_PHASE_ERROR =
 	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
 
 // F6: single source of truth for the next-step wire shape.
-const NEXT_STEP_SCHEMA = Type.Object({
+export const NEXT_STEP_SCHEMA = Type.Object({
 	message: Type.String({
 		description:
 			"The suggested next message, shown to the user verbatim and dispatched on selection. " +

@@ -122,6 +122,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				});
 				if (isProbeInFlight(state.lifecycle)) state.suspendProbeWatchdog?.();
 				parkForFreetext(state);
+				state.freetextAwaitingReply = true;
 				const command = activeCommandName(state.lifecycle);
 				if (command) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: command });
 				return {

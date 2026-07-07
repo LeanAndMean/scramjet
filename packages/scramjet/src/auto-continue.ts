@@ -862,9 +862,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const wasProbing = isProbeInFlight(state.lifecycle);
 		state.clearLifecycleTimers?.("session-compact");
 		if (wasProbing && isProbeInFlight(state.lifecycle)) enterDormant(state, "session-compact");
+		state.pendingSuggestion = null;
+		state.freetextAwaitingReply = false;
 	});
 
 	pi.on("session_shutdown", async () => {
 		state.clearLifecycleTimers?.("session-shutdown");
+		state.pendingSuggestion = null;
+		state.freetextAwaitingReply = false;
 	});
 }

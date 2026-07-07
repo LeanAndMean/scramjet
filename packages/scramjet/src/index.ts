@@ -19,6 +19,7 @@ import { registerScramjetCommand } from "./scramjet-command.js";
 import { registerSubagentTool } from "./subagent/index.js";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.js";
 import { registerSubdirContext } from "./subdir-context.js";
+import { registerSuggestNextStepsTool } from "./suggest-next-steps.js";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
 import type { ScramjetState } from "./types.js";
 import { registerUserInputTool } from "./user-input.js";
@@ -40,6 +41,8 @@ export function initScramjet(pi: ExtensionAPI) {
 		hasUserMessage: false,
 		autonomyConfigPath: defaultConfigPath(),
 		subdirLoadedPaths: new Set(),
+		pendingSuggestion: null,
+		freetextAwaitingReply: false,
 		logger,
 	};
 
@@ -66,5 +69,6 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerAgentCatalog(pi, state);
 	registerCommandCatalog(pi, state);
 	registerDormantCommandNotice(pi, state);
+	registerSuggestNextStepsTool(pi, state);
 	registerSubdirContext(pi, state);
 }

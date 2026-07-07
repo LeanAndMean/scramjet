@@ -108,6 +108,12 @@ export interface ModelRecord {
 	fromTurnIndex: number;
 }
 
+export interface PendingSuggestion {
+	steps: CommandStatusNextStep[];
+	recommendedIndex?: number;
+	generation: number;
+}
+
 // Exposed for test observability of closure-local timer state in auto-continue.ts.
 export interface LifecycleTimerAccessors {
 	isProbeScheduled(): boolean;
@@ -151,4 +157,6 @@ export interface ScramjetState extends LifecycleHolder {
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
 	subdirLoadedPaths: Set<string>;
+	pendingSuggestion: PendingSuggestion | null;
+	freetextAwaitingReply: boolean;
 }
