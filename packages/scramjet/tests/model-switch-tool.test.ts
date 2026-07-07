@@ -44,7 +44,10 @@ function toolFor(
 	const registry = options.registry ?? fakeModelRegistry([CLAUDE, GPT]);
 	const scopedModels = options.scopedModels ?? [];
 	const execute = (params: SwitchParams) =>
-		tool.execute("call-id", params, undefined, undefined, { modelRegistry: registry, scopedModels } as any) as Promise<any>;
+		tool.execute("call-id", params, undefined, undefined, {
+			modelRegistry: registry,
+			scopedModels,
+		} as any) as Promise<any>;
 	return { state, pi, tool, execute };
 }
 

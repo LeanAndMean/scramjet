@@ -175,11 +175,24 @@ function bootstrap(
 		model,
 		scopedModels,
 		hasConfiguredAuth,
-	}: { hasUI?: boolean; models?: any[]; model?: any; scopedModels?: any[]; hasConfiguredAuth?: (m: any) => boolean } = {},
+	}: {
+		hasUI?: boolean;
+		models?: any[];
+		model?: any;
+		scopedModels?: any[];
+		hasConfiguredAuth?: (m: any) => boolean;
+	} = {},
 ) {
 	const bag = recordingPi();
 	state.logger = createLogger(bag.pi);
-	const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming, models, model, scopedModels, hasConfiguredAuth });
+	const ctxBag = fakeCtx({
+		hasUI,
+		isStreaming: () => bag.pi.isStreaming,
+		models,
+		model,
+		scopedModels,
+		hasConfiguredAuth,
+	});
 	registerCommandStatusTool(bag.pi, state);
 	registerAutoContinue(bag.pi, state);
 	const statusTool = bag.tools.find((t) => t.name === "report_scramjet_command_status");

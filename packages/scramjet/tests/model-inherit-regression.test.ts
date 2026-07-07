@@ -10,7 +10,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerClearAlias } from "../src/clear-alias.js";
 import { dispatchNextStep } from "../src/next-step-dispatch.js";
-import type { NextStep, ScramjetState } from "../src/types.js";
+import type { NextStep } from "../src/types.js";
 import { freshState } from "./helpers.js";
 
 describe("model inherit-by-default regression guard", () => {
