@@ -10,8 +10,8 @@ function setup(stateOverrides = {}) {
 	return { tool, state, pi };
 }
 
-function fakeCtx(hasUI = true) {
-	return hasUI ? { ui: { custom: async () => null } } : undefined;
+function fakeCtx(has = true) {
+	return { hasUI: has, ui: { custom: async () => null } };
 }
 
 const validSteps = [{ message: "/mach12:pr-create 55", reason: "PR is ready" }];
@@ -113,7 +113,7 @@ describe("suggest_scramjet_next_steps", () => {
 			expect(state.pendingSuggestion).toBeNull();
 		});
 
-		it("rejects when ctx is undefined", async () => {
+		it("rejects when hasUI is false (headless/noOp context)", async () => {
 			const { tool, state } = setup();
 
 			const result = await tool.execute(
@@ -123,7 +123,7 @@ describe("suggest_scramjet_next_steps", () => {
 				},
 				undefined,
 				undefined,
-				undefined,
+				fakeCtx(false),
 			);
 
 			expect(result.details.error).toBe("non-tui");

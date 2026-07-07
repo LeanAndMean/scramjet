@@ -320,7 +320,7 @@ Design conventions:
 ### Writing a subroutine command
 
 A delegate-only subroutine:
-- Declares **`delegate-only: true`** in frontmatter — this hides it from the command catalog and prevents the harness from dispatching it top-level (forced transitions, next-step suggestions). It remains user-typeable and in Pi autocomplete — the harness constrains itself, never the user.
+- Declares **`delegate-only: true`** in frontmatter — this hides it from the command catalog and prevents the harness from dispatching it top-level (forced/closed/open/suggestions). It remains user-typeable and in Pi autocomplete — the harness constrains itself, never the user.
 - Has **no `next` block** — the caller's `next:` controls chaining, not the subroutine's.
 - Scopes `allowed-tools` tightly to what it actually needs.
 - Uses `$ARGUMENTS` or positional placeholders to receive caller-provided context.

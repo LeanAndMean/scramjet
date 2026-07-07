@@ -152,6 +152,7 @@ For no-policy commands (`policyMode: "none"` in log details), steps 13–15 are 
 - `"suggestion dropped"` with `data.reason`: `aborted` (user cancelled the run), `stale-generation`, `no-ui`, `freetext-awaiting-reply`
 - `"suggestion dispatch dropped"` — timer fired but validation failed or UI unavailable
 - `"suggestion dispatch timer stale"` — generation or identity mismatch at timer fire
+- `"suggestion dispatch failed"` — `showSelector` threw during deferred dispatch
 
 **Retention on error:**
 - `"suggestion retained"` with `data.reason: "error-retry"` — error stop keeps suggestion for retry

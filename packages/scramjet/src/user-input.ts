@@ -126,8 +126,8 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				const command = activeCommandName(state.lifecycle);
 				if (command) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: command });
 				return {
-					content: [{ type: "text", text: JSON.stringify({ parked: true }) }],
-					details: { type: "freetext", parked: true },
+					content: [{ type: "text", text: JSON.stringify({ parked: parkResult.ok }) }],
+					details: { type: "freetext", parked: parkResult.ok },
 					terminate: true,
 				};
 			}

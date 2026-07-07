@@ -50,17 +50,9 @@ function sha256(filePath) {
 }
 
 function walkDir(dir) {
-	const results = [];
-	const entries = readdirSync(dir, { withFileTypes: true });
-	for (const entry of entries) {
-		const fullPath = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			results.push(...walkDir(fullPath));
-		} else if (entry.isFile()) {
-			results.push(fullPath);
-		}
-	}
-	return results;
+	return readdirSync(dir, { recursive: true, withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => join(entry.parentPath, entry.name));
 }
 
 function ensureParentDir(filePath) {

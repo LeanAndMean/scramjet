@@ -109,7 +109,7 @@ export interface ModelRecord {
 }
 
 export interface PendingSuggestion {
-	steps: CommandStatusNextStep[];
+	steps: [CommandStatusNextStep, ...CommandStatusNextStep[]];
 	recommendedIndex?: number;
 	generation: number;
 }
