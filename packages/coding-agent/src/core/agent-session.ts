@@ -2277,6 +2277,7 @@ export class AgentSession {
 			},
 			{
 				getModel: () => this.model,
+				getScopedModels: () => this.scopedModels,
 				isIdle: () => !this.isStreaming,
 				getSignal: () => this.agent.signal,
 				abort: () => this.abort(),
