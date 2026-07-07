@@ -62,7 +62,7 @@ export interface CommandDef {
 	body: string;
 	description?: string;
 	argumentHint?: string;
-	delegateOnly?: boolean;
+	delegateOnly?: true;
 	allowedTools?: string[];
 	next?: NextStepPolicy;
 }

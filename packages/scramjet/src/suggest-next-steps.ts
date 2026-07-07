@@ -3,9 +3,10 @@
  *
  * Lets the agent suggest running a command (or a small set of commands) via
  * the next-step selector popup, outside the two-phase probe lifecycle.
- * Idle-gated: only accepted when no top-level command is active. The payload
- * is stored in transient state (`state.pendingSuggestion`) and drained on the
- * next idle `agent_end` by auto-continue.ts (Stage 4).
+ * Idle-gated: only accepted when no top-level command is active, a TUI is
+ * available, and no freetext reply is pending. The payload is stored in
+ * transient state (`state.pendingSuggestion`) and drained on the next idle
+ * `agent_end` by auto-continue.ts.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
@@ -157,7 +158,7 @@ export function registerSuggestNextStepsTool(pi: ExtensionAPI, state: ScramjetSt
 			});
 
 			const recommended =
-				params.recommended_next_step !== undefined
+				params.recommended_next_step !== undefined && params.recommended_next_step < params.next_steps.length
 					? params.next_steps[params.recommended_next_step]
 					: params.next_steps[0];
 			const preview = recommended?.message ?? params.next_steps[0]?.message ?? "";

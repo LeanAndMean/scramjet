@@ -146,7 +146,7 @@ For no-policy commands (`policyMode: "none"` in log details), steps 13–15 are 
 6. `"next step dispatching"` or `"next step pasted"` — user accepted via Enter
 
 **Rejection at tool time:**
-- `"suggestion rejected"` with `data.reason` (`command-active`, `validation`) and `data.phase`
+- `"suggestion rejected"` with `data.reason` (`command-active`, or descriptive validation failure text from `validateNextSteps`) and `data.phase`
 
 **Drop at drain time:**
 - `"suggestion dropped"` with `data.reason`: `aborted` (user cancelled the run), `stale-generation`, `no-ui`, `freetext-awaiting-reply`

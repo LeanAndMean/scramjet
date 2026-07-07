@@ -16,7 +16,7 @@ Every command file starts with YAML frontmatter between `---` fences. All fields
 |-------|------|----------|-------------|
 | `description` | string | No | One-line description shown in command listings and help. Feeds the command catalog in the system prompt. |
 | `argument-hint` | string | No | Usage hint shown alongside the command name (e.g., `"<issue-number> [context]"`). Feeds the command catalog. |
-| `delegate-only` | boolean | No | When `true`, marks the command as a subroutine that should only be invoked via delegation, not directly by the user. Hidden from the command catalog and refused by harness dispatch (forced/next-steps/suggestions), but remains user-typeable and in Pi autocomplete. Must be exactly `true`; any other value (including `false`) produces a load warning and is treated as absent. |
+| `delegate-only` | boolean | No | When `true`, marks the command as a subroutine that should only be invoked via delegation, not directly by the user. Hidden from the command catalog and refused by harness dispatch (forced/closed/open/suggestions), but remains user-typeable and in Pi autocomplete. Must be exactly `true`; any other value (including `false`) produces a load warning and is treated as absent. |
 | `allowed-tools` | string[] | No | Tools this command is permitted to use. Omit for unrestricted access. |
 | `next` | object | No | Next-step policy declaring what happens after the command completes. |
 
