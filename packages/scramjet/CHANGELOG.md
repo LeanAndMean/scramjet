@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.41.0 — Command catalog, agent-initiated suggestions, and manifest-based upgrades
+
+Injects the available top-level command catalog into the system prompt so the agent can discover and suggest commands. Adds a `suggest_scramjet_next_steps` tool for agent-initiated command suggestions via the next-step selector popup (idle-gated, never auto-dispatches). Introduces `delegate-only: true` and `argument-hint` frontmatter fields for command authoring. Adds manifest-based upgrade support to postinstall seeding, preserving user-edited command files across upgrades. Fixes [#248](https://github.com/LeanAndMean/scramjet/issues/248).
+
+### Added
+
+- `command-catalog.ts`: system prompt section (`scramjet:command-catalog`) listing top-level commands with argument hints and descriptions, filtered by `delegateOnly`.
+- `suggest-next-steps.ts`: `suggest_scramjet_next_steps` tool — idle-gated, validates through `validateNextSteps` with delegate-only/unknown rejection, stores in `state.pendingSuggestion` for deferred selector drain. Non-TUI sessions rejected at tool time.
+- `auto-continue.ts`: idle `agent_end` branch drains pending suggestions via the next-step selector with `forcePause` and a distinct title; stopReason filtering, generation + object-identity stale guards, freetext co-occurrence guard.
+- `commands/loader.ts`: parses `delegate-only: true` and `argument-hint` from frontmatter into `CommandDef`.
+- `commands/validator.ts`: optional `commandCheck` callback parameter for delegate-only/unknown rejection during validation.
+- `auto-continue.ts`: `dispatchForced` rejects delegate-only targets.
+- Mach 12 subroutines: `delegate-only: true` frontmatter on all 7 delegate-only commands.
+- `scripts/postinstall.js`: manifest-based upgrade system — `.seed-manifest.json` with per-file sha256 + version; upgrades replace unedited files, preserve edits with warnings; legacy backup-and-reseed with user-added file recovery; same-version short-circuit.
+- CI: postinstall double-run smoke test (idempotency).
+- Tests for command catalog builder, suggest tool lifecycle gating, suggestion drain scheduling, delegate-only enforcement, validator `commandCheck`, manifest upgrade flows, and Mach 12 wiring.
+
+### Changed
+
+- `next-step-selector.ts`: `selectNextStep` accepts optional `title` parameter for selector title threading.
+- State: `pendingSuggestion: PendingSuggestion | null` and `freetextAwaitingReply: boolean` added to `ScramjetState`.
+- `session_compact` and `session_shutdown` clear suggestion state.
+
 ## 0.40.1 — Next-step selector respects scoped model list
 
 The next-step selector's model cycling (left/right arrows) and the model-switch-tool's error catalog now respect the user's scoped model list (`--models` / `/scoped-models`). When a model scope is active, only scoped models with configured auth are cycled — matching Ctrl+P semantics. Falls back to the full available set when no scope is configured. Fixes [#256](https://github.com/LeanAndMean/scramjet/issues/256).
