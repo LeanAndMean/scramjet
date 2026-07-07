@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.40.1 — Next-step selector respects scoped model list
+
+The next-step selector's model cycling (left/right arrows) and the model-switch-tool's error catalog now respect the user's scoped model list (`--models` / `/scoped-models`). When a model scope is active, only scoped models with configured auth are cycled — matching Ctrl+P semantics. Falls back to the full available set when no scope is configured. Fixes [#256](https://github.com/LeanAndMean/scramjet/issues/256).
+
+### Changed
+
+- `auto-continue.ts`: next-step selector model list prefers `ctx.scopedModels` (filtered by `hasConfiguredAuth`) over `ctx.modelRegistry.getAvailable()`.
+- `model-switch-tool.ts`: error catalog for unknown models shows scoped models when a scope is active.
+
+### Added
+
+- Pi runtime: `scopedModels` property on `ExtensionContext`, wired through `ExtensionContextActions` / `runner.ts` / `agent-session.ts` following the same closure-getter pattern as `model`.
+- Tests for scoped-preferred, empty-fallback, auth-filtering, and scoped-catalog cases.
+
 ## 0.40.0 — Model selection in next-step selector
 
 The next-step selector now supports model cycling: left/right arrows cycle through available models before dispatching the selected next step. The chosen model is applied via `pi.setModel` before dispatch (fresh sessions inherit via issue 186 snapshot). Countdown auto-select and Escape never commit a model change. Fixes [#249](https://github.com/LeanAndMean/scramjet/issues/249).
