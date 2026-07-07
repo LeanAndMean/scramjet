@@ -1,3 +1,4 @@
+import type { ThinkingLevel } from "@leanandmean/agent";
 import { createLifecycle, type LifecycleHolder, type LifecycleState } from "../src/lifecycle.js";
 import { createLogger, SCRAMJET_LOG_TYPE } from "../src/logger.js";
 import type { CommandStatusRestingPayload, ScramjetState } from "../src/types.js";
@@ -108,6 +109,9 @@ export function recordingPi(): RecordingPi {
 			}
 			pi.setModelCalls.push({ model, result: pi.setModelResult });
 			return pi.setModelResult;
+		},
+		getThinkingLevel(): ThinkingLevel {
+			return "high";
 		},
 		registerCommand(name: string, spec: unknown) {
 			commands.push({ name, spec });

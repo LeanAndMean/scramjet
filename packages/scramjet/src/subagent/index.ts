@@ -2,13 +2,21 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolUpdateCallback } from "@leanandmean/agent";
+import type { AgentToolUpdateCallback, ThinkingLevel } from "@leanandmean/agent";
 import type { Message } from "@leanandmean/ai";
 import { StringEnum } from "@leanandmean/ai";
 import { type ExtensionAPI, getMarkdownTheme, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+
+const THINKING_LEVEL_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+export function capThinkingLevel(requested: ThinkingLevel, parentLevel: ThinkingLevel): ThinkingLevel {
+	const requestedIdx = THINKING_LEVEL_ORDER.indexOf(requested);
+	const parentIdx = THINKING_LEVEL_ORDER.indexOf(parentLevel);
+	return requestedIdx <= parentIdx ? requested : parentLevel;
+}
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -264,18 +272,22 @@ export function getPiInvocation(args: string[]): { command: string; args: string
 	return { command: "scramjet", args };
 }
 
-async function runSingleAgent(
-	defaultCwd: string,
-	agents: AgentConfig[],
-	agentName: string,
-	task: string,
-	cwd: string | undefined,
-	step: number | undefined,
-	signal: AbortSignal | undefined,
-	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined,
-	makeDetails: (results: SingleResult[]) => SubagentDetails,
-	discoveryDiagnostics: string[],
-): Promise<SingleResult> {
+interface RunSingleAgentOptions {
+	defaultCwd: string;
+	agents: AgentConfig[];
+	agentName: string;
+	task: string;
+	cwd: string | undefined;
+	step: number | undefined;
+	signal: AbortSignal | undefined;
+	onUpdate: AgentToolUpdateCallback<SubagentDetails> | undefined;
+	makeDetails: (results: SingleResult[]) => SubagentDetails;
+	discoveryDiagnostics: string[];
+	thinkingLevel: ThinkingLevel;
+}
+
+async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult> {
+	const { defaultCwd, agents, agentName, task, cwd, step, signal, onUpdate, makeDetails, discoveryDiagnostics } = opts;
 	const agent = agents.find((a) => a.name === agentName);
 
 	if (!agent) {
@@ -295,6 +307,7 @@ async function runSingleAgent(
 	const args: string[] = ["--mode", "json", "-p", "--no-session", "--cache-retention", "short"];
 	if (agent.model) args.push("--model", agent.model);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
+	args.push("--thinking", opts.thinkingLevel);
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
@@ -437,16 +450,22 @@ async function runSingleAgent(
 	}
 }
 
+const EffortSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"], {
+	description: "Thinking effort level for the agent subprocess. Capped at the main session's level.",
+});
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task to delegate to the agent" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	effort: Type.Optional(EffortSchema),
 });
 
 const ChainItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
 	task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
+	effort: Type.Optional(EffortSchema),
 });
 
 const AgentScopeSchema = StringEnum(AGENT_SCOPES, {
@@ -464,6 +483,7 @@ const SubagentParams = Type.Object({
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+	effort: Type.Optional(EffortSchema),
 });
 
 export function registerSubagentTool(pi: ExtensionAPI) {
@@ -477,6 +497,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 			'To enable project-local agents in .scramjet/agents, set agentScope: "both" (or "project").',
 		].join(" "),
 		parameters: SubagentParams,
+		promptSnippet:
+			"effort: optional thinking level (off/minimal/low/medium/high/xhigh). Guidance: low for exploration and information gathering; medium for structured review and analysis; high for architecture, design, assessment, and code tracing tasks requiring judgment; xhigh for complex multi-constraint planning or deep root-cause analysis. Capped at your current session level.",
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
@@ -536,6 +558,10 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				}
 			}
 
+			const parentLevel = pi.getThinkingLevel();
+			const resolveEffort = (effort: string | undefined): ThinkingLevel =>
+				effort ? capThinkingLevel(effort as ThinkingLevel, parentLevel) : parentLevel;
+
 			if (params.chain && params.chain.length > 0) {
 				const results: SingleResult[] = [];
 				let previousOutput = "";
@@ -557,18 +583,19 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							}
 						: undefined;
 
-					const result = await runSingleAgent(
-						ctx.cwd,
+					const result = await runSingleAgent({
+						defaultCwd: ctx.cwd,
 						agents,
-						step.agent,
-						taskWithContext,
-						step.cwd,
-						i + 1,
+						agentName: step.agent,
+						task: taskWithContext,
+						cwd: step.cwd,
+						step: i + 1,
 						signal,
-						chainUpdate,
-						makeDetails("chain"),
-						discovery.diagnostics,
-					);
+						onUpdate: chainUpdate,
+						makeDetails: makeDetails("chain"),
+						discoveryDiagnostics: discovery.diagnostics,
+						thinkingLevel: resolveEffort(step.effort),
+					});
 					results.push(result);
 
 					if (isResultError(result)) {
@@ -631,23 +658,24 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				};
 
 				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-					const result = await runSingleAgent(
-						ctx.cwd,
+					const result = await runSingleAgent({
+						defaultCwd: ctx.cwd,
 						agents,
-						t.agent,
-						t.task,
-						t.cwd,
-						undefined,
+						agentName: t.agent,
+						task: t.task,
+						cwd: t.cwd,
+						step: undefined,
 						signal,
-						(partial) => {
+						onUpdate: (partial) => {
 							if (partial.details?.results[0]) {
 								allResults[index] = partial.details.results[0];
 								emitParallelUpdate();
 							}
 						},
-						makeDetails("parallel"),
-						discovery.diagnostics,
-					);
+						makeDetails: makeDetails("parallel"),
+						discoveryDiagnostics: discovery.diagnostics,
+						thinkingLevel: resolveEffort(t.effort),
+					});
 					allResults[index] = result;
 					emitParallelUpdate();
 					return result;
@@ -672,18 +700,19 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 			}
 
 			if (params.agent && params.task) {
-				const result = await runSingleAgent(
-					ctx.cwd,
+				const result = await runSingleAgent({
+					defaultCwd: ctx.cwd,
 					agents,
-					params.agent,
-					params.task,
-					params.cwd,
-					undefined,
+					agentName: params.agent,
+					task: params.task,
+					cwd: params.cwd,
+					step: undefined,
 					signal,
 					onUpdate,
-					makeDetails("single"),
-					discovery.diagnostics,
-				);
+					makeDetails: makeDetails("single"),
+					discoveryDiagnostics: discovery.diagnostics,
+					thinkingLevel: resolveEffort(params.effort),
+				});
 				if (isResultError(result)) {
 					return {
 						content: [
