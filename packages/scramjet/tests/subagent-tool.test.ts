@@ -49,12 +49,15 @@ function renderToolCall(tool: any, args: any): string {
 	return tool.renderCall(args, theme, {}).render(120).join("\n");
 }
 
-function renderToolResult(tool: any, result: any, expanded: boolean): string {
+function renderToolResult(tool: any, result: any, expanded: boolean, args?: any): string {
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	};
-	return tool.renderResult(result, { expanded }, theme, {}).render(120).join("\n");
+	return tool
+		.renderResult(result, { expanded }, theme, { args: args ?? {} })
+		.render(120)
+		.join("\n");
 }
 
 function failedParallelRenderResult() {
@@ -756,6 +759,178 @@ describe("renderCall — single mode", () => {
 
 		const rendered = renderToolCall(tool, { agent: "explorer", task: "Explore" });
 
+		expect(rendered).toContain("[Effort:high]");
+	});
+});
+
+describe("renderResult model and effort", () => {
+	function singleResult(overrides: any = {}) {
+		return {
+			content: [{ type: "text", text: "done" }],
+			details: {
+				mode: "single",
+				agentScope: "user",
+				projectAgentsDir: null,
+				results: [
+					{
+						agent: "test-agent",
+						agentSource: "user",
+						task: "do something",
+						exitCode: 0,
+						messages: [{ role: "assistant", content: [{ type: "text", text: "result" }] }],
+						stderr: "",
+						usage: {
+							input: 100,
+							output: 50,
+							cacheRead: 0,
+							cacheWrite: 0,
+							cost: 0.01,
+							contextTokens: 150,
+							turns: 1,
+						},
+						model: "claude-sonnet-4-20250514",
+						...overrides,
+					},
+				],
+			},
+		};
+	}
+
+	function parallelResult(count: number, overrides: any = {}) {
+		return {
+			content: [{ type: "text", text: `Parallel: ${count}/${count} succeeded` }],
+			details: {
+				mode: "parallel",
+				agentScope: "user",
+				projectAgentsDir: null,
+				results: Array.from({ length: count }, (_, i) => ({
+					agent: `agent-${i}`,
+					agentSource: "user",
+					task: `task ${i}`,
+					exitCode: 0,
+					messages: [{ role: "assistant", content: [{ type: "text", text: `output ${i}` }] }],
+					stderr: "",
+					usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.01, contextTokens: 150, turns: 1 },
+					model: "claude-sonnet-4-20250514",
+					...overrides,
+				})),
+			},
+		};
+	}
+
+	function chainResult(count: number, overrides: any = {}) {
+		return {
+			content: [{ type: "text", text: "chain done" }],
+			details: {
+				mode: "chain",
+				agentScope: "user",
+				projectAgentsDir: null,
+				results: Array.from({ length: count }, (_, i) => ({
+					agent: `step-agent-${i}`,
+					agentSource: "user",
+					task: `step task ${i}`,
+					step: i + 1,
+					exitCode: 0,
+					messages: [{ role: "assistant", content: [{ type: "text", text: `step output ${i}` }] }],
+					stderr: "",
+					usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.01, contextTokens: 150, turns: 1 },
+					model: "claude-opus-4-20250514",
+					...overrides,
+				})),
+			},
+		};
+	}
+
+	it("shows model in single expanded header", () => {
+		const tool = registeredSubagentTool();
+		const rendered = renderToolResult(tool, singleResult(), true, { effort: "high" });
+		expect(rendered).toContain("claude-sonnet-4-20250514");
+	});
+
+	it("shows model in single collapsed header", () => {
+		const tool = registeredSubagentTool();
+		const rendered = renderToolResult(tool, singleResult(), false, { effort: "high" });
+		expect(rendered).toContain("claude-sonnet-4-20250514");
+	});
+
+	it("shows effort in single result header", () => {
+		const tool = registeredSubagentTool();
+		const rendered = renderToolResult(tool, singleResult(), true, { effort: "medium" });
+		expect(rendered).toContain("[Effort:medium]");
+	});
+
+	it("omits model when undefined", () => {
+		const tool = registeredSubagentTool();
+		const rendered = renderToolResult(tool, singleResult({ model: undefined }), true, { effort: "high" });
+		expect(rendered).not.toContain("claude-sonnet");
+		expect(rendered).toContain("test-agent");
+	});
+
+	it("shows model and effort in parallel expanded headers", () => {
+		const tool = registeredSubagentTool();
+		const args = {
+			tasks: [
+				{ agent: "agent-0", task: "task 0", effort: "low" },
+				{ agent: "agent-1", task: "task 1", effort: "medium" },
+			],
+		};
+		const rendered = renderToolResult(tool, parallelResult(2), true, args);
+		expect(rendered).toContain("claude-sonnet-4-20250514");
+		expect(rendered).toContain("[Effort:low]");
+		expect(rendered).toContain("[Effort:medium]");
+	});
+
+	it("shows model and effort in parallel collapsed headers", () => {
+		const tool = registeredSubagentTool();
+		const args = {
+			tasks: [
+				{ agent: "agent-0", task: "task 0", effort: "high" },
+				{ agent: "agent-1", task: "task 1" },
+			],
+		};
+		const rendered = renderToolResult(tool, parallelResult(2), false, args);
+		expect(rendered).toContain("claude-sonnet-4-20250514");
+		expect(rendered).toContain("[Effort:high]");
+	});
+
+	it("shows model and effort in chain expanded headers", () => {
+		const tool = registeredSubagentTool();
+		const args = {
+			chain: [
+				{ agent: "step-agent-0", task: "step 0", effort: "low" },
+				{ agent: "step-agent-1", task: "step 1", effort: "high" },
+			],
+		};
+		const rendered = renderToolResult(tool, chainResult(2), true, args);
+		expect(rendered).toContain("claude-opus-4-20250514");
+		expect(rendered).toContain("[Effort:low]");
+		expect(rendered).toContain("[Effort:high]");
+	});
+
+	it("shows model and effort in chain collapsed headers", () => {
+		const tool = registeredSubagentTool();
+		const args = {
+			chain: [
+				{ agent: "step-agent-0", task: "step 0", effort: "medium" },
+				{ agent: "step-agent-1", task: "step 1" },
+			],
+		};
+		const rendered = renderToolResult(tool, chainResult(2), false, args);
+		expect(rendered).toContain("claude-opus-4-20250514");
+		expect(rendered).toContain("[Effort:medium]");
+	});
+
+	it("resolves effort against parent level", () => {
+		const tool = registeredSubagentTool();
+		const args = { effort: "xhigh" };
+		const rendered = renderToolResult(tool, singleResult(), true, args);
+		// Parent level is "high" (from mock), xhigh should cap to high
+		expect(rendered).toContain("[Effort:high]");
+	});
+
+	it("shows parent effort when no explicit effort in args", () => {
+		const tool = registeredSubagentTool();
+		const rendered = renderToolResult(tool, singleResult(), false, {});
 		expect(rendered).toContain("[Effort:high]");
 	});
 });
