@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.42.0 — Add effort parameter to subagent tool
+
+The `subagent` tool now accepts an optional `effort` parameter that controls the thinking level of subagent subprocesses. The effort is capped at the main session's current thinking level, so a subagent never thinks harder than its parent. When omitted, the parent's thinking level is inherited. Effort can be specified per-invocation (single mode), per-task (parallel mode), or per-step (chain mode). Closes [#259](https://github.com/LeanAndMean/scramjet/issues/259).
+
+### Added
+
+- `effort` parameter on `subagent` tool (top-level, `tasks[]`, `chain[]`) — one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- `--thinking <level>` is now always passed to subagent subprocesses, making thinking level explicit and deterministic.
+- `promptSnippet` on the subagent tool describing effort usage and capping behavior.
+
+### Changed
+
+- Subagent subprocesses now always receive an explicit `--thinking` CLI arg. Previously, thinking level was inherited implicitly via settings/defaults. Functionally equivalent, but deterministic.
+
 ## 0.41.1 — Make `fresh_session` required in next-step schemas
 
 Makes `fresh_session` a required field in `CommandStatusNextStep` and both tool schemas (`report_scramjet_command_status`, `suggest_scramjet_next_steps`). Previously optional with a `false` default, the agent would silently omit it without considering session context — observed during testing when `suggest_scramjet_next_steps` suggested `/mach12:pr-pre-merge` without `fresh_session: true`, running the command in a stale context window.
