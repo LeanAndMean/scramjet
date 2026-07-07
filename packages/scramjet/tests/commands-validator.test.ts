@@ -158,7 +158,12 @@ describe("validateNextSteps — commandCheck parameter", () => {
 	it("does not apply commandCheck to non-command messages", () => {
 		const open = { mode: "open" as const, candidates: [] };
 		const check = vi.fn(() => "should not be called");
-		const result = validateNextSteps([{ message: "Plain text suggestion", fresh_session: false, reason: "context" }], open, 0, check);
+		const result = validateNextSteps(
+			[{ message: "Plain text suggestion", fresh_session: false, reason: "context" }],
+			open,
+			0,
+			check,
+		);
 		expect(check).not.toHaveBeenCalled();
 		expect(result.valid).toHaveLength(1);
 	});
@@ -360,7 +365,11 @@ describe("validateNextSteps — selector-visible array form", () => {
 	});
 
 	it("rejects non-command messages outside open policies", () => {
-		const result = validateNextSteps([{ message: "Continue in prose", fresh_session: false, reason: "not a command" }], closed, 0);
+		const result = validateNextSteps(
+			[{ message: "Continue in prose", fresh_session: false, reason: "not a command" }],
+			closed,
+			0,
+		);
 		expect(result.valid).toEqual([]);
 		expect(result.skipped[0].reason).toContain("open policies");
 	});

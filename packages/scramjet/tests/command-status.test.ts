@@ -192,7 +192,9 @@ describe("registerCommandStatusTool — gate", () => {
 		const result = await execute({
 			status: "completed",
 			summary: "needs user choice",
-			next_steps: [{ message: "Ask the user which branch to use", fresh_session: false, reason: "No branch was specified" }],
+			next_steps: [
+				{ message: "Ask the user which branch to use", fresh_session: false, reason: "No branch was specified" },
+			],
 			recommended_next_step: 0,
 		});
 

@@ -72,7 +72,7 @@ function readManifest(destDir: string): { version: string; files: Record<string,
 }
 
 function writeManifest(destDir: string, manifest: { version: string; files: Record<string, string> }): void {
-	writeFileSync(join(destDir, MANIFEST_NAME), JSON.stringify(manifest, null, "\t") + "\n");
+	writeFileSync(join(destDir, MANIFEST_NAME), `${JSON.stringify(manifest, null, "\t")}\n`);
 }
 
 describe("scripts/postinstall.js — Mach 12 seeding", () => {
