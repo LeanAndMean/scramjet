@@ -99,7 +99,7 @@ function validateDisplayableStep(
 			index,
 			reason: step.reason,
 			message: step.message,
-			freshSession: step.fresh_session ?? false,
+			freshSession: step.fresh_session,
 			parsedCommand,
 		},
 	};

@@ -53,7 +53,7 @@ describe("registerCommandStatusTool — registration", () => {
 		expect(nextStepSchema.properties.type).toBeUndefined();
 		expect(nextStepSchema.properties.name).toBeUndefined();
 		expect(nextStepSchema.properties.label).toBeUndefined();
-		expect(nextStepSchema.required).toEqual(["message"]);
+		expect(nextStepSchema.required).toEqual(["message", "fresh_session"]);
 	});
 });
 
@@ -173,7 +173,7 @@ describe("registerCommandStatusTool — gate", () => {
 			status: "completed",
 			summary: "stage done",
 			next_steps: [
-				{ message: "/mach12:issue-review" },
+				{ message: "/mach12:issue-review", fresh_session: false },
 				{ message: "/mach12:issue-implement 92 3", fresh_session: true },
 			],
 			recommended_next_step: 1,
@@ -192,13 +192,13 @@ describe("registerCommandStatusTool — gate", () => {
 		const result = await execute({
 			status: "completed",
 			summary: "needs user choice",
-			next_steps: [{ message: "Ask the user which branch to use", reason: "No branch was specified" }],
+			next_steps: [{ message: "Ask the user which branch to use", fresh_session: false, reason: "No branch was specified" }],
 			recommended_next_step: 0,
 		});
 
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.lastReport?.next_steps).toEqual([
-			{ message: "Ask the user which branch to use", reason: "No branch was specified" },
+			{ message: "Ask the user which branch to use", fresh_session: false, reason: "No branch was specified" },
 		]);
 		expect(String(result.content[0].text)).toBe("status: completed");
 	});

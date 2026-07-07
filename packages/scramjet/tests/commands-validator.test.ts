@@ -111,6 +111,7 @@ describe("validateNextSteps — commandCheck parameter", () => {
 
 	const entry = (over: Partial<CommandStatusNextStep>): CommandStatusNextStep => ({
 		message: "/mach12:pr-review-fix",
+		fresh_session: false,
 		reason: "fix review findings",
 		...over,
 	});
@@ -157,7 +158,7 @@ describe("validateNextSteps — commandCheck parameter", () => {
 	it("does not apply commandCheck to non-command messages", () => {
 		const open = { mode: "open" as const, candidates: [] };
 		const check = vi.fn(() => "should not be called");
-		const result = validateNextSteps([{ message: "Plain text suggestion", reason: "context" }], open, 0, check);
+		const result = validateNextSteps([{ message: "Plain text suggestion", fresh_session: false, reason: "context" }], open, 0, check);
 		expect(check).not.toHaveBeenCalled();
 		expect(result.valid).toHaveLength(1);
 	});
@@ -183,6 +184,7 @@ describe("validateNextSteps — same-command-different-args messages", () => {
 
 	const preMerge: CommandStatusNextStep = {
 		message: "/mach12:pr-pre-merge 94",
+		fresh_session: true,
 		reason: "No issues found, proceed to merge",
 	};
 
@@ -241,6 +243,7 @@ describe("validateNextSteps — selector-visible array form", () => {
 
 	const entry = (over: Partial<CommandStatusNextStep>): CommandStatusNextStep => ({
 		message: "/mach12:pr-review-fix",
+		fresh_session: false,
 		reason: "fits this workflow",
 		...over,
 	});
@@ -286,8 +289,8 @@ describe("validateNextSteps — selector-visible array form", () => {
 		expect(result.skipped).toEqual([]);
 	});
 
-	it("defaults freshSession to false when fresh_session is omitted", () => {
-		const result = validateNextSteps([entry({})], closed, 0);
+	it("maps fresh_session false to freshSession false", () => {
+		const result = validateNextSteps([entry({ fresh_session: false })], closed, 0);
 		expect(result.recommended?.freshSession).toBe(false);
 	});
 
@@ -324,6 +327,7 @@ describe("validateNextSteps — selector-visible array form", () => {
 				entry({ message: "/infra:rotate-key", reason: "outside Scramjet but useful" }),
 				{
 					message: "Please summarize the issue.",
+					fresh_session: false,
 					reason: "needs more context",
 				},
 			],
@@ -356,7 +360,7 @@ describe("validateNextSteps — selector-visible array form", () => {
 	});
 
 	it("rejects non-command messages outside open policies", () => {
-		const result = validateNextSteps([{ message: "Continue in prose", reason: "not a command" }], closed, 0);
+		const result = validateNextSteps([{ message: "Continue in prose", fresh_session: false, reason: "not a command" }], closed, 0);
 		expect(result.valid).toEqual([]);
 		expect(result.skipped[0].reason).toContain("open policies");
 	});
@@ -369,7 +373,7 @@ describe("validateNextSteps — selector-visible array form", () => {
 
 	it("rejects missing reason for selector-visible non-command entries", () => {
 		const open = { mode: "open" as const, candidates: [] };
-		const result = validateNextSteps([{ message: "Continue in prose" }], open, 0);
+		const result = validateNextSteps([{ message: "Continue in prose", fresh_session: false }], open, 0);
 		expect(result.valid).toEqual([]);
 		expect(result.skipped[0].reason).toContain("must include reason");
 	});

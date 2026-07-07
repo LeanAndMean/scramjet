@@ -87,7 +87,7 @@ function toNextStep(step: CommandStatusNextStep | undefined): NextStep | undefin
 	if (!step) return undefined;
 	const parsed = parseSlashCommand(step.message);
 	if (!parsed) return undefined;
-	return { name: parsed.name, args: parsed.args, freshSession: step.fresh_session ?? false, reason: step.reason };
+	return { name: parsed.name, args: parsed.args, freshSession: step.fresh_session, reason: step.reason };
 }
 
 function selectorErrorMessage(err: unknown): string {

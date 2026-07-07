@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.41.1 — Make `fresh_session` required in next-step schemas
+
+Makes `fresh_session` a required field in `CommandStatusNextStep` and both tool schemas (`report_scramjet_command_status`, `suggest_scramjet_next_steps`). Previously optional with a `false` default, the agent would silently omit it without considering session context — observed during testing when `suggest_scramjet_next_steps` suggested `/mach12:pr-pre-merge` without `fresh_session: true`, running the command in a stale context window.
+
+### Changed
+
+- `types.ts`: `fresh_session` is now required on `CommandStatusNextStep`.
+- `command-status.ts`: `NEXT_STEP_SCHEMA` field changed from `Type.Optional(Type.Boolean())` to `Type.Boolean()`.
+- `auto-continue.ts`, `commands/validator.ts`: removed `?? false` fallbacks (field is always present).
+
 ## 0.41.0 — Command catalog, agent-initiated suggestions, and manifest-based upgrades
 
 Injects the available top-level command catalog into the system prompt so the agent can discover and suggest commands. Adds a `suggest_scramjet_next_steps` tool for agent-initiated command suggestions via the next-step selector popup (idle-gated, never auto-dispatches). Introduces `delegate-only: true` and `argument-hint` frontmatter fields for command authoring. Adds manifest-based upgrade support to postinstall seeding, preserving user-edited command files across upgrades. Fixes [#248](https://github.com/LeanAndMean/scramjet/issues/248).

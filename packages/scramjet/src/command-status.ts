@@ -80,13 +80,11 @@ export const NEXT_STEP_SCHEMA = Type.Object({
 			"For a slash command, start with '/' and include any arguments, e.g. '/mach12:issue-plan 55'. " +
 			"For a non-command follow-up, write the message text directly.",
 	}),
-	fresh_session: Type.Optional(
-		Type.Boolean({
-			description:
-				"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session'). " +
-				"Only meaningful for slash commands; defaults to false.",
-		}),
-	),
+	fresh_session: Type.Boolean({
+		description:
+			"Whether to start a fresh session first (true if instructions say '/clear then ...' or 'in a fresh session'). " +
+			"Only meaningful for slash commands; defaults to false.",
+	}),
 	reason: Type.Optional(Type.String({ description: "Brief explanation of why this next step fits." })),
 });
 

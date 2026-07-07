@@ -24,8 +24,8 @@ export interface NextStep {
 export interface CommandStatusNextStep {
 	// Displayed in the selector AND dispatched on selection.
 	message: string;
-	// Only meaningful for slash commands; defaults to false.
-	fresh_session?: boolean;
+	// Only meaningful for slash commands.
+	fresh_session: boolean;
 	// Shown as the description underneath the message.
 	reason?: string;
 }
