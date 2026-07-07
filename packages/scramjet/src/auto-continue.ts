@@ -62,6 +62,7 @@ import type {
 	EdgeSetting,
 	NextStep,
 	NextStepPolicy,
+	PendingSuggestion,
 	ScramjetState,
 } from "./types.js";
 
@@ -86,7 +87,7 @@ function toNextStep(step: CommandStatusNextStep | undefined): NextStep | undefin
 	if (!step) return undefined;
 	const parsed = parseSlashCommand(step.message);
 	if (!parsed) return undefined;
-	return { name: parsed.name, args: parsed.args, freshSession: step.fresh_session ?? false, reason: step.reason };
+	return { name: parsed.name, args: parsed.args, freshSession: step.fresh_session, reason: step.reason };
 }
 
 function selectorErrorMessage(err: unknown): string {
@@ -242,6 +243,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		return { name: parsed.name, args: parsed.args, freshSession: option.freshSession, reason: option.reason };
 	}
 
+	function delegateOnlyCheck(name: string): string | null {
+		const def = state.registry.get(name);
+		if (def?.delegateOnly) return `${name} is delegate-only (invoke via delegate, not top-level dispatch)`;
+		return null;
+	}
+
 	function dispatchForced(target: string, handoff: NextStep | undefined, ctx: ExtensionContext): boolean {
 		const command = activeCommandName(state.lifecycle);
 		const def = state.registry.get(target);
@@ -252,6 +259,15 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				detail: { target, reason: "target-not-in-registry" },
 			});
 			ctx.ui.notify(`scramjet: forced target "${target}" not in registry; auto-continue skipped`, "warning");
+			return false;
+		}
+		if (def.delegateOnly) {
+			state.logger.lifecycle("forced dispatch skipped", {
+				phase: lp(state.lifecycle),
+				...(command ? { command } : {}),
+				detail: { target, reason: "target-is-delegate-only" },
+			});
+			ctx.ui.notify(`scramjet: forced target "${target}" is delegate-only; auto-continue skipped`, "warning");
 			return false;
 		}
 
@@ -369,7 +385,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	function showSelector(
 		result: ReturnType<typeof validateNextSteps>,
 		ctx: ExtensionContext,
-		{ forcePause = false }: { forcePause?: boolean } = {},
+		{ forcePause = false, title }: { forcePause?: boolean; title?: string } = {},
 	) {
 		cancelSelector();
 		const selectorId = activeSelectorId;
@@ -395,6 +411,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				: ctx.modelRegistry.getAvailable();
 		const initialModel = ctx.model;
 		void selectNextStep(ctx, {
+			title,
 			options: result.valid,
 			recommended: result.recommended,
 			autoSelect,
@@ -582,7 +599,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step);
+		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step, delegateOnlyCheck);
 		if (!result.valid.length) {
 			state.logger.lifecycle("next-step dispatch skipped", {
 				phase: lp(state.lifecycle),
@@ -703,6 +720,85 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				});
 				ctx.ui.notify(
 					`scramjet: next-step dispatch failed (${(err as Error).message}); auto-continue paused`,
+					"warning",
+				);
+			}
+		}, 0);
+	}
+
+	function scheduleSuggestionDispatch(suggestion: PendingSuggestion, ctx: ExtensionContext) {
+		clearDispatchTimer("suggestion-reschedule");
+		const dispatchGeneration = state.lifecycleGeneration;
+		// Object identity is load-bearing: generation alone cannot detect a same-generation
+		// re-store (last-write-wins within one run), so we check both.
+		const capturedSuggestion = suggestion;
+		state.logger.lifecycle("suggestion dispatch scheduled", {
+			phase: lp(state.lifecycle),
+			detail: {
+				stepCount: suggestion.steps.length,
+				recommendedIndex: suggestion.recommendedIndex,
+				generation: dispatchGeneration,
+			},
+		});
+		dispatchTimer = setTimeout(() => {
+			dispatchTimer = null;
+			if (
+				state.lifecycleGeneration !== dispatchGeneration ||
+				activeCommandName(state.lifecycle) !== null ||
+				state.pendingSuggestion !== capturedSuggestion
+			) {
+				state.logger.lifecycle("suggestion dispatch timer stale", {
+					phase: lp(state.lifecycle),
+					detail: {
+						scheduledGeneration: dispatchGeneration,
+						currentGeneration: state.lifecycleGeneration,
+						activeCommand: activeCommandName(state.lifecycle),
+						identityMatch: state.pendingSuggestion === capturedSuggestion,
+					},
+				});
+				return;
+			}
+			// Consume and clear
+			const consumed = state.pendingSuggestion;
+			state.pendingSuggestion = null;
+			if (!consumed) return;
+
+			if (!ctx.hasUI) {
+				state.logger.lifecycle("suggestion dispatch dropped", {
+					phase: lp(state.lifecycle),
+					detail: { reason: "no-ui" },
+				});
+				return;
+			}
+
+			// Re-validate against current registry (may have been reassigned)
+			const openPolicy = { mode: "open" as const, candidates: [] };
+			const result = validateNextSteps(consumed.steps, openPolicy, consumed.recommendedIndex, delegateOnlyCheck);
+			if (!result.valid.length) {
+				state.logger.lifecycle("suggestion dispatch dropped", {
+					phase: lp(state.lifecycle),
+					detail: { reason: result.reason ?? "no-valid-options" },
+				});
+				return;
+			}
+
+			state.logger.lifecycle("suggestion dispatch fired", {
+				phase: lp(state.lifecycle),
+				detail: {
+					validCount: result.valid.length,
+					recommended: result.recommended?.message,
+				},
+			});
+
+			try {
+				showSelector(result, ctx, { forcePause: true, title: "Agent suggests a next step" });
+			} catch (err) {
+				state.logger.lifecycle("suggestion dispatch failed", {
+					phase: lp(state.lifecycle),
+					detail: { error: (err as Error).message },
+				});
+				ctx.ui.notify(
+					`scramjet: suggestion selector failed (${(err as Error).message}); suggestion dropped`,
 					"warning",
 				);
 			}
@@ -832,11 +928,70 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		// Parked for input, dormant, or idle — no action
-		if (isParkedForInput(state.lifecycle) || isDormant(state.lifecycle) || activeName === null) {
+		// Parked for input or dormant — no action
+		if (isParkedForInput(state.lifecycle) || isDormant(state.lifecycle)) {
 			state.logger.lifecycle("agent_end skipped", {
 				phase: lp(state.lifecycle),
 				...(activeName ? { command: activeName } : {}),
+				detail: { reason: "inactive-lifecycle" },
+			});
+			return;
+		}
+
+		// Idle with a pending suggestion — schedule the deferred selector
+		if (activeName === null && state.pendingSuggestion) {
+			// Own stopReason filtering (existing aborted/error guards are activeName-gated)
+			if (stopReason === "aborted") {
+				state.pendingSuggestion = null;
+				state.logger.lifecycle("suggestion dropped", {
+					phase: lp(state.lifecycle),
+					detail: { reason: "aborted" },
+				});
+				return;
+			}
+			if (stopReason === "error") {
+				state.logger.lifecycle("suggestion retained", {
+					phase: lp(state.lifecycle),
+					detail: { reason: "error-retry" },
+				});
+				return;
+			}
+			if (state.pendingSuggestion.generation !== state.lifecycleGeneration) {
+				state.logger.lifecycle("suggestion dropped", {
+					phase: lp(state.lifecycle),
+					detail: {
+						reason: "stale-generation",
+						storedGeneration: state.pendingSuggestion.generation,
+						currentGeneration: state.lifecycleGeneration,
+					},
+				});
+				state.pendingSuggestion = null;
+				return;
+			}
+			if (!ctx.hasUI) {
+				state.logger.lifecycle("suggestion dropped", {
+					phase: lp(state.lifecycle),
+					detail: { reason: "no-ui" },
+				});
+				state.pendingSuggestion = null;
+				return;
+			}
+			if (state.freetextAwaitingReply) {
+				state.logger.lifecycle("suggestion dropped", {
+					phase: lp(state.lifecycle),
+					detail: { reason: "freetext-awaiting-reply" },
+				});
+				state.pendingSuggestion = null;
+				return;
+			}
+			scheduleSuggestionDispatch(state.pendingSuggestion, ctx);
+			return;
+		}
+
+		// Idle with no suggestion — no action
+		if (activeName === null) {
+			state.logger.lifecycle("agent_end skipped", {
+				phase: lp(state.lifecycle),
 				detail: { reason: "inactive-lifecycle" },
 			});
 			return;
@@ -847,9 +1002,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		const wasProbing = isProbeInFlight(state.lifecycle);
 		state.clearLifecycleTimers?.("session-compact");
 		if (wasProbing && isProbeInFlight(state.lifecycle)) enterDormant(state, "session-compact");
+		state.pendingSuggestion = null;
+		state.freetextAwaitingReply = false;
 	});
 
 	pi.on("session_shutdown", async () => {
 		state.clearLifecycleTimers?.("session-shutdown");
+		state.pendingSuggestion = null;
+		state.freetextAwaitingReply = false;
 	});
 }

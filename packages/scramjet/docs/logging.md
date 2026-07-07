@@ -135,6 +135,28 @@ For no-policy commands (`policyMode: "none"` in log details), steps 13–15 are 
 **Lifecycle gate rejection** (tool called out of valid state):
 - `"status report rejected"` with `data.reason` and `data.phase`
 
+### Suggestion lifecycle (suggest_scramjet_next_steps)
+
+**Happy path** (agent suggests, user accepts):
+1. `"suggestion stored"` — tool accepted, payload stored in `state.pendingSuggestion`
+2. `"agent_end observed"` — idle turn ends, suggestion detected
+3. `"suggestion dispatch scheduled"` — deferred dispatch timer set
+4. `"suggestion dispatch fired"` — timer fired, re-validated, selector shown
+5. `"next-step selector shown"` — selector displayed with `forcePause: true`
+6. `"next step dispatching"` or `"next step pasted"` — user accepted via Enter
+
+**Rejection at tool time:**
+- `"suggestion rejected"` with `data.reason` (`command-active`, or descriptive validation failure text from `validateNextSteps`) and `data.phase`
+
+**Drop at drain time:**
+- `"suggestion dropped"` with `data.reason`: `aborted` (user cancelled the run), `stale-generation`, `no-ui`, `freetext-awaiting-reply`
+- `"suggestion dispatch dropped"` — timer fired but validation failed or UI unavailable
+- `"suggestion dispatch timer stale"` — generation or identity mismatch at timer fire
+- `"suggestion dispatch failed"` — `showSelector` threw during deferred dispatch
+
+**Retention on error:**
+- `"suggestion retained"` with `data.reason: "error-retry"` — error stop keeps suggestion for retry
+
 ## Diagnostic workflow
 
 When a session misbehaves (command didn't chain, probe didn't fire, unexpected pause):

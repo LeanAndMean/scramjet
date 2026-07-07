@@ -151,6 +151,75 @@ Body text.`;
 		if (!result.ok) return;
 		expect(result.def.description).toBeUndefined();
 	});
+
+	it("parses argument-hint into argumentHint", () => {
+		const content = "---\nargument-hint: '<issue-number> [context]'\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:cmd.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.argumentHint).toBe("<issue-number> [context]");
+	});
+
+	it("trims whitespace from argument-hint", () => {
+		const content = "---\nargument-hint: '  <arg>  '\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:cmd.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.argumentHint).toBe("<arg>");
+	});
+
+	it("ignores non-string argument-hint", () => {
+		const content = "---\nargument-hint: 42\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:cmd.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.argumentHint).toBeUndefined();
+	});
+
+	it("ignores empty-string argument-hint", () => {
+		const content = "---\nargument-hint: ''\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:cmd.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.argumentHint).toBeUndefined();
+	});
+
+	it("parses delegate-only: true into delegateOnly", () => {
+		const content = "---\ndelegate-only: true\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:sub.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.delegateOnly).toBe(true);
+	});
+
+	it("leaves delegateOnly undefined when delegate-only is absent", () => {
+		const content = "---\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:cmd.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.delegateOnly).toBeUndefined();
+	});
+
+	it("treats non-boolean delegate-only as absent with a warning", () => {
+		const content = "---\ndelegate-only: 'yes'\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:sub.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.delegateOnly).toBeUndefined();
+		expect(result.warnings).toBeDefined();
+		expect(result.warnings![0]).toContain("delegate-only");
+		expect(result.warnings![0]).toContain("yes");
+	});
+
+	it("treats delegate-only: false as absent with a warning", () => {
+		const content = "---\ndelegate-only: false\n---\nBody.";
+		const result = parseCommandFile("/abs/mach12:cmd.md", content, SET);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.delegateOnly).toBeUndefined();
+		expect(result.warnings).toBeDefined();
+		expect(result.warnings![0]).toContain("delegate-only");
+	});
 });
 
 describe("buildRegistry — collision and skip semantics", () => {

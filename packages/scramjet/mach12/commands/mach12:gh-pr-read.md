@@ -1,6 +1,7 @@
 ---
 description: Read a GitHub pull request's title, body, and all comments; optionally locate an HTML-marker comment
 argument-hint: "<pr-number> [--marker <html-marker>]"
+delegate-only: true
 allowed-tools:
   - bash
 ---

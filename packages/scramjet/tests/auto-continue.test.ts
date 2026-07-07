@@ -812,6 +812,25 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0].message).toContain("b:missing");
 		});
 
+		it("warns and does not dispatch when the forced target is delegate-only", async () => {
+			const delegateOnlyDef: CommandDef = {
+				name: "b:target",
+				filePath: "/fake/b:target.md",
+				body: "subroutine",
+				delegateOnly: true,
+			};
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(delegateOnlyDef) });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "completed", summary: "done" });
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(activeCommandName(state.lifecycle)).toBeNull();
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("delegate-only");
+		});
+
 		it("clears pending forced origin and warns if dispatch rejects", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
 			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
@@ -984,6 +1003,33 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("not in closed candidates");
+		});
+
+		it("skips delegate-only next_steps entries via commandCheck", async () => {
+			const delegateOnlyDef: CommandDef = {
+				name: "b:sub",
+				filePath: "/fake/b:sub.md",
+				body: "",
+				delegateOnly: true,
+			};
+			const okDef = defWithPolicy("b:ok", undefined);
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:sub" }, { name: "b:ok" }] });
+			const state = runningState(def, { enabled: true, registry: registryWith(delegateOnlyDef, okDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "done",
+				next_steps: [
+					{ message: "/b:sub", reason: "delegate target" },
+					{ message: "/b:ok", reason: "valid target" },
+				],
+				recommended_next_step: 1,
+			});
+
+			expect(ctxBag.dispatched).toHaveLength(1);
+			expect(ctxBag.dispatched[0].input).toBe("/b:ok");
+			expect(ctxBag.notifications.some((n: any) => n.message.includes("delegate-only"))).toBe(true);
 		});
 
 		it("user selection before countdown overrides the recommendation", async () => {
@@ -3136,5 +3182,334 @@ describe("scoped model list at next-step dispatch", () => {
 
 		expect(bag.pi.setModelCalls).toHaveLength(1);
 		expect(bag.pi.setModelCalls[0].model).toBe(modelC);
+	});
+});
+
+describe("suggestion drain (idle branch)", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	function idleWithSuggestion(
+		steps: Array<{ message: string; reason?: string; fresh_session?: boolean }>,
+		opts: { recommendedIndex?: number; enabled?: boolean; hasUI?: boolean; freetextAwaitingReply?: boolean } = {},
+	) {
+		const state = freshState({
+			enabled: opts.enabled ?? true,
+			lifecycle: lifecycleFor("idle"),
+			pendingSuggestion: {
+				steps,
+				recommendedIndex: opts.recommendedIndex,
+				generation: 0,
+			},
+			freetextAwaitingReply: opts.freetextAwaitingReply ?? false,
+		});
+		const bag = recordingPi();
+		state.logger = createLogger(bag.pi);
+		const ctxBag = fakeCtx({ hasUI: opts.hasUI ?? true, isStreaming: () => bag.pi.isStreaming });
+		registerAutoContinue(bag.pi, state);
+		registerHistory(bag.pi, state);
+		return { state, bag, ctxBag };
+	}
+
+	async function flushDrain() {
+		await vi.advanceTimersByTimeAsync(0);
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+	}
+
+	it("shows the selector with custom title and no countdown despite enabled=true", async () => {
+		const { bag, ctxBag } = idleWithSuggestion(
+			[{ message: "/mach12:pr-review 248", reason: "PR ready for review" }],
+			{ recommendedIndex: 0, enabled: true },
+		);
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("Agent suggests a next step");
+		expect(rendered).toContain("/mach12:pr-review 248");
+		// No auto-select countdown even though enabled=true (forcePause)
+		expect(rendered).not.toContain("auto-selects");
+	});
+
+	it("Enter dispatches the selected command via dispatchUserInput", async () => {
+		const { bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review 248", reason: "review" }], {
+			recommendedIndex: 0,
+		});
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushDrain();
+
+		expect(ctxBag.dispatched).toEqual([
+			{ input: "/mach12:pr-review 248", options: { deliverAs: "followUp" }, session: "current" },
+		]);
+	});
+
+	it("Escape is a silent no-op (nothing dispatched, nothing journaled, no state left)", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review 248", reason: "review" }], {
+			recommendedIndex: 0,
+		});
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		const ESCAPE = String.fromCharCode(27);
+		ctxBag.customComponents[0].handleInput(ESCAPE);
+		await vi.advanceTimersByTimeAsync(10000);
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(ctxBag.dispatched).toEqual([]);
+		expect(ctxBag.notifications).toEqual([]);
+		expect(state.pendingSuggestion).toBeNull();
+	});
+
+	it("non-command entry pastes to the editor", async () => {
+		const { bag, ctxBag } = idleWithSuggestion(
+			[{ message: "Please continue in prose.", reason: "best handled as text" }],
+			{ recommendedIndex: 0 },
+		);
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushDrain();
+
+		expect(ctxBag.pasted).toEqual(["Please continue in prose."]);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("aborted idle run drops the pending suggestion", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review", reason: "review" }], {
+			recommendedIndex: 0,
+		});
+
+		await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+		await flushDrain();
+
+		expect(state.pendingSuggestion).toBeNull();
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("error retains the suggestion and dispatches on the next clean agent_end", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review", reason: "review" }], {
+			recommendedIndex: 0,
+		});
+
+		// First agent_end: error → retain
+		await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, ctxBag.ctx);
+		await flushDrain();
+
+		expect(state.pendingSuggestion).not.toBeNull();
+		expect(ctxBag.customComponents).toHaveLength(0);
+
+		// Second agent_end: clean → dispatches
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		expect(ctxBag.customComponents).toHaveLength(1);
+		expect(state.pendingSuggestion).toBeNull();
+	});
+
+	it("error retains then user input clears and never dispatches", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review", reason: "review" }], {
+			recommendedIndex: 0,
+		});
+
+		// error → retain
+		await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, ctxBag.ctx);
+		expect(state.pendingSuggestion).not.toBeNull();
+
+		// User input clears the suggestion
+		await bag.emit("input", { text: "something else", source: "interactive" }, ctxBag.ctx);
+		expect(state.pendingSuggestion).toBeNull();
+
+		// Next clean agent_end has nothing to dispatch
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("stale generation drops the suggestion", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review", reason: "review" }], {
+			recommendedIndex: 0,
+		});
+
+		// Bump generation to make the suggestion stale
+		state.lifecycleGeneration++;
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		expect(state.pendingSuggestion).toBeNull();
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("object-identity re-store race: exactly one popup with latest payload", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/first:cmd", reason: "original" }], {
+			recommendedIndex: 0,
+		});
+
+		// First agent_end schedules the dispatch
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+
+		// Before the tick fires, re-store a different suggestion (same generation)
+		const newSuggestion = {
+			steps: [{ message: "/second:cmd", reason: "latest" }],
+			recommendedIndex: 0,
+			generation: 0,
+		};
+		state.pendingSuggestion = newSuggestion;
+
+		// First tick fires but sees identity mismatch → stale
+		await flushDrain();
+		// No popup from first suggestion
+		expect(ctxBag.customComponents).toHaveLength(0);
+
+		// Second agent_end picks up the new suggestion
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		// Exactly one popup with the latest payload
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("/second:cmd");
+		expect(rendered).not.toContain("/first:cmd");
+	});
+
+	it("hasUI drop guard: no-UI drops the suggestion at the drain tick", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review", reason: "review" }], {
+			recommendedIndex: 0,
+			hasUI: false,
+		});
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		expect(state.pendingSuggestion).toBeNull();
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("freetext co-occurrence drops the suggestion", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review", reason: "review" }], {
+			recommendedIndex: 0,
+			freetextAwaitingReply: true,
+		});
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		expect(state.pendingSuggestion).toBeNull();
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("enabled=false still shows the selector (suggestions are flag-independent)", async () => {
+		const { bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review 248", reason: "review" }], {
+			recommendedIndex: 0,
+			enabled: false,
+		});
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await flushDrain();
+
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("/mach12:pr-review 248");
+		expect(rendered).toContain("Agent suggests a next step");
+		// No countdown even though recommended (forcePause)
+		expect(rendered).not.toContain("auto-selects");
+	});
+
+	it("model-cycling path uses the custom title from suggestions", async () => {
+		const modelA = { provider: "anthropic", id: "claude-opus-4", name: "Claude Opus 4" };
+		const modelB = { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" };
+		const state = freshState({
+			enabled: true,
+			lifecycle: lifecycleFor("idle"),
+			pendingSuggestion: {
+				steps: [{ message: "/mach12:pr-review 248", reason: "review" }],
+				recommendedIndex: 0,
+				generation: 0,
+			},
+		});
+		const bag = recordingPi();
+		state.logger = createLogger(bag.pi);
+		const ctxBag = fakeCtx({
+			hasUI: true,
+			isStreaming: () => bag.pi.isStreaming,
+			models: [modelA, modelB],
+			model: modelA,
+			scopedModels: [],
+		});
+		registerAutoContinue(bag.pi, state);
+		registerHistory(bag.pi, state);
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("Agent suggests a next step");
+		expect(rendered).not.toContain("Select next step");
+	});
+
+	it("plain-path uses 'Select next step' as default title for completed commands", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("Select next step");
+		expect(rendered).not.toContain("Agent suggests");
 	});
 });

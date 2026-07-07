@@ -26,6 +26,7 @@ export interface NextStepSelection {
 }
 
 export interface NextStepSelectorOptions {
+	title?: string;
 	options: ValidatedNextStep[];
 	recommended: ValidatedNextStep | null;
 	autoSelect?: ValidatedNextStep;
@@ -170,13 +171,22 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 
 export function selectNextStep(
 	ctx: ExtensionContext,
-	{ options, recommended, autoSelect, countdownSeconds = 0, signal, models, initialModel }: NextStepSelectorOptions,
+	{
+		title = "Select next step",
+		options,
+		recommended,
+		autoSelect,
+		countdownSeconds = 0,
+		signal,
+		models,
+		initialModel,
+	}: NextStepSelectorOptions,
 ): Promise<NextStepSelection | null> {
 	const enableModelCycling = models && models.length > 1 && initialModel;
 
 	if (!enableModelCycling) {
 		const p = selectScramjetChoice(ctx, {
-			title: "Select next step",
+			title,
 			options,
 			recommended,
 			getTitle: optionTitle,
@@ -287,7 +297,7 @@ export function selectNextStep(
 						? `←→ model • ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in ${remaining}s`
 						: "←→ model • ↑↓ navigate • enter select • esc cancel";
 					return [
-						theme.fg("accent", theme.bold("Select next step")),
+						theme.fg("accent", theme.bold(title)),
 						...selectList.render(width),
 						modelLine,
 						theme.fg("dim", footer),

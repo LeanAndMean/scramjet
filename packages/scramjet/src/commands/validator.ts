@@ -78,6 +78,7 @@ function validateDisplayableStep(
 	step: CommandStatusNextStep,
 	policy: DecidedPolicy,
 	index: number,
+	commandCheck?: (name: string) => string | null,
 ): { valid: true; option: ValidatedNextStep } | { valid: false; reason: string } {
 	const parsedCommand = parseSlashCommand(step.message);
 	if (!parsedCommand && policy.mode !== "open") {
@@ -86,6 +87,10 @@ function validateDisplayableStep(
 	if (parsedCommand) {
 		const result = validateNextStep(parsedCommand.name, policy);
 		if (!result.valid) return result;
+		if (commandCheck) {
+			const checkResult = commandCheck(parsedCommand.name);
+			if (checkResult !== null) return { valid: false, reason: checkResult };
+		}
 	}
 	if (!hasReason(step)) return { valid: false, reason: "selector-visible next steps must include reason" };
 	return {
@@ -94,7 +99,7 @@ function validateDisplayableStep(
 			index,
 			reason: step.reason,
 			message: step.message,
-			freshSession: step.fresh_session ?? false,
+			freshSession: step.fresh_session,
 			parsedCommand,
 		},
 	};
@@ -104,13 +109,14 @@ export function validateNextSteps(
 	steps: readonly CommandStatusNextStep[] | undefined,
 	policy: DecidedPolicy,
 	recommendedIndex?: number,
+	commandCheck?: (name: string) => string | null,
 ): NextStepsValidation {
 	const valid: ValidatedNextStep[] = [];
 	const skipped: SkippedNextStep[] = [];
 	let firstReason: string | undefined;
 
 	for (const [index, step] of (steps ?? []).entries()) {
-		const result = validateDisplayableStep(step, policy, index);
+		const result = validateDisplayableStep(step, policy, index, commandCheck);
 		if (result.valid) {
 			valid.push(result.option);
 			continue;

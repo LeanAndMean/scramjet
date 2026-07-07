@@ -237,9 +237,13 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	// intended single-turn scope. (F18)
 	pi.on("before_agent_start", async () => {
 		state.pendingForcedDispatch = null;
+		state.pendingSuggestion = null;
+		state.freetextAwaitingReply = false;
 	});
 
 	pi.on("input", async (event) => {
+		state.pendingSuggestion = null;
+		state.freetextAwaitingReply = false;
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
 			// Resume a parked command on an interactive non-slash reply. Only

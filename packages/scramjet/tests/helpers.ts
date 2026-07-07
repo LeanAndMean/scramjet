@@ -21,6 +21,8 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		rearmProbeWatchdog: undefined,
 		autonomyConfigPath: "/tmp/scramjet-test/autonomy.yaml",
 		subdirLoadedPaths: new Set<string>(),
+		pendingSuggestion: null,
+		freetextAwaitingReply: false,
 		logger: createLogger({ appendEntry() {} } as any),
 		...overrides,
 	};

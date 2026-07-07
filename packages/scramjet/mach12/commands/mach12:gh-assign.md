@@ -1,6 +1,7 @@
 ---
 description: Assign the current user to one or more GitHub issues, handling existing assignees
 argument-hint: "<issue-number> [<issue-number> ...]"
+delegate-only: true
 allowed-tools:
   - bash
 ---

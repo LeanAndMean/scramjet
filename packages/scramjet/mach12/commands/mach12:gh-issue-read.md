@@ -1,6 +1,7 @@
 ---
 description: Read a GitHub issue's title, body, and all comments; optionally locate an HTML-marker comment
 argument-hint: "<issue-number> [--marker <html-marker>]"
+delegate-only: true
 allowed-tools:
   - bash
 ---

@@ -681,17 +681,18 @@ describe("registerUserInputTool — freetext interaction", () => {
 });
 
 describe("registerUserInputTool — idle phase behavior", () => {
-	it("freetext when idle: returns parked, lifecycle unmutated, no parked entry", async () => {
+	it("freetext when idle: returns parked:false, lifecycle unmutated, no parked entry", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("idle") });
 		const { execute, pi } = toolFor(state);
 		const result = await execute({ type: "freetext", message: "Title?" });
 
 		const parsed = JSON.parse(result.content[0].text);
-		expect(parsed).toEqual({ parked: true });
+		expect(parsed).toEqual({ parked: false });
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.activeCommand).toBeNull();
 		expect(state.lifecycle.probeArmed).toBe(false);
 		expect(state.lifecycle.parkedForInput).toBe(false);
+		expect(state.freetextAwaitingReply).toBe(false);
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE)).toHaveLength(0);
 	});
 

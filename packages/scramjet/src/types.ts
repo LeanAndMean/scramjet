@@ -24,8 +24,8 @@ export interface NextStep {
 export interface CommandStatusNextStep {
 	// Displayed in the selector AND dispatched on selection.
 	message: string;
-	// Only meaningful for slash commands; defaults to false.
-	fresh_session?: boolean;
+	// Only meaningful for slash commands.
+	fresh_session: boolean;
 	// Shown as the description underneath the message.
 	reason?: string;
 }
@@ -61,6 +61,8 @@ export interface CommandDef {
 	filePath: string;
 	body: string;
 	description?: string;
+	argumentHint?: string;
+	delegateOnly?: true;
 	allowedTools?: string[];
 	next?: NextStepPolicy;
 }
@@ -106,6 +108,12 @@ export interface ModelRecord {
 	fromTurnIndex: number;
 }
 
+export interface PendingSuggestion {
+	steps: [CommandStatusNextStep, ...CommandStatusNextStep[]];
+	recommendedIndex?: number;
+	generation: number;
+}
+
 // Exposed for test observability of closure-local timer state in auto-continue.ts.
 export interface LifecycleTimerAccessors {
 	isProbeScheduled(): boolean;
@@ -149,4 +157,6 @@ export interface ScramjetState extends LifecycleHolder {
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
 	subdirLoadedPaths: Set<string>;
+	pendingSuggestion: PendingSuggestion | null;
+	freetextAwaitingReply: boolean;
 }

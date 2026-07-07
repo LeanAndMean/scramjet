@@ -78,7 +78,7 @@ jobs:
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary
-        # XDG_DATA_HOME and verify it seeds mach12/ idempotently.
+        # XDG_DATA_HOME and verify it seeds mach12/ with manifest.
         run: |
           set -euo pipefail
           TMP=$(mktemp -d)
@@ -86,7 +86,8 @@ jobs:
           test -d "$TMP/scramjet/mach12/commands"
           test -d "$TMP/scramjet/mach12/agents"
           test -f "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
-          # Second run: idempotent (no-op, preserves user edits).
+          test -f "$TMP/scramjet/mach12/.seed-manifest.json"
+          # Second run: same-version short-circuit preserves user edits.
           echo "user edit" > "$TMP/scramjet/mach12/USER-MARKER"
           XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
           test -f "$TMP/scramjet/mach12/USER-MARKER"

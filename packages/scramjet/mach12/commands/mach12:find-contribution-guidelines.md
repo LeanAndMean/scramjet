@@ -1,5 +1,6 @@
 ---
 description: Locate and surface the project's contribution guidelines for planning context
+delegate-only: true
 allowed-tools:
   - bash
   - read
