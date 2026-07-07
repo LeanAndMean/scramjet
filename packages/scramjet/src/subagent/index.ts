@@ -498,7 +498,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 		].join(" "),
 		parameters: SubagentParams,
 		promptSnippet:
-			"effort: optional thinking level (off/minimal/low/medium/high/xhigh). Use lower effort for simple lookups, higher for complex analysis. Capped at your current session level.",
+			"effort: optional thinking level (off/minimal/low/medium/high/xhigh). Guidance: low for exploration and information gathering; medium for structured review and analysis; high for architecture, design, assessment, and code tracing tasks requiring judgment; xhigh for complex multi-constraint planning or deep root-cause analysis. Capped at your current session level.",
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
