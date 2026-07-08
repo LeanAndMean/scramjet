@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { AgentToolUpdateCallback, ThinkingLevel } from "@leanandmean/agent";
 import type { Message } from "@leanandmean/ai";
 import { StringEnum } from "@leanandmean/ai";
-import { type ExtensionAPI, getMarkdownTheme, withFileMutationQueue } from "@leanandmean/coding-agent";
+import { type ExtensionAPI, getMarkdownTheme, type ThemeColor, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
@@ -487,6 +487,27 @@ const SubagentParams = Type.Object({
 });
 
 export function registerSubagentTool(pi: ExtensionAPI) {
+	const getParentLevel = (): ThinkingLevel | undefined => {
+		try {
+			return pi.getThinkingLevel();
+		} catch {
+			return undefined;
+		}
+	};
+
+	const formatEffortTag = (
+		explicit: string | undefined,
+		parentLevel: ThinkingLevel | undefined,
+		theme: { fg: (color: ThemeColor, text: string) => string },
+	): string => {
+		const level = explicit
+			? parentLevel
+				? capThinkingLevel(explicit as ThinkingLevel, parentLevel)
+				: explicit
+			: parentLevel;
+		return level ? ` ${theme.fg("muted", `[Effort:${level}]`)}` : "";
+	};
+
 	pi.registerTool<typeof SubagentParams, SubagentDetails>({
 		name: "subagent",
 		label: "Subagent",
@@ -742,23 +763,24 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 		renderCall(args, theme, _context) {
 			const scope: AgentScope = args.agentScope ?? "user";
+			const parentLevel = getParentLevel();
+			const effortTag = (explicit: string | undefined) => formatEffortTag(explicit, parentLevel, theme);
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `chain (${args.chain.length} steps)`) +
 					theme.fg("muted", ` [${scope}]`);
-				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
+				for (let i = 0; i < args.chain.length; i++) {
 					const step = args.chain[i];
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
-					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 					text +=
 						"\n  " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
 						theme.fg("accent", step.agent) +
-						theme.fg("dim", ` ${preview}`);
+						effortTag(step.effort) +
+						theme.fg("dim", ` ${cleanTask}`);
 				}
-				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
@@ -766,29 +788,34 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`);
-				for (const t of args.tasks.slice(0, 3)) {
-					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+				for (const t of args.tasks) {
+					text += `\n  ${theme.fg("accent", t.agent)}${effortTag(t.effort)}${theme.fg("dim", ` ${t.task}`)}`;
 				}
-				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			const agentName = args.agent || "...";
-			const preview = args.task ? (args.task.length > 60 ? `${args.task.slice(0, 60)}...` : args.task) : "...";
+			const taskText = args.task || "...";
 			let text =
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
+				effortTag(args.effort) +
 				theme.fg("muted", ` [${scope}]`);
-			text += `\n  ${theme.fg("dim", preview)}`;
+			text += `\n  ${theme.fg("dim", taskText)}`;
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { expanded }, theme, _context) {
+		renderResult(result, { expanded }, theme, context) {
 			const details = result.details;
 			if (!details || details.results.length === 0) {
 				const text = result.content[0];
 				return new Text(text?.type === "text" ? text.text : "(no output)", 0, 0);
 			}
+
+			const parentLevel = getParentLevel();
+			const effortTag = (explicit: string | undefined) => formatEffortTag(explicit, parentLevel, theme);
+			const modelTag = (model: string | undefined): string => {
+				return model ? ` ${theme.fg("dim", model)}` : "";
+			};
 
 			const mdTheme = getMarkdownTheme();
 
@@ -814,10 +841,11 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
+				const singleEffort = context.args?.effort;
 
 				if (expanded) {
 					const container = new Container();
-					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+					let header = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${modelTag(r.model)}${effortTag(singleEffort)}`;
 					if (isError && r.stopReason) header += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 					container.addChild(new Text(header, 0, 0));
 					if (isError && r.errorMessage)
@@ -853,7 +881,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					return container;
 				}
 
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${modelTag(r.model)}${effortTag(singleEffort)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (isError && r.stderr) text += `\n${theme.fg("error", r.stderr.trim())}`;
@@ -884,15 +912,17 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 						),
 					);
 
-					for (const r of details.results) {
+					for (let i = 0; i < details.results.length; i++) {
+						const r = details.results[i];
 						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
+						const stepEffort = context.args?.chain?.[i]?.effort;
 
 						container.addChild(new Spacer(1));
 						container.addChild(
 							new Text(
-								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}`,
+								`${theme.fg("muted", `─── Step ${r.step}: `) + theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(stepEffort)}`,
 								0,
 								0,
 							),
@@ -936,11 +966,13 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					" " +
 					theme.fg("toolTitle", theme.bold("chain ")) +
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
-				for (const r of details.results) {
+				for (let i = 0; i < details.results.length; i++) {
+					const r = details.results[i];
 					const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					const isError = isResultError(r);
-					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
+					const stepEffort = context.args?.chain?.[i]?.effort;
+					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(stepEffort)}`;
 					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
 					else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
@@ -977,14 +1009,20 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 						),
 					);
 
-					for (const r of details.results) {
+					for (let i = 0; i < details.results.length; i++) {
+						const r = details.results[i];
 						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
+						const taskEffort = context.args?.tasks?.[i]?.effort;
 
 						container.addChild(new Spacer(1));
 						container.addChild(
-							new Text(`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}`, 0, 0),
+							new Text(
+								`${theme.fg("muted", "─── ") + theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(taskEffort)}`,
+								0,
+								0,
+							),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 
@@ -1021,7 +1059,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				}
 
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
-				for (const r of details.results) {
+				for (let i = 0; i < details.results.length; i++) {
+					const r = details.results[i];
 					const rIcon =
 						r.exitCode === EXIT_CODE_RUNNING
 							? theme.fg("warning", "⏳")
@@ -1030,7 +1069,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					const isError = isResultError(r);
-					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+					const taskEffort = context.args?.tasks?.[i]?.effort;
+					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(taskEffort)}`;
 					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
 					else if (displayItems.length === 0) {
 						const output = r.exitCode === EXIT_CODE_RUNNING ? "(running...)" : "(no output)";

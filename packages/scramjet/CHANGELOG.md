@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.42.1 — Improve subagent TUI display
+
+The subagent tool's TUI rendering now shows all tasks (no truncation), displays effort level per agent, shows the model name in result headers, and renders full task descriptions without character limits. Closes [#262](https://github.com/LeanAndMean/scramjet/issues/262).
+
+### Changed
+
+- `renderCall`: removed 3-item cap and `... +N more` overflow for parallel/chain modes — all tasks now listed.
+- `renderCall`: removed 40/60-character task text truncation — full text rendered, `Text` component handles word-wrap.
+- `renderCall`: added `[Effort:<level>]` per agent in all three modes (single/parallel/chain), resolved via `capThinkingLevel`.
+- `renderResult`: added model name and `[Effort:<level>]` to all 6 per-agent header sites (single/chain/parallel, expanded/collapsed).
+- Example extension (`packages/coding-agent/examples/extensions/subagent/index.ts`): synced truncation removal and model display.
+
 ## 0.42.0 — Add effort parameter to subagent tool
 
 The `subagent` tool now accepts an optional `effort` parameter that controls the thinking level of subagent subprocesses. The effort is capped at the main session's current thinking level, so a subagent never thinks harder than its parent. When omitted, the parent's thinking level is inherited. Effort can be specified per-invocation (single mode), per-task (parallel mode), or per-step (chain mode). Closes [#259](https://github.com/LeanAndMean/scramjet/issues/259).
