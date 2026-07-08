@@ -303,6 +303,7 @@ export class Editor implements Component, Focusable {
 
 	// Spellcheck provider
 	private spellcheckProvider?: SpellcheckProvider;
+	private lastSpellcheckLines?: string[];
 
 	// Prompt history for up/down navigation
 	private history: string[] = [];
@@ -472,8 +473,8 @@ export class Editor implements Component, Focusable {
 
 		const horizontal = this.borderColor("─");
 
-		// Notify spellcheck provider of current text
-		if (this.spellcheckProvider) {
+		if (this.spellcheckProvider && this.state.lines !== this.lastSpellcheckLines) {
+			this.lastSpellcheckLines = this.state.lines;
 			this.spellcheckProvider.textChanged(this.state.lines);
 		}
 
@@ -528,12 +529,12 @@ export class Editor implements Component, Focusable {
 			let lineVisibleWidth = visibleWidth(layoutLine.text);
 			let cursorInPadding = false;
 
-			// Get spellcheck ranges for decoration
 			const spellRanges =
 				this.spellcheckProvider && this.theme.spellcheckError
 					? this.spellcheckProvider.getMisspelledRanges(layoutLine.logicalLine)
 					: [];
 			const spellColorize = this.theme.spellcheckError;
+			const shouldDecorate = spellRanges.length > 0 && spellColorize != null;
 
 			// Add cursor if this line has it
 			if (layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {
@@ -551,43 +552,39 @@ export class Editor implements Component, Focusable {
 					const restAfter = after.slice(firstGrapheme.length);
 					const cursor = `\x1b[7m${firstGrapheme}\x1b[0m`;
 
-					// Apply spellcheck decoration to before and restAfter separately
-					const decoratedBefore =
-						spellRanges.length > 0 && spellColorize
-							? applySpellcheckDecoration(
-									before,
-									layoutLine.chunkStart,
-									layoutLine.chunkStart + layoutLine.cursorPos,
-									spellRanges,
-									spellColorize,
-								)
-							: before;
+					const decoratedBefore = shouldDecorate
+						? applySpellcheckDecoration(
+								before,
+								layoutLine.chunkStart,
+								layoutLine.chunkStart + layoutLine.cursorPos,
+								spellRanges,
+								spellColorize!,
+							)
+						: before;
 					const restAfterStart = layoutLine.chunkStart + layoutLine.cursorPos + firstGrapheme.length;
-					const decoratedRestAfter =
-						spellRanges.length > 0 && spellColorize
-							? applySpellcheckDecoration(
-									restAfter,
-									restAfterStart,
-									layoutLine.chunkEnd,
-									spellRanges,
-									spellColorize,
-								)
-							: restAfter;
+					const decoratedRestAfter = shouldDecorate
+						? applySpellcheckDecoration(
+								restAfter,
+								restAfterStart,
+								layoutLine.chunkEnd,
+								spellRanges,
+								spellColorize!,
+							)
+						: restAfter;
 
 					displayText = decoratedBefore + marker + cursor + decoratedRestAfter;
 					// lineVisibleWidth stays the same - we're replacing, not adding
 				} else {
 					// Cursor is at the end - add highlighted space
-					const decoratedBefore =
-						spellRanges.length > 0 && spellColorize
-							? applySpellcheckDecoration(
-									before,
-									layoutLine.chunkStart,
-									layoutLine.chunkEnd,
-									spellRanges,
-									spellColorize,
-								)
-							: before;
+					const decoratedBefore = shouldDecorate
+						? applySpellcheckDecoration(
+								before,
+								layoutLine.chunkStart,
+								layoutLine.chunkEnd,
+								spellRanges,
+								spellColorize!,
+							)
+						: before;
 					const cursor = "\x1b[7m \x1b[0m";
 					displayText = decoratedBefore + marker + cursor;
 					lineVisibleWidth = lineVisibleWidth + 1;
@@ -596,14 +593,13 @@ export class Editor implements Component, Focusable {
 						cursorInPadding = true;
 					}
 				}
-			} else if (spellRanges.length > 0 && spellColorize) {
-				// No cursor on this line - apply decoration to full text
+			} else if (shouldDecorate) {
 				displayText = applySpellcheckDecoration(
 					displayText,
 					layoutLine.chunkStart,
 					layoutLine.chunkEnd,
 					spellRanges,
-					spellColorize,
+					spellColorize!,
 				);
 			}
 

@@ -153,7 +153,7 @@ describe("NspellProvider", () => {
 
 	beforeAll(async () => {
 		provider = new NspellProvider();
-		await new Promise((resolve) => setTimeout(resolve, 500));
+		await provider.ready;
 	});
 
 	it("returns empty ranges for correctly spelled words", () => {
@@ -223,5 +223,22 @@ describe("NspellProvider", () => {
 		provider.textChanged(["Check thsi: hello"]);
 		const ranges = provider.getMisspelledRanges(0);
 		expect(ranges).toEqual([{ start: 6, end: 10 }]);
+	});
+
+	it("returns correct positions for duplicate misspelled words", () => {
+		provider.textChanged(["helo world helo"]);
+		const ranges = provider.getMisspelledRanges(0);
+		expect(ranges).toEqual([
+			{ start: 0, end: 4 },
+			{ start: 11, end: 15 },
+		]);
+	});
+
+	it("returns independent ranges per line", () => {
+		provider.textChanged(["helo world", "the quik fox"]);
+		const line0 = provider.getMisspelledRanges(0);
+		const line1 = provider.getMisspelledRanges(1);
+		expect(line0).toEqual([{ start: 0, end: 4 }]);
+		expect(line1).toEqual([{ start: 4, end: 8 }]);
 	});
 });

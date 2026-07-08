@@ -62,6 +62,7 @@ export function hasCodeLikeCasing(word: string): boolean {
 
 export class NspellProvider implements SpellcheckProvider {
 	onUpdate: (() => void) | null = null;
+	readonly ready: Promise<void>;
 
 	private checker: { correct(word: string): boolean } | null = null;
 	private cache = new Map<string, SpellcheckRange[]>();
@@ -69,7 +70,7 @@ export class NspellProvider implements SpellcheckProvider {
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor() {
-		this.initDictionary();
+		this.ready = this.initDictionary();
 	}
 
 	private async initDictionary(): Promise<void> {
