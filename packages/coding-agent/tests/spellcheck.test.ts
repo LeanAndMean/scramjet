@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	hasCodeLikeCasing,
 	isCodeLikeToken,
@@ -240,5 +240,44 @@ describe("NspellProvider", () => {
 		const line1 = provider.getMisspelledRanges(1);
 		expect(line0).toEqual([{ start: 0, end: 4 }]);
 		expect(line1).toEqual([{ start: 4, end: 8 }]);
+	});
+
+	describe("cache pruning", () => {
+		it("prunes stale entries after text changes", async () => {
+			vi.useFakeTimers();
+			const p = new NspellProvider();
+			await p.ready;
+
+			p.textChanged(["hello world", "the quick fox"]);
+			p.getMisspelledRanges(0);
+			p.getMisspelledRanges(1);
+			expect(p.cacheSize).toBe(2);
+
+			p.textChanged(["goodbye"]);
+			await vi.advanceTimersByTimeAsync(200);
+
+			expect(p.cacheSize).toBe(1);
+
+			vi.useRealTimers();
+		});
+
+		it("retains cached results for shared lines", async () => {
+			vi.useFakeTimers();
+			const p = new NspellProvider();
+			await p.ready;
+
+			p.textChanged(["hello world", "the quick fox"]);
+			p.getMisspelledRanges(0);
+			p.getMisspelledRanges(1);
+			const originalRanges = p.getMisspelledRanges(0);
+
+			p.textChanged(["hello world", "a new line"]);
+			await vi.advanceTimersByTimeAsync(200);
+
+			expect(p.cacheSize).toBe(2);
+			expect(p.getMisspelledRanges(0)).toBe(originalRanges);
+
+			vi.useRealTimers();
+		});
 	});
 });
