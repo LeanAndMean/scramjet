@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.42.2 — Fix rebuild path message duplication in tool rows
+
+Fix `renderSessionContext()` in `interactive-mode.ts` to call `markExecutionStarted()` and `setArgsComplete()` on tool components with matched results before calling `updateResult()`, bringing the rebuild path to parity with the live execution path. This fixes intermittent message duplication in `get_scramjet_user_input` freetext tool rows (and any other tool whose `renderCall` gates on `executionStarted`) after compaction, thinking toggles, or settings reloads. Closes [#257](https://github.com/LeanAndMean/scramjet/issues/257).
+
+### Fixed
+
+- Tool components rebuilt during `renderSessionContext()` now have `executionStarted` and `argsComplete` set before `updateResult()`, preventing `renderCall` from rendering the prompt message when `renderResult` already handles it.
+
+### Added
+
+- Regression tests verifying single-render behavior on rebuild and documenting the pre-fix duplication.
+
 ## 0.42.1 — Improve subagent TUI display
 
 The subagent tool's TUI rendering now shows all tasks (no truncation), displays effort level per agent, shows the model name in result headers, and renders full task descriptions without character limits. Closes [#262](https://github.com/LeanAndMean/scramjet/issues/262).
