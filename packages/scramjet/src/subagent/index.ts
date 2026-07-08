@@ -5,7 +5,7 @@ import * as path from "node:path";
 import type { AgentToolUpdateCallback, ThinkingLevel } from "@leanandmean/agent";
 import type { Message } from "@leanandmean/ai";
 import { StringEnum } from "@leanandmean/ai";
-import { type ExtensionAPI, type ThemeColor, getMarkdownTheme, withFileMutationQueue } from "@leanandmean/coding-agent";
+import { type ExtensionAPI, getMarkdownTheme, type ThemeColor, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
