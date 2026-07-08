@@ -46,8 +46,8 @@ If no context was provided, ask the user what the issue is about.
 Before drafting, gather enough context to write a useful issue:
 
 - If the input is already a structured artifact from another Mach 12 command, preserve its intent and use it as the authoritative source; do not reframe away important finding/stage identifiers.
-- If the request is a bug report, vague problem statement, code-linked feature, error report, or current-behavior complaint, inspect relevant repository context before drafting. Use `read`, `grep`, `glob`, and, when code context is non-trivial, dispatch `mach12:code-explorer` to identify current behavior, affected surfaces, similar features, related files, and constraints.
-- If desired behavior, reproduction, user impact, scope, or constraints are unclear after context gathering, ask a small set of concrete clarifying questions before creating the issue. Do not guess implementation details to fill gaps.
+- If the request is a bug report, vague problem statement, code-linked feature, error report, or current-behavior complaint, inspect relevant repository context before drafting. Use `read`, `grep`, `glob`, and, when code context is non-trivial, dispatch `mach12:code-explorer` to identify current behavior, affected surfaces, similar features, related files, and constraints. While exploring, maintain a structured evidence log: for each meaningful observation, record the source (file:line or command output) and what was observed. This log becomes the Investigation section directly — write it as you go, not reconstructed after the fact.
+- If desired behavior, reproduction, user impact, scope, or constraints are unclear after context gathering, ask a small set of concrete clarifying questions before creating the issue. Do not guess implementation details to fill gaps. Record each Q&A pair — user answers become entries in User's Request, preserving the user's own words and decisions as first-class evidence.
 - If the user supplied a fully specified request with clear current/desired behavior and acceptance criteria, avoid ceremonial exploration; verify only the context needed to avoid a misleading issue.
 
 Look up the project's contribution guidelines so the issue is shaped to match repo conventions. Delegate to:
@@ -77,13 +77,25 @@ Draft a structured issue with these sections:
 - Use imperative form (e.g., "Add validation for bulk solvent inputs")
 
 ### Body
+
+The body sections follow an authority gradient — section position communicates provenance. Highest authority (user's own words) first, through agent observations (verifiable) and conclusions (challengeable), to proposed outcomes and speculative notes.
+
 - **Summary**: 2-3 sentences describing the problem, user need, or feature.
-- **Current Behavior / Problem**: What happens now, what pain exists, or what context prompted the issue. For new features with no current behavior, describe the current limitation.
-- **Desired Behavior**: What should be true from the user's or maintainer's perspective. Describe observable outcomes, workflow behavior, or artifact qualities -- not the implementation mechanism. If the issue's subject is a command definition, agent definition, or workflow specification, naming the specific file and section as the target of a behavioral change is appropriate here; move to Technical Notes only when describing the mechanism of the change (algorithm, control flow, data structure choices).
-- **Acceptance Criteria**: Bullet list of verifiable end-state conditions that define "done", independent of implementation approach. Exception: when the artifact being changed is itself a specification (command definitions, config schemas, workflow files, documentation), implementation-specific criteria are appropriate because the spec IS the implementation.
-- **Relevant Context** (optional): Links to related PRs, issues, discussions, review findings, assessment comments, or code areas discovered during due diligence.
-- **Technical Notes** (optional): Non-binding implementation hints, relevant files, architectural considerations, risks, or suspected approaches.
+- **User's Request**: What the user directly stated — requirements, constraints, decisions from clarifying questions, and steering context. Verbatim intent in the user's own words, no agent interpretation or rephrasing. If the user provided no descriptive content (meta-directives only), omit this section.
+- **Investigation** (required for bug reports, vague problem statements, refactors, and code-linked features; skip for fully specified requests and structured artifacts): What was directly observed during exploration. Each item cites its source (file:line, command output, or reproduced behavior) and states what was observed. Purely observational — no conclusions, no "because", no interpretation. A reader should be able to independently verify every claim by going to the cited source.
+- **Analysis** (required when Investigation is present; skip otherwise): What was concluded from the observations. Root cause identification, reasoning chains, and alternatives ruled out. Every conclusion traces back to specific Investigation items by reference. Explicitly distinguishes certainty ("X causes Y because [Investigation item]") from uncertainty ("X likely causes Y, but [what would need to be checked]").
+- **Proposed Behavior**: What should be true from the user's or maintainer's perspective. Observable outcomes, workflow behavior, or artifact qualities synthesized from User's Request + Investigation + Analysis — not the implementation mechanism. If the issue's subject is a command definition, agent definition, or workflow specification, naming the specific file and section as the target of a behavioral change is appropriate here; move to Technical Notes only when describing the mechanism of the change (algorithm, control flow, data structure choices).
+- **Acceptance Criteria**: Bullet list of verifiable end-state conditions that define "done". Each criterion is tagged with its derivation: `(user-stated)` for criteria directly from User's Request, or `(derived)` for criteria the agent synthesized from investigation/analysis. Must be implementation-agnostic — do NOT include implementation-specific acceptance criteria unless the user explicitly requested a particular approach. Exception: when the artifact being changed is itself a specification (command definitions, config schemas, workflow files, documentation), implementation-specific criteria are appropriate because the spec IS the implementation.
+- **Open Questions** (optional): Explicit unknowns the investigation could not resolve. Things that remain uncertain, would require further exploration, or depend on decisions not yet made. Honest gaps for downstream consumers rather than false certainty.
+- **Technical Notes** (optional): Non-binding implementation hints, relevant files, architectural considerations, risks, or suspected approaches. These are hypotheses, not commitments.
 - **Testability** (bug reports only): Whether the problem is reproducible via an automated test, what such a test would assert, and what test type would be appropriate (unit, integration, end-to-end). Skip this section for features, refactors, and documentation tasks.
+
+### Adaptive layouts
+
+Not all issue types need the full investigative structure. The absence of Investigation/Analysis sections structurally communicates that no agent investigation occurred — this is informative, not a gap.
+
+- **Fully specified requests** (user provided clear current/desired behavior and acceptance criteria): Summary, User's Request, Proposed Behavior, Acceptance Criteria, Technical Notes. No Investigation or Analysis.
+- **Structured artifacts** (output from another Mach 12 command): Preserve the source structure entirely — do not force the authority-gradient layout onto content that already has its own organizational logic. Apply PII rules but not section restructuring.
 
 ### Drafting notes
 
@@ -95,16 +107,17 @@ When the input (the user context above, or a subsequent user response) is struct
 
 **Proposed Behavior boundary**: Outcome vs. implementation decision test -- if a sentence describes a specific implementation mechanism (algorithm, data structure, control flow decision, code pattern), it belongs in Technical Notes. Naming a specific file or section as the target of a behavioral change is Proposed Behavior, not implementation detail.
 
-**Acceptance Criteria constraint**: Observable end-state framing. Each criterion should be confirmable regardless of implementation path. Exception for specification artifacts (command definitions, config schemas, workflow files, documentation) where the spec is the deliverable -- in those cases, implementation-specific criteria are appropriate.
+**Acceptance Criteria constraint**: Each criterion must be confirmable regardless of implementation path. Do NOT include implementation-specific acceptance criteria unless the user explicitly requested a particular approach or the artifact being changed is itself a specification (command definitions, config schemas, workflow files, documentation). Test: could these acceptance criteria be satisfied by multiple different implementations? If not, they are too implementation-specific — rewrite to describe the observable outcome, or move the implementation detail to Technical Notes.
 
 **Final issue-quality self-check before presenting the draft**:
 
-- Did you gather enough context to avoid a misleading or shallow issue?
-- Does Desired Behavior describe the end state or behavior, not merely an implementation mechanism?
-- Are implementation ideas clearly labeled as Technical Notes and non-binding unless the artifact being changed is itself the specification?
-- Are acceptance criteria observable and testable?
+- Provenance integrity: Does every factual claim in Analysis trace to a specific Investigation item? If a conclusion has no cited observation, it is unsupported — either investigate further or move it to Open Questions.
+- Implementation neutrality: Could these acceptance criteria be satisfied by multiple different implementations? If not, rewrite or move to Technical Notes.
+- User decisions captured: Are clarifying-question answers recorded in User's Request, not silently consumed as implicit context?
+- Authority gradient: Is Investigation purely observational (no "because", no conclusions)? Is Analysis purely reasoned (no new observations)? Is Proposed Behavior a synthesis of the preceding sections, not a copy of any one?
+- Open Questions honesty: Are there unresolved unknowns being presented as certainties elsewhere in the issue? Surface them.
 - If the request came from a structured review/assessment artifact, did you preserve the relevant F/S identifiers, markers, or stage references?
-- If important reproduction steps, desired behavior, or scope are still missing, ask the user before proceeding.
+- If important reproduction steps, proposed behavior, or scope are still missing, ask the user before proceeding.
 
 ## Step 3: Review
 

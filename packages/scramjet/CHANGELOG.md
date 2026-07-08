@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.42.3 — Restructure issue-create with provenance-native authority gradient
+
+Restructure the `mach12:issue-create` body template to follow an epistemic authority gradient (User's Request → Investigation → Analysis → Proposed Behavior). Adds provenance tagging on acceptance criteria (`user-stated` / `derived`), adaptive layouts for non-investigative issue types, and an Open Questions section for honest unknowns. Closes [#157](https://github.com/LeanAndMean/scramjet/issues/157).
+
+### Changed
+
+- Issue body sections now follow an authority gradient — highest authority (user's own words) first, through agent observations and conclusions, to proposed outcomes.
+- "Desired Behavior" renamed to "Proposed Behavior" to reflect its synthesized nature.
+- Acceptance criteria must be tagged `(user-stated)` or `(derived)` and are explicitly prohibited from being implementation-specific unless user-requested.
+- Self-check consolidated from generic quality bullets to provenance-aware checks (provenance integrity, implementation neutrality, authority gradient).
+
+### Added
+
+- Investigation section: purely observational evidence with source citations, built as a structured evidence log during exploration.
+- Analysis section: conclusions traced back to Investigation items, with explicit certainty/uncertainty distinction.
+- User's Request section: verbatim user intent preserved without agent interpretation.
+- Open Questions section for unresolved unknowns.
+- Adaptive layouts: fully specified requests and structured artifacts skip Investigation/Analysis.
+
 ## 0.42.2 — Fix rebuild path message duplication in tool rows
 
 Fix `renderSessionContext()` in `interactive-mode.ts` to call `markExecutionStarted()` and `setArgsComplete()` on tool components with matched results before calling `updateResult()`, bringing the rebuild path to parity with the live execution path. This fixes intermittent message duplication in `get_scramjet_user_input` freetext tool rows (and any other tool whose `renderCall` gates on `executionStarted`) after compaction, thinking toggles, or settings reloads. Closes [#257](https://github.com/LeanAndMean/scramjet/issues/257).
