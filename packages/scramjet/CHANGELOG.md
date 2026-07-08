@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.43.2 — Add risk-based deferral exception for low-risk fixes in PR reviews
+
+Expand the "Genuine issue" classification in `mach12:pr-review-assessment` to include low-risk, contained fixes regardless of relatedness to the PR's primary purpose. Narrow "Deferred" to apply only when a fix would meaningfully expand risk or require non-trivial design work. Add a corresponding exception in `mach12:pr-review-fix` so review-surfaced low-risk fixes are legitimate in-scope findings. Closes [#271](https://github.com/LeanAndMean/scramjet/issues/271).
+
+### Changed
+
+- `mach12:pr-review-assessment`: low-risk contained fixes classified as Genuine, not Deferred.
+- `mach12:pr-review-fix`: exception added for review-surfaced low-risk Genuine findings.
+
 ## 0.43.1 — Prune spellcheck cache of stale entries
 
 The `NspellProvider` line-level cache now prunes entries for lines no longer in the editor on each debounced recheck. Previously, every unique line string ever typed accumulated indefinitely. Closes [#268](https://github.com/LeanAndMean/scramjet/issues/268).
