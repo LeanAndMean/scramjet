@@ -27,6 +27,8 @@ export { type SettingItem, SettingsList, type SettingsListTheme } from "./compon
 export { Spacer } from "./components/spacer.js";
 export { Text } from "./components/text.js";
 export { TruncatedText } from "./components/truncated-text.js";
+
+export type { SpellcheckRange, SpellcheckProvider } from "./spellcheck.js";
 // Editor component interface (for custom editors)
 export type { EditorComponent } from "./editor-component.js";
 // Fuzzy matching

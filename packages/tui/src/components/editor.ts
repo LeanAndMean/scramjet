@@ -200,6 +200,7 @@ interface LayoutLine {
 export interface EditorTheme {
 	borderColor: (str: string) => string;
 	selectList: SelectListTheme;
+	spellcheckError?: (str: string) => string;
 }
 
 export interface EditorOptions {
