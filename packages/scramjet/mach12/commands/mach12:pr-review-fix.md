@@ -127,7 +127,7 @@ Treat the selected findings list as the bounded scope:
 Fix only the findings listed above. Do not fix other findings in the review comment.
 
 - Prefer the smallest change that fully addresses each finding.
-- Avoid opportunistic cleanup, new abstractions, new dependencies, or new files unless required for correctness. Low-risk fixes surfaced by the review and classified as Genuine are legitimate in-scope findings, not opportunistic cleanup -- fix them alongside the other selected findings.
+- Avoid opportunistic cleanup, new abstractions, new dependencies, or new files unless required for correctness. Low-risk fixes classified as Genuine are legitimate in-scope findings, not opportunistic cleanup -- fix them alongside the other selected findings.
 - If a finding would require a large refactor, recommend deferring it to a separate issue unless the refactor is required for correctness. Offer to create the issue with `/mach12:issue-create`.
 
 ## Step 5: Commit, document, and choose the next step

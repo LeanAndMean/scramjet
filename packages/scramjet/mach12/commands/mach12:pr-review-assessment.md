@@ -71,7 +71,7 @@ The brief should instruct the assessor to:
 1. Review the PR title, body, and all existing comments. Note any findings that have already been discussed, resolved, or deferred in the PR conversation.
 2. For each review finding, **read the actual code** referenced and **independently verify** whether the issue exists.
 3. Classify each finding using its F/S identifier from the review comment (e.g., "F1 -- Genuine", "S2 -- Nitpick"). Classify as one of:
-   - **Genuine issue** -- Real problem that should be fixed before merge. Explain why. This includes low-risk, contained fixes regardless of whether they are related to the PR's primary purpose -- when the blast radius is small and the chance of introducing new problems is negligible, the fix belongs here, not in Deferred.
+   - **Genuine issue** -- Real problem that should be fixed before merge (explain why). This includes low-risk, contained fixes regardless of whether they are related to the PR's primary purpose -- when the blast radius is small and the chance of introducing new problems is negligible, the fix belongs here, not in Deferred.
    - **Nitpick** -- Stylistic preference or minor point that does not affect correctness or maintainability. Explain why it does not matter.
    - **False positive** -- The reviewer flagged something that is not actually an issue. Explain why the code is correct.
    - **Deferred** -- Real issue that would meaningfully expand the PR's risk surface or require non-trivial design work to address. Should be tracked separately. Do not defer low-risk, contained fixes -- classify those as Genuine even when unrelated to the PR's primary purpose.
