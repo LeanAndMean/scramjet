@@ -71,10 +71,10 @@ The brief should instruct the assessor to:
 1. Review the PR title, body, and all existing comments. Note any findings that have already been discussed, resolved, or deferred in the PR conversation.
 2. For each review finding, **read the actual code** referenced and **independently verify** whether the issue exists.
 3. Classify each finding using its F/S identifier from the review comment (e.g., "F1 -- Genuine", "S2 -- Nitpick"). Classify as one of:
-   - **Genuine issue** -- Real problem that should be fixed before merge. Explain why.
+   - **Genuine issue** -- Real problem that should be fixed before merge. Explain why. This includes low-risk, contained fixes regardless of whether they are related to the PR's primary purpose -- when the blast radius is small and the chance of introducing new problems is negligible, the fix belongs here, not in Deferred.
    - **Nitpick** -- Stylistic preference or minor point that does not affect correctness or maintainability. Explain why it does not matter.
    - **False positive** -- The reviewer flagged something that is not actually an issue. Explain why the code is correct.
-   - **Deferred** -- Real issue but out of scope for this PR. Should be tracked separately.
+   - **Deferred** -- Real issue that would meaningfully expand the PR's risk surface or require non-trivial design work to address. Should be tracked separately. Do not defer low-risk, contained fixes -- classify those as Genuine even when unrelated to the PR's primary purpose.
    - If a finding was already fixed in a subsequent commit or resolved in discussion, classify it as **False positive** with a note that it has been addressed. If explicitly deferred in discussion, classify it as **Deferred** and reference the relevant comment.
    For simplification findings specifically: a simplification is worthwhile only if it preserves behavior, improves or maintains clarity, fits project conventions, and does not remove necessary validation, error handling, security, or tests. Do not treat "shorter" as automatically better.
 4. After classifying all findings, produce a **staged implementation plan** covering everything worth fixing. Reference findings by their F/S identifiers (e.g., "stage 1 addresses F1 and F3"):
