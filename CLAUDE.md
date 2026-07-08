@@ -230,4 +230,5 @@ Every merge to `main` must carry a version bump in `packages/scramjet/package.js
 - **Every PR gets a version bump** — including pure refactors, test-only changes, and documentation updates. If it merges to main, it needs a new version.
 - **Bump level**: patch for bug fixes, refactors, docs, and test changes; minor for new features or non-breaking behavioral changes; major for breaking changes.
 - **CHANGELOG entry**: required alongside every version bump, following the existing format in `packages/scramjet/CHANGELOG.md`.
+- **Timing**: version bumps and changelog entries are performed by `mach12:pr-pre-merge` after merging main into the feature branch. Do not include them in implementation plans, implementation stages, or review findings — they happen at the end, not during feature work.
 - **Runtime package versions**: the four Pi runtime packages (`@leanandmean/{tui,ai,agent,coding-agent}`) maintain their own versions independently. Their versions only change when their source is modified. The release workflow tolerates "already published" for unchanged runtime packages.

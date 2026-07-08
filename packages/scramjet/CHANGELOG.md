@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.43.4 — Add release-preparation timing directive to system prompt
+
+Add a "Release preparation timing" section to the scramjet system prompt that tells all agents (including subagents) that version bumps belong at the end of a PR's lifecycle — never in implementation plans, never flagged in reviews, never performed during feature work. This is the portable fix: it travels with scramjet and overrides any project's CLAUDE.md version-bump rules. Simplify the per-command anti-directives that are now redundant with the system-level directive. Fixes [#270](https://github.com/LeanAndMean/scramjet/issues/270).
+
+### Changed
+
+- `base-directives.ts`: New "Release preparation timing" system prompt section visible to all agents.
+- `CLAUDE.md`: Timing qualification added to Release process section (local bonus for scramjet development).
+- `mach12:issue-plan`: Release-preparation exclusion simplified (rationale now carried by system prompt).
+- `mach12:issue-review`: Release-preparation review criterion simplified.
+- `mach12:issue-implement`: Deferral instruction simplified; brief-passthrough directive removed.
+- `mach12:pr-review`: Brief directive reduced to premature-bump detection only.
+
 ## 0.43.3 — Improve issue-plan clarifying questions: quality format and step ordering
 
 Rewrite `mach12:issue-plan` Step 5 ("Clarify scope and requirements") to narrow scope to what-to-build questions and add a structured Question Quality Format requiring context, choices, tradeoffs, recommendation, and rationale. Add a classification heuristic distinguishing scope/requirements questions (Step 5) from architecture questions (new Step 7). Add self-assessment instruction so agents attempt to answer from codebase evidence before escalating. Insert new Step 7 ("Ask architecture questions") after architect lenses run, with a conditional gate. Renumber subsequent steps and update all internal cross-references. Revise Decision Log format with separate scope and architecture question entries. Fixes [#273](https://github.com/LeanAndMean/scramjet/issues/273).

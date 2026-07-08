@@ -241,6 +241,8 @@ Before finalizing the plan, verify it satisfies the following:
 
 **Pitfalls consolidation:** Review findings from Step 4's "Constraints and edge cases" lens and Step 6's architecture analysis (including each lens's "What evidence would make this approach inappropriate" statement). Consolidate concrete pitfalls into a `## Pitfalls and Gotchas` section in the plan. Each item should be a specific, actionable warning — things that could go wrong, subtle constraints, non-obvious dependencies, or easy-to-miss edge cases that the implementation session needs to be aware of. Do not include boilerplate warnings or generic risk statements.
 
+**Release-preparation exclusion:** Do not include version bumps, changelog entries, or release-preparation as implementation stages — these are owned by `mach12:pr-pre-merge`. Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
+
 **Each stage must be scoped to what can be implemented within a single session.** A stage that is too large should be split. Consider:
 - The amount of codebase exploration needed
 - The number of files to create or modify

@@ -84,7 +84,7 @@ Each exploration should return a list of key files and observations. After explo
 
 ## Step 5: Review the plan
 
-If the user provided context in Step 1, weight the review toward the areas they emphasized -- surface findings on those areas even at Suggestions-level severity, and note in Step 7 how the user's focus shaped the findings (e.g., "User emphasized testing strategy; this raised three suggestions in that area that would otherwise be borderline."). Apply this weighting across all six axes below; do not let it crowd out coverage of the other axes.
+If the user provided context in Step 1, weight the review toward the areas they emphasized -- surface findings on those areas even at Suggestions-level severity, and note in Step 7 how the user's focus shaped the findings (e.g., "User emphasized testing strategy; this raised three suggestions in that area that would otherwise be borderline."). Apply this weighting across all axes below; do not let it crowd out coverage of the other axes.
 
 For each stage in the plan, assess:
 
@@ -101,6 +101,7 @@ For each stage in the plan, assess:
    - New abstractions, configuration, or extension points without evidence from the issue, codebase, or contribution guidance.
    - Testing plans broader than the risk requires.
    Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden.
+8. **Release-preparation exclusion**: Does the plan include version bumps, changelog entries, or release-preparation as implementation stages? Flag as a defect (severity: Important). Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
 
 Also assess the plan holistically:
 - Does it address all requirements and acceptance criteria from the issue?
