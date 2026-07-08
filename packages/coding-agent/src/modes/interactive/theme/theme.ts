@@ -142,7 +142,8 @@ export type ThemeColor =
 	| "thinkingMedium"
 	| "thinkingHigh"
 	| "thinkingXhigh"
-	| "bashMode";
+	| "bashMode"
+	| "spellcheckError";
 
 export type ThemeBg =
 	| "selectedBg"
@@ -1129,6 +1130,7 @@ export function getEditorTheme(): EditorTheme {
 	return {
 		borderColor: (text: string) => theme.fg("borderMuted", text),
 		selectList: getSelectListTheme(),
+		spellcheckError: (text: string) => theme.fg("spellcheckError", text),
 	};
 }
 

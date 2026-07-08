@@ -11,7 +11,7 @@ export {
 // Components
 export { Box } from "./components/box.js";
 export { CancellableLoader } from "./components/cancellable-loader.js";
-export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.js";
+export { applySpellcheckDecoration, Editor, type EditorOptions, type EditorTheme } from "./components/editor.js";
 export { Image, type ImageOptions, type ImageTheme } from "./components/image.js";
 export { Input } from "./components/input.js";
 export { Loader, type LoaderIndicatorOptions } from "./components/loader.js";
@@ -57,6 +57,7 @@ export {
 	parseKey,
 	setKittyProtocolActive,
 } from "./keys.js";
+export type { SpellcheckProvider, SpellcheckRange } from "./spellcheck.js";
 // Input buffering for batch splitting
 export { StdinBuffer, type StdinBufferEventMap, type StdinBufferOptions } from "./stdin-buffer.js";
 // Terminal interface and implementations

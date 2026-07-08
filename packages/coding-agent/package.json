@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/coding-agent",
-	"version": "0.74.1-scramjet.9",
+	"version": "0.74.1-scramjet.10",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -19,7 +19,12 @@
 			"import": "./dist/index.js"
 		}
 	},
-	"files": ["dist", "docs", "examples", "CHANGELOG.md"],
+	"files": [
+		"dist",
+		"docs",
+		"examples",
+		"CHANGELOG.md"
+	],
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
@@ -30,9 +35,10 @@
 	"dependencies": {
 		"@leanandmean/agent": "0.74.1-scramjet.7",
 		"@leanandmean/ai": "0.74.1-scramjet.6",
-		"@leanandmean/tui": "0.74.1-scramjet.4",
+		"@leanandmean/tui": "0.74.1-scramjet.5",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"chalk": "^5.5.0",
+		"dictionary-en": "^4.0.0",
 		"diff": "^8.0.2",
 		"glob": "^13.0.1",
 		"highlight.js": "^10.7.3",
@@ -40,6 +46,7 @@
 		"ignore": "^7.0.5",
 		"jiti": "^2.7.0",
 		"minimatch": "^10.2.3",
+		"nspell": "^2.1.5",
 		"proper-lockfile": "^4.1.2",
 		"typebox": "^1.1.24",
 		"undici": "^7.19.1",

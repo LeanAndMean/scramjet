@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/tui",
-	"version": "0.74.1-scramjet.4",
+	"version": "0.74.1-scramjet.5",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -13,7 +13,7 @@
 		"clean": "shx rm -rf dist",
 		"build": "tsgo -p tsconfig.build.json",
 		"dev": "tsgo -p tsconfig.build.json --watch --preserveWatchOutput",
-		"test": "node --test --import tsx test/*.test.ts"
+		"test": "vitest --run --passWithNoTests"
 	},
 	"files": ["dist/**/*"],
 	"engines": {

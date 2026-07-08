@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.43.0 — Add spellcheck highlighting to editor
+
+Add live spellcheck highlighting to the TUI editor component. Misspelled words are decorated with a themed foreground color and curly underline (progressive enhancement in supported terminals). Code-like tokens (camelCase, snake_case, paths, URLs, slash commands, short abbreviations) are excluded from checking. The dictionary loads asynchronously — the editor works normally until it's ready, with no perceptible input latency. Closes [#266](https://github.com/LeanAndMean/scramjet/issues/266).
+
+### Added
+
+- `SpellcheckProvider` interface in `@leanandmean/tui` mirroring the existing `AutocompleteProvider` pattern, with `SpellcheckRange` type for byte-offset misspelled ranges.
+- `applySpellcheckDecoration()` in the editor render pipeline — clips and applies colored foreground + curly underline to misspelled ranges, handling cursor-line splits correctly.
+- `NspellProvider` in `@leanandmean/coding-agent` using `nspell` + `dictionary-en` — tokenizes lines into word runs, excludes code-like tokens, caches results per-line, and debounces rechecks at 150ms.
+- `spellcheckError` added to `ThemeColor` union, both dark/light theme JSONs, and the theme schema.
+- TUI vitest config (`packages/tui/vitest.config.ts`).
+- 48 tests covering decoration rendering, tokenization, code-exclusion, casing, and nspell integration.
+
 ## 0.42.3 — Restructure issue-create with provenance-native authority gradient
 
 Restructure the `mach12:issue-create` body template to follow an epistemic authority gradient (User's Request → Investigation → Analysis → Proposed Behavior). Adds provenance tagging on acceptance criteria (`user-stated` / `derived`), adaptive layouts for non-investigative issue types, and an Open Questions section for honest unknowns. Closes [#157](https://github.com/LeanAndMean/scramjet/issues/157).
