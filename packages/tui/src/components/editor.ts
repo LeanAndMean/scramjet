@@ -2,6 +2,7 @@ import type { AutocompleteProvider, AutocompleteSuggestions } from "../autocompl
 import { getKeybindings } from "../keybindings.js";
 import { decodePrintableKey, matchesKey } from "../keys.js";
 import { KillRing } from "../kill-ring.js";
+import type { SpellcheckProvider, SpellcheckRange } from "../spellcheck.js";
 import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.js";
 import { UndoStack } from "../undo-stack.js";
 import { getSegmenter, isPunctuationChar, isWhitespaceChar, truncateToWidth, visibleWidth } from "../utils.js";
@@ -195,6 +196,48 @@ interface LayoutLine {
 	text: string;
 	hasCursor: boolean;
 	cursorPos?: number;
+	logicalLine: number;
+	chunkStart: number;
+	chunkEnd: number;
+}
+
+/**
+ * Apply spellcheck decoration to a text chunk. Exported for testability.
+ */
+export function applySpellcheckDecoration(
+	text: string,
+	chunkStart: number,
+	chunkEnd: number,
+	ranges: SpellcheckRange[],
+	colorize: (s: string) => string,
+): string {
+	if (ranges.length === 0 || text.length === 0) return text;
+
+	// Filter and clip ranges to [chunkStart, chunkEnd)
+	const clipped: Array<{ localStart: number; localEnd: number }> = [];
+	for (const r of ranges) {
+		if (r.end <= chunkStart || r.start >= chunkEnd) continue;
+		clipped.push({
+			localStart: Math.max(0, r.start - chunkStart),
+			localEnd: Math.min(chunkEnd - chunkStart, r.end - chunkStart),
+		});
+	}
+
+	if (clipped.length === 0) return text;
+
+	let result = "";
+	let pos = 0;
+	for (const { localStart, localEnd } of clipped) {
+		if (pos < localStart) {
+			result += text.slice(pos, localStart);
+		}
+		result += `\x1b[4:3m${colorize(text.slice(localStart, localEnd))}\x1b[24m`;
+		pos = localEnd;
+	}
+	if (pos < text.length) {
+		result += text.slice(pos);
+	}
+	return result;
 }
 
 export interface EditorTheme {
@@ -257,6 +300,9 @@ export class Editor implements Component, Focusable {
 	// Bracketed paste mode buffering
 	private pasteBuffer: string = "";
 	private isInPaste: boolean = false;
+
+	// Spellcheck provider
+	private spellcheckProvider?: SpellcheckProvider;
 
 	// Prompt history for up/down navigation
 	private history: string[] = [];
@@ -333,6 +379,11 @@ export class Editor implements Component, Focusable {
 	setAutocompleteProvider(provider: AutocompleteProvider): void {
 		this.cancelAutocomplete();
 		this.autocompleteProvider = provider;
+	}
+
+	setSpellcheckProvider(provider: SpellcheckProvider): void {
+		this.spellcheckProvider = provider;
+		provider.onUpdate = () => this.tui.requestRender();
 	}
 
 	/**
@@ -421,6 +472,11 @@ export class Editor implements Component, Focusable {
 
 		const horizontal = this.borderColor("─");
 
+		// Notify spellcheck provider of current text
+		if (this.spellcheckProvider) {
+			this.spellcheckProvider.textChanged(this.state.lines);
+		}
+
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
 
@@ -472,6 +528,13 @@ export class Editor implements Component, Focusable {
 			let lineVisibleWidth = visibleWidth(layoutLine.text);
 			let cursorInPadding = false;
 
+			// Get spellcheck ranges for decoration
+			const spellRanges =
+				this.spellcheckProvider && this.theme.spellcheckError
+					? this.spellcheckProvider.getMisspelledRanges(layoutLine.logicalLine)
+					: [];
+			const spellColorize = this.theme.spellcheckError;
+
 			// Add cursor if this line has it
 			if (layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {
 				const before = displayText.slice(0, layoutLine.cursorPos);
@@ -487,18 +550,61 @@ export class Editor implements Component, Focusable {
 					const firstGrapheme = afterGraphemes[0]?.segment || "";
 					const restAfter = after.slice(firstGrapheme.length);
 					const cursor = `\x1b[7m${firstGrapheme}\x1b[0m`;
-					displayText = before + marker + cursor + restAfter;
+
+					// Apply spellcheck decoration to before and restAfter separately
+					const decoratedBefore =
+						spellRanges.length > 0 && spellColorize
+							? applySpellcheckDecoration(
+									before,
+									layoutLine.chunkStart,
+									layoutLine.chunkStart + layoutLine.cursorPos,
+									spellRanges,
+									spellColorize,
+								)
+							: before;
+					const restAfterStart = layoutLine.chunkStart + layoutLine.cursorPos + firstGrapheme.length;
+					const decoratedRestAfter =
+						spellRanges.length > 0 && spellColorize
+							? applySpellcheckDecoration(
+									restAfter,
+									restAfterStart,
+									layoutLine.chunkEnd,
+									spellRanges,
+									spellColorize,
+								)
+							: restAfter;
+
+					displayText = decoratedBefore + marker + cursor + decoratedRestAfter;
 					// lineVisibleWidth stays the same - we're replacing, not adding
 				} else {
 					// Cursor is at the end - add highlighted space
+					const decoratedBefore =
+						spellRanges.length > 0 && spellColorize
+							? applySpellcheckDecoration(
+									before,
+									layoutLine.chunkStart,
+									layoutLine.chunkEnd,
+									spellRanges,
+									spellColorize,
+								)
+							: before;
 					const cursor = "\x1b[7m \x1b[0m";
-					displayText = before + marker + cursor;
+					displayText = decoratedBefore + marker + cursor;
 					lineVisibleWidth = lineVisibleWidth + 1;
 					// If cursor overflows content width into the padding, flag it
 					if (lineVisibleWidth > contentWidth && paddingX > 0) {
 						cursorInPadding = true;
 					}
 				}
+			} else if (spellRanges.length > 0 && spellColorize) {
+				// No cursor on this line - apply decoration to full text
+				displayText = applySpellcheckDecoration(
+					displayText,
+					layoutLine.chunkStart,
+					layoutLine.chunkEnd,
+					spellRanges,
+					spellColorize,
+				);
 			}
 
 			// Calculate padding based on actual visible width
@@ -830,6 +936,9 @@ export class Editor implements Component, Focusable {
 				text: "",
 				hasCursor: true,
 				cursorPos: 0,
+				logicalLine: 0,
+				chunkStart: 0,
+				chunkEnd: 0,
 			});
 			return layoutLines;
 		}
@@ -847,11 +956,17 @@ export class Editor implements Component, Focusable {
 						text: line,
 						hasCursor: true,
 						cursorPos: this.state.cursorCol,
+						logicalLine: i,
+						chunkStart: 0,
+						chunkEnd: line.length,
 					});
 				} else {
 					layoutLines.push({
 						text: line,
 						hasCursor: false,
+						logicalLine: i,
+						chunkStart: 0,
+						chunkEnd: line.length,
 					});
 				}
 			} else {
@@ -895,11 +1010,17 @@ export class Editor implements Component, Focusable {
 							text: chunk.text,
 							hasCursor: true,
 							cursorPos: adjustedCursorPos,
+							logicalLine: i,
+							chunkStart: chunk.startIndex,
+							chunkEnd: chunk.endIndex,
 						});
 					} else {
 						layoutLines.push({
 							text: chunk.text,
 							hasCursor: false,
+							logicalLine: i,
+							chunkStart: chunk.startIndex,
+							chunkEnd: chunk.endIndex,
 						});
 					}
 				}
