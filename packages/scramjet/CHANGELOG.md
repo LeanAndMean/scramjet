@@ -1,12 +1,23 @@
 # Changelog
 
-## 0.42.3 — Fix evidence-log contradiction in issue-create command
+## 0.42.3 — Restructure issue-create with provenance-native authority gradient
 
-Remove "and what it implies" from the evidence-log instruction in `mach12:issue-create`, resolving the contradiction with Investigation's "no interpretation" constraint. Implications belong in Analysis, not Investigation.
+Restructure the `mach12:issue-create` body template to follow an epistemic authority gradient (User's Request → Investigation → Analysis → Proposed Behavior). Adds provenance tagging on acceptance criteria (`user-stated` / `derived`), adaptive layouts for non-investigative issue types, and an Open Questions section for honest unknowns. Closes [#157](https://github.com/LeanAndMean/scramjet/issues/157).
 
-### Fixed
+### Changed
 
-- Evidence-log instruction no longer asks for interpretation that the Investigation section definition prohibits.
+- Issue body sections now follow an authority gradient — highest authority (user's own words) first, through agent observations and conclusions, to proposed outcomes.
+- "Desired Behavior" renamed to "Proposed Behavior" to reflect its synthesized nature.
+- Acceptance criteria must be tagged `(user-stated)` or `(derived)` and are explicitly prohibited from being implementation-specific unless user-requested.
+- Self-check consolidated from generic quality bullets to provenance-aware checks (provenance integrity, implementation neutrality, authority gradient).
+
+### Added
+
+- Investigation section: purely observational evidence with source citations, built as a structured evidence log during exploration.
+- Analysis section: conclusions traced back to Investigation items, with explicit certainty/uncertainty distinction.
+- User's Request section: verbatim user intent preserved without agent interpretation.
+- Open Questions section for unresolved unknowns.
+- Adaptive layouts: fully specified requests and structured artifacts skip Investigation/Analysis.
 
 ## 0.42.2 — Fix rebuild path message duplication in tool rows
 
