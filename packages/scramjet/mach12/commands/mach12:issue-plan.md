@@ -71,11 +71,11 @@ Before exploring the code, delegate to:
 
 The subroutine returns any planning-relevant guidance found in `CONTRIBUTING.md`, `DEVELOPMENT.md`, or `.github/CONTRIBUTING.md`: expected project layers (e.g., models, migrations, API routes, services, UI, documentation), testing expectations (test frameworks, coverage requirements, test types), and any other requirements that should inform the implementation plan.
 
-Record these as **project planning requirements** -- they inform both the exploration focus and the plan drafting in Step 8.
+Record these as **project planning requirements** -- they inform both the exploration focus and the plan drafting in Step 9.
 
 ## Step 4: Explore the codebase
 
-Dispatch parallel exploration tasks to specialized subagents (one per lens). All lenses are required -- Step 5 always evaluates constraints and edge cases, and Step 6 requires constraint awareness for sound architecture design.
+Dispatch parallel exploration tasks to specialized subagents (one per lens). All lenses are required -- Steps 5 and 7 evaluate constraints and edge cases (before and after architecture design respectively), and Step 6 requires constraint awareness for sound architecture design.
 
 - **Similar features**: Find existing code that solves related problems. Trace through their implementation comprehensively, identifying patterns and conventions the new work should follow.
 - **Architecture**: Map the architecture and abstractions for the relevant area, tracing through the code to understand the layers, data flow, and design decisions.
@@ -90,18 +90,53 @@ Each exploration should return a list of 5-10 key files. After exploration compl
 
 Present a comprehensive summary of findings and patterns discovered.
 
-## Step 5: Ask clarifying questions
+## Step 5: Clarify scope and requirements
 
 **CRITICAL**: This is one of the most important steps. DO NOT SKIP.
 
-Review the codebase findings from Step 4 against the issue requirements. Identify all underspecified aspects:
+This step covers questions about **what to build** — scope boundaries, requirements, user-facing behavior, and constraints that the architect agents need as input. Questions about **how to build it** (code structure, patterns, abstractions, internal design) belong in Step 7, after architects have analyzed the options.
 
-1. Present a clear analysis of the problem based on what you found in the codebase.
-2. Identify ambiguities, underspecified scope, unstated constraints, edge cases, integration concerns, and design preferences that will affect the implementation plan.
-3. **Present all questions to the user in a clear, organized list.**
-4. **Wait for answers before proceeding to architecture design.**
+### Classification heuristic
 
-If the user says "whatever you think is best", provide your recommendation and get explicit confirmation.
+**Ask here (scope/requirements):**
+- What is in or out of scope
+- User-facing behavior preferences
+- External constraints (compatibility, performance budgets, deployment)
+- Requirements ambiguity (what does the issue actually mean by X?)
+- Edge-case behavior the user must decide
+
+**Defer to Step 7 (architecture):**
+- Which abstraction pattern to use
+- How to structure internal modules or layers
+- Where to place new code in the existing architecture
+- Whether to introduce a new dependency or utility
+- Data flow and internal interface design
+
+### Self-assessment
+
+Before escalating a question to the user, attempt to answer it from codebase evidence. When the codebase strongly suggests one answer, state your finding and ask for confirmation rather than presenting it as an open question. The user's value is correcting wrong assumptions and providing knowledge that isn't in the codebase — not answering questions the codebase already answers.
+
+### Question Quality Format
+
+For each question that involves a choice (not purely informational), provide:
+
+- **Context**: The relevant codebase finding or constraint (one sentence)
+- **Choices**: The available options (brief list)
+- **Tradeoffs**: One sentence per pro/con for non-obvious options
+- **Recommendation**: Your suggested answer (one sentence)
+- **Rationale**: The assumptions behind your recommendation — this is the most important element, because it lets the user correct wrong assumptions (one sentence)
+
+Purely informational questions (yes/no confirmations, factual clarifications where you need information not in the codebase) are exempt from this format. State them directly.
+
+### Procedure
+
+1. Review the codebase findings from Step 4 against the issue requirements.
+2. Classify each potential question as scope/requirements (ask here) or architecture (defer to Step 7).
+3. For scope/requirements questions, attempt self-assessment. Present only questions you cannot confidently answer from evidence.
+4. Always present your analysis of the problem, even if no questions remain after self-assessment. The user needs to see what you found and what you concluded.
+5. **Wait for answers before proceeding** — but only if you have escalated questions. If self-assessment resolved everything, present your findings and proceed to Step 6.
+
+If the user says "whatever you think is best", provide your recommendation with rationale and get explicit confirmation.
 
 ## Step 6: Design architecture
 
@@ -137,7 +172,23 @@ Do not default to the middle option without explaining why both the smaller and 
 
 **Ask the user which approach they prefer.**
 
-## Step 7: Design test strategy
+## Step 7: Ask architecture questions
+
+After the architect lenses have run, review their outputs for unresolved architecture questions — aspects of **how to build it** that the lenses surfaced disagreement on, left ambiguous, or where user preference is needed.
+
+### Self-assessment
+
+Use the architect lens outputs to resolve questions before escalating. When one lens's approach clearly fits the codebase conventions and satisfies the requirements, state your finding rather than asking. Questions deferred from Step 5 may already be answered by the architect analysis — check before presenting them.
+
+### Procedure
+
+1. Review questions deferred from Step 5 against the architect outputs. Drop any that the analysis resolved.
+2. Identify new architecture questions surfaced by the lenses (e.g., disagreements between lenses on a specific structural choice).
+3. For remaining questions, follow the Question Quality Format from Step 5. Include relevant findings from the architect lenses as context.
+4. Present your analysis of how the architecture maps to the clarified requirements, even if no questions remain.
+5. **If unresolved questions exist, wait for answers before proceeding.** If the architect analysis resolved everything, present your brief summary and proceed to Step 8.
+
+## Step 8: Design test strategy
 
 Before drafting the plan, decide whether the issue needs a deliberate test strategy.
 
@@ -168,9 +219,9 @@ The subagent returns a test strategy with per-test cost/benefit assessments, cov
 
 ### Lightweight path
 
-When skipping the subagent, state the test approach inline in the plan (e.g., "Update wiring test; no behavioral tests needed -- prose-only change"). This satisfies the test coverage planning requirement in Step 8 without a full dispatch.
+When skipping the subagent, state the test approach inline in the plan (e.g., "Update wiring test; no behavioral tests needed -- prose-only change"). This satisfies the test coverage planning requirement in Step 9 without a full dispatch.
 
-## Step 8: Draft the plan
+## Step 9: Draft the plan
 
 Using the architecture selected in Step 6 as the structural foundation, draft a **staged implementation plan** with:
 - Clear stages (numbered, with descriptive names)
@@ -185,7 +236,7 @@ Before finalizing the plan, verify it satisfies the following:
 
 **Project-layer coverage:** Cross-check the plan against the project layers discovered during codebase exploration and any layers specified in the project planning requirements recorded in Step 3. Every affected layer should be addressed by at least one stage. If a discovered layer is not affected by this change, it may be omitted -- but if a layer is affected and no stage addresses it, add the missing work to the appropriate stage or create a new one.
 
-**Test coverage planning:** If Step 7 produced a test strategy, incorporate its per-stage test directives into the relevant stages. If Step 7 took the lightweight path, use its inline note. Each stage that introduces or modifies behavior must specify what tests to add or modify and what behaviors to cover. If the project has no testable runtime code (e.g., plugin definitions, documentation, configuration), note this and skip test planning.
+**Test coverage planning:** If Step 8 produced a test strategy, incorporate its per-stage test directives into the relevant stages. If Step 8 took the lightweight path, use its inline note. Each stage that introduces or modifies behavior must specify what tests to add or modify and what behaviors to cover. If the project has no testable runtime code (e.g., plugin definitions, documentation, configuration), note this and skip test planning.
 
 **Pitfalls consolidation:** Review findings from Step 4's "Constraints and edge cases" lens and Step 6's architecture analysis (including each lens's "What evidence would make this approach inappropriate" statement). Consolidate concrete pitfalls into a `## Pitfalls and Gotchas` section in the plan. Each item should be a specific, actionable warning — things that could go wrong, subtle constraints, non-obvious dependencies, or easy-to-miss edge cases that the implementation session needs to be aware of. Do not include boilerplate warnings or generic risk statements.
 
@@ -195,7 +246,7 @@ Before finalizing the plan, verify it satisfies the following:
 - The complexity of the logic involved
 - The testing surface area
 
-## Step 9: Post plan and create branch
+## Step 10: Post plan and create branch
 
 Present the plan to the user and ask:
 
@@ -213,9 +264,10 @@ After the user approves the plan:
    - The staged breakdown.
    - A `## Pitfalls and Gotchas` section after the staged breakdown: concrete warnings discovered during exploration and architecture design — things that could go wrong, subtle constraints, non-obvious dependencies, easy-to-miss edge cases. Bullet list format; each item actionable and specific to this implementation.
    - A `## Decision Log` section appended after the pitfalls section. This section captures the reasoning behind key decisions made during planning:
-     - **Clarifying Questions (Step 5):** For each question asked and answered, include the question and a synthesized answer. Only include exchanges where the answer changed or constrained the plan. Omit exchanges where the user confirmed a default or said "whatever you think is best."
+     - **Scope Questions (Step 5):** For each scope/requirements question asked and answered, include the question and a synthesized answer. Only include exchanges where the answer changed or constrained the plan. Omit exchanges where the user confirmed a default or said "whatever you think is best."
      - **Architecture Choice (Step 6):** The selected approach, the rationale for choosing it, and the alternatives considered with brief reasons for rejection.
-     - **Omission condition:** Skip the Decision Log section entirely if Step 5 produced no questions AND Step 6 had no meaningful differentiation between approaches.
+     - **Architecture Questions (Step 7):** For each architecture question asked and answered, include the question and a synthesized answer. Only include exchanges where the answer changed or constrained the plan.
+     - **Omission condition:** Skip the Decision Log section entirely if Step 5 produced no questions AND Step 6 had no meaningful differentiation between approaches AND Step 7 produced no questions.
    - A note that this comment will guide staged implementation.
 
    Then delegate to:
