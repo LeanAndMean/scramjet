@@ -3160,6 +3160,8 @@ export class InteractiveMode {
 				// Match tool results to pending tool components
 				const component = renderedPendingTools.get(message.toolCallId);
 				if (component) {
+					component.markExecutionStarted();
+					component.setArgsComplete();
 					component.updateResult(message);
 					renderedPendingTools.delete(message.toolCallId);
 				}

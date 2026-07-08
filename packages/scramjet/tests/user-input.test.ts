@@ -1123,3 +1123,49 @@ describe("registerUserInputTool — journaling", () => {
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(0);
 	});
 });
+
+describe("registerUserInputTool — rebuild path deduplication (issue 257)", () => {
+	function buildFreetextComponent(tool: any) {
+		return new ToolExecutionComponent(
+			"get_scramjet_user_input",
+			"call-rebuild",
+			{ type: "freetext", message: "What release title should I use?" },
+			undefined,
+			tool,
+			{ requestRender: () => {} } as any,
+			process.cwd(),
+		);
+	}
+
+	const freetextResult = {
+		content: [{ type: "text" as const, text: JSON.stringify({ parked: true }) }],
+		details: { type: "freetext", parked: true },
+		isError: false,
+	};
+
+	it("rebuild with markExecutionStarted + setArgsComplete: message appears exactly once", () => {
+		const { tool } = toolFor();
+		const component = buildFreetextComponent(tool);
+
+		component.markExecutionStarted();
+		component.setArgsComplete();
+		component.updateResult(freetextResult, false);
+
+		const output = visibleText(component.render(120).join("\n"));
+		const occurrences = output.split("What release title should I use?").length - 1;
+		expect(occurrences).toBe(1);
+		expect(output).toContain("Parked for reply");
+	});
+
+	it("rebuild without markExecutionStarted: message appears twice (documents pre-fix bug)", () => {
+		const { tool } = toolFor();
+		const component = buildFreetextComponent(tool);
+
+		// Simulate the old rebuild path: only updateResult, no markExecutionStarted/setArgsComplete
+		component.updateResult(freetextResult, false);
+
+		const output = visibleText(component.render(120).join("\n"));
+		const occurrences = output.split("What release title should I use?").length - 1;
+		expect(occurrences).toBe(2);
+	});
+});
