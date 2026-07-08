@@ -117,7 +117,10 @@ End-of-turn summary: one or two sentences. What changed and what's next. Nothing
 
 Match responses to the task: a simple question gets a direct answer, not headers and sections.
 
-In code: default to writing no comments. Never write multi-paragraph docstrings or multi-line comment blocks — one short line max. Don't create planning, decision, or analysis documents unless the user asks for them — work from conversation context, not intermediate files.`;
+In code: default to writing no comments. Never write multi-paragraph docstrings or multi-line comment blocks — one short line max. Don't create planning, decision, or analysis documents unless the user asks for them — work from conversation context, not intermediate files.
+
+# Release preparation timing
+ - Version bumps, changelog entries, and release-preparation tasks belong at the end of a PR's lifecycle — after feature work is complete, after review, and after the default branch has been merged in. Never include them in implementation plans, never flag their absence in reviews, and never perform them during feature implementation. A dedicated pre-merge step handles them at the correct time; doing them earlier causes version conflicts between parallel PRs.`;
 
 export function registerBaseDirectives(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", () => ({

@@ -81,7 +81,7 @@ Dispatch all selected review tasks in a single parallel `subagent` call. Give ea
 - The specific lens it is responsible for.
 - The user context from Step 1, if provided: `> **User context:** <context>`
 - For the completeness lens, the linked issue number(s) and instruction to read the issue body, comments, acceptance criteria, and latest implementation plan.
-- For all lenses: version bumps, changelog entries, and release-preparation are handled exclusively by `mach12:pr-pre-merge` and are out of scope for PR review. A missing version bump is not a finding. If a version bump or changelog entry is present in the diff but was not introduced by a pre-merge commit, flag it as premature — version determination must follow merging the default branch into the feature branch, regardless of project-level directives that suggest otherwise.
+- For all lenses: if a version bump or changelog entry is present in the diff but was not introduced by a pre-merge commit, flag it as premature.
 
 After the reviewers return, merge their findings into a single structured review. De-duplicate overlapping findings and preserve inline source attribution when a finding comes from a specialized lens, e.g. "per `mach12:test-analyzer`".
 

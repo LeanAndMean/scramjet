@@ -101,7 +101,7 @@ For each stage in the plan, assess:
    - New abstractions, configuration, or extension points without evidence from the issue, codebase, or contribution guidance.
    - Testing plans broader than the risk requires.
    Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden.
-8. **Release-preparation exclusion**: Does the plan include version bumps, changelog entries, or release-preparation tasks as implementation stages? Flag any such stage as a defect to remove. These tasks are exclusively owned by `mach12:pr-pre-merge`, which performs them after merging the default branch — this ordering prevents parallel PRs from bumping the same baseline version and causing merge conflicts. This exclusion does not apply to implementation-necessary version changes (e.g., updating a dependency version the code requires). Default severity: Important.
+8. **Release-preparation exclusion**: Does the plan include version bumps, changelog entries, or release-preparation as implementation stages? Flag as a defect (severity: Important). Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
 
 Also assess the plan holistically:
 - Does it address all requirements and acceptance criteria from the issue?

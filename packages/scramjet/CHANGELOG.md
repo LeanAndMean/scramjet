@@ -1,15 +1,17 @@
 # Changelog
 
-## 0.43.4 — Add version-bump anti-directives to Mach 12 planning and review commands
+## 0.43.4 — Add release-preparation timing directive to system prompt
 
-Add anti-directives to four Mach 12 commands that prevent version bumps, changelog entries, and release-preparation tasks from leaking into implementation plans and reviews. These tasks are exclusively owned by `mach12:pr-pre-merge`, which performs them after merging the default branch — this ordering prevents parallel PRs from bumping the same baseline version and causing merge conflicts. Fixes [#270](https://github.com/LeanAndMean/scramjet/issues/270).
+Add a "Release preparation timing" section to the scramjet system prompt that tells all agents (including subagents) that version bumps belong at the end of a PR's lifecycle — never in implementation plans, never flagged in reviews, never performed during feature work. This is the portable fix: it travels with scramjet and overrides any project's CLAUDE.md version-bump rules. Simplify the per-command anti-directives that are now redundant with the system-level directive. Fixes [#270](https://github.com/LeanAndMean/scramjet/issues/270).
 
 ### Changed
 
-- `mach12:issue-plan`: Release-preparation exclusion requirement in Step 9 prevents planners from including version bump stages.
-- `mach12:issue-review`: New review criterion (item 8) flags version bump stages as a defect with Important severity.
-- `mach12:pr-review`: Directive for all review lenses scoping version bumps out of PR review findings.
-- `mach12:issue-implement`: Phase 5 defers version-bump stages from older plans; Phase 6 excludes release-preparation from reviewer briefs.
+- `base-directives.ts`: New "Release preparation timing" system prompt section visible to all agents.
+- `CLAUDE.md`: Timing qualification added to Release process section (local bonus for scramjet development).
+- `mach12:issue-plan`: Release-preparation exclusion simplified (rationale now carried by system prompt).
+- `mach12:issue-review`: Release-preparation review criterion simplified.
+- `mach12:issue-implement`: Deferral instruction simplified; brief-passthrough directive removed.
+- `mach12:pr-review`: Brief directive reduced to premature-bump detection only.
 
 ## 0.43.3 — Improve issue-plan clarifying questions: quality format and step ordering
 
