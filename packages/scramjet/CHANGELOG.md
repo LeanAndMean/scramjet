@@ -1,11 +1,15 @@
 # Changelog
 
-## 0.43.3 — Fix issue-plan Step 4 justification and add deferred-questions visibility
+## 0.43.3 — Improve issue-plan clarifying questions: quality format and step ordering
 
-Fix inaccurate Step 4 justification that conflated a lens name with what Steps 5 and 7 do. Add instruction in Step 5 to list architecture questions deferred to Step 7 so they remain visible in the conversation for long sessions. Patch bump and CHANGELOG for the PR. Addresses review findings F1, F3, F4 from PR #275.
+Rewrite `mach12:issue-plan` Step 5 ("Clarify scope and requirements") to narrow scope to what-to-build questions and add a structured Question Quality Format requiring context, choices, tradeoffs, recommendation, and rationale. Add a classification heuristic distinguishing scope/requirements questions (Step 5) from architecture questions (new Step 7). Add self-assessment instruction so agents attempt to answer from codebase evidence before escalating. Insert new Step 7 ("Ask architecture questions") after architect lenses run, with a conditional gate. Renumber subsequent steps and update all internal cross-references. Revise Decision Log format with separate scope and architecture question entries. Fixes [#273](https://github.com/LeanAndMean/scramjet/issues/273).
 
 ### Changed
 
+- `mach12:issue-plan`: Step 5 rewritten with classification heuristic, self-assessment, and Question Quality Format (context, choices, tradeoffs, recommendation, rationale).
+- `mach12:issue-plan`: New Step 7 ("Ask architecture questions") added after architecture design, with self-assessment and conditional gate.
+- `mach12:issue-plan`: Steps 7-9 renumbered to 8-10; all internal cross-references updated.
+- `mach12:issue-plan`: Decision Log format updated with separate "Scope Questions (Step 5)" and "Architecture Questions (Step 7)" entries and three-way omission condition.
 - `mach12:issue-plan`: Step 4 justification sentence rewritten to accurately describe downstream step dependencies.
 - `mach12:issue-plan`: Step 5 procedure gains item 6 — list deferred architecture questions visibly before proceeding.
 
