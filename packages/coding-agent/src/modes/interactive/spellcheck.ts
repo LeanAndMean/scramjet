@@ -75,11 +75,8 @@ export class NspellProvider implements SpellcheckProvider {
 
 	private async initDictionary(): Promise<void> {
 		try {
-			const [{ default: nspell }, { default: dictionary }] = await Promise.all([
-				import("nspell") as Promise<{ default: typeof import("nspell") }>,
-				import("dictionary-en"),
-			]);
-			this.checker = nspell(dictionary.aff as Buffer, dictionary.dic as Buffer);
+			const [nspellMod, { default: dictionary }] = await Promise.all([import("nspell"), import("dictionary-en")]);
+			this.checker = nspellMod.default(dictionary.aff as Buffer, dictionary.dic as Buffer);
 			// Re-check with dictionary now available
 			if (this.currentLines.length > 0) {
 				this.recheck();
