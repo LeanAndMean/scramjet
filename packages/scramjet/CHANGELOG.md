@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.42.3 — Fix evidence-log contradiction in issue-create command
+
+Remove "and what it implies" from the evidence-log instruction in `mach12:issue-create`, resolving the contradiction with Investigation's "no interpretation" constraint. Implications belong in Analysis, not Investigation.
+
+### Fixed
+
+- Evidence-log instruction no longer asks for interpretation that the Investigation section definition prohibits.
+
 ## 0.42.2 — Fix rebuild path message duplication in tool rows
 
 Fix `renderSessionContext()` in `interactive-mode.ts` to call `markExecutionStarted()` and `setArgsComplete()` on tool components with matched results before calling `updateResult()`, bringing the rebuild path to parity with the live execution path. This fixes intermittent message duplication in `get_scramjet_user_input` freetext tool rows (and any other tool whose `renderCall` gates on `executionStarted`) after compaction, thinking toggles, or settings reloads. Closes [#257](https://github.com/LeanAndMean/scramjet/issues/257).
