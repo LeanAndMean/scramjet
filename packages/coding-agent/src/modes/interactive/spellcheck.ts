@@ -85,8 +85,8 @@ export class NspellProvider implements SpellcheckProvider {
 			if (this.currentLines.length > 0) {
 				this.recheck();
 			}
-		} catch {
-			// Dictionary load failure is non-fatal — spellcheck simply won't activate
+		} catch (err) {
+			console.warn("Spellcheck dictionary failed to load:", err instanceof Error ? err.message : err);
 		}
 	}
 

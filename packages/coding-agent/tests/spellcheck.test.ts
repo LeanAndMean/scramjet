@@ -260,5 +260,24 @@ describe("NspellProvider", () => {
 
 			vi.useRealTimers();
 		});
+
+		it("retains cached results for shared lines", async () => {
+			vi.useFakeTimers();
+			const p = new NspellProvider();
+			await p.ready;
+
+			p.textChanged(["hello world", "the quick fox"]);
+			p.getMisspelledRanges(0);
+			p.getMisspelledRanges(1);
+			const originalRanges = p.getMisspelledRanges(0);
+
+			p.textChanged(["hello world", "a new line"]);
+			await vi.advanceTimersByTimeAsync(200);
+
+			expect(p.cacheSize).toBe(2);
+			expect(p.getMisspelledRanges(0)).toBe(originalRanges);
+
+			vi.useRealTimers();
+		});
 	});
 });
