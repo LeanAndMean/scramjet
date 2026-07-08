@@ -67,6 +67,10 @@ export class NspellProvider implements SpellcheckProvider {
 	private checker: { correct(word: string): boolean } | null = null;
 	private cache = new Map<string, SpellcheckRange[]>();
 	private currentLines: string[] = [];
+
+	get cacheSize(): number {
+		return this.cache.size;
+	}
 	private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor() {
@@ -110,12 +114,17 @@ export class NspellProvider implements SpellcheckProvider {
 	private recheck(): void {
 		if (!this.checker) return;
 		let changed = false;
+		const pruned = new Map<string, SpellcheckRange[]>();
 		for (const line of this.currentLines) {
-			if (!this.cache.has(line)) {
-				this.cache.set(line, this.computeRanges(line));
+			const cached = this.cache.get(line);
+			if (cached !== undefined) {
+				pruned.set(line, cached);
+			} else {
+				pruned.set(line, this.computeRanges(line));
 				changed = true;
 			}
 		}
+		this.cache = pruned;
 		if (changed && this.onUpdate) {
 			this.onUpdate();
 		}

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.43.1 — Prune spellcheck cache of stale entries
+
+The `NspellProvider` line-level cache now prunes entries for lines no longer in the editor on each debounced recheck. Previously, every unique line string ever typed accumulated indefinitely. Closes [#268](https://github.com/LeanAndMean/scramjet/issues/268).
+
+### Fixed
+
+- Rebuild the cache as a new Map in `recheck()`, retaining only entries whose keys appear in `currentLines`.
+- Add `cacheSize` getter for test observability.
+- Add test verifying stale cache entries are pruned after text changes.
+
 ## 0.43.0 — Add spellcheck highlighting to editor
 
 Add live spellcheck highlighting to the TUI editor component. Misspelled words are decorated with a themed foreground color and curly underline (progressive enhancement in supported terminals). Code-like tokens (camelCase, snake_case, paths, URLs, slash commands, short abbreviations) are excluded from checking. The dictionary loads asynchronously — the editor works normally until it's ready, with no perceptible input latency. Closes [#266](https://github.com/LeanAndMean/scramjet/issues/266).
