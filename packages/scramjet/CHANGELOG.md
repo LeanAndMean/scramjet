@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.43.4 — Add version-bump anti-directives to Mach 12 planning and review commands
+
+Add anti-directives to four Mach 12 commands that prevent version bumps, changelog entries, and release-preparation tasks from leaking into implementation plans and reviews. These tasks are exclusively owned by `mach12:pr-pre-merge`, which performs them after merging the default branch — this ordering prevents parallel PRs from bumping the same baseline version and causing merge conflicts. Fixes [#270](https://github.com/LeanAndMean/scramjet/issues/270).
+
+### Changed
+
+- `mach12:issue-plan`: Release-preparation exclusion requirement in Step 9 prevents planners from including version bump stages.
+- `mach12:issue-review`: New review criterion (item 8) flags version bump stages as a defect with Important severity.
+- `mach12:pr-review`: Directive for all review lenses scoping version bumps out of PR review findings.
+- `mach12:issue-implement`: Phase 5 defers version-bump stages from older plans; Phase 6 excludes release-preparation from reviewer briefs.
+
 ## 0.43.3 — Improve issue-plan clarifying questions: quality format and step ordering
 
 Rewrite `mach12:issue-plan` Step 5 ("Clarify scope and requirements") to narrow scope to what-to-build questions and add a structured Question Quality Format requiring context, choices, tradeoffs, recommendation, and rationale. Add a classification heuristic distinguishing scope/requirements questions (Step 5) from architecture questions (new Step 7). Add self-assessment instruction so agents attempt to answer from codebase evidence before escalating. Insert new Step 7 ("Ask architecture questions") after architect lenses run, with a conditional gate. Renumber subsequent steps and update all internal cross-references. Revise Decision Log format with separate scope and architecture question entries. Fixes [#273](https://github.com/LeanAndMean/scramjet/issues/273).
