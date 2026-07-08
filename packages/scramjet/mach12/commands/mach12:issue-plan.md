@@ -75,7 +75,7 @@ Record these as **project planning requirements** -- they inform both the explor
 
 ## Step 4: Explore the codebase
 
-Dispatch parallel exploration tasks to specialized subagents (one per lens). All lenses are required -- Steps 5 and 7 evaluate constraints and edge cases (before and after architecture design respectively), and Step 6 requires constraint awareness for sound architecture design.
+Dispatch parallel exploration tasks to specialized subagents (one per lens). All four lenses are required -- they feed into Steps 5 through 7, and omitting any risks blind spots in scope clarification and architecture design.
 
 - **Similar features**: Find existing code that solves related problems. Trace through their implementation comprehensively, identifying patterns and conventions the new work should follow.
 - **Architecture**: Map the architecture and abstractions for the relevant area, tracing through the code to understand the layers, data flow, and design decisions.
@@ -135,6 +135,7 @@ Purely informational questions (yes/no confirmations, factual clarifications whe
 3. For scope/requirements questions, attempt self-assessment. Present only questions you cannot confidently answer from evidence.
 4. Always present your analysis of the problem, even if no questions remain after self-assessment. The user needs to see what you found and what you concluded.
 5. **Wait for answers before proceeding** — but only if you have escalated questions. If self-assessment resolved everything, present your findings and proceed to Step 6.
+6. Before proceeding to Step 6, list any architecture questions deferred to Step 7 so they remain visible in the conversation for later reference.
 
 If the user says "whatever you think is best", provide your recommendation with rationale and get explicit confirmation.
 

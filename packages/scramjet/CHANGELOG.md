@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.43.3 — Fix issue-plan Step 4 justification and add deferred-questions visibility
+
+Fix inaccurate Step 4 justification that conflated a lens name with what Steps 5 and 7 do. Add instruction in Step 5 to list architecture questions deferred to Step 7 so they remain visible in the conversation for long sessions. Patch bump and CHANGELOG for the PR. Addresses review findings F1, F3, F4 from PR #275.
+
+### Changed
+
+- `mach12:issue-plan`: Step 4 justification sentence rewritten to accurately describe downstream step dependencies.
+- `mach12:issue-plan`: Step 5 procedure gains item 6 — list deferred architecture questions visibly before proceeding.
+
 ## 0.43.2 — Add risk-based deferral exception for low-risk fixes in PR reviews
 
 Expand the "Genuine issue" classification in `mach12:pr-review-assessment` to include low-risk, contained fixes regardless of relatedness to the PR's primary purpose. Narrow "Deferred" to apply only when a fix would meaningfully expand risk or require non-trivial design work. Add a corresponding exception in `mach12:pr-review-fix` so review-surfaced low-risk fixes are legitimate in-scope findings. Closes [#271](https://github.com/LeanAndMean/scramjet/issues/271).
