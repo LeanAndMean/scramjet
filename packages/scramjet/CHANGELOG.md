@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.43.5 — Add HTML tracking markers to issue-create, pr-create, and push commands
+
+Add invisible HTML comment markers (`<!-- mach12-issue -->`, `<!-- mach12-pr -->`, `<!-- mach12-progress -->`) as the first line of artifacts created by three commands that previously lacked them. Follows the established convention from `mach12:issue-plan` and `mach12:pr-review` which already use command-specific markers for retrieval. Fixes [#277](https://github.com/LeanAndMean/scramjet/issues/277).
+
+### Changed
+
+- `mach12:issue-create`: Marker instruction added to Step 2 Body section.
+- `mach12:pr-create`: Marker line added to the literal body template in Step 3.
+- `mach12:push`: Marker instruction added to Step 4 Comment content section.
+
 ## 0.43.4 — Add release-preparation timing directive to system prompt
 
 Add a "Release preparation timing" section to the scramjet system prompt that tells all agents (including subagents) that version bumps belong at the end of a PR's lifecycle — never in implementation plans, never flagged in reviews, never performed during feature work. This is the portable fix: it travels with scramjet and overrides any project's CLAUDE.md version-bump rules. Simplify the per-command anti-directives that are now redundant with the system-level directive. Fixes [#270](https://github.com/LeanAndMean/scramjet/issues/270).

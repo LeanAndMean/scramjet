@@ -80,6 +80,7 @@ Draft a structured issue with these sections:
 
 The body sections follow an authority gradient — section position communicates provenance. Highest authority (user's own words) first, through agent observations (verifiable) and conclusions (challengeable), to proposed outcomes and speculative notes.
 
+- `<!-- mach12-issue -->` as the very first line of the issue body (this invisible HTML marker enables reliable identification in future sessions).
 - **Summary**: 2-3 sentences describing the problem, user need, or feature.
 - **User's Request**: What the user directly stated — requirements, constraints, decisions from clarifying questions, and steering context. Verbatim intent in the user's own words, no agent interpretation or rephrasing. If the user provided no descriptive content (meta-directives only), omit this section.
 - **Investigation** (required for bug reports, vague problem statements, refactors, and code-linked features; skip for fully specified requests and structured artifacts): What was directly observed during exploration. Each item cites its source (file:line, command output, or reproduced behavior) and states what was observed. Purely observational — no conclusions, no "because", no interpretation. A reader should be able to independently verify every claim by going to the cited source.

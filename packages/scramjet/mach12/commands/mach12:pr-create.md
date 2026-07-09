@@ -106,6 +106,7 @@ Compose a PR title and body based on the gathered context.
 **Body:**
 
 ```
+<!-- mach12-pr -->
 ## Summary
 - <bullet points summarizing the changes>
 
