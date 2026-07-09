@@ -1,0 +1,30 @@
+Scramjet
+Copyright 2026 Kevin Ryan
+
+This product includes software developed at earendil-works/pi
+(https://github.com/earendil-works/pi), originally licensed under
+the MIT License. Pi runtime packages (tui, ai, agent, coding-agent)
+are vendored from the LeanAndMean fork (base version 0.74.1) and
+modified. See UPSTREAM_DIVERGENCE.md for details.
+
+This product includes code derived from the following third-party projects:
+
+- ansi-regex and strip-ansi (https://github.com/chalk/ansi-regex)
+  Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>
+  License: MIT
+  Source: packages/coding-agent/src/utils/ansi.ts
+
+- marked v15.0.4 (https://github.com/markedjs/marked)
+  Copyright (c) 2011-2024 Christopher Jeffrey
+  License: MIT
+  Source: packages/coding-agent/src/core/export-html/vendor/marked.min.js
+
+- OpenTUI (https://github.com/anomalyco/opentui)
+  Copyright (c) 2025 opentui
+  License: MIT
+  Source: packages/tui/src/stdin-buffer.ts
+
+- Highlight.js v11.9.0 (https://github.com/highlightjs/highlight.js)
+  Copyright (c) 2006-2023 the Highlight.js contributors
+  License: BSD-3-Clause
+  Source: packages/coding-agent/src/core/export-html/vendor/highlight.min.js

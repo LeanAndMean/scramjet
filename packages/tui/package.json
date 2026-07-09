@@ -5,7 +5,7 @@
 		"access": "public"
 	},
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"type": "module",
 	"main": "dist/index.js",
 	"types": "./dist/index.d.ts",

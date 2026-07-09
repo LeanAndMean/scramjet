@@ -2,7 +2,7 @@
 	"name": "@leanandmean/scramjet",
 	"version": "0.43.6",
 	"description": "A high-velocity harness for agentic development",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"repository": "github:LeanAndMean/scramjet",
 	"type": "module",
 	"bin": {
@@ -22,7 +22,8 @@
 		"docs/",
 		"CHANGELOG.md",
 		"README.md",
-		"LICENSE"
+		"LICENSE",
+		"NOTICE"
 	],
 	"engines": {
 		"node": ">=20"

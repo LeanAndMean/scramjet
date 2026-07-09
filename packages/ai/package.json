@@ -5,7 +5,7 @@
 		"access": "public"
 	},
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
