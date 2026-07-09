@@ -89,6 +89,8 @@ If neither session context nor detection yields a target, skip commenting and in
 
 ### Comment content
 
+Include `<!-- mach12-progress -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
+
 Prepare a brief progress comment covering:
 - Summary of changes in this batch.
 - Commit hash(es) included.
