@@ -9,7 +9,8 @@ modified. See UPSTREAM_DIVERGENCE.md for details.
 
 This product includes code derived from the following third-party projects:
 
-- ansi-regex and strip-ansi (https://github.com/chalk/ansi-regex)
+- ansi-regex (https://github.com/chalk/ansi-regex) and
+  strip-ansi (https://github.com/chalk/strip-ansi)
   Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>
   License: MIT
   Source: packages/coding-agent/src/utils/ansi.ts
@@ -25,6 +26,6 @@ This product includes code derived from the following third-party projects:
   Source: packages/tui/src/stdin-buffer.ts
 
 - Highlight.js v11.9.0 (https://github.com/highlightjs/highlight.js)
-  Copyright (c) 2006-2023 the Highlight.js contributors
+  Copyright (c) 2006, Ivan Sagalaev
   License: BSD-3-Clause
   Source: packages/coding-agent/src/core/export-html/vendor/highlight.min.js
