@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.43.7 — Migrate repository license from MIT to Apache 2.0
+
+Replace MIT license with Apache 2.0 across all five published packages. Add per-package LICENSE files for runtime packages so npm tarballs ship license text. Create NOTICE file with third-party attributions for vendored code (Pi upstream fork, ansi-regex/strip-ansi, marked, OpenTUI, Highlight.js). Fixes [#283](https://github.com/LeanAndMean/scramjet/issues/283).
+
+### Changed
+
+- Root and `packages/scramjet/` LICENSE replaced with Apache 2.0 full text.
+- New LICENSE files added to `packages/{tui,ai,agent,coding-agent}/`.
+- All `package.json` license fields updated to `"Apache-2.0"`.
+- README license sections updated in scramjet and coding-agent packages.
+- CLAUDE.md: added third-party attribution maintenance guidance to Release process section.
+
+### Added
+
+- `NOTICE` file (root + `packages/scramjet/` copy) with required Apache 2.0 attributions.
+- NOTICE included in scramjet package tarball via `files` array.
+
 ## 0.43.6 — Remove diagram tool and beautiful-mermaid-derived code
 
 Remove the dead diagram renderer (~4000 LOC source, ~1800 LOC tests) that was disabled at runtime since issue 232. Eliminates the only third-party code attribution requirement ahead of the Apache 2.0 license migration. Fixes [#284](https://github.com/LeanAndMean/scramjet/issues/284).

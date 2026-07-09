@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/agent",
-	"version": "0.74.1-scramjet.7",
+	"version": "0.74.1-scramjet.8",
 	"publishConfig": {
 		"access": "public"
 	},
