@@ -195,4 +195,4 @@ Found a bug or have a feature request? Open an issue at [github.com/LeanAndMean/
 
 ## License
 
-MIT
+Apache-2.0

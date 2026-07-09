@@ -1,11 +1,11 @@
 {
 	"name": "@leanandmean/agent",
-	"version": "0.74.1-scramjet.7",
+	"version": "0.74.1-scramjet.8",
 	"publishConfig": {
 		"access": "public"
 	},
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
-	"license": "MIT",
+	"license": "Apache-2.0",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

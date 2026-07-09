@@ -616,7 +616,7 @@ See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines and [docs/developmen
 
 ## License
 
-MIT
+Apache-2.0
 
 ## See Also
 
