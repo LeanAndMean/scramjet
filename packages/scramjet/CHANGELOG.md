@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.43.6 — Remove diagram tool and beautiful-mermaid-derived code
+
+Remove the dead diagram renderer (~4000 LOC source, ~1800 LOC tests) that was disabled at runtime since issue 232. Eliminates the only third-party code attribution requirement ahead of the Apache 2.0 license migration. Fixes [#284](https://github.com/LeanAndMean/scramjet/issues/284).
+
+### Removed
+
+- `packages/scramjet/src/diagram/` directory (13 source files).
+- Four diagram test files.
+- `THIRD-PARTY-NOTICES` file and its `package.json` files-array entry.
+- Diagram bullet from CLAUDE.md architecture section.
+
 ## 0.43.5 — Add HTML tracking markers to issue-create, pr-create, and push commands
 
 Add invisible HTML comment markers (`<!-- mach12-issue -->`, `<!-- mach12-pr -->`, `<!-- mach12-progress -->`) as the first line of artifacts created by three commands that previously lacked them. Follows the established convention from `mach12:issue-plan` and `mach12:pr-review` which already use command-specific markers for retrieval. Fixes [#277](https://github.com/LeanAndMean/scramjet/issues/277).
