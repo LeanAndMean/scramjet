@@ -1047,7 +1047,11 @@ describe("renderResult — parallel progress accuracy", () => {
 	it("shows running indicator when some tasks have not finalized", () => {
 		const tool = registeredSubagentTool();
 		const results = [
-			makeResult({ agent: "done-agent", exitCode: 0, messages: [{ role: "assistant", content: [{ type: "text", text: "output" }] }] }),
+			makeResult({
+				agent: "done-agent",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "output" }] }],
+			}),
 			makeResult({ agent: "running-agent-1", exitCode: -1 }),
 			makeResult({ agent: "running-agent-2", exitCode: -1 }),
 		];
@@ -1059,7 +1063,11 @@ describe("renderResult — parallel progress accuracy", () => {
 	it("shows (running...) for tasks with no output that are still running", () => {
 		const tool = registeredSubagentTool();
 		const results = [
-			makeResult({ agent: "done-agent", exitCode: 0, messages: [{ role: "assistant", content: [{ type: "text", text: "output" }] }] }),
+			makeResult({
+				agent: "done-agent",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "output" }] }],
+			}),
 			makeResult({ agent: "running-agent", exitCode: -1 }),
 		];
 		const rendered = renderToolResult(tool, partialParallelResult(results), false);
@@ -1082,8 +1090,16 @@ describe("renderResult — parallel progress accuracy", () => {
 	it("shows success only when all tasks have finalized successfully", () => {
 		const tool = registeredSubagentTool();
 		const results = [
-			makeResult({ agent: "agent-0", exitCode: 0, messages: [{ role: "assistant", content: [{ type: "text", text: "out 0" }] }] }),
-			makeResult({ agent: "agent-1", exitCode: 0, messages: [{ role: "assistant", content: [{ type: "text", text: "out 1" }] }] }),
+			makeResult({
+				agent: "agent-0",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "out 0" }] }],
+			}),
+			makeResult({
+				agent: "agent-1",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "out 1" }] }],
+			}),
 		];
 		const rendered = renderToolResult(tool, partialParallelResult(results), false);
 		expect(rendered).toContain("✓");
