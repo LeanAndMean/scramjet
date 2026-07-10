@@ -318,7 +318,7 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 		agent: agentName,
 		agentSource: agent.source,
 		task,
-		exitCode: 0,
+		exitCode: EXIT_CODE_RUNNING,
 		messages: [],
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
