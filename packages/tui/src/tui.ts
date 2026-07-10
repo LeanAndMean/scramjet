@@ -477,6 +477,7 @@ export class TUI extends Container {
 		this.terminal.write("\x1b[16t");
 	}
 
+	// SCRAMJET-DIVERGENCE: OSC 11 terminal background query with timeout, single-flight, and late-reply safety (#298).
 	queryTerminalBackgroundColor(options?: { timeoutMs?: number }): Promise<TerminalRgb | undefined> {
 		if (this.bgColorPromise) return this.bgColorPromise;
 
@@ -640,6 +641,7 @@ export class TUI extends Container {
 		}
 	}
 
+	// SCRAMJET-DIVERGENCE: intercepts OSC 11 responses before input listeners (#298).
 	private consumeOsc11Response(data: string): boolean {
 		if (!isOsc11Response(data)) return false;
 

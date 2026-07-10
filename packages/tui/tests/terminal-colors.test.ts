@@ -292,35 +292,22 @@ describe("StdinBuffer OSC hold", () => {
 		expect(emitted).toEqual(["\x1b]11;rgb:ff"]);
 	});
 
-	it("keyboard input during hold is forwarded normally", () => {
+	it("keyboard input during hold is concatenated into the held buffer", () => {
 		buffer.holdOscInput(true);
 		buffer.process("\x1b]11;rgb:ff");
 		vi.advanceTimersByTime(5);
-		// Keyboard input arrives as a separate process() call
 		buffer.process("x");
-		// "x" should be emitted, the OSC fragment should still be held
-		// But actually, StdinBuffer concatenates... let me think
-		// buffer now has "\x1b]11;rgb:ffx" — which is still an incomplete OSC
-		// Actually no — extractCompleteSequences would try to parse this
-		// The "x" gets appended to the buffer making it "\x1b]11;rgb:ffx"
-		// which is still an incomplete OSC sequence (no terminator)
-		// So nothing emits until the terminator arrives or hold is released
-		// This is fine - the test should verify the buffer holds it all
+		// Appended to the incomplete OSC sequence — nothing emits until hold is released
 		expect(emitted).toEqual([]);
-		// When the full response arrives (even appended to keyboard noise)
-		// it won't parse as a valid OSC 11 — that's handled at the TUI level
 	});
 
-	it("complete non-OSC sequences mixed with held OSC prefix", () => {
+	it("held OSC prefix completes and emits when terminator arrives", () => {
 		buffer.holdOscInput(true);
-		// First, an OSC fragment
 		buffer.process("\x1b]11;rgb:");
 		expect(emitted).toEqual([]);
-		// Now process a completely separate chunk with plain text
-		// Because process() appends to buffer, this becomes part of the OSC
-		// In reality, separate stdin reads that contain keyboard + response
-		// would already have been split by the OS into separate events
-		// The typical case: response comes in one chunk, keyboard in another
+		// Terminator completes the sequence — extractCompleteSequences emits it immediately
+		buffer.process("ff/ff/ff\x1b\\");
+		expect(emitted).toEqual(["\x1b]11;rgb:ff/ff/ff\x1b\\"]);
 	});
 });
 

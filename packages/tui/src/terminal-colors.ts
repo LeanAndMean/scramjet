@@ -1,3 +1,6 @@
+// SCRAMJET-DIVERGENCE: entire file is new — pure OSC 11 response parser/recognizer (#298).
+
+/** Normalized sRGB, each channel in [0, 1]. */
 export interface TerminalRgb {
 	r: number;
 	g: number;

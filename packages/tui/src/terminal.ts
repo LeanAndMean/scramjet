@@ -56,8 +56,7 @@ export interface Terminal {
 	// Progress indicator (OSC 9;4)
 	setProgress(active: boolean): void;
 
-	// Signal that an OSC query is active and incomplete OSC responses should
-	// not be auto-flushed by StdinBuffer's normal timeout.
+	// SCRAMJET-DIVERGENCE: holdOscInput wires TUI-level query control to StdinBuffer (#298).
 	holdOscInput(hold: boolean): void;
 }
 

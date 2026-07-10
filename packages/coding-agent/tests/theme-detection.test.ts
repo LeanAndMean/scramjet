@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	classifyBackgroundColor,
 	detectThemeFromEnvironment,
-	detectThemeInteractive,
 	relativeLuminance,
 	srgbToLinear,
 } from "../src/modes/interactive/theme/theme.js";
@@ -174,115 +173,5 @@ describe("detectThemeFromEnvironment", () => {
 
 	it("returns undefined with undefined env", () => {
 		expect(detectThemeFromEnvironment()).toBeUndefined();
-	});
-});
-
-describe("detectThemeInteractive", () => {
-	it("explicit theme suppresses all queries", async () => {
-		const queryFn = vi.fn();
-		const result = await detectThemeInteractive({
-			explicitTheme: "custom-dark",
-			queryFn,
-			env: { colorfgbg: "0;15", termProgram: "Apple_Terminal" },
-		});
-		expect(result).toEqual({ theme: "custom-dark", source: "explicit" });
-		expect(queryFn).not.toHaveBeenCalled();
-	});
-
-	it("COLORFGBG suppresses OSC query", async () => {
-		const queryFn = vi.fn();
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: { colorfgbg: "0;15" },
-		});
-		expect(result).toEqual({ theme: "light", source: "colorfgbg" });
-		expect(queryFn).not.toHaveBeenCalled();
-	});
-
-	it("Apple Terminal suppresses OSC query", async () => {
-		const queryFn = vi.fn();
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: { termProgram: "Apple_Terminal" },
-		});
-		expect(result).toEqual({ theme: "light", source: "apple-terminal" });
-		expect(queryFn).not.toHaveBeenCalled();
-	});
-
-	it("calls OSC query when no sync signal", async () => {
-		const queryFn = vi.fn().mockResolvedValue({ r: 1, g: 1, b: 1 });
-		await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: {},
-		});
-		expect(queryFn).toHaveBeenCalledTimes(1);
-	});
-
-	it("classifies OSC light result as light", async () => {
-		const queryFn = vi.fn().mockResolvedValue({ r: 1, g: 1, b: 1 });
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: {},
-		});
-		expect(result).toEqual({ theme: "light", source: "osc11" });
-	});
-
-	it("classifies OSC dark result as dark", async () => {
-		const queryFn = vi.fn().mockResolvedValue({ r: 0.05, g: 0.05, b: 0.05 });
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: {},
-		});
-		expect(result).toEqual({ theme: "dark", source: "osc11" });
-	});
-
-	it("returns dark on timeout (undefined from query)", async () => {
-		const queryFn = vi.fn().mockResolvedValue(undefined);
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: {},
-		});
-		expect(result).toEqual({ theme: "dark", source: "default" });
-	});
-
-	it("returns dark on thrown query", async () => {
-		const queryFn = vi.fn().mockRejectedValue(new Error("terminal error"));
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: {},
-		});
-		expect(result).toEqual({ theme: "dark", source: "default" });
-	});
-
-	it("classifies OSC luminance boundary correctly", async () => {
-		// sRGB 0.50 gray → luminance ≈ 0.214 → light
-		const queryFn = vi.fn().mockResolvedValue({ r: 0.5, g: 0.5, b: 0.5 });
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: {},
-		});
-		expect(result).toEqual({ theme: "light", source: "osc11" });
-	});
-
-	it("does not call SettingsManager or persist", async () => {
-		// This test verifies the function signature — it accepts no settings
-		// reference and cannot persist. The absence of a persistence mechanism
-		// in the API is the guarantee.
-		const queryFn = vi.fn().mockResolvedValue({ r: 1, g: 1, b: 1 });
-		const result = await detectThemeInteractive({
-			explicitTheme: undefined,
-			queryFn,
-			env: {},
-		});
-		expect(result.theme).toBe("light");
-		// No settingsManager in the interface = no persistence possible
 	});
 });

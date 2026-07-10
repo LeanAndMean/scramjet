@@ -727,39 +727,6 @@ export function detectThemeFromEnvironment(env?: {
 	return undefined;
 }
 
-export type ThemeDetectionSource = "explicit" | "colorfgbg" | "apple-terminal" | "osc11" | "default";
-
-export interface ThemeDetectionResult {
-	theme: string;
-	source: ThemeDetectionSource;
-}
-
-export async function detectThemeInteractive(options: {
-	explicitTheme: string | undefined;
-	queryFn: () => Promise<{ r: number; g: number; b: number } | undefined>;
-	env?: { colorfgbg?: string; termProgram?: string };
-}): Promise<ThemeDetectionResult> {
-	if (options.explicitTheme) {
-		return { theme: options.explicitTheme, source: "explicit" };
-	}
-
-	const envResult = detectThemeFromEnvironment(options.env);
-	if (envResult) {
-		return envResult;
-	}
-
-	try {
-		const rgb = await options.queryFn();
-		if (rgb) {
-			return { theme: classifyBackgroundColor(rgb), source: "osc11" };
-		}
-	} catch {
-		// Query failed — fall through to default
-	}
-
-	return { theme: "dark", source: "default" };
-}
-
 function getDefaultTheme(): string {
 	return detectThemeFromEnvironment()?.theme ?? "dark";
 }

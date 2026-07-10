@@ -601,7 +601,8 @@ export class InteractiveMode {
 
 		// Detect terminal background via OSC 11 if no stronger signal resolved synchronously.
 		// The constructor already initialized theme from explicit setting, COLORFGBG, or Apple Terminal
-		// heuristic (via getDefaultTheme). This step only fires when those all returned "dark" by default.
+		// heuristic (via getDefaultTheme). This step only fires when no explicit theme is set and
+		// detectThemeFromEnvironment() returned undefined (no env signal available).
 		if (!this.settingsManager.getTheme() && !detectThemeFromEnvironment()) {
 			const rgb = await this.ui.queryTerminalBackgroundColor({ timeoutMs: 100 });
 			if (rgb) {

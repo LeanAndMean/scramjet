@@ -432,6 +432,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		return this.buffer;
 	}
 
+	// SCRAMJET-DIVERGENCE: holdOscInput suppresses flush timeout for incomplete OSC sequences (#298).
 	holdOscInput(hold: boolean): void {
 		this._holdOsc = hold;
 		if (!hold && this.buffer.length > 0 && !this.timeout) {
