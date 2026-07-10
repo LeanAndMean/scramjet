@@ -564,17 +564,17 @@ execute it.)
 ##### Semantics
 
 - **Tool access** is declared per-command (in YAML frontmatter,
-  `allowed-tools:`). The first delegated frame's caller scope is the
-  active top-level command's `allowed-tools`; nested delegated frames
-  inherit from the active delegated caller frame. The delegated frame's
-  effective tool set is the intersection of the caller's effective tools
-  and the callee's declared `allowed-tools` — no escalation is possible.
+  `allowed-tools:`). Each delegated frame's effective tool set is the
+  intersection of the callee's declared `allowed-tools` and the active
+  top-level command's `allowed-tools` — regardless of stack depth or
+  sibling delegations. No escalation is possible.
 - **Nested delegation** is allowed. A delegated command can itself
   delegate to another. Each call pushes a frame onto the call stack;
   cycle detection rejects A → B → A within the same turn. MVP frames are
   latched until the next agent turn (no true push/pop return signal), so
-  repeated calls to the same delegated command in one turn are cycles and
-  sequential sibling delegations inherit prior narrowing/depth.
+  repeated calls to the same delegated command in one turn are cycles;
+  sequential sibling delegations increment depth monotonically but do
+  not inherit prior siblings' scope narrowing.
 - **History appearance:** delegated commands are shown in the sidebar
   **indented under the caller**. Top-level (chained) commands are at the
   outer indent level. This visually distinguishes "command finished, the

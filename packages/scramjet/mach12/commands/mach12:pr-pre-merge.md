@@ -113,7 +113,7 @@ git merge origin/<default-branch>
      - Ask whether to apply the recommendation, apply a different resolution the user specifies, or abort the merge entirely.
   6. If the user picks abort at any point, run `git merge --abort` and stop.
 
-  After all conflicts are resolved, finalize with `git commit --no-edit` and push (`git push`). If the push fails, report the error and stop. Record which files were resolved and how (auto-resolved vs. user-directed) for the report.
+  After all conflicts are resolved, verify no residual conflict markers remain: `grep -rn '^<<<<<<< \|^=======$\|^>>>>>>> ' <resolved-files>`. If any markers are found, the resolution is incomplete -- re-examine the affected files. Once clean, finalize with `git commit --no-edit` and push (`git push`). If the push fails, report the error and stop. Record which files were resolved and how (auto-resolved vs. user-directed) for the report.
 
 **If the merge fails for any reason other than conflicts** (invalid ref, dirty working tree, internal error), report the full error output to the user and stop.
 
@@ -177,7 +177,7 @@ Run the project's test suite:
 
 Report results. If tests fail, do NOT silently ignore failures. Attempt to diagnose and fix:
 
-1. **Diagnose**: Read the test output and trace each failure to its root cause. Determine whether the failure is PR-caused (introduced or exposed by this branch's changes) or pre-existing (also fails on the default branch — check with `git stash && git checkout origin/<default-branch> && <run failing tests> && git checkout - && git stash pop` if uncertain).
+1. **Diagnose**: Read the test output and trace each failure to its root cause. Determine whether the failure is PR-caused (introduced or exposed by this branch's changes) or pre-existing (also fails on the default branch — compare by running the failing tests against `origin/<default-branch>` using `git stash push -m "pre-merge-check"` only if the tree is dirty, then `git checkout origin/<default-branch> -- . && <run failing tests> && git checkout - -- .` and finally `git stash pop` only if a stash was pushed; alternatively use `git worktree add /tmp/baseline-check origin/<default-branch>` for an isolated comparison without touching the working tree).
 2. **Fix and re-run**: For PR-caused failures with clear fixes (updated test expectations, import paths changed by merge, renamed symbols, missing test fixtures), apply the fix and re-run the test suite once.
 3. **Escalate**: If tests still fail after one fix attempt, or if the fix requires design decisions, escalate to the user with:
    - Which tests failed and their output.

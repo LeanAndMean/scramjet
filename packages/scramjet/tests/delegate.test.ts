@@ -277,6 +277,7 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(result.content[0].text).toMatch(
 			/\[scramjet\/delegate\] WARNING: effective allowed-tools scope for 'callee' is empty/,
 		);
+		expect(result.content[0].text).toContain("callee-body");
 	});
 
 	it("each delegation intersects independently with the top-level command scope", async () => {
@@ -407,28 +408,6 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(result.content[0].text).toBe(
 			'<scramjet-command name="a">\nfirst=one two second=three\n</scramjet-command>',
 		);
-	});
-
-	it("prepends an empty-scope warning to the body when intersected allowed-tools is empty", async () => {
-		const state = freshState({
-			registry: new Map([
-				["top", def("top", "body-top", ["Read"])],
-				["callee", def("callee", "callee-body", ["Bash"])],
-			]),
-			lifecycle: lifecycleFor("dormant", "top"),
-		});
-		const { pi, tools } = recordingPi();
-		registerDelegateTool(pi, state);
-		const tool = tools[0];
-
-		const result = await tool.execute("call-1", { command: "callee", args: "" }, undefined, undefined, { cwd: "/" });
-
-		expect(state.delegateStack[0].effectiveAllowedTools).toEqual([]);
-		expect(result.content[0].text).toMatch(
-			/\[scramjet\/delegate\] WARNING: effective allowed-tools scope for 'callee' is empty/,
-		);
-		expect(result.content[0].text).toContain("callee-body");
-		expect(result.details.effectiveAllowedTools).toEqual([]);
 	});
 
 	it("sibling delegation does not inherit prior sibling's narrowed scope", async () => {
