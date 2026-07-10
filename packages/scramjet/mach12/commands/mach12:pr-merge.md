@@ -37,7 +37,7 @@ gh pr view <pr-number> --json state,mergeable,mergeStateStatus,reviewDecision,st
 
 If there are blocking issues, report them to the user and stop. Do NOT force-merge.
 
-- **Failed CI checks**: suggest running a CI-fix flow to diagnose and address the failures.
+- **Failed CI checks**: list each failing check by name and its summary from `statusCheckRollup`. Suggest running `/mach12:pr-pre-merge <pr-number>`, which diagnoses CI failures, applies fixes, and pushes them.
 - **Merge conflicts**: suggest resolving conflicts manually or rebasing the branch.
 - **Missing review approval**: suggest requesting a review.
 - **Branch behind main**: when `mergeStateStatus` is `BEHIND`, suggest running `/mach12:pr-pre-merge <pr-number>` to update the branch before merging.

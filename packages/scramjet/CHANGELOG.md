@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.43.10 — Fix delegation scoping and improve pre-merge command prose
+
+Fix delegation scoping so all delegations intersect with the top-level command's `allowed-tools` independently, rather than monotonically narrowing through the latched stack. Expand pr-pre-merge conflict resolution, test failure handling, and uncommitted file scanning. Make pr-merge CI failure guidance actionable. Fixes [#293](https://github.com/LeanAndMean/scramjet/issues/293).
+
+### Fixed
+
+- Delegation scoping now intersects each subroutine's `allowed-tools` with the top-level command scope independently, regardless of stack depth or sibling delegations.
+
+### Changed
+
+- `mach12:pr-pre-merge` conflict resolution expanded from binary abort/auto-resolve to contextual self-assessment with autonomous fixes and structured escalation.
+- `mach12:pr-pre-merge` test failure handling now includes bounded diagnose-and-fix cycle with classification and escalation.
+- `mach12:pr-pre-merge` uncommitted file staging uses relevance-aware dirty-tree scan.
+- `mach12:pr-merge` CI failure guidance now includes per-check categorization and specific fix suggestions.
+- Updated CLAUDE.md, command-authoring.md, and scramjet-vision.md to reflect independent delegation scoping.
+
 ## 0.43.9 — Add text-length tiebreaker to fuzzyFilter for tied scores
 
 When fuzzy scores are tied, shorter candidate texts now rank first. Fixes autocomplete ranking where typing `/pr-rev` showed `mach12:pr-review-assessment` above `mach12:pr-review`. Fixes [#290](https://github.com/LeanAndMean/scramjet/issues/290).
