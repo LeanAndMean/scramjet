@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.45.2 — Fix parallel subagent progress indicator showing completed prematurely
+
+Fix `currentResult.exitCode` initialization from `0` to `EXIT_CODE_RUNNING` in `runSingleAgent`, so interim updates propagated into the parallel `allResults[]` array correctly preserve the running sentinel. Previously, children that had emitted output but not yet exited were counted as completed, producing misleading progress indicators. Fixes [#301](https://github.com/LeanAndMean/scramjet/issues/301).
+
+### Fixed
+
+- Parallel progress rendering no longer shows `✓ 6/6 tasks` while tasks are still running.
+- Added 4 rendering tests covering partial parallel progress state.
+
 ## 0.45.1 — Fix subagent model inheritance from parent session
 
 Subagent subprocesses now inherit the active model from the parent session instead of reading from shared `settings.json`. Prevents cross-terminal model contamination during parallel subagent dispatches. Agent frontmatter `model:` still takes precedence. Fixes [#300](https://github.com/LeanAndMean/scramjet/issues/300).
