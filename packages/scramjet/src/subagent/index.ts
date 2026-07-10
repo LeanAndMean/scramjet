@@ -10,7 +10,7 @@ import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 
-const THINKING_LEVEL_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const THINKING_LEVEL_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export function capThinkingLevel(requested: ThinkingLevel, parentLevel: ThinkingLevel): ThinkingLevel {
 	const requestedIdx = THINKING_LEVEL_ORDER.indexOf(requested);
@@ -450,7 +450,7 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 	}
 }
 
-const EffortSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh"], {
+const EffortSchema = StringEnum(["off", "minimal", "low", "medium", "high", "xhigh", "max"], {
 	description: "Thinking effort level for the agent subprocess. Capped at the main session's level.",
 });
 

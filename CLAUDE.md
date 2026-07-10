@@ -220,9 +220,18 @@ Before adding a dependency, utility, or custom implementation, check whether exi
 
 ## Upstream Pi sync
 
-Pi runtime packages are vendored from the LeanAndMean fork and modified directly when doing so simplifies Scramjet's implementation. A small change to a Pi package that dramatically reduces complexity in Scramjet is the intended path — not something to work around. Minimize unnecessary divergence, but do not treat Pi packages as read-only.
+Upstream Pi is at https://github.com/earendil-works/pi. This is a runtime
+framework — not Anthropic's Claude Code CLI (github.com/anthropics/claude-code),
+which is a different product entirely.
 
-Behavioral modifications are tracked in `UPSTREAM_DIVERGENCE.md` and marked with `// SCRAMJET-DIVERGENCE:` comments in source. Consult the divergence doc before modifying Pi files or syncing with upstream.
+Pi packages are vendored directly in this repo at packages/{tui,ai,agent,coding-agent}
+and modified in place. Behavioral modifications are marked with
+`// SCRAMJET-DIVERGENCE:` comments in source. Consult UPSTREAM_DIVERGENCE.md before
+modifying Pi files or syncing with upstream.
+
+Minimize unnecessary divergence, but do not treat Pi packages as read-only. A small
+change to a Pi package that dramatically reduces complexity in Scramjet is the
+intended path — not something to work around.
 
 ## Release process
 

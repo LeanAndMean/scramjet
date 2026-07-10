@@ -41,6 +41,22 @@ describe("capThinkingLevel", () => {
 			expect(capThinkingLevel(level, "xhigh")).toBe(level);
 		}
 	});
+
+	it("caps max to parent when parent is below max", () => {
+		expect(capThinkingLevel("max", "xhigh")).toBe("xhigh");
+		expect(capThinkingLevel("max", "high")).toBe("high");
+	});
+
+	it("passes through max when parent is max", () => {
+		expect(capThinkingLevel("max", "max")).toBe("max");
+	});
+
+	it("passes through each level when parent is max", () => {
+		const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+		for (const level of levels) {
+			expect(capThinkingLevel(level, "max")).toBe(level);
+		}
+	});
 });
 
 function writeProjectAgent(tmpDir: string, fileName: string, frontmatter: string[], body = "Agent body.") {
