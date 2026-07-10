@@ -110,7 +110,7 @@ export function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => 
 		return items;
 	}
 
-	const results: { item: T; totalScore: number }[] = [];
+	const results: { item: T; totalScore: number; textLength: number }[] = [];
 
 	for (const item of items) {
 		const text = getText(item);
@@ -128,10 +128,10 @@ export function fuzzyFilter<T>(items: T[], query: string, getText: (item: T) => 
 		}
 
 		if (allMatch) {
-			results.push({ item, totalScore });
+			results.push({ item, totalScore, textLength: text.length });
 		}
 	}
 
-	results.sort((a, b) => a.totalScore - b.totalScore);
+	results.sort((a, b) => a.totalScore - b.totalScore || a.textLength - b.textLength);
 	return results.map((r) => r.item);
 }
