@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.45.1 — Fix subagent model inheritance from parent session
+
+Subagent subprocesses now inherit the active model from the parent session instead of reading from shared `settings.json`. Prevents cross-terminal model contamination during parallel subagent dispatches. Agent frontmatter `model:` still takes precedence. Fixes [#300](https://github.com/LeanAndMean/scramjet/issues/300).
+
+### Fixed
+
+- Thread `parentModel` (from `ctx.model`) through all three subagent dispatch paths (single, chain, parallel) as `--model provider/id`.
+- Subagent model resolution order: agent frontmatter `model:` → parent session model → omitted (subprocess default).
+
 ## 0.45.0 — Automatic light/dark theme detection for terminal readability
 
 Add runtime terminal background detection so light-terminal users automatically get the light theme without manual configuration. Implements OSC 11 background query, COLORFGBG parsing, and Apple Terminal heuristic with a four-step precedence chain. Tune light palette to meet WCAG AA contrast requirements. Fixes [#298](https://github.com/LeanAndMean/scramjet/issues/298).
