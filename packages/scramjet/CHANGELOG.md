@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.43.9 — Add text-length tiebreaker to fuzzyFilter for tied scores
+
+When fuzzy scores are tied, shorter candidate texts now rank first. Fixes autocomplete ranking where typing `/pr-rev` showed `mach12:pr-review-assessment` above `mach12:pr-review`. Fixes [#290](https://github.com/LeanAndMean/scramjet/issues/290).
+
+### Fixed
+
+- `fuzzyFilter` now uses text length as a secondary sort key so shorter matches rank above longer ones at equal score.
+
+### Added
+
+- Four tests for `fuzzyFilter` covering empty query, non-matching query, tied-score tiebreaker, and score-beats-length invariant.
+
 ## 0.43.8 — Add contributor-oriented root README for monorepo landing page
 
 Create a root README.md that orients repo visitors with project identity, monorepo package table, and navigation links to existing documentation. Add doc-sync rule to CLAUDE.md requiring root README updates when monorepo structure changes. Fixes [#286](https://github.com/LeanAndMean/scramjet/issues/286).
