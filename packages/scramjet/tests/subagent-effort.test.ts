@@ -247,3 +247,77 @@ function getFinalOutput(messages: any[]): string {
 	}
 	return "";
 }
+
+describe("subagent model inheritance", () => {
+	let tmpDir: string;
+	let origArgv1: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-model-test-"));
+		origArgv1 = process.argv[1];
+		writeProjectAgent(tmpDir, "test-agent.md", ["name: test-agent", "description: Test agent"]);
+	});
+
+	afterEach(() => {
+		process.argv[1] = origArgv1;
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("passes parent model as --model when agent has no model", async () => {
+		process.argv[1] = writeFakeInvocation(tmpDir, argsEchoScript());
+		const tool = registeredSubagentTool("high");
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: "test-agent", task: "work", agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false, model: { provider: "anthropic", id: "claude-opus-4-6" } },
+		);
+
+		const argv = JSON.parse(textContent(result));
+		const modelIdx = argv.indexOf("--model");
+		expect(modelIdx).toBeGreaterThan(-1);
+		expect(argv[modelIdx + 1]).toBe("anthropic/claude-opus-4-6");
+	});
+
+	it("agent frontmatter model takes precedence over parent model", async () => {
+		process.argv[1] = writeFakeInvocation(tmpDir, argsEchoScript());
+		writeProjectAgent(tmpDir, "model-agent.md", [
+			"name: model-agent",
+			"description: Agent with model",
+			"model: openai/gpt-4o",
+		]);
+		const tool = registeredSubagentTool("high");
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: "model-agent", task: "work", agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false, model: { provider: "anthropic", id: "claude-opus-4-6" } },
+		);
+
+		const argv = JSON.parse(textContent(result));
+		const modelIdx = argv.indexOf("--model");
+		expect(modelIdx).toBeGreaterThan(-1);
+		expect(argv[modelIdx + 1]).toBe("openai/gpt-4o");
+	});
+
+	it("no --model flag when both agent.model and ctx.model are undefined", async () => {
+		process.argv[1] = writeFakeInvocation(tmpDir, argsEchoScript());
+		const tool = registeredSubagentTool("high");
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: "test-agent", task: "work", agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		const argv = JSON.parse(textContent(result));
+		const modelIdx = argv.indexOf("--model");
+		expect(modelIdx).toBe(-1);
+	});
+});

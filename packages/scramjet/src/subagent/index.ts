@@ -284,6 +284,7 @@ interface RunSingleAgentOptions {
 	makeDetails: (results: SingleResult[]) => SubagentDetails;
 	discoveryDiagnostics: string[];
 	thinkingLevel: ThinkingLevel;
+	parentModel: string | undefined;
 }
 
 async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult> {
@@ -305,7 +306,8 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 	}
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session", "--cache-retention", "short"];
-	if (agent.model) args.push("--model", agent.model);
+	const modelArg = agent.model ?? opts.parentModel;
+	if (modelArg) args.push("--model", modelArg);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 	args.push("--thinking", opts.thinkingLevel);
 
@@ -580,6 +582,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 			}
 
 			const parentLevel = pi.getThinkingLevel();
+			const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 			const resolveEffort = (effort: string | undefined): ThinkingLevel =>
 				effort ? capThinkingLevel(effort as ThinkingLevel, parentLevel) : parentLevel;
 
@@ -616,6 +619,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 						makeDetails: makeDetails("chain"),
 						discoveryDiagnostics: discovery.diagnostics,
 						thinkingLevel: resolveEffort(step.effort),
+						parentModel,
 					});
 					results.push(result);
 
@@ -696,6 +700,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 						makeDetails: makeDetails("parallel"),
 						discoveryDiagnostics: discovery.diagnostics,
 						thinkingLevel: resolveEffort(t.effort),
+						parentModel,
 					});
 					allResults[index] = result;
 					emitParallelUpdate();
@@ -733,6 +738,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					makeDetails: makeDetails("single"),
 					discoveryDiagnostics: discovery.diagnostics,
 					thinkingLevel: resolveEffort(params.effort),
+					parentModel,
 				});
 				if (isResultError(result)) {
 					return {
