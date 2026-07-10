@@ -110,6 +110,8 @@ import { UserMessageComponent } from "./components/user-message.js";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.js";
 import { NspellProvider } from "./spellcheck.js";
 import {
+	classifyBackgroundColor,
+	detectThemeFromEnvironment,
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
 	getEditorTheme,
@@ -577,14 +579,44 @@ export class InteractiveMode {
 			console.log(theme.fg("dim", `Model scope: ${modelList}${cycleHint}`));
 		}
 
-		// Add header container as first child
+		// Add header container as first child (content built after theme detection below)
 		this.ui.addChild(this.headerContainer);
 
-		// Add header with keybindings from config (unless silenced)
+		this.ui.addChild(this.chatContainer);
+		this.ui.addChild(this.pendingMessagesContainer);
+		this.ui.addChild(this.statusContainer);
+		this.renderWidgets(); // Initialize with default spacer
+		this.ui.addChild(this.widgetContainerAbove);
+		this.ui.addChild(this.editorContainer);
+		this.ui.addChild(this.widgetContainerBelow);
+		this.ui.addChild(this.footer);
+		this.ui.setFocus(this.editor);
+
+		this.setupKeyHandlers();
+		this.setupEditorSubmitHandler();
+
+		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
+		this.ui.start();
+		this.isInitialized = true;
+
+		// Detect terminal background via OSC 11 if no stronger signal resolved synchronously.
+		// The constructor already initialized theme from explicit setting, COLORFGBG, or Apple Terminal
+		// heuristic (via getDefaultTheme). This step only fires when no explicit theme is set and
+		// detectThemeFromEnvironment() returned undefined (no env signal available).
+		if (!this.settingsManager.getTheme() && !detectThemeFromEnvironment()) {
+			const rgb = await this.ui.queryTerminalBackgroundColor({ timeoutMs: 100 });
+			if (rgb) {
+				const detected = classifyBackgroundColor(rgb);
+				if (detected !== "dark") {
+					setTheme(detected);
+				}
+			}
+		}
+
+		// Build themed header content (after theme detection so colors are correct)
 		if (this.options.verbose || !this.settingsManager.getQuietStartup()) {
 			const logo = theme.bold(theme.fg("accent", APP_NAME)) + theme.fg("dim", ` v${this.version}`);
 
-			// Build startup instructions using keybinding hint helpers
 			const hint = (keybinding: AppKeybinding, description: string) => keyHint(keybinding, description);
 
 			const expandedInstructions = [
@@ -632,32 +664,13 @@ export class InteractiveMode {
 				0,
 			);
 
-			// Setup UI layout
 			this.headerContainer.addChild(new Spacer(1));
 			this.headerContainer.addChild(this.builtInHeader);
 			this.headerContainer.addChild(new Spacer(1));
 		} else {
-			// Minimal header when silenced
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
 		}
-
-		this.ui.addChild(this.chatContainer);
-		this.ui.addChild(this.pendingMessagesContainer);
-		this.ui.addChild(this.statusContainer);
-		this.renderWidgets(); // Initialize with default spacer
-		this.ui.addChild(this.widgetContainerAbove);
-		this.ui.addChild(this.editorContainer);
-		this.ui.addChild(this.widgetContainerBelow);
-		this.ui.addChild(this.footer);
-		this.ui.setFocus(this.editor);
-
-		this.setupKeyHandlers();
-		this.setupEditorSubmitHandler();
-
-		// Start the UI before initializing extensions so session_start handlers can use interactive dialogs
-		this.ui.start();
-		this.isInitialized = true;
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();

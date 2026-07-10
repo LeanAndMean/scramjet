@@ -12,6 +12,7 @@ Themes are JSON files that define colors for the TUI.
 - [Theme Format](#theme-format)
 - [Color Tokens](#color-tokens)
 - [Color Values](#color-values)
+- [Terminal Background](#terminal-background)
 - [Tips](#tips)
 
 ## Locations
@@ -37,7 +38,20 @@ Select a theme via `/settings` or in `settings.json`:
 }
 ```
 
-On first run, scramjet detects your terminal background and defaults to `dark` or `light`.
+An explicit `theme` setting is always authoritative — automatic detection never overrides it.
+
+### Automatic Theme Detection
+
+When no explicit theme is configured, scramjet automatically selects `dark` or `light` on each interactive startup using the following precedence chain:
+
+1. **`COLORFGBG` environment variable** — If set (e.g., `0;15` or `15;0;0`), the final semicolon-delimited field is interpreted as an xterm-256 color index. Its RGB approximation is classified by WCAG relative luminance (threshold 0.2) as light or dark.
+2. **Apple Terminal heuristic** — If `TERM_PROGRAM=Apple_Terminal` and no valid `COLORFGBG` is present, defaults to `light`. Users with custom dark profiles can set `theme: "dark"` explicitly.
+3. **OSC 11 terminal query** — On terminals that support it (iTerm2, Kitty, WezTerm, Windows Terminal, Alacritty), scramjet queries the actual background color via the OSC 11 escape sequence. The query has a 100 ms timeout to avoid perceptible startup delay.
+4. **Fallback** — If all of the above fail or time out, defaults to `dark`.
+
+Automatic detection runs on every interactive startup. The result is never persisted to settings — terminal profiles can change between launches, and detection will adapt.
+
+> **Note:** macOS Terminal.app does not support OSC 11 queries (nor truecolor), but the Apple Terminal heuristic (step 2) correctly selects the light theme for its default configuration.
 
 ## Creating a Custom Theme
 
@@ -237,7 +251,7 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 
 ### HTML Export (optional)
 
-The `export` section controls colors for `/export` HTML output. If omitted, colors are derived from `userMessageBg`.
+The `export` section controls colors for `/export` HTML output only. If omitted, colors are derived from `userMessageBg`.
 
 ```json
 {
@@ -249,6 +263,8 @@ The `export` section controls colors for `/export` HTML output. If omitted, colo
 }
 ```
 
+> **Note:** `export.pageBg` controls the HTML export background, not the terminal background. Scramjet cannot set the terminal's background color — that is always owned by the terminal emulator. See [Terminal Background](#terminal-background) below.
+
 ## Color Values
 
 Four formats are supported:
@@ -258,7 +274,15 @@ Four formats are supported:
 | Hex | `"#ff0000"` | 6-digit hex RGB |
 | 256-color | `39` | xterm 256-color palette index (0-255) |
 | Variable | `"primary"` | Reference to a `vars` entry |
-| Default | `""` | Terminal's default color |
+| Default | `""` | Terminal's default foreground/background |
+
+### Empty-String Terminal Defaults
+
+When a color token is set to `""`, scramjet emits `\x1b[39m` (reset foreground) or `\x1b[49m` (reset background), deferring to the terminal's configured default colors. This means:
+
+- The theme cannot guarantee contrast for empty-string tokens, because the terminal's actual foreground/background is unknown at theme time.
+- Tokens like `text`, `userMessageText`, `customMessageText`, and `toolOutput` use `""` in the built-in themes to inherit the terminal's default foreground.
+- If your terminal's default foreground creates poor contrast against themed element backgrounds, you can override these tokens with explicit colors in a custom theme.
 
 ### 256-Color Palette
 
@@ -276,15 +300,30 @@ Check truecolor support:
 echo $COLORTERM  # Should output "truecolor" or "24bit"
 ```
 
+## Terminal Background
+
+Scramjet styles individual UI elements (message boxes, tool boxes, selected items) with themed backgrounds, but it does **not** control the terminal's overall background color. The space between and around themed elements shows the terminal emulator's own background.
+
+This is by design — setting the terminal background via escape sequences (OSC 11 mutation) is invasive, not universally supported, and affects scrollback behavior. Instead:
+
+- The built-in `light` theme is designed for white or near-white terminal backgrounds.
+- The built-in `dark` theme is designed for dark terminal backgrounds.
+- Automatic detection selects the appropriate theme based on your terminal's actual background.
+- For best results, ensure your terminal profile's background color matches the theme family (light background → light theme, dark background → dark theme).
+
+### Light Theme Contrast
+
+The built-in light theme guarantees WCAG AA contrast (4.5:1) for all explicit text-bearing foreground colors against their actual rendering surfaces (element backgrounds and white canvas). Element backgrounds (`userMessageBg`, `toolPendingBg`, etc.) maintain at least 1.30:1 contrast against white for visual separation. These guarantees hold in both truecolor and 256-color rendering modes.
+
 ## Tips
 
 **Dark terminals:** Use bright, saturated colors with higher contrast.
 
-**Light terminals:** Use darker, muted colors with lower contrast.
+**Light terminals:** Use darker, muted colors. The built-in light theme targets 4.5:1+ contrast against white.
 
 **Color harmony:** Start with a base palette (Nord, Gruvbox, Tokyo Night), define it in `vars`, and reference consistently.
 
-**Testing:** Check your theme with different message types, tool states, markdown content, and long wrapped text.
+**Testing:** Check your theme with different message types, tool states, markdown content, and long wrapped text. Test in both truecolor and 256-color mode if your users may have older terminals.
 
 **VS Code:** Set `terminal.integrated.minimumContrastRatio` to `1` for accurate colors.
 

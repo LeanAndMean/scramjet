@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.45.0 — Automatic light/dark theme detection for terminal readability
+
+Add runtime terminal background detection so light-terminal users automatically get the light theme without manual configuration. Implements OSC 11 background query, COLORFGBG parsing, and Apple Terminal heuristic with a four-step precedence chain. Tune light palette to meet WCAG AA contrast requirements. Fixes [#298](https://github.com/LeanAndMean/scramjet/issues/298).
+
+### Added
+
+- OSC 11 terminal background color query in TUI with 100 ms timeout, single-flight semantics, and late-reply discard safety.
+- StdinBuffer `holdOscInput` mechanism to retain split OSC responses past the 10 ms flush timeout.
+- Theme auto-detection precedence: explicit setting → COLORFGBG → Apple Terminal heuristic → OSC 11 query → dark default.
+- COLORFGBG parsing uses final semicolon-delimited field with luminance-based light/dark classification.
+- Apple Terminal (`TERM_PROGRAM=Apple_Terminal`) light-mode heuristic for terminals lacking COLORFGBG and OSC 11.
+- Deferred themed header content construction to prevent wrong-theme color flash on startup.
+- 341 new tests across terminal-colors, theme-detection, and light-theme-contrast test files.
+
+### Changed
+
+- Light theme palette: all foreground/background pairs meet WCAG AA 4.5:1 contrast against white; element backgrounds provide ≥1.30:1 visual separation from white canvas.
+- Theme setting default changed from `"dark"` to auto-detected (explicit setting always overrides).
+- Auto-detection results are never persisted to settings; recomputed on each interactive startup.
+
+### Documentation
+
+- `themes.md`: added Automatic Theme Detection section with precedence chain and terminal compatibility notes.
+- `settings.md`: updated theme setting description to reflect auto-detection default.
+- `UPSTREAM_DIVERGENCE.md`: added TUI divergence entries and adapted-upstream-commits table.
+
 ## 0.44.0 — Add GPT-5.6 Sol, Terra, Luna model support and max thinking level
 
 Add GPT-5.6 Sol, Terra, and Luna models across OpenAI providers with correct pricing, context windows, and cache-write costs. Introduce `max` reasoning effort level for Sol across the full stack. Fixes [#297](https://github.com/LeanAndMean/scramjet/issues/297).

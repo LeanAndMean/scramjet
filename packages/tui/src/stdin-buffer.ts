@@ -278,6 +278,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	private pasteMode: boolean = false;
 	private pasteBuffer: string = "";
 	private pendingKittyPrintableCodepoint: number | undefined;
+	private _holdOsc: boolean = false;
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
@@ -376,6 +377,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 
 		if (this.buffer.length > 0) {
+			if (this._holdOsc && this.buffer.startsWith(`${ESC}]`)) {
+				return;
+			}
 			this.timeout = setTimeout(() => {
 				const flushed = this.flush();
 
@@ -426,6 +430,19 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 	getBuffer(): string {
 		return this.buffer;
+	}
+
+	// SCRAMJET-DIVERGENCE: holdOscInput suppresses flush timeout for incomplete OSC sequences (#298).
+	holdOscInput(hold: boolean): void {
+		this._holdOsc = hold;
+		if (!hold && this.buffer.length > 0 && !this.timeout) {
+			this.timeout = setTimeout(() => {
+				const flushed = this.flush();
+				for (const sequence of flushed) {
+					this.emitDataSequence(sequence);
+				}
+			}, this.timeoutMs);
+		}
 	}
 
 	destroy(): void {

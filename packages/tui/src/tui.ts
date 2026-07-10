@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
+import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
 
@@ -260,6 +261,12 @@ export class TUI extends Container {
 	private fullRedrawCount = 0;
 	private stopped = false;
 
+	// OSC 11 background color query state
+	private bgColorPromise: Promise<TerminalRgb | undefined> | undefined;
+	private bgColorResolve: ((value: TerminalRgb | undefined) => void) | undefined;
+	private bgColorTimeout: ReturnType<typeof setTimeout> | undefined;
+	private bgColorDiscardCredit = false;
+
 	// Overlay stack for modal components rendered on top of base content
 	private focusOrderCounter = 0;
 	private overlayStack: {
@@ -470,11 +477,45 @@ export class TUI extends Container {
 		this.terminal.write("\x1b[16t");
 	}
 
+	// SCRAMJET-DIVERGENCE: OSC 11 terminal background query with timeout, single-flight, and late-reply safety (#298).
+	queryTerminalBackgroundColor(options?: { timeoutMs?: number }): Promise<TerminalRgb | undefined> {
+		if (this.bgColorPromise) return this.bgColorPromise;
+
+		const timeoutMs = options?.timeoutMs ?? 100;
+		this.bgColorPromise = new Promise<TerminalRgb | undefined>((resolve) => {
+			this.bgColorResolve = resolve;
+		});
+
+		this.terminal.holdOscInput(true);
+		this.terminal.write(OSC_11_QUERY);
+
+		this.bgColorTimeout = setTimeout(() => {
+			this.bgColorTimeout = undefined;
+			this.terminal.holdOscInput(false);
+			this.bgColorDiscardCredit = true;
+			if (this.bgColorResolve) {
+				this.bgColorResolve(undefined);
+				this.bgColorResolve = undefined;
+			}
+		}, timeoutMs);
+
+		return this.bgColorPromise;
+	}
+
 	stop(): void {
 		this.stopped = true;
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
 			this.renderTimer = undefined;
+		}
+		if (this.bgColorTimeout) {
+			clearTimeout(this.bgColorTimeout);
+			this.bgColorTimeout = undefined;
+		}
+		if (this.bgColorResolve) {
+			this.bgColorDiscardCredit = true;
+			this.bgColorResolve(undefined);
+			this.bgColorResolve = undefined;
 		}
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
 		if (this.previousLines.length > 0) {
@@ -542,6 +583,10 @@ export class TUI extends Container {
 	}
 
 	private handleInput(data: string): void {
+		if (this.consumeOsc11Response(data)) {
+			return;
+		}
+
 		if (this.inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.inputListeners) {
@@ -594,6 +639,32 @@ export class TUI extends Container {
 			this.focusedComponent.handleInput(data);
 			this.requestRender();
 		}
+	}
+
+	// SCRAMJET-DIVERGENCE: intercepts OSC 11 responses before input listeners (#298).
+	private consumeOsc11Response(data: string): boolean {
+		if (!isOsc11Response(data)) return false;
+
+		// Discard credit: consume one late response after timeout or stop
+		if (this.bgColorDiscardCredit) {
+			this.bgColorDiscardCredit = false;
+			return true;
+		}
+
+		// Active query: resolve with parsed result
+		if (this.bgColorResolve) {
+			const rgb = parseOsc11Response(data);
+			if (this.bgColorTimeout) {
+				clearTimeout(this.bgColorTimeout);
+				this.bgColorTimeout = undefined;
+			}
+			this.terminal.holdOscInput(false);
+			this.bgColorResolve(rgb);
+			this.bgColorResolve = undefined;
+			return true;
+		}
+
+		return false;
 	}
 
 	private consumeCellSizeResponse(data: string): boolean {

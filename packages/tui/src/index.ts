@@ -62,6 +62,8 @@ export type { SpellcheckProvider, SpellcheckRange } from "./spellcheck.js";
 export { StdinBuffer, type StdinBufferEventMap, type StdinBufferOptions } from "./stdin-buffer.js";
 // Terminal interface and implementations
 export { ProcessTerminal, type Terminal } from "./terminal.js";
+// Terminal color detection
+export { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
 // Terminal image support
 export {
 	allocateImageId,

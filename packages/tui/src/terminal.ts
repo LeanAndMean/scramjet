@@ -55,6 +55,9 @@ export interface Terminal {
 
 	// Progress indicator (OSC 9;4)
 	setProgress(active: boolean): void;
+
+	// SCRAMJET-DIVERGENCE: holdOscInput wires TUI-level query control to StdinBuffer (#298).
+	holdOscInput(hold: boolean): void;
 }
 
 /**
@@ -384,6 +387,10 @@ export class ProcessTerminal implements Terminal {
 			// OSC 9;4;0 - clear progress
 			process.stdout.write(TERMINAL_PROGRESS_CLEAR_SEQUENCE);
 		}
+	}
+
+	holdOscInput(hold: boolean): void {
+		this.stdinBuffer?.holdOscInput(hold);
 	}
 
 	private clearProgressInterval(): boolean {

@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/coding-agent",
-	"version": "0.74.1-scramjet.13",
+	"version": "0.74.1-scramjet.14",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -35,7 +35,7 @@
 	"dependencies": {
 		"@leanandmean/agent": "0.74.1-scramjet.9",
 		"@leanandmean/ai": "0.74.1-scramjet.8",
-		"@leanandmean/tui": "0.74.1-scramjet.7",
+		"@leanandmean/tui": "0.74.1-scramjet.8",
 		"@silvia-odwyer/photon-node": "^0.3.4",
 		"chalk": "^5.5.0",
 		"dictionary-en": "^4.0.0",
