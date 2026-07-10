@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/agent",
-	"version": "0.74.1-scramjet.8",
+	"version": "0.74.1-scramjet.9",
 	"publishConfig": {
 		"access": "public"
 	},
@@ -28,7 +28,7 @@
 		"test": "vitest --run --passWithNoTests"
 	},
 	"dependencies": {
-		"@leanandmean/ai": "0.74.1-scramjet.7",
+		"@leanandmean/ai": "0.74.1-scramjet.8",
 		"ignore": "^7.0.5",
 		"typebox": "^1.1.24",
 		"yaml": "^2.8.2"

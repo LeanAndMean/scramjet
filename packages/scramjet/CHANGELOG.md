@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.44.0 — Add GPT-5.6 Sol, Terra, Luna model support and max thinking level
+
+Add GPT-5.6 Sol, Terra, and Luna models across OpenAI providers with correct pricing, context windows, and cache-write costs. Introduce `max` reasoning effort level for Sol across the full stack. Fixes [#297](https://github.com/LeanAndMean/scramjet/issues/297).
+
+### Added
+
+- GPT-5.6 Sol (1M context, `max` thinking support), Terra (1M context), and Luna (400K context) under `openai` and `openai-codex` providers.
+- `max` reasoning effort level across types, providers, CLI args, UI selectors, and subagent schema.
+- New tests for GPT-5.6 model entries, `max` thinking level clamping, and Bedrock budget handling.
+
+### Changed
+
+- Rename `xhigh` description from "Maximum" to "Extra-high" to avoid confusion with the new `max` level.
+- Update `ClampedThinkingLevel` exclusions and provider type boundaries for Google/Vertex and Bedrock.
+- Clarify CLAUDE.md upstream Pi sync section with explicit repo URL and Pi/Claude Code CLI disambiguation.
+- Update UPSTREAM_DIVERGENCE.md with GPT-5.6-related divergence entries.
+
+### Fixed
+
+- Pre-existing workspace version mismatches in agent, coding-agent, and scramjet dependency references.
+
 ## 0.43.10 — Fix delegation scoping and improve pre-merge command prose
 
 Fix delegation scoping so all delegations intersect with the top-level command's `allowed-tools` independently, rather than monotonically narrowing through the latched stack. Expand pr-pre-merge conflict resolution, test failure handling, and uncommitted file scanning. Make pr-merge CI failure guidance actionable. Fixes [#293](https://github.com/LeanAndMean/scramjet/issues/293).
