@@ -1016,3 +1016,94 @@ describe("renderResult model and effort", () => {
 		expect(resultRendered).not.toContain("[Effort:");
 	});
 });
+
+describe("renderResult — parallel progress accuracy", () => {
+	function partialParallelResult(results: any[]) {
+		return {
+			content: [{ type: "text", text: "in progress" }],
+			details: {
+				mode: "parallel",
+				agentScope: "user",
+				projectAgentsDir: null,
+				results,
+			},
+		};
+	}
+
+	function makeResult(overrides: any = {}) {
+		return {
+			agent: "test-agent",
+			agentSource: "user",
+			task: "some task",
+			exitCode: 0,
+			messages: [],
+			stderr: "",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			model: "claude-sonnet-4-20250514",
+			...overrides,
+		};
+	}
+
+	it("shows running indicator when some tasks have not finalized", () => {
+		const tool = registeredSubagentTool();
+		const results = [
+			makeResult({
+				agent: "done-agent",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "output" }] }],
+			}),
+			makeResult({ agent: "running-agent-1", exitCode: -1 }),
+			makeResult({ agent: "running-agent-2", exitCode: -1 }),
+		];
+		const rendered = renderToolResult(tool, partialParallelResult(results), false);
+		expect(rendered).toContain("⏳");
+		expect(rendered).toContain("1/3 done, 2 running");
+	});
+
+	it("shows (running...) for tasks with no output that are still running", () => {
+		const tool = registeredSubagentTool();
+		const results = [
+			makeResult({
+				agent: "done-agent",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "output" }] }],
+			}),
+			makeResult({ agent: "running-agent", exitCode: -1 }),
+		];
+		const rendered = renderToolResult(tool, partialParallelResult(results), false);
+		expect(rendered).toContain("(running...)");
+	});
+
+	it("shows all-running state when no tasks have finalized", () => {
+		const tool = registeredSubagentTool();
+		const results = [
+			makeResult({ agent: "agent-0", exitCode: -1 }),
+			makeResult({ agent: "agent-1", exitCode: -1 }),
+			makeResult({ agent: "agent-2", exitCode: -1 }),
+		];
+		const rendered = renderToolResult(tool, partialParallelResult(results), false);
+		expect(rendered).toContain("⏳");
+		expect(rendered).toContain("0/3 done, 3 running");
+		expect(rendered).not.toContain("✓");
+	});
+
+	it("shows success only when all tasks have finalized successfully", () => {
+		const tool = registeredSubagentTool();
+		const results = [
+			makeResult({
+				agent: "agent-0",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "out 0" }] }],
+			}),
+			makeResult({
+				agent: "agent-1",
+				exitCode: 0,
+				messages: [{ role: "assistant", content: [{ type: "text", text: "out 1" }] }],
+			}),
+		];
+		const rendered = renderToolResult(tool, partialParallelResult(results), false);
+		expect(rendered).toContain("✓");
+		expect(rendered).toContain("2/2 tasks");
+		expect(rendered).not.toContain("running");
+	});
+});
