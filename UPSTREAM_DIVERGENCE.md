@@ -29,6 +29,14 @@ Package names in `package.json` files were also renamed:
 | `packages/agent/src/agent-loop.ts` | Awaits `config.beforeToolBatch?.(...)` after assistant `message_end` and before tool-call extraction | Ensures queued async handlers settle before pipeline reads tool calls ([#196](https://github.com/LeanAndMean/scramjet/issues/196)) |
 | `packages/agent/src/agent-loop.ts` | Narrowed tool-call helpers to a `ToolCallHooks` type; extracted `prepareResolvedToolCall`; added exported `executeHarnessToolCall` (single resolved-tool execution accepting an `AgentTool` directly, bypassing the active-tools lookup) | Lets harness-only (LLM-invisible) tools execute through the identical prepare/execute/finalize pipeline ([#244](https://github.com/LeanAndMean/scramjet/issues/244)) |
 | `packages/agent/src/agent.ts` | Added `Agent.runHarnessTool` (transient idle run + mid-run queue with turn-boundary and end-of-run flush drains); `createLoopConfig().prepareNextTurn` always runs (drains harness queue + routing self-heal onto `state.model`); `prepareNextTurn` public signature widened to receive the live `PrepareNextTurnContext`; `processEvents` falls back to a transient run signal | Harness-tool-invocation primitive: model-change notices and other harness-originated tool calls execute with real event/persistence/routing semantics but no run/turn framing ([#244](https://github.com/LeanAndMean/scramjet/issues/244)) |
+| `packages/tui/src/terminal-colors.ts` | New file: pure OSC 11 response parser/recognizer with normalized RGB output | Terminal background color detection for automatic theme selection ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
+| `packages/tui/src/stdin-buffer.ts` | Added `holdOscInput(hold)` method that suppresses the 10 ms flush timeout for incomplete OSC sequences while a query is active | Prevents split OSC 11 responses from being flushed as raw text into the editor ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
+| `packages/tui/src/terminal.ts` | Added `holdOscInput(hold: boolean)` to the `Terminal` interface and `ProcessTerminal` implementation | Wires TUI-level query control to StdinBuffer ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
+| `packages/tui/src/tui.ts` | Added `queryTerminalBackgroundColor({ timeoutMs })` single-flight method; `consumeOsc11Response` input interception before listeners; discard credit for late responses preserved across stop/start | OSC 11 terminal background query with timeout, single-flight, and late-reply safety ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
+| `packages/tui/src/index.ts` | Re-exported `TerminalRgb` type and `parseOsc11Response` from `terminal-colors.ts` | Public API surface for theme detection consumers ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
+| `packages/coding-agent/src/modes/interactive/theme/theme.ts` | Added `detectThemeFromEnvironment()` (COLORFGBG + Apple Terminal), `detectThemeInteractive()` (full async precedence), `classifyBackgroundColor()`, `xterm256ToNormalizedRgb()`, luminance helpers; fixed COLORFGBG to use final field | Automatic theme selection policy: explicit → COLORFGBG → Apple Terminal → OSC 11 → dark ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
+| `packages/coding-agent/src/modes/interactive/interactive-mode.ts` | Added async OSC 11 query after `ui.start()` when no synchronous signal resolved; deferred themed header content building to after detection | Startup wiring for automatic theme detection without wrong-theme flash ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
+| `packages/coding-agent/src/modes/interactive/theme/light.json` | Darkened all foreground vars and element backgrounds to meet WCAG 4.5:1 text contrast and ≥1.30:1 background separation against white in both truecolor and 256-color modes | Light-palette readability contract ([#298](https://github.com/LeanAndMean/scramjet/issues/298)) |
 | `packages/coding-agent/package.json` | Added `piConfig: { name: "scramjet", configDir: ".scramjet" }` | Rebrands TUI to "scramjet", sets config/agent dir names |
 | `packages/coding-agent/src/config.ts` | `VERSION` reads `SCRAMJET_VERSION` env var first; `getChangelogPath()` reads `SCRAMJET_CHANGELOG_PATH`; `getPackageDir()` reads `SCRAMJET_PACKAGE_DIR` with `PI_PACKAGE_DIR` fallback; removed `getShareViewerUrl()`/`DEFAULT_SHARE_VIEWER_URL`; download URL points to `LeanAndMean/scramjet` | Product displays its own changelog, env vars, and URLs |
 | `packages/coding-agent/src/main.ts` | Added `builtinInit` to `MainOptions` interface; `--offline` sets `SCRAMJET_OFFLINE`; offline check reads `SCRAMJET_OFFLINE` with `PI_OFFLINE` fallback; exported `buildSessionOptions` with `inherited` parameter (highest-precedence model/thinkingLevel from previous session); gated CLI `--model` and `--thinking` behind existing-value checks so inherited values take priority | Direct product wiring + rebranded env vars; model isolation for in-process session replacement ([#186](https://github.com/LeanAndMean/scramjet/issues/186)) |
@@ -83,13 +91,20 @@ Preserved:
 - `pi-package` npm keyword
 - `pi` key in package.json manifests
 
+### Adapted upstream commits
+
+The following upstream Pi commits were used as reference during Scramjet-specific implementation. The code is not a direct cherry-pick — it was adapted to fit Scramjet's architecture (e.g., single-flight query semantics, StdinBuffer hold mechanism, and coding-agent policy layer are Scramjet-specific).
+
+| Upstream commit | What it contributed | Scramjet adaptation |
+|-----------------|--------------------|-----------------|
+| `f10cf57e96ad` | OSC 11 background query concept and response parsing approach | Reimplemented as a pure parser (`terminal-colors.ts`) with single-flight TUI method, StdinBuffer hold, discard credit, and stop/start safety. Upstream's implementation differs structurally. |
+| `f0989800cbd5` | Theme detection precedence idea (environment signals before terminal query) | Reimplemented as `detectThemeFromEnvironment()` + `detectThemeInteractive()` with strict COLORFGBG final-field parsing, Apple Terminal heuristic, luminance classification, and no-persistence semantics. |
+
 ### Currently unmodified packages
 
 These are current facts, not constraints. Pi packages are modified directly when doing so simplifies Scramjet's implementation (see CLAUDE.md "Upstream Pi sync").
 
-- `packages/tui/` — no source modifications
-
-Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above. `packages/ai/` carries the unconditional tool-call-ID sanitization (issue #244) and the Opus 4.8/Fable 5/Sonnet 5 model support divergences (issue #245) listed in the table above.
+Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above. `packages/ai/` carries the unconditional tool-call-ID sanitization (issue #244) and the Opus 4.8/Fable 5/Sonnet 5 model support divergences (issue #245) listed in the table above. `packages/tui/` carries the OSC 11 query and StdinBuffer hold divergences (issue #298) listed in the table above.
 
 ## Cherry-Pick Workflow
 
