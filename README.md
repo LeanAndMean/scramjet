@@ -29,7 +29,6 @@ Requires Node >= 20. See [`CLAUDE.md`](CLAUDE.md) for build commands, local deve
 ## Documentation
 
 - [`packages/scramjet/README.md`](packages/scramjet/README.md) — User-facing docs (install, usage, design philosophy)
-- [`ALPHA_GUIDE.md`](ALPHA_GUIDE.md) — Alpha tester setup and usage guide
 - [`packages/scramjet/docs/scramjet-vision.md`](packages/scramjet/docs/scramjet-vision.md) — Design document and target architecture
 - [`packages/scramjet/docs/command-authoring.md`](packages/scramjet/docs/command-authoring.md) — Command-set authoring reference
 - [`CLAUDE.md`](CLAUDE.md) — Contributor workflow and repo conventions

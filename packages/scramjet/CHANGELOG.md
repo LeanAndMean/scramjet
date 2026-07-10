@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.43.8 — Add contributor-oriented root README for monorepo landing page
+
+Create a root README.md that orients repo visitors with project identity, monorepo package table, and navigation links to existing documentation. Add doc-sync rule to CLAUDE.md requiring root README updates when monorepo structure changes. Fixes [#286](https://github.com/LeanAndMean/scramjet/issues/286).
+
+### Added
+
+- Root `README.md` with overview, package table, development pointer, documentation index, and license section.
+- CLAUDE.md doc-sync rule for root README maintenance.
+
 ## 0.43.7 — Migrate repository license from MIT to Apache 2.0
 
 Replace MIT license with Apache 2.0 across all five published packages. Add per-package LICENSE files for runtime packages so npm tarballs ship license text. Create NOTICE file with third-party attributions for vendored code (Pi upstream fork, ansi-regex/strip-ansi, marked, OpenTUI, Highlight.js). Fixes [#283](https://github.com/LeanAndMean/scramjet/issues/283).
