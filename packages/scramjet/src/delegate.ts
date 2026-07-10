@@ -72,8 +72,7 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 				};
 			}
 			const activeCommand = activeCommandName(state.lifecycle);
-			const callerTools =
-				activeCommand !== null ? state.registry.get(activeCommand)?.allowedTools : undefined;
+			const callerTools = activeCommand !== null ? state.registry.get(activeCommand)?.allowedTools : undefined;
 			const effectiveAllowedTools = intersectTools(callerTools, def.allowedTools);
 			const frame: DelegateFrame = {
 				commandName: params.command,

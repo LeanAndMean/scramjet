@@ -1,5 +1,5 @@
 ---
-description: Run the pre-merge checklist - branch freshness, docs, version, CHANGELOG, tests
+description: Run the pre-merge checklist - branch freshness, docs, version, CHANGELOG, tests, CI
 argument-hint: "<pr-number> [context]"
 allowed-tools:
   - bash
@@ -136,7 +136,7 @@ This summary provides the foundation for the documentation, version bump, CHANGE
 
 If the user provided context, honor it as guidance for this checklist:
 
-- **Skip directives** (e.g., "skip version bump", "no changelog needed"): skip the named checklist section entirely and report it as "skipped per user request" in Step 8. Do not run the section's logic, even partially.
+- **Skip directives** (e.g., "skip version bump", "no changelog needed"): skip the named checklist section entirely and report it as "skipped per user request" in Step 9. Do not run the section's logic, even partially.
 - **Focus directives** (e.g., "focus on docs", "scrutinize the test coverage"): examine the named section more thoroughly. Surface findings that a routine pass might overlook.
 - **Other context**: use as supplementary information when running the relevant sections (e.g., a note about what changed informs documentation review).
 
@@ -196,14 +196,100 @@ If there are changes, assess and commit them:
 1. **Scan for uncommitted/untracked files** beyond what the checklist explicitly modified. Categorize each file:
    - **Checklist-produced** (files you modified during Steps 6a-6d): always stage.
    - **Generated tracked artifacts** (e.g., `package-lock.json`, `yarn.lock`, `Cargo.lock`, `poetry.lock`, build outputs that the repo already tracks): stage if they changed as a side effect of checklist operations (dependency install, build step). If unsure whether the change is a side effect or pre-existing, check `git diff <file>` to understand what changed.
-   - **Unrelated pre-existing files** (files that were dirty or untracked before the checklist ran, unrelated to this PR's changes): leave alone. Note them in the Step 8 report so the user is aware.
+   - **Unrelated pre-existing files** (files that were dirty or untracked before the checklist ran, unrelated to this PR's changes): leave alone. Note them in the Step 9 report so the user is aware.
    - **Ambiguous files** (cannot determine whether they belong to this PR or are pre-existing): ask the user about the specific files before staging.
    Never use `git add -A` or `git add .` — stage files individually based on the assessment above.
 2. **Stage** the files identified for inclusion (`git add <file>...`). If staging fails, report the error to the user and proceed to Step 8.
 3. **Commit** with message: "Pre-merge checklist: [brief summary of what was updated]". If the commit fails (pre-commit hook, empty commit, permissions), report the error to the user and proceed to Step 8.
 4. **Push** to remote (`git push`). If the push fails, report the error to the user and advise them to retry manually with `git push`. Proceed to Step 8.
 
-## Step 8: Present pre-merge report
+## Step 8: CI verification
+
+Check whether CI is passing on the current HEAD of the PR branch. This step catches failures that local checks do not cover (lint, typecheck, build, packaging, smoke tests).
+
+If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), skip this step and report "CI: skipped per user request" in Step 9.
+
+### 8a. Check CI status
+
+```
+gh pr checks <pr-number> --json name,state,bucket,link
+```
+
+Evaluate the results:
+
+- **All checks pass** (`bucket` is `pass` for every check): CI is green. Proceed to Step 9.
+- **Any checks pending** (`bucket` is `pending`): CI is still running. Wait for completion:
+  ```
+  gh pr checks <pr-number> --watch
+  ```
+  After it finishes, re-read the results and evaluate again.
+- **No checks reported**: CI may not have triggered yet. Wait up to 60 seconds for checks to appear, polling `gh pr checks` with a short delay. If checks appear, evaluate them. If none appear, note this in the report and proceed to Step 9.
+- **Any checks failed** (`bucket` is `fail`): proceed to 8b.
+
+### 8b. Diagnose failures
+
+Wait for all checks to finish before diagnosing — partial results lead to incomplete fixes and unnecessary push cycles:
+
+```
+gh pr checks <pr-number> --watch
+```
+
+Then read the logs for each failing check:
+
+```
+gh run view <run-id> --log-failed
+```
+
+Extract the run ID from the failing check's `link` field (the numeric ID in the URL path).
+
+From the logs, identify the root cause of each failure:
+
+- **Lint/format errors**: identify the linter and the failing files.
+- **Type errors**: identify the type-checker and the failing files.
+- **Build errors**: identify the build step and error message.
+- **Test failures**: if Step 6d already ran tests and they passed locally, these may stem from code pushed before the checklist ran, or from platform-specific differences.
+- **Other failures** (packaging, smoke tests, import guards): read the log output and diagnose accordingly.
+
+### 8c. Fix and push
+
+Fix each diagnosed failure locally. For common categories:
+
+- **Lint/format**: run the project's lint-fix command (e.g., `npx biome check --write .`, `npm run lint -- --write`). Identify the correct command from `package.json` scripts or project configuration.
+- **Type errors**: fix the type issues in the identified files.
+- **Build errors**: fix the source based on the build error.
+- **Test failures**: diagnose and fix as described in Step 6d.
+
+After applying fixes, verify locally by running the relevant check command before pushing.
+
+Delegate to push the fixes:
+
+```
+/mach12:push CI fix: <brief description of what was fixed> for PR #<pr-number>
+```
+
+### 8d. Verify
+
+Wait for CI to run on the pushed fixes:
+
+```
+gh pr checks <pr-number> --watch
+```
+
+Then re-read results:
+
+```
+gh pr checks <pr-number> --json name,state,bucket,link
+```
+
+- **All checks pass**: CI is green. Proceed to Step 9.
+- **Checks still failing**: escalate to the user with:
+  - Which checks are still failing and their log output.
+  - What was attempted and why it did not resolve the issue.
+  - A recommendation for next steps.
+
+Do not attempt a second fix cycle — a persistent failure after one fix always escalates.
+
+## Step 9: Present pre-merge report
 
 Present a summary of what was done:
 - [ ] Branch freshness: [current with <default-branch> / merged N commits from <default-branch> / auto-resolved conflicts in: <files> / behind <default-branch> (user skipped merge)]
@@ -211,6 +297,7 @@ Present a summary of what was done:
 - [ ] Version: [bumped to X.Y.Z / no version tracking / no changes needed / skipped per user request]
 - [ ] CHANGELOG: [updated / no changelog maintained / no changes needed / skipped per user request]
 - [ ] Tests: [all passing / N failures noted / skipped per user request]
+- [ ] CI: [all checks passing / fixed: <summary of what was fixed> / failing: <summary> (escalated) / pending (no checks reported) / skipped per user request]
 
 Report any items that need follow-up (test failures, manual conflict resolution, etc.) so the user can decide how to proceed.
 
