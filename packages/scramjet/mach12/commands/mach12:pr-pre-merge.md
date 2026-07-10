@@ -97,7 +97,23 @@ git merge origin/<default-branch>
 **If the merge has conflicts**, check whether all conflicted files are on the version-file allowlist: `plugin.json`, `package.json`, `pyproject.toml`, `setup.cfg`, `Cargo.toml`, `build.gradle`. Only files on this allowlist are eligible for auto-resolution.
 
 - **All conflicts are trivial (version files only):** For each conflicted file, resolve by taking the default branch's version (`git checkout --theirs <file>` then `git add <file>`), then finalize the merge with `git commit --no-edit`. Push the result (`git push`). If the push fails, report the error and stop. Record which files were auto-resolved for the report.
-- **Any non-trivial conflicts exist:** Abort the merge with `git merge --abort`. Report the list of conflicted files to the user and stop the session -- the user must resolve conflicts manually.
+- **Any non-trivial conflicts exist:** Attempt to resolve them using codebase context before aborting. For each conflicted file:
+
+  1. Read the conflict markers to understand both sides of the conflict.
+  2. Gather context: the PR description, commit history on both sides (`git log origin/<default-branch>..HEAD --oneline` and `git log HEAD..origin/<default-branch> --oneline`), and the surrounding code.
+  3. Assess whether the resolution is clear from context:
+     - **Non-overlapping additions** (both sides added different imports, different functions, different config entries): combine both additions.
+     - **Rename/refactor + feature** (one side renamed a symbol or refactored, the other used the old name): apply the rename to the new code.
+     - **Mechanical conflicts** (formatting, whitespace, comment changes alongside substantive edits): take the substantive edit.
+  4. If the resolution is clear, resolve the file (`git add <file>`) and move to the next conflict.
+  5. If the resolution is genuinely ambiguous (both sides modified the same logic with different intent, or the correct merge requires design judgment), present the conflict to the user with:
+     - The file path and a summary of the conflicting hunks.
+     - What each side changed and why (inferred from commits and PR context).
+     - A recommended resolution with rationale.
+     - Ask whether to apply the recommendation, apply a different resolution the user specifies, or abort the merge entirely.
+  6. If the user picks abort at any point, run `git merge --abort` and stop.
+
+  After all conflicts are resolved, finalize with `git commit --no-edit` and push (`git push`). If the push fails, report the error and stop. Record which files were resolved and how (auto-resolved vs. user-directed) for the report.
 
 **If the merge fails for any reason other than conflicts** (invalid ref, dirty working tree, internal error), report the full error output to the user and stop.
 
@@ -159,17 +175,33 @@ Run the project's test suite:
 # Rust: cargo test
 ```
 
-Report results. If tests fail, investigate and report -- do NOT silently ignore failures.
+Report results. If tests fail, do NOT silently ignore failures. Attempt to diagnose and fix:
+
+1. **Diagnose**: Read the test output and trace each failure to its root cause. Determine whether the failure is PR-caused (introduced or exposed by this branch's changes) or pre-existing (also fails on the default branch — check with `git stash && git checkout origin/<default-branch> && <run failing tests> && git checkout - && git stash pop` if uncertain).
+2. **Fix and re-run**: For PR-caused failures with clear fixes (updated test expectations, import paths changed by merge, renamed symbols, missing test fixtures), apply the fix and re-run the test suite once.
+3. **Escalate**: If tests still fail after one fix attempt, or if the fix requires design decisions, escalate to the user with:
+   - Which tests failed and their output.
+   - The diagnosis (root cause, whether PR-caused or pre-existing).
+   - What was attempted (if a fix was tried).
+   - A recommendation for next steps.
+
+Do not loop beyond one fix-and-rerun cycle — a second failure always escalates.
 
 ## Step 7: Commit checklist changes
 
 Check whether the checklist produced any uncommitted changes by running `git status --porcelain`. If the output is empty, no changes were made -- proceed to Step 8.
 
-If there are changes, commit and push them:
+If there are changes, assess and commit them:
 
-1. **Stage** only the files modified during this checklist (`git add <file>...`). If staging fails, report the error to the user and proceed to Step 8.
-2. **Commit** with message: "Pre-merge checklist: [brief summary of what was updated]". If the commit fails (pre-commit hook, empty commit, permissions), report the error to the user and proceed to Step 8.
-3. **Push** to remote (`git push`). If the push fails, report the error to the user and advise them to retry manually with `git push`. Proceed to Step 8.
+1. **Scan for uncommitted/untracked files** beyond what the checklist explicitly modified. Categorize each file:
+   - **Checklist-produced** (files you modified during Steps 6a-6d): always stage.
+   - **Generated tracked artifacts** (e.g., `package-lock.json`, `yarn.lock`, `Cargo.lock`, `poetry.lock`, build outputs that the repo already tracks): stage if they changed as a side effect of checklist operations (dependency install, build step). If unsure whether the change is a side effect or pre-existing, check `git diff <file>` to understand what changed.
+   - **Unrelated pre-existing files** (files that were dirty or untracked before the checklist ran, unrelated to this PR's changes): leave alone. Note them in the Step 8 report so the user is aware.
+   - **Ambiguous files** (cannot determine whether they belong to this PR or are pre-existing): ask the user about the specific files before staging.
+   Never use `git add -A` or `git add .` — stage files individually based on the assessment above.
+2. **Stage** the files identified for inclusion (`git add <file>...`). If staging fails, report the error to the user and proceed to Step 8.
+3. **Commit** with message: "Pre-merge checklist: [brief summary of what was updated]". If the commit fails (pre-commit hook, empty commit, permissions), report the error to the user and proceed to Step 8.
+4. **Push** to remote (`git push`). If the push fails, report the error to the user and advise them to retry manually with `git push`. Proceed to Step 8.
 
 ## Step 8: Present pre-merge report
 
