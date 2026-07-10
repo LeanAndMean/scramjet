@@ -9811,23 +9811,6 @@ export const MODELS = {
 			contextWindow: 262144,
 			maxTokens: 80000,
 		} satisfies Model<"openai-completions">,
-		"arcee-ai/trinity-mini": {
-			id: "arcee-ai/trinity-mini",
-			name: "Arcee AI: Trinity Mini",
-			api: "openai-completions",
-			provider: "openrouter",
-			baseUrl: "https://openrouter.ai/api/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: {
-				input: 0.045,
-				output: 0.15,
-				cacheRead: 0,
-				cacheWrite: 0,
-			},
-			contextWindow: 131072,
-			maxTokens: 131072,
-		} satisfies Model<"openai-completions">,
 		"arcee-ai/virtuoso-large": {
 			id: "arcee-ai/virtuoso-large",
 			name: "Arcee AI: Virtuoso Large",
@@ -12064,7 +12047,7 @@ export const MODELS = {
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,
@@ -16907,7 +16890,7 @@ export const MODELS = {
 			provider: "vercel-ai-gateway",
 			baseUrl: "https://ai-gateway.vercel.sh",
 			reasoning: true,
-			thinkingLevelMap: {"xhigh":"xhigh"},
+			thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
 			cost: {
 				input: 5,

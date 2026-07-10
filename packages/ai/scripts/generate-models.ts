@@ -203,17 +203,11 @@ function getTogetherThinkingLevelMap(
 }
 
 function supportsOpenAiXhigh(modelId: string): boolean {
-	return (
-		modelId.includes("gpt-5.2") ||
-		modelId.includes("gpt-5.3") ||
-		modelId.includes("gpt-5.4") ||
-		modelId.includes("gpt-5.5") ||
-		modelId.includes("gpt-5.6")
-	);
+	return /gpt-5\.[2-6]/.test(modelId);
 }
 
 function supportsOpenAiMax(modelId: string): boolean {
-	return modelId === "gpt-5.6-sol";
+	return modelId.endsWith("gpt-5.6-sol");
 }
 
 function isGoogleThinkingApi(model: Model<any>): boolean {

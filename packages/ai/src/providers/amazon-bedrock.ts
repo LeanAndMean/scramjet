@@ -907,6 +907,7 @@ function buildAdditionalModelRequestFields(
 						max: 16384,
 					};
 
+					// Budget-based thinking has no native xhigh/max; clamp to high
 					const level = options.reasoning === "xhigh" || options.reasoning === "max" ? "high" : options.reasoning;
 					const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
 

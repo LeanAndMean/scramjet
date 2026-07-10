@@ -137,6 +137,31 @@ describe("Bedrock xhigh effort — new models", () => {
 	});
 });
 
+describe("Bedrock max effort — budget-based models", () => {
+	it("Sonnet 3.5 clamps max to budget-based thinking", async () => {
+		const model = makeModel("anthropic.claude-3-5-sonnet-20241022-v2:0", { maxTokens: 200000 });
+		const payload = await capturePayload(model, minimalContext, { reasoning: "max" });
+		expect(payload.additionalModelRequestFields?.thinking?.budget_tokens).toBe(16384);
+		expect(payload.additionalModelRequestFields?.output_config).toBeUndefined();
+	});
+
+	it("Haiku 3.5 clamps max to budget-based thinking", async () => {
+		const model = makeModel("anthropic.claude-3-5-haiku-20241022-v1:0", { maxTokens: 200000 });
+		const payload = await capturePayload(model, minimalContext, { reasoning: "max" });
+		expect(payload.additionalModelRequestFields?.thinking?.budget_tokens).toBe(16384);
+		expect(payload.additionalModelRequestFields?.output_config).toBeUndefined();
+	});
+
+	it("max uses custom budget via clamped key on budget-based model", async () => {
+		const model = makeModel("anthropic.claude-3-5-sonnet-20241022-v2:0", { maxTokens: 200000 });
+		const payload = await capturePayload(model, minimalContext, {
+			reasoning: "max",
+			thinkingBudgets: { high: 8192 },
+		});
+		expect(payload.additionalModelRequestFields?.thinking?.budget_tokens).toBe(8192);
+	});
+});
+
 describe("Bedrock xhigh effort — application inference profile names", () => {
 	it("Opus 4.8 recognized via model name on profile ARN", async () => {
 		const model = makeModel("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", {
