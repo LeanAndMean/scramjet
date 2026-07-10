@@ -67,6 +67,8 @@ Biome: tabs, indent width 3, line width 120. Run `npx biome check --write .` to 
 
 When modifying command frontmatter schema (`commands/loader.ts`, `commands/parse-next-step.ts`), delegation behavior (`delegate.ts`), tool scoping (`delegate.ts`, `tool-scope-advisory.ts`), status reporting (`command-status.ts`), lifecycle facts (`lifecycle.ts`), or next-step dispatch (`auto-continue.ts`, `commands/validator.ts`), update `packages/scramjet/docs/command-authoring.md` to reflect the change. When modifying lifecycle state structure or transitions, also update `packages/scramjet/docs/lifecycle-state-space.md`. When modifying log categories, levels, or lifecycle event instrumentation, update `packages/scramjet/docs/logging.md`. The authoring doc is agent-facing — inaccurate guidance produces malformed commands.
 
+When modifying monorepo structure, package descriptions, or navigation links, update the root `README.md` to reflect the change.
+
 When diagnosing harness misbehavior (probe didn't fire, command didn't chain, unexpected pause), consult `packages/scramjet/docs/logging.md` for the entry schema, `jq` query patterns, and diagnostic workflow.
 
 ## Architecture
