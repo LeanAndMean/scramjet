@@ -73,11 +73,7 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 			}
 			const activeCommand = activeCommandName(state.lifecycle);
 			const callerTools =
-				state.delegateStack.length > 0
-					? state.delegateStack[state.delegateStack.length - 1].effectiveAllowedTools
-					: activeCommand !== null
-						? state.registry.get(activeCommand)?.allowedTools
-						: undefined;
+				activeCommand !== null ? state.registry.get(activeCommand)?.allowedTools : undefined;
 			const effectiveAllowedTools = intersectTools(callerTools, def.allowedTools);
 			const frame: DelegateFrame = {
 				commandName: params.command,
@@ -118,13 +114,10 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 
 	// Per-turn reset of the latched stack. Frames are pushed on each delegate
 	// call and never popped within a turn; the next turn starts with a fresh
-	// empty stack regardless of /scramjet on/off. Consequence: a second call
-	// to the same command in one turn is reported as a cycle, and sequential
-	// sibling calls narrow effective tools and increase history depth
-	// monotonically rather than each inheriting from the top-level scope. This is
-	// the MVP "latched scoping" tradeoff CLAUDE.md names; true push/pop
-	// semantics need a per-frame "delegated body consumed" signal Pi does not
-	// currently provide.
+	// empty stack regardless of /scramjet on/off. Each delegation independently
+	// intersects with the top-level command's scope rather than the previous
+	// frame's — true push/pop semantics need a per-frame "delegated body
+	// consumed" signal Pi does not currently provide.
 	// The advisory warnings that fire when a tool call falls outside the
 	// frame's effectiveAllowedTools live in tool-scope-advisory.ts — that's
 	// the user-visible surface of this latching.

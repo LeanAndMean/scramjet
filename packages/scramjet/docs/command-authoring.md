@@ -372,7 +372,7 @@ The harness rejects delegation cycles. If command A delegates to B and B attempt
 
 ### Latched scoping
 
-Delegation frames are latched within a turn — once narrowed, scope stays narrowed. A second delegation in the same turn inherits the narrowed scope, not the original top-level scope. The stack resets at the start of each new turn.
+Delegation frames are latched within a turn — frames push and never pop. However, each delegation independently intersects with the top-level command's scope, not the previous frame's. Sequential sibling delegations do not narrow each other. The stack resets at the start of each new turn.
 
 ---
 
@@ -392,9 +392,8 @@ If a command declares no `allowed-tools` (unrestricted), it inherits the caller'
 ### Scoping rules
 
 1. **Top-level command scope** is the declared `allowed-tools` (or unrestricted if omitted).
-2. **First delegation** intersects the top-level scope with the subroutine's declared scope.
-3. **Nested delegation** intersects the current frame's effective scope with the next subroutine's scope.
-4. **Empty intersection** (caller and callee declare disjoint tools) produces a warning prepended to the delegated body. The frame is effectively locked — no tools pass the advisory check.
+2. **Every delegation** (first, sibling, or nested) intersects the top-level scope with the subroutine's declared scope.
+3. **Empty intersection** (top-level and callee declare disjoint tools) produces a warning prepended to the delegated body. The frame is effectively locked — no tools pass the advisory check.
 
 ### Advisory enforcement (MVP)
 
