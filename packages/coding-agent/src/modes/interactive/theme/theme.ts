@@ -637,23 +637,131 @@ export function getThemeByName(name: string): Theme | undefined {
 	}
 }
 
-function detectTerminalBackground(): "dark" | "light" {
-	const colorfgbg = process.env.COLORFGBG || "";
+// ============================================================================
+// Terminal Background Detection
+// ============================================================================
+
+const XTERM_BASIC_COLORS: ReadonlyArray<readonly [number, number, number]> = [
+	[0, 0, 0],
+	[128, 0, 0],
+	[0, 128, 0],
+	[128, 128, 0],
+	[0, 0, 128],
+	[128, 0, 128],
+	[0, 128, 128],
+	[192, 192, 192],
+	[128, 128, 128],
+	[255, 0, 0],
+	[0, 255, 0],
+	[255, 255, 0],
+	[0, 0, 255],
+	[255, 0, 255],
+	[0, 255, 255],
+	[255, 255, 255],
+];
+
+export function srgbToLinear(value: number): number {
+	if (value <= 0.04045) return value / 12.92;
+	return ((value + 0.055) / 1.055) ** 2.4;
+}
+
+export function relativeLuminance(r: number, g: number, b: number): number {
+	return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
+}
+
+const LUMINANCE_THRESHOLD = 0.2;
+
+export function classifyBackgroundColor(rgb: { r: number; g: number; b: number }): "dark" | "light" {
+	return relativeLuminance(rgb.r, rgb.g, rgb.b) >= LUMINANCE_THRESHOLD ? "light" : "dark";
+}
+
+function xterm256ToNormalizedRgb(index: number): { r: number; g: number; b: number } {
+	let r: number;
+	let g: number;
+	let b: number;
+	if (index < 16) {
+		const entry = XTERM_BASIC_COLORS[index]!;
+		[r, g, b] = entry;
+	} else if (index < 232) {
+		const ci = index - 16;
+		const ri = Math.floor(ci / 36);
+		const gi = Math.floor((ci % 36) / 6);
+		const bi = ci % 6;
+		r = ri === 0 ? 0 : 55 + ri * 40;
+		g = gi === 0 ? 0 : 55 + gi * 40;
+		b = bi === 0 ? 0 : 55 + bi * 40;
+	} else {
+		const gray = 8 + (index - 232) * 10;
+		r = g = b = gray;
+	}
+	return { r: r / 255, g: g / 255, b: b / 255 };
+}
+
+export interface EnvDetectionResult {
+	theme: "dark" | "light";
+	source: "colorfgbg" | "apple-terminal";
+}
+
+export function detectThemeFromEnvironment(env?: {
+	colorfgbg?: string;
+	termProgram?: string;
+}): EnvDetectionResult | undefined {
+	const colorfgbg = env?.colorfgbg ?? process.env.COLORFGBG ?? "";
+	const termProgram = env?.termProgram ?? process.env.TERM_PROGRAM ?? "";
+
 	if (colorfgbg) {
 		const parts = colorfgbg.split(";");
 		if (parts.length >= 2) {
-			const bg = parseInt(parts[1], 10);
-			if (!Number.isNaN(bg)) {
-				const result = bg < 8 ? "dark" : "light";
-				return result;
+			const bg = Number(parts[parts.length - 1]);
+			if (Number.isInteger(bg) && bg >= 0 && bg <= 255) {
+				const rgb = xterm256ToNormalizedRgb(bg);
+				return { theme: classifyBackgroundColor(rgb), source: "colorfgbg" };
 			}
 		}
 	}
-	return "dark";
+
+	if (termProgram === "Apple_Terminal") {
+		return { theme: "light", source: "apple-terminal" };
+	}
+
+	return undefined;
+}
+
+export type ThemeDetectionSource = "explicit" | "colorfgbg" | "apple-terminal" | "osc11" | "default";
+
+export interface ThemeDetectionResult {
+	theme: string;
+	source: ThemeDetectionSource;
+}
+
+export async function detectThemeInteractive(options: {
+	explicitTheme: string | undefined;
+	queryFn: () => Promise<{ r: number; g: number; b: number } | undefined>;
+	env?: { colorfgbg?: string; termProgram?: string };
+}): Promise<ThemeDetectionResult> {
+	if (options.explicitTheme) {
+		return { theme: options.explicitTheme, source: "explicit" };
+	}
+
+	const envResult = detectThemeFromEnvironment(options.env);
+	if (envResult) {
+		return envResult;
+	}
+
+	try {
+		const rgb = await options.queryFn();
+		if (rgb) {
+			return { theme: classifyBackgroundColor(rgb), source: "osc11" };
+		}
+	} catch {
+		// Query failed — fall through to default
+	}
+
+	return { theme: "dark", source: "default" };
 }
 
 function getDefaultTheme(): string {
-	return detectTerminalBackground();
+	return detectThemeFromEnvironment()?.theme ?? "dark";
 }
 
 // ============================================================================
