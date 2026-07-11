@@ -2915,8 +2915,14 @@ export class InteractiveMode {
 				// Show retry indicator
 				this.statusContainer.clear();
 				this.retryCountdown?.dispose();
-				const retryMessage = (seconds: number) =>
-					`Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`;
+				const retryMessage = (seconds: number) => {
+					const base = `Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s...`;
+					const cumulative =
+						event.cumulativeErrors && event.cumulativeErrors > 1
+							? ` [${event.cumulativeErrors} total failures this prompt]`
+							: "";
+					return `${base}${cumulative} (${keyText("app.interrupt")} to cancel)`;
+				};
 				this.retryLoader = new Loader(
 					this.ui,
 					(spinner) => theme.fg("warning", spinner),
