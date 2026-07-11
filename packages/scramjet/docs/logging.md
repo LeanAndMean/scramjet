@@ -192,7 +192,7 @@ When a session misbehaves (command didn't chain, probe didn't fire, unexpected p
 
 | Symptom | Look for | Likely cause |
 |---------|----------|--------------|
-| Command didn't chain | `"next-step dispatch skipped"` with `reason` in data | Policy mismatch, `/scramjet off`, no valid next_steps |
+| Command didn't chain | `"next-step dispatch skipped"` with `reason` in data | Policy mismatch, `/autopilot off`, no valid next_steps |
 | Probe never fired | No `"status probe scheduled"` after `"agent_end observed"` | `probeArmed` was not true at agent_end |
 | Probe fired but no chain | `"probe watchdog fired"` or `"status probe turn ended without a valid status report"` | Agent didn't call `report_scramjet_command_status` |
 | Double agent_end | Two `"agent_end observed"` without intervening probe | Fast successive turns; second skipped by lifecycle guard |

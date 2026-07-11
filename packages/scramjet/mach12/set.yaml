@@ -7,4 +7,4 @@ description: |
   Each command file declares its post-turn next-step policy in YAML
   frontmatter. The harness reads the declaration, surfaces candidate hints
   to the agent at turn end, validates the agent's pick (or fires the forced
-  target), and dispatches under /scramjet on.
+  target), and dispatches under /autopilot on.

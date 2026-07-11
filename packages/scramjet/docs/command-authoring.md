@@ -98,7 +98,7 @@ The `next` block declares what Scramjet does after a command reports `status: "c
 
 ### `forced`
 
-The target command runs automatically after completion. No user decision, no agent decision. Fires even when `/scramjet off` — the user implicitly chose to chain by invoking a command that declares `forced`.
+The target command runs automatically after completion. No user decision, no agent decision. Fires even when `/autopilot off` — the user implicitly chose to chain by invoking a command that declares `forced`.
 
 ```yaml
 next:
@@ -571,7 +571,7 @@ When a command completes with `next_steps`, the user sees a selector with:
 - **Each entry's `message`** as the primary text (the full `/command args` wire).
 - **Each entry's `reason`** as the description underneath, differentiating entries.
 
-The `recommended_next_step` entry is highlighted as the default selection. If `/scramjet on` and the policy allows automatic dispatch, the recommended entry fires without user interaction.
+The `recommended_next_step` entry is highlighted as the default selection. If `/autopilot on` and the policy allows automatic dispatch, the recommended entry fires without user interaction.
 
 When multiple models are available, the selector also shows a model line below the options. The user can cycle models with left/right arrows before committing a selection; the chosen model is committed via `pi.setModel` before dispatch. This is transparent to command authors — it does not affect `next_steps` declarations or dispatch semantics.
 
@@ -604,8 +604,8 @@ The user sees three entries. The first two are the same command with different a
 
 Users can configure per-edge autonomy settings in `~/.config/scramjet/autonomy.yaml` that override the normal dispatch behavior for specific transitions:
 
-- **`chain`**: auto-dispatches the transition immediately, bypassing the selector — even when `/scramjet off`.
-- **`pause`**: forces the selector without auto-select or countdown — even when `/scramjet on`.
+- **`chain`**: auto-dispatches the transition immediately, bypassing the selector — even when `/autopilot off`.
+- **`pause`**: forces the selector without auto-select or countdown — even when `/autopilot on`.
 
 These settings are user-controlled and invisible to command authors. They do not affect `forced` transitions. As an author, you don't need to account for them — declare policies based on what makes sense for the command's semantics, and trust that users who configure edge overrides know what they want.
 

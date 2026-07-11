@@ -439,9 +439,9 @@ describe("registerHistory — input event", () => {
 		expect(activeCommandName(state.lifecycle)).toBeNull();
 	});
 
-	it("does NOT clear activeTopLevelCommand for known Pi/scramjet built-in slash commands (F4)", async () => {
-		// /scramjet on, /clear, /help etc. are registered with Pi, not the
-		// command-set registry. The user toggling /scramjet on mid-workflow
+	it("does NOT clear activeTopLevelCommand for known Pi/autopilot built-in slash commands (F4)", async () => {
+		// /autopilot on, /clear, /help etc. are registered with Pi, not the
+		// command-set registry. The user toggling /autopilot on mid-workflow
 		// must not silently break the forced chain.
 		const state = freshState({
 			registry: registryOf(["mach10:push"]),
@@ -450,11 +450,11 @@ describe("registerHistory — input event", () => {
 		const { pi, emit } = recordingPi();
 		// Simulate pi.getCommands() returning known commands.
 		(pi as any).getCommands = () => [
-			{ name: "scramjet", description: "toggle", source: "extension", sourceInfo: {} },
+			{ name: "autopilot", description: "toggle", source: "extension", sourceInfo: {} },
 			{ name: "clear", description: "clear", source: "extension", sourceInfo: {} },
 		];
 		registerHistory(pi, state);
-		await emit("input", { text: "/scramjet on", source: "interactive" });
+		await emit("input", { text: "/autopilot on", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 		await emit("input", { text: "/clear", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
@@ -468,7 +468,7 @@ describe("registerHistory — input event", () => {
 		const { pi, emit } = recordingPi();
 		// No getCommands on the fake pi — tests fallback allow-list path.
 		registerHistory(pi, state);
-		await emit("input", { text: "/scramjet on", source: "interactive" });
+		await emit("input", { text: "/autopilot on", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
 		await emit("input", { text: "/clear", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");

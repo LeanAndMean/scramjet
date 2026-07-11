@@ -5,7 +5,7 @@
  * unsupported remote, a missing/unauthenticated CLI, or not a git repo.
  *
  * This is an opportunistic UI hint, NOT workflow state: nothing is journaled
- * and nothing is added to ScramjetState. It shows regardless of /scramjet
+ * and nothing is added to ScramjetState. It shows regardless of /autopilot
  * on|off, because the flag gates workflow *decisions* (closed/open agent-pick,
  * ask user-pick) and an ambient hint is not a decision. The footer surface
  * (ctx.ui.setStatus) is distinct from the transient below-editor countdown

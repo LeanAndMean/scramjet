@@ -30,8 +30,8 @@ function formatCandidates(candidates: Candidate[]): string {
 
 function recommendationRule(scramjetEnabled: boolean): string {
 	return scramjetEnabled
-		? "With `/scramjet on`, set `recommended_next_step` to the zero-based index only when the recommended entry's message is a slash command; do not set it for a non-command message."
-		: "With `/scramjet off`, set `recommended_next_step` to the zero-based index of the best option to show the user; Scramjet will not auto-dispatch it.";
+		? "With `/autopilot on`, set `recommended_next_step` to the zero-based index only when the recommended entry's message is a slash command; do not set it for a non-command message."
+		: "With `/autopilot off`, set `recommended_next_step` to the zero-based index of the best option to show the user; Scramjet will not auto-dispatch it.";
 }
 
 export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, scramjetEnabled = true): string {

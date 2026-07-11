@@ -1,4 +1,4 @@
-/** /scramjet on|off — gates `closed`/`open`/`ask` decisions. `forced`
+/** /autopilot on|off — gates `closed`/`open`/`ask` decisions. `forced`
  *  fires regardless; see CLAUDE.md "MVP design rationales". */
 
 import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
@@ -6,9 +6,9 @@ import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
 import { showSettingsPage } from "./settings-ui.js";
 import type { ScramjetState } from "./types.js";
 
-export function registerScramjetCommand(pi: ExtensionAPI, state: ScramjetState) {
-	pi.registerCommand("scramjet", {
-		description: "Toggle Scramjet auto-continuation: /scramjet on|off|settings|status",
+export function registerAutopilotCommand(pi: ExtensionAPI, state: ScramjetState) {
+	pi.registerCommand("autopilot", {
+		description: "Toggle Scramjet auto-continuation: /autopilot on|off|settings|status",
 		getArgumentCompletions: (prefix) => {
 			const options = ["on", "off", "settings", "status"];
 			const filtered = options.filter((o) => o.startsWith(prefix));
@@ -36,7 +36,7 @@ export function registerScramjetCommand(pi: ExtensionAPI, state: ScramjetState) 
 			} else if (arg === "" || arg === "status") {
 				ctx.ui.notify(`Scramjet is ${state.enabled ? "on" : "off"}`, "info");
 			} else {
-				ctx.ui.notify("Usage: /scramjet on|off|settings|status", "warning");
+				ctx.ui.notify("Usage: /autopilot on|off|settings|status", "warning");
 			}
 		},
 	});

@@ -1079,7 +1079,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 		});
 
-		it("free-text recommendation under /scramjet on shows selector but does not auto-dispatch", async () => {
+		it("free-text recommendation under /autopilot on shows selector but does not auto-dispatch", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state);
@@ -1169,7 +1169,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[1].message).toContain("points to invalid next step");
 		});
 
-		it("free-text recommendation under /scramjet off is shown but not dispatched", async () => {
+		it("free-text recommendation under /autopilot off is shown but not dispatched", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: false });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
@@ -1187,7 +1187,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0].message).toContain("only auto-dispatches command");
 		});
 
-		it("free-text recommendation under /scramjet on is not auto-dispatchable", async () => {
+		it("free-text recommendation under /autopilot on is not auto-dispatchable", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
 			const state = runningState(def, { enabled: true });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
@@ -2677,7 +2677,7 @@ describe("edge-level autonomy settings integration", () => {
 		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
 	});
 
-	it("chain fires regardless of /scramjet off (user pre-decided)", async () => {
+	it("chain fires regardless of /autopilot off (user pre-decided)", async () => {
 		writeConfig("edges:\n  a:cmd:\n    b:ok: chain\n");
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const state = runningState(def, { enabled: false, autonomyConfigPath: configPath });
@@ -2741,7 +2741,7 @@ describe("edge-level autonomy settings integration", () => {
 		]);
 	});
 
-	it("pause + UI + /scramjet on: shows selector without auto-select", async () => {
+	it("pause + UI + /autopilot on: shows selector without auto-select", async () => {
 		writeConfig("edges:\n  a:cmd:\n    b:ok: pause\n");
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
@@ -2762,7 +2762,7 @@ describe("edge-level autonomy settings integration", () => {
 		expect(rendered).not.toContain("auto-selects");
 	});
 
-	it("pause + headless + /scramjet on: notifies but does not dispatch", async () => {
+	it("pause + headless + /autopilot on: notifies but does not dispatch", async () => {
 		writeConfig("edges:\n  a:cmd:\n    b:ok: pause\n");
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const state = runningState(def, { enabled: true, autonomyConfigPath: configPath });
@@ -2779,7 +2779,7 @@ describe("edge-level autonomy settings integration", () => {
 		expect(ctxBag.notifications.some((n) => n.message.includes("edge setting: pause"))).toBe(true);
 	});
 
-	it("absent setting: behavior unchanged (follows /scramjet flag)", async () => {
+	it("absent setting: behavior unchanged (follows /autopilot flag)", async () => {
 		writeConfig("edges:\n  other:cmd:\n    b:ok: chain\n");
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const state = runningState(def, { enabled: false, autonomyConfigPath: configPath });

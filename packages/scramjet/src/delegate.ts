@@ -113,7 +113,7 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 
 	// Per-turn reset of the latched stack. Frames are pushed on each delegate
 	// call and never popped within a turn; the next turn starts with a fresh
-	// empty stack regardless of /scramjet on/off. Each delegation independently
+	// empty stack regardless of /autopilot on/off. Each delegation independently
 	// intersects with the top-level command's scope rather than the previous
 	// frame's — true push/pop semantics need a per-frame "delegated body
 	// consumed" signal Pi does not currently provide.

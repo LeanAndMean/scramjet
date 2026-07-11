@@ -21,7 +21,7 @@ export const SIDEBAR_MAX = 50;
 // a workflow exit. Used only when pi.getCommands() is unavailable (older Pi,
 // test fakes that don't stub it); the normal path consults the live command
 // list. (F4)
-const FALLBACK_KNOWN_SLASH = new Set<string>(["scramjet", "clear"]);
+const FALLBACK_KNOWN_SLASH = new Set<string>(["autopilot", "clear"]);
 
 function extractSlashName(text: string): string | null {
 	if (!text.startsWith("/")) return null;
@@ -261,8 +261,8 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// next-step policy to whatever the agent does in response. (F25)
 			//
 			// Exception: a slash command that *is* registered with Pi (built-ins
-			// like /scramjet, /clear, /help, plus other extensions' commands) is
-			// not a workflow exit — the user toggling /scramjet on mid-chain or
+			// like /autopilot, /clear, /help, plus other extensions' commands) is
+			// not a workflow exit — the user toggling /autopilot on mid-chain or
 			// checking /help should not silently break a forced next-step. Only
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
 			if (event.text.startsWith("/") && activeCommandName(state.lifecycle) !== null) {
