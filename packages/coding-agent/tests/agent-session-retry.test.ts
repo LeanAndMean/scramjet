@@ -188,9 +188,9 @@ describe("AgentSession retry bounding", () => {
 		);
 
 		await session.prompt("hello");
-		const ends = retryEvents(events).filter(
-			(e) => e.type === "auto_retry_end" && !e.success,
-		) as Array<AgentSessionEvent & { type: "auto_retry_end" }>;
+		const ends = retryEvents(events).filter((e) => e.type === "auto_retry_end" && !e.success) as Array<
+			AgentSessionEvent & { type: "auto_retry_end" }
+		>;
 
 		expect(ends).toHaveLength(1);
 		expect(ends[0].finalError).toContain("Repeated retry failures");

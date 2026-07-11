@@ -2917,9 +2917,10 @@ export class InteractiveMode {
 				this.retryCountdown?.dispose();
 				const retryMessage = (seconds: number) => {
 					const base = `Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s...`;
-					const cumulative = event.cumulativeErrors && event.cumulativeErrors > 1
-						? ` [${event.cumulativeErrors} total failures this prompt]`
-						: "";
+					const cumulative =
+						event.cumulativeErrors && event.cumulativeErrors > 1
+							? ` [${event.cumulativeErrors} total failures this prompt]`
+							: "";
 					return `${base}${cumulative} (${keyText("app.interrupt")} to cancel)`;
 				};
 				this.retryLoader = new Loader(

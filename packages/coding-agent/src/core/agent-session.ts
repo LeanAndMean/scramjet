@@ -134,7 +134,14 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 			errorMessage?: string;
 	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; cumulativeErrors?: number }
+	| {
+			type: "auto_retry_start";
+			attempt: number;
+			maxAttempts: number;
+			delayMs: number;
+			errorMessage: string;
+			cumulativeErrors?: number;
+	  }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 
 /** Listener function for agent session events */
@@ -2533,7 +2540,8 @@ export class AgentSession {
 				type: "auto_retry_end",
 				success: false,
 				attempt: this._runRetryCount - 1,
-				finalError: `Repeated retry failures (${this._runRetryCount - 1} total attempts this prompt). ${message.errorMessage ?? ""}`.trim(),
+				finalError:
+					`Repeated retry failures (${this._runRetryCount - 1} total attempts this prompt). ${message.errorMessage ?? ""}`.trim(),
 			});
 			this._retryAttempt = 0;
 			this._resolveRetry();
