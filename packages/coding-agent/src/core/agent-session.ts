@@ -134,7 +134,7 @@ export type AgentSessionEvent =
 			willRetry: boolean;
 			errorMessage?: string;
 	  }
-	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
+	| { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; cumulativeErrors?: number }
 	| { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string };
 
 /** Listener function for agent session events */
@@ -275,6 +275,7 @@ export class AgentSession {
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
+	private _runRetryCount = 0;
 	private _retryPromise: Promise<void> | undefined = undefined;
 	private _retryResolve: (() => void) | undefined = undefined;
 
@@ -1163,6 +1164,7 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
+		this._runRetryCount = 0;
 		await this.agent.prompt(messages);
 		await this.waitForRetry();
 	}
@@ -2523,6 +2525,20 @@ export class AgentSession {
 		}
 
 		this._retryAttempt++;
+		this._runRetryCount++;
+
+		const cumulativeCap = settings.maxRetries * 2;
+		if (this._runRetryCount > cumulativeCap) {
+			this._emit({
+				type: "auto_retry_end",
+				success: false,
+				attempt: this._runRetryCount - 1,
+				finalError: `Repeated retry failures (${this._runRetryCount - 1} total attempts this prompt). ${message.errorMessage ?? ""}`.trim(),
+			});
+			this._retryAttempt = 0;
+			this._resolveRetry();
+			return false;
+		}
 
 		if (this._retryAttempt > settings.maxRetries) {
 			// Max retries exceeded, emit final failure and reset
@@ -2545,6 +2561,7 @@ export class AgentSession {
 			maxAttempts: settings.maxRetries,
 			delayMs,
 			errorMessage: message.errorMessage || "Unknown error",
+			cumulativeErrors: this._runRetryCount,
 		});
 
 		// Remove error message from agent state (keep in session for history)
