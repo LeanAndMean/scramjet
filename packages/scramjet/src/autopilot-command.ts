@@ -34,7 +34,7 @@ export function registerAutopilotCommand(pi: ExtensionAPI, state: ScramjetState)
 				}
 				await showSettingsPage(pi, ctx as ExtensionContext, state);
 			} else if (arg === "" || arg === "status") {
-				ctx.ui.notify(`Scramjet is ${state.enabled ? "on" : "off"}`, "info");
+				ctx.ui.notify(`Autopilot is ${state.enabled ? "on" : "off"}`, "info");
 			} else {
 				ctx.ui.notify("Usage: /autopilot on|off|settings|status", "warning");
 			}

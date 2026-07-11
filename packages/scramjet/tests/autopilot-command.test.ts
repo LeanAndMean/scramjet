@@ -54,7 +54,7 @@ function spec(commands: RegisteredCommand[]) {
 }
 
 describe("registerAutopilotCommand — registration surface", () => {
-	it("registers exactly one command, named 'scramjet', with a description", () => {
+	it("registers exactly one command, named 'autopilot', with a description", () => {
 		const { pi, commands } = recordingPi();
 		registerAutopilotCommand(pi, freshState());
 		expect(commands).toHaveLength(1);
