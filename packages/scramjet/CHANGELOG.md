@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.45.3 — Bound auto-retry loops with per-prompt cumulative counter
+
+Add a per-prompt cumulative retry counter to `AgentSession` that caps total retry attempts at `maxRetries * 2` (default 6), preventing unbounded retry loops where stream failures alternate with successful tool-call turns (resetting the per-burst counter each time). Fixes [#302](https://github.com/LeanAndMean/scramjet/issues/302).
+
+### Fixed
+
+- Interleaved stream errors and successful turns no longer cycle indefinitely; cumulative cap terminates the loop.
+- TUI retry message now shows cumulative failure count when > 1 (`[N total failures this prompt]`).
+- `auto_retry_start` event extended with optional `cumulativeErrors` field for downstream consumers.
+
 ## 0.45.2 — Fix parallel subagent progress indicator showing completed prematurely
 
 Fix `currentResult.exitCode` initialization from `0` to `EXIT_CODE_RUNNING` in `runSingleAgent`, so interim updates propagated into the parallel `allResults[]` array correctly preserve the running sentinel. Previously, children that had emitted output but not yet exited were counted as completed, producing misleading progress indicators. Fixes [#301](https://github.com/LeanAndMean/scramjet/issues/301).
