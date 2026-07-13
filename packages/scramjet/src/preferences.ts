@@ -24,7 +24,8 @@ export function loadPreferences(configPath: string): Preferences {
 	} catch (err: unknown) {
 		if (cache?.path === configPath) cache = null;
 		if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULT_PREFERENCES };
-		return { ...DEFAULT_PREFERENCES };
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(`preferences.yaml: cannot stat config file: ${msg}`);
 	}
 
 	if (cache?.path === configPath && stat.mtimeMs === cache.mtimeMs) {
@@ -37,10 +38,9 @@ export function loadPreferences(configPath: string): Preferences {
 		const prefs = parsePreferences(doc);
 		cache = { path: configPath, mtimeMs: stat.mtimeMs, prefs };
 		return { ...prefs };
-	} catch {
-		const prefs = { ...DEFAULT_PREFERENCES };
-		cache = { path: configPath, mtimeMs: stat.mtimeMs, prefs };
-		return prefs;
+	} catch (err: unknown) {
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(`preferences.yaml: failed to load config: ${msg}`);
 	}
 }
 
@@ -50,7 +50,8 @@ function parsePreferences(doc: unknown): Preferences {
 	}
 	const obj = doc as Record<string, unknown>;
 	return {
-		title_indicator: typeof obj.title_indicator === "boolean" ? obj.title_indicator : DEFAULT_PREFERENCES.title_indicator,
+		title_indicator:
+			typeof obj.title_indicator === "boolean" ? obj.title_indicator : DEFAULT_PREFERENCES.title_indicator,
 		bell: typeof obj.bell === "boolean" ? obj.bell : DEFAULT_PREFERENCES.bell,
 	};
 }

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { derivePhaseLabel } from "./lifecycle.js";
-import { loadPreferences } from "./preferences.js";
+import { DEFAULT_PREFERENCES, loadPreferences, type Preferences } from "./preferences.js";
 import type { ScramjetState } from "./types.js";
 
 const BELL_COOLDOWN_MS = 5_000;
@@ -38,26 +38,43 @@ export function titleForPhase(phase: string, sessionName: string | undefined, cw
 export function registerTerminalIndicators(pi: ExtensionAPI, state: ScramjetState): void {
 	let lastBellMs = 0;
 
-	function setTitleForPhase(ctx: { hasUI: boolean; ui: { setTitle(t: string): void } }, phase: string) {
+	function safeLoadPreferences(): Preferences {
+		try {
+			return loadPreferences(state.preferencesPath);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			state.logger.warn("preferences", msg);
+			return { ...DEFAULT_PREFERENCES };
+		}
+	}
+
+	function setTitleForPhase(
+		ctx: { hasUI: boolean; ui: { setTitle(t: string): void } },
+		phase: string,
+		prefs: Preferences,
+	) {
 		if (!ctx.hasUI) return;
-		const prefs = loadPreferences(state.preferencesPath);
 		if (!prefs.title_indicator) return;
 		ctx.ui.setTitle(titleForPhase(phase, pi.getSessionName(), path.basename(process.cwd())));
 	}
 
 	pi.on("session_start", (_event, ctx) => {
-		setTitleForPhase(ctx, "idle");
+		setTitleForPhase(ctx, "idle", safeLoadPreferences());
+	});
+
+	pi.on("session_tree", (_event, ctx) => {
+		setTitleForPhase(ctx, "idle", safeLoadPreferences());
 	});
 
 	pi.on("agent_start", (_event, ctx) => {
-		setTitleForPhase(ctx, "running");
+		setTitleForPhase(ctx, "running", safeLoadPreferences());
 	});
 
 	pi.on("agent_end", (_event, ctx) => {
+		const prefs = safeLoadPreferences();
 		const phase = derivePhaseLabel(state.lifecycle);
-		setTitleForPhase(ctx, phase);
+		setTitleForPhase(ctx, phase, prefs);
 
-		const prefs = loadPreferences(state.preferencesPath);
 		const isTTY = process.stdout.isTTY === true;
 		const isDispatchScheduled = state.lifecycleTimers?.isDispatchScheduled() ?? false;
 		const isProbeScheduled = state.lifecycleTimers?.isProbeScheduled() ?? false;

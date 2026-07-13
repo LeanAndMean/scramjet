@@ -3,7 +3,7 @@ import type { Component } from "@leanandmean/tui";
 import { type SettingItem, SettingsList, type SettingsListTheme } from "@leanandmean/tui";
 import { defaultConfigPath, loadAutonomyConfig, lookupEdge, saveAutonomyConfig } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
-import { loadPreferences, savePreferences } from "./preferences.js";
+import { DEFAULT_PREFERENCES, loadPreferences, type Preferences, savePreferences } from "./preferences.js";
 import type { AutonomyConfig, NextStepPolicy, ScramjetState } from "./types.js";
 
 const EDGE_VALUES = ["default", "chain", "pause"] as const;
@@ -145,7 +145,12 @@ export function buildTopLevelItems(
 		values: ["on", "off"],
 	});
 
-	const prefs = loadPreferences(state.preferencesPath);
+	let prefs: Preferences;
+	try {
+		prefs = loadPreferences(state.preferencesPath);
+	} catch {
+		prefs = { ...DEFAULT_PREFERENCES };
+	}
 	items.push({
 		id: "title-indicator",
 		label: "Title indicator",
@@ -239,10 +244,10 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 					const payload: EnabledToggleData = { enabled: state.enabled };
 					pi.appendEntry(ENABLED_TOGGLE_TYPE, payload);
 				} else if (id === "title-indicator" || id === "terminal-bell") {
-					const currentPrefs = loadPreferences(state.preferencesPath);
-					const key = id === "title-indicator" ? "title_indicator" : "bell";
-					currentPrefs[key] = newValue === "on";
 					try {
+						const currentPrefs = loadPreferences(state.preferencesPath);
+						const key = id === "title-indicator" ? "title_indicator" : "bell";
+						currentPrefs[key] = newValue === "on";
 						savePreferences(state.preferencesPath, currentPrefs);
 					} catch (err: unknown) {
 						const msg = err instanceof Error ? err.message : String(err);

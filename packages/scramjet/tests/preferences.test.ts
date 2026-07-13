@@ -63,9 +63,9 @@ describe("preferences", () => {
 			expect(loadPreferences(configPath)).toEqual({ title_indicator: true, bell: true });
 		});
 
-		it("returns defaults for invalid YAML", () => {
+		it("throws for invalid YAML", () => {
 			fs.writeFileSync(configPath, "{{{{invalid");
-			expect(loadPreferences(configPath)).toEqual(DEFAULT_PREFERENCES);
+			expect(() => loadPreferences(configPath)).toThrow("preferences.yaml: failed to load config:");
 		});
 
 		it("returns defaults for non-object YAML", () => {

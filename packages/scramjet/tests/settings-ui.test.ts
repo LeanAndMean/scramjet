@@ -403,7 +403,12 @@ describe("buildTopLevelItems", () => {
 describe("buildTopLevelItems — notification preferences", () => {
 	it("includes title-indicator toggle with correct default (on)", () => {
 		const state = freshState({ preferencesPath: path.join(tmpDir!, "preferences.yaml") });
-		const items = buildTopLevelItems(state, () => null, noopTheme, () => {});
+		const items = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		const item = items.find((i) => i.id === "title-indicator");
 		expect(item).toBeDefined();
 		expect(item?.currentValue).toBe("on");
@@ -413,7 +418,12 @@ describe("buildTopLevelItems — notification preferences", () => {
 
 	it("includes terminal-bell toggle with correct default (off)", () => {
 		const state = freshState({ preferencesPath: path.join(tmpDir!, "preferences.yaml") });
-		const items = buildTopLevelItems(state, () => null, noopTheme, () => {});
+		const items = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		const item = items.find((i) => i.id === "terminal-bell");
 		expect(item).toBeDefined();
 		expect(item?.currentValue).toBe("off");
@@ -425,7 +435,12 @@ describe("buildTopLevelItems — notification preferences", () => {
 		const prefsPath = path.join(tmpDir!, "preferences.yaml");
 		savePreferences(prefsPath, { title_indicator: false, bell: true });
 		const state = freshState({ preferencesPath: prefsPath });
-		const items = buildTopLevelItems(state, () => null, noopTheme, () => {});
+		const items = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+		);
 		expect(items.find((i) => i.id === "title-indicator")?.currentValue).toBe("off");
 		expect(items.find((i) => i.id === "terminal-bell")?.currentValue).toBe("on");
 	});
