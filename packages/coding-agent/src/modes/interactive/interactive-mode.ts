@@ -702,7 +702,12 @@ export class InteractiveMode {
 	private updateTerminalTitle(): void {
 		// SCRAMJET-DIVERGENCE: delegate to title provider when set.
 		if (this.titleProvider) {
-			const title = this.titleProvider();
+			let title: string | undefined;
+			try {
+				title = this.titleProvider();
+			} catch {
+				// Provider failed; fall through to default title
+			}
 			if (title !== undefined) {
 				this.ui.terminal.setTitle(title);
 				return;
