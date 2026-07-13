@@ -186,6 +186,10 @@ export interface ExtensionUIContext {
 	/** Set the terminal window/tab title. */
 	setTitle(title: string): void;
 
+	// SCRAMJET-DIVERGENCE: title provider callback for extension-owned terminal titles.
+	/** Register a callback that supplies the terminal title. When set, updateTerminalTitle() delegates to this provider; if the provider returns undefined, the default title is used. Pass undefined to clear. */
+	setTitleProvider(provider: (() => string | undefined) | undefined): void;
+
 	/** Show a custom component with keyboard focus. */
 	custom<T>(
 		factory: (

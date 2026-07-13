@@ -37,6 +37,7 @@ export function titleForPhase(phase: string, sessionName: string | undefined, cw
 // fires first and updates lifecycle/timers before this handler reads them.
 export function registerTerminalIndicators(pi: ExtensionAPI, state: ScramjetState): void {
 	let lastBellMs = 0;
+	let agentIsRunning = false;
 
 	function safeLoadPreferences(): Preferences {
 		try {
@@ -46,6 +47,17 @@ export function registerTerminalIndicators(pi: ExtensionAPI, state: ScramjetStat
 			state.logger.warn("preferences", msg);
 			return { ...DEFAULT_PREFERENCES };
 		}
+	}
+
+	function currentPhase(): string {
+		if (agentIsRunning) return "running";
+		return derivePhaseLabel(state.lifecycle);
+	}
+
+	function titleProvider(): string | undefined {
+		const prefs = safeLoadPreferences();
+		if (!prefs.title_indicator) return undefined;
+		return titleForPhase(currentPhase(), pi.getSessionName(), path.basename(process.cwd()));
 	}
 
 	function setTitleForPhase(
@@ -59,18 +71,24 @@ export function registerTerminalIndicators(pi: ExtensionAPI, state: ScramjetStat
 	}
 
 	pi.on("session_start", (_event, ctx) => {
-		setTitleForPhase(ctx, "idle", safeLoadPreferences());
+		agentIsRunning = false;
+		if (ctx.hasUI) {
+			ctx.ui.setTitleProvider(titleProvider);
+		}
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
+		agentIsRunning = false;
 		setTitleForPhase(ctx, "idle", safeLoadPreferences());
 	});
 
 	pi.on("agent_start", (_event, ctx) => {
+		agentIsRunning = true;
 		setTitleForPhase(ctx, "running", safeLoadPreferences());
 	});
 
 	pi.on("agent_end", (_event, ctx) => {
+		agentIsRunning = false;
 		const prefs = safeLoadPreferences();
 		const phase = derivePhaseLabel(state.lifecycle);
 		setTitleForPhase(ctx, phase, prefs);

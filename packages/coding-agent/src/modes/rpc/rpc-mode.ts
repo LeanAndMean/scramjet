@@ -218,6 +218,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			} as RpcExtensionUIRequest);
 		},
 
+		// SCRAMJET-DIVERGENCE: title provider stub (not supported in RPC mode).
+		setTitleProvider() {
+			// Title provider not supported in RPC mode
+		},
+
 		async custom() {
 			// Custom UI not supported in RPC mode
 			return undefined as never;

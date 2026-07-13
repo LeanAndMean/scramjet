@@ -242,6 +242,8 @@ export class InteractiveMode {
 	private loadingAnimation: Loader | undefined = undefined;
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
+	// SCRAMJET-DIVERGENCE: title provider for extension-owned terminal titles.
+	private titleProvider: (() => string | undefined) | undefined = undefined;
 	private workingIndicatorOptions: LoaderIndicatorOptions | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
@@ -698,6 +700,19 @@ export class InteractiveMode {
 	 * Update terminal title with session name and cwd.
 	 */
 	private updateTerminalTitle(): void {
+		// SCRAMJET-DIVERGENCE: delegate to title provider when set.
+		if (this.titleProvider) {
+			let title: string | undefined;
+			try {
+				title = this.titleProvider();
+			} catch {
+				// Provider failed; fall through to default title
+			}
+			if (title !== undefined) {
+				this.ui.terminal.setTitle(title);
+				return;
+			}
+		}
 		const cwdBasename = path.basename(this.sessionManager.getCwd());
 		const sessionName = this.sessionManager.getSessionName();
 		if (sessionName) {
@@ -1800,6 +1815,7 @@ export class InteractiveMode {
 		this.setCustomEditorComponent(undefined);
 		this.setupAutocompleteProvider();
 		this.defaultEditor.onExtensionShortcut = undefined;
+		this.titleProvider = undefined;
 		this.updateTerminalTitle();
 		this.workingMessage = undefined;
 		this.workingVisible = true;
@@ -1965,6 +1981,10 @@ export class InteractiveMode {
 			setFooter: (factory) => this.setExtensionFooter(factory),
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
+			setTitleProvider: (provider) => {
+				this.titleProvider = provider;
+				this.updateTerminalTitle();
+			},
 			custom: (factory, options) => this.showExtensionCustom(factory, options),
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
