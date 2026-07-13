@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.47.0 — Terminal bell and title-state indicators
+
+Add dynamic terminal title and optional bell notification that surface agent status without switching windows. Title shows working (●) / waiting (○) prefix; bell fires on agent-idle transitions with a 5 s cooldown. Both controlled via a new preferences system at `~/.config/scramjet/preferences.yaml` and exposed in `/scramjet settings`. Fixes [#312](https://github.com/LeanAndMean/scramjet/issues/312).
+
+### Added
+
+- `terminal-indicators.ts`: dynamic terminal title updates on lifecycle transitions (title defaults on).
+- Terminal bell (BEL character) on agent-idle, guarded by TTY check, cooldown, and dispatch/probe suppression (bell defaults off).
+- `preferences.ts`: mtime-cached YAML preferences loader/saver at `~/.config/scramjet/preferences.yaml`.
+- `/scramjet settings` now includes title indicator and bell toggles.
+- `preferencesPath` on `ScramjetState` for testability.
+- Tests: `preferences.test.ts`, `terminal-indicators.test.ts`, expanded `settings-ui.test.ts`.
+
 ## 0.46.1 — Separate `/scramjet settings` from `/autopilot` command
 
 Register a dedicated `/scramjet` command that owns the harness-wide settings UI (`/scramjet settings`), narrowing `/autopilot` to `on|off|status` only. Fixes [#309](https://github.com/LeanAndMean/scramjet/issues/309).
