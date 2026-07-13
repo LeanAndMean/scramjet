@@ -1,16 +1,15 @@
 /** /autopilot on|off — gates `closed`/`open`/`ask` decisions. `forced`
  *  fires regardless; see CLAUDE.md "MVP design rationales". */
 
-import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
+import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
-import { showSettingsPage } from "./settings-ui.js";
 import type { ScramjetState } from "./types.js";
 
 export function registerAutopilotCommand(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerCommand("autopilot", {
-		description: "Toggle Scramjet auto-continuation: /autopilot on|off|settings|status",
+		description: "Toggle Scramjet auto-continuation: /autopilot on|off|status",
 		getArgumentCompletions: (prefix) => {
-			const options = ["on", "off", "settings", "status"];
+			const options = ["on", "off", "status"];
 			const filtered = options.filter((o) => o.startsWith(prefix));
 			return filtered.length > 0 ? filtered.map((o) => ({ value: o, label: o })) : null;
 		},
@@ -27,16 +26,10 @@ export function registerAutopilotCommand(pi: ExtensionAPI, state: ScramjetState)
 				const payload: EnabledToggleData = { enabled: false };
 				pi.appendEntry(ENABLED_TOGGLE_TYPE, payload);
 				ctx.ui.notify("Scramjet auto-continuation disabled", "info");
-			} else if (arg === "settings") {
-				if (!ctx.hasUI) {
-					ctx.ui.notify("Settings requires a TUI environment", "error");
-					return;
-				}
-				await showSettingsPage(pi, ctx as ExtensionContext, state);
 			} else if (arg === "" || arg === "status") {
 				ctx.ui.notify(`Autopilot is ${state.enabled ? "on" : "off"}`, "info");
 			} else {
-				ctx.ui.notify("Usage: /autopilot on|off|settings|status", "warning");
+				ctx.ui.notify("Usage: /autopilot on|off|status", "warning");
 			}
 		},
 	});

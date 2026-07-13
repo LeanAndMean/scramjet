@@ -94,7 +94,8 @@ Scramjet is a product monorepo. The `bin/scramjet.js` entry point calls Pi's lib
 
 **Independent capabilities:**
 
-- `autopilot-command.ts` — the `/autopilot on|off` slash command.
+- `autopilot-command.ts` — the `/autopilot on|off|status` slash command.
+- `scramjet-command.ts` — the `/scramjet settings` slash command; opens the harness-wide settings UI (autonomy edge overrides, autopilot toggle).
 - `clear-alias.ts` — `/clear` alias.
 - `subagent/` — registers the `subagent` tool as a builtin (`registerSubagentTool(pi)`), enabling agent dispatch to specialized subagents via isolated subprocess invocations. Copied from `packages/coding-agent/examples/extensions/subagent/` with branding fixes (`getPiInvocation` fallback, temp-dir prefix). No `ScramjetState` dependency; registered unconditionally. Agent discovery reads from `getAgentDir()/agents/` (populated by the agent-bridge) and optional project-local `.scramjet/agents/`. The `subagent-output-advisor.ts` hook watches for silent `(no output)` failures from this tool.
 - `pr-indicator.ts` — ambient footer hint showing the current branch's active GitHub PR number (`PR #<n>`) via `ctx.ui.setStatus` when exactly one open PR matches; shows nothing in every other case (no/multiple PRs, unsupported remote, missing/unauthenticated `gh`, not a git repo). Resolves on `session_start` / `session_tree` / `agent_end` (the `gh` call on `agent_end` is gated behind a cheap local branch-diff). An opportunistic hint, not workflow state: nothing is journaled, nothing is added to `ScramjetState`, and it shows regardless of `/autopilot on|off`. This footer `setStatus` text is a different Pi primitive from — and not a violation of — the sidebar UI panel deferred in `docs/scramjet-vision.md` section 5. A commented forge-swap seam marks where a future `glab` (`MR !<iid>`) branch would slot in.

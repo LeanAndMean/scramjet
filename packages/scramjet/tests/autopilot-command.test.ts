@@ -161,32 +161,17 @@ describe("registerAutopilotCommand — handler", () => {
 		expect(notifications[0].message).toContain("Usage:");
 	});
 
-	it("'/autopilot settings' without TUI notifies error and does not throw", async () => {
-		const { pi, commands } = recordingPi();
+	it("'settings' is no longer a valid subcommand and produces a usage warning", async () => {
+		const { pi, commands, appended } = recordingPi();
 		const state = freshState();
 		registerAutopilotCommand(pi, state);
-		const notifications: { message: string; type?: string }[] = [];
-		const ctx: any = {
-			hasUI: false,
-			ui: {
-				notify(message: string, type?: string) {
-					notifications.push({ message, type });
-				},
-			},
-		};
+		const { ctx, notifications } = fakeCtx();
 
 		await spec(commands).handler("settings", ctx);
 
+		expect(appended).toEqual([]);
 		expect(notifications).toHaveLength(1);
-		expect(notifications[0].type).toBe("error");
-		expect(notifications[0].message).toContain("TUI");
-	});
-
-	it("'settings' appears in argument completions", () => {
-		const { pi, commands } = recordingPi();
-		registerAutopilotCommand(pi, freshState());
-		const fn = spec(commands).getArgumentCompletions;
-		const results = fn?.("s");
-		expect(results?.map((c) => c.value)).toContain("settings");
+		expect(notifications[0].type).toBe("warning");
+		expect(notifications[0].message).toContain("Usage:");
 	});
 });
