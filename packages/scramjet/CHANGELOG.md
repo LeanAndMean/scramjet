@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.46.0 — Rename `/scramjet` command to `/autopilot`
+
+Rename the `/scramjet on|off|settings|status` slash command to `/autopilot on|off|settings|status`. All user-facing strings and documentation updated. Wire formats (`scramjet:enabled-toggle`, `<scramjet-command>` tags, `scramjet:` journal prefixes) preserved for session compatibility. Fixes [#295](https://github.com/LeanAndMean/scramjet/issues/295).
+
+### Changed
+
+- `/scramjet` command renamed to `/autopilot` — `on`, `off`, `settings`, and `status` subcommands unchanged.
+- Source file `scramjet-command.ts` renamed to `autopilot-command.ts`; export renamed to `registerAutopilotCommand`.
+- Settings UI label updated to "Autopilot".
+- `FALLBACK_KNOWN_SLASH` in history.ts updated from `"scramjet"` to `"autopilot"`.
+
 ## 0.45.3 — Bound auto-retry loops with per-prompt cumulative counter
 
 Add a per-prompt cumulative retry counter to `AgentSession` that caps total retry attempts at `maxRetries * 2` (default 6), preventing unbounded retry loops where stream failures alternate with successful tool-call turns (resetting the per-burst counter each time). Fixes [#302](https://github.com/LeanAndMean/scramjet/issues/302).
