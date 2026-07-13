@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.46.1 — Separate `/scramjet settings` from `/autopilot` command
+
+Register a dedicated `/scramjet` command that owns the harness-wide settings UI (`/scramjet settings`), narrowing `/autopilot` to `on|off|status` only. Fixes [#309](https://github.com/LeanAndMean/scramjet/issues/309).
+
+### Added
+
+- `/scramjet settings` command (and bare `/scramjet` as default) for the settings UI.
+- `scramjet-command.ts` with `registerScramjetCommand` export.
+- `"scramjet"` added to `FALLBACK_KNOWN_SLASH` set in `history.ts`.
+
+### Changed
+
+- `/autopilot` no longer accepts `settings` subcommand — narrowed to `on|off|status`.
+
 ## 0.46.0 — Rename `/scramjet` command to `/autopilot`
 
 Rename the `/scramjet on|off|settings|status` slash command to `/autopilot on|off|settings|status`. All user-facing strings and documentation updated. Wire formats (`scramjet:enabled-toggle`, `<scramjet-command>` tags, `scramjet:` journal prefixes) preserved for session compatibility. Fixes [#295](https://github.com/LeanAndMean/scramjet/issues/295).
