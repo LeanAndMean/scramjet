@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { Component } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../src/autonomy-settings.js";
+import { loadPreferences, resetCache as resetPrefsCache, savePreferences } from "../src/preferences.js";
 import { buildCommandItems, buildEdgeItems, buildTopLevelItems, showSettingsPage } from "../src/settings-ui.js";
 import type { AutonomyConfig, CommandDef, NextStepPolicy } from "../src/types.js";
 import { freshState } from "./helpers.js";
@@ -29,6 +30,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	resetCache();
+	resetPrefsCache();
 	if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
 	tmpDir = null;
 });
@@ -398,7 +400,93 @@ describe("buildTopLevelItems", () => {
 	});
 });
 
+describe("buildTopLevelItems — notification preferences", () => {
+	it("includes title-indicator toggle with correct default (on)", () => {
+		const state = freshState({ preferencesPath: path.join(tmpDir!, "preferences.yaml") });
+		const items = buildTopLevelItems(state, () => null, noopTheme, () => {});
+		const item = items.find((i) => i.id === "title-indicator");
+		expect(item).toBeDefined();
+		expect(item?.currentValue).toBe("on");
+		expect(item?.values).toEqual(["on", "off"]);
+		expect(item?.description).toContain("title");
+	});
+
+	it("includes terminal-bell toggle with correct default (off)", () => {
+		const state = freshState({ preferencesPath: path.join(tmpDir!, "preferences.yaml") });
+		const items = buildTopLevelItems(state, () => null, noopTheme, () => {});
+		const item = items.find((i) => i.id === "terminal-bell");
+		expect(item).toBeDefined();
+		expect(item?.currentValue).toBe("off");
+		expect(item?.values).toEqual(["on", "off"]);
+		expect(item?.description).toContain("bell");
+	});
+
+	it("reflects saved preferences", () => {
+		const prefsPath = path.join(tmpDir!, "preferences.yaml");
+		savePreferences(prefsPath, { title_indicator: false, bell: true });
+		const state = freshState({ preferencesPath: prefsPath });
+		const items = buildTopLevelItems(state, () => null, noopTheme, () => {});
+		expect(items.find((i) => i.id === "title-indicator")?.currentValue).toBe("off");
+		expect(items.find((i) => i.id === "terminal-bell")?.currentValue).toBe("on");
+	});
+});
+
 describe("showSettingsPage", () => {
+	it("toggling title-indicator persists to preferences file", async () => {
+		const prefsPath = path.join(tmpDir!, "preferences.yaml");
+		const state = freshState({ preferencesPath: prefsPath });
+		state.registry = new Map();
+
+		const pi = { appendEntry: vi.fn() };
+		const ctx = {
+			ui: {
+				notify: vi.fn(),
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+					// Navigate to title-indicator (index 1) and toggle
+					component.handleInput?.("\x1b[B"); // down to title-indicator
+					component.handleInput?.("\r"); // cycle: on → off
+				},
+			},
+		};
+
+		await showSettingsPage(pi as never, ctx as never, state);
+
+		const prefs = loadPreferences(prefsPath);
+		expect(prefs.title_indicator).toBe(false);
+		expect(prefs.bell).toBe(false);
+	});
+
+	it("toggling terminal-bell persists to preferences file", async () => {
+		const prefsPath = path.join(tmpDir!, "preferences.yaml");
+		const state = freshState({ preferencesPath: prefsPath });
+		state.registry = new Map();
+
+		const pi = { appendEntry: vi.fn() };
+		const ctx = {
+			ui: {
+				notify: vi.fn(),
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+					// Navigate to terminal-bell (index 2) and toggle
+					component.handleInput?.("\x1b[B"); // down to title-indicator
+					component.handleInput?.("\x1b[B"); // down to terminal-bell
+					component.handleInput?.("\r"); // cycle: off → on
+				},
+			},
+		};
+
+		await showSettingsPage(pi as never, ctx as never, state);
+
+		const prefs = loadPreferences(prefsPath);
+		expect(prefs.bell).toBe(true);
+		expect(prefs.title_indicator).toBe(true);
+	});
+
 	it("preserves fresh disk overrides when saving an autonomy toggle", async () => {
 		const configPath = path.join(tmpDir!, "autonomy.yaml");
 		const state = freshState({ autonomyConfigPath: configPath });
@@ -417,9 +505,11 @@ describe("showSettingsPage", () => {
 					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
 					saveAutonomyConfig(configPath, { edges: { "mach12:cmd": { a: "chain", b: "pause" } } });
 
-					component.handleInput?.("\x1b[B");
-					component.handleInput?.("\r");
-					component.handleInput?.("\r");
+					component.handleInput?.("\x1b[B"); // title-indicator
+					component.handleInput?.("\x1b[B"); // terminal-bell
+					component.handleInput?.("\x1b[B"); // command-autonomy
+					component.handleInput?.("\r"); // open command submenu
+					component.handleInput?.("\r"); // open edge submenu
 					expect(renderText(component)).toContain("a  chain");
 					component.handleInput?.("\r");
 				},
