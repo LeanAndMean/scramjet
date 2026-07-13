@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.47.1 — Fix terminal title indicators overwritten by Pi
+
+Add a `setTitleProvider` callback to Pi's extension UI context so Scramjet can own the terminal title. Pi's default title update now defers to the provider when set, preventing it from overwriting the `●`/`○` indicator prefix. Fixes [#315](https://github.com/LeanAndMean/scramjet/issues/315).
+
+### Added
+
+- `setTitleProvider` on `ExtensionUIContext` (Pi runtime divergence) — lets an extension register a callback that supplies the terminal title string.
+- Title provider registration in `terminal-indicators.ts` on `session_start`; returns `undefined` when `title_indicator` is disabled so Pi's default title is used.
+
+### Changed
+
+- `InteractiveMode.updateTerminalTitle()` checks the title provider before applying its own format.
+- Bumped `@leanandmean/coding-agent` to `0.74.1-scramjet.16`.
+
 ## 0.47.0 — Terminal bell and title-state indicators
 
 Add dynamic terminal title and optional bell notification that surface agent status without switching windows. Title shows working (●) / waiting (○) prefix; bell fires on agent-idle transitions with a 5 s cooldown. Both controlled via a new preferences system at `~/.config/scramjet/preferences.yaml` and exposed in `/scramjet settings`. Fixes [#312](https://github.com/LeanAndMean/scramjet/issues/312).
