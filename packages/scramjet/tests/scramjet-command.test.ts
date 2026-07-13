@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerScramjetCommand } from "../src/scramjet-command.js";
 import { freshState } from "./helpers.js";
+
+vi.mock("../src/settings-ui.js", () => ({
+	showSettingsPage: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { showSettingsPage } from "../src/settings-ui.js";
 
 interface RegisteredCommand {
 	name: string;
@@ -85,6 +91,19 @@ describe("registerScramjetCommand — handler", () => {
 		expect(notifications).toHaveLength(1);
 		expect(notifications[0].type).toBe("error");
 		expect(notifications[0].message).toContain("TUI");
+	});
+
+	it("'settings' with TUI calls showSettingsPage", async () => {
+		const { pi, commands } = recordingPi();
+		const state = freshState();
+		registerScramjetCommand(pi, state);
+		const { ctx, notifications } = fakeCtx(true);
+
+		await spec(commands).handler("settings", ctx);
+
+		expect(showSettingsPage).toHaveBeenCalledOnce();
+		expect(showSettingsPage).toHaveBeenCalledWith(pi, ctx, state);
+		expect(notifications).toHaveLength(0);
 	});
 
 	it("unknown args produce a usage warning", async () => {

@@ -1,4 +1,4 @@
-/** /autopilot on|off — gates `closed`/`open`/`ask` decisions. `forced`
+/** /autopilot on|off|status — gates `closed`/`open`/`ask` decisions. `forced`
  *  fires regardless; see CLAUDE.md "MVP design rationales". */
 
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
