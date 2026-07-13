@@ -98,7 +98,7 @@ There is no "workflow mode" to enter or exit. You're always just using Pi. Scram
 
 By default, `/autopilot on` auto-accepts all recommended transitions and `/autopilot off` pauses at every one. Autonomy settings let you override this per edge — pin specific transitions to always chain or always pause, regardless of the global flag.
 
-Run `/autopilot settings` to browse commands and edit autonomy overrides from the TUI. You can also edit `~/.config/scramjet/autonomy.yaml` (or `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`) directly:
+Run `/scramjet settings` to browse commands and edit autonomy overrides from the TUI. You can also edit `~/.config/scramjet/autonomy.yaml` (or `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`) directly:
 
 ```yaml
 edges:

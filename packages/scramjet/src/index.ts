@@ -16,6 +16,7 @@ import { registerModelChangeNotice } from "./model-change-notice.js";
 import { registerModelIdentity } from "./model-identity.js";
 import { registerModelSwitchTool } from "./model-switch-tool.js";
 import { registerPrIndicator } from "./pr-indicator.js";
+import { registerScramjetCommand } from "./scramjet-command.js";
 import { registerSubagentTool } from "./subagent/index.js";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.js";
 import { registerSubdirContext } from "./subdir-context.js";
@@ -58,6 +59,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerAutoContinue(pi, state);
 	registerSubagentTool(pi);
 	registerAutopilotCommand(pi, state);
+	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);
 	registerCommandLoader(pi, state);
 	registerModelIdentity(pi, state);

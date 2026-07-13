@@ -21,7 +21,7 @@ export const SIDEBAR_MAX = 50;
 // a workflow exit. Used only when pi.getCommands() is unavailable (older Pi,
 // test fakes that don't stub it); the normal path consults the live command
 // list. (F4)
-const FALLBACK_KNOWN_SLASH = new Set<string>(["autopilot", "clear"]);
+const FALLBACK_KNOWN_SLASH = new Set<string>(["autopilot", "clear", "scramjet"]);
 
 function extractSlashName(text: string): string | null {
 	if (!text.startsWith("/")) return null;
