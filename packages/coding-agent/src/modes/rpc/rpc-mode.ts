@@ -218,6 +218,10 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			} as RpcExtensionUIRequest);
 		},
 
+		setTitleProvider() {
+			// Title provider not supported in RPC mode
+		},
+
 		async custom() {
 			// Custom UI not supported in RPC mode
 			return undefined as never;
