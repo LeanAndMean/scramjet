@@ -16,11 +16,13 @@ import { registerModelChangeNotice } from "./model-change-notice.js";
 import { registerModelIdentity } from "./model-identity.js";
 import { registerModelSwitchTool } from "./model-switch-tool.js";
 import { registerPrIndicator } from "./pr-indicator.js";
+import { defaultPreferencesPath } from "./preferences.js";
 import { registerScramjetCommand } from "./scramjet-command.js";
 import { registerSubagentTool } from "./subagent/index.js";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.js";
 import { registerSubdirContext } from "./subdir-context.js";
 import { registerSuggestNextStepsTool } from "./suggest-next-steps.js";
+import { registerTerminalIndicators } from "./terminal-indicators.js";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
 import type { ScramjetState } from "./types.js";
 import { registerUserInputTool } from "./user-input.js";
@@ -41,6 +43,7 @@ export function initScramjet(pi: ExtensionAPI) {
 		pendingNotifyModel: null,
 		hasUserMessage: false,
 		autonomyConfigPath: defaultConfigPath(),
+		preferencesPath: defaultPreferencesPath(),
 		subdirLoadedPaths: new Set(),
 		pendingSuggestion: null,
 		freetextAwaitingReply: false,
@@ -73,4 +76,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerDormantCommandNotice(pi, state);
 	registerSuggestNextStepsTool(pi, state);
 	registerSubdirContext(pi, state);
+	// Must follow registerAutoContinue — hooks fire in registration order, and
+	// indicators read lifecycle state set by auto-continue's agent_end handler.
+	registerTerminalIndicators(pi, state);
 }

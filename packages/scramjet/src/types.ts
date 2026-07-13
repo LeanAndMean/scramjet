@@ -156,6 +156,7 @@ export interface ScramjetState extends LifecycleHolder {
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
+	preferencesPath: string;
 	subdirLoadedPaths: Set<string>;
 	pendingSuggestion: PendingSuggestion | null;
 	freetextAwaitingReply: boolean;

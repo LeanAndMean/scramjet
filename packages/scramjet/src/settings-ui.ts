@@ -3,6 +3,7 @@ import type { Component } from "@leanandmean/tui";
 import { type SettingItem, SettingsList, type SettingsListTheme } from "@leanandmean/tui";
 import { defaultConfigPath, loadAutonomyConfig, lookupEdge, saveAutonomyConfig } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
+import { DEFAULT_PREFERENCES, loadPreferences, type Preferences, savePreferences } from "./preferences.js";
 import type { AutonomyConfig, NextStepPolicy, ScramjetState } from "./types.js";
 
 const EDGE_VALUES = ["default", "chain", "pause"] as const;
@@ -144,6 +145,27 @@ export function buildTopLevelItems(
 		values: ["on", "off"],
 	});
 
+	let prefs: Preferences;
+	try {
+		prefs = loadPreferences(state.preferencesPath);
+	} catch {
+		prefs = { ...DEFAULT_PREFERENCES };
+	}
+	items.push({
+		id: "title-indicator",
+		label: "Title indicator",
+		description: "Show ● working / ○ waiting prefix in the terminal title",
+		currentValue: prefs.title_indicator ? "on" : "off",
+		values: ["on", "off"],
+	});
+	items.push({
+		id: "terminal-bell",
+		label: "Terminal bell",
+		description: "Ring terminal bell when the agent is waiting for input",
+		currentValue: prefs.bell ? "on" : "off",
+		values: ["on", "off"],
+	});
+
 	const commandsWithEdges = [...state.registry.values()].filter((def) => def.next != null);
 	if (commandsWithEdges.length > 0) {
 		const edgeSummary = buildRegistrySummary(configGetter());
@@ -221,6 +243,16 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 					state.enabled = newValue === "on";
 					const payload: EnabledToggleData = { enabled: state.enabled };
 					pi.appendEntry(ENABLED_TOGGLE_TYPE, payload);
+				} else if (id === "title-indicator" || id === "terminal-bell") {
+					try {
+						const currentPrefs = loadPreferences(state.preferencesPath);
+						const key = id === "title-indicator" ? "title_indicator" : "bell";
+						currentPrefs[key] = newValue === "on";
+						savePreferences(state.preferencesPath, currentPrefs);
+					} catch (err: unknown) {
+						const msg = err instanceof Error ? err.message : String(err);
+						ctx.ui.notify(`Failed to save preferences: ${msg}`, "error");
+					}
 				}
 			},
 			() => done(),
