@@ -14,7 +14,7 @@
  * so the directives, and the safety guidance in particular, are always present.
  * It returns only `systemPromptSection` (no `message`), so it composes cleanly
  * with any other before_agent_start handler. It is unconditional: base-prompt quality applies
- * regardless of /scramjet on|off (same flag-independent posture as
+ * regardless of /autopilot on|off (same flag-independent posture as
  * pr-indicator.ts), so no ScramjetState is threaded.
  *
  * The two Scramjet-specific blocks (orientation + feedback routing) are
@@ -39,7 +39,7 @@ command delegation. Mach 12 is one such command set (the issue → plan → revi
 implement → PR → ship methodology); other sets can sit alongside it.
 
 Scramjet documentation (read only when the user asks about Scramjet itself — its
-commands, command sets, next-step chaining, delegation, or the /scramjet on/off
+commands, command sets, next-step chaining, delegation, or the /autopilot on/off
 flag):
 - README: ${scramjetReadmePath}
 - Vision / design: ${scramjetVisionPath}

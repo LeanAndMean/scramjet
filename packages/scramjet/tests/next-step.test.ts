@@ -62,16 +62,16 @@ describe("buildNextStepBlock — closed mode", () => {
 		expect(block).toContain("stop the chain");
 	});
 
-	it("includes only the current /scramjet on or off recommendation rule", () => {
+	it("includes only the current /autopilot on or off recommendation rule", () => {
 		const on = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
-		expect(on).toContain("With `/scramjet on`");
+		expect(on).toContain("With `/autopilot on`");
 		expect(on).toContain("recommended entry's message is a slash command");
-		expect(on).not.toContain("With `/scramjet off`");
+		expect(on).not.toContain("With `/autopilot off`");
 
 		const off = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
-		expect(off).toContain("With `/scramjet off`");
+		expect(off).toContain("With `/autopilot off`");
 		expect(off).toContain("Scramjet will not auto-dispatch");
-		expect(off).not.toContain("With `/scramjet on`");
+		expect(off).not.toContain("With `/autopilot on`");
 	});
 
 	it("renders candidates without hints", () => {
@@ -100,16 +100,16 @@ describe("buildNextStepBlock — open mode", () => {
 		expect(block).toContain("stop the chain");
 	});
 
-	it("includes only the current /scramjet on or off open-policy recommendation rule", () => {
+	it("includes only the current /autopilot on or off open-policy recommendation rule", () => {
 		const on = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
-		expect(on).toContain("With `/scramjet on`");
+		expect(on).toContain("With `/autopilot on`");
 		expect(on).toContain("do not set it for a non-command message");
-		expect(on).not.toContain("With `/scramjet off`");
+		expect(on).not.toContain("With `/autopilot off`");
 
 		const off = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
-		expect(off).toContain("With `/scramjet off`");
+		expect(off).toContain("With `/autopilot off`");
 		expect(off).toContain("Scramjet will not auto-dispatch");
-		expect(off).not.toContain("With `/scramjet on`");
+		expect(off).not.toContain("With `/autopilot on`");
 	});
 
 	it("renders empty candidates as open/free-form rather than a terminus", () => {

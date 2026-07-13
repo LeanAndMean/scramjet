@@ -138,8 +138,8 @@ export function buildTopLevelItems(
 
 	items.push({
 		id: "auto-continuation",
-		label: "Scramjet auto-continuation",
-		description: "When on, Scramjet automatically chains commands based on next-step policies",
+		label: "Autopilot",
+		description: "When on, Scramjet automatically chains commands based on next-step policies (/autopilot on|off)",
 		currentValue: state.enabled ? "on" : "off",
 		values: ["on", "off"],
 	});

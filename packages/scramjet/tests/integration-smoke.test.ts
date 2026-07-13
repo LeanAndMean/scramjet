@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAutoContinue } from "../src/auto-continue.js";
+import { registerAutopilotCommand } from "../src/autopilot-command.js";
 import { registerCommandStatusTool } from "../src/command-status.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import { registerDelegateTool } from "../src/delegate.js";
@@ -10,7 +11,6 @@ import { registerHistory } from "../src/history.js";
 import { initScramjet } from "../src/index.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
-import { registerScramjetCommand } from "../src/scramjet-command.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
 import type { CommandDef, NextStepPolicy, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
@@ -195,8 +195,8 @@ describe("integration smoke — base directives wired into the extension factory
 	});
 });
 
-// S21: end-to-end chain smoke under /scramjet on. Exercises every harness
-// module that participates in the dispatch loop — scramjet-command,
+// S21: end-to-end chain smoke under /autopilot on. Exercises every harness
+// module that participates in the dispatch loop — autopilot-command,
 // history, command-status, auto-continue — against a synthetic two-command
 // registry. The point isn't to re-test each module in isolation (every
 // one already has its own suite) but to assert they compose through the
@@ -206,7 +206,7 @@ describe("integration smoke — base directives wired into the extension factory
 // status probe, the agent reports completion via report_scramjet_command_status, and
 // auto-continue's forced-mode dispatch fires the next slash that the input
 // handler then records as origin: "forced".
-describe("integration smoke — end-to-end chain under /scramjet on (S21)", () => {
+describe("integration smoke — end-to-end chain under /autopilot on (S21)", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
@@ -275,7 +275,7 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 				[origin.name, origin],
 				[target.name, target],
 			]),
-			enabled: false, // user will flip this via /scramjet on
+			enabled: false, // user will flip this via /autopilot on
 		});
 
 		const bag = bigRecordingPi();
@@ -286,16 +286,16 @@ describe("integration smoke — end-to-end chain under /scramjet on (S21)", () =
 		};
 
 		// Wire every harness module that participates in a real dispatch.
-		registerScramjetCommand(bag.pi, state);
+		registerAutopilotCommand(bag.pi, state);
 		registerHistory(bag.pi, state);
 		registerCommandStatusTool(bag.pi, state);
 		registerAutoContinue(bag.pi, state);
 		registerDelegateTool(bag.pi, state);
 		registerToolCallAdvisor(bag.pi, state);
 
-		// 1. User toggles /scramjet on — not a slash-command input event, that's
+		// 1. User toggles /autopilot on — not a slash-command input event, that's
 		//    Pi's command-handler path. We invoke the registered handler directly.
-		const toggle = bag.commands.find((c) => c.name === "scramjet");
+		const toggle = bag.commands.find((c) => c.name === "autopilot");
 		expect(toggle).toBeDefined();
 		await toggle?.spec.handler("on", ctx);
 		expect(state.enabled).toBe(true);

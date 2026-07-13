@@ -88,10 +88,10 @@ wins) is preserved; the *mechanism* (LLM reads prose) is replaced.
   commands as subroutines (delegation) without prose duplication.
 - **Chaining is the user's choice between commands.** When more than one
   next step is possible, *someone* has to decide which to take. By default
-  that someone is the user. `/scramjet on` lets the agent decide instead.
+  that someone is the user. `/autopilot on` lets the agent decide instead.
   Either way, Esc returns to plain Pi.
 - **Behaviorally invisible when idle, visually unobtrusive otherwise.**
-  When `/scramjet off`, the harness behaves like any standard coding
+  When `/autopilot off`, the harness behaves like any standard coding
   agent (Claude Code, Codex, Pi). The history sidebar is a small visual
   affordance, not a behavioral one — see §6.
 - **Authoring is a first-class flow.** Creating and editing commands lives
@@ -323,7 +323,7 @@ encouraged but optional.
 - **`forced` completion gate.** The forced target runs only after the
   command reports `status: "completed"` via `report_scramjet_command_status`. It
   does not require an agent-picked `next_steps` entry, and it still ignores
-  `/scramjet off`; the completion status only prevents chaining after
+  `/autopilot off`; the completion status only prevents chaining after
   clarification, error, or an otherwise unfinished turn.
 - **No `next` declared.** Equivalent to `mode: ask` with no hint. The
   harness does not inject a next-step instruction block and does not
@@ -475,12 +475,12 @@ already supports this without schema changes.
 
 ##### Design decisions
 
-- **`/scramjet on` does not affect intra-command interactions.** `/scramjet on`
+- **`/autopilot on` does not affect intra-command interactions.** `/autopilot on`
   auto-accepts recommended *between-command* next steps. Intra-command
   interactions are the mechanism for human-AI alignment within a command
   and cannot be safely skipped by a global toggle. The autonomy graduation
   path for intra-command gates is per-interaction settings (auto-answer
-  semantics above), not `/scramjet on` absorbing them.
+  semantics above), not `/autopilot on` absorbing them.
 
 - **Probe messages should be concise.** The extended probe reminds the
   agent of the available tool names at the decision point; it does not
@@ -622,7 +622,7 @@ Y, Z" in a system prompt is not enforcement; it is hope. When hard
 enforcement lands, the harness gates at the event level, not at the
 prose level.
 
-#### 5. `/scramjet on` / `/scramjet off`
+#### 5. `/autopilot on` / `/autopilot off`
 
 When **off** (default), the harness pauses after each top-level
 command's `closed`, `open`, `ask`, or absent next-step. Hint text from
@@ -641,7 +641,7 @@ In both modes, Esc at any point returns to plain Pi.
 
 ##### Scope: between-command chaining only
 
-`/scramjet on` and `/scramjet off` affect only *between-command* chaining
+`/autopilot on` and `/autopilot off` affect only *between-command* chaining
 decisions — the next-step dispatch that occurs after a command reports
 `completed`. They do **not** gate intra-command user interactions (§3).
 
@@ -651,7 +651,7 @@ them under a global toggle would conflate "automate obvious transitions"
 with "suppress judgment checkpoints," which are fundamentally different
 concerns. The autonomy graduation path for intra-command interactions is
 per-interaction auto-answer settings (§3, *Auto-answer semantics*), not
-`/scramjet on`.
+`/autopilot on`.
 
 ##### Why `forced` fires under `/off`
 
@@ -677,7 +677,7 @@ over deterministic transitions.
 
 `scramjet` displays a **right-side sidebar** showing recent commands run
 in the current session. The sidebar is **always on**. This is a visual
-affordance, not a behavioral one: when `/scramjet off`, the harness still
+affordance, not a behavioral one: when `/autopilot off`, the harness still
 behaves like a standard coding agent — the sidebar is just a small log of
 "which slash commands have I run" that any user might find useful
 regardless of chaining.
@@ -691,7 +691,7 @@ Initial scope:
   `/clear`). Truncated with `…` on overflow.
 - **Symbol/color:** leading marker indicates origin.
   - `▸` user-initiated (manually typed)
-  - `●` agent-initiated (selected by the agent under `/scramjet on`)
+  - `●` agent-initiated (selected by the agent under `/autopilot on`)
   - `■` `forced` next-step
 - **Indentation:** delegated commands are indented one level under their
   caller. Top-level (chained) commands are at the outer level.
@@ -775,7 +775,7 @@ is universal.
 
 #### 8. Persistence and isolation
 
-- Per-session `/scramjet on` state.
+- Per-session `/autopilot on` state.
 - Process history persisted in the session and restored on resume.
   Cross-session workflow restore beyond the visible history is not a
   goal of the MVP, but is not explicitly forbidden either — if it falls

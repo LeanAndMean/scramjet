@@ -46,7 +46,7 @@ Once you have a few related commands, two patterns appear:
 Scramjet supports both patterns:
 
 - **Composability.** Commands invoke other commands as subroutines — write common routines once, call them from anywhere.
-- **Chaining.** Commands declare what should come next. Scramjet validates the options and shows a selector. With `/scramjet on`, the recommendation auto-selects after a brief countdown. With `/scramjet off`, you pick manually. Either way, Escape returns to plain Pi.
+- **Chaining.** Commands declare what should come next. Scramjet validates the options and shows a selector. With `/autopilot on`, the recommendation auto-selects after a brief countdown. With `/autopilot off`, you pick manually. Either way, Escape returns to plain Pi.
 
 ```
 > /mach12:issue-plan 55
@@ -96,9 +96,9 @@ There is no "workflow mode" to enter or exit. You're always just using Pi. Scram
 
 ## Autonomy settings
 
-By default, `/scramjet on` auto-accepts all recommended transitions and `/scramjet off` pauses at every one. Autonomy settings let you override this per edge — pin specific transitions to always chain or always pause, regardless of the global flag.
+By default, `/autopilot on` auto-accepts all recommended transitions and `/autopilot off` pauses at every one. Autonomy settings let you override this per edge — pin specific transitions to always chain or always pause, regardless of the global flag.
 
-Run `/scramjet settings` to browse commands and edit autonomy overrides from the TUI. You can also edit `~/.config/scramjet/autonomy.yaml` (or `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`) directly:
+Run `/autopilot settings` to browse commands and edit autonomy overrides from the TUI. You can also edit `~/.config/scramjet/autonomy.yaml` (or `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`) directly:
 
 ```yaml
 edges:
@@ -112,9 +112,9 @@ edges:
 
 | Setting   | Behavior |
 |-----------|----------|
-| `chain`   | Auto-dispatch without selector or countdown, regardless of `/scramjet on\|off` |
-| `pause`   | Always show selector without auto-select, regardless of `/scramjet on\|off` |
-| (absent)  | Default behavior — follows `/scramjet on\|off` flag |
+| `chain`   | Auto-dispatch without selector or countdown, regardless of `/autopilot on\|off` |
+| `pause`   | Always show selector without auto-select, regardless of `/autopilot on\|off` |
+| (absent)  | Default behavior — follows `/autopilot on\|off` flag |
 
 A `"*"` wildcard target applies to any command not explicitly listed under a source. `forced` transitions are not affected by edge settings.
 

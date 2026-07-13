@@ -1,5 +1,5 @@
 /**
- * /scramjet on|off|status writer-side tests.
+ * /autopilot on|off|status writer-side tests.
  *
  * The toggle is the user's only knob for auto-continuation; before this
  * file existed only the *replay* side (history.ts → state.enabled) was
@@ -8,8 +8,8 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { registerAutopilotCommand } from "../src/autopilot-command.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "../src/history.js";
-import { registerScramjetCommand } from "../src/scramjet-command.js";
 import { freshState } from "./helpers.js";
 
 interface RegisteredCommand {
@@ -48,23 +48,23 @@ function fakeCtx() {
 }
 
 function spec(commands: RegisteredCommand[]) {
-	const entry = commands.find((c) => c.name === "scramjet");
-	if (!entry) throw new Error("scramjet command not registered");
+	const entry = commands.find((c) => c.name === "autopilot");
+	if (!entry) throw new Error("autopilot command not registered");
 	return entry.spec;
 }
 
-describe("registerScramjetCommand — registration surface", () => {
-	it("registers exactly one command, named 'scramjet', with a description", () => {
+describe("registerAutopilotCommand — registration surface", () => {
+	it("registers exactly one command, named 'autopilot', with a description", () => {
 		const { pi, commands } = recordingPi();
-		registerScramjetCommand(pi, freshState());
+		registerAutopilotCommand(pi, freshState());
 		expect(commands).toHaveLength(1);
-		expect(commands[0].name).toBe("scramjet");
+		expect(commands[0].name).toBe("autopilot");
 		expect(commands[0].spec.description).toBeTruthy();
 	});
 
 	it("argument completions: 'o' offers both on/off; 'on' offers only on; 'x' returns null", () => {
 		const { pi, commands } = recordingPi();
-		registerScramjetCommand(pi, freshState());
+		registerAutopilotCommand(pi, freshState());
 		const fn = spec(commands).getArgumentCompletions;
 		expect(fn).toBeDefined();
 		const completionsFor = (prefix: string) => fn?.(prefix);
@@ -79,11 +79,11 @@ describe("registerScramjetCommand — registration surface", () => {
 	});
 });
 
-describe("registerScramjetCommand — handler", () => {
-	it("'/scramjet on' sets state.enabled=true, appends a toggle entry, and notifies", async () => {
+describe("registerAutopilotCommand — handler", () => {
+	it("'/autopilot on' sets state.enabled=true, appends a toggle entry, and notifies", async () => {
 		const { pi, commands, appended } = recordingPi();
 		const state = freshState({ enabled: false });
-		registerScramjetCommand(pi, state);
+		registerAutopilotCommand(pi, state);
 		const { ctx, notifications } = fakeCtx();
 
 		await spec(commands).handler("on", ctx);
@@ -95,10 +95,10 @@ describe("registerScramjetCommand — handler", () => {
 		expect(notifications[0].message.toLowerCase()).toContain("enabled");
 	});
 
-	it("'/scramjet off' sets state.enabled=false, appends a toggle entry, and notifies", async () => {
+	it("'/autopilot off' sets state.enabled=false, appends a toggle entry, and notifies", async () => {
 		const { pi, commands, appended } = recordingPi();
 		const state = freshState({ enabled: true });
-		registerScramjetCommand(pi, state);
+		registerAutopilotCommand(pi, state);
 		const { ctx, notifications } = fakeCtx();
 
 		await spec(commands).handler("off", ctx);
@@ -113,17 +113,17 @@ describe("registerScramjetCommand — handler", () => {
 	it("arg parsing is case-insensitive and trims surrounding whitespace ('  ON  ')", async () => {
 		const { pi, commands, appended } = recordingPi();
 		const state = freshState({ enabled: false });
-		registerScramjetCommand(pi, state);
+		registerAutopilotCommand(pi, state);
 		const { ctx } = fakeCtx();
 		await spec(commands).handler("  ON  ", ctx);
 		expect(state.enabled).toBe(true);
 		expect(appended).toHaveLength(1);
 	});
 
-	it("'/scramjet' (empty args) reports status without writing a toggle entry", async () => {
+	it("'/autopilot' (empty args) reports status without writing a toggle entry", async () => {
 		const { pi, commands, appended } = recordingPi();
 		const state = freshState({ enabled: true });
-		registerScramjetCommand(pi, state);
+		registerAutopilotCommand(pi, state);
 		const { ctx, notifications } = fakeCtx();
 
 		await spec(commands).handler("", ctx);
@@ -134,10 +134,10 @@ describe("registerScramjetCommand — handler", () => {
 		expect(notifications[0].message.toLowerCase()).toContain("on");
 	});
 
-	it("'/scramjet status' reports off when state is off, no journal write", async () => {
+	it("'/autopilot status' reports off when state is off, no journal write", async () => {
 		const { pi, commands, appended } = recordingPi();
 		const state = freshState({ enabled: false });
-		registerScramjetCommand(pi, state);
+		registerAutopilotCommand(pi, state);
 		const { ctx, notifications } = fakeCtx();
 
 		await spec(commands).handler("status", ctx);
@@ -149,7 +149,7 @@ describe("registerScramjetCommand — handler", () => {
 	it("unknown args produce a usage warning and do not mutate state or journal", async () => {
 		const { pi, commands, appended } = recordingPi();
 		const state = freshState({ enabled: false });
-		registerScramjetCommand(pi, state);
+		registerAutopilotCommand(pi, state);
 		const { ctx, notifications } = fakeCtx();
 
 		await spec(commands).handler("yes please", ctx);
@@ -161,10 +161,10 @@ describe("registerScramjetCommand — handler", () => {
 		expect(notifications[0].message).toContain("Usage:");
 	});
 
-	it("'/scramjet settings' without TUI notifies error and does not throw", async () => {
+	it("'/autopilot settings' without TUI notifies error and does not throw", async () => {
 		const { pi, commands } = recordingPi();
 		const state = freshState();
-		registerScramjetCommand(pi, state);
+		registerAutopilotCommand(pi, state);
 		const notifications: { message: string; type?: string }[] = [];
 		const ctx: any = {
 			hasUI: false,
@@ -184,7 +184,7 @@ describe("registerScramjetCommand — handler", () => {
 
 	it("'settings' appears in argument completions", () => {
 		const { pi, commands } = recordingPi();
-		registerScramjetCommand(pi, freshState());
+		registerAutopilotCommand(pi, freshState());
 		const fn = spec(commands).getArgumentCompletions;
 		const results = fn?.("s");
 		expect(results?.map((c) => c.value)).toContain("settings");

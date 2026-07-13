@@ -30,9 +30,9 @@
  *
  * For completed commands: `forced` fires the declared target unconditionally
  * after completion; closed/open validate selector-visible options. With UI,
- * Scramjet shows a selector and `/scramjet on` auto-selects a recommended
+ * Scramjet shows a selector and `/autopilot on` auto-selects a recommended
  * command after a 3s countdown; without UI it dispatches only a valid
- * recommended command under `/scramjet on`. Dispatch uses Pi's
+ * recommended command under `/autopilot on`. Dispatch uses Pi's
  * dispatchUserInput so slash commands run through Pi's normal input pipeline.
  * See CLAUDE.md "MVP design rationales".
  */
@@ -523,7 +523,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				);
 			} else {
 				ctx.ui.notify(
-					`scramjet: next would be ${text}; /scramjet on only auto-dispatches command next steps`,
+					`scramjet: next would be ${text}; /autopilot on only auto-dispatches command next steps`,
 					"info",
 				);
 			}
@@ -554,7 +554,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				detail: { reason: "scramjet-disabled", message: result.recommended.message },
 			});
 			ctx.ui.notify(
-				`scramjet: next would be ${cleanForNotify(result.recommended.message)}${fresh}; /scramjet on to chain`,
+				`scramjet: next would be ${cleanForNotify(result.recommended.message)}${fresh}; /autopilot on to chain`,
 				"info",
 			);
 		}
