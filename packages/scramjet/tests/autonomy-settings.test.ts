@@ -3,16 +3,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	applyRecommendations,
 	defaultConfigPath,
 	loadAutonomyConfig,
 	lookupEdge,
+	mergeAllRecommendations,
 	parseAutonomyConfig,
+	parseAutonomyRecommendations,
 	resetCache,
 	resolveEdgeBehavior,
 	saveAutonomyConfig,
 	validateConfig,
+	validateRecommendations,
 } from "../src/autonomy-settings.js";
-import type { AutonomyConfig, CommandRegistry } from "../src/types.js";
+import type { AutonomyConfig, AutonomyRecommendations, CommandRegistry } from "../src/types.js";
 
 describe("parseAutonomyConfig", () => {
 	it("parses valid config", () => {
@@ -405,5 +409,256 @@ describe("validateConfig", () => {
 		expect(warnings).toHaveLength(2);
 		expect(warnings[0]).toContain('unknown source command "bad:source"');
 		expect(warnings[1]).toContain('unknown target command "bad:target"');
+	});
+
+	it("accepts recommendations type (widened parameter)", () => {
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"mach12:issue-implement": { "mach12:pr-create": "chain" },
+			},
+		};
+		expect(validateConfig(recs, registry)).toEqual([]);
+	});
+});
+
+describe("parseAutonomyRecommendations", () => {
+	it("parses valid values: chain, pause, default", () => {
+		const raw = `
+edges:
+  cmd:a:
+    cmd:b: chain
+    cmd:c: pause
+    cmd:d: default
+`;
+		const recs = parseAutonomyRecommendations(raw);
+		expect(recs.edges["cmd:a"]).toEqual({
+			"cmd:b": "chain",
+			"cmd:c": "pause",
+			"cmd:d": "default",
+		});
+	});
+
+	it("skips invalid values", () => {
+		const raw = `
+edges:
+  cmd:a:
+    cmd:b: chain
+    cmd:c: auto
+    cmd:d: 123
+`;
+		const recs = parseAutonomyRecommendations(raw);
+		expect(recs.edges["cmd:a"]).toEqual({ "cmd:b": "chain" });
+	});
+
+	it("returns empty edges for empty YAML", () => {
+		expect(parseAutonomyRecommendations("")).toEqual({ edges: {} });
+	});
+
+	it("returns empty edges for YAML without edges key", () => {
+		expect(parseAutonomyRecommendations("foo: bar")).toEqual({ edges: {} });
+	});
+
+	it("returns empty edges when edges is null", () => {
+		expect(parseAutonomyRecommendations("edges:")).toEqual({ edges: {} });
+	});
+
+	it("skips source with non-object targets", () => {
+		const raw = `
+edges:
+  cmd:a: not-an-object
+  cmd:b:
+    cmd:c: default
+`;
+		const recs = parseAutonomyRecommendations(raw);
+		expect(recs.edges["cmd:a"]).toBeUndefined();
+		expect(recs.edges["cmd:b"]).toEqual({ "cmd:c": "default" });
+	});
+
+	it("throws on malformed YAML", () => {
+		expect(() => parseAutonomyRecommendations("{ invalid yaml: [")).toThrow();
+	});
+
+	it("omits source entries with no valid targets", () => {
+		const raw = `
+edges:
+  cmd:a:
+    cmd:b: invalid
+  cmd:c:
+    cmd:d: chain
+`;
+		const recs = parseAutonomyRecommendations(raw);
+		expect(recs.edges["cmd:a"]).toBeUndefined();
+		expect(recs.edges["cmd:c"]).toEqual({ "cmd:d": "chain" });
+	});
+});
+
+describe("applyRecommendations", () => {
+	let tmpDir: string;
+	let configPath: string;
+
+	beforeEach(() => {
+		resetCache();
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-test-"));
+		configPath = path.join(tmpDir, "scramjet", "autonomy.yaml");
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("fills gaps: absent edge gets added", () => {
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"cmd:a": { "cmd:b": "chain" },
+			},
+		};
+		const result = applyRecommendations(configPath, recs);
+		expect(result).toEqual({ applied: 1, skipped: 0 });
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded!.edges["cmd:a"]).toEqual({ "cmd:b": "chain" });
+	});
+
+	it("does not overwrite existing edge", () => {
+		const existing: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "pause" } },
+		};
+		saveAutonomyConfig(configPath, existing);
+
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"cmd:a": { "cmd:b": "chain" },
+			},
+		};
+		const result = applyRecommendations(configPath, recs);
+		expect(result).toEqual({ applied: 0, skipped: 1 });
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded!.edges["cmd:a"]).toEqual({ "cmd:b": "pause" });
+	});
+
+	it("default recommendation is a no-op", () => {
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"cmd:a": { "cmd:b": "default" },
+			},
+		};
+		const result = applyRecommendations(configPath, recs);
+		expect(result).toEqual({ applied: 0, skipped: 1 });
+		expect(fs.existsSync(configPath)).toBe(false);
+	});
+
+	it("default on existing edge is skipped (preserves user setting)", () => {
+		const existing: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "chain" } },
+		};
+		saveAutonomyConfig(configPath, existing);
+
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"cmd:a": { "cmd:b": "default" },
+			},
+		};
+		const result = applyRecommendations(configPath, recs);
+		expect(result).toEqual({ applied: 0, skipped: 1 });
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded!.edges["cmd:a"]).toEqual({ "cmd:b": "chain" });
+	});
+
+	it("returns correct counts for mixed apply/skip", () => {
+		const existing: AutonomyConfig = {
+			edges: { "cmd:a": { "cmd:b": "pause" } },
+		};
+		saveAutonomyConfig(configPath, existing);
+
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"cmd:a": { "cmd:b": "chain", "cmd:c": "chain" },
+				"cmd:d": { "cmd:e": "pause", "cmd:f": "default" },
+			},
+		};
+		const result = applyRecommendations(configPath, recs);
+		// cmd:a→cmd:b: skipped (existing), cmd:a→cmd:c: applied,
+		// cmd:d→cmd:e: applied, cmd:d→cmd:f: skipped (default)
+		expect(result).toEqual({ applied: 2, skipped: 2 });
+		const loaded = loadAutonomyConfig(configPath);
+		expect(loaded!.edges["cmd:a"]).toEqual({ "cmd:b": "pause", "cmd:c": "chain" });
+		expect(loaded!.edges["cmd:d"]).toEqual({ "cmd:e": "pause" });
+	});
+
+	it("all-default recommendations leave file absent", () => {
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"cmd:a": { "cmd:b": "default", "cmd:c": "default" },
+			},
+		};
+		const result = applyRecommendations(configPath, recs);
+		expect(result).toEqual({ applied: 0, skipped: 2 });
+		expect(fs.existsSync(configPath)).toBe(false);
+	});
+
+	it("empty recommendations is a no-op", () => {
+		const recs: AutonomyRecommendations = { edges: {} };
+		const result = applyRecommendations(configPath, recs);
+		expect(result).toEqual({ applied: 0, skipped: 0 });
+	});
+});
+
+describe("mergeAllRecommendations", () => {
+	it("merges multiple sets", () => {
+		const recs = new Map<string, AutonomyRecommendations>([
+			["set-a", { edges: { "cmd:a": { "cmd:b": "chain" } } }],
+			["set-b", { edges: { "cmd:c": { "cmd:d": "pause" } } }],
+		]);
+		const merged = mergeAllRecommendations(recs);
+		expect(merged.edges["cmd:a"]).toEqual({ "cmd:b": "chain" });
+		expect(merged.edges["cmd:c"]).toEqual({ "cmd:d": "pause" });
+	});
+
+	it("first-write-wins on conflicts", () => {
+		const recs = new Map<string, AutonomyRecommendations>([
+			["set-a", { edges: { "cmd:a": { "cmd:b": "chain" } } }],
+			["set-b", { edges: { "cmd:a": { "cmd:b": "pause" } } }],
+		]);
+		const merged = mergeAllRecommendations(recs);
+		expect(merged.edges["cmd:a"]!["cmd:b"]).toBe("chain");
+	});
+
+	it("empty map produces empty edges", () => {
+		const merged = mergeAllRecommendations(new Map());
+		expect(merged.edges).toEqual({});
+	});
+
+	it("merges different targets for same source across sets", () => {
+		const recs = new Map<string, AutonomyRecommendations>([
+			["set-a", { edges: { "cmd:a": { "cmd:b": "chain" } } }],
+			["set-b", { edges: { "cmd:a": { "cmd:c": "pause" } } }],
+		]);
+		const merged = mergeAllRecommendations(recs);
+		expect(merged.edges["cmd:a"]).toEqual({ "cmd:b": "chain", "cmd:c": "pause" });
+	});
+});
+
+describe("validateRecommendations", () => {
+	const registry: CommandRegistry = new Map([
+		["mach12:issue-implement", {} as any],
+		["mach12:pr-create", {} as any],
+	]);
+
+	it("returns no warnings for valid recommendations", () => {
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"mach12:issue-implement": { "mach12:pr-create": "chain" },
+			},
+		};
+		expect(validateRecommendations(recs, registry)).toEqual([]);
+	});
+
+	it("warns on unknown commands", () => {
+		const recs: AutonomyRecommendations = {
+			edges: {
+				"mach12:unknown": { "mach12:pr-create": "chain" },
+			},
+		};
+		const warnings = validateRecommendations(recs, registry);
+		expect(warnings).toContain('unknown source command "mach12:unknown"');
 	});
 });

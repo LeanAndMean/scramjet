@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import type { AutonomyConfig, CommandRegistry, EdgeSetting } from "./types.js";
+import type { AutonomyConfig, AutonomyRecommendations, CommandRegistry, EdgeSetting, RecommendationSetting } from "./types.js";
 
 const VALID_SETTINGS = new Set(["chain", "pause"]);
+const VALID_REC_SETTINGS = new Set(["chain", "pause", "default"]);
 
 let cache: { path: string; mtimeMs: number; config: AutonomyConfig | null } | null = null;
 
@@ -82,7 +83,10 @@ export function resolveEdgeBehavior(configPath: string, source: string, target: 
 	return lookupEdge(config, source, target);
 }
 
-export function validateConfig(config: AutonomyConfig, registry: CommandRegistry): string[] {
+export function validateConfig(
+	config: { edges: Record<string, Record<string, string>> },
+	registry: CommandRegistry,
+): string[] {
 	const warnings: string[] = [];
 	for (const [source, targets] of Object.entries(config.edges)) {
 		if (!registry.has(source)) {
@@ -95,6 +99,89 @@ export function validateConfig(config: AutonomyConfig, registry: CommandRegistry
 		}
 	}
 	return warnings;
+}
+
+export function validateRecommendations(recs: AutonomyRecommendations, registry: CommandRegistry): string[] {
+	return validateConfig(recs, registry);
+}
+
+export function parseAutonomyRecommendations(raw: string): AutonomyRecommendations {
+	const doc = parseYaml(raw);
+	if (
+		doc == null ||
+		typeof doc !== "object" ||
+		!("edges" in doc) ||
+		doc.edges == null ||
+		typeof doc.edges !== "object"
+	) {
+		return { edges: {} };
+	}
+
+	const edges: AutonomyRecommendations["edges"] = {};
+	for (const [source, targets] of Object.entries(doc.edges as Record<string, unknown>)) {
+		if (targets == null || typeof targets !== "object") continue;
+		const targetMap: Record<string, RecommendationSetting> = {};
+		for (const [target, setting] of Object.entries(targets as Record<string, unknown>)) {
+			if (typeof setting === "string" && VALID_REC_SETTINGS.has(setting)) {
+				targetMap[target] = setting as RecommendationSetting;
+			}
+		}
+		if (Object.keys(targetMap).length > 0) {
+			edges[source] = targetMap;
+		}
+	}
+	return { edges };
+}
+
+export function applyRecommendations(
+	configPath: string,
+	recommendations: AutonomyRecommendations,
+): { applied: number; skipped: number } {
+	const config = loadAutonomyConfig(configPath) ?? { edges: {} };
+	let applied = 0;
+	let skipped = 0;
+
+	for (const [source, targets] of Object.entries(recommendations.edges)) {
+		for (const [target, setting] of Object.entries(targets)) {
+			if (setting === "default") {
+				skipped++;
+				continue;
+			}
+			if (config.edges[source]?.[target]) {
+				skipped++;
+				continue;
+			}
+			if (!config.edges[source]) {
+				config.edges[source] = {};
+			}
+			config.edges[source][target] = setting;
+			applied++;
+		}
+	}
+
+	if (applied > 0) {
+		saveAutonomyConfig(configPath, config);
+	}
+	return { applied, skipped };
+}
+
+export function mergeAllRecommendations(
+	recs: ReadonlyMap<string, AutonomyRecommendations>,
+): AutonomyRecommendations {
+	const merged: AutonomyRecommendations = { edges: {} };
+	for (const setRecs of recs.values()) {
+		for (const [source, targets] of Object.entries(setRecs.edges)) {
+			if (!merged.edges[source]) {
+				merged.edges[source] = {};
+			}
+			for (const [target, setting] of Object.entries(targets)) {
+				if (!(target in merged.edges[source])) {
+					merged.edges[source][target] = setting;
+				}
+			}
+		}
+	}
+	return merged;
 }
 
 export function saveAutonomyConfig(configPath: string, config: AutonomyConfig): void {

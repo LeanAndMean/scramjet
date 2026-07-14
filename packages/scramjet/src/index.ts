@@ -43,6 +43,7 @@ export function initScramjet(pi: ExtensionAPI) {
 		pendingNotifyModel: null,
 		hasUserMessage: false,
 		autonomyConfigPath: defaultConfigPath(),
+		autonomyRecommendations: new Map(),
 		preferencesPath: defaultPreferencesPath(),
 		subdirLoadedPaths: new Set(),
 		pendingSuggestion: null,
