@@ -71,7 +71,7 @@ export const NEXT_STEP_SELECTION_TYPE = "scramjet:next-step-selection";
 export interface NextStepSelectionEntry {
 	outcome: "selected" | "dismissed";
 	source: "completion" | "suggestion";
-	policyMode: string | null;
+	policyMode: NextStepPolicy["mode"] | null;
 	sourceCommand: string | null;
 	options: Array<{ message: string; reason: string }>;
 	selected: { message: string; reason: string } | null;
@@ -408,7 +408,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			forcePause?: boolean;
 			title?: string;
 			source: "completion" | "suggestion";
-			policyMode?: string;
+			policyMode?: NextStepPolicy["mode"];
 			sourceCommand?: string;
 		} = {
 			source: "completion",
@@ -458,22 +458,24 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				activeSelectorAbort = null;
 
 				const entryOptions = result.valid.map((o) => ({ message: o.message, reason: o.reason }));
-				const recommendedIdx = result.recommended
-					? result.valid.indexOf(result.recommended)
-					: null;
+				const recommendedIdx = result.recommended ? result.valid.indexOf(result.recommended) : null;
 				const entrySourceCommand = sourceCommand ?? selectorCommand;
 
 				if (!selection) {
-					pi.appendEntry(NEXT_STEP_SELECTION_TYPE, {
-						outcome: "dismissed",
-						source,
-						policyMode: policyMode ?? null,
-						sourceCommand: entrySourceCommand,
-						options: entryOptions,
-						selected: null,
-						recommendedIndex: recommendedIdx === -1 ? null : recommendedIdx,
-						modelSwitch: null,
-					} satisfies NextStepSelectionEntry);
+					try {
+						pi.appendEntry(NEXT_STEP_SELECTION_TYPE, {
+							outcome: "dismissed",
+							source,
+							policyMode: policyMode ?? null,
+							sourceCommand: entrySourceCommand,
+							options: entryOptions,
+							selected: null,
+							recommendedIndex: recommendedIdx === -1 ? null : recommendedIdx,
+							modelSwitch: null,
+						} satisfies NextStepSelectionEntry);
+					} catch (e) {
+						state.logger.warn("journal", "failed to journal next-step dismiss", { error: String(e) });
+					}
 					state.logger.lifecycle("next-step selector closed", {
 						phase: lp(state.lifecycle),
 						detail: { reason: "no-selection" },
@@ -507,16 +509,20 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					}
 				}
 
-				pi.appendEntry(NEXT_STEP_SELECTION_TYPE, {
-					outcome: "selected",
-					source,
-					policyMode: policyMode ?? null,
-					sourceCommand: entrySourceCommand,
-					options: entryOptions,
-					selected: { message: selection.step.message, reason: selection.step.reason },
-					recommendedIndex: recommendedIdx === -1 ? null : recommendedIdx,
-					modelSwitch: selection.model?.name ?? null,
-				} satisfies NextStepSelectionEntry);
+				try {
+					pi.appendEntry(NEXT_STEP_SELECTION_TYPE, {
+						outcome: "selected",
+						source,
+						policyMode: policyMode ?? null,
+						sourceCommand: entrySourceCommand,
+						options: entryOptions,
+						selected: { message: selection.step.message, reason: selection.step.reason },
+						recommendedIndex: recommendedIdx === -1 ? null : recommendedIdx,
+						modelSwitch: selection.model?.name ?? null,
+					} satisfies NextStepSelectionEntry);
+				} catch (e) {
+					state.logger.warn("journal", "failed to journal next-step selection", { error: String(e) });
+				}
 
 				runSelectedOption(selection.step, ctx);
 			})

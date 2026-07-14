@@ -2,14 +2,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NextStepSelectionEntry } from "../src/auto-continue.js";
 import {
-	NEXT_STEP_SELECTION_TYPE,
 	cleanForNotify,
 	extractStopReason,
+	NEXT_STEP_SELECTION_TYPE,
 	NOTIFY_MAX,
 	registerAutoContinue,
 } from "../src/auto-continue.js";
-import type { NextStepSelectionEntry } from "../src/auto-continue.js";
 import { resetCache } from "../src/autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../src/command-status.js";
 import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory, USER_INPUT_PARKED_TYPE } from "../src/history.js";
@@ -3526,9 +3526,7 @@ describe("next-step selection journaling", () => {
 	afterEach(() => vi.useRealTimers());
 
 	function selectionEntries(pi: any): NextStepSelectionEntry[] {
-		return pi.appended
-			.filter((e: any) => e.customType === NEXT_STEP_SELECTION_TYPE)
-			.map((e: any) => e.data);
+		return pi.appended.filter((e: any) => e.customType === NEXT_STEP_SELECTION_TYPE).map((e: any) => e.data);
 	}
 
 	it("journals outcome=selected on completion selection", async () => {
