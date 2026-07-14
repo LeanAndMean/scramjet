@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.48.1 — Confirmation submenu for Apply recommended settings
+
+"Apply recommended settings" now opens a confirmation submenu listing each recommended edge with its pending/configured status, instead of immediately applying. When all edges are already configured, the item remains visible with an "all applied" label. Fixes [#319](https://github.com/LeanAndMean/scramjet/issues/319).
+
+### Changed
+
+- "Apply recommended settings" item always appears when a command set has recommendations, even when all edges are already configured.
+- Selecting the item opens a confirmation submenu instead of immediately applying; "Apply N pending" action requires explicit selection.
+- Label reflects current state: "Apply recommended settings (N pending)" or "Recommended settings (all applied)".
+
+### Added
+
+- `classifyRecommendationEdges` pure function for testable edge classification.
+- 11 new/updated test cases for the confirmation flow.
+
 ## 0.48.0 — Command-set autonomy recommendations
 
 Command sets can now ship `autonomy-defaults.yaml` alongside their commands directory, providing recommended autonomy edge settings. Recommendations are gap-fill only — user config always wins — and are surfaced as an "Apply recommended settings" action in `/scramjet settings`. Ships Mach 12 defaults for three happy-path edges. Fixes [#292](https://github.com/LeanAndMean/scramjet/issues/292).

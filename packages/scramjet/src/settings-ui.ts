@@ -11,7 +11,35 @@ import {
 } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
 import { DEFAULT_PREFERENCES, loadPreferences, type Preferences, savePreferences } from "./preferences.js";
-import type { AutonomyConfig, AutonomyRecommendations, NextStepPolicy, ScramjetState } from "./types.js";
+import type {
+	AutonomyConfig,
+	AutonomyRecommendations,
+	NextStepPolicy,
+	RecommendationSetting,
+	ScramjetState,
+} from "./types.js";
+
+export interface EdgeClassification {
+	source: string;
+	target: string;
+	setting: RecommendationSetting;
+	status: "pending" | "configured";
+}
+
+export function classifyRecommendationEdges(
+	merged: AutonomyRecommendations,
+	config: AutonomyConfig | null,
+): EdgeClassification[] {
+	const result: EdgeClassification[] = [];
+	for (const [source, targets] of Object.entries(merged.edges)) {
+		for (const [target, setting] of Object.entries(targets)) {
+			if (setting === "default") continue;
+			const status = config?.edges[source]?.[target] != null ? "configured" : "pending";
+			result.push({ source, target, setting, status });
+		}
+	}
+	return result;
+}
 
 const EDGE_VALUES = ["default", "chain", "pause"] as const;
 
@@ -142,36 +170,59 @@ export function buildApplyRecommendationsItem(
 	configPath: string,
 	exitSubmenu: () => void,
 	notify: (message: string, type?: "info" | "warning" | "error") => void,
+	theme: SettingsListTheme,
 ): SettingItem | null {
 	if (recommendations.size === 0) return null;
 
 	const merged = mergeAllRecommendations(recommendations);
-	const config = configGetter();
-	let unapplied = 0;
-	for (const [source, targets] of Object.entries(merged.edges)) {
-		for (const [target, setting] of Object.entries(targets)) {
-			if (setting === "default") continue;
-			if (config?.edges[source]?.[target] != null) continue;
-			unapplied++;
-		}
-	}
+	const initialEdges = classifyRecommendationEdges(merged, configGetter());
+	if (initialEdges.length === 0) return null;
 
-	if (unapplied === 0) return null;
+	const unapplied = initialEdges.filter((e) => e.status === "pending").length;
+	const label =
+		unapplied > 0 ? `Apply recommended settings (${unapplied} pending)` : "Recommended settings (all applied)";
 
 	return {
 		id: "apply-recommendations",
-		label: `Apply recommended settings (${unapplied} edge${unapplied !== 1 ? "s" : ""})`,
+		label,
 		currentValue: "",
-		submenu: () => {
-			try {
-				const result = applyRecommendations(configPath, merged);
-				notify(`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`, "info");
-			} catch (err: unknown) {
-				const msg = err instanceof Error ? err.message : String(err);
-				notify(`Failed to apply recommendations: ${msg}`, "error");
+		submenu: (_currentValue, done) => {
+			const freshEdges = classifyRecommendationEdges(merged, configGetter());
+			const pending = freshEdges.filter((e) => e.status === "pending").length;
+
+			const edgeItems: SettingItem[] = freshEdges.map((edge) => ({
+				id: `rec-${edge.source}::${edge.target}`,
+				label: `${edge.source} → ${edge.target}`,
+				currentValue: `${edge.setting} (${edge.status})`,
+			}));
+
+			if (pending > 0) {
+				edgeItems.push({
+					id: "confirm-apply",
+					label: `Apply ${pending} pending`,
+					currentValue: "",
+					values: ["apply"],
+				});
 			}
-			exitSubmenu();
-			return { render: () => [], invalidate() {}, handleInput() {} };
+
+			return new SettingsList(
+				edgeItems,
+				Math.min(edgeItems.length + 2, 10),
+				theme,
+				(id, _newValue) => {
+					if (id === "confirm-apply") {
+						try {
+							const result = applyRecommendations(configPath, merged);
+							notify(`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`, "info");
+						} catch (err: unknown) {
+							const msg = err instanceof Error ? err.message : String(err);
+							notify(`Failed to apply recommendations: ${msg}`, "error");
+						}
+						exitSubmenu();
+					}
+				},
+				() => done(),
+			);
 		},
 	};
 }
@@ -234,6 +285,7 @@ export function buildTopLevelItems(
 								configPath,
 								closeSummary,
 								notify,
+								theme,
 							)
 						: null;
 				const allItems = applyItem ? [applyItem, ...commandItems] : commandItems;
