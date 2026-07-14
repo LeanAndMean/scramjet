@@ -752,7 +752,9 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 			reason: "startup",
 		});
 		const firstSize = state.autonomyRecommendations.size;
-		(state.autonomyRecommendations as Map<string, AutonomyRecommendations>).set("ghost", { edges: { fake: { fake2: "chain" } } });
+		(state.autonomyRecommendations as Map<string, AutonomyRecommendations>).set("ghost", {
+			edges: { fake: { fake2: "chain" } },
+		});
 		handler?.({
 			type: "resources_discover",
 			cwd: join(FIXTURES, "does-not-exist"),

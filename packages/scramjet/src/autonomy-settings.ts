@@ -2,7 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import type { AutonomyConfig, AutonomyRecommendations, CommandRegistry, EdgeSetting, RecommendationSetting } from "./types.js";
+import type {
+	AutonomyConfig,
+	AutonomyRecommendations,
+	CommandRegistry,
+	EdgeSetting,
+	RecommendationSetting,
+} from "./types.js";
 
 const VALID_SETTINGS = new Set(["chain", "pause"]);
 const VALID_REC_SETTINGS = new Set(["chain", "pause", "default"]);
@@ -169,9 +175,7 @@ export function applyRecommendations(
 	return { applied, skipped };
 }
 
-export function mergeAllRecommendations(
-	recs: ReadonlyMap<string, AutonomyRecommendations>,
-): AutonomyRecommendations {
+export function mergeAllRecommendations(recs: ReadonlyMap<string, AutonomyRecommendations>): AutonomyRecommendations {
 	const merged: AutonomyRecommendations = { edges: {} };
 	for (const setRecs of recs.values()) {
 		for (const [source, targets] of Object.entries(setRecs.edges)) {

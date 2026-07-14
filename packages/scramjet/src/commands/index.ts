@@ -2,8 +2,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
-import type { ScramjetState } from "../types.js";
 import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
+import type { ScramjetState } from "../types.js";
 import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
@@ -134,9 +134,7 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 							recommendations.set(setEntry.name, recs);
 						}
 					} catch (err) {
-						discoveryWarnings.push(
-							`[scramjet/discovery] could not parse ${recPath}: ${(err as Error).message}`,
-						);
+						discoveryWarnings.push(`[scramjet/discovery] could not parse ${recPath}: ${(err as Error).message}`);
 					}
 				}
 			}
