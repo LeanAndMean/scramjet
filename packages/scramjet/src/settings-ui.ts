@@ -11,7 +11,35 @@ import {
 } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
 import { DEFAULT_PREFERENCES, loadPreferences, type Preferences, savePreferences } from "./preferences.js";
-import type { AutonomyConfig, AutonomyRecommendations, NextStepPolicy, ScramjetState } from "./types.js";
+import type {
+	AutonomyConfig,
+	AutonomyRecommendations,
+	NextStepPolicy,
+	RecommendationSetting,
+	ScramjetState,
+} from "./types.js";
+
+export interface EdgeClassification {
+	source: string;
+	target: string;
+	setting: RecommendationSetting;
+	status: "pending" | "configured";
+}
+
+export function classifyRecommendationEdges(
+	merged: AutonomyRecommendations,
+	config: AutonomyConfig | null,
+): EdgeClassification[] {
+	const result: EdgeClassification[] = [];
+	for (const [source, targets] of Object.entries(merged.edges)) {
+		for (const [target, setting] of Object.entries(targets)) {
+			if (setting === "default") continue;
+			const status = config?.edges[source]?.[target] != null ? "configured" : "pending";
+			result.push({ source, target, setting, status });
+		}
+	}
+	return result;
+}
 
 const EDGE_VALUES = ["default", "chain", "pause"] as const;
 
@@ -146,15 +174,8 @@ export function buildApplyRecommendationsItem(
 	if (recommendations.size === 0) return null;
 
 	const merged = mergeAllRecommendations(recommendations);
-	const config = configGetter();
-	let unapplied = 0;
-	for (const [source, targets] of Object.entries(merged.edges)) {
-		for (const [target, setting] of Object.entries(targets)) {
-			if (setting === "default") continue;
-			if (config?.edges[source]?.[target] != null) continue;
-			unapplied++;
-		}
-	}
+	const edges = classifyRecommendationEdges(merged, configGetter());
+	const unapplied = edges.filter((e) => e.status === "pending").length;
 
 	if (unapplied === 0) return null;
 

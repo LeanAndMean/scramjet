@@ -7,12 +7,13 @@ import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../src/auton
 import { loadPreferences, resetCache as resetPrefsCache, savePreferences } from "../src/preferences.js";
 import {
 	buildApplyRecommendationsItem,
+	classifyRecommendationEdges,
 	buildCommandItems,
 	buildEdgeItems,
 	buildTopLevelItems,
 	showSettingsPage,
 } from "../src/settings-ui.js";
-import type { AutonomyConfig, AutonomyRecommendations, CommandDef, NextStepPolicy } from "../src/types.js";
+import type { AutonomyConfig, AutonomyRecommendations, CommandDef, NextStepPolicy, RecommendationSetting } from "../src/types.js";
 import { freshState } from "./helpers.js";
 
 const noopTheme = {
@@ -704,5 +705,59 @@ describe("buildApplyRecommendationsItem", () => {
 			"mach12:impl": "pause", // preserved user override
 			"mach12:pr": "chain", // applied recommendation
 		});
+	});
+});
+
+describe("classifyRecommendationEdges", () => {
+	it("returns empty array for empty merged edges", () => {
+		const merged: AutonomyRecommendations = { edges: {} };
+		const result = classifyRecommendationEdges(merged, null);
+		expect(result).toEqual([]);
+	});
+
+	it("classifies all as pending when no config exists", () => {
+		const merged: AutonomyRecommendations = {
+			edges: {
+				"mach12:impl": { "mach12:pr": "chain" },
+				"mach12:pr": { "mach12:review": "pause" },
+			},
+		};
+		const result = classifyRecommendationEdges(merged, null);
+		expect(result).toEqual([
+			{ source: "mach12:impl", target: "mach12:pr", setting: "chain", status: "pending" },
+			{ source: "mach12:pr", target: "mach12:review", setting: "pause", status: "pending" },
+		]);
+	});
+
+	it("classifies all as configured when every edge has a config override", () => {
+		const merged: AutonomyRecommendations = {
+			edges: {
+				"mach12:impl": { "mach12:pr": "chain" },
+			},
+		};
+		const config: AutonomyConfig = { edges: { "mach12:impl": { "mach12:pr": "pause" } } };
+		const result = classifyRecommendationEdges(merged, config);
+		expect(result).toEqual([
+			{ source: "mach12:impl", target: "mach12:pr", setting: "chain", status: "configured" },
+		]);
+	});
+
+	it("filters out default settings and classifies mixed correctly", () => {
+		const merged: AutonomyRecommendations = {
+			edges: {
+				"mach12:impl": {
+					"mach12:pr": "chain",
+					"mach12:review": "default" as RecommendationSetting,
+					"mach12:merge": "pause",
+				},
+			},
+		};
+		const config: AutonomyConfig = { edges: { "mach12:impl": { "mach12:pr": "chain" } } };
+		const result = classifyRecommendationEdges(merged, config);
+		expect(result).toHaveLength(2);
+		expect(result).toEqual([
+			{ source: "mach12:impl", target: "mach12:pr", setting: "chain", status: "configured" },
+			{ source: "mach12:impl", target: "mach12:merge", setting: "pause", status: "pending" },
+		]);
 	});
 });
