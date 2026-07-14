@@ -1,0 +1,3 @@
+edges:
+  infra:rotate-key:
+    infra:unknown-target: pause

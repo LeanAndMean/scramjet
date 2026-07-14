@@ -92,8 +92,14 @@ export interface SidebarEntry {
 
 export type EdgeSetting = "chain" | "pause" | null;
 
+export type RecommendationSetting = "chain" | "pause" | "default";
+
 export interface AutonomyConfig {
 	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;
+}
+
+export interface AutonomyRecommendations {
+	edges: Record<string, Record<string, RecommendationSetting>>;
 }
 
 // Name of the harness-only tool that records a user-initiated model change as a real
@@ -156,6 +162,7 @@ export interface ScramjetState extends LifecycleHolder {
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
+	autonomyRecommendations: ReadonlyMap<string, AutonomyRecommendations>;
 	preferencesPath: string;
 	subdirLoadedPaths: Set<string>;
 	pendingSuggestion: PendingSuggestion | null;

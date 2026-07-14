@@ -1,10 +1,17 @@
 import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import type { Component } from "@leanandmean/tui";
 import { type SettingItem, SettingsList, type SettingsListTheme } from "@leanandmean/tui";
-import { defaultConfigPath, loadAutonomyConfig, lookupEdge, saveAutonomyConfig } from "./autonomy-settings.js";
+import {
+	applyRecommendations,
+	defaultConfigPath,
+	loadAutonomyConfig,
+	lookupEdge,
+	mergeAllRecommendations,
+	saveAutonomyConfig,
+} from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
 import { DEFAULT_PREFERENCES, loadPreferences, type Preferences, savePreferences } from "./preferences.js";
-import type { AutonomyConfig, NextStepPolicy, ScramjetState } from "./types.js";
+import type { AutonomyConfig, AutonomyRecommendations, NextStepPolicy, ScramjetState } from "./types.js";
 
 const EDGE_VALUES = ["default", "chain", "pause"] as const;
 
@@ -129,11 +136,53 @@ function buildEdgeSubmenu(
 	return list;
 }
 
+export function buildApplyRecommendationsItem(
+	recommendations: ReadonlyMap<string, AutonomyRecommendations>,
+	configGetter: () => AutonomyConfig | null,
+	configPath: string,
+	exitSubmenu: () => void,
+	notify: (message: string, type?: "info" | "warning" | "error") => void,
+): SettingItem | null {
+	if (recommendations.size === 0) return null;
+
+	const merged = mergeAllRecommendations(recommendations);
+	const config = configGetter();
+	let unapplied = 0;
+	for (const [source, targets] of Object.entries(merged.edges)) {
+		for (const [target, setting] of Object.entries(targets)) {
+			if (setting === "default") continue;
+			if (config?.edges[source]?.[target] != null) continue;
+			unapplied++;
+		}
+	}
+
+	if (unapplied === 0) return null;
+
+	return {
+		id: "apply-recommendations",
+		label: `Apply recommended settings (${unapplied} edge${unapplied !== 1 ? "s" : ""})`,
+		currentValue: "",
+		submenu: () => {
+			try {
+				const result = applyRecommendations(configPath, merged);
+				notify(`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`, "info");
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				notify(`Failed to apply recommendations: ${msg}`, "error");
+			}
+			exitSubmenu();
+			return { render: () => [], invalidate() {}, handleInput() {} };
+		},
+	};
+}
+
 export function buildTopLevelItems(
 	state: ScramjetState,
 	configGetter: () => AutonomyConfig | null,
 	theme: SettingsListTheme,
 	commandOnChange: (commandName: string, target: string, value: string) => void,
+	configPath?: string,
+	notify?: (message: string, type?: "info" | "warning" | "error") => void,
 ): SettingItem[] {
 	const items: SettingItem[] = [];
 
@@ -175,13 +224,25 @@ export function buildTopLevelItems(
 			description: "Per-edge overrides for command chaining behavior",
 			currentValue: edgeSummary,
 			submenu: (_currentValue, done) => {
+				const closeSummary = () => done(buildRegistrySummary(configGetter()));
 				const commandItems = buildCommandItems(state, configGetter, theme, commandOnChange);
+				const applyItem =
+					configPath && notify
+						? buildApplyRecommendationsItem(
+								state.autonomyRecommendations,
+								configGetter,
+								configPath,
+								closeSummary,
+								notify,
+							)
+						: null;
+				const allItems = applyItem ? [applyItem, ...commandItems] : commandItems;
 				return new SettingsList(
-					commandItems,
-					Math.min(commandItems.length, 10),
+					allItems,
+					Math.min(allItems.length, 10),
 					theme,
 					(_id, _newValue) => {},
-					() => done(buildRegistrySummary(configGetter())),
+					closeSummary,
 				);
 			},
 		});
@@ -233,7 +294,14 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 		const settingsTheme = buildSettingsTheme(theme as Parameters<SettingsThemeFactory>[0]);
 
-		const topItems = buildTopLevelItems(state, configGetter, settingsTheme, handleAutonomyChange);
+		const topItems = buildTopLevelItems(
+			state,
+			configGetter,
+			settingsTheme,
+			handleAutonomyChange,
+			configPath,
+			(msg, type) => ctx.ui.notify(msg, type),
+		);
 		const list = new SettingsList(
 			topItems,
 			Math.min(topItems.length + 2, 10),

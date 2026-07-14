@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.48.0 — Command-set autonomy recommendations
+
+Command sets can now ship `autonomy-defaults.yaml` alongside their commands directory, providing recommended autonomy edge settings. Recommendations are gap-fill only — user config always wins — and are surfaced as an "Apply recommended settings" action in `/scramjet settings`. Ships Mach 12 defaults for three happy-path edges. Fixes [#292](https://github.com/LeanAndMean/scramjet/issues/292).
+
+### Added
+
+- `RecommendationSetting` type (`chain` | `pause` | `default`) and `AutonomyRecommendations` interface.
+- `parseAutonomyRecommendations`, `applyRecommendations` (gap-fill only), `mergeAllRecommendations` (first-write-wins across sets), and `validateRecommendations` in `autonomy-settings.ts`.
+- `autonomy-defaults.yaml` discovery in `resources_discover` — reads from both global and project-local command-set roots.
+- "Apply recommended settings (N edges)" action in the command-autonomy submenu of `/scramjet settings`, visible only when unapplied recommendations exist.
+- `mach12/autonomy-defaults.yaml` shipping three edges: issue-implement → issue-implement (`chain`), issue-implement → pr-create (`chain`), pr-create → pr-review (`chain`).
+- 33 new test cases across `autonomy-settings.test.ts`, `commands-loader.test.ts`, and `settings-ui.test.ts`.
+
+### Changed
+
+- `validateConfig` first parameter widened to accept both configs and recommendations for key checking.
+
 ## 0.47.1 — Fix terminal title indicators overwritten by Pi
 
 Add a `setTitleProvider` callback to Pi's extension UI context so Scramjet can own the terminal title. Pi's default title update now defers to the provider when set, preventing it from overwriting the `●`/`○` indicator prefix. Fixes [#315](https://github.com/LeanAndMean/scramjet/issues/315).

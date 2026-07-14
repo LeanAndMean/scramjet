@@ -14,7 +14,7 @@ import {
 	parseCommandFile,
 } from "../src/commands/loader.js";
 import { createLogger } from "../src/logger.js";
-import type { AgentDef, CommandDef } from "../src/types.js";
+import type { AgentDef, AutonomyRecommendations, CommandDef } from "../src/types.js";
 import { freshState } from "./helpers.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -663,5 +663,163 @@ describe("registerCommandLoader — agent discovery integration", () => {
 			reason: "startup",
 		});
 		expect(state.agentRegistry.size).toBe(0);
+	});
+});
+
+describe("registerCommandLoader — autonomy recommendations discovery", () => {
+	let originalCache: string | undefined;
+	let originalAgentDir: string | undefined;
+	let agentDirSandbox: string;
+	let stderrSpy: { mockRestore(): void };
+
+	beforeEach(() => {
+		originalCache = process.env.SCRAMJET_CACHE;
+		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-rec-discovery-"));
+		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
+		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+	});
+
+	afterEach(() => {
+		if (originalCache === undefined) delete process.env.SCRAMJET_CACHE;
+		else process.env.SCRAMJET_CACHE = originalCache;
+		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		rmSync(agentDirSandbox, { recursive: true, force: true });
+		stderrSpy.mockRestore();
+	});
+
+	it("discovers and stores autonomy recommendations from global fixtures", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+
+		expect(state.autonomyRecommendations.has("mach12")).toBe(true);
+		const mach12Recs = state.autonomyRecommendations.get("mach12")!;
+		expect(mach12Recs.edges["mach12:issue-plan"]?.["mach12:pr-review"]).toBe("chain");
+	});
+
+	it("does not store entry when autonomy-defaults.yaml is missing", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "does-not-exist");
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+
+		expect(state.autonomyRecommendations.size).toBe(0);
+	});
+
+	it("logs validation warning for unknown command in recommendations", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+
+		expect(state.autonomyRecommendations.has("infra")).toBe(true);
+		const warnings = appended
+			.filter((e) => (e.data as any).level === "warn")
+			.map((e) => (e.data as any).message as string);
+		expect(warnings.some((m) => m.includes("infra:unknown-target"))).toBe(true);
+	});
+
+	it("rebuilds recommendations on each handler invocation", () => {
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+		const firstSize = state.autonomyRecommendations.size;
+		(state.autonomyRecommendations as Map<string, AutonomyRecommendations>).set("ghost", {
+			edges: { fake: { fake2: "chain" } },
+		});
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "reload",
+		});
+		expect(state.autonomyRecommendations.size).toBe(firstSize);
+		expect(state.autonomyRecommendations.has("ghost")).toBe(false);
+	});
+
+	it("project-local recommendations overwrite global for same set name", () => {
+		// Create a project-local autonomy-defaults.yaml for mach12 with different content
+		const projDir = mkdtempSync(join(tmpdir(), "scramjet-rec-proj-"));
+		const projMach12 = join(projDir, ".scramjet", "mach12", "commands");
+		const { mkdirSync, writeFileSync } = require("node:fs");
+		mkdirSync(projMach12, { recursive: true });
+		// Need a command so the registry has something to validate against
+		writeFileSync(join(projMach12, "mach12:proj-cmd.md"), "---\n---\nBody.");
+		writeFileSync(
+			join(projDir, ".scramjet", "mach12", "autonomy-defaults.yaml"),
+			"edges:\n  mach12:issue-plan:\n    mach12:pr-review: pause\n",
+		);
+
+		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: projDir,
+			reason: "startup",
+		});
+
+		const mach12Recs = state.autonomyRecommendations.get("mach12")!;
+		expect(mach12Recs.edges["mach12:issue-plan"]?.["mach12:pr-review"]).toBe("pause");
+
+		rmSync(projDir, { recursive: true, force: true });
+	});
+
+	it("logs warning for malformed autonomy-defaults.yaml", () => {
+		// Create a temp global dir with a malformed YAML
+		const tempGlobal = mkdtempSync(join(tmpdir(), "scramjet-rec-malformed-"));
+		const { mkdirSync, writeFileSync } = require("node:fs");
+		const setDir = join(tempGlobal, "badset", "commands");
+		mkdirSync(setDir, { recursive: true });
+		writeFileSync(join(setDir, "badset:cmd.md"), "---\n---\nBody.");
+		writeFileSync(join(tempGlobal, "badset", "autonomy-defaults.yaml"), ": : : invalid yaml\n  bad");
+
+		process.env.SCRAMJET_CACHE = tempGlobal;
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state);
+		const handler = handlers.get("resources_discover")![0];
+		handler?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+
+		const warnings = appended
+			.filter((e) => (e.data as any).level === "warn")
+			.map((e) => (e.data as any).message as string);
+		expect(warnings.some((m) => m.includes("could not parse") && m.includes("autonomy-defaults.yaml"))).toBe(true);
+		expect(state.autonomyRecommendations.has("badset")).toBe(false);
+
+		rmSync(tempGlobal, { recursive: true, force: true });
 	});
 });

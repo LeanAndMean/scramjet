@@ -1,0 +1,6 @@
+edges:
+  mach12:issue-implement:
+    mach12:issue-implement: chain
+    mach12:pr-create: chain
+  mach12:pr-create:
+    mach12:pr-review: chain

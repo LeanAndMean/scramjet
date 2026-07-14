@@ -5,8 +5,14 @@ import type { Component } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../src/autonomy-settings.js";
 import { loadPreferences, resetCache as resetPrefsCache, savePreferences } from "../src/preferences.js";
-import { buildCommandItems, buildEdgeItems, buildTopLevelItems, showSettingsPage } from "../src/settings-ui.js";
-import type { AutonomyConfig, CommandDef, NextStepPolicy } from "../src/types.js";
+import {
+	buildApplyRecommendationsItem,
+	buildCommandItems,
+	buildEdgeItems,
+	buildTopLevelItems,
+	showSettingsPage,
+} from "../src/settings-ui.js";
+import type { AutonomyConfig, AutonomyRecommendations, CommandDef, NextStepPolicy } from "../src/types.js";
 import { freshState } from "./helpers.js";
 
 const noopTheme = {
@@ -534,5 +540,169 @@ describe("showSettingsPage", () => {
 		await showSettingsPage(pi as never, ctx as never, state);
 
 		expect(loadAutonomyConfig(configPath)).toEqual({ edges: { "mach12:cmd": { a: "pause", b: "pause" } } });
+	});
+});
+
+describe("buildApplyRecommendationsItem", () => {
+	it("returns null when no recommendations exist", () => {
+		const item = buildApplyRecommendationsItem(
+			new Map(),
+			() => null,
+			"/tmp/test/autonomy.yaml",
+			() => {},
+			() => {},
+		);
+		expect(item).toBeNull();
+	});
+
+	it("returns null when all recommended edges are already configured", () => {
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			["mach12", { edges: { "mach12:impl": { "mach12:pr": "chain" } } }],
+		]);
+		const config: AutonomyConfig = { edges: { "mach12:impl": { "mach12:pr": "pause" } } };
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => config,
+			"/tmp/test/autonomy.yaml",
+			() => {},
+			() => {},
+		);
+		expect(item).toBeNull();
+	});
+
+	it("returns null when all recommendations are default (no-ops)", () => {
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			["mach12", { edges: { "mach12:impl": { "mach12:pr": "default" } } }],
+		]);
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => null,
+			"/tmp/test/autonomy.yaml",
+			() => {},
+			() => {},
+		);
+		expect(item).toBeNull();
+	});
+
+	it("shows correct count of unapplied edges in label", () => {
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			[
+				"mach12",
+				{
+					edges: {
+						"mach12:impl": { "mach12:impl": "chain", "mach12:pr": "chain" },
+						"mach12:pr": { "mach12:review": "chain" },
+					},
+				},
+			],
+		]);
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => null,
+			"/tmp/test/autonomy.yaml",
+			() => {},
+			() => {},
+		);
+		expect(item).not.toBeNull();
+		expect(item!.label).toBe("Apply recommended settings (3 edges)");
+	});
+
+	it("shows singular when only one unapplied edge", () => {
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			["mach12", { edges: { "mach12:impl": { "mach12:pr": "chain" } } }],
+		]);
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => null,
+			"/tmp/test/autonomy.yaml",
+			() => {},
+			() => {},
+		);
+		expect(item!.label).toBe("Apply recommended settings (1 edge)");
+	});
+
+	it("excludes already-configured edges from count", () => {
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			[
+				"mach12",
+				{
+					edges: {
+						"mach12:impl": { "mach12:impl": "chain", "mach12:pr": "chain" },
+					},
+				},
+			],
+		]);
+		const config: AutonomyConfig = { edges: { "mach12:impl": { "mach12:impl": "pause" } } };
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => config,
+			"/tmp/test/autonomy.yaml",
+			() => {},
+			() => {},
+		);
+		expect(item!.label).toBe("Apply recommended settings (1 edge)");
+	});
+
+	it("apply action triggers exitSubmenu after writing config", () => {
+		const configPath = path.join(tmpDir!, "autonomy.yaml");
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			["mach12", { edges: { "mach12:impl": { "mach12:pr": "chain" } } }],
+		]);
+		let exitCalled = false;
+		const notifications: { msg: string; type?: string }[] = [];
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => null,
+			configPath,
+			() => {
+				exitCalled = true;
+			},
+			(msg, type) => {
+				notifications.push({ msg, type });
+			},
+		);
+
+		// Activate the submenu (simulates Enter on the item)
+		item!.submenu!("", () => {});
+
+		expect(exitCalled).toBe(true);
+		expect(notifications).toHaveLength(1);
+		expect(notifications[0].msg).toContain("Applied 1 recommended setting");
+		expect(notifications[0].type).toBe("info");
+
+		const config = loadAutonomyConfig(configPath);
+		expect(config).toEqual({ edges: { "mach12:impl": { "mach12:pr": "chain" } } });
+	});
+
+	it("preserves user overrides after apply", () => {
+		const configPath = path.join(tmpDir!, "autonomy.yaml");
+		saveAutonomyConfig(configPath, { edges: { "mach12:impl": { "mach12:impl": "pause" } } });
+
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			[
+				"mach12",
+				{
+					edges: {
+						"mach12:impl": { "mach12:impl": "chain", "mach12:pr": "chain" },
+					},
+				},
+			],
+		]);
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => loadAutonomyConfig(configPath),
+			configPath,
+			() => {},
+			() => {},
+		);
+		expect(item!.label).toBe("Apply recommended settings (1 edge)");
+
+		item!.submenu!("", () => {});
+
+		const config = loadAutonomyConfig(configPath);
+		expect(config?.edges["mach12:impl"]).toEqual({
+			"mach12:impl": "pause", // preserved user override
+			"mach12:pr": "chain", // applied recommendation
+		});
 	});
 });

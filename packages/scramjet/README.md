@@ -120,6 +120,8 @@ A `"*"` wildcard target applies to any command not explicitly listed under a sou
 
 The file is optional — without it, behavior is identical to today. Invalid command names in the config produce warnings on first use but never crash.
 
+Command sets can also ship recommended settings via `autonomy-defaults.yaml` in the set directory. Recommendations are gap-fill only (never overwrite your config) and appear as an "Apply recommended settings" action in `/scramjet settings` when unapplied recommendations exist.
+
 ## Mach 12
 
 Scramjet ships with the Mach 12 command set — one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not the only way to use Scramjet.
