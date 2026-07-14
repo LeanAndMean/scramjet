@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.49.0 — Journal next-step selector choices
+
+Next-step selector interactions (completions and suggestions) are now journaled as `scramjet:next-step-selection` session entries via `pi.appendEntry()`, capturing the options presented, actual user selection (or dismiss), source, policy mode, source command, recommended index, and model cycling. Fixes a defect where session history showed the recommended option rather than the user's actual choice. Fixes [#321](https://github.com/LeanAndMean/scramjet/issues/321).
+
+### Added
+
+- `scramjet:next-step-selection` journal entries recording selector outcomes (selected option or dismiss) with full context.
+- `showSelector` options extended with `source`, `policyMode`, and `sourceCommand` parameters threaded from all call sites.
+- `policyMode` type tightened from `string` to the union of valid modes.
+
+### Fixed
+
+- Session history now records the user's actual selector choice instead of the recommended option.
+
 ## 0.48.1 — Confirmation submenu for Apply recommended settings
 
 "Apply recommended settings" now opens a confirmation submenu listing each recommended edge with its pending/configured status, instead of immediately applying. When all edges are already configured, the item remains visible with an "all applied" label. Fixes [#319](https://github.com/LeanAndMean/scramjet/issues/319).
