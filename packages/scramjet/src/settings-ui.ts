@@ -170,7 +170,7 @@ export function buildApplyRecommendationsItem(
 	configPath: string,
 	exitSubmenu: () => void,
 	notify: (message: string, type?: "info" | "warning" | "error") => void,
-	theme?: SettingsListTheme,
+	theme: SettingsListTheme,
 ): SettingItem | null {
 	if (recommendations.size === 0) return null;
 
@@ -180,9 +180,7 @@ export function buildApplyRecommendationsItem(
 
 	const unapplied = initialEdges.filter((e) => e.status === "pending").length;
 	const label =
-		unapplied > 0
-			? `Apply recommended settings (${unapplied} pending)`
-			: "Recommended settings (all applied)";
+		unapplied > 0 ? `Apply recommended settings (${unapplied} pending)` : "Recommended settings (all applied)";
 
 	return {
 		id: "apply-recommendations",
@@ -207,26 +205,15 @@ export function buildApplyRecommendationsItem(
 				});
 			}
 
-			const listTheme = theme ?? {
-				label: (text: string) => text,
-				value: (text: string) => text,
-				description: (text: string) => text,
-				cursor: "> ",
-				hint: (text: string) => text,
-			};
-
 			return new SettingsList(
 				edgeItems,
 				Math.min(edgeItems.length + 2, 10),
-				listTheme,
+				theme,
 				(id, _newValue) => {
 					if (id === "confirm-apply") {
 						try {
 							const result = applyRecommendations(configPath, merged);
-							notify(
-								`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`,
-								"info",
-							);
+							notify(`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`, "info");
 						} catch (err: unknown) {
 							const msg = err instanceof Error ? err.message : String(err);
 							notify(`Failed to apply recommendations: ${msg}`, "error");

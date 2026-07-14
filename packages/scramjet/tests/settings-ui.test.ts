@@ -7,13 +7,19 @@ import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../src/auton
 import { loadPreferences, resetCache as resetPrefsCache, savePreferences } from "../src/preferences.js";
 import {
 	buildApplyRecommendationsItem,
-	classifyRecommendationEdges,
 	buildCommandItems,
 	buildEdgeItems,
 	buildTopLevelItems,
+	classifyRecommendationEdges,
 	showSettingsPage,
 } from "../src/settings-ui.js";
-import type { AutonomyConfig, AutonomyRecommendations, CommandDef, NextStepPolicy, RecommendationSetting } from "../src/types.js";
+import type {
+	AutonomyConfig,
+	AutonomyRecommendations,
+	CommandDef,
+	NextStepPolicy,
+	RecommendationSetting,
+} from "../src/types.js";
 import { freshState } from "./helpers.js";
 
 const noopTheme = {
@@ -552,6 +558,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item).toBeNull();
 	});
@@ -567,6 +574,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item).not.toBeNull();
 		expect(item!.label).toContain("all applied");
@@ -582,6 +590,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item).toBeNull();
 	});
@@ -604,6 +613,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item).not.toBeNull();
 		expect(item!.label).toBe("Apply recommended settings (3 pending)");
@@ -619,6 +629,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item!.label).toBe("Apply recommended settings (1 pending)");
 	});
@@ -641,6 +652,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item!.label).toBe("Apply recommended settings (1 pending)");
 	});
@@ -662,6 +674,7 @@ describe("buildApplyRecommendationsItem", () => {
 			(msg, type) => {
 				notifications.push({ msg, type });
 			},
+			noopTheme,
 		);
 
 		item!.submenu!("", () => {});
@@ -688,6 +701,7 @@ describe("buildApplyRecommendationsItem", () => {
 			(msg, type) => {
 				notifications.push({ msg, type });
 			},
+			noopTheme,
 		);
 
 		const submenu = item!.submenu!("", () => {});
@@ -702,6 +716,40 @@ describe("buildApplyRecommendationsItem", () => {
 
 		const config = loadAutonomyConfig(configPath);
 		expect(config).toEqual({ edges: { "mach12:impl": { "mach12:pr": "chain" } } });
+	});
+
+	it("notifies error and exits when apply fails", () => {
+		// Create a file where the config directory should be, making saveAutonomyConfig throw
+		const blocker = path.join(tmpDir!, "blocker");
+		fs.writeFileSync(blocker, "block");
+		const configPath = path.join(blocker, "autonomy.yaml");
+
+		const recs: Map<string, AutonomyRecommendations> = new Map([
+			["mach12", { edges: { "mach12:impl": { "mach12:pr": "chain" } } }],
+		]);
+		let exitCalled = false;
+		const notifications: { msg: string; type?: string }[] = [];
+		const item = buildApplyRecommendationsItem(
+			recs,
+			() => null,
+			configPath,
+			() => {
+				exitCalled = true;
+			},
+			(msg, type) => {
+				notifications.push({ msg, type });
+			},
+			noopTheme,
+		);
+
+		const submenu = item!.submenu!("", () => {});
+		submenu.handleInput?.("\x1b[B"); // down to Apply item
+		submenu.handleInput?.("\r"); // confirm
+
+		expect(notifications).toHaveLength(1);
+		expect(notifications[0].type).toBe("error");
+		expect(notifications[0].msg).toContain("Failed to apply");
+		expect(exitCalled).toBe(true);
 	});
 
 	it("preserves user overrides after apply confirmation", () => {
@@ -724,6 +772,7 @@ describe("buildApplyRecommendationsItem", () => {
 			configPath,
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item!.label).toBe("Apply recommended settings (1 pending)");
 
@@ -758,6 +807,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 
 		const submenu = item!.submenu!("", () => {});
@@ -779,6 +829,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 
 		const submenu = item!.submenu!("", () => {});
@@ -798,6 +849,7 @@ describe("buildApplyRecommendationsItem", () => {
 			"/tmp/test/autonomy.yaml",
 			() => {},
 			() => {},
+			noopTheme,
 		);
 		expect(item!.label).toContain("1 pending");
 
@@ -823,6 +875,7 @@ describe("buildApplyRecommendationsItem", () => {
 				exitCalled = true;
 			},
 			() => {},
+			noopTheme,
 		);
 
 		const submenu = item!.submenu!("", () => {
@@ -864,9 +917,7 @@ describe("classifyRecommendationEdges", () => {
 		};
 		const config: AutonomyConfig = { edges: { "mach12:impl": { "mach12:pr": "pause" } } };
 		const result = classifyRecommendationEdges(merged, config);
-		expect(result).toEqual([
-			{ source: "mach12:impl", target: "mach12:pr", setting: "chain", status: "configured" },
-		]);
+		expect(result).toEqual([{ source: "mach12:impl", target: "mach12:pr", setting: "chain", status: "configured" }]);
 	});
 
 	it("filters out default settings and classifies mixed correctly", () => {
