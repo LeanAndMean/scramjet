@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import type { ScramjetState } from "../types.js";
+import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
 import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
@@ -106,6 +107,40 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 				...projectAgentEntries,
 			]);
 			state.agentRegistry = agentRegistry;
+
+			const recommendations = new Map<string, import("../types.js").AutonomyRecommendations>();
+			for (const rootDir of [globalDir, projectDir]) {
+				for (const setEntry of safeReaddir(rootDir, discoveryWarnings)) {
+					if (!setEntry.isDirectory) continue;
+					const recPath = join(rootDir, setEntry.name, "autonomy-defaults.yaml");
+					let content: string;
+					try {
+						content = readFileSync(recPath, "utf-8");
+					} catch (err) {
+						const code = (err as NodeJS.ErrnoException).code;
+						if (code !== "ENOENT") {
+							discoveryWarnings.push(
+								`[scramjet/discovery] could not read ${recPath} (${code ?? "unknown"}: ${(err as Error).message})`,
+							);
+						}
+						continue;
+					}
+					try {
+						const recs = parseAutonomyRecommendations(content);
+						if (Object.keys(recs.edges).length > 0) {
+							for (const w of validateRecommendations(recs, registry)) {
+								discoveryWarnings.push(w);
+							}
+							recommendations.set(setEntry.name, recs);
+						}
+					} catch (err) {
+						discoveryWarnings.push(
+							`[scramjet/discovery] could not parse ${recPath}: ${(err as Error).message}`,
+						);
+					}
+				}
+			}
+			state.autonomyRecommendations = recommendations;
 
 			const bridge = ensureAgentBridge(agentRegistry, [globalDir, projectDir]);
 			if (bridge.created.length > 0 && bridge.targetDir !== null) {
