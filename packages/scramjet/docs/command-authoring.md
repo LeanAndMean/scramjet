@@ -609,6 +609,29 @@ Users can configure per-edge autonomy settings in `~/.config/scramjet/autonomy.y
 
 These settings are user-controlled and invisible to command authors. They do not affect `forced` transitions. As an author, you don't need to account for them — declare policies based on what makes sense for the command's semantics, and trust that users who configure edge overrides know what they want.
 
+### Autonomy recommendations
+
+Command sets can ship recommended autonomy settings by placing an `autonomy-defaults.yaml` file in the command-set root directory (sibling to `commands/`). This lets a set suggest which edges should auto-chain or pause for the best out-of-the-box experience.
+
+```yaml
+# mach12/autonomy-defaults.yaml
+edges:
+  mach12:issue-implement:
+    mach12:issue-implement: chain
+    mach12:pr-create: chain
+  mach12:pr-create:
+    mach12:pr-review: chain
+```
+
+Valid values are `chain`, `pause`, and `default`. The `default` value explicitly recommends no override (useful for overriding a broader wildcard recommendation in the same file).
+
+**Key semantics:**
+
+- **Gap-fill only** — recommendations never overwrite existing user config. If the user already has a setting for an edge, the recommendation is ignored.
+- **First-write-wins across sets** — when multiple command sets ship recommendations for the same edge, the first one discovered wins. Command sets cannot override each other's recommendations.
+- **User-initiated apply** — recommendations are not applied automatically. They appear as an "Apply recommended settings (N edges)" action in `/scramjet settings` → Command autonomy, visible only when unapplied recommendations exist.
+- **Invalid command names** produce load-time warnings but don't prevent other recommendations from loading.
+
 ---
 
 ## Command File Anatomy
