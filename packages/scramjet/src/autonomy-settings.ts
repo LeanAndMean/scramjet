@@ -105,7 +105,7 @@ export function validateRecommendations(recs: AutonomyRecommendations, registry:
 	return validateConfig(recs, registry);
 }
 
-export function parseAutonomyRecommendations(raw: string): AutonomyRecommendations {
+export function parseAutonomyRecommendations(raw: string, warnings?: string[]): AutonomyRecommendations {
 	const doc = parseYaml(raw);
 	if (
 		doc == null ||
@@ -124,6 +124,10 @@ export function parseAutonomyRecommendations(raw: string): AutonomyRecommendatio
 		for (const [target, setting] of Object.entries(targets as Record<string, unknown>)) {
 			if (typeof setting === "string" && VALID_REC_SETTINGS.has(setting)) {
 				targetMap[target] = setting as RecommendationSetting;
+			} else if (typeof setting === "string") {
+				warnings?.push(
+					`[scramjet/discovery] unknown autonomy recommendation value "${setting}" for edge ${source} → ${target} (expected: chain, pause, default)`,
+				);
 			}
 		}
 		if (Object.keys(targetMap).length > 0) {

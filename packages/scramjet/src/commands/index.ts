@@ -126,7 +126,7 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 						continue;
 					}
 					try {
-						const recs = parseAutonomyRecommendations(content);
+						const recs = parseAutonomyRecommendations(content, discoveryWarnings);
 						if (Object.keys(recs.edges).length > 0) {
 							for (const w of validateRecommendations(recs, registry)) {
 								discoveryWarnings.push(w);

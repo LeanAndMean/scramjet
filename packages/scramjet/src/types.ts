@@ -162,7 +162,7 @@ export interface ScramjetState extends LifecycleHolder {
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;
 	autonomyConfigPath: string;
-	autonomyRecommendations: Map<string, AutonomyRecommendations>;
+	autonomyRecommendations: ReadonlyMap<string, AutonomyRecommendations>;
 	preferencesPath: string;
 	subdirLoadedPaths: Set<string>;
 	pendingSuggestion: PendingSuggestion | null;

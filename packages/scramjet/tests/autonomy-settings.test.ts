@@ -450,6 +450,25 @@ edges:
 		expect(recs.edges["cmd:a"]).toEqual({ "cmd:b": "chain" });
 	});
 
+	it("emits warnings for invalid string values when warnings array is provided", () => {
+		const raw = `
+edges:
+  cmd:a:
+    cmd:b: chain
+    cmd:c: Chain
+    cmd:d: chian
+`;
+		const warnings: string[] = [];
+		const recs = parseAutonomyRecommendations(raw, warnings);
+		expect(recs.edges["cmd:a"]).toEqual({ "cmd:b": "chain" });
+		expect(warnings).toHaveLength(2);
+		expect(warnings[0]).toContain('"Chain"');
+		expect(warnings[0]).toContain("cmd:a");
+		expect(warnings[0]).toContain("cmd:c");
+		expect(warnings[1]).toContain('"chian"');
+		expect(warnings[1]).toContain("cmd:d");
+	});
+
 	it("returns empty edges for empty YAML", () => {
 		expect(parseAutonomyRecommendations("")).toEqual({ edges: {} });
 	});
