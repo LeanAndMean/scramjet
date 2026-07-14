@@ -170,29 +170,72 @@ export function buildApplyRecommendationsItem(
 	configPath: string,
 	exitSubmenu: () => void,
 	notify: (message: string, type?: "info" | "warning" | "error") => void,
+	theme?: SettingsListTheme,
 ): SettingItem | null {
 	if (recommendations.size === 0) return null;
 
 	const merged = mergeAllRecommendations(recommendations);
-	const edges = classifyRecommendationEdges(merged, configGetter());
-	const unapplied = edges.filter((e) => e.status === "pending").length;
+	const initialEdges = classifyRecommendationEdges(merged, configGetter());
+	if (initialEdges.length === 0) return null;
 
-	if (unapplied === 0) return null;
+	const unapplied = initialEdges.filter((e) => e.status === "pending").length;
+	const label =
+		unapplied > 0
+			? `Apply recommended settings (${unapplied} pending)`
+			: "Recommended settings (all applied)";
 
 	return {
 		id: "apply-recommendations",
-		label: `Apply recommended settings (${unapplied} edge${unapplied !== 1 ? "s" : ""})`,
+		label,
 		currentValue: "",
-		submenu: () => {
-			try {
-				const result = applyRecommendations(configPath, merged);
-				notify(`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`, "info");
-			} catch (err: unknown) {
-				const msg = err instanceof Error ? err.message : String(err);
-				notify(`Failed to apply recommendations: ${msg}`, "error");
+		submenu: (_currentValue, done) => {
+			const freshEdges = classifyRecommendationEdges(merged, configGetter());
+			const pending = freshEdges.filter((e) => e.status === "pending").length;
+
+			const edgeItems: SettingItem[] = freshEdges.map((edge) => ({
+				id: `rec-${edge.source}::${edge.target}`,
+				label: `${edge.source} → ${edge.target}`,
+				currentValue: `${edge.setting} (${edge.status})`,
+			}));
+
+			if (pending > 0) {
+				edgeItems.push({
+					id: "confirm-apply",
+					label: `Apply ${pending} pending`,
+					currentValue: "",
+					values: ["apply"],
+				});
 			}
-			exitSubmenu();
-			return { render: () => [], invalidate() {}, handleInput() {} };
+
+			const listTheme = theme ?? {
+				label: (text: string) => text,
+				value: (text: string) => text,
+				description: (text: string) => text,
+				cursor: "> ",
+				hint: (text: string) => text,
+			};
+
+			return new SettingsList(
+				edgeItems,
+				Math.min(edgeItems.length + 2, 10),
+				listTheme,
+				(id, _newValue) => {
+					if (id === "confirm-apply") {
+						try {
+							const result = applyRecommendations(configPath, merged);
+							notify(
+								`Applied ${result.applied} recommended setting${result.applied !== 1 ? "s" : ""}`,
+								"info",
+							);
+						} catch (err: unknown) {
+							const msg = err instanceof Error ? err.message : String(err);
+							notify(`Failed to apply recommendations: ${msg}`, "error");
+						}
+						exitSubmenu();
+					}
+				},
+				() => done(),
+			);
 		},
 	};
 }
@@ -255,6 +298,7 @@ export function buildTopLevelItems(
 								configPath,
 								closeSummary,
 								notify,
+								theme,
 							)
 						: null;
 				const allItems = applyItem ? [applyItem, ...commandItems] : commandItems;
