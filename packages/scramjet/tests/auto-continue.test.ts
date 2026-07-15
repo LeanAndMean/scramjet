@@ -1020,6 +1020,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("discarding");
+			expect(logMessages(bag.pi).some((m) => m.includes("discarding"))).toBe(true);
 		});
 
 		it("error after inline report retains the report and dispatches on the next clean agent_end", async () => {

@@ -35,7 +35,7 @@ The `hasUI` flag is captured on `session_start`. Before TUI detection completes,
 | `subagent` | `subagent-output-advisor.ts` | Silent subagent failure detection |
 | `probe` | `auto-continue.ts` | Probe scheduling, watchdog, send failures |
 | `dispatch` | `auto-continue.ts` | Stale selector warnings |
-| `status` | `command-status.ts` | Status report processing warnings |
+| `status` | `command-status.ts`, `auto-continue.ts` | Status report processing warnings, report-discard warnings on abort |
 | `lifecycle` | Multiple | Lifecycle fact mutations (shared category for `lifecycle`-level entries) |
 | `input` | `user-input.ts` | User input tool warnings |
 | `subdir-context` | `subdir-context.ts` | Subdirectory context discovery warnings and debug traces |

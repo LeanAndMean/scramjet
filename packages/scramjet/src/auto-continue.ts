@@ -9,8 +9,8 @@
  *     the work turn, after delivering its answer. The tool records the status
  *     and clears probeArmed, so this driver routes on that same turn's
  *     agent_end (via hasTerminalReport) and no probe is ever sent.
- *   - Probe (fallback): if the work turn ends without a report but a next-step
- *     policy is declared, this driver DEFERS a hidden status-check probe — a
+ *   - Probe (fallback): if the work turn ends without a report, this driver
+ *     DEFERS a hidden status-check probe — a
  *     custom message that triggers a short second turn in which the agent calls
  *     report_scramjet_command_status. The tool records the status; this driver
  *     reads it on the probe turn's agent_end.
