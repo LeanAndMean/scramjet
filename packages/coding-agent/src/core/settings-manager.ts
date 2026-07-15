@@ -332,6 +332,14 @@ export class SettingsManager {
 
 	/** Migrate old settings format to new format */
 	private static migrateSettings(settings: Record<string, unknown>): Settings {
+		// SCRAMJET-DIVERGENCE: Pi's builtin themes were renamed to pi-dark/pi-light. Migrate the two
+		// exact legacy theme names; custom names are untouched and re-running is a no-op.
+		if (settings.theme === "dark") {
+			settings.theme = "pi-dark";
+		} else if (settings.theme === "light") {
+			settings.theme = "pi-light";
+		}
+
 		// Migrate queueMode -> steeringMode
 		if ("queueMode" in settings && !("steeringMode" in settings)) {
 			settings.steeringMode = settings.queueMode;

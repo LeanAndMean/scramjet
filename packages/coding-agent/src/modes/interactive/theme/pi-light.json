@@ -1,6 +1,6 @@
 {
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
-	"name": "light",
+	"name": "pi-light",
 	"vars": {
 		"teal": "#2b5f5f",
 		"blue": "#2d5a8a",

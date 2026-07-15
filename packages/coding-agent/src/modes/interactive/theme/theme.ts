@@ -454,11 +454,13 @@ let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
 function getBuiltinThemes(): Record<string, ThemeJson> {
 	if (!BUILTIN_THEMES) {
 		const themesDir = getThemesDir();
-		const darkPath = path.join(themesDir, "dark.json");
-		const lightPath = path.join(themesDir, "light.json");
+		// SCRAMJET-DIVERGENCE: Pi's builtin themes are shipped as pi-dark/pi-light so scramjet's
+		// custom themes have distinct names.
+		const darkPath = path.join(themesDir, "pi-dark.json");
+		const lightPath = path.join(themesDir, "pi-light.json");
 		BUILTIN_THEMES = {
-			dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
-			light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
+			"pi-dark": JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
+			"pi-light": JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
 		};
 	}
 	return BUILTIN_THEMES;
@@ -544,7 +546,8 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 				.map((color) => `  - ${color}`)
 				.join("\n");
 			errorMessage += '\n\nPlease add these colors to your theme\'s "colors" object.';
-			errorMessage += "\nSee the built-in themes (dark.json, light.json) for reference values.";
+			// SCRAMJET-DIVERGENCE: builtin theme files renamed to pi-dark.json/pi-light.json.
+			errorMessage += "\nSee the built-in themes (pi-dark.json, pi-light.json) for reference values.";
 		}
 		if (otherErrors.length > 0) {
 			errorMessage += `\n\nOther errors:\n${otherErrors.join("\n")}`;
@@ -727,8 +730,39 @@ export function detectThemeFromEnvironment(env?: {
 	return undefined;
 }
 
+// SCRAMJET-DIVERGENCE: pure resolver mapping a terminal classification to a theme name.
+// An explicit setting always wins; otherwise an undefined classification resolves to the dark
+// branch, "light" resolves to pi-light, and "dark" resolves to scramjet-dark when it is available
+// (else pi-dark, so Pi-without-scramjet still gets a valid builtin). Performs no I/O — callers pass
+// hasScramjetDark so the mapping stays testable and timing-independent.
+export function resolveThemeName({
+	explicitSetting,
+	detectedClassification,
+	hasScramjetDark,
+}: {
+	explicitSetting: string | undefined;
+	detectedClassification: "dark" | "light" | undefined;
+	hasScramjetDark: boolean;
+}): string {
+	if (explicitSetting) {
+		return explicitSetting;
+	}
+	const classification = detectedClassification ?? "dark";
+	if (classification === "light") {
+		return "pi-light";
+	}
+	return hasScramjetDark ? "scramjet-dark" : "pi-dark";
+}
+
+// SCRAMJET-DIVERGENCE: env-only default used by initTheme's fallback and the HTML-export color
+// functions (no OSC 11 available in those paths). Interactive reapplication resolves directly via
+// resolveThemeName with the captured classification instead.
 function getDefaultTheme(): string {
-	return detectThemeFromEnvironment()?.theme ?? "dark";
+	return resolveThemeName({
+		explicitSetting: undefined,
+		detectedClassification: detectThemeFromEnvironment()?.theme,
+		hasScramjetDark: registeredThemes.has("scramjet-dark"),
+	});
 }
 
 // ============================================================================
@@ -769,6 +803,12 @@ export function setRegisteredThemes(themes: Theme[]): void {
 	}
 }
 
+// SCRAMJET-DIVERGENCE: getter for the currently applied theme name so interactive reapplication
+// can skip redundant re-applies of an already-active theme.
+export function getCurrentThemeName(): string | undefined {
+	return currentThemeName;
+}
+
 export function initTheme(themeName?: string, enableWatcher: boolean = false): void {
 	const name = themeName ?? getDefaultTheme();
 	currentThemeName = name;
@@ -778,9 +818,10 @@ export function initTheme(themeName?: string, enableWatcher: boolean = false): v
 			startThemeWatcher();
 		}
 	} catch (_error) {
-		// Theme is invalid - fall back to dark theme silently
-		currentThemeName = "dark";
-		setGlobalTheme(loadTheme("dark"));
+		// Theme is invalid - fall back to pi-dark theme silently
+		// SCRAMJET-DIVERGENCE: fallback routed to the renamed builtin.
+		currentThemeName = "pi-dark";
+		setGlobalTheme(loadTheme("pi-dark"));
 		// Don't start watcher for fallback theme
 	}
 }
@@ -797,9 +838,10 @@ export function setTheme(name: string, enableWatcher: boolean = false): { succes
 		}
 		return { success: true };
 	} catch (error) {
-		// Theme is invalid - fall back to dark theme
-		currentThemeName = "dark";
-		setGlobalTheme(loadTheme("dark"));
+		// Theme is invalid - fall back to pi-dark theme
+		// SCRAMJET-DIVERGENCE: fallback routed to the renamed builtin.
+		currentThemeName = "pi-dark";
+		setGlobalTheme(loadTheme("pi-dark"));
 		// Don't start watcher for fallback theme
 		return {
 			success: false,
@@ -825,7 +867,8 @@ function startThemeWatcher(): void {
 	stopThemeWatcher();
 
 	// Only watch if it's a custom theme (not built-in)
-	if (!currentThemeName || currentThemeName === "dark" || currentThemeName === "light") {
+	// SCRAMJET-DIVERGENCE: builtin names are pi-dark/pi-light.
+	if (!currentThemeName || currentThemeName === "pi-dark" || currentThemeName === "pi-light") {
 		return;
 	}
 
@@ -959,7 +1002,8 @@ function ansi256ToHex(index: number): string {
  */
 export function getResolvedThemeColors(themeName?: string): Record<string, string> {
 	const name = themeName ?? currentThemeName ?? getDefaultTheme();
-	const isLight = name === "light";
+	// SCRAMJET-DIVERGENCE: light builtin renamed to pi-light.
+	const isLight = name === "pi-light";
 	const themeJson = loadThemeJson(name);
 	const resolved = resolveThemeColors(themeJson.colors, themeJson.vars);
 
@@ -985,7 +1029,8 @@ export function getResolvedThemeColors(themeName?: string): Record<string, strin
  */
 export function isLightTheme(themeName?: string): boolean {
 	// Currently just check the name - could be extended to analyze colors
-	return themeName === "light";
+	// SCRAMJET-DIVERGENCE: light builtin renamed to pi-light.
+	return themeName === "pi-light";
 }
 
 /**
