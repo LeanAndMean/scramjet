@@ -86,6 +86,10 @@ Each exploration should return a list of key files and observations. After explo
 
 If the user provided context in Step 1, weight the review toward the areas they emphasized -- surface findings on those areas even at Suggestions-level severity, and note in Step 7 how the user's focus shaped the findings (e.g., "User emphasized testing strategy; this raised three suggestions in that area that would otherwise be borderline."). Apply this weighting across all axes below; do not let it crowd out coverage of the other axes.
 
+### Respect user-attributed decisions
+
+The plan's `## Decision Log` may tag entries with a source: `[user-decided]` (the user explicitly directed the decision) or `[agent-proposed]` (planner judgment). A `[user-decided]` entry reflects settled user intent -- do **not** raise it on minimality (axis 7), alternative-approach, or preference grounds; the minimum-sufficient-solution ladder does not override an explicit user requirement. A genuine correctness or feasibility defect in a `[user-decided]` entry (it references a nonexistent file, contradicts a hard codebase constraint, or cannot work as described) is still in scope. `[agent-proposed]` entries and untagged entries (legacy plans posted before this convention) get normal scrutiny -- treat untagged as `[agent-proposed]`, never as `[user-decided]`.
+
 For each stage in the plan, assess:
 
 1. **Correctness**: Does the stage accurately describe what needs to happen? Are the files and changes correct?
@@ -100,7 +104,7 @@ For each stage in the plan, assess:
    - New dependencies where platform/stdlib/existing project utilities suffice.
    - New abstractions, configuration, or extension points without evidence from the issue, codebase, or contribution guidance.
    - Testing plans broader than the risk requires.
-   Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden.
+   Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden. Do not apply this axis to `[user-decided]` Decision Log entries -- see "Respect user-attributed decisions" above.
 8. **Release-preparation exclusion**: Does the plan include version bumps, changelog entries, or release-preparation as implementation stages? Flag as a defect (severity: Important). Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
 
 Also assess the plan holistically:
@@ -142,6 +146,7 @@ Use the assessment to filter and reclassify the review output:
 - Important findings should include genuine issues that should be addressed before implementation.
 - Suggestions should include useful suggestions and clearly labeled deferred/out-of-scope concerns.
 - False positives and nitpicks should not appear as blocking findings; mention them only briefly if useful for transparency.
+- A finding that challenges a `[user-decided]` Decision Log entry purely on minimality, alternative-approach, or preference grounds is classified Deferred/out-of-scope (or False positive if it misreads the plan) -- never Critical or Important. A genuine correctness or feasibility defect in a `[user-decided]` entry remains in scope and is classified on its merits.
 - Preserve the original F/S identifiers when reclassifying so later discussion can reference stable items.
 
 ## Step 7: Present findings and execute decision
