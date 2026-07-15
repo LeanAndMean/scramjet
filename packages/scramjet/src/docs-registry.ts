@@ -10,7 +10,7 @@ export interface DocEntry {
 	condition: string;
 }
 
-function packageRoot(): string {
+export function packageRoot(): string {
 	let dir = dirname(fileURLToPath(import.meta.url));
 	while (dir !== dirname(dir)) {
 		if (existsSync(join(dir, "package.json"))) return dir;

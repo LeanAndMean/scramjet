@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
+import { packageRoot } from "../docs-registry.js";
 import type { ScramjetState } from "../types.js";
 import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
@@ -159,7 +160,8 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 			}
 			const promptPaths: string[] = [];
 			for (const def of registry.values()) promptPaths.push(def.filePath);
-			return { promptPaths };
+			const themePaths = [join(packageRoot(), "themes")];
+			return { promptPaths, themePaths };
 		} catch (err) {
 			state.logger.warn(
 				"discovery",
