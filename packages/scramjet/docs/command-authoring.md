@@ -411,12 +411,12 @@ In the current implementation, tool-scoping is advisory only. The harness logs w
 
 ## 6. Status-Reporting Conventions
 
-Every top-level command (not delegate-only subroutines) must instruct the agent on how to report completion via `report_scramjet_command_status`. This happens in a **separate turn** from the command's user-facing answer — Scramjet sends a hidden status-check probe after the answer turn completes.
+Every top-level command (not delegate-only subroutines) must instruct the agent on how to report completion via `report_scramjet_command_status`. The agent may report inline — during the work turn, after delivering the user-facing answer — or in response to the hidden status-check probe Scramjet sends when a work turn ends without a report.
 
 ### The answer/probe protocol
 
-1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. No completion signaling happens here.
-2. **Probe turn:** Scramjet sends a hidden message asking the agent to choose one route:
+1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. Once the answer is delivered, the agent may report a terminal status (`completed`/`blocked`/`incomplete`) inline in the same turn; the report terminates the turn and Scramjet dispatches from it directly, skipping the probe.
+2. **Probe turn (fallback):** If the work turn ends without a report, Scramjet sends a hidden message asking the agent to choose one route:
    - Call `report_scramjet_command_status` with a status and stop the probe turn.
    - Call `get_scramjet_user_input` if structured input is needed before continuing. For **confirm/select**, the tool blocks until the user responds and returns the answer in the same turn — continue command work immediately. The probe is re-armed without consuming the `continuing` budget, so Scramjet will send another probe after the resumed work ends. For **freetext**, the tool terminates the turn and parks the command; the user replies in the standard editor, and the command resumes on a new turn.
 
@@ -481,7 +481,8 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ### Don't
 
-- Don't instruct the agent to call `report_scramjet_command_status` during the answer turn. The tool is gated to accept terminal reports only when a probe is in flight or the command is dormant, and will return an error otherwise.
+- Don't instruct the agent to report status before the user-facing answer is delivered. Terminal reports are accepted inline during the work turn, but the tool call terminates the turn — reporting early truncates the answer. Answer first, then report.
+- Don't instruct the agent to call `report_scramjet_command_status` with `continuing` during the work turn. Inline acceptance covers terminal statuses only; `continuing` outside a probe or dormant state is rejected.
 - Don't instruct subroutine commands to call `report_scramjet_command_status`. Only the top-level command reports status; subroutines return control to their caller.
 - Don't put user-facing content in `summary`. The agent's answer was already delivered in the answer turn. `summary` is metadata for Scramjet's internal routing.
 - Don't omit `reason` from `next_steps` entries. The harness rejects entries without a non-empty `reason`.

@@ -68,7 +68,7 @@ For logging and diagnostics, a phase label is derived from facts. This is a logg
 | `isProbeDue(lifecycle)` | Command associated, `probeArmed`, not parked |
 | `isProbeInFlight(lifecycle)` | Command associated and `probeInFlight` |
 | `hasTerminalReport(lifecycle)` | Command associated and `lastReport !== null` |
-| `canAcceptTerminalReport(lifecycle)` | `probeInFlight` or dormant (terminal reports accepted during probe or from dormant) |
+| `canAcceptTerminalReport(lifecycle)` | `probeArmed`, `probeInFlight`, or dormant (terminal reports accepted inline during the work turn, during a probe, or from dormant) |
 | `canAcceptDormantContinuing(lifecycle)` | `isDormant(lifecycle)` |
 
 ## Mutation helpers
@@ -84,7 +84,7 @@ Every mutation validates post-conditions, bumps `lifecycleGeneration`, and logs 
 | `beginProbe(holder, reason)` | Active command, `probeArmed` | Clears `probeArmed`, sets `probeInFlight` |
 | `acceptProbeContinuing(holder)` | `probeInFlight`, under continue limit | Clears `probeInFlight`, arms probe, increments counter |
 | `acceptDormantContinuing(holder)` | Dormant | Arms probe, resets counter to 0 |
-| `acceptTerminalReport(holder, payload)` | `probeInFlight` or dormant, non-continuing status | Clears `probeInFlight`, stores report, resets counter |
+| `acceptTerminalReport(holder, payload)` | `probeArmed`, `probeInFlight`, or dormant, non-continuing status | Clears `probeArmed` and `probeInFlight`, stores report, resets counter |
 | `parkForFreetext(holder)` | Active command | Sets `parkedForInput`, clears all other mode flags and counter |
 | `resumeFromParkedInput(holder)` | `parkedForInput` | Clears `parkedForInput`, arms probe, resets counter |
 | `resumeAfterProbeInput(holder)` | `probeInFlight` | Clears `probeInFlight`, arms probe, preserves counter |
@@ -108,7 +108,7 @@ The `agent_end` handler in `auto-continue.ts` evaluates lifecycle facts in this 
 1. **Abort** (`stopReason === "aborted"`): clear all timers, enter dormant. Command stays associated but disarmed.
 2. **Error** (`stopReason === "error"`): leave armed/probing facts intact for Pi retry safety. If a probe turn errors, the existing generation- and command-guarded watchdog remains responsible for self-healing only when no retried report arrives.
 3. **Active command not in registry**: warn, clear active command, clear timers.
-4. **Probe due** (`isProbeDue`): begin probe and schedule deferred hidden probe message. Commands with no next-step policy probe identically — the probe message omits the `<scramjet-next-step>` block.
+4. **Probe due** (`isProbeDue`): begin probe and schedule deferred hidden probe message. Commands with no next-step policy probe identically — the probe message omits the `<scramjet-next-step>` block. An inline terminal report filed during the work turn clears `probeArmed`, so this branch is skipped and the report routes via step 6 — the probe is a fallback, not a requirement.
 5. **Probe in flight without report**: self-heal to dormant (probe turn ended without a status report).
 6. **Terminal report pending** (`hasTerminalReport`): route by status — completed dispatches next step (or clears to idle without dispatch when no policy exists), blocked/incomplete enter dormant.
 7. **Parked or dormant**: no-op.
