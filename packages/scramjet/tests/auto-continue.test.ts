@@ -917,6 +917,96 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		});
 	});
 
+	// issue 331: a terminal report filed during the work turn (probeArmed) must
+	// skip the probe entirely — agent_end falls through isProbeDue (cleared by the
+	// mutation) straight to hasTerminalReport and dispatches per policy.
+	describe("inline terminal report during probeArmed (issue 331)", () => {
+		const targetDef = defWithPolicy("b:target", undefined, "routed by Pi");
+
+		it("forced: inline completed report dispatches with no probe sent and no watchdog armed", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: false, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			// Agent reports inline while the work turn is still running.
+			await report({ status: "completed", summary: "done" });
+			expect(state.lifecycle.probeArmed).toBe(false);
+			expect(derivedPhase(state.lifecycle)).toBe("reported");
+
+			// Work turn's agent_end fires mid-stream; dispatch defers past it.
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(bag.pi.sent).toEqual([]); // no probe message ever sent
+			expect(state.lifecycleTimers?.isWatchdogActive() ?? false).toBe(false);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+		});
+
+		it("closed + autopilot on + no UI: inline completed report dispatches the valid pick with no probe", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await report({
+				status: "completed",
+				summary: "s",
+				next_steps: [{ message: "/b:ok alpha", reason: "continue" }],
+				recommended_next_step: 0,
+			});
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			expect(ctxBag.dispatchedWhileStreaming).toEqual([]);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(bag.pi.sent).toEqual([]);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:ok alpha", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+		});
+
+		it("blocked inline report enters dormant with no probe and no dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await report({ status: "blocked", summary: "CI failing" });
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(bag.pi.sent).toEqual([]);
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("blocked");
+		});
+
+		it("probe fallback unchanged: no inline report → probe fires exactly as before", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, { status: "completed", summary: "done" });
+
+			expect(bag.pi.sent).toHaveLength(1); // the probe
+			expect((bag.pi.sent[0].message as any).customType).toBe(COMMAND_STATUS_PROBE_TYPE);
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+		});
+	});
+
 	describe("closed / open / ask completed", () => {
 		it("closed valid recommendation + enabled=true shows the selector", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
