@@ -67,13 +67,14 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(String(result.content[0].text)).toContain("not active right now");
 	});
 
-	it("rejects terminal status when probe armed (running)", async () => {
+	it("accepts terminal status when probe armed (running) — inline reporting", async () => {
 		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ status: "completed", summary: "done" });
 
-		expect(result.terminate).toBeUndefined();
-		expect(result.details.error).toBe("out-of-phase");
-		expect(isProbeDue(state.lifecycle)).toBe(true);
+		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.lastReport?.status).toBe("completed");
+		expect(state.lifecycle.probeArmed).toBe(false);
+		expect(isProbeDue(state.lifecycle)).toBe(false);
 	});
 
 	it("rejects terminal status from reported (has lastReport)", async () => {

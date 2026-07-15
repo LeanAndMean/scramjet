@@ -2,15 +2,19 @@
  * report_scramjet_command_status tool and dormant command notice.
  *
  * The tool is the agent's structured report at the end of an active Scramjet
- * command, supplied in a *separate* turn from the command's user-facing answer
+ * command. It may be supplied inline in the answer turn once the work is done
+ * (issue 331), or in a separate probe turn when the agent does not self-report
  * (issue 84, two-phase protocol).
  *
- * Four statuses, four execution paths:
+ * Four statuses, five execution paths:
  * - "continuing" during a probe: non-terminating. Increments continueCount,
  *   re-arms the probe, returns without terminate so the agent keeps working.
  * - "continuing" while dormant: non-terminating. Resets continueCount, re-arms
  *   the probe, returns without terminate. This is the only dormant resume path
  *   for commands that need to do more work.
+ * - "completed" / "blocked" / "incomplete" while running (inline): terminating.
+ *   Clears probeArmed so no probe fires, stores the report in lastReport, and
+ *   returns terminate: true.
  * - "completed" / "blocked" / "incomplete" during a probe: terminating. Stores
  *   the report in lastReport and returns terminate: true.
  * - "completed" / "blocked" / "incomplete" while dormant: terminating. Same
@@ -258,7 +262,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				};
 			}
 
-			// Terminal status path — accepted during probe or from dormant
+			// Terminal status path — accepted while running (inline), during probe, or from dormant
 			if (!canAcceptTerminalReport(state.lifecycle)) {
 				state.logger.lifecycle("status report rejected", {
 					command,

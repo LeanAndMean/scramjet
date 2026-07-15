@@ -129,7 +129,7 @@ export function hasTerminalReport(lifecycle: LifecycleState): boolean {
 }
 
 export function canAcceptTerminalReport(lifecycle: LifecycleState): boolean {
-	return lifecycle.probeInFlight || isDormant(lifecycle);
+	return lifecycle.probeArmed || lifecycle.probeInFlight || isDormant(lifecycle);
 }
 
 export function canAcceptDormantContinuing(lifecycle: LifecycleState): boolean {
@@ -276,13 +276,14 @@ export function acceptDormantContinuing(holder: LifecycleHolder): MutationResult
 }
 
 export function acceptTerminalReport(holder: LifecycleHolder, payload: CommandStatusRestingPayload): MutationResult {
-	if (!holder.lifecycle.probeInFlight && !isDormant(holder.lifecycle)) {
-		return { ok: false, reason: "not probing or dormant; cannot accept terminal report" };
+	if (!holder.lifecycle.probeArmed && !holder.lifecycle.probeInFlight && !isDormant(holder.lifecycle)) {
+		return { ok: false, reason: "not running, probing, or dormant; cannot accept terminal report" };
 	}
 	if ((payload.status as string) === "continuing") {
 		return { ok: false, reason: "continuing is not a terminal status" };
 	}
 	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeArmed = false;
 	lc.probeInFlight = false;
 	lc.lastReport = payload;
 	lc.continueCount = 0;
