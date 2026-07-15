@@ -72,9 +72,17 @@ const CONTINUE_LIMIT_ERROR =
 	`You have reported "continuing" ${CONTINUE_LIMIT} times without completing the command. ` +
 	"Report your actual status: completed, blocked, or incomplete.";
 
+const PROMPT_SNIPPET =
+	"You have access to `report_scramjet_command_status` for reporting the status of an active " +
+	"Scramjet slash command. Once the command's work is done and your final user-facing answer has been " +
+	"delivered, you may report a terminal status (`completed`, `blocked`, or `incomplete`) inline — " +
+	"always deliver the complete answer first, because reporting ends the turn. " +
+	"If you do not report inline, Scramjet sends a status-check message as a fallback; respond to it " +
+	"with this tool. Do not call this tool for ordinary user tasks.";
+
 const OUT_OF_PHASE_ERROR =
-	"report_scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
-	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
+	"report_scramjet_command_status cannot accept a report right now (e.g. the command is parked waiting " +
+	"for user input, or a report was already filed). Do not call this tool for ordinary tasks.";
 
 // F6: single source of truth for the next-step wire shape.
 export const NEXT_STEP_SCHEMA = Type.Object({
@@ -143,8 +151,11 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 		name: "report_scramjet_command_status",
 		label: "Report Scramjet Command Status",
 		description:
-			"Report the status of an active Scramjet slash command after Scramjet explicitly asks for a status check. " +
-			"Do not call this tool for ordinary user tasks. Do not call it unless the latest message asks you to call it.",
+			"Report the status of an active Scramjet slash command. Terminal statuses (completed, blocked, " +
+			"incomplete) may be reported inline once the command's work is done and the final user-facing answer " +
+			"has been delivered, or in response to Scramjet's status-check message. " +
+			"Do not call this tool for ordinary user tasks.",
+		promptSnippet: PROMPT_SNIPPET,
 		parameters: Type.Object({
 			status: STATUS_SCHEMA,
 			summary: Type.String({ description: "Brief summary of the command's outcome." }),
