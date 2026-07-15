@@ -129,7 +129,7 @@ export function hasTerminalReport(lifecycle: LifecycleState): boolean {
 }
 
 export function canAcceptTerminalReport(lifecycle: LifecycleState): boolean {
-	return lifecycle.probeArmed || lifecycle.probeInFlight || isDormant(lifecycle);
+	return lifecycle.activeCommand !== null && (lifecycle.probeArmed || lifecycle.probeInFlight || isDormant(lifecycle));
 }
 
 export function canAcceptDormantContinuing(lifecycle: LifecycleState): boolean {

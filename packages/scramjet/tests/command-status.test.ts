@@ -126,6 +126,7 @@ describe("registerCommandStatusTool — gate", () => {
 
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.error).toBe("out-of-phase");
+		expect(String(result.content[0].text)).toContain("already");
 	});
 
 	it("rejects terminal status when parked for input (waiting)", async () => {
@@ -134,6 +135,7 @@ describe("registerCommandStatusTool — gate", () => {
 
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.error).toBe("out-of-phase");
+		expect(String(result.content[0].text)).toContain("parked");
 	});
 
 	it("accepts terminal status from dormant", async () => {

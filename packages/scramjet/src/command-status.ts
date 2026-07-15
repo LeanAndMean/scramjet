@@ -79,6 +79,9 @@ const CONTINUING_OUT_OF_PHASE_ERROR =
 	"response to Scramjet's status-check message or while the command is dormant. Keep working, " +
 	"or report a terminal status (completed, blocked, incomplete) once the work is done.";
 
+// Reached only when canAcceptTerminalReport is false and the command is active, which by the
+// mode-exclusivity invariant leaves exactly two states: reported (lastReport !== null) or parked.
+// A fifth mode flag would break this binary discrimination.
 function outOfPhaseError(lifecycle: ScramjetState["lifecycle"]): string {
 	return lifecycle.lastReport !== null ? ALREADY_REPORTED_ERROR : PARKED_ERROR;
 }

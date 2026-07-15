@@ -94,7 +94,7 @@ jq 'select(.type == "scramjet:log") | .data | "\(.timestamp / 1000 | strftime("%
 
 ### Healthy probe cycle
 
-Note: an agent may report a terminal status inline during the work turn (issue 331); such a session shows `"status report accepted"` and `"lifecycle: acceptTerminalReport"` with **no probe entries at all** (steps 2–7 and 10 absent). That trace is healthy, not a broken cycle — the probe is a fallback for agents that do not self-report.
+Note: an agent may report a terminal status inline during the work turn (issue 331); such a session shows `"status report accepted"` and `"lifecycle: acceptTerminalReport"` with **no probe entries at all** (steps 2–7 and 10 absent). Note also that the ordering below is the probe-cycle ordering: in an inline session the report entries (steps 8/9) are filed during the work turn and therefore **precede** that turn's `"agent_end observed"` (step 1), which then routes the report. That trace is healthy, not a broken cycle — the probe is a fallback for agents that do not self-report.
 
 A successful command completion produces this sequence of lifecycle entries:
 
