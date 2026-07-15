@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.50.2 — Attribute plan Decision Log entries to their source
+
+`mach12:issue-plan` now prefixes every Decision Log entry with a source tag (`[user-decided]` or `[agent-proposed]`) so downstream sessions can distinguish settled user intent from planner judgment. `mach12:issue-review` honors those tags: `[user-decided]` entries are kept out of scope for minimality (axis 7), alternative-approach, and preference challenges, while genuine correctness/feasibility defects remain in scope. Untagged (legacy) entries default to normal scrutiny. Fixes [#325](https://github.com/LeanAndMean/scramjet/issues/325).
+
+### Changed
+
+- `mach12:issue-plan`: Decision Log gains an attribution convention — Scope Questions (Step 5), Architecture Choice (Step 6, both Selected and Rejected lines), and Architecture Questions (Step 7) are each prefixed with `[user-decided]` or `[agent-proposed]`; a merely-confirmed planner default is never tagged `[user-decided]`.
+- `mach12:issue-review`: new "Respect user-attributed decisions" rule keeps `[user-decided]` entries out of scope for the minimality axis, alternative-approach, and preference challenges; Step 6 classification and the minimality axis (7) both reference it.
+
 ## 0.50.1 — Publish coding-agent theme changes with scramjet-dark
 
 Release-plumbing fix for 0.50.0. That release modified `@leanandmean/coding-agent` source (theme rename, `themePaths` re-application timing, settings migration) but did not bump `coding-agent`'s version, so `scramjet@0.50.0` pinned the already-published `coding-agent@0.74.1-scramjet.16`, which predated the changes — the bundled `scramjet-dark` theme would not register for installed users. 0.50.0 was never published.
