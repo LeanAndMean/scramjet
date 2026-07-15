@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.50.1 — Publish coding-agent theme changes with scramjet-dark
+
+Release-plumbing fix for 0.50.0. That release modified `@leanandmean/coding-agent` source (theme rename, `themePaths` re-application timing, settings migration) but did not bump `coding-agent`'s version, so `scramjet@0.50.0` pinned the already-published `coding-agent@0.74.1-scramjet.16`, which predated the changes — the bundled `scramjet-dark` theme would not register for installed users. 0.50.0 was never published.
+
+### Fixed
+
+- Bumped `@leanandmean/coding-agent` to `0.74.1-scramjet.17` so its theme changes are published, and repointed the `scramjet` dependency to `0.74.1-scramjet.17`.
+
 ## 0.50.0 — Ship scramjet-dark theme as bundled default
 
 Scramjet now ships its own `scramjet-dark` theme (cool cyan/blue palette with warm amber accents) as the default for dark-mode terminals, registered at runtime via `themePaths`. Pi's original built-in themes are renamed to `pi-dark`/`pi-light`, cleanly separating them from scramjet's custom themes; existing `"theme": "dark"`/`"light"` settings are migrated automatically. Light-mode terminals map to `pi-light`, and Pi-without-scramjet falls back to `pi-dark`. Fixes [#322](https://github.com/LeanAndMean/scramjet/issues/322).
