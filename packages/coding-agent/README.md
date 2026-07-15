@@ -345,7 +345,7 @@ Place in `~/.scramjet/agent/extensions/`, `.scramjet/extensions/`, or a [scramje
 
 ### Themes
 
-Built-in: `dark`, `light`. Themes hot-reload: modify the active theme file and scramjet immediately applies changes.
+Built-in: `scramjet-dark` (the bundled default for dark-mode terminals), plus Pi's original `pi-dark` and `pi-light`. Themes hot-reload: modify the active theme file and scramjet immediately applies changes.
 
 Place in `~/.scramjet/agent/themes/`, `.scramjet/themes/`, or a [scramjet package](#scramjet-packages) to share with others. See [docs/themes.md](docs/themes.md).
 
