@@ -158,13 +158,13 @@ vim ~/.scramjet/agent/themes/my-theme.json
 
 - `name` is required and must be unique.
 - `vars` is optional. Define reusable colors here, then reference them in `colors`.
-- `colors` must define all 51 required tokens.
+- `colors` must define all 52 required tokens.
 
 The `$schema` field enables editor auto-completion and validation.
 
 ## Color Tokens
 
-Every theme must define all 51 color tokens. There are no optional colors.
+Every theme must define all 52 color tokens. There are no optional colors.
 
 ### Core UI (11 colors)
 
@@ -253,6 +253,12 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 | Token | Purpose |
 |-------|---------|
 | `bashMode` | Editor border in bash mode (`!` prefix) |
+
+### Spellcheck (1 color)
+
+| Token | Purpose |
+|-------|---------|
+| `spellcheckError` | Misspelled words in the editor |
 
 ### HTML Export (optional)
 

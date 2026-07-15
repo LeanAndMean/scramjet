@@ -83,6 +83,8 @@ const ThemeJsonSchema = Type.Object({
 		thinkingXhigh: ColorValueSchema,
 		// Bash Mode (1 color)
 		bashMode: ColorValueSchema,
+		// Spellcheck (1 color)
+		spellcheckError: ColorValueSchema,
 	}),
 	export: Type.Optional(
 		Type.Object({
@@ -153,7 +155,7 @@ export type ThemeBg =
 	| "toolSuccessBg"
 	| "toolErrorBg";
 
-type ColorMode = "truecolor" | "256color";
+export type ColorMode = "truecolor" | "256color";
 
 // ============================================================================
 // Color Utilities
@@ -754,9 +756,11 @@ export function resolveThemeName({
 	return hasScramjetDark ? "scramjet-dark" : "pi-dark";
 }
 
-// SCRAMJET-DIVERGENCE: env-only default used by initTheme's fallback and the HTML-export color
-// functions (no OSC 11 available in those paths). Interactive reapplication resolves directly via
-// resolveThemeName with the captured classification instead.
+// SCRAMJET-DIVERGENCE: env-only default used when initTheme is called with no theme name, and by
+// the HTML-export color functions (no OSC 11 available in those paths). This is initTheme's default,
+// not its error fallback — the catch-block fallback in initTheme/setTheme is the hardcoded pi-dark
+// below. Interactive reapplication resolves directly via resolveThemeName with the captured
+// classification instead.
 function getDefaultTheme(): string {
 	return resolveThemeName({
 		explicitSetting: undefined,

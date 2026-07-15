@@ -50,6 +50,12 @@ describe("settings theme migration", () => {
 		expect(SettingsManager.inMemory({ theme: "my-custom" }).getTheme()).toBe("my-custom");
 	});
 
+	it("leaves a name merely containing a legacy substring unchanged (exact-match guard)", () => {
+		expect(SettingsManager.inMemory({ theme: "my-dark" }).getTheme()).toBe("my-dark");
+		expect(SettingsManager.inMemory({ theme: "darkane" }).getTheme()).toBe("darkane");
+		expect(SettingsManager.inMemory({ theme: "light-mode" }).getTheme()).toBe("light-mode");
+	});
+
 	it("is idempotent on an already-migrated value", () => {
 		expect(SettingsManager.inMemory({ theme: "pi-dark" }).getTheme()).toBe("pi-dark");
 		expect(SettingsManager.inMemory({ theme: "pi-light" }).getTheme()).toBe("pi-light");

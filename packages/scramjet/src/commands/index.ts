@@ -91,6 +91,11 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 		// the whole session. Wrap once at the top level so any unexpected
 		// failure degrades to "no scramjet commands this session" with a
 		// loud warning, rather than a hard startup crash.
+		//
+		// themePaths depends only on packageRoot() (pure path work), so it is
+		// built outside the try and returned in both branches: a command-discovery
+		// failure must not also drop the bundled scramjet-dark theme (F1).
+		const themePaths = [join(packageRoot(), "themes")];
 		try {
 			const discoveryWarnings: string[] = [];
 			const globalDir = globalRoot();
@@ -160,14 +165,13 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 			}
 			const promptPaths: string[] = [];
 			for (const def of registry.values()) promptPaths.push(def.filePath);
-			const themePaths = [join(packageRoot(), "themes")];
 			return { promptPaths, themePaths };
 		} catch (err) {
 			state.logger.warn(
 				"discovery",
-				`failed: ${(err as Error).message}; no scramjet commands will be available this session`,
+				`failed: ${(err as Error).message}; no scramjet commands will be available this session (bundled scramjet-dark theme unaffected)`,
 			);
-			return { promptPaths: [] };
+			return { promptPaths: [], themePaths };
 		}
 	});
 }
