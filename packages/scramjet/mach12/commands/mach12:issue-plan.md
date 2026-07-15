@@ -267,9 +267,13 @@ After the user approves the plan:
    - The staged breakdown.
    - A `## Pitfalls and Gotchas` section after the staged breakdown: concrete warnings discovered during exploration and architecture design — things that could go wrong, subtle constraints, non-obvious dependencies, easy-to-miss edge cases. Bullet list format; each item actionable and specific to this implementation.
    - A `## Decision Log` section appended after the pitfalls section. This section captures the reasoning behind key decisions made during planning:
-     - **Scope Questions (Step 5):** For each scope/requirements question asked and answered, include the question and a synthesized answer. Only include exchanges where the answer changed or constrained the plan. Omit exchanges where the user confirmed a default or said "whatever you think is best."
-     - **Architecture Choice (Step 6):** The selected approach, the rationale for choosing it, and the alternatives considered with brief reasons for rejection.
-     - **Architecture Questions (Step 7):** For each architecture question asked and answered, include the question and a synthesized answer. Only include exchanges where the answer changed or constrained the plan.
+     - **Attribution convention:** Prefix every Decision Log entry with a source tag so downstream sessions (especially `mach12:issue-review`) can distinguish settled user intent from planner judgment:
+       - `[user-decided]` -- the user explicitly directed, chose, or required this, via a Step 5/6/7 answer, a discussion directive, or a selector choice. Tag an entry `[user-decided]` only when the user genuinely steered the decision -- not when they merely confirmed a planner default (those exchanges are dropped by the omission condition below and must not resurface as `[user-decided]`).
+       - `[agent-proposed]` -- the planning agent reached this on its own analysis; subject to normal review challenge.
+       - Tag **both** Selected and Rejected lines. A rejected alternative is `[user-decided]` when a user directive is the reason it was rejected (e.g., the user chose the competing option), otherwise `[agent-proposed]`. Use the tag literals exactly -- `mach12:issue-review` keys on the literal `[user-decided]`.
+     - **Scope Questions (Step 5):** For each scope/requirements question asked and answered, include the source tag, the question, and a synthesized answer. Only include exchanges where the answer changed or constrained the plan. Omit exchanges where the user confirmed a default or said "whatever you think is best."
+     - **Architecture Choice (Step 6):** The selected approach with its source tag, the rationale for choosing it, and the alternatives considered -- each with its own source tag and a brief reason for rejection.
+     - **Architecture Questions (Step 7):** For each architecture question asked and answered, include the source tag, the question, and a synthesized answer. Only include exchanges where the answer changed or constrained the plan.
      - **Omission condition:** Skip the Decision Log section entirely if Step 5 produced no questions AND Step 6 had no meaningful differentiation between approaches AND Step 7 produced no questions.
    - A note that this comment will guide staged implementation.
 
