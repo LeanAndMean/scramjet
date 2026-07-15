@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.50.0 — Ship scramjet-dark theme as bundled default
+
+Scramjet now ships its own `scramjet-dark` theme (cool cyan/blue palette with warm amber accents) as the default for dark-mode terminals, registered at runtime via `themePaths`. Pi's original built-in themes are renamed to `pi-dark`/`pi-light`, cleanly separating them from scramjet's custom themes; existing `"theme": "dark"`/`"light"` settings are migrated automatically. Light-mode terminals map to `pi-light`, and Pi-without-scramjet falls back to `pi-dark`. Fixes [#322](https://github.com/LeanAndMean/scramjet/issues/322).
+
+### Added
+
+- Bundled `scramjet-dark` theme (`packages/scramjet/themes/scramjet-dark.json`), registered via `themePaths` in `resources_discover` and selected as the default for dark-mode terminals.
+- `themes/` added to the scramjet package `files` allowlist so the theme ships in the npm tarball.
+- Pure `resolveThemeName({ explicitSetting, detectedClassification, hasScramjetDark })` resolver centralizing classification-to-theme-name mapping; `getDefaultTheme()` reimplemented on top of it.
+- `loadThemeFromPath`, `resolveThemeName`, and `getCurrentThemeName` exposed on the `@leanandmean/coding-agent` public surface.
+- Terminal classification captured in `InteractiveMode` (env-seeded, OSC-11-updated) and re-applied after extension themes register, fixing the timing gap where `scramjet-dark` is not yet registered at construction.
+- `spellcheckError` color token (all themes now define 52 tokens).
+- `packageRoot()` exported from `docs-registry.ts` for `themePaths` resolution.
+
+### Changed
+
+- Pi's built-in `dark`/`light` themes renamed to `pi-dark`/`pi-light`.
+- Existing `"theme": "dark"`/`"light"` settings migrated to `"pi-dark"`/`"pi-light"` (exact-match, one-way, idempotent; custom names untouched).
+- `themePaths` is built outside the command-discovery try/catch so a discovery failure no longer drops the bundled theme.
+- Documentation updated (`themes.md`, coding-agent README) and Pi-side changes recorded in `UPSTREAM_DIVERGENCE.md`.
+
 ## 0.49.0 — Journal next-step selector choices
 
 Next-step selector interactions (completions and suggestions) are now journaled as `scramjet:next-step-selection` session entries via `pi.appendEntry()`, capturing the options presented, actual user selection (or dismiss), source, policy mode, source command, recommended index, and model cycling. Fixes a defect where session history showed the recommended option rather than the user's actual choice. Fixes [#321](https://github.com/LeanAndMean/scramjet/issues/321).
