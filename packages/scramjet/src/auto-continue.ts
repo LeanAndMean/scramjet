@@ -906,6 +906,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			clearProbeTimer("aborted");
 			clearProbeWatchdog("aborted");
 			clearDispatchTimer("aborted");
+			if (hasTerminalReport(state.lifecycle)) {
+				ctx.ui.notify(
+					`scramjet: aborted — discarding "${state.lifecycle.lastReport!.status}" status report for ${activeName}`,
+					"warning",
+				);
+			}
 			enterDormant(state, "aborted");
 			return;
 		}
@@ -918,6 +924,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					phase: lp(state.lifecycle),
 					command: activeName,
 					detail: { watchdogActive: probeWatchdog !== null },
+				});
+			}
+			if (hasTerminalReport(state.lifecycle)) {
+				state.logger.lifecycle("reported error observed", {
+					phase: lp(state.lifecycle),
+					command: activeName,
+					detail: { status: state.lifecycle.lastReport!.status },
 				});
 			}
 			return;

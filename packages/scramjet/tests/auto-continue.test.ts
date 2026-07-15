@@ -1005,6 +1005,44 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			]);
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
+
+		it("aborted after inline report discards the report, notifies, and enters dormant with no dispatch", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await report({ status: "completed", summary: "done" });
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
+			expect(ctxBag.notifications[0].message).toContain("discarding");
+		});
+
+		it("error after inline report retains the report and dispatches on the next clean agent_end", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await report({ status: "completed", summary: "done" });
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+
+			// Report survives the error turn.
+			expect(derivedPhase(state.lifecycle)).toBe("reported");
+			expect(ctxBag.dispatched).toEqual([]);
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(ctxBag.dispatched).toEqual([
+				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
+			]);
+			expect(derivedPhase(state.lifecycle)).toBe("idle");
+		});
 	});
 
 	describe("closed / open / ask completed", () => {

@@ -94,6 +94,8 @@ jq 'select(.type == "scramjet:log") | .data | "\(.timestamp / 1000 | strftime("%
 
 ### Healthy probe cycle
 
+Note: an agent may report a terminal status inline during the work turn (issue 331); such a session shows `"status report accepted"` and `"lifecycle: acceptTerminalReport"` with **no probe entries at all** (steps 2–7 and 10 absent). That trace is healthy, not a broken cycle — the probe is a fallback for agents that do not self-report.
+
 A successful command completion produces this sequence of lifecycle entries:
 
 1. `"agent_end observed"` — agent turn ended, lifecycle facts checked
@@ -104,7 +106,7 @@ A successful command completion produces this sequence of lifecycle entries:
 6. `"status probe sent"` — `sendMessage` succeeded
 7. `"probe watchdog armed"` — watchdog timeout set for probe turn
 8. `"status report accepted"` — `report_scramjet_command_status` called with valid payload
-9. `"lifecycle: acceptTerminalReport"` — fact mutation: `probeInFlight or dormant → lastReport`
+9. `"lifecycle: acceptTerminalReport"` — fact mutation: `probeArmed (inline), probeInFlight, or dormant → lastReport`
 10. `"probe watchdog cleared"` — watchdog cancelled (report received in time)
 11. `"agent_end observed"` — second agent_end (probe turn completed)
 12. `"lifecycle: clearActiveCommand"` — fact mutation: command cleared (for completed)

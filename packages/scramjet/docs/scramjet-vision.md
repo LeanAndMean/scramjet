@@ -981,7 +981,9 @@ edges, and stays out of the way.
   `report_scramjet_command_status` protocol (issue 84). After the command's
   normal answer turn goes idle, the harness sends a TUI-hidden
   status-check message carrying the `<scramjet-next-step>` candidate
-  block; the agent reports via `report_scramjet_command_status`. The candidate
+  block; the agent reports via `report_scramjet_command_status`. The
+  probe is a fallback: the agent may also report a terminal status
+  inline during the work turn once the answer is delivered (issue 331). The candidate
   list rides in that user-role probe message (not the system prompt, to
   preserve prompt-cache hit rates). `next_steps[].message` is the
   suggested next message (a leading `/` makes it a slash command); the

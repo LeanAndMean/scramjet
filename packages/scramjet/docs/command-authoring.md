@@ -452,7 +452,8 @@ The command body must include explicit instructions for how to call `report_scra
 **Example prose (from a command with `forced` next step):**
 
 ```markdown
-When Scramjet asks you to report command status, call `report_scramjet_command_status`
+Once the final answer is delivered (or when Scramjet's status-check asks), call
+`report_scramjet_command_status`
 with `status: "completed"`. This command declares a `forced` next step, so
 Scramjet runs the target regardless; include a single `next_steps` entry only
 to pass runtime context to that target:
@@ -467,7 +468,8 @@ user input, use `get_scramjet_user_input` (freetext) instead of reporting a stat
 **Example prose (from a command with `open` next step):**
 
 ```markdown
-When Scramjet asks you to report command status, call `report_scramjet_command_status`
+Once the final answer is delivered (or when Scramjet's status-check asks), call
+`report_scramjet_command_status`
 with `status: "completed"` and choose selector-visible `next_steps` entries:
 
 1. If Stage N+1 remains: `message`: `/mach12:issue-implement <issue> <next-stage>`,
@@ -677,7 +679,8 @@ Delegate to:
 
 <Do the final action (post comment, push code, etc.)>
 
-When Scramjet asks you to report command status, call `report_scramjet_command_status`
+Once the final answer is delivered (or when Scramjet's status-check asks), call
+`report_scramjet_command_status`
 with <specific instructions for this command's reporting>.
 ```
 

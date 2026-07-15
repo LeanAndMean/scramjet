@@ -276,7 +276,7 @@ export function acceptDormantContinuing(holder: LifecycleHolder): MutationResult
 }
 
 export function acceptTerminalReport(holder: LifecycleHolder, payload: CommandStatusRestingPayload): MutationResult {
-	if (!holder.lifecycle.probeArmed && !holder.lifecycle.probeInFlight && !isDormant(holder.lifecycle)) {
+	if (!canAcceptTerminalReport(holder.lifecycle)) {
 		return { ok: false, reason: "not running, probing, or dormant; cannot accept terminal report" };
 	}
 	if ((payload.status as string) === "continuing") {
