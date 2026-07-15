@@ -19,7 +19,7 @@ Themes are JSON files that define colors for the TUI.
 
 Scramjet loads themes from:
 
-- Built-in: `dark`, `light`
+- Built-in: `pi-dark`, `pi-light`, and `scramjet-dark` (the bundled default for dark-mode terminals)
 - Global: `~/.scramjet/agent/themes/*.json`
 - Project: `.scramjet/themes/*.json`
 - Packages: `themes/` directories or `pi.themes` entries in `package.json`
@@ -42,12 +42,17 @@ An explicit `theme` setting is always authoritative — automatic detection neve
 
 ### Automatic Theme Detection
 
-When no explicit theme is configured, scramjet automatically selects `dark` or `light` on each interactive startup using the following precedence chain:
+When no explicit theme is configured, scramjet classifies the terminal as light or dark on each interactive startup, then maps that classification to a theme. The classification uses the following precedence chain:
 
 1. **`COLORFGBG` environment variable** — If set (e.g., `0;15` or `15;0;0`), the final semicolon-delimited field is interpreted as an xterm-256 color index. Its RGB approximation is classified by WCAG relative luminance (threshold 0.2) as light or dark.
-2. **Apple Terminal heuristic** — If `TERM_PROGRAM=Apple_Terminal` and no valid `COLORFGBG` is present, defaults to `light`. Users with custom dark profiles can set `theme: "dark"` explicitly.
+2. **Apple Terminal heuristic** — If `TERM_PROGRAM=Apple_Terminal` and no valid `COLORFGBG` is present, classifies as `light`. Users with custom dark profiles can set `theme: "scramjet-dark"` explicitly.
 3. **OSC 11 terminal query** — On terminals that support it (iTerm2, Kitty, WezTerm, Windows Terminal, Alacritty), scramjet queries the actual background color via the OSC 11 escape sequence. The query has a 100 ms timeout to avoid perceptible startup delay.
-4. **Fallback** — If all of the above fail or time out, defaults to `dark`.
+4. **Fallback** — If all of the above fail or time out, classifies as `dark`.
+
+The classification then maps to a theme name:
+
+- **dark** → `scramjet-dark`, scramjet's bundled default. When `scramjet-dark` is not registered — e.g. Pi used without scramjet — this falls back to `pi-dark`.
+- **light** → `pi-light`.
 
 Automatic detection runs on every interactive startup. The result is never persisted to settings — terminal profiles can change between launches, and detection will adapt.
 
@@ -153,13 +158,13 @@ vim ~/.scramjet/agent/themes/my-theme.json
 
 - `name` is required and must be unique.
 - `vars` is optional. Define reusable colors here, then reference them in `colors`.
-- `colors` must define all 51 required tokens.
+- `colors` must define all 52 required tokens.
 
 The `$schema` field enables editor auto-completion and validation.
 
 ## Color Tokens
 
-Every theme must define all 51 color tokens. There are no optional colors.
+Every theme must define all 52 color tokens. There are no optional colors.
 
 ### Core UI (11 colors)
 
@@ -249,6 +254,12 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 |-------|---------|
 | `bashMode` | Editor border in bash mode (`!` prefix) |
 
+### Spellcheck (1 color)
+
+| Token | Purpose |
+|-------|---------|
+| `spellcheckError` | Misspelled words in the editor |
+
 ### HTML Export (optional)
 
 The `export` section controls colors for `/export` HTML output only. If omitted, colors are derived from `userMessageBg`.
@@ -306,8 +317,8 @@ Scramjet styles individual UI elements (message boxes, tool boxes, selected item
 
 This is by design — setting the terminal background via escape sequences (OSC 11 mutation) is invasive, not universally supported, and affects scrollback behavior. Instead:
 
-- The built-in `light` theme is designed for white or near-white terminal backgrounds.
-- The built-in `dark` theme is designed for dark terminal backgrounds.
+- The built-in `pi-light` theme is designed for white or near-white terminal backgrounds.
+- The `scramjet-dark` theme (and Pi's `pi-dark`) is designed for dark terminal backgrounds.
 - Automatic detection selects the appropriate theme based on your terminal's actual background.
 - For best results, ensure your terminal profile's background color matches the theme family (light background → light theme, dark background → dark theme).
 
@@ -330,5 +341,7 @@ The built-in light theme guarantees WCAG AA contrast (4.5:1) for all explicit te
 ## Examples
 
 See the built-in themes:
-- [dark.json](../src/modes/interactive/theme/dark.json)
-- [light.json](../src/modes/interactive/theme/light.json)
+- [pi-dark.json](../src/modes/interactive/theme/pi-dark.json)
+- [pi-light.json](../src/modes/interactive/theme/pi-light.json)
+
+Scramjet's bundled default dark theme lives at [`packages/scramjet/themes/scramjet-dark.json`](../../scramjet/themes/scramjet-dark.json).
