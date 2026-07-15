@@ -35,7 +35,7 @@ The `hasUI` flag is captured on `session_start`. Before TUI detection completes,
 | `subagent` | `subagent-output-advisor.ts` | Silent subagent failure detection |
 | `probe` | `auto-continue.ts` | Probe scheduling, watchdog, send failures |
 | `dispatch` | `auto-continue.ts` | Stale selector warnings |
-| `status` | `command-status.ts` | Status report processing warnings |
+| `status` | `command-status.ts`, `auto-continue.ts` | Status report processing warnings, report-discard warnings on abort |
 | `lifecycle` | Multiple | Lifecycle fact mutations (shared category for `lifecycle`-level entries) |
 | `input` | `user-input.ts` | User input tool warnings |
 | `subdir-context` | `subdir-context.ts` | Subdirectory context discovery warnings and debug traces |
@@ -94,6 +94,8 @@ jq 'select(.type == "scramjet:log") | .data | "\(.timestamp / 1000 | strftime("%
 
 ### Healthy probe cycle
 
+Note: an agent may report a terminal status inline during the work turn (issue 331); such a session shows `"status report accepted"` and `"lifecycle: acceptTerminalReport"` with **no probe entries at all** (steps 2–7 and 10 absent). Note also that the ordering below is the probe-cycle ordering: in an inline session the report entries (steps 8/9) are filed during the work turn and therefore **precede** that turn's `"agent_end observed"` (step 1), which then routes the report. That trace is healthy, not a broken cycle — the probe is a fallback for agents that do not self-report.
+
 A successful command completion produces this sequence of lifecycle entries:
 
 1. `"agent_end observed"` — agent turn ended, lifecycle facts checked
@@ -104,7 +106,7 @@ A successful command completion produces this sequence of lifecycle entries:
 6. `"status probe sent"` — `sendMessage` succeeded
 7. `"probe watchdog armed"` — watchdog timeout set for probe turn
 8. `"status report accepted"` — `report_scramjet_command_status` called with valid payload
-9. `"lifecycle: acceptTerminalReport"` — fact mutation: `probeInFlight or dormant → lastReport`
+9. `"lifecycle: acceptTerminalReport"` — fact mutation: `probeArmed (inline), probeInFlight, or dormant → lastReport`
 10. `"probe watchdog cleared"` — watchdog cancelled (report received in time)
 11. `"agent_end observed"` — second agent_end (probe turn completed)
 12. `"lifecycle: clearActiveCommand"` — fact mutation: command cleared (for completed)

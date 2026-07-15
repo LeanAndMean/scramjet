@@ -2,23 +2,11 @@
  * report_scramjet_command_status tool and dormant command notice.
  *
  * The tool is the agent's structured report at the end of an active Scramjet
- * command, supplied in a *separate* turn from the command's user-facing answer
- * (issue 84, two-phase protocol).
- *
- * Four statuses, four execution paths:
- * - "continuing" during a probe: non-terminating. Increments continueCount,
- *   re-arms the probe, returns without terminate so the agent keeps working.
- * - "continuing" while dormant: non-terminating. Resets continueCount, re-arms
- *   the probe, returns without terminate. This is the only dormant resume path
- *   for commands that need to do more work.
- * - "completed" / "blocked" / "incomplete" during a probe: terminating. Stores
- *   the report in lastReport and returns terminate: true.
- * - "completed" / "blocked" / "incomplete" while dormant: terminating. Same
- *   storage and terminate behavior. Enables dormant commands to report
- *   completion directly without an extra continuing → probe cycle.
- *
- * auto-continue.ts reads the stored status on the subsequent agent_end and
- * validates/dispatches/pauses.
+ * command. Terminal statuses (completed/blocked/incomplete) terminate the turn
+ * and are accepted inline once the answer is delivered (issue 331), during a
+ * probe, or from dormant; "continuing" is non-terminating and re-arms the
+ * probe (from a probe turn or dormant only). auto-continue.ts reads the stored
+ * status on the subsequent agent_end and validates/dispatches/pauses.
  *
  * The dormant notice is a volatile system prompt section that tells the agent
  * about a dormant command and how to resume or complete it.
@@ -61,16 +49,42 @@ interface CommandStatusDetails {
 export const COMMAND_STATUS_PROBE_TYPE = "scramjet-command-status";
 
 const NO_ACTIVE_COMMAND_ERROR =
-	"report_scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
-	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
+	"report_scramjet_command_status is not active right now — no Scramjet command is running. " +
+	"Use it only during an active Scramjet slash command: report a terminal status inline once the " +
+	"command's work is done and the final answer is delivered, or in response to Scramjet's " +
+	"status-check message. Do not call this tool for ordinary tasks.";
 
 const CONTINUE_LIMIT_ERROR =
 	`You have reported "continuing" ${CONTINUE_LIMIT} times without completing the command. ` +
 	"Report your actual status: completed, blocked, or incomplete.";
 
-const OUT_OF_PHASE_ERROR =
-	"report_scramjet_command_status is not active right now. Do not call this tool for ordinary tasks — " +
-	"call it only when Scramjet's status-check message explicitly asks you to report command status.";
+const PROMPT_SNIPPET =
+	"You have access to `report_scramjet_command_status` for reporting the status of an active " +
+	"Scramjet slash command. Once the command's work is done and your final user-facing answer has been " +
+	"delivered, you may report a terminal status (`completed`, `blocked`, or `incomplete`) inline — " +
+	"always deliver the complete answer first, because reporting ends the turn. " +
+	"If you do not report inline, Scramjet sends a status-check message as a fallback; respond to it " +
+	"with this tool. Do not call this tool for ordinary user tasks.";
+
+const PARKED_ERROR =
+	"report_scramjet_command_status cannot accept a report right now: the command is parked waiting " +
+	"for user input. Wait for the user's reply before reporting.";
+
+const ALREADY_REPORTED_ERROR =
+	"report_scramjet_command_status cannot accept a report right now: a status report was already " +
+	"filed for this command. Do not call this tool again.";
+
+const CONTINUING_OUT_OF_PHASE_ERROR =
+	'report_scramjet_command_status cannot accept "continuing" right now — it is only valid in ' +
+	"response to Scramjet's status-check message or while the command is dormant. Keep working, " +
+	"or report a terminal status (completed, blocked, incomplete) once the work is done.";
+
+// Reached only when canAcceptTerminalReport is false and the command is active, which by the
+// mode-exclusivity invariant leaves exactly two states: reported (lastReport !== null) or parked.
+// A fifth mode flag would break this binary discrimination.
+function outOfPhaseError(lifecycle: ScramjetState["lifecycle"]): string {
+	return lifecycle.lastReport !== null ? ALREADY_REPORTED_ERROR : PARKED_ERROR;
+}
 
 // F6: single source of truth for the next-step wire shape.
 export const NEXT_STEP_SCHEMA = Type.Object({
@@ -139,8 +153,11 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 		name: "report_scramjet_command_status",
 		label: "Report Scramjet Command Status",
 		description:
-			"Report the status of an active Scramjet slash command after Scramjet explicitly asks for a status check. " +
-			"Do not call this tool for ordinary user tasks. Do not call it unless the latest message asks you to call it.",
+			"Report the status of an active Scramjet slash command. Terminal statuses (completed, blocked, " +
+			"incomplete) may be reported inline once the command's work is done and the final user-facing answer " +
+			"has been delivered, or in response to Scramjet's status-check message. " +
+			"Do not call this tool for ordinary user tasks.",
+		promptSnippet: PROMPT_SNIPPET,
 		parameters: Type.Object({
 			status: STATUS_SCHEMA,
 			summary: Type.String({ description: "Brief summary of the command's outcome." }),
@@ -218,10 +235,6 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 
 				// Dormant continuing
 				if (canAcceptDormantContinuing(state.lifecycle)) {
-					state.logger.lifecycle("dormant continuing accepted", {
-						command,
-						detail: { summary: params.summary },
-					});
 					const result = acceptDormantContinuing(state);
 					if (!result.ok) {
 						state.logger.lifecycle("status report rejected", {
@@ -234,6 +247,10 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 							details,
 						};
 					}
+					state.logger.lifecycle("dormant continuing accepted", {
+						command,
+						detail: { summary: params.summary },
+					});
 					const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
 					return {
 						content: [{ type: "text", text: "Continuing. Proceed with your work." }],
@@ -253,12 +270,12 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				);
 				const details: CommandStatusDetails = { error: "out-of-phase" };
 				return {
-					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
+					content: [{ type: "text", text: CONTINUING_OUT_OF_PHASE_ERROR }],
 					details,
 				};
 			}
 
-			// Terminal status path — accepted during probe or from dormant
+			// Terminal status path — accepted while running (inline), during probe, or from dormant
 			if (!canAcceptTerminalReport(state.lifecycle)) {
 				state.logger.lifecycle("status report rejected", {
 					command,
@@ -267,7 +284,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				state.logger.warn("status", "report_scramjet_command_status called out of phase; report ignored", {});
 				const details: CommandStatusDetails = { error: "out-of-phase" };
 				return {
-					content: [{ type: "text", text: OUT_OF_PHASE_ERROR }],
+					content: [{ type: "text", text: outOfPhaseError(state.lifecycle) }],
 					details,
 				};
 			}
@@ -287,9 +304,8 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				});
 				const details: CommandStatusDetails = { error: "mutation-failed" };
 				return {
-					content: [{ type: "text", text: "Status report failed." }],
+					content: [{ type: "text", text: `Status report failed: ${reportResult.reason}` }],
 					details,
-					terminate: true,
 				};
 			}
 

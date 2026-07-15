@@ -978,15 +978,18 @@ edges, and stays out of the way.
 #### Resolved
 
 - **Agent-picks-next mechanism.** Resolved: the two-phase
-  `report_scramjet_command_status` protocol (issue 84). After the command's
-  normal answer turn goes idle, the harness sends a TUI-hidden
-  status-check message carrying the `<scramjet-next-step>` candidate
-  block; the agent reports via `report_scramjet_command_status`. The candidate
-  list rides in that user-role probe message (not the system prompt, to
-  preserve prompt-cache hit rates). `next_steps[].message` is the
-  suggested next message (a leading `/` makes it a slash command); the
-  harness validates the agent's pick on the probe turn's `agent_end`
-  against the active command's policy.
+  `report_scramjet_command_status` protocol (issue 84). There are two
+  report paths. Inline (common, issue 331): the agent calls
+  `report_scramjet_command_status` during the work turn, after
+  delivering its answer. Probe (fallback): if the work turn goes idle
+  without a report, the harness sends a TUI-hidden status-check message
+  carrying the `<scramjet-next-step>` candidate block, and the agent
+  reports in that short probe turn. The candidate list rides in that
+  user-role probe message (not the system prompt, to preserve
+  prompt-cache hit rates). `next_steps[].message` is the suggested next
+  message (a leading `/` makes it a slash command); on the `agent_end`
+  following whichever report path was used, the harness validates the
+  agent's pick against the active command's policy and dispatches.
 - **Delegation dispatch mechanism.** Resolved: same-context tool-result
   delegation (see §4 *Dispatch mechanism*). The `delegate` tool returns
   the substituted command body as text in the tool result; the agent

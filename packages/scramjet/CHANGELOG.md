@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.51.0 — Accept terminal status reports inline during the work turn
+
+The `report_scramjet_command_status` tool now accepts terminal statuses (`completed`/`blocked`/`incomplete`) during the `probeArmed` phase, so a command can report completion inline once its final answer is delivered — eliminating the forced status-probe round-trip (measured 7–19s of latency per command completion). The probe remains a fallback for commands whose model does not self-report. Fixes [#331](https://github.com/LeanAndMean/scramjet/issues/331).
+
+### Changed
+
+- `lifecycle.ts`: `canAcceptTerminalReport` now returns true during `probeArmed`, and `acceptTerminalReport` clears `probeArmed` when accepting inline so the subsequent `agent_end` skips the probe branch and routes through the existing `hasTerminalReport` dispatch path.
+- `command-status.ts`: the `report_scramjet_command_status` tool description and a new `promptSnippet` document answer-first inline reporting.
+- `auto-continue.ts`: `agent_end` routing pinned for inline terminal reports (forced dispatch with no probe, closed-policy autopilot dispatch, inline `blocked` → dormant).
+- Documentation updated across `lifecycle-state-space.md`, `command-authoring.md`, `logging.md`, `scramjet-vision.md`, and CLAUDE.md to describe inline reporting as the primary path and the probe as a fallback.
+
 ## 0.50.2 — Attribute plan Decision Log entries to their source
 
 `mach12:issue-plan` now prefixes every Decision Log entry with a source tag (`[user-decided]` or `[agent-proposed]`) so downstream sessions can distinguish settled user intent from planner judgment. `mach12:issue-review` honors those tags: `[user-decided]` entries are kept out of scope for minimality (axis 7), alternative-approach, and preference challenges, while genuine correctness/feasibility defects remain in scope. Untagged (legacy) entries default to normal scrutiny. Fixes [#325](https://github.com/LeanAndMean/scramjet/issues/325).
