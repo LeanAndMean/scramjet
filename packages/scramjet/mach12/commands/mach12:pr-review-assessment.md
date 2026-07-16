@@ -18,14 +18,14 @@ next:
         deferred items).
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when all findings are nitpicks, false positives, or
-        explicitly deferred -- no fixes are required and the PR is ready
-        for the merge checklist.
+        Pick when all findings are nitpicks, false positives,
+        regressions, or explicitly deferred -- no fixes are required and
+        the PR is ready for the merge checklist.
 ---
 
 # PR Review Assessment
 
-You are running an independent assessment of each finding produced by `/mach12:pr-review`, separating genuine issues from nitpicks and false positives. This is the due-diligence step before any code changes happen.
+You are running an independent assessment of each finding produced by `/mach12:pr-review`, separating genuine issues from nitpicks, false positives, and suggested changes that would themselves regress the code. Each finding is judged on two axes -- whether the flagged problem is real, and whether applying the reviewer's suggested fix would actually improve things. This is the due-diligence step before any code changes happen.
 
 <user-context>
 $ARGUMENTS
@@ -64,23 +64,29 @@ Save the review comment content and its numeric comment ID for later steps.
 
 ## Step 3: Run the independent assessment
 
+"Independent" here means the assessment is independent of the **review author's conclusions** -- the assessor re-derives each verdict from the actual code rather than trusting the reviewer's framing. It does **not** mean the main agent forms its own classifications first. Division of labor:
+
+- **Main agent:** parse the input, gather the PR and review context (Steps 1-2), build the subagent brief, and dispatch. Do **not** pre-classify findings, pre-judge their validity, or inject leading conclusions into the brief before dispatch.
+- **Subagent:** owns the classification, the reasoning, and -- for genuine issues -- the fix approach.
+
 Dispatch the assessment to a general-purpose subagent. Include the review text and the PR context (title, body, and all comments) directly in the subagent brief -- do not ask the subagent to re-fetch them.
 
 The brief should instruct the assessor to:
 
 1. Review the PR title, body, and all existing comments. Note any findings that have already been discussed, resolved, or deferred in the PR conversation.
-2. For each review finding, **read the actual code** referenced and **independently verify** whether the issue exists.
-3. Classify each finding using its F/S identifier from the review comment (e.g., "F1 -- Genuine", "S2 -- Nitpick"). Classify as one of:
-   - **Genuine issue** -- Real problem that should be fixed before merge (explain why). This includes low-risk, contained fixes regardless of whether they are related to the PR's primary purpose -- when the blast radius is small and the chance of introducing new problems is negligible, the fix belongs here, not in Deferred.
-   - **Nitpick** -- Stylistic preference or minor point that does not affect correctness or maintainability. Explain why it does not matter.
-   - **False positive** -- The reviewer flagged something that is not actually an issue. Explain why the code is correct.
-   - **Deferred** -- Real issue that would meaningfully expand the PR's risk surface or require non-trivial design work to address. Should be tracked separately. Do not defer low-risk, contained fixes -- classify those as Genuine even when unrelated to the PR's primary purpose.
-   - If a finding was already fixed in a subsequent commit or resolved in discussion, classify it as **False positive** with a note that it has been addressed. If explicitly deferred in discussion, classify it as **Deferred** and reference the relevant comment.
-   For simplification findings specifically: a simplification is worthwhile only if it preserves behavior, improves or maintains clarity, fits project conventions, and does not remove necessary validation, error handling, security, or tests. Do not treat "shorter" as automatically better.
+2. For each review finding, **read the actual code** referenced and evaluate it on **two axes**: (A) is the flagged problem real and worth caring about, and (B) would applying the reviewer's *suggested change* actually be a net improvement -- preserving behavior, maintaining or improving clarity, fitting project conventions, and not stripping necessary validation, error handling, security, or tests. Both axes require reading the code; a real problem does not imply the suggested fix is safe to apply.
+3. Classify each finding using its F/S identifier from the review comment (e.g., "F1 -- Genuine", "S2 -- Nitpick"). Apply the two axes via this decision tree:
+   - **False positive** -- The observation is not real: the reviewer flagged something that is not actually an issue. Explain why the code is correct. If a finding was already fixed in a subsequent commit or resolved in discussion, classify it here with a note that it has been addressed.
+   - **Genuine issue** -- The problem is real and a sound, contained fix exists: the reviewer's suggested fix, or -- when the reviewer's suggestion is unsound but a simple correct fix exists -- an assessor-corrected one. **State the fix approach** so downstream work applies the sound fix, not the reviewer's original if it was unsound. This includes low-risk, contained fixes regardless of whether they are related to the PR's primary purpose -- when the blast radius is small and the chance of introducing new problems is negligible, the fix belongs here, not in Deferred.
+   - **Nitpick** -- The problem is real but minor or stylistic, **and** its fix passes the fix-value gate (safe, and a genuine net-positive). It is an optional, low-priority improvement worth applying -- not a change that "does not matter." If a minor observation's fix would be neutral churn or would regress the code, it is not a Nitpick -- classify it as a Regression instead.
+   - **Deferred** -- Real issue whose sound fix would meaningfully expand the PR's risk surface or require non-trivial design work to address. Should be tracked separately. If explicitly deferred in discussion, classify it here and reference the relevant comment. Do not defer low-risk, contained fixes -- classify those as Genuine even when unrelated to the PR's primary purpose.
+   - **Regression** -- The observation may touch real code or real tradeoffs, but the reviewer's *suggested change* would leave the codebase worse, break it, or yield no net benefit (pure churn), and no worthwhile alternative fix exists. This covers **quality** regressions as well as runtime breakage: removing needed validation, error handling, or tests; degrading clarity; or fighting project conventions all count -- not only "breaks functionality." Explain why applying the change would be counterproductive. Regression findings are **never** routed to a fix stage or to `pr-review-fix`; mark them explicitly as rejected.
+   As a general principle across **all** finding types, the axis-(B) fix-value gate applies -- including that you must not treat "shorter" or "different" as automatically better.
 4. After classifying all findings, produce a **staged implementation plan** covering everything worth fixing. Reference findings by their F/S identifiers (e.g., "stage 1 addresses F1 and F3"):
    - Number each stage with a descriptive name.
-   - Required stages for genuine issues (must fix before merge).
-   - Optional stages for nitpicks (nice-to-have improvements).
+   - Required stages for genuine issues (must fix before merge), applying the fix approach recorded for each.
+   - Optional stages for nitpicks (optional, net-positive minor improvements).
+   - **Exclude Regression findings from all stages** -- they were actively rejected as harmful and are not fixes to apply.
    - Each stage should list the specific findings it addresses and which files are affected.
 5. Return all classifications (each with the original finding summary and 1-2 sentence reasoning referencing specific code), followed by the staged implementation plan produced in instruction (4).
 
@@ -89,7 +95,7 @@ The brief should instruct the assessor to:
 Prepare the assessment body. It must include:
 - `<!-- mach12-assessment -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
 - A reference to the review comment it is assessing (link to the specific comment URL recorded in Step 2).
-- Each finding with its classification and reasoning.
+- Each finding with its classification and reasoning. Mark any **Regression** finding distinctly (e.g., "Sn -- Regression -- do not apply") so the human and future sessions see it was actively rejected as harmful rather than overlooked.
 - The staged implementation plan at the end.
 - Model attribution at the bottom -- use the model attribution from the Model Identity section of your system prompt (e.g., "Assessed by <model name>").
 
@@ -109,10 +115,10 @@ Present the assessment to the user in CLI output:
 
 For each finding:
 - Original finding (brief summary)
-- Classification (genuine / nitpick / false positive / deferred)
+- Classification (genuine / nitpick / false positive / deferred / regression)
 - Reasoning (1-2 sentences, referencing specific code)
 
-Summary counts: how many genuine, how many nitpicks, how many false positives, how many deferred.
+Summary counts: how many genuine, how many nitpicks, how many false positives, how many deferred, how many regressions.
 
 After the per-finding list and summary counts, display the staged implementation plan so the user can identify which issues to address next without switching to GitHub.
 
@@ -236,7 +242,7 @@ Display the comment IDs for reference -- the next-step command (`pr-review-fix` 
 
 If genuine issues remain (including any reclassified items), the natural next step is `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>` (e.g., `F1 F3 S2` -- all genuine issues, interleaved in F/S identifier order).
 
-If all findings are nitpicks/false positives, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
+If all findings are nitpicks, false positives, regressions, or deferred, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
 
 When Scramjet asks you to report command status, call `report_scramjet_command_status` with `status: "completed"` and populate `next_steps` based on the assessment outcome:
 
@@ -259,7 +265,7 @@ Emit two entries — one `/mach12:pr-review-fix` and one `/mach12:pr-pre-merge`:
 
 Set `recommended_next_step` to `0` (fix pass).
 
-**When all findings are nitpicks, false positives, or explicitly deferred:**
+**When all findings are nitpicks, false positives, regressions, or explicitly deferred:**
 
 Emit two entries:
 
@@ -269,4 +275,5 @@ Emit two entries:
 Set `recommended_next_step` to `0` (pre-merge).
 
 **General rules:**
+- **Regression findings never appear in any `/mach12:pr-review-fix` argument set** in any branch above -- they were rejected as harmful, not deferred for later. Count them toward the "no fixes required" condition alongside nitpicks, false positives, and deferred items.
 - Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
