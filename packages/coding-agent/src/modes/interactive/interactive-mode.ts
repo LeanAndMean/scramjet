@@ -114,11 +114,13 @@ import {
 	detectThemeFromEnvironment,
 	getAvailableThemes,
 	getAvailableThemesWithPaths,
+	getCurrentThemeName,
 	getEditorTheme,
 	getMarkdownTheme,
 	getThemeByName,
 	initTheme,
 	onThemeChange,
+	resolveThemeName,
 	setRegisteredThemes,
 	setTheme,
 	setThemeInstance,
@@ -244,6 +246,9 @@ export class InteractiveMode {
 	private workingVisible = true;
 	// SCRAMJET-DIVERGENCE: title provider for extension-owned terminal titles.
 	private titleProvider: (() => string | undefined) | undefined = undefined;
+	// SCRAMJET-DIVERGENCE: captured terminal classification (env-seeded in the constructor, updated
+	// by the OSC 11 query) used to re-resolve the default theme once extension themes register.
+	private detectedClassification: "dark" | "light" | undefined = undefined;
 	private workingIndicatorOptions: LoaderIndicatorOptions | undefined = undefined;
 	private readonly defaultWorkingMessage = "Working...";
 	private readonly defaultHiddenThinkingLabel = "Thinking...";
@@ -382,7 +387,32 @@ export class InteractiveMode {
 
 		// Register themes from resource loader and initialize
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
+		// SCRAMJET-DIVERGENCE: capture the env classification so the post-extension-bind reapplication
+		// can honor COLORFGBG/Apple-Terminal-detected (never-OSC) terminals. Without this seed, those
+		// terminals would resolve the dark branch and clobber light terminals to scramjet-dark.
+		this.detectedClassification = detectThemeFromEnvironment()?.theme;
 		initTheme(this.settingsManager.getTheme(), true);
+	}
+
+	// SCRAMJET-DIVERGENCE: re-resolve the theme after extension themes register (or after a reload),
+	// so scramjet-dark can take effect once it becomes available. An explicit user setting still wins
+	// via the resolver; the captured classification (env-seeded + OSC-updated) drives auto-detection.
+	// Skips the apply when the resolved name already matches the active theme, unless `force` is set:
+	// the reload path forces a re-read from disk (registered extension themes have no file watcher, so
+	// /reload is their only refresh path even when the active theme's name is unchanged).
+	private reapplyResolvedTheme(force = false): void {
+		const name = resolveThemeName({
+			explicitSetting: this.settingsManager.getTheme(),
+			detectedClassification: this.detectedClassification,
+			hasScramjetDark: getAvailableThemes().includes("scramjet-dark"),
+		});
+		if (!force && name === getCurrentThemeName()) {
+			return;
+		}
+		const result = setTheme(name, true);
+		if (!result.success) {
+			this.showError(`Failed to load theme "${name}": ${result.error}\nFell back to pi-dark theme.`);
+		}
 	}
 
 	private getAutocompleteSourceTag(sourceInfo?: SourceInfo): string | undefined {
@@ -608,10 +638,11 @@ export class InteractiveMode {
 		if (!this.settingsManager.getTheme() && !detectThemeFromEnvironment()) {
 			const rgb = await this.ui.queryTerminalBackgroundColor({ timeoutMs: 100 });
 			if (rgb) {
-				const detected = classifyBackgroundColor(rgb);
-				if (detected !== "dark") {
-					setTheme(detected);
-				}
+				// SCRAMJET-DIVERGENCE: capture the OSC 11 classification and resolve through the shared
+				// resolver so a dark terminal maps to scramjet-dark (when available) and a light one to
+				// pi-light. Skips the apply when the resolved name is already active.
+				this.detectedClassification = classifyBackgroundColor(rgb);
+				this.reapplyResolvedTheme();
 			}
 		}
 
@@ -1530,6 +1561,9 @@ export class InteractiveMode {
 		});
 
 		setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
+		// SCRAMJET-DIVERGENCE: extension themes (e.g. scramjet-dark) register after the constructor's
+		// initTheme, so re-resolve now that they are available.
+		this.reapplyResolvedTheme();
 		this.setupAutocompleteProvider();
 
 		const extensionRunner = this.session.extensionRunner;
@@ -3843,7 +3877,8 @@ export class InteractiveMode {
 					transport: this.settingsManager.getTransport(),
 					thinkingLevel: this.session.thinkingLevel,
 					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getTheme() || "dark",
+					// SCRAMJET-DIVERGENCE: display fallback routed to the renamed builtin.
+					currentTheme: this.settingsManager.getTheme() || "pi-dark",
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
@@ -3909,7 +3944,10 @@ export class InteractiveMode {
 						this.settingsManager.setTheme(themeName);
 						this.ui.invalidate();
 						if (!result.success) {
-							this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to dark theme.`);
+							// SCRAMJET-DIVERGENCE: fallback message names the renamed builtin.
+							this.showError(
+								`Failed to load theme "${themeName}": ${result.error}\nFell back to pi-dark theme.`,
+							);
 						}
 					},
 					onThemePreview: (themeName) => {
@@ -4893,11 +4931,10 @@ export class InteractiveMode {
 			}
 			setRegisteredThemes(this.session.resourceLoader.getThemes().themes);
 			this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
-			const themeName = this.settingsManager.getTheme();
-			const themeResult = themeName ? setTheme(themeName, true) : { success: true };
-			if (!themeResult.success) {
-				this.showError(`Failed to load theme "${themeName}": ${themeResult.error}\nFell back to dark theme.`);
-			}
+			// SCRAMJET-DIVERGENCE: re-resolve through the resolver after reload so newly registered
+			// themes (and the captured classification) are honored; force a re-read since reload's purpose
+			// is to pick up on-disk theme edits even when the active theme's name is unchanged.
+			this.reapplyResolvedTheme(true);
 			const editorPaddingX = this.settingsManager.getEditorPaddingX();
 			const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
 			this.defaultEditor.setPaddingX(editorPaddingX);

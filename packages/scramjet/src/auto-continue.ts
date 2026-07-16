@@ -2,12 +2,21 @@
  * Auto-continuation, two-phase command-status protocol (issue 84).
  *
  * A top-level Scramjet command produces its normal user-facing answer in one
- * turn (the answer turn injects nothing about completion). On that turn's
- * agent_end, if the command declares a next-step policy, this driver begins the
- * probe and DEFERS a hidden status-check probe — a custom message that triggers
- * a short second turn in which the agent calls report_scramjet_command_status.
- * The tool records the status; this driver reads it on the probe turn's
- * agent_end and validates/dispatches/pauses.
+ * turn (the answer turn injects nothing about completion). There are two ways
+ * the status is filed:
+ *
+ *   - Inline (common): the agent calls report_scramjet_command_status during
+ *     the work turn, after delivering its answer. The tool records the status
+ *     and clears probeArmed, so this driver routes on that same turn's
+ *     agent_end (via hasTerminalReport) and no probe is ever sent.
+ *   - Probe (fallback): if the work turn ends without a report, this driver
+ *     DEFERS a hidden status-check probe — a
+ *     custom message that triggers a short second turn in which the agent calls
+ *     report_scramjet_command_status. The tool records the status; this driver
+ *     reads it on the probe turn's agent_end.
+ *
+ * Either way, once a terminal status is recorded this driver validates the
+ * declared next step and dispatches/pauses.
  *
  * The probe MUST be deferred, not sent synchronously from the agent_end
  * listener: during agent_end the run is still streaming, so a synchronous
@@ -981,6 +990,15 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			clearProbeTimer("aborted");
 			clearProbeWatchdog("aborted");
 			clearDispatchTimer("aborted");
+			if (hasTerminalReport(state.lifecycle)) {
+				const discarded = state.lifecycle.lastReport!.status;
+				state.logger.warn("status", `aborted — discarding "${discarded}" status report for ${activeName}`, {
+					phase: lp(state.lifecycle),
+					command: activeName,
+					detail: { status: discarded },
+				});
+				ctx.ui.notify(`scramjet: aborted — discarding "${discarded}" status report for ${activeName}`, "warning");
+			}
 			enterDormant(state, "aborted");
 			return;
 		}
@@ -993,6 +1011,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					phase: lp(state.lifecycle),
 					command: activeName,
 					detail: { watchdogActive: probeWatchdog !== null },
+				});
+			}
+			if (hasTerminalReport(state.lifecycle)) {
+				state.logger.lifecycle("reported error observed", {
+					phase: lp(state.lifecycle),
+					command: activeName,
+					detail: { status: state.lifecycle.lastReport!.status },
 				});
 			}
 			return;

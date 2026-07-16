@@ -188,10 +188,11 @@ describe("query helpers", () => {
 		);
 	});
 
-	it("canAcceptTerminalReport requires probeInFlight or dormant", () => {
+	it("canAcceptTerminalReport requires probeArmed, probeInFlight, or dormant", () => {
 		expect(canAcceptTerminalReport(createLifecycle())).toBe(false);
 		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd", probeInFlight: true })).toBe(true);
-		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd", probeArmed: true })).toBe(false);
+		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd", probeArmed: true })).toBe(true);
+		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd", parkedForInput: true })).toBe(false);
 		expect(canAcceptTerminalReport({ ...createLifecycle(), activeCommand: "cmd" })).toBe(true);
 	});
 
@@ -399,9 +400,19 @@ describe("acceptTerminalReport", () => {
 		fails(acceptTerminalReport(h, { status: "continuing" as any, summary: "x" }), "not a terminal");
 	});
 
-	it("rejects from non-qualifying state", () => {
-		const h = freshLifecycleHolder({ activeCommand: "cmd", probeArmed: true });
-		fails(acceptTerminalReport(h, completedPayload), "not probing or dormant");
+	it("accepts from probeArmed (inline) and clears the armed flag", () => {
+		const h = freshLifecycleHolder({ activeCommand: "cmd", probeArmed: true, continueCount: 2 });
+		ok(acceptTerminalReport(h, completedPayload));
+		expect(h.lifecycle.probeArmed).toBe(false);
+		expect(h.lifecycle.probeInFlight).toBe(false);
+		expect(h.lifecycle.lastReport).toBe(completedPayload);
+		expect(h.lifecycle.continueCount).toBe(0);
+		expect(isProbeDue(h.lifecycle)).toBe(false);
+	});
+
+	it("rejects from non-qualifying state (parked)", () => {
+		const h = freshLifecycleHolder({ activeCommand: "cmd", parkedForInput: true });
+		fails(acceptTerminalReport(h, completedPayload), "not running, probing, or dormant");
 	});
 
 	it("accepts from dormant state", () => {
@@ -560,6 +571,21 @@ describe("full engagement cycle", () => {
 		ok(acceptDormantContinuing(h));
 		expect(h.lifecycle.continueCount).toBe(0);
 		expect(isProbeDue(h.lifecycle)).toBe(true);
+	});
+
+	it("start → inline terminal report → clear (no probe)", () => {
+		const h = freshLifecycleHolder();
+		ok(startCommand(h, "mach12:pr-review"));
+		expect(isProbeDue(h.lifecycle)).toBe(true);
+
+		ok(acceptTerminalReport(h, completedPayload));
+		expect(isProbeDue(h.lifecycle)).toBe(false);
+		expect(isProbeInFlight(h.lifecycle)).toBe(false);
+		expect(hasTerminalReport(h.lifecycle)).toBe(true);
+		expect(h.lifecycle.lastReport?.status).toBe("completed");
+
+		ok(clearActiveCommand(h, "dispatched"));
+		expect(h.lifecycle).toEqual(createLifecycle());
 	});
 
 	it("blocked keeps command associated as dormant", () => {

@@ -4,7 +4,7 @@ import { describe, expect, test } from "vitest";
 import { loadThemeFromPath, relativeLuminance } from "../src/modes/interactive/theme/theme.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LIGHT_THEME_PATH = path.resolve(__dirname, "../src/modes/interactive/theme/light.json");
+const LIGHT_THEME_PATH = path.resolve(__dirname, "../src/modes/interactive/theme/pi-light.json");
 
 // ============================================================================
 // ANSI Decoding Helpers

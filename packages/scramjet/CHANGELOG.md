@@ -1,5 +1,66 @@
 # Changelog
 
+## 0.51.1 — Skip extension handlers on an invalidated runner
+
+Fixes a stale-ctx error (`This extension ctx is stale after session replacement or reload`) thrown from `terminal-indicators`'s `agent_end` handler when a completed command chains to a fresh session (`fresh_session: true`). The root cause is that `ExtensionRunner.emit()` reuses one ctx across all handlers, and a mid-emit `setTimeout(0)` fresh-session dispatch invalidates the runner during an earlier handler's async yield, so later ctx-touching handlers throw. Fixes [#326](https://github.com/LeanAndMean/scramjet/issues/326).
+
+### Fixed
+
+- `packages/coding-agent` `ExtensionRunner`: adds a `skipStale(eventType)` guard wired into all ten `emit*` methods, so remaining handlers are skipped once the runner is invalidated mid-emit. A `session_shutdown` emit on an already-stale runner is routed to `emitError` as an ordering violation rather than silently skipped. Marked with `// SCRAMJET-DIVERGENCE:` and documented in `UPSTREAM_DIVERGENCE.md`.
+
+### Added
+
+- `extension-runner-stale.test.ts`: covers the mid-emit invalidation window, the ordering-violation path, and that normal emits are unaffected.
+
+## 0.51.0 — Accept terminal status reports inline during the work turn
+
+The `report_scramjet_command_status` tool now accepts terminal statuses (`completed`/`blocked`/`incomplete`) during the `probeArmed` phase, so a command can report completion inline once its final answer is delivered — eliminating the forced status-probe round-trip (measured 7–19s of latency per command completion). The probe remains a fallback for commands whose model does not self-report. Fixes [#331](https://github.com/LeanAndMean/scramjet/issues/331).
+
+### Changed
+
+- `lifecycle.ts`: `canAcceptTerminalReport` now returns true during `probeArmed`, and `acceptTerminalReport` clears `probeArmed` when accepting inline so the subsequent `agent_end` skips the probe branch and routes through the existing `hasTerminalReport` dispatch path.
+- `command-status.ts`: the `report_scramjet_command_status` tool description and a new `promptSnippet` document answer-first inline reporting.
+- `auto-continue.ts`: `agent_end` routing pinned for inline terminal reports (forced dispatch with no probe, closed-policy autopilot dispatch, inline `blocked` → dormant).
+- Documentation updated across `lifecycle-state-space.md`, `command-authoring.md`, `logging.md`, `scramjet-vision.md`, and CLAUDE.md to describe inline reporting as the primary path and the probe as a fallback.
+
+## 0.50.2 — Attribute plan Decision Log entries to their source
+
+`mach12:issue-plan` now prefixes every Decision Log entry with a source tag (`[user-decided]` or `[agent-proposed]`) so downstream sessions can distinguish settled user intent from planner judgment. `mach12:issue-review` honors those tags: `[user-decided]` entries are kept out of scope for minimality (axis 7), alternative-approach, and preference challenges, while genuine correctness/feasibility defects remain in scope. Untagged (legacy) entries default to normal scrutiny. Fixes [#325](https://github.com/LeanAndMean/scramjet/issues/325).
+
+### Changed
+
+- `mach12:issue-plan`: Decision Log gains an attribution convention — Scope Questions (Step 5), Architecture Choice (Step 6, both Selected and Rejected lines), and Architecture Questions (Step 7) are each prefixed with `[user-decided]` or `[agent-proposed]`; a merely-confirmed planner default is never tagged `[user-decided]`.
+- `mach12:issue-review`: new "Respect user-attributed decisions" rule keeps `[user-decided]` entries out of scope for the minimality axis, alternative-approach, and preference challenges; Step 6 classification and the minimality axis (7) both reference it.
+
+## 0.50.1 — Publish coding-agent theme changes with scramjet-dark
+
+Release-plumbing fix for 0.50.0. That release modified `@leanandmean/coding-agent` source (theme rename, `themePaths` re-application timing, settings migration) but did not bump `coding-agent`'s version, so `scramjet@0.50.0` pinned the already-published `coding-agent@0.74.1-scramjet.16`, which predated the changes — the bundled `scramjet-dark` theme would not register for installed users. 0.50.0 was never published.
+
+### Fixed
+
+- Bumped `@leanandmean/coding-agent` to `0.74.1-scramjet.17` so its theme changes are published, and repointed the `scramjet` dependency to `0.74.1-scramjet.17`.
+
+## 0.50.0 — Ship scramjet-dark theme as bundled default
+
+Scramjet now ships its own `scramjet-dark` theme (cool cyan/blue palette with warm amber accents) as the default for dark-mode terminals, registered at runtime via `themePaths`. Pi's original built-in themes are renamed to `pi-dark`/`pi-light`, cleanly separating them from scramjet's custom themes; existing `"theme": "dark"`/`"light"` settings are migrated automatically. Light-mode terminals map to `pi-light`, and Pi-without-scramjet falls back to `pi-dark`. Fixes [#322](https://github.com/LeanAndMean/scramjet/issues/322).
+
+### Added
+
+- Bundled `scramjet-dark` theme (`packages/scramjet/themes/scramjet-dark.json`), registered via `themePaths` in `resources_discover` and selected as the default for dark-mode terminals.
+- `themes/` added to the scramjet package `files` allowlist so the theme ships in the npm tarball.
+- Pure `resolveThemeName({ explicitSetting, detectedClassification, hasScramjetDark })` resolver centralizing classification-to-theme-name mapping; `getDefaultTheme()` reimplemented on top of it.
+- `loadThemeFromPath`, `resolveThemeName`, and `getCurrentThemeName` exposed on the `@leanandmean/coding-agent` public surface.
+- Terminal classification captured in `InteractiveMode` (env-seeded, OSC-11-updated) and re-applied after extension themes register, fixing the timing gap where `scramjet-dark` is not yet registered at construction.
+- `spellcheckError` color token (all themes now define 52 tokens).
+- `packageRoot()` exported from `docs-registry.ts` for `themePaths` resolution.
+
+### Changed
+
+- Pi's built-in `dark`/`light` themes renamed to `pi-dark`/`pi-light`.
+- Existing `"theme": "dark"`/`"light"` settings migrated to `"pi-dark"`/`"pi-light"` (exact-match, one-way, idempotent; custom names untouched).
+- `themePaths` is built outside the command-discovery try/catch so a discovery failure no longer drops the bundled theme.
+- Documentation updated (`themes.md`, coding-agent README) and Pi-side changes recorded in `UPSTREAM_DIVERGENCE.md`.
+
 ## 0.49.0 — Journal next-step selector choices
 
 Next-step selector interactions (completions and suggestions) are now journaled as `scramjet:next-step-selection` session entries via `pi.appendEntry()`, capturing the options presented, actual user selection (or dismiss), source, policy mode, source command, recommended index, and model cycling. Fixes a defect where session history showed the recommended option rather than the user's actual choice. Fixes [#321](https://github.com/LeanAndMean/scramjet/issues/321).

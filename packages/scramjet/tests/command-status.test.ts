@@ -39,6 +39,13 @@ describe("registerCommandStatusTool — registration", () => {
 		expect(handlers.get("before_agent_start")).toBeUndefined();
 	});
 
+	it("advertises inline reporting via description and promptSnippet", () => {
+		const { tool } = toolFor();
+		expect(tool.description).toContain("inline");
+		expect(tool.promptSnippet).toContain("report_scramjet_command_status");
+		expect(tool.promptSnippet).toContain("answer first");
+	});
+
 	it("exposes the unified message-based next-step schema and recommended-index fields", () => {
 		const { tool } = toolFor();
 		const params = tool.parameters;
@@ -67,13 +74,50 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(String(result.content[0].text)).toContain("not active right now");
 	});
 
-	it("rejects terminal status when probe armed (running)", async () => {
+	it("accepts terminal status when probe armed (running) — inline reporting", async () => {
 		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ status: "completed", summary: "done" });
 
+		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.lastReport?.status).toBe("completed");
+		expect(state.lifecycle.probeArmed).toBe(false);
+		expect(isProbeDue(state.lifecycle)).toBe(false);
+	});
+
+	it("journals the inline report under the active command name", async () => {
+		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:pr-create") }));
+		await execute({ status: "completed", summary: "done" });
+		expect(pi.appended).toContainEqual({
+			customType: COMMAND_STATUS_TYPE,
+			data: { commandName: "mach12:pr-create", status: "completed" },
+		});
+	});
+
+	it("accepts blocked inline when probe armed (running)", async () => {
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const result = await execute({ status: "blocked", summary: "missing dep" });
+
+		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.lastReport).toMatchObject({ status: "blocked", summary: "missing dep" });
+		expect(state.lifecycle.probeArmed).toBe(false);
+	});
+
+	it("accepts incomplete inline when probe armed (running)", async () => {
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const result = await execute({ status: "incomplete", summary: "stopped" });
+
+		expect(result.terminate).toBe(true);
+		expect(state.lifecycle.lastReport).toMatchObject({ status: "incomplete", summary: "stopped" });
+		expect(state.lifecycle.probeArmed).toBe(false);
+	});
+
+	it("rejects continuing when probe armed (running)", async () => {
+		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const result = await execute({ status: "continuing", summary: "more work" });
+
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.error).toBe("out-of-phase");
-		expect(isProbeDue(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.probeArmed).toBe(true);
 	});
 
 	it("rejects terminal status from reported (has lastReport)", async () => {
@@ -82,6 +126,7 @@ describe("registerCommandStatusTool — gate", () => {
 
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.error).toBe("out-of-phase");
+		expect(String(result.content[0].text)).toContain("already");
 	});
 
 	it("rejects terminal status when parked for input (waiting)", async () => {
@@ -90,6 +135,7 @@ describe("registerCommandStatusTool — gate", () => {
 
 		expect(result.terminate).toBeUndefined();
 		expect(result.details.error).toBe("out-of-phase");
+		expect(String(result.content[0].text)).toContain("parked");
 	});
 
 	it("accepts terminal status from dormant", async () => {
