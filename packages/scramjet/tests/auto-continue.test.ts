@@ -3891,6 +3891,31 @@ describe("next-step selection record tool", () => {
 		expect(ctxBag.dispatched).toEqual([]);
 	});
 
+	it("selector: staleness during the record await suppresses dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state);
+		const originalInvoke = bag.pi.invokeHarnessTool;
+		bag.pi.invokeHarnessTool = async (name: string, args: unknown, options?: unknown) => {
+			state.lifecycleGeneration++;
+			return originalInvoke(name, args, options);
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(recordCalls(bag.pi)).toHaveLength(1);
+		expect(ctxBag.dispatched).toEqual([]);
+		expect(logMessagesAll(bag.pi).some((m) => m.includes("next-step dispatch skipped"))).toBe(true);
+	});
+
 	it("stale selector resolution records nothing", async () => {
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const state = runningState(def, { enabled: true });

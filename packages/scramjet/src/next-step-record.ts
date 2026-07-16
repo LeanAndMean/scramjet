@@ -3,15 +3,16 @@
  *
  * The next-step selector is a transient ctx.ui.custom widget — it vanishes on
  * resolution and leaves no transcript artifact. This tool, invoked by
- * auto-continue.ts via pi.invokeHarnessTool after the selector resolves (or
- * after a headless routeWithoutUi auto-dispatch), records the outcome as a real
+ * auto-continue.ts via pi.invokeHarnessTool after the selector resolves (or,
+ * on the headless routeWithoutUi path, before the auto-dispatch fires),
+ * records the outcome as a real
  * ToolResultMessage: persisted, replayed, rendered as a TUI row, and visible in
  * LLM context so the model learns which next step was actually taken. Modeled
  * on model-change-notice.ts.
  */
 
 import type { AgentToolResult, ExtensionAPI } from "@leanandmean/coding-agent";
-import { Container, Text } from "@leanandmean/tui";
+import { Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
 
 export const NEXT_STEP_RECORD_TOOL = "scramjet_next_step_selection";
@@ -58,21 +59,9 @@ export function buildRecordText(params: NextStepRecordParams): string {
 	return lines.join("\n");
 }
 
-function isRecordParams(value: unknown): value is NextStepRecordParams {
-	if (typeof value !== "object" || value === null) return false;
-	const record = value as Partial<NextStepRecordParams>;
-	return (
-		(record.outcome === "selected" || record.outcome === "dismissed") &&
-		Array.isArray(record.options) &&
-		(record.selected === null || typeof record.selected === "string")
-	);
-}
-
 function renderRecordResult(result: AgentToolResult<unknown>) {
-	if (!isRecordParams(result.details)) return new Text("", 0, 0);
-	const container = new Container();
-	container.addChild(new Text(buildRecordText(result.details), 0, 0));
-	return container;
+	const text = result.content.find((c) => c.type === "text")?.text;
+	return new Text(text ?? "(next-step record unavailable)", 0, 0);
 }
 
 export function registerNextStepRecord(pi: ExtensionAPI): void {

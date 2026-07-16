@@ -493,6 +493,8 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 						phase: lp(state.lifecycle),
 						detail: { reason: "no-selection" },
 					});
+					// Best-effort (fire-and-forget): nothing dispatches after a dismiss, so
+					// there is no ordering to protect.
 					void recordSelection({
 						outcome: "dismissed",
 						options: entryOptions,
@@ -544,8 +546,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					state.logger.warn("journal", "failed to journal next-step selection", { error: String(e) });
 				}
 
-				// Awaited so the record lands in the current session's transcript before
-				// dispatch — a fresh_session step replaces the session immediately after.
+				// Awaited so the record usually lands in the current session's transcript
+				// before dispatch — a fresh_session step replaces the session immediately
+				// after. Not guaranteed: invokeHarnessTool resolves immediately when it
+				// queues mid-run, and Agent.reset() (fresh_session) discards that queue.
 				await recordSelection({
 					outcome: "selected",
 					options: entryOptions,
@@ -558,6 +562,11 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					state.lifecycleGeneration !== selectorGeneration ||
 					activeCommandName(state.lifecycle) !== selectorCommand
 				) {
+					state.logger.lifecycle("next-step dispatch skipped", {
+						phase: lp(state.lifecycle),
+						...(entrySourceCommand ? { command: entrySourceCommand } : {}),
+						detail: { reason: "stale-after-record", message: selection.step.message },
+					});
 					return;
 				}
 
@@ -647,10 +656,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			const parsed = recommended.parsedCommand!;
 			const dispatchGeneration = state.lifecycleGeneration;
 			const dispatchCommand = activeCommandName(state.lifecycle);
-			// Awaited (via then) before dispatch for the same fresh_session ordering
-			// reason as the selector path; recordSelection never rejects. The await
-			// opens a gap (invokeHarnessTool can queue mid-run), so re-check staleness
-			// before dispatching, mirroring the selector path.
+			// Chained via .then() rather than await because this runs inside the
+			// synchronous agent_end handler path; the record still settles before
+			// dispatch (same fresh_session ordering intent as the selector path,
+			// with the same mid-run queuing caveat), and recordSelection never
+			// rejects. The gap before .then() runs means lifecycle can move, so
+			// re-check staleness before dispatching, mirroring the selector path.
 			void recordSelection({
 				outcome: "selected",
 				options: result.valid.map((o) => ({ message: o.message, reason: o.reason })),
