@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.53.0 — Classify pr-review-assessment findings by fix value
+
+Reworks `mach12:pr-review-assessment` so each review finding is judged on two axes: whether the flagged problem is real, and whether applying the reviewer's suggested change would actually be a net improvement. Adds a distinct **Regression** classification for real observations whose suggested fix would leave the code worse, break it, or yield pure churn (covering quality regressions — stripping validation/error-handling/tests, degrading clarity, fighting conventions — not only runtime breakage), and surfaces it end-to-end: excluded from staged plans, marked distinctly in the assessment comment, counted in the CLI summary, and forbidden from any `pr-review-fix` argument set. Redefines **Genuine** to carry the fix approach (including an assessor-corrected one when the reviewer's suggestion is unsound), redefines **Nitpick** as an optional net-positive minor improvement, generalizes the fix-value guardrail from simplification-only to all finding types, and states the main-agent vs. subagent division of labor in Step 3. Fixes [#342](https://github.com/LeanAndMean/scramjet/issues/342).
+
+### Changed
+
+- `mach12/commands/mach12:pr-review-assessment.md`: prose-only rework of the classification taxonomy, decision tree, staged-plan handling, CLI output, and next-step reporting to add the Regression classification and the two-axis (problem-real / fix-value) framing.
+
 ## 0.52.0 — Persist next-step selector outcomes as transcript tool rows
 
 The next-step selector's outcome is now recorded as a real, replayable tool row. A new harness-only `scramjet_next_step_selection` tool (the second consumer of the harness-tool-invocation primitive) is invoked via `pi.invokeHarnessTool` after the selector resolves — recording every offered option with the chosen one marked, or all options plus "Cancelled" on dismiss — so the transcript, session replay, and LLM context always show which next step was taken. Fixes [#324](https://github.com/LeanAndMean/scramjet/issues/324).
