@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.51.1 — Skip extension handlers on an invalidated runner
+
+Fixes a stale-ctx error (`This extension ctx is stale after session replacement or reload`) thrown from `terminal-indicators`'s `agent_end` handler when a completed command chains to a fresh session (`fresh_session: true`). The root cause is that `ExtensionRunner.emit()` reuses one ctx across all handlers, and a mid-emit `setTimeout(0)` fresh-session dispatch invalidates the runner during an earlier handler's async yield, so later ctx-touching handlers throw. Fixes [#326](https://github.com/LeanAndMean/scramjet/issues/326).
+
+### Fixed
+
+- `packages/coding-agent` `ExtensionRunner`: adds a `skipStale(eventType)` guard wired into all ten `emit*` methods, so remaining handlers are skipped once the runner is invalidated mid-emit. A `session_shutdown` emit on an already-stale runner is routed to `emitError` as an ordering violation rather than silently skipped. Marked with `// SCRAMJET-DIVERGENCE:` and documented in `UPSTREAM_DIVERGENCE.md`.
+
+### Added
+
+- `extension-runner-stale.test.ts`: covers the mid-emit invalidation window, the ordering-violation path, and that normal emits are unaffected.
+
 ## 0.51.0 — Accept terminal status reports inline during the work turn
 
 The `report_scramjet_command_status` tool now accepts terminal statuses (`completed`/`blocked`/`incomplete`) during the `probeArmed` phase, so a command can report completion inline once its final answer is delivered — eliminating the forced status-probe round-trip (measured 7–19s of latency per command completion). The probe remains a fallback for commands whose model does not self-report. Fixes [#331](https://github.com/LeanAndMean/scramjet/issues/331).
