@@ -209,9 +209,7 @@ function bootstrap(
 }
 
 async function flushMicrotasks() {
-	await Promise.resolve();
-	await Promise.resolve();
-	await Promise.resolve();
+	for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
 // Drives the full two-phase protocol: the answer turn ends (while the run is
@@ -3867,5 +3865,341 @@ describe("next-step selection journaling", () => {
 		]);
 		expect(entry.recommendedIndex).toBe(1);
 		expect(entry.selected).toEqual({ message: "/c:alt", reason: "alternate" });
+	});
+});
+
+describe("next-step selection record tool", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	function recordCalls(pi: any) {
+		return pi.harnessToolCalls.filter((c: any) => c.name === "scramjet_next_step_selection");
+	}
+
+	it("invokes the record tool with selected outcome before dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state);
+		// Gate the record invocation so we can prove dispatch waits for it to settle,
+		// not merely that both happen by the time microtasks drain (S2).
+		let releaseRecord: () => void = () => {};
+		const recordGate = new Promise<void>((resolve) => {
+			releaseRecord = resolve;
+		});
+		const originalInvoke = bag.pi.invokeHarnessTool;
+		bag.pi.invokeHarnessTool = async (name: string, args: unknown, options?: unknown) => {
+			await originalInvoke(name, args, options);
+			await recordGate;
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		// Record captured, but dispatch is still blocked behind the unresolved record promise.
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toEqual({
+			outcome: "selected",
+			options: [{ message: "/b:ok", reason: "continue" }],
+			selectedIndex: 0,
+			sourceCommand: "a:cmd",
+			source: "completion",
+		});
+		expect(ctxBag.dispatched).toEqual([]);
+
+		releaseRecord();
+		await flushMicrotasks();
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("invokes the record tool with dismissed outcome on dismiss", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		const ESCAPE = String.fromCharCode(27);
+		ctxBag.customComponents[0].handleInput(ESCAPE);
+		await vi.advanceTimersByTimeAsync(10000);
+		await flushMicrotasks();
+
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toMatchObject({ outcome: "dismissed", selectedIndex: null });
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("records suggestion selections with source=suggestion", async () => {
+		const steps = [{ message: "/mach12:pr-review 248", reason: "review" }];
+		const state = freshState({
+			enabled: true,
+			lifecycle: lifecycleFor("idle"),
+			pendingSuggestion: { steps, recommendedIndex: 0, generation: 0 },
+		});
+		const bag = recordingPi();
+		state.logger = createLogger(bag.pi);
+		const ctxBag = fakeCtx({ hasUI: true, isStreaming: () => bag.pi.isStreaming });
+		registerAutoContinue(bag.pi, state);
+		registerHistory(bag.pi, state);
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		await flushMicrotasks();
+
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toMatchObject({
+			outcome: "selected",
+			source: "suggestion",
+			selectedIndex: 0,
+		});
+	});
+
+	it("records headless autopilot auto-dispatch as selected, before dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+		// Gate the record invocation to prove the headless .then dispatch waits for it
+		// to settle, independent of microtask draining (S2).
+		let releaseRecord: () => void = () => {};
+		const recordGate = new Promise<void>((resolve) => {
+			releaseRecord = resolve;
+		});
+		const originalInvoke = bag.pi.invokeHarnessTool;
+		bag.pi.invokeHarnessTool = async (name: string, args: unknown, options?: unknown) => {
+			await originalInvoke(name, args, options);
+			await recordGate;
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		await flushMicrotasks();
+
+		// Record captured, but dispatch is still blocked behind the unresolved record promise.
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toMatchObject({
+			outcome: "selected",
+			selectedIndex: 0,
+			sourceCommand: "a:cmd",
+			source: "completion",
+		});
+		expect(ctxBag.dispatched).toEqual([]);
+
+		releaseRecord();
+		await flushMicrotasks();
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("headless: a non-stringifiable record rejection is swallowed and dispatch still fires (S1)", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+		// A rejection whose message getter and String() coercion both throw. If the
+		// recordSelection catch formatted it with `err.message`/`String(err)` it would
+		// itself throw, rejecting recordSelection and starving the headless .then dispatch.
+		bag.pi.invokeHarnessTool = async () => {
+			throw Object.create(null);
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		await flushMicrotasks();
+
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+		expect(logMessagesAll(bag.pi).some((m) => m.includes("failed to record next-step selection"))).toBe(true);
+	});
+
+	it("headless non-autopilot path records nothing", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		await flushMicrotasks();
+
+		expect(recordCalls(bag.pi)).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("inline report (no probe): headless autopilot dispatch records the selection", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+		// Agent reports inline during the work turn — no probe round-trip.
+		await report({
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		await flushMicrotasks();
+
+		expect(bag.pi.sent).toEqual([]); // no probe message ever sent
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toMatchObject({
+			outcome: "selected",
+			selectedIndex: 0,
+			sourceCommand: "a:cmd",
+			source: "completion",
+		});
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("inline report (no probe): selector pick records the selection", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await report({
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(bag.pi.sent).toEqual([]); // no probe message ever sent
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toMatchObject({ outcome: "selected", selectedIndex: 0, source: "completion" });
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("headless: staleness during the record await suppresses dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+		const originalInvoke = bag.pi.invokeHarnessTool;
+		bag.pi.invokeHarnessTool = async (name: string, args: unknown, options?: unknown) => {
+			state.lifecycleGeneration++;
+			return originalInvoke(name, args, options);
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		await flushMicrotasks();
+
+		expect(recordCalls(bag.pi)).toHaveLength(1);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("selector: staleness during the record await suppresses dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state);
+		const originalInvoke = bag.pi.invokeHarnessTool;
+		bag.pi.invokeHarnessTool = async (name: string, args: unknown, options?: unknown) => {
+			state.lifecycleGeneration++;
+			return originalInvoke(name, args, options);
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(recordCalls(bag.pi)).toHaveLength(1);
+		expect(ctxBag.dispatched).toEqual([]);
+		expect(logMessagesAll(bag.pi).some((m) => m.includes("next-step dispatch skipped"))).toBe(true);
+	});
+
+	it("stale selector resolution records nothing", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state);
+		let resolveSelector: (value: string | null) => void = () => {};
+		ctxBag.ctx.ui.custom = () =>
+			new Promise((resolve) => {
+				resolveSelector = resolve;
+			});
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		state.lifecycleGeneration++;
+		resolveSelector("0");
+		await flushMicrotasks();
+
+		expect(recordCalls(bag.pi)).toHaveLength(0);
+		expect(ctxBag.dispatched).toEqual([]);
+	});
+
+	it("record tool failure warns but does not block dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state);
+		bag.pi.invokeHarnessTool = async () => {
+			throw new Error("record boom");
+		};
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+		expect(logMessages(bag.pi).some((m) => m.includes("failed to record next-step selection"))).toBe(true);
 	});
 });

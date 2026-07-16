@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.52.0 — Persist next-step selector outcomes as transcript tool rows
+
+The next-step selector's outcome is now recorded as a real, replayable tool row. A new harness-only `scramjet_next_step_selection` tool (the second consumer of the harness-tool-invocation primitive) is invoked via `pi.invokeHarnessTool` after the selector resolves — recording every offered option with the chosen one marked, or all options plus "Cancelled" on dismiss — so the transcript, session replay, and LLM context always show which next step was taken. Fixes [#324](https://github.com/LeanAndMean/scramjet/issues/324).
+
+### Added
+
+- `next-step-record.ts`: registers the harness-only `scramjet_next_step_selection` tool and exports the pure `buildRecordText` renderer.
+- `next-step-record.test.ts` and expanded `auto-continue.test.ts` / `integration-smoke.test.ts` coverage for record invocation on selection, dismissal, and headless autopilot dispatch.
+
+### Changed
+
+- `auto-continue.ts`: invokes the record tool for both selector resolutions (selected/dismissed) and the headless autopilot auto-dispatch path; selected-path records settle before dispatch when possible, dismissed records are fire-and-forget, and record failure never blocks the chain.
+- `packages/agent` `Agent.reset()`: warns when it discards a non-empty harness tool queue so a lost record row is diagnosable (marked `// SCRAMJET-DIVERGENCE:`, documented in `UPSTREAM_DIVERGENCE.md`). Bumped `@leanandmean/agent` to `0.74.1-scramjet.10` and `@leanandmean/coding-agent` to `0.74.1-scramjet.19`, repointing the dependent pins.
+
 ## 0.51.1 — Skip extension handlers on an invalidated runner
 
 Fixes a stale-ctx error (`This extension ctx is stale after session replacement or reload`) thrown from `terminal-indicators`'s `agent_end` handler when a completed command chains to a fresh session (`fresh_session: true`). The root cause is that `ExtensionRunner.emit()` reuses one ctx across all handlers, and a mid-emit `setTimeout(0)` fresh-session dispatch invalidates the runner during an earlier handler's async yield, so later ctx-touching handlers throw. Fixes [#326](https://github.com/LeanAndMean/scramjet/issues/326).

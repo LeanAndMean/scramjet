@@ -344,4 +344,37 @@ describe("Agent.runHarnessTool", () => {
 		// A supplied id is used verbatim.
 		expect(ids[2]).toBe("custom_id-1");
 	});
+
+	it("reset() warns with queued harness tool names when discarding the queue", async () => {
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (msg?: unknown) => {
+			warnings.push(String(msg));
+		};
+		try {
+			const { fn } = createRecordingStreamFn([makeTextAssistantMessage("done")]);
+			let agentRef!: Agent;
+			const agent = new Agent({
+				initialState: { model: testModel, tools: [] },
+				streamFn: fn,
+				getApiKey: async () => "key",
+			});
+			agentRef = agent;
+			agent.subscribe((event) => {
+				if (event.type === "message_start" && event.message.role === "user") {
+					// Queue a harness call mid-run, then reset before the turn boundary drains it.
+					void agentRef.runHarnessTool(makeHarnessTool([]), { note: "discarded" });
+					agentRef.reset();
+				}
+			});
+
+			await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+		} finally {
+			console.warn = originalWarn;
+		}
+
+		// The count identifies how many were lost; the names identify which transcript artifacts.
+		expect(warnings.some((w) => w.includes("discarded 1 queued harness tool call"))).toBe(true);
+		expect(warnings.some((w) => w.includes("harness_notice"))).toBe(true);
+	});
 });
