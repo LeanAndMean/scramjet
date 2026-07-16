@@ -742,7 +742,26 @@ export class ExtensionRunner {
 		);
 	}
 
+	// SCRAMJET-DIVERGENCE: issue 326 — after invalidate() (session replacement/teardown),
+	// remaining or subsequent handler invocations are skipped instead of running against a
+	// dead ctx and throwing the stale-ctx error. session_shutdown is the exception: skipping
+	// it silently would drop teardown hooks, so that ordering violation is reported.
+	private skipStale(eventType: string): boolean {
+		if (!this.staleMessage) return false;
+		if (eventType === "session_shutdown") {
+			this.emitError({
+				extensionPath: "<runner>",
+				event: "session_shutdown",
+				error: "session_shutdown emitted after runner invalidation; teardown hooks were skipped (ordering bug)",
+			});
+		} else if (process.env.SCRAMJET_DEBUG || process.env.PI_DEBUG) {
+			console.debug(`ExtensionRunner: skipping ${eventType} handlers on invalidated runner (issue 326)`);
+		}
+		return true;
+	}
+
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
+		if (this.skipStale(event.type)) return undefined as RunnerEmitResult<TEvent>;
 		const ctx = this.createContext();
 		let result: SessionBeforeEventResult | undefined;
 
@@ -751,6 +770,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale(event.type)) return result as RunnerEmitResult<TEvent>;
 				try {
 					const handlerResult = await handler(event, ctx);
 
@@ -777,6 +797,7 @@ export class ExtensionRunner {
 	}
 
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
+		if (this.skipStale("message_end")) return undefined;
 		const ctx = this.createContext();
 		let currentMessage = event.message;
 		let modified = false;
@@ -786,6 +807,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale("message_end")) return modified ? currentMessage : undefined;
 				try {
 					const currentEvent: MessageEndEvent = { ...event, message: currentMessage };
 					const handlerResult = (await handler(currentEvent, ctx)) as MessageEndEventResult | undefined;
@@ -819,6 +841,7 @@ export class ExtensionRunner {
 	}
 
 	async emitToolResult(event: ToolResultEvent): Promise<ToolResultEventResult | undefined> {
+		if (this.skipStale("tool_result")) return undefined;
 		const ctx = this.createContext();
 		const currentEvent: ToolResultEvent = { ...event };
 		let modified = false;
@@ -828,6 +851,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale("tool_result")) break;
 				try {
 					const handlerResult = (await handler(currentEvent, ctx)) as ToolResultEventResult | undefined;
 					if (!handlerResult) continue;
@@ -869,6 +893,7 @@ export class ExtensionRunner {
 	}
 
 	async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
+		if (this.skipStale("tool_call")) return undefined;
 		const ctx = this.createContext();
 		let result: ToolCallEventResult | undefined;
 
@@ -877,6 +902,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale("tool_call")) return result;
 				const handlerResult = await handler(event, ctx);
 
 				if (handlerResult) {
@@ -892,6 +918,7 @@ export class ExtensionRunner {
 	}
 
 	async emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined> {
+		if (this.skipStale("user_bash")) return undefined;
 		const ctx = this.createContext();
 
 		for (const ext of this.extensions) {
@@ -899,6 +926,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale("user_bash")) return undefined;
 				try {
 					const handlerResult = await handler(event, ctx);
 					if (handlerResult) {
@@ -921,6 +949,7 @@ export class ExtensionRunner {
 	}
 
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+		if (this.skipStale("context")) return messages;
 		const ctx = this.createContext();
 		let currentMessages = structuredClone(messages);
 
@@ -929,6 +958,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale("context")) return currentMessages;
 				try {
 					const event: ContextEvent = { type: "context", messages: currentMessages };
 					const handlerResult = await handler(event, ctx);
@@ -953,6 +983,7 @@ export class ExtensionRunner {
 	}
 
 	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {
+		if (this.skipStale("before_provider_request")) return payload;
 		const ctx = this.createContext();
 		let currentPayload = payload;
 
@@ -961,6 +992,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale("before_provider_request")) return currentPayload;
 				try {
 					const event: BeforeProviderRequestEvent = {
 						type: "before_provider_request",
@@ -992,6 +1024,7 @@ export class ExtensionRunner {
 		systemPromptSections: SystemPromptSection[],
 		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
+		if (this.skipStale("before_agent_start")) return undefined;
 		let currentSystemPrompt = flattenSystemPrompt(systemPromptSections);
 		const ctx = Object.defineProperties(
 			{},
@@ -1020,6 +1053,7 @@ export class ExtensionRunner {
 						systemPromptSections,
 						systemPromptOptions,
 					};
+					if (this.skipStale("before_agent_start")) break;
 					const handlerResult = await handler(event, ctx);
 
 					if (handlerResult) {
@@ -1122,6 +1156,7 @@ export class ExtensionRunner {
 		promptPaths: Array<{ path: string; extensionPath: string }>;
 		themePaths: Array<{ path: string; extensionPath: string }>;
 	}> {
+		if (this.skipStale("resources_discover")) return { skillPaths: [], promptPaths: [], themePaths: [] };
 		const ctx = this.createContext();
 		const skillPaths: Array<{ path: string; extensionPath: string }> = [];
 		const promptPaths: Array<{ path: string; extensionPath: string }> = [];
@@ -1132,6 +1167,7 @@ export class ExtensionRunner {
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
+				if (this.skipStale("resources_discover")) return { skillPaths, promptPaths, themePaths };
 				try {
 					const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
 					const handlerResult = await handler(event, ctx);
@@ -1164,12 +1200,18 @@ export class ExtensionRunner {
 
 	/** Emit input event. Transforms chain, "handled" short-circuits. */
 	async emitInput(text: string, images: ImageContent[] | undefined, source: InputSource): Promise<InputEventResult> {
+		if (this.skipStale("input")) return { action: "continue" };
 		const ctx = this.createContext();
 		let currentText = text;
 		let currentImages = images;
 
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
+				if (this.skipStale("input")) {
+					return currentText !== text || currentImages !== images
+						? { action: "transform", text: currentText, images: currentImages }
+						: { action: "continue" };
+				}
 				try {
 					const event: InputEvent = { type: "input", text: currentText, images: currentImages, source };
 					const result = (await handler(event, ctx)) as InputEventResult | undefined;
