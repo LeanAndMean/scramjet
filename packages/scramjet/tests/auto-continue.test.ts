@@ -3998,6 +3998,62 @@ describe("next-step selection record tool", () => {
 		expect(ctxBag.dispatched).toEqual([]);
 	});
 
+	it("inline report (no probe): headless autopilot dispatch records the selection", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true });
+		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+		// Agent reports inline during the work turn — no probe round-trip.
+		await report({
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+		await flushMicrotasks();
+
+		expect(bag.pi.sent).toEqual([]); // no probe message ever sent
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toMatchObject({
+			outcome: "selected",
+			selected: "/b:ok",
+			sourceCommand: "a:cmd",
+			source: "completion",
+		});
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("inline report (no probe): selector pick records the selection", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = bootstrap(state);
+
+		await report({
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			recommended_next_step: 0,
+		});
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(bag.pi.sent).toEqual([]); // no probe message ever sent
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		const calls = recordCalls(bag.pi);
+		expect(calls).toHaveLength(1);
+		expect(calls[0].args).toMatchObject({ outcome: "selected", selected: "/b:ok", source: "completion" });
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
 	it("headless: staleness during the record await suppresses dispatch", async () => {
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const state = runningState(def, { enabled: true });
