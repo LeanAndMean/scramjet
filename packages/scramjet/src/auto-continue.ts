@@ -55,6 +55,7 @@ import {
 } from "./lifecycle.js";
 import { buildProbeMessage } from "./next-step.js";
 import { dispatchNextStep } from "./next-step-dispatch.js";
+import { NEXT_STEP_RECORD_TOOL, type NextStepRecordParams } from "./next-step-record.js";
 import { selectNextStep } from "./next-step-selector.js";
 import type {
 	CommandStatusNextStep,
@@ -389,6 +390,18 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 	}
 
+	// Persist a selector outcome as a real tool call/result pair (transcript row,
+	// replay, LLM context). Never throws — a broken record row must not eat a chain.
+	async function recordSelection(params: NextStepRecordParams): Promise<void> {
+		try {
+			await pi.invokeHarnessTool(NEXT_STEP_RECORD_TOOL, params);
+		} catch (err) {
+			state.logger.warn("dispatch", "failed to record next-step selection", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
 	function cancelSelector() {
 		activeSelectorId++;
 		activeSelectorAbort?.abort();
@@ -480,6 +493,13 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 						phase: lp(state.lifecycle),
 						detail: { reason: "no-selection" },
 					});
+					void recordSelection({
+						outcome: "dismissed",
+						options: entryOptions,
+						selected: null,
+						sourceCommand: entrySourceCommand,
+						source,
+					});
 					return;
 				}
 
@@ -522,6 +542,23 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					} satisfies NextStepSelectionEntry);
 				} catch (e) {
 					state.logger.warn("journal", "failed to journal next-step selection", { error: String(e) });
+				}
+
+				// Awaited so the record lands in the current session's transcript before
+				// dispatch — a fresh_session step replaces the session immediately after.
+				await recordSelection({
+					outcome: "selected",
+					options: entryOptions,
+					selected: selection.step.message,
+					sourceCommand: entrySourceCommand,
+					source,
+				});
+				if (
+					selectorId !== activeSelectorId ||
+					state.lifecycleGeneration !== selectorGeneration ||
+					activeCommandName(state.lifecycle) !== selectorCommand
+				) {
+					return;
 				}
 
 				runSelectedOption(selection.step, ctx);
@@ -606,7 +643,34 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		}
 
 		if (state.enabled) {
-			executeStep(toDispatchStep(result.recommended, result.recommended.parsedCommand), ctx);
+			const recommended = result.recommended;
+			const parsed = recommended.parsedCommand!;
+			const dispatchGeneration = state.lifecycleGeneration;
+			const dispatchCommand = activeCommandName(state.lifecycle);
+			// Awaited (via then) before dispatch for the same fresh_session ordering
+			// reason as the selector path; recordSelection never rejects. The await
+			// opens a gap (invokeHarnessTool can queue mid-run), so re-check staleness
+			// before dispatching, mirroring the selector path.
+			void recordSelection({
+				outcome: "selected",
+				options: result.valid.map((o) => ({ message: o.message, reason: o.reason })),
+				selected: recommended.message,
+				sourceCommand: sourceName ?? null,
+				source: "completion",
+			}).then(() => {
+				if (
+					state.lifecycleGeneration !== dispatchGeneration ||
+					activeCommandName(state.lifecycle) !== dispatchCommand
+				) {
+					state.logger.lifecycle("next-step dispatch skipped", {
+						phase: lp(state.lifecycle),
+						...(sourceName ? { command: sourceName } : {}),
+						detail: { reason: "stale-after-record", message: recommended.message },
+					});
+					return;
+				}
+				executeStep(toDispatchStep(recommended, parsed), ctx);
+			});
 		} else {
 			const fresh = result.recommended.freshSession ? " (fresh session)" : "";
 			state.logger.lifecycle("next-step dispatch skipped", {

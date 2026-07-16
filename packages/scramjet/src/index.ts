@@ -15,6 +15,7 @@ import { createLogger } from "./logger.js";
 import { registerModelChangeNotice } from "./model-change-notice.js";
 import { registerModelIdentity } from "./model-identity.js";
 import { registerModelSwitchTool } from "./model-switch-tool.js";
+import { registerNextStepRecord } from "./next-step-record.js";
 import { registerPrIndicator } from "./pr-indicator.js";
 import { defaultPreferencesPath } from "./preferences.js";
 import { registerScramjetCommand } from "./scramjet-command.js";
@@ -69,6 +70,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerModelIdentity(pi, state);
 	registerModelSwitchTool(pi, state);
 	registerModelChangeNotice(pi, state);
+	registerNextStepRecord(pi);
 	registerHistory(pi, state);
 	registerPrIndicator(pi);
 	registerBaseDirectives(pi);
