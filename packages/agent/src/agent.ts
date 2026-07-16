@@ -354,7 +354,8 @@ export class Agent {
 		// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244). Queued harness
 		// tool calls are dropped on reset; surface it so a lost record row is diagnosable.
 		if (this.harnessToolQueue.length > 0) {
-			console.warn(`Agent.reset() discarded ${this.harnessToolQueue.length} queued harness tool call(s)`);
+			const names = this.harnessToolQueue.map((item) => item.tool.name).join(", ");
+			console.warn(`Agent.reset() discarded ${this.harnessToolQueue.length} queued harness tool call(s): ${names}`);
 		}
 		this.harnessToolQueue.length = 0;
 	}

@@ -195,6 +195,20 @@ describe("integration smoke — base directives wired into the extension factory
 	});
 });
 
+// Proves index.ts actually wires registerNextStepRecord into the extension. The
+// unit suite (next-step-record.test.ts) registers the tool directly, so only the
+// real default export catches a dropped registerNextStepRecord call in the factory.
+describe("integration smoke — next-step record tool wired into the extension factory", () => {
+	it("scramjet() registers the harness-only next-step selection record tool", () => {
+		const { pi, tools } = recordingPi();
+		initScramjet(pi);
+
+		const tool = tools.find((t: any) => t.name === "scramjet_next_step_selection");
+		expect(tool).toBeDefined();
+		expect(tool.activation).toBe("harness-only");
+	});
+});
+
 // S21: end-to-end chain smoke under /autopilot on. Exercises every harness
 // module that participates in the dispatch loop — autopilot-command,
 // history, command-status, auto-continue — against a synthetic two-command

@@ -406,7 +406,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			await pi.invokeHarnessTool(NEXT_STEP_RECORD_TOOL, params);
 		} catch (err) {
 			state.logger.warn("dispatch", "failed to record next-step selection", {
-				error: err instanceof Error ? err.message : String(err),
+				error: selectorErrorMessage(err),
 			});
 		}
 	}
@@ -507,7 +507,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					void recordSelection({
 						outcome: "dismissed",
 						options: entryOptions,
-						selected: null,
+						selectedIndex: null,
 						sourceCommand: entrySourceCommand,
 						source,
 					});
@@ -562,7 +562,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				await recordSelection({
 					outcome: "selected",
 					options: entryOptions,
-					selected: selection.step.message,
+					selectedIndex: result.valid.indexOf(selection.step),
 					sourceCommand: entrySourceCommand,
 					source,
 				});
@@ -674,7 +674,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			void recordSelection({
 				outcome: "selected",
 				options: result.valid.map((o) => ({ message: o.message, reason: o.reason })),
-				selected: recommended.message,
+				selectedIndex: result.valid.indexOf(recommended),
 				sourceCommand: sourceName ?? null,
 				source: "completion",
 			}).then(() => {

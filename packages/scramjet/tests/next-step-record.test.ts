@@ -14,7 +14,7 @@ describe("buildRecordText", () => {
 				{ message: "/b:ok", reason: "primary" },
 				{ message: "/c:alt", reason: "alternate" },
 			],
-			selected: "/c:alt",
+			selectedIndex: 1,
 			sourceCommand: "a:cmd",
 			source: "completion",
 		});
@@ -25,7 +25,7 @@ describe("buildRecordText", () => {
 		const text = buildRecordText({
 			outcome: "dismissed",
 			options: [{ message: "/b:ok", reason: "primary" }, { message: "/c:alt" }],
-			selected: null,
+			selectedIndex: null,
 			sourceCommand: "a:cmd",
 			source: "completion",
 		});
@@ -36,7 +36,7 @@ describe("buildRecordText", () => {
 		const text = buildRecordText({
 			outcome: "selected",
 			options: [{ message: "/b:ok" }],
-			selected: "/b:ok",
+			selectedIndex: 0,
 			sourceCommand: null,
 			source: "suggestion",
 		});
@@ -47,7 +47,7 @@ describe("buildRecordText", () => {
 		const text = buildRecordText({
 			outcome: "selected",
 			options: [{ message: "/b:ok" }],
-			selected: "/b:ok",
+			selectedIndex: 0,
 			sourceCommand: null,
 			source: "completion",
 		});
@@ -58,12 +58,40 @@ describe("buildRecordText", () => {
 		const text = buildRecordText({
 			outcome: "selected",
 			options: [{ message: "/b:ok" }],
-			selected: "/b:ok",
+			selectedIndex: 0,
 			sourceCommand: null,
 			source: "completion",
 		});
 		expect(text).toContain("→ /b:ok");
 		expect(text).not.toContain("—");
+	});
+
+	it("marks only the selected index when option messages are identical (F2)", () => {
+		const text = buildRecordText({
+			outcome: "selected",
+			options: [
+				{ message: "/b:ok", reason: "first path" },
+				{ message: "/b:ok", reason: "second path" },
+			],
+			selectedIndex: 1,
+			sourceCommand: "a:cmd",
+			source: "completion",
+		});
+		expect(text).toBe(["Next step (from a:cmd):", "  /b:ok — first path", "→ /b:ok — second path"].join("\n"));
+	});
+
+	it("strips control characters and collapses newlines in option text (F1)", () => {
+		const text = buildRecordText({
+			outcome: "selected",
+			options: [{ message: "/b:ok\u001b[31mred\u0007", reason: "line one\nline two" }],
+			selectedIndex: 0,
+			sourceCommand: "a\u001b[2Jcmd",
+			source: "completion",
+		});
+		expect(text).toBe(["Next step (from a [2Jcmd):", "→ /b:ok [31mred — line one line two"].join("\n"));
+		for (const forbidden of ["\u001b", "\u0007", "\n/b", "one\ntwo"]) {
+			expect(text).not.toContain(forbidden);
+		}
 	});
 });
 
@@ -84,7 +112,7 @@ describe("registerNextStepRecord", () => {
 		const params = {
 			outcome: "selected",
 			options: [{ message: "/b:ok", reason: "primary" }],
-			selected: "/b:ok",
+			selectedIndex: 0,
 			sourceCommand: "a:cmd",
 			source: "completion",
 		};
@@ -100,7 +128,7 @@ describe("registerNextStepRecord", () => {
 		const result = await tool.execute("id", {
 			outcome: "selected",
 			options: [{ message: "/b:ok" }, { message: "/c:alt" }],
-			selected: "/b:ok",
+			selectedIndex: 0,
 			sourceCommand: "a:cmd",
 			source: "completion",
 		});
@@ -116,7 +144,7 @@ describe("registerNextStepRecord", () => {
 		const result = await tool.execute("id", {
 			outcome: "dismissed",
 			options: [{ message: "/b:ok" }],
-			selected: null,
+			selectedIndex: null,
 			sourceCommand: null,
 			source: "completion",
 		});
