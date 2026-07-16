@@ -18,9 +18,9 @@ next:
         deferred items).
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when all findings are nitpicks, false positives, or
-        explicitly deferred -- no fixes are required and the PR is ready
-        for the merge checklist.
+        Pick when all findings are nitpicks, false positives,
+        regressions, or explicitly deferred -- no fixes are required and
+        the PR is ready for the merge checklist.
 ---
 
 # PR Review Assessment
@@ -78,10 +78,10 @@ The brief should instruct the assessor to:
 3. Classify each finding using its F/S identifier from the review comment (e.g., "F1 -- Genuine", "S2 -- Nitpick"). Apply the two axes via this decision tree:
    - **False positive** -- The observation is not real: the reviewer flagged something that is not actually an issue. Explain why the code is correct. If a finding was already fixed in a subsequent commit or resolved in discussion, classify it here with a note that it has been addressed.
    - **Genuine issue** -- The problem is real and a sound, contained fix exists: the reviewer's suggested fix, or -- when the reviewer's suggestion is unsound but a simple correct fix exists -- an assessor-corrected one. **State the fix approach** so downstream work applies the sound fix, not the reviewer's original if it was unsound. This includes low-risk, contained fixes regardless of whether they are related to the PR's primary purpose -- when the blast radius is small and the chance of introducing new problems is negligible, the fix belongs here, not in Deferred.
-   - **Nitpick** -- The problem is real but minor or stylistic, **and** its fix passes the fix-value gate (safe, and a genuine net-positive). It is an optional, low-priority improvement worth applying -- not a change that "does not matter." If a minor observation's fix would be neutral churn or would regress the code, it is not a Nitpick -- classify it as False positive or Regression instead.
+   - **Nitpick** -- The problem is real but minor or stylistic, **and** its fix passes the fix-value gate (safe, and a genuine net-positive). It is an optional, low-priority improvement worth applying -- not a change that "does not matter." If a minor observation's fix would be neutral churn or would regress the code, it is not a Nitpick -- classify it as a Regression instead.
    - **Deferred** -- Real issue whose sound fix would meaningfully expand the PR's risk surface or require non-trivial design work to address. Should be tracked separately. If explicitly deferred in discussion, classify it here and reference the relevant comment. Do not defer low-risk, contained fixes -- classify those as Genuine even when unrelated to the PR's primary purpose.
-   - **Regression** -- The observation may touch real code or real tradeoffs, but the reviewer's *suggested change* would leave the codebase worse or break it, and no worthwhile alternative fix exists. This covers **quality** regressions as well as runtime breakage: removing needed validation, error handling, or tests; degrading clarity; or fighting project conventions all count -- not only "breaks functionality." Explain why applying the change would be counterproductive. Regression findings are **never** routed to a fix stage or to `pr-review-fix`; mark them explicitly as rejected.
-   As a general principle across **all** finding types: a suggested change is worth applying only if it preserves behavior, improves or maintains clarity, fits project conventions, and does not remove necessary validation, error handling, security, or tests. Do not treat "shorter" or "different" as automatically better.
+   - **Regression** -- The observation may touch real code or real tradeoffs, but the reviewer's *suggested change* would leave the codebase worse, break it, or yield no net benefit (pure churn), and no worthwhile alternative fix exists. This covers **quality** regressions as well as runtime breakage: removing needed validation, error handling, or tests; degrading clarity; or fighting project conventions all count -- not only "breaks functionality." Explain why applying the change would be counterproductive. Regression findings are **never** routed to a fix stage or to `pr-review-fix`; mark them explicitly as rejected.
+   As a general principle across **all** finding types, the axis-(B) fix-value gate applies -- including that you must not treat "shorter" or "different" as automatically better.
 4. After classifying all findings, produce a **staged implementation plan** covering everything worth fixing. Reference findings by their F/S identifiers (e.g., "stage 1 addresses F1 and F3"):
    - Number each stage with a descriptive name.
    - Required stages for genuine issues (must fix before merge), applying the fix approach recorded for each.
