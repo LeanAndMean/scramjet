@@ -61,6 +61,9 @@ Scramjet stores session data under the agent directory (`~/.scramjet/agent` by d
 Find the most recent session file with:
 
 ```sh
+# macOS (BSD stat)
+find ~/.scramjet/agent/sessions -name '*.jsonl' -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | head -5 | cut -d' ' -f2-
+# Linux (GNU find)
 find ~/.scramjet/agent/sessions -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | head -5 | cut -d' ' -f2-
 ```
 
@@ -162,7 +165,7 @@ Do not hardcode or reconstruct the agent directory path; always derive from the 
 **List candidates, excluding the current session:**
 
 ```sh
-find "$SESSION_DIR" -maxdepth 1 -name '*.jsonl' ! -name "$(basename "$CURRENT_SESSION_JOURNAL")" -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-
+ls -1t "$SESSION_DIR"/*.jsonl 2>/dev/null | grep -v "$(basename "$CURRENT_SESSION_JOURNAL")"
 ```
 
 **Verify each candidate's CWD.** Custom `--session-dir` can mix journals from different working directories into the same folder. Check the first line's `.cwd` against the system prompt's `Current working directory`:
@@ -180,7 +183,7 @@ jq -c --arg term "$SEARCH_TERM" '
   select(.type == "custom" and .customType == "scramjet:command-status"
     and (.data.summary // "") != ""
     and ((.data.summary | ascii_downcase) | contains($term | ascii_downcase)))
-  | {file: input_filename, ts: .timestamp, cmd: .data.commandName, status: .data.status, summary: .data.summary}
+  | {file: input_filename, ts: .timestamp, cmd: .data.commandName, status: .data.status, summary: .data.summary}  # file: included for self-describing output; useful when concatenating results across multiple candidates
 ' "$CANDIDATE"
 ```
 
