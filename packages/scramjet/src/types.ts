@@ -30,12 +30,14 @@ export interface CommandStatusNextStep {
 	reason?: string;
 }
 
-// Structured result the agent supplies through report_scramjet_command_status in
-// response to the post-response status probe. `recommended_next_step` is a
-// zero-based index into the original `next_steps` array.
+// Structured result the agent supplies through report_scramjet_command_status.
+// Reports are accepted inline once the answer is delivered, during a probe, or
+// from dormant; the probe is the fallback when the agent never reports. The
+// `summary` comes first so the agent writes its evidence before committing to a
+// status. `recommended_next_step` is a zero-based index into `next_steps`.
 export interface CommandStatusPayload {
-	status: "completed" | "blocked" | "incomplete" | "continuing";
 	summary: string;
+	status: "completed" | "blocked" | "incomplete" | "continuing";
 	next_steps?: CommandStatusNextStep[];
 	recommended_next_step?: number;
 }

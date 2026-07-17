@@ -60,11 +60,12 @@ const CONTINUE_LIMIT_ERROR =
 
 const PROMPT_SNIPPET =
 	"You have access to `report_scramjet_command_status` for reporting the status of an active " +
-	"Scramjet slash command. Once the command's work is done and your final user-facing answer has been " +
-	"delivered, you may report a terminal status (`completed`, `blocked`, or `incomplete`) inline — " +
-	"always deliver the complete answer first, because reporting ends the turn. " +
-	"If you do not report inline, Scramjet sends a status-check message as a fallback; respond to it " +
-	"with this tool. Do not call this tool for ordinary user tasks.";
+	"Scramjet slash command. Summarize the work you performed first, then give the status — the " +
+	"summary is your evidence, the status is your assessment of it. Once the command's work is done " +
+	"and your final user-facing answer has been delivered, you may report a terminal status " +
+	"(`completed`, `blocked`, or `incomplete`) inline — always deliver the complete answer first, " +
+	"because reporting ends the turn. If you do not report inline, Scramjet sends a status-check " +
+	"message as a fallback; respond to it with this tool. Do not call this tool for ordinary user tasks.";
 
 const PARKED_ERROR =
 	"report_scramjet_command_status cannot accept a report right now: the command is parked waiting " +
@@ -153,14 +154,19 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 		name: "report_scramjet_command_status",
 		label: "Report Scramjet Command Status",
 		description:
-			"Report the status of an active Scramjet slash command. Terminal statuses (completed, blocked, " +
-			"incomplete) may be reported inline once the command's work is done and the final user-facing answer " +
-			"has been delivered, or in response to Scramjet's status-check message. " +
-			"Do not call this tool for ordinary user tasks.",
+			"Report the status of an active Scramjet slash command. Summarize the work performed first, then " +
+			"give the status. Terminal statuses (completed, blocked, incomplete) may be reported inline once the " +
+			"command's work is done and the final user-facing answer has been delivered, or in response to " +
+			"Scramjet's status-check message. Do not call this tool for ordinary user tasks.",
 		promptSnippet: PROMPT_SNIPPET,
 		parameters: Type.Object({
+			summary: Type.String({
+				minLength: 1,
+				description:
+					"A summary of the work you completed. On your first report, summarize the work done so far; " +
+					"on each later report, summarize only the work completed since your previous report.",
+			}),
 			status: STATUS_SCHEMA,
-			summary: Type.String({ description: "Brief summary of the command's outcome." }),
 			next_steps: Type.Optional(
 				Type.Array(NEXT_STEP_SCHEMA, {
 					description:
@@ -226,6 +232,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 						};
 					}
 					state.rearmProbeWatchdog?.();
+					recordCommandStatus(pi, command, "continuing", params.summary);
 					const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
 					return {
 						content: [{ type: "text", text: "Continuing. Proceed with your work." }],
@@ -251,6 +258,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 						command,
 						detail: { summary: params.summary },
 					});
+					recordCommandStatus(pi, command, "continuing", params.summary);
 					const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
 					return {
 						content: [{ type: "text", text: "Continuing. Proceed with your work." }],
@@ -319,7 +327,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				},
 			});
 
-			recordCommandStatus(pi, command, params.status);
+			recordCommandStatus(pi, command, params.status, params.summary);
 
 			const next =
 				params.recommended_next_step === undefined
