@@ -23,6 +23,9 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string }>;
 	/** Pre-loaded skills. */
 	skills?: Skill[];
+	// SCRAMJET-DIVERGENCE: expose session file path as volatile environment fact (issue 348)
+	/** Current session file path, omitted when sessions are disabled. */
+	sessionFile?: string;
 }
 
 /**
@@ -78,10 +81,14 @@ export function buildSystemPromptSections(options: BuildSystemPromptOptions): Sy
 		}
 	}
 
-	// Date and working directory last, excluded from cached prefixes
+	// SCRAMJET-DIVERGENCE: include session journal path alongside date/cwd (issue 348)
+	const sessionJournalLine = options.sessionFile
+		? `\nCurrent session journal: ${options.sessionFile.replace(/\\/g, "/")}`
+		: "";
+
 	sections.push({
 		id: "volatile",
-		text: `\nCurrent date: ${date}\nCurrent working directory: ${promptCwd}`,
+		text: `\nCurrent date: ${date}\nCurrent working directory: ${promptCwd}${sessionJournalLine}`,
 		cacheRetention: "none",
 	});
 

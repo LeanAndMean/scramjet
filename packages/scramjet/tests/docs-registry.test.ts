@@ -24,10 +24,18 @@ describe("docs-registry", () => {
 		expect(getDocPath("readme")).toMatch(/README\.md$/);
 		expect(getDocPath("vision")).toMatch(/scramjet-vision\.md$/);
 		expect(getDocPath("command-authoring")).toMatch(/command-authoring\.md$/);
+		expect(getDocPath("logging")).toMatch(/logging\.md$/);
 	});
 
 	it("getDocPath is typed to accept only valid DocKeys", () => {
 		const key: DocKey = "readme";
 		expect(getDocPath(key)).toMatch(/README\.md$/);
+	});
+
+	it("logging key resolves to an existing absolute docs/logging.md", () => {
+		const path = getDocPath("logging");
+		expect(path).toMatch(/docs\/logging\.md$/);
+		expect(existsSync(path)).toBe(true);
+		expect(path.startsWith("/")).toBe(true);
 	});
 });

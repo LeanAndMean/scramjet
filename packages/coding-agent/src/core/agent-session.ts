@@ -994,6 +994,7 @@ export class AgentSession {
 		const loadedSkills = this._resourceLoader.getSkills().skills;
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 
+		// SCRAMJET-DIVERGENCE: pass session file path for volatile environment fact (issue 348)
 		this._baseSystemPromptOptions = {
 			cwd: this._cwd,
 			skills: loadedSkills,
@@ -1003,6 +1004,7 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
+			sessionFile: this.sessionManager.getSessionFile(),
 		};
 		this._baseSystemPromptSections = buildSystemPromptSections(this._baseSystemPromptOptions);
 		this.agent.state.systemPrompt = this._baseSystemPromptSections.slice();

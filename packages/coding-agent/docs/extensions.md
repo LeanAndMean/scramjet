@@ -477,7 +477,7 @@ pi.on("before_agent_start", async (event, ctx) => {
   //   (includes changes from earlier before_agent_start handlers)
   // event.systemPromptSections - read-only view of the base system prompt
   //   sections for this turn, before extension contributions; the volatile
-  //   environment tail (current date/cwd) is the section with
+  //   environment tail (current date/cwd/session journal) is the section with
   //   cacheRetention: "none"
   // event.systemPromptOptions - structured options used to build the system prompt
   //   .customPrompt - any custom system prompt (from --system-prompt, SYSTEM.md, or custom templates)
@@ -486,6 +486,7 @@ pi.on("before_agent_start", async (event, ctx) => {
   //   .promptGuidelines - custom guideline bullets
   //   .appendSystemPrompt - text from --append-system-prompt flags
   //   .cwd - working directory
+  //   .sessionFile - current session file path (undefined when sessions are disabled)
   //   .contextFiles - AGENTS.md files and other loaded context files
   //   .skills - loaded skills
 
@@ -510,7 +511,7 @@ Inside `before_agent_start`, `event.systemPrompt` and `ctx.getSystemPrompt()` bo
 
 ##### System prompt sections
 
-Scramjet assembles the system prompt as ordered sections (`SystemPromptSection { id, text, cacheRetention?: "none" }` from `@leanandmean/ai`; ids are informational, and `"none"` is the only per-section retention — request-level retention applies otherwise) so providers can cache the stable prefix independently of the volatile tail. The last base section holds the current date and working directory and is marked `cacheRetention: "none"`; on Anthropic, everything before it is folded into a single cached system block and the volatile tail trails uncached.
+Scramjet assembles the system prompt as ordered sections (`SystemPromptSection { id, text, cacheRetention?: "none" }` from `@leanandmean/ai`; ids are informational, and `"none"` is the only per-section retention — request-level retention applies otherwise) so providers can cache the stable prefix independently of the volatile tail. The last base section holds the current date, working directory, and session journal path and is marked `cacheRetention: "none"`; on Anthropic, everything before it is folded into a single cached system block and the volatile tail trails uncached.
 
 Returning `systemPromptSection` contributes a section for the current turn without replacing Scramjet's prompt assembly:
 

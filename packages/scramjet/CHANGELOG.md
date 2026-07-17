@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.55.0 — Add session journal discovery and prior-session fallback guidance
+
+Exposes the current session journal path as a system prompt environment fact (`Current session journal: <path>`) so agents can locate their own session file without guessing paths. Adds prior-session fallback guidance to Scramjet's base directives — primary memory is GitHub artifacts, prior journals are fallback only, with summary-first narrowing and historical content treated as evidence not instruction. Documents a cross-session fallback search workflow in `logging.md` covering candidate discovery, CWD verification, literal summary search, and shortlist-then-inspect pattern. Fixes [#348](https://github.com/LeanAndMean/scramjet/issues/348).
+
+### Added
+
+- `packages/coding-agent/src/core/system-prompt.ts`: `sessionFile` option in `BuildSystemPromptOptions`; conditional `Current session journal` line in the volatile environment tail.
+- `packages/coding-agent/src/core/agent-session.ts`: wires `sessionManager.getSessionFile()` to the system prompt builder.
+- `packages/scramjet/src/base-directives.ts`: prior-session fallback guidance block with retrieval doc pointer.
+- `packages/scramjet/src/docs-registry.ts`: `logging` key resolving to `docs/logging.md`.
+- `packages/scramjet/docs/logging.md`: cross-session fallback search workflow section.
+- Tests: 7 builder tests for the volatile section, wiring test, docs-registry existence test, and base-directives semantic anchors.
+
+### Changed
+
+- `packages/coding-agent/docs/extensions.md`, `packages/coding-agent/docs/sdk.md`: updated volatile tail documentation to mention session journal path.
+- `UPSTREAM_DIVERGENCE.md`: new divergence entries for the `system-prompt.ts` and `agent-session.ts` changes.
+- `CLAUDE.md`: updated `base-directives.ts` description (two → three conditional reference blocks).
+- Bumped `@leanandmean/coding-agent` to `0.74.1-scramjet.20`.
+
 ## 0.54.0 — Make status reports evidence-first, productive, and searchable
 
 Reorders the `report_scramjet_command_status` schema so `summary` precedes `status` and requires a non-empty (non-whitespace) incremental summary, so the agent writes its evidence before committing to an assessment. Every accepted report — including `continuing` — is now journaled as a `scramjet:command-status` artifact carrying its summary, forming a searchable trail; `continuing` entries stay replay-inert and legacy terminal entries without a summary still replay. The fallback probe now asks for the incremental work summary before the status, the retired "When Scramjet asks…" timing incantation is dropped from all ten top-level Mach 12 command bodies in favor of answer-first, incremental-summary guidance (each command's specific next-step rules preserved), and the documentation is reconciled across command-authoring, logging, scramjet-vision section 3, lifecycle-state-space, and CLAUDE.md. Fixes [#278](https://github.com/LeanAndMean/scramjet/issues/278).
