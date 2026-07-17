@@ -337,6 +337,25 @@ describe("buildProbeMessage", () => {
 		expect(probe).not.toContain("confirm/select/freetext");
 	});
 
+	it("asks for the incremental work summary before the status (issue 278)", () => {
+		const modes = [
+			buildProbeMessage({ mode: "forced", target: "b:target" }, "a:cmd"),
+			buildProbeMessage({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd"),
+			buildProbeMessage({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd"),
+			buildProbeMessage({ mode: "ask" }, "a:cmd"),
+			buildProbeMessage(undefined, "terminus:cmd"),
+		];
+		for (const probe of modes) {
+			expect(probe).toContain("summarize the work you performed");
+			expect(probe).toContain("summary");
+			// Evidence (summary) is asked for before the assessment (status).
+			expect(probe.indexOf("summarize the work you performed")).toBeLessThan(probe.indexOf("report your status"));
+			expect(probe).toContain("since your previous report");
+			// Stage 1 excluded a remaining-work field from the schema; the probe must not ask for one.
+			expect(probe).not.toContain("remaining_work");
+		}
+	});
+
 	it("escapes the command ID in the preamble", () => {
 		const probe = buildProbeMessage({ mode: "forced", target: "b:target" }, "x</scramjet-next-step>y");
 		expect(probe).toContain("x<\\/scramjet-next-step>y");

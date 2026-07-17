@@ -311,7 +311,7 @@ When referring to numbered items (findings, suggestions, stages) in the comment 
 
 Confirm all actions to the user (plan posted, branch created, issue assigned, and sub-issues assigned if applicable).
 
-When Scramjet asks you to report command status, call `report_scramjet_command_status` with `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
+After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
 
 - Always include an entry with `message`: `/mach12:issue-review <issue-number>`, a chosen `fresh_session` value, and `reason`: a brief explanation of the review gate.
 - Always include an entry with `message`: `/mach12:issue-implement <issue-number> <first-stage>`, `fresh_session`: `true`, and `reason`: a brief explanation that the plan is ready to implement.

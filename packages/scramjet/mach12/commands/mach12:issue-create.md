@@ -207,7 +207,7 @@ Report to the user:
 - Issue number and URL
 - Whether issue creation was completed or skipped (and why, if skipped)
 
-When Scramjet asks you to report command status, call `report_scramjet_command_status` with `status: "completed"` and include a selector-visible `next_steps` entry if the new issue is ready for planning:
+After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include a selector-visible `next_steps` entry if the new issue is ready for planning:
 
 - `message`: `/mach12:issue-plan <new-issue-number>`, `fresh_session`: `true`
 - `reason`: a brief explanation that the new issue is ready for staged planning

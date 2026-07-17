@@ -301,7 +301,7 @@ Present a summary of what was done:
 
 Report any items that need follow-up (test failures, manual conflict resolution, etc.) so the user can decide how to proceed.
 
-When Scramjet asks you to report command status, call `report_scramjet_command_status` with `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
+After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
 
 - Always include an entry with `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when merging is appropriate.
 - Always include an entry with `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a fix pass is warranted.

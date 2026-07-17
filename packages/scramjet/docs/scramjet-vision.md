@@ -382,21 +382,22 @@ extended probe offers three paths:
 
 1. **Continue executing.** The agent has more work to do — it stopped
    prematurely (observed most frequently after complex delegations). It
-   returns from the probe without calling either `get_scramjet_user_input` or
-   `report_scramjet_command_status`; the harness interprets the absence of a
-   terminal signal as "re-arm the turn" and resumes without user
-   involvement.
+   calls `report_scramjet_command_status` with `status: "continuing"`; the
+   harness re-arms the agent's turn and resumes without user involvement. A
+   probe turn that ends in *silence* — no tool call at all — does **not**
+   re-arm; it self-heals to dormant, preserving the command association so
+   the user can resume the command later.
 2. **Request user input.** The agent needs information from the user. It
    calls `get_scramjet_user_input` with the appropriate type and payload.
 3. **Report terminal status.** The agent is done or stuck. It calls
    `report_scramjet_command_status` as today.
 
-The probe is the **reliable path** — it catches the natural LLM
-turn-ending behavior regardless of whether the agent proactively called a
-tool. Proactive tool use (calling `get_scramjet_user_input` or
-`report_scramjet_command_status` during the turn, before the probe fires) is
-the **fast path** — it skips the probe round-trip and produces the same
-outcome.
+Inline reporting is the **common path**: once the command's user-facing
+answer is delivered, the agent typically reports its status (terminal, or
+`continuing` from a dormant state) in the same work turn, skipping the probe
+round-trip. The probe is the **fallback** — it catches the natural LLM
+turn-ending behavior when the agent ends its turn without reporting, and
+produces the same outcome.
 
 ##### The "continue" nudge
 
