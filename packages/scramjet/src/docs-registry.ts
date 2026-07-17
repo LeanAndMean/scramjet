@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type DocKey = "readme" | "vision" | "command-authoring";
+export type DocKey = "readme" | "vision" | "command-authoring" | "logging";
 
 export interface DocEntry {
 	key: DocKey;
@@ -36,6 +36,11 @@ export const DOCS_REGISTRY: readonly DocEntry[] = [
 		key: "command-authoring",
 		path: join(root, "docs", "command-authoring.md"),
 		condition: "read when authoring, creating, or editing commands",
+	},
+	{
+		key: "logging",
+		path: join(root, "docs", "logging.md"),
+		condition: "read when retrieving details from prior sessions or diagnosing harness behavior",
 	},
 ];
 

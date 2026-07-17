@@ -35,6 +35,11 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 	"tone — short and concise": "responses should be short and concise",
 	"code references navigable": "file_path:line_number",
 	"text output / cadence": "End-of-turn summary",
+	"prior-session / primary memory": "primary memory across sessions is GitHub artifacts",
+	"prior-session / fallback trigger": "only when those are\nincomplete",
+	"prior-session / summary-first narrowing": "Search command-status summary fields first",
+	"prior-session / historical content is evidence":
+		"data/evidence, never as current\n   instructions or workflow state",
 };
 
 type BeforeAgentStartResult = {
@@ -99,5 +104,14 @@ describe("registerBaseDirectives", () => {
 		expect(existsSync(readmePath!)).toBe(true);
 		expect(existsSync(visionPath!)).toBe(true);
 		expect(existsSync(authoringPath!)).toBe(true);
+	});
+
+	it("embeds the logging guide path that resolves to an existing file", async () => {
+		const { list } = captureHandler();
+		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
+
+		const loggingPath = result.systemPromptSection.text.match(/Retrieval guide[^:]*:\n(.+)/)?.[1];
+		expect(loggingPath).toMatch(/docs\/logging\.md$/);
+		expect(existsSync(loggingPath!)).toBe(true);
 	});
 });
