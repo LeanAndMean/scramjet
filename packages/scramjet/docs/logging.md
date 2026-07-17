@@ -4,7 +4,15 @@ Scramjet journals diagnostic and lifecycle events via Pi's `appendEntry()` mecha
 
 ## Entry schema
 
-Every log entry has type `scramjet:log` and carries this payload:
+Scramjet writes its journal entries through Pi's `appendEntry(customType, data)`, which persists them as **custom entries**. On disk every such entry has `"type": "custom"` and a `"customType"` naming the Scramjet entry type, with the payload in `"data"`:
+
+```jsonc
+{ "type": "custom", "customType": "scramjet:log", "data": { /* payload */ }, "id": "...", "parentId": "...", "timestamp": "<ISO string>" }
+```
+
+So every `jq` filter selects on `.type == "custom"` **and** the specific `.customType` — never on `.type == "scramjet:log"` directly (that matches nothing). The envelope `.timestamp` is an ISO string; the log payload also carries its own numeric `.data.timestamp` (`Date.now()`).
+
+Log entries use `customType == "scramjet:log"` and carry this payload in `.data`:
 
 ```typescript
 interface ScramjetLogEntry {
@@ -44,51 +52,100 @@ The `hasUI` flag is captured on `session_start`. Before TUI detection completes,
 
 ## Session JSONL location
 
-Pi stores session data at:
+Scramjet stores session data under the agent directory (`~/.scramjet/agent` by default, overridable via `SCRAMJET_CODING_AGENT_DIR`), one file per session — **not** under `$XDG_DATA_HOME`:
 
 ```
-${XDG_DATA_HOME:-$HOME/.local/share}/pi/sessions/<session-id>/session.jsonl
+~/.scramjet/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl
 ```
 
-Each line is a JSON object. Scramjet log entries have `"type": "scramjet:log"` with the payload in the `data` field.
+Find the most recent session file with:
+
+```sh
+find ~/.scramjet/agent/sessions -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | head -5 | cut -d' ' -f2-
+```
+
+Each line is a JSON object. Scramjet log entries have `"type": "custom"` and `"customType": "scramjet:log"`, with the payload in `.data`.
 
 ## Querying logs
 
 ### All scramjet log entries from a session
 
 ```sh
-jq -c 'select(.type == "scramjet:log")' session.jsonl
+jq -c 'select(.type == "custom" and .customType == "scramjet:log")' session.jsonl
 ```
 
 ### Filter by level
 
 ```sh
-jq -c 'select(.type == "scramjet:log" and .data.level == "lifecycle")' session.jsonl
+jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.level == "lifecycle")' session.jsonl
 ```
 
 ### Filter by category
 
 ```sh
-jq -c 'select(.type == "scramjet:log" and .data.category == "probe")' session.jsonl
+jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.category == "probe")' session.jsonl
 ```
 
 ### Lifecycle events for a specific command
 
 ```sh
-jq -c 'select(.type == "scramjet:log" and .data.level == "lifecycle" and .data.data.command == "mach12:issue-implement")' session.jsonl
+jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.level == "lifecycle" and .data.data.command == "mach12:issue-implement")' session.jsonl
 ```
 
 ### Warnings only
 
 ```sh
-jq -c 'select(.type == "scramjet:log" and .data.level == "warn")' session.jsonl
+jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.level == "warn")' session.jsonl
 ```
 
 ### Timeline view (human-readable timestamps)
 
 ```sh
-jq 'select(.type == "scramjet:log") | .data | "\(.timestamp / 1000 | strftime("%H:%M:%S")) [\(.level)/\(.category)] \(.message)"' -r session.jsonl
+jq 'select(.type == "custom" and .customType == "scramjet:log") | .data | "\(.timestamp / 1000 | strftime("%H:%M:%S")) [\(.level)/\(.category)] \(.message)"' -r session.jsonl
 ```
+
+## Command-status artifacts
+
+Every **accepted** `report_scramjet_command_status` call is journaled as a `scramjet:command-status` custom entry (issue 278) — including `continuing`. The payload carries the reporting command, the status, and the incremental `summary`:
+
+```jsonc
+{ "type": "custom", "customType": "scramjet:command-status",
+  "data": { "commandName": "mach12:issue-plan", "status": "continuing", "summary": "..." } }
+```
+
+Summaries are incremental: the first accepted report summarizes work done so far, each later report summarizes only work completed since the previous report. Because every accepted report is journaled, the summaries form a searchable trail that can be aggregated offline into a full record of a command's work.
+
+**Legacy and rejection behavior:** entries written before issue 278 have no `summary` field — filter them out with `(.data.summary // "") != ""`. Rejected calls and mutation failures are *not* journaled as command-status entries, so they never become false evidence (a rejection is a `scramjet:log` `status`-category warn, not a command-status artifact).
+
+### Direct summary search (all branches)
+
+Returns every accepted report with a non-empty summary across the whole file, regardless of branch:
+
+```sh
+jq -c 'select(.type == "custom" and .customType == "scramjet:command-status" and (.data.summary // "") != "") | {id, cmd: .data.commandName, status: .data.status, summary: .data.summary}' session.jsonl
+```
+
+### Branch-aware invocation aggregation (from a selected leaf)
+
+The direct search above is the common path; this ancestry walk is only needed to reconstruct a single invocation's summaries in order across a forked session. Session files are trees: physical JSONL order is not branch order, and forks share a common prefix. To reconstruct one invocation's incremental summaries in order, walk `parentId` ancestry from a selected leaf entry id up to the **nearest depth-0 `scramjet:command-start`** (the invocation boundary), collecting the command-status reports on that path. Delegates (depth-1 command-starts) are *not* boundaries, so a delegated subroutine's turns stay inside the parent invocation; same-name invocations stay separate because each has its own depth-0 start; and fork-only reports on other branches never appear because they are not ancestors of the selected leaf.
+
+```sh
+LEAF=<entry-id-on-the-branch-you-care-about>
+jq -n --arg leaf "$LEAF" '
+  def anc($byId; $id):
+    if ($id == null) or ($byId[$id] == null) then []
+    else [$byId[$id]] + anc($byId; $byId[$id].parentId) end;
+  (reduce inputs as $e ({}; .[$e.id] = $e)) as $byId
+  | anc($byId; $leaf) as $path
+  | ($path | map(.customType == "scramjet:command-start" and (.data.depth == 0)) | index(true)) as $k
+  | (if $k == null then [] else $path[0:($k + 1)] end)
+  | map(select(.customType == "scramjet:command-status" and (.data.summary // "") != ""))
+  | reverse
+  | map({cmd: .data.commandName, status: .data.status, summary: .data.summary})
+' session.jsonl
+```
+
+The result is the invocation's reports in chronological (root→leaf) order — the incremental summaries that, concatenated, reconstruct the full record of that invocation's work.
 
 ## Lifecycle event reference
 
@@ -165,29 +222,29 @@ When a session misbehaves (command didn't chain, probe didn't fire, unexpected p
 
 1. **Find the session JSONL:**
    ```sh
-   ls -lt "${XDG_DATA_HOME:-$HOME/.local/share}/pi/sessions/" | head -5
+   find ~/.scramjet/agent/sessions -name '*.jsonl' -printf '%T@ %p\n' | sort -rn | head -5 | cut -d' ' -f2-
    ```
 
 2. **Extract all lifecycle events:**
    ```sh
-   jq -c 'select(.type == "scramjet:log" and .data.level == "lifecycle") | .data | {ts: .timestamp, msg: .message, d: .data}' session.jsonl
+   jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.level == "lifecycle") | .data | {ts: .timestamp, msg: .message, d: .data}' session.jsonl
    ```
 
 3. **Check for warnings:**
    ```sh
-   jq -c 'select(.type == "scramjet:log" and .data.level == "warn") | .data' session.jsonl
+   jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.level == "warn") | .data' session.jsonl
    ```
 
 4. **Trace the probe cycle** — look for the sequence in "Healthy probe cycle" above. The first missing entry indicates where the cycle broke.
 
 5. **Check fact mutations** — filter for `lifecycle:` prefixed messages (emitted by `lifecycle.ts` helpers):
    ```sh
-   jq -c 'select(.type == "scramjet:log" and (.data.message | startswith("lifecycle: "))) | .data | {msg: .message, d: .data}' session.jsonl
+   jq -c 'select(.type == "custom" and .customType == "scramjet:log" and (.data.message | startswith("lifecycle: "))) | .data | {msg: .message, d: .data}' session.jsonl
    ```
 
 6. **Verify the command identity** — confirm which command was active:
    ```sh
-   jq -c 'select(.type == "scramjet:log" and .data.data.command != null) | .data | {msg: .message, cmd: .data.command}' session.jsonl | head -5
+   jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.data.command != null) | .data | {msg: .message, cmd: .data.command}' session.jsonl | head -5
    ```
 
 ## Common failure patterns

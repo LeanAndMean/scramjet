@@ -46,6 +46,21 @@ describe("registerCommandStatusTool — registration", () => {
 		expect(tool.promptSnippet).toContain("answer first");
 	});
 
+	it("orders summary before status in the schema (evidence before assessment)", () => {
+		const { tool } = toolFor();
+		const keys = Object.keys(tool.parameters.properties);
+		expect(keys.indexOf("summary")).toBeGreaterThanOrEqual(0);
+		expect(keys.indexOf("summary")).toBeLessThan(keys.indexOf("status"));
+	});
+
+	it("requires a non-empty summary and describes incremental semantics", () => {
+		const { tool } = toolFor();
+		expect(tool.parameters.required).toContain("summary");
+		expect(tool.parameters.properties.summary.minLength).toBe(1);
+		expect(tool.parameters.properties.summary.pattern).toBe("\\S");
+		expect(tool.parameters.properties.summary.description.toLowerCase()).toContain("since");
+	});
+
 	it("exposes the unified message-based next-step schema and recommended-index fields", () => {
 		const { tool } = toolFor();
 		const params = tool.parameters;
@@ -74,6 +89,19 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(String(result.content[0].text)).toContain("not active right now");
 	});
 
+	it("leaves lifecycle facts, generation, and journal unchanged on a rejected call", async () => {
+		const { state, pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("waiting", "mach12:test") }));
+		const gen = state.lifecycleGeneration;
+		const before = { ...state.lifecycle };
+		const result = await execute({ status: "completed", summary: "done" });
+
+		expect(result.terminate).toBeUndefined();
+		expect(result.details.error).toBe("out-of-phase");
+		expect(state.lifecycleGeneration).toBe(gen);
+		expect(state.lifecycle).toEqual(before);
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
+	});
+
 	it("accepts terminal status when probe armed (running) — inline reporting", async () => {
 		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
 		const result = await execute({ status: "completed", summary: "done" });
@@ -89,7 +117,7 @@ describe("registerCommandStatusTool — gate", () => {
 		await execute({ status: "completed", summary: "done" });
 		expect(pi.appended).toContainEqual({
 			customType: COMMAND_STATUS_TYPE,
-			data: { commandName: "mach12:pr-create", status: "completed" },
+			data: { commandName: "mach12:pr-create", status: "completed", summary: "done" },
 		});
 	});
 
@@ -178,7 +206,7 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(String(result.content[0].text)).toContain("completed");
 		expect(pi.appended).toContainEqual({
 			customType: COMMAND_STATUS_TYPE,
-			data: { commandName: "mach12:pr-create", status: "completed" },
+			data: { commandName: "mach12:pr-create", status: "completed", summary: "all green" },
 		});
 	});
 
@@ -187,7 +215,7 @@ describe("registerCommandStatusTool — gate", () => {
 		await execute({ status: "blocked", summary: "awaiting approval" });
 		expect(pi.appended).toContainEqual({
 			customType: COMMAND_STATUS_TYPE,
-			data: { commandName: "mach12:pr-create", status: "blocked" },
+			data: { commandName: "mach12:pr-create", status: "blocked", summary: "awaiting approval" },
 		});
 	});
 
@@ -252,7 +280,7 @@ describe("registerCommandStatusTool — gate", () => {
 	});
 
 	it("rejects a duplicate report: the second call has lastReport set and is refused", async () => {
-		const { state, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
+		const { state, pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing") }));
 
 		const first = await execute({ status: "completed", summary: "done" });
 		expect(first.terminate).toBe(true);
@@ -262,6 +290,8 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(second.terminate).toBeUndefined();
 		expect(second.details.error).toBe("out-of-phase");
 		expect(state.lifecycle.lastReport!.summary).toBe("done");
+		// The rejected duplicate produces no additional status artifact.
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(1);
 	});
 
 	it("renders a plain status line for non-completed reports", async () => {
@@ -286,10 +316,23 @@ describe("registerCommandStatusTool — probe continuing", () => {
 		expect(isProbeDue(state.lifecycle)).toBe(true);
 	});
 
-	it("does not journal the continuing status", async () => {
+	it("journals the continuing status with its incremental summary", async () => {
 		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "a:cmd") }));
 		await execute({ status: "continuing", summary: "still working" });
-		expect(pi.appended).toHaveLength(0);
+		expect(pi.appended).toContainEqual({
+			customType: COMMAND_STATUS_TYPE,
+			data: { commandName: "a:cmd", status: "continuing", summary: "still working" },
+		});
+	});
+
+	it("does not journal a continue-limit rejection", async () => {
+		const { state, pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "a:cmd") }));
+		state.lifecycle = lifecycleFor("probing", "a:cmd", { continueCount: 3 });
+		const gen = state.lifecycleGeneration;
+		const limited = await execute({ status: "continuing", summary: "still going" });
+		expect(limited.details.error).toBe("continue-limit");
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
+		expect(state.lifecycleGeneration).toBe(gen);
 	});
 
 	it("allows up to 3 consecutive continues then returns limit error", async () => {
@@ -350,10 +393,13 @@ describe("registerCommandStatusTool — dormant continuing", () => {
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
 	});
 
-	it("does not journal dormant continuing", async () => {
+	it("journals dormant continuing with its incremental summary", async () => {
 		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") }));
 		await execute({ status: "continuing", summary: "resuming" });
-		expect(pi.appended).toHaveLength(0);
+		expect(pi.appended).toContainEqual({
+			customType: COMMAND_STATUS_TYPE,
+			data: { commandName: "mach12:test", status: "continuing", summary: "resuming" },
+		});
 	});
 
 	it("allows resumption even after a prior continue-limit exhaustion", async () => {

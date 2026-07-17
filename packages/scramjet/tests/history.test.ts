@@ -66,8 +66,8 @@ function cmdStart(command: string, depth = 0, ts = 0): SessionEntry {
 	return customEntry(COMMAND_START_TYPE, data);
 }
 
-function cmdStatus(commandName: string, status: CommandStatusRestingStatus): SessionEntry {
-	const data: CommandStatusData = { commandName, status };
+function cmdStatus(commandName: string, status: CommandStatusRestingStatus, summary = "work summary"): SessionEntry {
+	const data: CommandStatusData = { commandName, status, summary };
 	return customEntry(COMMAND_STATUS_TYPE, data);
 }
 
@@ -315,15 +315,57 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 });
 
 describe("recordCommandStatus", () => {
-	it("appends a COMMAND_STATUS_TYPE journal entry and mutates no state", () => {
+	it("appends a COMMAND_STATUS_TYPE journal entry with the summary and mutates no state", () => {
 		const { pi, appended } = recordingPi();
-		recordCommandStatus(pi, "mach12:pr-create", "completed");
+		recordCommandStatus(pi, "mach12:pr-create", "completed", "shipped stage 1");
 		expect(appended).toHaveLength(1);
 		expect(appended[0].customType).toBe(COMMAND_STATUS_TYPE);
 		expect(appended[0].data as CommandStatusData).toEqual({
 			commandName: "mach12:pr-create",
 			status: "completed",
+			summary: "shipped stage 1",
 		});
+	});
+
+	it("serializes all four statuses, including continuing, with the summary", () => {
+		for (const status of ["continuing", "completed", "blocked", "incomplete"] as const) {
+			const { pi, appended } = recordingPi();
+			recordCommandStatus(pi, "c", status, `did ${status}`);
+			expect(appended[0].data as CommandStatusData).toEqual({
+				commandName: "c",
+				status,
+				summary: `did ${status}`,
+			});
+		}
+	});
+});
+
+describe("replayHistory — continuing is replay-inert (issue 278)", () => {
+	it("reconstructs dormant from start → continuing (continuing never becomes a resting state)", () => {
+		const result = replayHistory([
+			cmdStart("a"),
+			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "continuing", summary: "more work" }),
+		]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("reconstructs idle from start → continuing → completed", () => {
+		const result = replayHistory([
+			cmdStart("a"),
+			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "continuing", summary: "progress" }),
+			cmdStatus("a", "completed"),
+		]);
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
+		expect(activeCommandName(result.lifecycle)).toBeNull();
+	});
+
+	it("replays a legacy terminal entry that has no summary field", () => {
+		const result = replayHistory([
+			cmdStart("a"),
+			customEntry(COMMAND_STATUS_TYPE, { commandName: "a", status: "completed" }),
+		]);
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
 	});
 });
 

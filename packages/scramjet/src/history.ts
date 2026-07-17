@@ -9,7 +9,7 @@ import {
 	resumeFromParkedInput,
 	startCommand,
 } from "./lifecycle.js";
-import type { CommandDef, CommandRegistry, CommandStatusRestingStatus, ScramjetState, SidebarEntry } from "./types.js";
+import type { CommandDef, CommandRegistry, CommandStatusPayload, ScramjetState, SidebarEntry } from "./types.js";
 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
@@ -130,12 +130,17 @@ export function recordCommandStart(
 	recordCommandInvocation(pi, state, name, origin, 0);
 }
 
-// Journal entry for a command-status report (issue 88). Records which command
-// reported and what status, so a rewind/resume can tell when a command completed
-// (reconstruct to idle) versus blocked/incomplete (reconstruct to dormant).
+// Journal entry for a command-status report (issue 88, issue 278). Records which
+// command reported, what status, and the incremental work summary. Every accepted
+// report is journaled — including "continuing" — so summaries form a searchable
+// artifact trail. Replay only acts on terminal statuses (see VALID_RESTING_STATUSES):
+// a completed reconstructs to idle, blocked/incomplete to dormant, continuing is inert.
+// Legacy entries written before summaries existed have no `summary` field and remain
+// replayable (replay never reads it).
 export interface CommandStatusData {
 	commandName: string;
-	status: CommandStatusRestingStatus;
+	status: CommandStatusPayload["status"];
+	summary: string;
 }
 
 // Journals the agent's report_scramjet_command_status report. Mirrors
@@ -144,9 +149,16 @@ export interface CommandStatusData {
 // persists the report so resume can rebuild the resting lifecycle facts. Terminal
 // statuses are journaled — that is what lets a command
 // which waits, is answered, then completes without offering a next step reconstruct
-// to idle instead of resurrecting at dormant (the duplicate-work hazard).
-export function recordCommandStatus(pi: ExtensionAPI, commandName: string, status: CommandStatusRestingStatus): void {
-	const data: CommandStatusData = { commandName, status };
+// to idle instead of resurrecting at dormant (the duplicate-work hazard). "continuing"
+// reports are also journaled (issue 278) to preserve incremental summaries; they stay
+// replay-inert because VALID_RESTING_STATUSES excludes them.
+export function recordCommandStatus(
+	pi: ExtensionAPI,
+	commandName: string,
+	status: CommandStatusPayload["status"],
+	summary: string,
+): void {
+	const data: CommandStatusData = { commandName, status, summary };
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
 }
 

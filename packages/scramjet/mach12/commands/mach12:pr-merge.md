@@ -145,7 +145,7 @@ Report to the user:
 
 ## Status Reporting
 
-When Scramjet asks you to report command status:
+After delivering your answer, report command status by calling `report_scramjet_command_status`; summarize the work you performed in `summary`, then choose the status:
 
 - After a successful merge (and optional release): report `status: "completed"` with a brief summary. Omit `next_steps` entirely — this command has no next-step policy and no chaining occurs.
 - If merge readiness checks fail (CI, conflicts, review): report `status: "blocked"` with a summary of the blocking issues. Omit `next_steps`.

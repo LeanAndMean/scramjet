@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.54.0 — Make status reports evidence-first, productive, and searchable
+
+Reorders the `report_scramjet_command_status` schema so `summary` precedes `status` and requires a non-empty (non-whitespace) incremental summary, so the agent writes its evidence before committing to an assessment. Every accepted report — including `continuing` — is now journaled as a `scramjet:command-status` artifact carrying its summary, forming a searchable trail; `continuing` entries stay replay-inert and legacy terminal entries without a summary still replay. The fallback probe now asks for the incremental work summary before the status, the retired "When Scramjet asks…" timing incantation is dropped from all ten top-level Mach 12 command bodies in favor of answer-first, incremental-summary guidance (each command's specific next-step rules preserved), and the documentation is reconciled across command-authoring, logging, scramjet-vision section 3, lifecycle-state-space, and CLAUDE.md. Fixes [#278](https://github.com/LeanAndMean/scramjet/issues/278).
+
+### Changed
+
+- `command-status.ts`: reorders the tool schema so `summary` precedes `status`, requires a non-empty incremental `summary`, and journals every accepted report (terminal and `continuing`) with its summary.
+- `history.ts`: records accepted status reports as searchable `scramjet:command-status` artifacts; `continuing` summaries are journaled but remain replay-inert, and legacy terminal entries without a summary still replay.
+- `next-step.ts`: the fallback probe message requests the incremental work summary before the status.
+- `types.ts`: reflects the summary-first, non-empty-summary report contract.
+- `mach12/commands/*.md`: all ten top-level command bodies drop the "When Scramjet asks…" timing incantation in favor of answer-first, incremental-summary status guidance, preserving each command's next-step rules.
+- Documentation: command-authoring (summary-first schema, accepted-vs-redirected reports), logging (corrected custom-entry envelope and session path, command-status artifact search and branch-aware aggregation jq), scramjet-vision section 3, lifecycle-state-space, and CLAUDE.md.
+
 ## 0.53.0 — Classify pr-review-assessment findings by fix value
 
 Reworks `mach12:pr-review-assessment` so each review finding is judged on two axes: whether the flagged problem is real, and whether applying the reviewer's suggested change would actually be a net improvement. Adds a distinct **Regression** classification for real observations whose suggested fix would leave the code worse, break it, or yield pure churn (covering quality regressions — stripping validation/error-handling/tests, degrading clarity, fighting conventions — not only runtime breakage), and surfaces it end-to-end: excluded from staged plans, marked distinctly in the assessment comment, counted in the CLI summary, and forbidden from any `pr-review-fix` argument set. Redefines **Genuine** to carry the fix approach (including an assessor-corrected one when the reviewer's suggestion is unsound), redefines **Nitpick** as an optional net-positive minor improvement, generalizes the fix-value guardrail from simplification-only to all finding types, and states the main-agent vs. subagent division of labor in Step 3. Fixes [#342](https://github.com/LeanAndMean/scramjet/issues/342).

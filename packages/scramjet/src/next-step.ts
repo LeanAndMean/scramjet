@@ -103,7 +103,9 @@ export function buildProbeMessage(
 	const preamble =
 		`Scramjet status check for \`${id}\`.\n\n` +
 		"Choose one route \u2014 do not write prose unless you continue command work after user input.\n\n" +
-		"`report_scramjet_command_status` \u2014 report your status and stop the probe turn:\n" +
+		"`report_scramjet_command_status` \u2014 summarize the work you performed, then report your status, then stop the probe turn. " +
+		"The `summary` is your evidence and comes first; the `status` is your assessment of it. Summarize only the work " +
+		"completed since your previous report (or all of it on your first report):\n" +
 		"- `continuing` \u2014 you have more work to do (not blocked, not waiting for input, not finished)\n" +
 		"- `completed` \u2014 the command's work is done and your answer was already delivered\n" +
 		"- `blocked` \u2014 cannot proceed (error, missing dependency, authorization)\n" +

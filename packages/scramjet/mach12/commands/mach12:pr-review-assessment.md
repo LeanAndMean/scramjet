@@ -244,7 +244,7 @@ If genuine issues remain (including any reclassified items), the natural next st
 
 If all findings are nitpicks, false positives, regressions, or deferred, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
 
-When Scramjet asks you to report command status, call `report_scramjet_command_status` with `status: "completed"` and populate `next_steps` based on the assessment outcome:
+After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and populate `next_steps` based on the assessment outcome:
 
 **When genuine issues exist AND nitpicks/optional items were also found:**
 

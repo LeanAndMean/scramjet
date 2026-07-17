@@ -156,6 +156,21 @@ describe("mach12 wiring — bundled command set", () => {
 		},
 	);
 
+	// Issue 278: top-level command bodies teach evidence-first status reporting
+	// (summary before status) and no longer carry the retired "When Scramjet asks…"
+	// timing incantation. This is a semantic check, not a snapshot of the
+	// command-specific next-step prose (which stays free to drift).
+	it.each(WIRING.filter((row) => !row.delegateOnly))(
+		"$basename teaches answer-first, incremental-summary status reporting",
+		({ basename }) => {
+			const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
+			const content = readFileSync(filePath, "utf-8");
+			expect(content).not.toContain("When Scramjet asks");
+			expect(content).toContain("After delivering your answer");
+			expect(content).toContain("summarize the work you performed in `summary`");
+		},
+	);
+
 	it("pr-review is wired to invoke the bundled Mach 12 reviewer agents", () => {
 		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review.md`);
 		const content = readFileSync(filePath, "utf-8");

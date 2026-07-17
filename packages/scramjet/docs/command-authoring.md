@@ -424,10 +424,12 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| `summary` | string | Yes | The work performed. On the first report, summarize the work done so far; on each later report, summarize only the work completed since the previous report. `summary` comes first so the agent writes its evidence before committing to a status. Must be non-empty. |
 | `status` | enum | Yes | `"continuing"`, `"completed"`, `"blocked"`, or `"incomplete"` |
-| `summary` | string | Yes | Brief summary of the command's outcome. |
 | `next_steps` | array | No | Ordered next-step candidates. Omit to stop the chain. |
 | `recommended_next_step` | integer | No | Zero-based index into `next_steps` for auto-dispatch. |
+
+**Every accepted report is journaled** — including `continuing` — as a `scramjet:command-status` session artifact carrying its `summary`. Incremental summaries can be aggregated offline into a full record of a command's work (see `docs/logging.md`). A report is either **accepted** (journaled and handled) or **rejected**. A `continuing` report sent outside a probe or dormant window is productively redirected back to the agent's work ("keep working") rather than dropped. Terminal-report rejections still occur while a command is active: in the parked phase the tool tells the agent to wait for the user's reply before reporting, and in the already-reported phase it rejects a second terminal report for the same command ("do not call this tool again").
 
 ### Status values
 
@@ -452,11 +454,10 @@ The command body must include explicit instructions for how to call `report_scra
 **Example prose (from a command with `forced` next step):**
 
 ```markdown
-Once the final answer is delivered (or when Scramjet's status-check asks), call
-`report_scramjet_command_status`
-with `status: "completed"`. This command declares a `forced` next step, so
-Scramjet runs the target regardless; include a single `next_steps` entry only
-to pass runtime context to that target:
+After delivering your answer, call `report_scramjet_command_status`: summarize
+the work you performed in `summary`, then set `status: "completed"`. This command
+declares a `forced` next step, so Scramjet runs the target regardless; include a
+single `next_steps` entry only to pass runtime context to that target:
 
 - `message`: `/mach12:pr-review-assessment <pr-number> --review-comment <comment-id>`
 
@@ -468,9 +469,9 @@ user input, use `get_scramjet_user_input` (freetext) instead of reporting a stat
 **Example prose (from a command with `open` next step):**
 
 ```markdown
-Once the final answer is delivered (or when Scramjet's status-check asks), call
-`report_scramjet_command_status`
-with `status: "completed"` and choose selector-visible `next_steps` entries:
+After delivering your answer, call `report_scramjet_command_status`: summarize
+the work you performed in `summary`, then set `status: "completed"` and choose
+selector-visible `next_steps` entries:
 
 1. If Stage N+1 remains: `message`: `/mach12:issue-implement <issue> <next-stage>`,
    `fresh_session`: `true`, `reason`: "Stage N+1 is the next planned stage."
@@ -484,9 +485,9 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 ### Don't
 
 - Don't instruct the agent to report status before the user-facing answer is delivered. Terminal reports are accepted inline during the work turn, but the tool call terminates the turn — reporting early truncates the answer. Answer first, then report.
-- Don't instruct the agent to call `report_scramjet_command_status` with `continuing` during the work turn. Inline acceptance covers terminal statuses only; `continuing` outside a probe or dormant state is rejected.
+- Don't instruct the agent to call `report_scramjet_command_status` with `continuing` during the work turn. Inline acceptance covers terminal statuses only; `continuing` outside a probe or dormant state is redirected back to the agent's work rather than accepted.
 - Don't instruct subroutine commands to call `report_scramjet_command_status`. Only the top-level command reports status; subroutines return control to their caller.
-- Don't put user-facing content in `summary`. The agent's answer was already delivered in the answer turn. `summary` is metadata for Scramjet's internal routing.
+- Don't put user-facing content in `summary`. The agent's answer was already delivered in the answer turn. `summary` is the incremental record of work performed — it is persisted as a searchable session artifact, not shown to the user.
 - Don't omit `reason` from `next_steps` entries. The harness rejects entries without a non-empty `reason`.
 
 ---
@@ -679,9 +680,9 @@ Delegate to:
 
 <Do the final action (post comment, push code, etc.)>
 
-Once the final answer is delivered (or when Scramjet's status-check asks), call
-`report_scramjet_command_status`
-with <specific instructions for this command's reporting>.
+After delivering your answer, call `report_scramjet_command_status`: summarize
+the work you performed in `summary`, then report the status per <specific
+instructions for this command's reporting>.
 ```
 
 ### Conventions

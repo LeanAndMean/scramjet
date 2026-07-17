@@ -125,6 +125,8 @@ The `setTimeout(0)` deferral for probe scheduling and completed dispatch remains
 
 ## Replay and resume
 
+Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry. Reconstruction is driven solely by command-start entries, parked markers, and terminal statuses.
+
 Replay reconstructs only stable resting states from journal entries:
 
 - **Parked** (`parkedForInput = true`): when a `scramjet:user-input-parked` entry exists for the active command.
