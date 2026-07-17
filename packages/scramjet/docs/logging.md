@@ -52,11 +52,10 @@ The `hasUI` flag is captured on `session_start`. Before TUI detection completes,
 
 ## Session JSONL location
 
-Scramjet stores session data under the agent directory (`~/.scramjet/agent`), one file per session:
+Scramjet stores session data under the agent directory (`~/.scramjet/agent` by default, overridable via `SCRAMJET_CODING_AGENT_DIR`), one file per session — **not** under `$XDG_DATA_HOME`:
 
 ```
-${XDG_DATA_HOME:-$HOME/.local/share} is not used; sessions live under:
-~/.scramjet/agent/sessions/<session-dir>/<timestamp>_<uuid>.jsonl
+~/.scramjet/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl
 ```
 
 Find the most recent session file with:
@@ -128,7 +127,7 @@ jq -c 'select(.type == "custom" and .customType == "scramjet:command-status" and
 
 ### Branch-aware invocation aggregation (from a selected leaf)
 
-Session files are trees: physical JSONL order is not branch order, and forks share a common prefix. To reconstruct one invocation's incremental summaries in order, walk `parentId` ancestry from a selected leaf entry id up to the **nearest depth-0 `scramjet:command-start`** (the invocation boundary), collecting the command-status reports on that path. Delegates (depth-1 command-starts) are *not* boundaries, so a delegated subroutine's turns stay inside the parent invocation; same-name invocations stay separate because each has its own depth-0 start; and fork-only reports on other branches never appear because they are not ancestors of the selected leaf.
+The direct search above is the common path; this ancestry walk is only needed to reconstruct a single invocation's summaries in order across a forked session. Session files are trees: physical JSONL order is not branch order, and forks share a common prefix. To reconstruct one invocation's incremental summaries in order, walk `parentId` ancestry from a selected leaf entry id up to the **nearest depth-0 `scramjet:command-start`** (the invocation boundary), collecting the command-status reports on that path. Delegates (depth-1 command-starts) are *not* boundaries, so a delegated subroutine's turns stay inside the parent invocation; same-name invocations stay separate because each has its own depth-0 start; and fork-only reports on other branches never appear because they are not ancestors of the selected leaf.
 
 ```sh
 LEAF=<entry-id-on-the-branch-you-care-about>

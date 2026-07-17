@@ -162,6 +162,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 		parameters: Type.Object({
 			summary: Type.String({
 				minLength: 1,
+				pattern: "\\S",
 				description:
 					"A summary of the work you completed. On your first report, summarize the work done so far; " +
 					"on each later report, summarize only the work completed since your previous report.",

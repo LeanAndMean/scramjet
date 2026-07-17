@@ -429,7 +429,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 | `next_steps` | array | No | Ordered next-step candidates. Omit to stop the chain. |
 | `recommended_next_step` | integer | No | Zero-based index into `next_steps` for auto-dispatch. |
 
-**Every accepted report is journaled** — including `continuing` — as a `scramjet:command-status` session artifact carrying its `summary`. Incremental summaries can be aggregated offline into a full record of a command's work (see `docs/logging.md`). A report is never a dead end: it is either **accepted** (journaled and handled) or **productively redirected** back to the agent's work. No lifecycle phase returns a bare "do not call this tool" rejection while a command is active.
+**Every accepted report is journaled** — including `continuing` — as a `scramjet:command-status` session artifact carrying its `summary`. Incremental summaries can be aggregated offline into a full record of a command's work (see `docs/logging.md`). A report is either **accepted** (journaled and handled) or **rejected**. A `continuing` report sent outside a probe or dormant window is productively redirected back to the agent's work ("keep working") rather than dropped. Terminal-report rejections still occur while a command is active: in the parked phase the tool tells the agent to wait for the user's reply before reporting, and in the already-reported phase it rejects a second terminal report for the same command ("do not call this tool again").
 
 ### Status values
 

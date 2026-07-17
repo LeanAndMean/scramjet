@@ -425,7 +425,7 @@ The two tools are complementary:
 
 A command that needs user input has two paths to get it:
 - **Proactive (fast path):** call `get_scramjet_user_input` during the turn.
-- **Via probe (reliable path):** end the turn, receive the probe, then
+- **Via probe (fallback):** end the turn, receive the probe, then
   call `get_scramjet_user_input` from the probe turn.
 
 Both keep the command active. Confirm/select probe-time calls have one extra

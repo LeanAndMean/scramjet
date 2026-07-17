@@ -57,6 +57,7 @@ describe("registerCommandStatusTool — registration", () => {
 		const { tool } = toolFor();
 		expect(tool.parameters.required).toContain("summary");
 		expect(tool.parameters.properties.summary.minLength).toBe(1);
+		expect(tool.parameters.properties.summary.pattern).toBe("\\S");
 		expect(tool.parameters.properties.summary.description.toLowerCase()).toContain("since");
 	});
 
