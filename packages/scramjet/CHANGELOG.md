@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.55.2 — Defer terminal status journaling to agent_end dispatch time
+
+Moves the terminal `recordCommandStatus` call from tool-execute time (`command-status.ts`) to `agent_end` dispatch time (`auto-continue.ts`), eliminating the abort-replay reconstruction bug by construction. An aborted terminal report is never journaled because the abort branch fires before the `hasTerminalReport` branch. `continuing` statuses remain journaled at tool-execute time (replay-inert). Fixes [#336](https://github.com/LeanAndMean/scramjet/issues/336).
+
+### Changed
+
+- `command-status.ts`: removed `recordCommandStatus` call from terminal status `execute` path; terminal reports now return `terminate: true` without journaling.
+- `auto-continue.ts`: added `recordCommandStatus` call in the `hasTerminalReport` dispatch branch, after the abort guard.
+- `lifecycle-state-space.md`: updated journaling timing documentation.
+- `CLAUDE.md`: updated architecture description for terminal status journaling.
+
+### Tests
+
+- `auto-continue.test.ts`: 3 new assertions covering deferred journaling, abort-no-journal, and error-retain-dispatch.
+- `command-status.test.ts`: 5 updated assertions reflecting that terminal statuses are no longer journaled at tool-execute time.
+
 ## 0.55.1 — Delete redundant next-step selection journal entry path
 
 Removes the `scramjet:next-step-selection` journal entry persistence path from `auto-continue.ts`, which was superseded by the `scramjet_next_step_selection` harness-tool record (issue 324). Deletes the constant, interface, both `appendEntry` call sites, and the corresponding test block. No behavioral change. Fixes [#340](https://github.com/LeanAndMean/scramjet/issues/340).

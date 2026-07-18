@@ -125,7 +125,7 @@ The `setTimeout(0)` deferral for probe scheduling and completed dispatch remains
 
 ## Replay and resume
 
-Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry. Reconstruction is driven solely by command-start entries, parked markers, and terminal statuses.
+Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Terminal statuses (`completed`/`blocked`/`incomplete`) are journaled at `agent_end` dispatch time (`auto-continue.ts`), not at tool-execute time — so an abort before `agent_end` prevents the entry from being written and replay reconstructs dormant (issue 336). `continuing` statuses are journaled at tool-execute time (`command-status.ts`) since they are replay-inert. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry. Reconstruction is driven solely by command-start entries, parked markers, and terminal statuses.
 
 Replay reconstructs only stable resting states from journal entries:
 
@@ -141,7 +141,8 @@ Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = 
 - `types.ts`: defines status payloads, `ScramjetState` (extending `LifecycleHolder`), and `LifecycleTimerAccessors`.
 - `history.ts`: owns command-start journaling, replay reconstruction, interactive reply resume, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns `agent_end` decision tree, probe scheduling, timer management, status routing, selector/dispatch timers, and terminal resolution.
-- `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and status journaling.
+- `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and `continuing` status journaling.
+- `auto-continue.ts` also owns terminal status journaling (deferred to `agent_end` dispatch time so aborts prevent the entry from being written — issue 336).
 - `user-input.ts`: owns structured input parking/resuming behavior and guards against interaction during pending report dispatch.
 
 ## Runtime diagnosis
