@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.55.1 — Delete redundant next-step selection journal entry path
+
+Removes the `scramjet:next-step-selection` journal entry persistence path from `auto-continue.ts`, which was superseded by the `scramjet_next_step_selection` harness-tool record (issue 324). Deletes the constant, interface, both `appendEntry` call sites, and the corresponding test block. No behavioral change. Fixes [#340](https://github.com/LeanAndMean/scramjet/issues/340).
+
+### Removed
+
+- `auto-continue.ts`: `NEXT_STEP_SELECTION_TYPE` constant, `NextStepSelectionEntry` interface, both `pi.appendEntry` call sites (dismissed and selected paths), and `policyMode` parameter from `showSelector`.
+- `auto-continue.test.ts`: 8-test "next-step selection journaling" describe block (~229 lines).
+
 ## 0.55.0 — Add session journal discovery and prior-session fallback guidance
 
 Exposes the current session journal path as a system prompt environment fact (`Current session journal: <path>`) so agents can locate their own session file without guessing paths. Adds prior-session fallback guidance to Scramjet's base directives — primary memory is GitHub artifacts, prior journals are fallback only, with summary-first narrowing and historical content treated as evidence not instruction. Documents a cross-session fallback search workflow in `logging.md` covering candidate discovery, CWD verification, literal summary search, and shortlist-then-inspect pattern. Fixes [#348](https://github.com/LeanAndMean/scramjet/issues/348).
