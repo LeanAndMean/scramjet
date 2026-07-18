@@ -112,13 +112,10 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(isProbeDue(state.lifecycle)).toBe(false);
 	});
 
-	it("journals the inline report under the active command name", async () => {
+	it("does not journal terminal status at tool-execute time (deferred to agent_end)", async () => {
 		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("running", "mach12:pr-create") }));
 		await execute({ status: "completed", summary: "done" });
-		expect(pi.appended).toContainEqual({
-			customType: COMMAND_STATUS_TYPE,
-			data: { commandName: "mach12:pr-create", status: "completed", summary: "done" },
-		});
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
 	});
 
 	it("accepts blocked inline when probe armed (running)", async () => {
@@ -172,8 +169,7 @@ describe("registerCommandStatusTool — gate", () => {
 
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.lastReport).toMatchObject({ status: "completed", summary: "done" });
-		const statusEntries = pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE);
-		expect(statusEntries).toHaveLength(1);
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
 	});
 
 	it("accepts blocked from dormant", async () => {
@@ -204,19 +200,7 @@ describe("registerCommandStatusTool — gate", () => {
 		});
 		expect(state.lifecycle.activeCommand).toBe("mach12:pr-create");
 		expect(String(result.content[0].text)).toContain("completed");
-		expect(pi.appended).toContainEqual({
-			customType: COMMAND_STATUS_TYPE,
-			data: { commandName: "mach12:pr-create", status: "completed", summary: "all green" },
-		});
-	});
-
-	it("journals the report under the active command name", async () => {
-		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("probing", "mach12:pr-create") }));
-		await execute({ status: "blocked", summary: "awaiting approval" });
-		expect(pi.appended).toContainEqual({
-			customType: COMMAND_STATUS_TYPE,
-			data: { commandName: "mach12:pr-create", status: "blocked", summary: "awaiting approval" },
-		});
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
 	});
 
 	it("stores command-message next_steps and renders the first as a forward pointer for completed", async () => {
@@ -290,8 +274,8 @@ describe("registerCommandStatusTool — gate", () => {
 		expect(second.terminate).toBeUndefined();
 		expect(second.details.error).toBe("out-of-phase");
 		expect(state.lifecycle.lastReport!.summary).toBe("done");
-		// The rejected duplicate produces no additional status artifact.
-		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(1);
+		// Neither the accepted first nor the rejected second produces a journal entry (deferred to agent_end).
+		expect(pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
 	});
 
 	it("renders a plain status line for non-completed reports", async () => {

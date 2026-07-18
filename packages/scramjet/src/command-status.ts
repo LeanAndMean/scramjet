@@ -328,8 +328,6 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				},
 			});
 
-			recordCommandStatus(pi, command, params.status, params.summary);
-
 			const next =
 				params.recommended_next_step === undefined
 					? params.next_steps?.[0]

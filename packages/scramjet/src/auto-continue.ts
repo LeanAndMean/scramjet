@@ -50,6 +50,7 @@ import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
+import { recordCommandStatus } from "./history.js";
 import {
 	activeCommandName,
 	beginProbe,
@@ -1027,6 +1028,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			clearProbeWatchdog("status-reported");
 			const report = state.lifecycle.lastReport!;
 			const command = state.lifecycle.activeCommand!;
+			recordCommandStatus(pi, command, report.status, report.summary);
 
 			if (report.status === "completed") {
 				clearActiveCommand(state, "completed");

@@ -1012,6 +1012,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("discarding");
 			expect(logMessages(bag.pi).some((m) => m.includes("discarding"))).toBe(true);
+			// Issue 336: abort discards the report — no terminal status is journaled
+			expect(bag.pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
 		});
 
 		it("error after inline report retains the report and dispatches on the next clean agent_end", async () => {
@@ -1023,9 +1025,10 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] }, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(0);
 
-			// Report survives the error turn.
+			// Report survives the error turn — no journal entry yet.
 			expect(derivedPhase(state.lifecycle)).toBe("reported");
 			expect(ctxBag.dispatched).toEqual([]);
+			expect(bag.pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
 
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(0);
@@ -1034,6 +1037,31 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				{ input: "/b:target", options: { deliverAs: "followUp" }, session: "current" },
 			]);
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
+			// Issue 336: terminal status journaled at dispatch time, not tool-execute time
+			expect(bag.pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(1);
+			expect(bag.pi.appended).toContainEqual({
+				customType: COMMAND_STATUS_TYPE,
+				data: { commandName: "a:cmd", status: "completed", summary: "done" },
+			});
+		});
+
+		it("journals terminal status at dispatch time, not tool-execute time", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const state = runningState(def, { enabled: true, registry: registryWith(targetDef) });
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await report({ status: "completed", summary: "all done" });
+			// After tool execute: no journal entry yet
+			expect(bag.pi.appended.filter((e: any) => e.customType === COMMAND_STATUS_TYPE)).toHaveLength(0);
+
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			await vi.advanceTimersByTimeAsync(0);
+
+			// After agent_end dispatch: journal entry written
+			expect(bag.pi.appended).toContainEqual({
+				customType: COMMAND_STATUS_TYPE,
+				data: { commandName: "a:cmd", status: "completed", summary: "all done" },
+			});
 		});
 	});
 
