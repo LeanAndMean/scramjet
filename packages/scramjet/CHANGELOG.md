@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.55.3 — Fix lifecycle replay for consumed replies and unknown-slash exits
+
+Adds two durable lifecycle-replay outcomes so `pi --resume`, fork, and tree navigation reconstruct the correct resting state. A consumed parked freetext reply now journals `scramjet:user-input-parked` with `{ parked: false }` (only after a successful `resumeFromParkedInput()`), so replay reconstructs **dormant** instead of waiting; the reply text is never persisted. An unknown-slash workflow exit now journals a new `scramjet:command-exited` entry (only after a successful `clearActiveCommand()`), so replay reconstructs **idle** instead of dormant; known Pi commands and `getCommands()` lookup failures preserve the workflow and emit nothing. `replayHistory()` becomes a chronological selected-branch fold. No `LifecycleState` or Pi-runtime changes. Fixes [#352](https://github.com/LeanAndMean/scramjet/issues/352).
+
+### Changed
+
+- `history.ts`: `replayHistory()` folds command-start, parked (`parked` boolean), exit, and terminal-status entries chronologically over the selected branch; the freetext-park journal now carries `{ parked: true }`, and the interactive-reply resume journals `{ parked: false }` after a successful `resumeFromParkedInput()`.
+- `auto-continue.ts`: the active-command-not-in-registry exit journals a `scramjet:command-exited` entry after a successful `clearActiveCommand()`.
+- `user-input.ts`: the freetext-park entry is written only after a successful `parkForFreetext()` and carries `{ parked: true }`.
+- `lifecycle-state-space.md`, `command-authoring.md`, `logging.md`, `CLAUDE.md`: documented the two durable outcomes and the chronological replay fold.
+
+### Tests
+
+- `lifecycle-provider-boundary.test.ts`: new suite proving resume / fork / tree navigation / compaction-while-probing deliver the reconstructed dormant fact to the next provider request, with an exited-workflow negative control.
+- `history.test.ts`, `auto-continue.test.ts`, `user-input.test.ts`: characterization coverage for consumed-reply dormant reconstruction, unknown-slash idle reconstruction, and the marker-free autonomous dormant causes.
+
 ## 0.55.2 — Defer terminal status journaling to agent_end dispatch time
 
 Moves the terminal `recordCommandStatus` call from tool-execute time (`command-status.ts`) to `agent_end` dispatch time (`auto-continue.ts`), eliminating the abort-replay reconstruction bug by construction. An aborted terminal report is never journaled because the abort branch fires before the `hasTerminalReport` branch. `continuing` statuses remain journaled at tool-execute time (replay-inert). Fixes [#336](https://github.com/LeanAndMean/scramjet/issues/336).
