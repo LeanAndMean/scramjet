@@ -375,7 +375,7 @@ describe("lifecycle provider boundary (issue 352 Stage 2)", () => {
 		fx = await makeFixture();
 		await fx.startCommand("a:cmd");
 
-		// A genuinely unknown slash: clears the active command live, journals nothing.
+		// A genuinely unknown slash: clears the active command live and journals the durable exit.
 		await fx.runtime.session.prompt("/typo-or-removed", { source: "interactive" });
 		await fx.drain();
 		expect(activeCommandName(fx.state().lifecycle)).toBeNull();

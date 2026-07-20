@@ -6,6 +6,7 @@ import { cleanForNotify, extractStopReason, NOTIFY_MAX, registerAutoContinue } f
 import { resetCache } from "../src/autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../src/command-status.js";
 import {
+	COMMAND_EXIT_TYPE,
 	COMMAND_START_TYPE,
 	COMMAND_STATUS_TYPE,
 	registerHistory,
@@ -4024,7 +4025,12 @@ describe("issue 352 — actual-journal replay characterization", () => {
 	// Custom-entry types that replayHistory folds into the resting lifecycle.
 	// The characterization asserts autonomous dormant causes journal none of
 	// these except the initiating command-start — no cause-specific marker.
-	const LIFECYCLE_JOURNAL_TYPES = new Set([COMMAND_START_TYPE, COMMAND_STATUS_TYPE, USER_INPUT_PARKED_TYPE]);
+	const LIFECYCLE_JOURNAL_TYPES = new Set([
+		COMMAND_START_TYPE,
+		COMMAND_STATUS_TYPE,
+		USER_INPUT_PARKED_TYPE,
+		COMMAND_EXIT_TYPE,
+	]);
 
 	function toBranch(appended: { customType: string; data: unknown }[]) {
 		return appended.map(
@@ -4126,6 +4132,26 @@ describe("issue 352 — actual-journal replay characterization", () => {
 
 		expect(derivedPhase(state.lifecycle)).toBe("waiting");
 		expect(bag.pi.appended.length).toBe(before);
+	});
+
+	it("registry-miss exit journals a durable exit and replays idle", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const { state, bag, ctxBag } = startedCommand(def);
+		await start(bag, def);
+
+		// The active command's definition disappears from the registry (removed
+		// command, reloaded command set). agent_end clears live state to idle and
+		// journals the durable exit so replay reconstructs idle, not dormant —
+		// mirroring the unknown-slash exit (S4).
+		state.registry.delete("a:cmd");
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(lifecycleJournalTypes(bag.pi.appended)).toEqual([COMMAND_START_TYPE, COMMAND_EXIT_TYPE]);
+
+		const replayed = replayHistory(toBranch(bag.pi.appended));
+		expect(derivedPhase(replayed.lifecycle)).toBe("idle");
+		expect(activeCommandName(replayed.lifecycle)).toBeNull();
 	});
 
 	describe("autonomous dormant causes replay dormant with no cause-specific entry", () => {

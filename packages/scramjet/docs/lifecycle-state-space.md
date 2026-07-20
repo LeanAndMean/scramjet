@@ -135,7 +135,7 @@ Two additional durable outcomes cover the transitions that mutate live lifecycle
 Reconstruction is driven by command-start entries, parked markers, consumed-reply outcomes, workflow exits, and terminal statuses, folded chronologically over the selected branch (`parentId` ancestry, not physical JSONL order):
 
 - A depth-0 command start resets the fold, associating the command in the dormant shape and clearing any parked state. Later starts, statuses, parks, consumed outcomes, and exits supersede earlier outcomes.
-- A matching `parked: true` (or omitted) sets waiting; a matching `parked: false` clears waiting only when the command is currently parked; a malformed `parked` value is inert.
+- A matching `parked: true` (or omitted) sets waiting; a matching `parked: false` sets waiting to false; a malformed `parked` value is inert.
 - A matching exit (same active command) clears the command and parked state to idle; an exit naming a different command, or a malformed exit, is inert.
 
 The command-name payloads carry no independent same-name invocation identity: a depth-0 start resets the chronological fold, so a later matching start re-associates the command regardless of prior outcomes. A later park after a consumed reply restores waiting; a rewind to before consumption remains waiting because the consumed outcome is not on the selected ancestry.
