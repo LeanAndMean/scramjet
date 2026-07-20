@@ -64,7 +64,7 @@ const DEFAULT_MODEL = {
 // The id must satisfy every provider's constraint (Anthropic's `^[a-zA-Z0-9_-]+$`, bounded length)
 // and must never embed raw model ids. A random suffix (not a bare counter) avoids collisions with
 // ids already present in a resumed transcript.
-function generateHarnessToolCallId(): string {
+export function generateHarnessToolCallId(): string {
 	const uuid = globalThis.crypto?.randomUUID?.();
 	const suffix = uuid
 		? uuid.replace(/-/g, "")
@@ -174,6 +174,22 @@ type ActiveRun = {
 	abortController: AbortController;
 };
 
+// SCRAMJET-DIVERGENCE: harness-tool-invocation settlement records (#341).
+/**
+ * One harness-tool invocation and the deferred promise that `runHarnessTool` returns for it. The
+ * promise settles only when the invocation's Agent-core pipeline completes (resolve) or when
+ * reset/teardown revokes the invocation or an infrastructure failure escapes the pipeline (reject).
+ */
+type HarnessToolInvocation = {
+	tool: AgentTool<any>;
+	args: unknown;
+	toolCallId: string;
+	promise: Promise<void>;
+	resolve: () => void;
+	reject: (reason: Error) => void;
+	settled: boolean;
+};
+
 /**
  * Stateful wrapper around the low-level agent loop.
  *
@@ -207,9 +223,16 @@ export class Agent {
 		signal?: AbortSignal,
 	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
 	private activeRun?: ActiveRun;
-	// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive state (#244).
-	/** Harness tool calls queued while a run is active, drained at the next turn boundary. */
-	private readonly harnessToolQueue: Array<{ tool: AgentTool<any>; args: unknown; toolCallId: string }> = [];
+	// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive state (#244, settlement #341).
+	/** Harness tool invocations queued while a run is active, drained at the next turn boundary. */
+	private readonly harnessToolQueue: HarnessToolInvocation[] = [];
+	/**
+	 * Every harness-tool invocation whose public promise has not yet settled — queued, shifted and
+	 * draining, or transient. Reset/teardown rejects this set; each invocation is removed as it
+	 * settles. Queue length is not a proxy for this: a draining call has left the queue but is still
+	 * unsettled (#341).
+	 */
+	private readonly unsettledHarnessTools = new Set<HarnessToolInvocation>();
 	/**
 	 * Markers for in-flight transient (idle) harness-tool runs; each resolves when its run settles.
 	 * A set (not a single field) keeps nested and overlapping transient runs valid, and lets a new
@@ -351,13 +374,16 @@ export class Agent {
 		this._state.errorMessage = undefined;
 		this.clearFollowUpQueue();
 		this.clearSteeringQueue();
-		// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244). Queued harness
-		// tool calls are dropped on reset; surface it so a lost record row is diagnosable.
-		if (this.harnessToolQueue.length > 0) {
-			const names = this.harnessToolQueue.map((item) => item.tool.name).join(", ");
-			console.warn(`Agent.reset() discarded ${this.harnessToolQueue.length} queued harness tool call(s): ${names}`);
+		// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244, settlement #341). Unsettled
+		// harness tool invocations are discarded on reset; surface it so a lost record row is
+		// diagnosable, then reject their promises so awaiting callers observe the discard.
+		if (this.unsettledHarnessTools.size > 0) {
+			const names = [...this.unsettledHarnessTools].map((record) => record.tool.name).join(", ");
+			console.warn(
+				`Agent.reset() discarded ${this.unsettledHarnessTools.size} unsettled harness tool call(s): ${names}`,
+			);
 		}
-		this.harnessToolQueue.length = 0;
+		this.rejectUnsettledHarnessTools(new Error("Agent.reset() discarded unsettled harness tool call"));
 	}
 
 	/** Start a new prompt from text, a single message, or a batch of messages. */
@@ -511,6 +537,10 @@ export class Agent {
 		this._state.streamingMessage = undefined;
 		this._state.errorMessage = undefined;
 
+		// SCRAMJET-DIVERGENCE (#341): a failed final flush leaves later queued calls unable to
+		// execute. Capture it (rejecting remnants below) and re-throw after finishRun so the run's
+		// promise still rejects with it, without a lint-flagged throw inside a finally block.
+		let finalDrainError: { error: unknown } | undefined;
 		try {
 			// Wait for in-flight transient harness-tool runs so their events do not interleave
 			// with this run's transcript.
@@ -526,9 +556,17 @@ export class Agent {
 				// aborted runs — after the last prepareNextTurn drain point, so a queued call is
 				// never stranded. Emits messages/tool events but no run framing.
 				await this.drainHarnessToolQueue(undefined, abortController.signal);
+			} catch (drainError) {
+				// The failing call was already rejected by executeHarnessInvocation; reject the
+				// remnants too so their promises settle.
+				this.rejectUnsettledHarnessTools(drainError instanceof Error ? drainError : new Error(String(drainError)));
+				finalDrainError = { error: drainError };
 			} finally {
 				this.finishRun();
 			}
+		}
+		if (finalDrainError) {
+			throw finalDrainError.error;
 		}
 	}
 
@@ -618,7 +656,7 @@ export class Agent {
 		}
 	}
 
-	// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244).
+	// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244, execution settlement #341).
 	/**
 	 * Execute a harness-originated tool call through the real execution pipeline.
 	 *
@@ -632,25 +670,105 @@ export class Agent {
 	 * When idle, the call executes immediately in a transient run scope. When a run is active, it is
 	 * queued and drained at the next turn boundary — before the next intra-run LLM call — with an
 	 * end-of-run flush for calls queued during the run's final turn, so a queued call is never stranded.
+	 *
+	 * **Settlement (#341).** The returned promise resolves only after the call's full Agent-core
+	 * pipeline finishes: the synthetic assistant tool-call message, tool prepare/execute/finalize, the
+	 * tool-result message, Agent state reduction, and every awaited listener for those events. A queued
+	 * call therefore does not resolve at enqueue time — it resolves when the drain executes it. The
+	 * promise rejects when reset or session teardown revokes an unsettled invocation, when an
+	 * infrastructure/listener/hook failure escapes the pipeline, or when a failed final drain leaves a
+	 * later queued call unable to execute. A tool's own `execute()` throwing is **not** a rejection: it
+	 * becomes a normal `isError: true` tool result, so the promise resolves after that error-result
+	 * pipeline completes. Rejection means the promised pipeline did not complete — it does not prove
+	 * artifact absence (state and persistence may have partially completed), so callers must not blindly
+	 * retry.
+	 *
+	 * This settles Agent-core execution only. It does **not** prove AgentSession persistence;
+	 * `AgentSession.invokeHarnessTool` layers the persisted-settlement boundary on top of it.
+	 *
+	 * **Reentrancy.** Do not `await` this from work whose return is required for the Agent to reach the
+	 * drain point (a model-callable `execute`, `beforeToolBatch`/`beforeToolCall`/`afterToolCall`/
+	 * `prepareNextTurn`, or an awaited listener), or the queued call can never execute and the await
+	 * deadlocks. Start/capture the promise, return from the gating callback, and await it from an
+	 * independent continuation.
 	 */
 	async runHarnessTool(tool: AgentTool<any>, args: unknown, options: { toolCallId?: string } = {}): Promise<void> {
 		const toolCallId = options.toolCallId ?? generateHarnessToolCallId();
+		const record = this.createHarnessInvocation(tool, args, toolCallId);
 		if (this.activeRun) {
-			this.harnessToolQueue.push({ tool, args, toolCallId });
-			return;
+			this.harnessToolQueue.push(record);
+			return record.promise;
 		}
 		// Register the marker before the first event so processEvents sees transient work in
-		// flight from the start, including for nested calls (a harness tool invoking another).
-		let settle!: () => void;
+		// flight from the start, including for nested calls (a harness tool invoking another). The
+		// marker tracks the underlying work even if reset/teardown rejects the public promise first,
+		// so a later prompt still waits for the transient events to finish before emitting its own.
+		let settleMarker!: () => void;
 		const marker = new Promise<void>((resolve) => {
-			settle = resolve;
+			settleMarker = resolve;
 		});
 		this.transientRuns.add(marker);
+		void (async () => {
+			try {
+				await this.executeHarnessInvocation(record, this.transientRunAbort.signal, undefined);
+			} catch {
+				// The rejection is already recorded on record.promise; a transient run has no run-failure
+				// path to propagate into, so nothing escapes here.
+			} finally {
+				this.transientRuns.delete(marker);
+				settleMarker();
+			}
+		})();
+		return record.promise;
+	}
+
+	// SCRAMJET-DIVERGENCE (#341): back a harness-tool invocation with a deferred promise and track it
+	// as unsettled until it resolves or is rejected.
+	private createHarnessInvocation(tool: AgentTool<any>, args: unknown, toolCallId: string): HarnessToolInvocation {
+		let resolve!: () => void;
+		let reject!: (reason: Error) => void;
+		const promise = new Promise<void>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		const record: HarnessToolInvocation = { tool, args, toolCallId, promise, resolve, reject, settled: false };
+		this.unsettledHarnessTools.add(record);
+		return record;
+	}
+
+	// SCRAMJET-DIVERGENCE (#341): settle a harness invocation exactly once. A later settlement attempt
+	// (e.g. underlying transient work finishing after reset already rejected the record) is ignored.
+	private settleHarnessInvocation(record: HarnessToolInvocation, error?: Error): void {
+		if (record.settled) return;
+		record.settled = true;
+		this.unsettledHarnessTools.delete(record);
+		if (error) record.reject(error);
+		else record.resolve();
+	}
+
+	// SCRAMJET-DIVERGENCE (#341): run one invocation's pipeline and settle its record. Infrastructure
+	// failures reject the record and rethrow so the drain path preserves current run-failure behavior;
+	// a tool's own execute() error is not seen here (it resolves as an isError tool result).
+	private async executeHarnessInvocation(
+		record: HarnessToolInvocation,
+		signal: AbortSignal | undefined,
+		ctx: PrepareNextTurnContext | undefined,
+	): Promise<void> {
 		try {
-			await this.emitHarnessToolCall(tool, args, toolCallId, this.transientRunAbort.signal, undefined);
-		} finally {
-			this.transientRuns.delete(marker);
-			settle();
+			await this.emitHarnessToolCall(record.tool, record.args, record.toolCallId, signal, ctx);
+		} catch (error) {
+			this.settleHarnessInvocation(record, error instanceof Error ? error : new Error(String(error)));
+			throw error;
+		}
+		this.settleHarnessInvocation(record);
+	}
+
+	// SCRAMJET-DIVERGENCE (#341): idempotently clear the queue and reject every still-unsettled
+	// invocation (queued, draining, or transient). Used by reset() and by the final-drain failure path.
+	rejectUnsettledHarnessTools(reason: Error): void {
+		this.harnessToolQueue.length = 0;
+		for (const record of [...this.unsettledHarnessTools]) {
+			this.settleHarnessInvocation(record, reason);
 		}
 	}
 
@@ -660,8 +778,8 @@ export class Agent {
 		signal: AbortSignal | undefined,
 	): Promise<void> {
 		while (this.harnessToolQueue.length > 0) {
-			const item = this.harnessToolQueue.shift()!;
-			await this.emitHarnessToolCall(item.tool, item.args, item.toolCallId, signal, ctx);
+			const record = this.harnessToolQueue.shift()!;
+			await this.executeHarnessInvocation(record, signal, ctx);
 		}
 	}
 

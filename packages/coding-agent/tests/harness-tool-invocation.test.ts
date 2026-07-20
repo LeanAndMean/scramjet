@@ -255,6 +255,7 @@ describe("AgentSession harness-tool invocation", () => {
 		const secondModel: Model<"openai-chat"> = { ...testModel, id: "second-model", name: "Second Model" };
 
 		let sessionRef!: AgentSession;
+		let noticePromise: Promise<void> | undefined;
 		const trigger = defineTool({
 			name: "trigger_switch",
 			label: "Trigger Switch",
@@ -263,8 +264,12 @@ describe("AgentSession harness-tool invocation", () => {
 			execute: async () => {
 				// Simulate the harness reacting to a mid-run user model change: the model is switched
 				// through the canonical session path, and the change is narrated via a harness notice.
+				// The notice is a mid-run queued call that cannot drain until this tool returns, so we
+				// capture its promise WITHOUT awaiting it here (an inline await would deadlock, #341) and
+				// await it externally after the run progresses.
 				await sessionRef.setModel(secondModel);
-				await sessionRef.invokeHarnessTool("harness_notice", { note: "midrun" });
+				noticePromise = sessionRef.invokeHarnessTool("harness_notice", { note: "midrun" });
+				noticePromise.catch(() => {});
 				return { content: [{ type: "text", text: "switched" }], details: undefined };
 			},
 		});
@@ -276,6 +281,8 @@ describe("AgentSession harness-tool invocation", () => {
 		sessionRef = session;
 
 		await session.prompt("go");
+		// The mid-run notice drained during the run; its promise now settles.
+		await expect(noticePromise).resolves.toBeUndefined();
 
 		// The notice actually executed, exactly once.
 		expect(calls).toEqual([{ note: "midrun" }]);
