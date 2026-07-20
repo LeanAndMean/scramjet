@@ -1547,6 +1547,22 @@ Typical `sourceInfo.source` values:
 - `sdk` for tools passed via `createAgentSession({ customTools })`
 - extension source metadata for tools registered by extensions
 
+### pi.invokeHarnessTool(name, args, options?)
+
+Execute a registered tool as a **harness-originated** call — one the harness makes itself, not one the model requested. The tool runs through the identical prepare/execute/finalize pipeline as a model tool call: it produces the same live `tool_execution_*`/message events, persisted session entries, and `tool_call`/`tool_result` hooks, but emits **no** run/turn framing (`agent_start`/`turn_*`/`agent_end`), so it is invisible to `agent_end`-keyed logic. The tool is resolved from the full registry, so a `"harness-only"` tool (never provider-visible) can still be executed. When the agent is idle the call executes immediately; mid-run it is queued and drained before the next intra-run LLM call.
+
+```typescript
+// Record a harness-originated event as a real, replayable tool row, then proceed only once it exists.
+await pi.invokeHarnessTool("my_notice_tool", { text: "model changed to X" });
+// The tool-result row is now persisted in the session transcript.
+```
+
+The returned promise **resolves only after the resulting tool-result message has been persisted** to the session — a stronger guarantee than "the tool ran". A consumer that must not replace or tear down the session (e.g. before starting a fresh session) until the record row exists can safely `await` it. The promise **rejects** if no tool with `name` is registered, if a matching event fails to process/persist, if the session is disposed before it settles, or if an explicit `options.toolCallId` is already pending. Rejection means the pipeline did not complete — it does **not** prove the artifact is absent (state and persistence may have partially completed), so do not blindly retry. A tool's own `execute()` error is not a rejection: it resolves normally as an `isError` result.
+
+`options.toolCallId` (optional) sets an explicit tool-call id; a provider-safe id is generated when omitted.
+
+Do not `await` this from work whose return is required for the agent to reach the mid-run drain point or for the event queue to persist the result (a model-callable `execute`, `beforeToolBatch`/`beforeToolCall`/`afterToolCall`/`prepareNextTurn`, or an awaited event handler) — that would deadlock. Start the promise, return from the gating callback, and await it from an independent continuation.
+
 ### pi.setModel(model)
 
 Set the current model. Returns `false` if no API key is available for the model. See [models.md](models.md) for configuring custom models.

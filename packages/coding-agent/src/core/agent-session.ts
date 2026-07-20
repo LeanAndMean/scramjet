@@ -16,6 +16,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@leanandmean/agent";
+// SCRAMJET-DIVERGENCE: provider-safe harness tool-call id generation for the persisted-settlement
+// acknowledgement key (#341).
+import { generateHarnessToolCallId } from "@leanandmean/agent";
 import type { AssistantMessage, ImageContent, Message, Model, SystemPromptSection, TextContent } from "@leanandmean/ai";
 import {
 	clampThinkingLevel,
@@ -252,6 +255,15 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 // AgentSession Class
 // ============================================================================
 
+// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement acknowledgement (#341). One deferred
+// promise per in-flight harness-tool invocation, resolved after the matching tool-result message_end
+// is persisted and rejected if that processing fails or the session is disposed first.
+type HarnessPersistenceAck = {
+	promise: Promise<void>;
+	resolve: () => void;
+	reject: (reason: Error) => void;
+};
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -263,6 +275,12 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _agentEventQueue: Promise<void> = Promise.resolve();
+
+	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement state (#341). `_disposed` gates post-
+	// teardown invocations; the map keys each in-flight invocation's tool-call id to its persistence
+	// acknowledgement so `_processAgentEvent` can settle it after the matching tool-result is persisted.
+	private _disposed = false;
+	private readonly _harnessPersistenceAcks = new Map<string, HarnessPersistenceAck>();
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
 	private _steeringMessages: string[] = [];
@@ -486,8 +504,8 @@ export class AgentSession {
 		this._createRetryPromiseForAgentEnd(event);
 
 		this._agentEventQueue = this._agentEventQueue.then(
-			() => this._processAgentEvent(event),
-			() => this._processAgentEvent(event),
+			() => this._processAgentEventTracked(event),
+			() => this._processAgentEventTracked(event),
 		);
 
 		// Keep queue alive if an event handler fails
@@ -522,6 +540,63 @@ export class AgentSession {
 			}
 		}
 		return undefined;
+	}
+
+	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Wraps queue-side event processing
+	// so a harness-tool invocation's persistence acknowledgement resolves only after the matching
+	// tool-result message_end has been fully processed and persisted, and rejects if processing any of
+	// that invocation's events throws. Rethrows to preserve the queue's existing keep-processing
+	// behavior (the caller attaches `.catch(() => {})`).
+	private async _processAgentEventTracked(event: AgentEvent): Promise<void> {
+		const ackId = this._harnessAckIdForEvent(event);
+		const ack = ackId !== undefined ? this._harnessPersistenceAcks.get(ackId) : undefined;
+		try {
+			await this._processAgentEvent(event);
+		} catch (err) {
+			if (ack) {
+				ack.reject(err instanceof Error ? err : new Error(String(err)));
+			}
+			throw err;
+		}
+		if (
+			ack &&
+			event.type === "message_end" &&
+			event.message.role === "toolResult" &&
+			event.message.toolCallId === ackId
+		) {
+			ack.resolve();
+		}
+	}
+
+	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). The tool-call id an event belongs
+	// to for acknowledgement tracking — the synthetic assistant tool-call, the `tool_execution_*`
+	// events, or the tool-result message. Returns undefined for events unrelated to a pending harness
+	// invocation; a returned id that has no pending acknowledgement (an ordinary model tool call)
+	// resolves to no-op at the call site.
+	private _harnessAckIdForEvent(event: AgentEvent): string | undefined {
+		switch (event.type) {
+			case "tool_execution_start":
+			case "tool_execution_update":
+			case "tool_execution_end":
+				return event.toolCallId;
+			case "message_start":
+			case "message_end": {
+				const message = event.message;
+				if (message.role === "toolResult") {
+					return message.toolCallId;
+				}
+				if (message.role === "assistant") {
+					for (const block of message.content) {
+						if (block.type === "toolCall" && this._harnessPersistenceAcks.has(block.id)) {
+							return block.id;
+						}
+					}
+				}
+				return undefined;
+			}
+			default:
+				return undefined;
+		}
 	}
 
 	private async _processAgentEvent(event: AgentEvent): Promise<void> {
@@ -775,9 +850,23 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		// SCRAMJET-DIVERGENCE: idempotent disposal that revokes in-flight harness-tool invocations (#341).
+		// A second call must not re-reject already-settled acknowledgements or re-run teardown.
+		if (this._disposed) return;
+		this._disposed = true;
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
+		// Reject pending persistence acknowledgements before revoking Agent-side invocations, so a caller
+		// awaiting invokeHarnessTool sees rejection rather than a promise that never settles. Already-
+		// running tool work may finish afterward; teardown revokes the old-session guarantee but cannot
+		// roll back arbitrary side effects.
+		const disposeError = new Error("AgentSession disposed before the harness tool invocation settled.");
+		for (const ack of this._harnessPersistenceAcks.values()) {
+			ack.reject(disposeError);
+		}
+		this._harnessPersistenceAcks.clear();
+		this.agent.rejectUnsettledHarnessTools(disposeError);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
@@ -871,7 +960,7 @@ export class AgentSession {
 		this._rebuildSystemPrompt(validToolNames);
 	}
 
-	// SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
+	// SCRAMJET-DIVERGENCE: harness-tool invocation (#244), persisted-settlement boundary (#341).
 	/**
 	 * Execute a registered tool as a harness-originated call (not requested by the model).
 	 *
@@ -883,13 +972,80 @@ export class AgentSession {
 	 * run/turn framing. The idle-vs-mid-run branch lives in `runHarnessTool` (keyed on the agent's
 	 * active run, which tracks `isStreaming`): idle calls execute immediately, mid-run calls queue
 	 * and drain before the next intra-run LLM call.
+	 *
+	 * **Persisted settlement (#341).** This is a strictly stronger boundary than
+	 * {@link Agent.runHarnessTool}: the returned promise resolves only after (1) the Agent-core
+	 * pipeline fulfills *and* (2) `_processAgentEvent` has persisted the matching tool-result
+	 * `message_end` via `SessionManager.appendMessage`. Because the event queue preserves order,
+	 * that also proves the preceding synthetic assistant tool-call message was persisted first. It
+	 * rejects on Agent-core failure, on failure to process/persist a matching event, on disposal
+	 * before settlement, on a post-disposal call, on an unknown tool, or on a duplicate explicit
+	 * tool-call id that is already pending. **Rejection means the promised pipeline did not complete —
+	 * it does not prove artifact absence** (Agent state and persistence may have partially or fully
+	 * completed before a late failure), so callers must not blindly retry. A tool's own `execute()`
+	 * error is *not* a rejection: it becomes a normal `isError: true` result and the promise resolves
+	 * after that error-result pipeline is persisted.
+	 *
+	 * **Reentrancy.** As with `runHarnessTool`, do not `await` this from work whose return is required
+	 * for the Agent to reach the drain point or for the event queue to persist the matching result.
 	 */
 	async invokeHarnessTool(name: string, args: unknown, options?: InvokeHarnessToolOptions): Promise<void> {
+		if (this._disposed) {
+			throw new Error(`Cannot invoke harness tool "${name}": the session has been disposed.`);
+		}
 		const tool = this._toolRegistry.get(name);
 		if (!tool) {
 			throw new Error(`Cannot invoke harness tool "${name}": no tool with that name is registered.`);
 		}
-		await this.agent.runHarnessTool(tool, args, options);
+		const toolCallId = this._allocateHarnessToolCallId(options?.toolCallId);
+		// Register the acknowledgement before Agent execution can emit events, so the queue-side handler
+		// always finds it. Await Agent execution and persistence concurrently: Agent-core failure or a
+		// persistence failure rejects, and the tool-call-id-keyed handler resolves after the matching
+		// tool-result is persisted.
+		const ack = this._registerHarnessPersistenceAck(toolCallId);
+		try {
+			await Promise.all([this.agent.runHarnessTool(tool, args, { toolCallId }), ack.promise]);
+		} finally {
+			// Identity-checked cleanup: only drop the entry if it is still this invocation's ack (disposal
+			// may have cleared the map, and a later same-id invocation must not have its entry removed).
+			if (this._harnessPersistenceAcks.get(toolCallId) === ack) {
+				this._harnessPersistenceAcks.delete(toolCallId);
+			}
+		}
+	}
+
+	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Allocate the tool-call id used as
+	// the acknowledgement key: reject a duplicate explicit id that is still pending, retry a generated
+	// id on the (astronomically unlikely) collision with a pending one.
+	private _allocateHarnessToolCallId(explicit?: string): string {
+		if (explicit !== undefined) {
+			if (this._harnessPersistenceAcks.has(explicit)) {
+				throw new Error(
+					`Cannot invoke harness tool with tool-call id "${explicit}": an invocation with that id is already pending.`,
+				);
+			}
+			return explicit;
+		}
+		let id = generateHarnessToolCallId();
+		while (this._harnessPersistenceAcks.has(id)) {
+			id = generateHarnessToolCallId();
+		}
+		return id;
+	}
+
+	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Register a deferred acknowledgement
+	// keyed by tool-call id. The caller awaits `ack.promise` inside the same synchronous frame that
+	// registers it, so a synchronous disposal rejection can never strand it as an unhandled rejection.
+	private _registerHarnessPersistenceAck(toolCallId: string): HarnessPersistenceAck {
+		let resolve!: () => void;
+		let reject!: (reason: Error) => void;
+		const promise = new Promise<void>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		const ack: HarnessPersistenceAck = { promise, resolve, reject };
+		this._harnessPersistenceAcks.set(toolCallId, ack);
+		return ack;
 	}
 
 	/** Whether compaction or branch summarization is currently running */

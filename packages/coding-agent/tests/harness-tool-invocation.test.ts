@@ -11,6 +11,12 @@
  *    (session-ordering, issue test requirement 8), and that pair is present in the context of the
  *    next non-probe LLM completion request (between-turns injection, issue test requirement 4).
  *
+ * Issue 341 layers a *persisted*-settlement boundary on top of Stage 1's Agent-core execution
+ * settlement: `invokeHarnessTool` resolves only after the matching tool-result `message_end` has
+ * been persisted (so no explicit drain is needed), rejects if that persistence fails after the
+ * Agent pipeline ran, rejects a pending invocation on dispose, and rejects a post-dispose call
+ * before executing anything.
+ *
  * The fixture stands up a minimal real `AgentSession` (fake `streamFn`, in-memory managers, a
  * `DefaultResourceLoader` over an empty tmp dir) so the assertions exercise the actual event,
  * persistence, and context-construction paths rather than mocks.
@@ -147,6 +153,45 @@ function makeNoticeTool(): { tool: ToolDefinition; calls: Array<Record<string, u
 	return { tool, calls };
 }
 
+/**
+ * A harness-only tool whose `execute` blocks on an external gate, so a caller can hold the Agent
+ * pipeline mid-execution (invocation pending) and release it deterministically.
+ */
+function makeGatedTool(): {
+	tool: ToolDefinition;
+	calls: Array<Record<string, unknown>>;
+	started: Promise<void>;
+	release: () => void;
+} {
+	const calls: Array<Record<string, unknown>> = [];
+	let release: () => void = () => {};
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let signalStarted: () => void = () => {};
+	const started = new Promise<void>((resolve) => {
+		signalStarted = resolve;
+	});
+	const tool = defineTool({
+		name: "harness_gated",
+		label: "Harness Gated",
+		description: "Harness-only tool that blocks in execute until released.",
+		activation: "harness-only",
+		parameters: Type.Object({ note: Type.Optional(Type.String()) }),
+		execute: async (_id, params) => {
+			calls.push(params as Record<string, unknown>);
+			signalStarted();
+			await gate;
+			return { content: [{ type: "text", text: "noted" }], details: undefined };
+		},
+	});
+	return { tool, calls, started, release };
+}
+
+async function flushMicrotasks(): Promise<void> {
+	for (let i = 0; i < 20; i++) await Promise.resolve();
+}
+
 function makeNormalTool(): ToolDefinition {
 	return defineTool({
 		name: "normal_custom",
@@ -195,19 +240,65 @@ describe("AgentSession harness-tool invocation", () => {
 		expect(session.getActiveToolNames()).toContain("read");
 	});
 
-	it("executes an idle harness call and persists a user-message-preceded toolCall/result pair", async () => {
+	it("stays pending until the tool-result is persisted, then resolves with immediate evidence (no drain)", async () => {
 		const { tool: notice, calls } = makeNoticeTool();
-		const { session, sessionManager, drain } = await createFixture([notice]);
+		const { session, sessionManager } = await createFixture([notice]);
 
 		await session.prompt("hi");
 		expect(session.isStreaming).toBe(false);
 
-		await session.invokeHarnessTool("harness_notice", { note: "x" });
-		await drain();
+		// Gate the AgentSession-side persistence of the harness tool-result. This step runs in the async
+		// event queue AFTER Agent-core execution has already settled `runHarnessTool`, so holding it
+		// isolates the persisted-settlement boundary (#341): only `invokeHarnessTool` must wait for it.
+		// Under the Stage-1-only (resolve-on-Agent-execution) behavior the invocation would resolve here
+		// while persistence is still gated, so `resolved` would be true and the pre-release assertions
+		// would fail. White-box hook, consistent with this file's existing `_drainAgentEventQueue` access.
+		let releasePersist: () => void = () => {};
+		const persistGate = new Promise<void>((resolve) => {
+			releasePersist = resolve;
+		});
+		let signalGateReached: () => void = () => {};
+		const gateReached = new Promise<void>((resolve) => {
+			signalGateReached = resolve;
+		});
+		const internal = session as unknown as {
+			_processAgentEvent(event: { type: string; message?: unknown }): Promise<void>;
+		};
+		const originalProcess = internal._processAgentEvent.bind(session);
+		internal._processAgentEvent = async (event) => {
+			const message = event.message as { role?: string; toolName?: string } | undefined;
+			if (event.type === "message_end" && message?.role === "toolResult" && message.toolName === "harness_notice") {
+				signalGateReached();
+				await persistGate;
+			}
+			return originalProcess(event);
+		};
 
-		// The tool actually ran.
+		let resolved = false;
+		const invoke = session.invokeHarnessTool("harness_notice", { note: "x" }).then(() => {
+			resolved = true;
+		});
+		// Deterministic barrier: the queue has reached the tool-result persistence step, which means
+		// Agent-core execution already settled `runHarnessTool`. A short flush lets that settlement and
+		// any resolve-on-execution propagate before we assert.
+		await gateReached;
+		await flushMicrotasks();
+
+		// Agent execution already ran (the tool executed), but persistence is gated: the invocation is
+		// still pending and the tool-result is not yet in the session.
 		expect(calls).toEqual([{ note: "x" }]);
+		expect(resolved).toBe(false);
+		const gated = sessionManager
+			.getBranch()
+			.filter((e): e is SessionMessageEntry => e.type === "message")
+			.map((e) => e.message);
+		expect(gated.some((m) => m.role === "toolResult" && m.toolName === "harness_notice")).toBe(false);
 
+		releasePersist();
+		await invoke;
+		expect(resolved).toBe(true);
+
+		// No explicit drain: settlement already awaited persistence, so the pair is present immediately.
 		const messages = sessionManager
 			.getBranch()
 			.filter((e): e is SessionMessageEntry => e.type === "message")
@@ -227,6 +318,72 @@ describe("AgentSession harness-tool invocation", () => {
 		expect(userIdx).toBeGreaterThanOrEqual(0);
 		expect(toolCallIdx).toBeGreaterThan(userIdx);
 		expect(toolResultIdx).toBeGreaterThan(toolCallIdx);
+	});
+
+	it("rejects a second invocation reusing a pending explicit tool-call id", async () => {
+		const { tool, calls, started, release } = makeGatedTool();
+		const { session } = await createFixture([tool]);
+
+		await session.prompt("hi");
+
+		// Hold the first invocation mid-execute so its acknowledgement stays pending, then a second
+		// invocation reusing the same explicit id must reject before touching the Agent.
+		const first = session.invokeHarnessTool("harness_gated", { note: "first" }, { toolCallId: "dup-id" });
+		first.catch(() => {});
+		await started;
+
+		await expect(
+			session.invokeHarnessTool("harness_gated", { note: "second" }, { toolCallId: "dup-id" }),
+		).rejects.toThrow(/already pending/i);
+		// The rejected duplicate never executed.
+		expect(calls).toEqual([{ note: "first" }]);
+
+		release();
+		await expect(first).resolves.toBeUndefined();
+	});
+
+	it("rejects the invocation when persisting the tool-result fails, after Agent execution ran", async () => {
+		const { tool: notice, calls } = makeNoticeTool();
+		const { session, sessionManager } = await createFixture([notice]);
+
+		await session.prompt("hi");
+
+		const persistError = new Error("appendMessage boom");
+		const original = sessionManager.appendMessage.bind(sessionManager);
+		sessionManager.appendMessage = ((message: Parameters<typeof original>[0]) => {
+			if (message.role === "toolResult" && message.toolName === "harness_notice") {
+				throw persistError;
+			}
+			return original(message);
+		}) as typeof original;
+
+		// Agent-core execution succeeds (the tool runs), but persisting the matching tool-result throws;
+		// the invocation rejects with that error. Rejection is not artifact absence — the tool DID run.
+		await expect(session.invokeHarnessTool("harness_notice", { note: "boom" })).rejects.toBe(persistError);
+		expect(calls).toEqual([{ note: "boom" }]);
+	});
+
+	it("rejects a pending invocation on dispose and refuses post-dispose invocations", async () => {
+		const { tool, calls, started, release } = makeGatedTool();
+		const { session } = await createFixture([tool]);
+
+		await session.prompt("hi");
+
+		const pending = session.invokeHarnessTool("harness_gated", { note: "pending" });
+		pending.catch(() => {});
+		await started;
+
+		session.dispose();
+		await expect(pending).rejects.toThrow(/disposed/i);
+
+		// A post-dispose invocation rejects before executing anything.
+		const callsBefore = calls.length;
+		await expect(session.invokeHarnessTool("harness_gated", { note: "after" })).rejects.toThrow(/disposed/i);
+		expect(calls.length).toBe(callsBefore);
+
+		// Release the underlying (now-orphaned) work so the transient run finishes and nothing leaks.
+		release();
+		await flushMicrotasks();
 	});
 
 	it("places the harness toolCall/result in the next LLM completion context (between-turns)", async () => {

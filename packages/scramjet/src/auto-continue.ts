@@ -511,10 +511,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					}
 				}
 
-				// Awaited so the record usually lands in the current session's transcript
-				// before dispatch — a fresh_session step replaces the session immediately
-				// after. Not guaranteed: invokeHarnessTool resolves immediately when it
-				// queues mid-run, and Agent.reset() (fresh_session) discards that queue.
+				// Awaited so the record lands in the current session's transcript before
+				// dispatch — critical for a fresh_session step, which replaces the session
+				// immediately after. invokeHarnessTool settles on actual persistence (#341),
+				// and this runs at agent_end (idle), so the record row is persisted before the
+				// replacement can discard it. recordSelection still swallows failures, so a
+				// broken record row never blocks the chain (best-effort).
 				await recordSelection({
 					outcome: "selected",
 					options: entryOptions,
@@ -621,12 +623,12 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			const parsed = recommended.parsedCommand!;
 			const dispatchGeneration = state.lifecycleGeneration;
 			const dispatchCommand = activeCommandName(state.lifecycle);
-			// Chained via .then() rather than await because this runs inside the
-			// synchronous agent_end handler path; the record still settles before
-			// dispatch (same fresh_session ordering intent as the selector path,
-			// with the same mid-run queuing caveat), and recordSelection never
-			// rejects. The gap before .then() runs means lifecycle can move, so
-			// re-check staleness before dispatching, mirroring the selector path.
+			// Chained via .then() rather than await because this runs on the deferred
+			// agent_end dispatch path; the record settles before dispatch (invokeHarnessTool
+			// resolves on actual persistence — #341 — so at idle the record row is persisted
+			// before a fresh_session replacement can discard the session), and recordSelection
+			// never rejects (best-effort). The gap before .then() runs means lifecycle can
+			// move, so re-check staleness before dispatching, mirroring the selector path.
 			void recordSelection({
 				outcome: "selected",
 				options: result.valid.map((o) => ({ message: o.message, reason: o.reason })),
