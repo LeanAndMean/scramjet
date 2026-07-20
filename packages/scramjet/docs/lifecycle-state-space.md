@@ -125,13 +125,26 @@ The `setTimeout(0)` deferral for probe scheduling and completed dispatch remains
 
 ## Replay and resume
 
-Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Terminal statuses (`completed`/`blocked`/`incomplete`) are journaled at `agent_end` dispatch time (`auto-continue.ts`), not at tool-execute time — so an abort before `agent_end` prevents the entry from being written and replay reconstructs dormant (issue 336). `continuing` statuses are journaled at tool-execute time (`command-status.ts`) since they are replay-inert. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry. Reconstruction is driven solely by command-start entries, parked markers, and terminal statuses.
+Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Terminal statuses (`completed`/`blocked`/`incomplete`) are journaled at `agent_end` dispatch time (`auto-continue.ts`), not at tool-execute time — so an abort before `agent_end` prevents the entry from being written and replay reconstructs dormant (issue 336). `continuing` statuses are journaled at tool-execute time (`command-status.ts`) since they are replay-inert. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry.
+
+Two additional durable outcomes cover the transitions that mutate live lifecycle facts but previously left replay reconstructing the *preceding* durable shape (issue 352):
+
+- **Consumed parked reply** (`scramjet:user-input-parked` with `{ commandName, parked: false }`): written only after a successful `resumeFromParkedInput()` when an interactive non-slash reply consumes a parked command. The reply text is never persisted. The original park entry carries `{ commandName, parked: true }`; a legacy entry that omits `parked` is treated as `parked: true`.
+- **Workflow exit** (`scramjet:command-exited` with `{ commandName }`): written only after a successful `clearActiveCommand()` when a truly unknown slash exits the workflow. Known Pi commands and `getCommands()` lookup failures preserve the workflow and emit no exit.
+
+Reconstruction is driven by command-start entries, parked markers, consumed-reply outcomes, workflow exits, and terminal statuses, folded chronologically over the selected branch (`parentId` ancestry, not physical JSONL order):
+
+- A depth-0 command start resets the fold, associating the command in the dormant shape and clearing any parked state. Later starts, statuses, parks, consumed outcomes, and exits supersede earlier outcomes.
+- A matching `parked: true` (or omitted) sets waiting; a matching `parked: false` clears waiting only when the command is currently parked; a malformed `parked` value is inert.
+- A matching exit (same active command) clears the command and parked state to idle; an exit naming a different command, or a malformed exit, is inert.
+
+The command-name payloads carry no independent same-name invocation identity: a depth-0 start resets the chronological fold, so a later matching start re-associates the command regardless of prior outcomes. A later park after a consumed reply restores waiting; a rewind to before consumption remains waiting because the consumed outcome is not on the selected ancestry.
 
 Replay reconstructs only stable resting states from journal entries:
 
-- **Parked** (`parkedForInput = true`): when a `scramjet:user-input-parked` entry exists for the active command.
-- **Dormant** (no mode flags): when a command start is associated but no parked entry is active and no terminal status was reported. No-policy commands reconstruct to dormant identically — they resume via explicit `continuing` through the status tool.
-- **Idle**: when no active command is resumable, or when the active command's last status was `completed`.
+- **Parked** (`parkedForInput = true`): when the last parked outcome for the active command is `parked: true` (or a legacy park with no `parked` field) and no later consumed-reply outcome or exit supersedes it.
+- **Dormant** (no mode flags): when a command start is associated but no parked entry is active (including after a consumed reply) and no terminal status was reported. No-policy commands reconstruct to dormant identically — they resume via explicit `continuing` through the status tool.
+- **Idle**: when no active command is resumable, when a workflow exit cleared the active command, or when the active command's last status was `completed`.
 
 Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = false`, `lastReport = null`, `continueCount = 0`.
 
@@ -139,7 +152,7 @@ Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = 
 
 - `lifecycle.ts`: defines `LifecycleState` (fact interface), invariant checks, query helpers, and mutation helpers with generation bumping and logging.
 - `types.ts`: defines status payloads, `ScramjetState` (extending `LifecycleHolder`), and `LifecycleTimerAccessors`.
-- `history.ts`: owns command-start journaling, replay reconstruction, interactive reply resume, and workflow exit on unknown slash input.
+- `history.ts`: owns command-start journaling, replay reconstruction (chronological selected-branch fold), interactive reply resume with consumed-reply (`parked: false`) journaling, and workflow exit on unknown slash input with `scramjet:command-exited` journaling.
 - `auto-continue.ts`: owns `agent_end` decision tree, probe scheduling, timer management, status routing, selector/dispatch timers, and terminal resolution.
 - `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and `continuing` status journaling.
 - `auto-continue.ts` also owns terminal status journaling (deferred to `agent_end` dispatch time so aborts prevent the entry from being written — issue 336).

@@ -4011,14 +4011,12 @@ describe("next-step selection record tool", () => {
 	});
 });
 
-// issue 352 (Stage 1): characterize actual-journal replay for the lifecycle
-// transitions that mutate live state but currently journal nothing durable.
-// The two `it.fails` checks pin the confirmed defects (a consumed parked reply
-// and an unknown-slash exit reconstruct the wrong resting phase on replay); they
-// are marked expected-to-fail so the suite stays green until Stage 3 adds the
-// durable outcomes and removes the marker. The autonomous-dormant cases assert
-// the counter-hypothesis: every non-reporting dormant cause already replays
-// dormant from the lone command-start, with no cause-specific journal entry.
+// issue 352: characterize actual-journal replay for the lifecycle transitions
+// that mutate live state. Stage 3 added the durable consumed-reply outcome, so
+// a consumed parked reply now reconstructs dormant on replay of the real emitted
+// branch. The autonomous-dormant cases assert the counter-hypothesis: every
+// non-reporting dormant cause already replays dormant from the lone
+// command-start, with no cause-specific journal entry.
 describe("issue 352 — actual-journal replay characterization", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
@@ -4075,7 +4073,7 @@ describe("issue 352 — actual-journal replay characterization", () => {
 		await bag.emit("input", { text: `/${def.name}`, source: "interactive" });
 	}
 
-	it.fails("consumed parked reply replays dormant, not waiting (defect; Stage 3 flips green)", async () => {
+	it("consumed parked reply replays dormant, not waiting", async () => {
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const { state, bag, parkFreetext } = startedCommand(def);
 
@@ -4087,11 +4085,16 @@ describe("issue 352 — actual-journal replay characterization", () => {
 		await bag.emit("input", { text: "option A", source: "interactive" });
 		expect(derivedPhase(state.lifecycle)).toBe("running");
 
-		// The emitted branch really contains a start + park (real handlers, no fabrication).
-		expect(lifecycleJournalTypes(bag.pi.appended)).toEqual([COMMAND_START_TYPE, USER_INPUT_PARKED_TYPE]);
+		// The emitted branch contains a start, the park, and the consumed-reply
+		// outcome (a second parked entry carrying parked: false) — real handlers.
+		expect(lifecycleJournalTypes(bag.pi.appended)).toEqual([
+			COMMAND_START_TYPE,
+			USER_INPUT_PARKED_TYPE,
+			USER_INPUT_PARKED_TYPE,
+		]);
 
-		// DEFECT: replay reconstructs waiting because the consumed reply left no
-		// durable outcome. Target (Stage 3): dormant. This assertion fails today.
+		// Replaying the branch reconstructs dormant: the consumed outcome clears
+		// waiting while retaining the command association.
 		const replayed = replayHistory(toBranch(bag.pi.appended));
 		expect(derivedPhase(replayed.lifecycle)).toBe("dormant");
 		expect(activeCommandName(replayed.lifecycle)).toBe("a:cmd");

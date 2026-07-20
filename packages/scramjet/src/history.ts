@@ -14,6 +14,7 @@ import type { CommandDef, CommandRegistry, CommandStatusPayload, ScramjetState, 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
 export const USER_INPUT_PARKED_TYPE = "scramjet:user-input-parked";
+export const COMMAND_EXIT_TYPE = "scramjet:command-exited";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
 
@@ -205,10 +206,23 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			// blocked/incomplete: command stays associated (dormant)
 			parkedForInput = false;
 		} else if (entry.customType === USER_INPUT_PARKED_TYPE) {
+			const data = entry.data as { commandName?: unknown; parked?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand) continue;
+			// parked: false is the consumed-reply outcome — it clears waiting for the
+			// active command. A missing field is a legacy park entry (means parked).
+			// Any other value is malformed and inert.
+			if (data.parked === false) {
+				parkedForInput = false;
+			} else if (data.parked === undefined || data.parked === true) {
+				parkedForInput = true;
+			}
+		} else if (entry.customType === COMMAND_EXIT_TYPE) {
 			const data = entry.data as { commandName?: unknown } | undefined;
 			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
 			if (data.commandName !== activeTopLevelCommand) continue;
-			parkedForInput = true;
+			activeTopLevelCommand = null;
+			parkedForInput = false;
 		}
 	}
 	const lifecycle = reconstructLifecycle(activeTopLevelCommand, parkedForInput);
@@ -263,7 +277,14 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// require the agent to explicitly call `continuing` after seeing
 			// the dormant notice (issue 215).
 			if (event.source === "interactive" && !event.text.startsWith("/") && isParkedForInput(state.lifecycle)) {
-				resumeFromParkedInput(state);
+				const command = activeCommandName(state.lifecycle);
+				const result = resumeFromParkedInput(state);
+				// Record the consumed park only when the mutation actually cleared
+				// waiting, so replay reconstructs dormant rather than waiting. Never
+				// persist the reply text.
+				if (result.ok && command) {
+					pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: command, parked: false });
+				}
 				return;
 			}
 			// A slash command that didn't resolve to anything in the registry
@@ -279,8 +300,14 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			// truly unrecognized slashes (typos, removed commands) clear. (F4)
 			if (event.text.startsWith("/") && activeCommandName(state.lifecycle) !== null) {
 				if (!isKnownSlashCommand(event.text, pi, state)) {
+					const command = activeCommandName(state.lifecycle);
 					state.clearLifecycleTimers?.();
-					clearActiveCommand(state, "unknown-slash");
+					const result = clearActiveCommand(state, "unknown-slash");
+					// Record the exit only when the active command was actually cleared,
+					// so replay reconstructs idle rather than dormant.
+					if (result.ok && command) {
+						pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: command });
+					}
 				}
 			}
 			return;

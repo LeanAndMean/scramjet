@@ -368,28 +368,24 @@ describe("lifecycle provider boundary (issue 352 Stage 2)", () => {
 		expectDormantNotice(fx.captures[before], "a:cmd");
 	});
 
-	// Exit negative control. A truly unknown slash clears the active command live but
-	// (pre-Stage-3) journals no durable exit outcome, so replay still reconstructs
-	// dormant and the resumed session wrongly shows the dormant notice. Stage 3 adds the
-	// exit outcome and flips this green. Marked expected-to-fail until then.
-	it.fails(
-		"exited workflow (unknown slash) resumes to idle with no dormant notice (defect; Stage 3 flips green)",
-		async () => {
-			fx = await makeFixture();
-			await fx.startCommand("a:cmd");
+	// Exit negative control. A truly unknown slash clears the active command live and
+	// journals a durable command-exited outcome, so replay reconstructs idle and the
+	// resumed session shows no dormant notice.
+	it("exited workflow (unknown slash) resumes to idle with no dormant notice", async () => {
+		fx = await makeFixture();
+		await fx.startCommand("a:cmd");
 
-			// A genuinely unknown slash: clears the active command live, journals nothing.
-			await fx.runtime.session.prompt("/typo-or-removed", { source: "interactive" });
-			await fx.drain();
-			expect(activeCommandName(fx.state().lifecycle)).toBeNull();
+		// A genuinely unknown slash: clears the active command live, journals nothing.
+		await fx.runtime.session.prompt("/typo-or-removed", { source: "interactive" });
+		await fx.drain();
+		expect(activeCommandName(fx.state().lifecycle)).toBeNull();
 
-			const sessionPath = fx.runtime.session.sessionFile;
-			if (!sessionPath) throw new Error("expected a persisted session file");
-			await fx.runtime.switchSession(sessionPath);
+		const sessionPath = fx.runtime.session.sessionFile;
+		if (!sessionPath) throw new Error("expected a persisted session file");
+		await fx.runtime.switchSession(sessionPath);
 
-			const before = fx.captures.length;
-			await fx.runtime.session.prompt("anything", { source: "interactive" });
-			expectNoDormantNotice(fx.captures[before]);
-		},
-	);
+		const before = fx.captures.length;
+		await fx.runtime.session.prompt("anything", { source: "interactive" });
+		expectNoDormantNotice(fx.captures[before]);
+	});
 });

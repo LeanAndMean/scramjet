@@ -550,12 +550,14 @@ Confirm and select return `{ "cancelled": true }` with `terminate: true` when th
 The tool is callable in any lifecycle phase except `reported` (when a terminal status report is pending dispatch). In that phase it returns a non-terminating error so the agent can still report status.
 
 - **Idle** (no active command): the tool works as a pure UI interaction. Confirm/select return the user's answer; freetext returns `terminate: true`. No lifecycle mutations occur — `parkForFreetext` and `enterDormant` no-op without an active command.
-- **Running / dormant / waiting** (active command, various mode flags): full lifecycle behavior applies. Freetext parks the command (`parkedForInput = true`) and journals a `scramjet:user-input-parked` entry. Confirm/select cancellation transitions to dormant.
+- **Running / dormant / waiting** (active command, various mode flags): full lifecycle behavior applies. Freetext parks the command (`parkedForInput = true`) and journals a `scramjet:user-input-parked` entry (`{ commandName, parked: true }`) after a successful park. Confirm/select cancellation transitions to dormant.
 - **Probing** (probe in flight): confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the probe is cleared and re-armed without incrementing `continueCount`, so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures during a probe leave it reportable so the agent can still report `blocked` or `incomplete`. Freetext parks the command from this state.
 
 ### Journaling
 
-Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; select entries also record the presented options. Freetext records only the prompt. Freetext with an active top-level command is also journaled as a `scramjet:user-input-parked` entry so resume reconstruction preserves the parked state.
+Each interaction is journaled as a `scramjet:user-input` custom entry type. Confirm/select entries record the interaction type, message, and result; select entries also record the presented options. Freetext records only the prompt. Freetext with an active top-level command is also journaled as a `scramjet:user-input-parked` entry (`{ commandName, parked: true }`) so resume reconstruction preserves the parked state.
+
+When an interactive non-slash reply consumes a parked command, Scramjet resumes it live and journals a second `scramjet:user-input-parked` entry with `{ commandName, parked: false }` (the reply text is never persisted). This is what lets a paused-then-answered command reconstruct to `dormant` after resume rather than reappearing as `waiting`. Legacy park entries written before this flag existed omit `parked` and are treated as `parked: true`. Likewise, when a truly unknown slash exits the workflow, Scramjet clears the active command and journals a `scramjet:command-exited` entry (`{ commandName }`), so replay reconstructs `idle` rather than `dormant`. Known Pi commands and command-lookup failures preserve the workflow and emit no exit.
 
 ### Don't
 

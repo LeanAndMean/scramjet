@@ -1097,7 +1097,7 @@ describe("registerUserInputTool — journaling", () => {
 
 		const parkedEntry = pi.appended.find((e: any) => e.customType === USER_INPUT_PARKED_TYPE);
 		expect(parkedEntry).toBeDefined();
-		expect(parkedEntry.data).toEqual({ commandName: "mach12:test" });
+		expect(parkedEntry.data).toEqual({ commandName: "mach12:test", parked: true });
 	});
 
 	it("does not journal parked marker on cancellation (new behavior)", async () => {
