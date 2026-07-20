@@ -5,7 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, extractStopReason, NOTIFY_MAX, registerAutoContinue } from "../src/auto-continue.js";
 import { resetCache } from "../src/autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../src/command-status.js";
-import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE, registerHistory, USER_INPUT_PARKED_TYPE } from "../src/history.js";
+import {
+	COMMAND_EXIT_TYPE,
+	COMMAND_START_TYPE,
+	COMMAND_STATUS_TYPE,
+	registerHistory,
+	replayHistory,
+	USER_INPUT_PARKED_TYPE,
+} from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { buildProbeMessage } from "../src/next-step.js";
@@ -4002,5 +4009,231 @@ describe("next-step selection record tool", () => {
 
 		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
 		expect(logMessages(bag.pi).some((m) => m.includes("failed to record next-step selection"))).toBe(true);
+	});
+});
+
+// issue 352: characterize actual-journal replay for the lifecycle transitions
+// that mutate live state. Stage 3 added the durable consumed-reply outcome, so
+// a consumed parked reply now reconstructs dormant on replay of the real emitted
+// branch. The autonomous-dormant cases assert the counter-hypothesis: every
+// non-reporting dormant cause already replays dormant from the lone
+// command-start, with no cause-specific journal entry.
+describe("issue 352 — actual-journal replay characterization", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	// Custom-entry types that replayHistory folds into the resting lifecycle.
+	// The characterization asserts autonomous dormant causes journal none of
+	// these except the initiating command-start — no cause-specific marker.
+	const LIFECYCLE_JOURNAL_TYPES = new Set([
+		COMMAND_START_TYPE,
+		COMMAND_STATUS_TYPE,
+		USER_INPUT_PARKED_TYPE,
+		COMMAND_EXIT_TYPE,
+	]);
+
+	function toBranch(appended: { customType: string; data: unknown }[]) {
+		return appended.map(
+			(a) =>
+				({
+					type: "custom",
+					id: "x",
+					parentId: null,
+					timestamp: "0",
+					customType: a.customType,
+					data: a.data,
+				}) as any,
+		);
+	}
+
+	function lifecycleJournalTypes(appended: { customType: string; data: unknown }[]) {
+		return appended.filter((a) => LIFECYCLE_JOURNAL_TYPES.has(a.customType)).map((a) => a.customType);
+	}
+
+	// Wires the real handlers and journals a genuine depth-0 command start through
+	// the input path, so the replayed branch is what production would actually
+	// emit — not a fabricated outcome-only journal.
+	function startedCommand(def: CommandDef) {
+		const state = freshState({ registry: registryWith(def), enabled: true });
+		const bag = recordingPi();
+		state.logger = createLogger(bag.pi);
+		const ctxBag = fakeCtx({ hasUI: true, isStreaming: () => bag.pi.isStreaming });
+		registerHistory(bag.pi, state);
+		registerUserInputTool(bag.pi, state);
+		registerCommandStatusTool(bag.pi, state);
+		registerAutoContinue(bag.pi, state);
+		const userInputTool = bag.tools.find((t: any) => t.name === "get_scramjet_user_input");
+		if (!userInputTool) throw new Error("get_scramjet_user_input not registered");
+		const parkFreetext = () =>
+			userInputTool.execute(
+				"call-id",
+				{ type: "freetext", message: "Which option?" },
+				undefined,
+				undefined,
+				ctxBag.ctx,
+			);
+		return { state, bag, ctxBag, parkFreetext };
+	}
+
+	async function start(bag: ReturnType<typeof recordingPi>, def: CommandDef) {
+		await bag.emit("input", { text: `/${def.name}`, source: "interactive" });
+	}
+
+	it("consumed parked reply replays dormant, not waiting", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const { state, bag, parkFreetext } = startedCommand(def);
+
+		await start(bag, def);
+		await parkFreetext();
+		expect(derivedPhase(state.lifecycle)).toBe("waiting");
+
+		// Interactive non-slash reply consumes the park: live state resumes.
+		await bag.emit("input", { text: "option A", source: "interactive" });
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+
+		// The emitted branch contains a start, the park, and the consumed-reply
+		// outcome (a second parked entry carrying parked: false) — real handlers.
+		expect(lifecycleJournalTypes(bag.pi.appended)).toEqual([
+			COMMAND_START_TYPE,
+			USER_INPUT_PARKED_TYPE,
+			USER_INPUT_PARKED_TYPE,
+		]);
+
+		// Replaying the branch reconstructs dormant: the consumed outcome clears
+		// waiting while retaining the command association.
+		const replayed = replayHistory(toBranch(bag.pi.appended));
+		expect(derivedPhase(replayed.lifecycle)).toBe("dormant");
+		expect(activeCommandName(replayed.lifecycle)).toBe("a:cmd");
+	});
+
+	it("nonparked interactive reply emits no consumed outcome and stays dormant (negative control)", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: true, lifecycle: lifecycleFor("dormant", "a:cmd") });
+		const bag = recordingPi();
+		state.logger = createLogger(bag.pi);
+		registerHistory(bag.pi, state);
+
+		await bag.emit("input", { text: "just chatting", source: "interactive" });
+
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(lifecycleJournalTypes(bag.pi.appended)).toEqual([]);
+	});
+
+	it("noninteractive reply to a parked command emits no consumed outcome (negative control)", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const { state, bag, parkFreetext } = startedCommand(def);
+
+		await start(bag, def);
+		await parkFreetext();
+		const before = bag.pi.appended.length;
+
+		// Extension-source reply must not self-resume, and must journal nothing.
+		await bag.emit("input", { text: "option A", source: "extension" });
+
+		expect(derivedPhase(state.lifecycle)).toBe("waiting");
+		expect(bag.pi.appended.length).toBe(before);
+	});
+
+	it("registry-miss exit journals a durable exit and replays idle", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const { state, bag, ctxBag } = startedCommand(def);
+		await start(bag, def);
+
+		// The active command's definition disappears from the registry (removed
+		// command, reloaded command set). agent_end clears live state to idle and
+		// journals the durable exit so replay reconstructs idle, not dormant —
+		// mirroring the unknown-slash exit (S4).
+		state.registry.delete("a:cmd");
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(lifecycleJournalTypes(bag.pi.appended)).toEqual([COMMAND_START_TYPE, COMMAND_EXIT_TYPE]);
+
+		const replayed = replayHistory(toBranch(bag.pi.appended));
+		expect(derivedPhase(replayed.lifecycle)).toBe("idle");
+		expect(activeCommandName(replayed.lifecycle)).toBeNull();
+	});
+
+	describe("autonomous dormant causes replay dormant with no cause-specific entry", () => {
+		async function assertReplaysDormant(state: ScramjetState, bag: ReturnType<typeof recordingPi>, command: string) {
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(activeCommandName(state.lifecycle)).toBe(command);
+			const replayed = replayHistory(toBranch(bag.pi.appended));
+			expect(derivedPhase(replayed.lifecycle)).toBe("dormant");
+			expect(activeCommandName(replayed.lifecycle)).toBe(command);
+			// Only the initiating command-start is journaled — no dormant-cause marker.
+			expect(lifecycleJournalTypes(bag.pi.appended)).toEqual([COMMAND_START_TYPE]);
+		}
+
+		it("watchdog timeout", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const { state, bag, ctxBag } = startedCommand(def);
+			await start(bag, def);
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+			await vi.advanceTimersByTimeAsync(30_000);
+
+			await assertReplaysDormant(state, bag, "a:cmd");
+		});
+
+		it("probe send failure", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const { state, bag, ctxBag } = startedCommand(def);
+			await start(bag, def);
+			bag.pi.sendMessage = () => {
+				throw new Error("send boom");
+			};
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+
+			await assertReplaysDormant(state, bag, "a:cmd");
+		});
+
+		it("abort", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const { state, bag, ctxBag } = startedCommand(def);
+			await start(bag, def);
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			await assertReplaysDormant(state, bag, "a:cmd");
+		});
+
+		it("probe turn ends without a valid status report", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const { state, bag, ctxBag } = startedCommand(def);
+			await start(bag, def);
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+
+			await assertReplaysDormant(state, bag, "a:cmd");
+		});
+
+		it("compaction while probing", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const { state, bag, ctxBag } = startedCommand(def);
+			await start(bag, def);
+
+			bag.pi.isStreaming = true;
+			await bag.emit("agent_end", {}, ctxBag.ctx);
+			bag.pi.isStreaming = false;
+			await vi.advanceTimersByTimeAsync(0);
+			expect(derivedPhase(state.lifecycle)).toBe("probing");
+			await bag.emit("session_compact", {}, ctxBag.ctx);
+
+			await assertReplaysDormant(state, bag, "a:cmd");
+		});
 	});
 });

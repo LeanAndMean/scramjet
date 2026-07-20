@@ -150,6 +150,34 @@ jq -n --arg leaf "$LEAF" '
 
 The result is the invocation's reports in chronological (root→leaf) order — the incremental summaries that, concatenated, reconstruct the full record of that invocation's work.
 
+## Lifecycle replay outcomes
+
+Besides command-status reports, two custom entries record the lifecycle transitions that mutate live state and must survive resume/fork/tree-navigation (issue 352). Both are folded chronologically over the selected `parentId` branch by `replayHistory()`, so branch-aware queries (the ancestry walk above) matter when a session has forked.
+
+**Parked-input outcomes** (`scramjet:user-input-parked`) carry `{ commandName, parked }`:
+
+```jsonc
+{ "type": "custom", "customType": "scramjet:user-input-parked",
+  "data": { "commandName": "mach12:issue-plan", "parked": true } }
+```
+
+- `parked: true` — the command parked on a freetext prompt (written only after a successful park). Reconstructs `waiting`.
+- `parked: false` — an interactive non-slash reply consumed the park (written only after a successful resume). Reconstructs `dormant`. The reply text is never persisted.
+- **Legacy:** entries written before the flag existed omit `parked` and mean `parked: true`. Match legacy-or-parked with `(.data.parked != false)`.
+
+**Workflow-exit outcomes** (`scramjet:command-exited`) carry `{ commandName }`, written only after a truly unknown slash successfully cleared the active command (known Pi commands and lookup failures emit nothing). Reconstructs `idle`.
+
+```jsonc
+{ "type": "custom", "customType": "scramjet:command-exited",
+  "data": { "commandName": "mach12:issue-plan" } }
+```
+
+Trace a command's park/resume/exit outcomes across all branches:
+
+```sh
+jq -c 'select(.type == "custom" and (.customType == "scramjet:user-input-parked" or .customType == "scramjet:command-exited")) | {id, parentId, kind: .customType, cmd: .data.commandName, parked: .data.parked}' session.jsonl
+```
+
 ### Cross-session fallback search
 
 Use this workflow when GitHub artifacts or command invocation context are incomplete and prior same-CWD work is likely to hold the missing detail. This is a fallback — primary memory is the current session's context, issue/PR bodies, and plan comments.

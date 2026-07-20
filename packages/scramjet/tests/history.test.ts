@@ -2,6 +2,7 @@ import type { SessionEntry } from "@leanandmean/coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import {
 	appendSidebarEntry,
+	COMMAND_EXIT_TYPE,
 	COMMAND_START_TYPE,
 	COMMAND_STATUS_TYPE,
 	type CommandStatusData,
@@ -311,6 +312,147 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 	it("reconstructs waiting only from the LAST entry when several are journaled", () => {
 		const result = replayHistory([cmdStart("a"), cmdStatus("a", "incomplete"), userInputParked("a")]);
 		expect(derivedPhase(result.lifecycle)).toBe("waiting");
+	});
+});
+
+// issue 352 (Stage 3): the unknown-slash workflow exit now emits a durable
+// command-exited outcome, so replaying the actual emitted branch reconstructs
+// idle. Pins the same-name identity contract the chronological fold relies on.
+describe("replayHistory — issue 352 exit/identity characterization", () => {
+	function toBranch(appended: { customType: string; data: unknown }[]): SessionEntry[] {
+		return appended.map((a) => customEntry(a.customType, a.data));
+	}
+
+	it("unknown-slash exit replays idle, not dormant", async () => {
+		const state = freshState({ registry: registryOf(["a:cmd"]) });
+		const { pi, appended, emit } = recordingPi();
+		// Known Pi commands exclude the typo, so it reads as a genuine unknown slash.
+		(pi as any).getCommands = () => [{ name: "autopilot" }, { name: "clear" }];
+		registerHistory(pi, state);
+
+		// Real command start (journals a depth-0 command-start), then a true
+		// unknown-slash exit (clears the active command live, journals the exit).
+		await emit("input", { text: "/a:cmd", source: "interactive" });
+		await emit("input", { text: "/typo-or-removed", source: "interactive" });
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+
+		// The emitted branch is the command-start followed by the durable exit.
+		expect(appended.map((a) => a.customType)).toEqual([COMMAND_START_TYPE, COMMAND_EXIT_TYPE]);
+
+		// Replaying the branch reconstructs idle: the exit supersedes the start.
+		const replayed = replayHistory(toBranch(appended));
+		expect(activeCommandName(replayed.lifecycle)).toBeNull();
+		expect(derivedPhase(replayed.lifecycle)).toBe("idle");
+	});
+
+	it("a known Pi slash preserves the workflow and emits no exit (negative control)", async () => {
+		const state = freshState({
+			registry: registryOf(["a:cmd"]),
+			lifecycle: lifecycleFor("dormant", "a:cmd"),
+		});
+		const { pi, appended, emit } = recordingPi();
+		(pi as any).getCommands = () => [{ name: "autopilot" }];
+		registerHistory(pi, state);
+
+		await emit("input", { text: "/autopilot on", source: "interactive" });
+
+		expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+		expect(appended).toHaveLength(0);
+	});
+
+	// The command-name payloads carry no independent same-name invocation
+	// identity: a depth-0 start resets the chronological fold, so a later
+	// matching start re-associates the command regardless of prior outcomes.
+	it("a later same-name start supersedes a prior park (dormant, not waiting)", () => {
+		const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStart("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("a later same-name start re-associates after a completed report (dormant, not idle)", () => {
+		const result = replayHistory([cmdStart("a"), cmdStatus("a", "completed"), cmdStart("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+});
+
+// issue 352 (Stage 3): the two durable outcomes added by this stage — the
+// consumed-reply park (parked: false) and the command-exited outcome — folded
+// chronologically over the selected branch.
+describe("replayHistory — issue 352 durable outcome fold", () => {
+	function parkedFlag(commandName: string, parked: unknown): SessionEntry {
+		return customEntry(USER_INPUT_PARKED_TYPE, { commandName, parked });
+	}
+	function exited(commandName: string): SessionEntry {
+		return customEntry(COMMAND_EXIT_TYPE, { commandName });
+	}
+
+	it("a consumed reply (parked: false) clears waiting to dormant", () => {
+		const result = replayHistory([cmdStart("a"), parkedFlag("a", true), parkedFlag("a", false)]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("parked: false with no preceding park is inert (stays dormant)", () => {
+		const result = replayHistory([cmdStart("a"), parkedFlag("a", false)]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("an explicit parked: true sets waiting", () => {
+		const result = replayHistory([cmdStart("a"), parkedFlag("a", true)]);
+		expect(derivedPhase(result.lifecycle)).toBe("waiting");
+	});
+
+	it("a legacy park entry (no parked field) still means waiting", () => {
+		const result = replayHistory([cmdStart("a"), userInputParked("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("waiting");
+	});
+
+	it("a malformed parked value is inert (stays dormant)", () => {
+		const result = replayHistory([cmdStart("a"), parkedFlag("a", "nope")]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("a later park restores waiting after a consumed reply", () => {
+		const result = replayHistory([
+			cmdStart("a"),
+			parkedFlag("a", true),
+			parkedFlag("a", false),
+			parkedFlag("a", true),
+		]);
+		expect(derivedPhase(result.lifecycle)).toBe("waiting");
+	});
+
+	it("a matching exit clears the command to idle", () => {
+		const result = replayHistory([cmdStart("a"), exited("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
+		expect(activeCommandName(result.lifecycle)).toBeNull();
+	});
+
+	it("an exit clears a parked command to idle", () => {
+		const result = replayHistory([cmdStart("a"), parkedFlag("a", true), exited("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("idle");
+		expect(activeCommandName(result.lifecycle)).toBeNull();
+	});
+
+	it("an exit naming a different command is inert", () => {
+		const result = replayHistory([cmdStart("a"), exited("b")]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("a malformed exit (missing commandName) is inert", () => {
+		const result = replayHistory([cmdStart("a"), customEntry(COMMAND_EXIT_TYPE, {})]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("a later start re-associates after an exit (dormant, not idle)", () => {
+		const result = replayHistory([cmdStart("a"), exited("a"), cmdStart("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
 	});
 });
 
