@@ -314,6 +314,69 @@ describe("replayHistory — command-status phase reconstruction (issue 88)", () 
 	});
 });
 
+// issue 352 (Stage 1): characterize actual-journal replay for the unknown-slash
+// workflow exit and pin the same-name identity contract the chronological fold
+// relies on. The `it.fails` check is marked expected-to-fail so the suite stays
+// green until Stage 3 adds the durable exit outcome and removes the marker.
+describe("replayHistory — issue 352 exit/identity characterization", () => {
+	function toBranch(appended: { customType: string; data: unknown }[]): SessionEntry[] {
+		return appended.map((a) => customEntry(a.customType, a.data));
+	}
+
+	it.fails("unknown-slash exit replays idle, not dormant (defect; Stage 3 flips green)", async () => {
+		const state = freshState({ registry: registryOf(["a:cmd"]) });
+		const { pi, appended, emit } = recordingPi();
+		// Known Pi commands exclude the typo, so it reads as a genuine unknown slash.
+		(pi as any).getCommands = () => [{ name: "autopilot" }, { name: "clear" }];
+		registerHistory(pi, state);
+
+		// Real command start (journals a depth-0 command-start), then a true
+		// unknown-slash exit (clears the active command live, journals nothing).
+		await emit("input", { text: "/a:cmd", source: "interactive" });
+		await emit("input", { text: "/typo-or-removed", source: "interactive" });
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+
+		// The emitted branch is just the command-start (no exit outcome exists yet).
+		expect(appended.map((a) => a.customType)).toEqual([COMMAND_START_TYPE]);
+
+		// DEFECT: replay reconstructs dormant because the command-start has no
+		// superseding exit outcome. Target (Stage 3): idle. This assertion fails today.
+		const replayed = replayHistory(toBranch(appended));
+		expect(activeCommandName(replayed.lifecycle)).toBeNull();
+		expect(derivedPhase(replayed.lifecycle)).toBe("idle");
+	});
+
+	it("a known Pi slash preserves the workflow and emits no exit (negative control)", async () => {
+		const state = freshState({
+			registry: registryOf(["a:cmd"]),
+			lifecycle: lifecycleFor("dormant", "a:cmd"),
+		});
+		const { pi, appended, emit } = recordingPi();
+		(pi as any).getCommands = () => [{ name: "autopilot" }];
+		registerHistory(pi, state);
+
+		await emit("input", { text: "/autopilot on", source: "interactive" });
+
+		expect(activeCommandName(state.lifecycle)).toBe("a:cmd");
+		expect(appended).toHaveLength(0);
+	});
+
+	// The command-name payloads carry no independent same-name invocation
+	// identity: a depth-0 start resets the chronological fold, so a later
+	// matching start re-associates the command regardless of prior outcomes.
+	it("a later same-name start supersedes a prior park (dormant, not waiting)", () => {
+		const result = replayHistory([cmdStart("a"), userInputParked("a"), cmdStart("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+
+	it("a later same-name start re-associates after a completed report (dormant, not idle)", () => {
+		const result = replayHistory([cmdStart("a"), cmdStatus("a", "completed"), cmdStart("a")]);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+		expect(activeCommandName(result.lifecycle)).toBe("a");
+	});
+});
+
 describe("recordCommandStatus", () => {
 	it("appends a COMMAND_STATUS_TYPE journal entry with the summary and mutates no state", () => {
 		const { pi, appended } = recordingPi();
