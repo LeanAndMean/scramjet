@@ -2649,7 +2649,8 @@ export class AgentSession {
 		// SCRAMJET-DIVERGENCE: the Scramjet builtin is a required product component, so reload must validate
 		// the replacement loader before any irreversible live mutation. settingsManager.reload() runs first
 		// because the loader's path resolution reads live settings (the loader defers its own settings/source-map
-		// commit until after the builtin init succeeds). resourceLoader.reload() then re-runs the required
+		// commit until after the builtin init succeeds, so on this path the shared manager is intentionally read
+		// twice). resourceLoader.reload() then re-runs the required
 		// builtin and throws RequiredBuiltinInitError on failure — before session_shutdown is emitted and before
 		// resetApiProviders(). A throwing builtin therefore leaves the current runner, resources, and providers
 		// intact and fires no session_shutdown; only a validated candidate proceeds to teardown and rebuild.

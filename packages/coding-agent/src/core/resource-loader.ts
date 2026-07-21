@@ -37,6 +37,30 @@ export class RequiredBuiltinInitError extends Error {
 	}
 }
 
+// SCRAMJET-DIVERGENCE: RequiredBuiltinInitError exposes only a generic product message and carries the real
+// failure as `cause`. Render that cause for display — the stack for an Error, the stringified value otherwise,
+// or nothing when there is no cause — so post-startup sinks can surface it the same way main.ts does at startup.
+export function renderRequiredBuiltinInitCause(error: RequiredBuiltinInitError): string | undefined {
+	if (error.cause instanceof Error) {
+		return error.cause.stack ?? error.cause.message;
+	}
+	if (error.cause !== undefined) {
+		return String(error.cause);
+	}
+	return undefined;
+}
+
+// SCRAMJET-DIVERGENCE: post-startup sinks (interactive reload / fatal-runtime handler, RPC command catch)
+// render error.message. A RequiredBuiltinInitError's message is a generic product string, so append the
+// unwrapped cause detail to keep those surfaces actionable; any other error renders exactly as before.
+export function describeRuntimeError(error: unknown): string {
+	if (error instanceof RequiredBuiltinInitError) {
+		const detail = renderRequiredBuiltinInitCause(error);
+		return detail === undefined ? error.message : `${error.message}\n${detail}`;
+	}
+	return error instanceof Error ? error.message : String(error);
+}
+
 export interface ResourceExtensionPaths {
 	skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
 	promptPaths?: Array<{ path: string; metadata: PathMetadata }>;
@@ -341,9 +365,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	async reload(): Promise<void> {
-		// SCRAMJET-DIVERGENCE: settings reload and source-map clearing are deferred to the commit block
-		// below (after the required builtin init succeeds) so a throwing builtin leaves previously committed
-		// loader state intact. Path resolution uses the settings the caller already reloaded.
+		// SCRAMJET-DIVERGENCE: settings reload and source-map clearing are deferred to the commit block below
+		// (after the required builtin init succeeds) so a throwing builtin leaves previously committed loader state
+		// intact. Path resolution reads whatever the shared SettingsManager currently holds — freshly loaded at
+		// construction for the standalone callers (createAgentSessionServices, sdk.ts), or caller-reloaded first on
+		// the AgentSession.reload() path; a caller needing fresh settings must reload before invoking reload().
 		const resolvedPaths = await this.packageManager.resolve();
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,

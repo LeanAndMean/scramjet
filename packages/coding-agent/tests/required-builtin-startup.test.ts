@@ -78,7 +78,18 @@ describe("main() surfaces the required builtin failure at startup", () => {
 		delete process.env[ENV_SESSION_DIR];
 	});
 
-	it("exits non-zero with a Scramjet-attributed error and retains the cause", async () => {
+	class ExitSignal extends Error {
+		constructor(readonly code: number | undefined) {
+			super(`process.exit(${code})`);
+		}
+	}
+
+	// Runs main() with a throwing required builtin, capturing the process.exit code and everything written to
+	// console.error/console.log so callers can assert both the exit code and the surfaced text.
+	async function runMain(
+		argv: string[],
+		builtinInit: () => void,
+	): Promise<{ code: number | undefined; output: string }> {
 		const { ENV_AGENT_DIR, ENV_SESSION_DIR } = await import("../src/config.js");
 		const dir = mkdtempSync(join(tmpdir(), "required-builtin-main-"));
 		const agentDir = join(dir, "agent");
@@ -86,36 +97,72 @@ describe("main() surfaces the required builtin failure at startup", () => {
 		process.env[ENV_SESSION_DIR] = join(agentDir, "sessions");
 		process.chdir(dir);
 
-		class ExitSignal extends Error {
-			constructor(readonly code: number | undefined) {
-				super(`process.exit(${code})`);
-			}
-		}
-		const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+		vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
 			throw new ExitSignal(code);
 		}) as never);
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 		const { main } = await import("../src/main.js");
-		const original = new Error("builtin boom detail");
-
 		let caught: unknown;
 		try {
-			await main(["--offline"], {
-				builtinInit: () => {
-					throw original;
-				},
-			});
+			await main(argv, { builtinInit });
 		} catch (error) {
 			caught = error;
 		}
 
 		expect(caught).toBeInstanceOf(ExitSignal);
-		expect((caught as ExitSignal).code).toBe(1);
-		expect(exitSpy).toHaveBeenCalledWith(1);
+		const output = [...errorSpy.mock.calls, ...logSpy.mock.calls].map((call) => String(call[0])).join("\n");
+		return { code: (caught as ExitSignal).code, output };
+	}
 
-		const output = errorSpy.mock.calls.map((call) => String(call[0])).join("\n");
+	it("exits non-zero with a Scramjet-attributed error and renders an Error cause's stack", async () => {
+		const { code, output } = await runMain(["--offline"], () => {
+			throw new Error("builtin boom detail");
+		});
+
+		expect(code).toBe(1);
 		expect(output).toMatch(/scramjet/i);
 		expect(output).toContain("builtin boom detail");
+	});
+
+	it("renders a non-Error (string) cause via String()", async () => {
+		const { code, output } = await runMain(["--offline"], () => {
+			throw "string boom detail";
+		});
+
+		expect(code).toBe(1);
+		expect(output).toMatch(/scramjet/i);
+		expect(output).toContain("string boom detail");
+	});
+
+	it("exits cleanly (no anonymous crash) when the cause is undefined", async () => {
+		const { code, output } = await runMain(["--offline"], () => {
+			throw undefined;
+		});
+
+		expect(code).toBe(1);
+		expect(output).toMatch(/scramjet/i);
+	});
+
+	// Pins current behavior (issue 361 S6b): --help and --list-models are handled after runtime creation, so a
+	// broken required builtin exits(1) before either can print. Making them work despite a broken builtin is
+	// deferred design work; this documents the status quo, it does not endorse it.
+	it("--help exits non-zero before printing when the required builtin is broken", async () => {
+		const { code, output } = await runMain(["--help"], () => {
+			throw new Error("help builtin boom");
+		});
+
+		expect(code).toBe(1);
+		expect(output).toMatch(/scramjet/i);
+	});
+
+	it("--list-models exits non-zero before printing when the required builtin is broken", async () => {
+		const { code, output } = await runMain(["--list-models"], () => {
+			throw new Error("list-models builtin boom");
+		});
+
+		expect(code).toBe(1);
+		expect(output).toMatch(/scramjet/i);
 	});
 });

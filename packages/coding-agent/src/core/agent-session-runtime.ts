@@ -169,6 +169,20 @@ export class AgentSessionRuntime {
 		this._modelFallbackMessage = result.modelFallbackMessage;
 	}
 
+	// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required builtin
+	// failure aborts before the irreversible session_shutdown/dispose, leaving the live runtime intact. Every
+	// caller passes a target sessionManager independent of the live one, so a failed candidate mutates no live
+	// state; the teardown reason and destination file are derived from the createRuntime options.
+	private async swapRuntime(
+		options: Parameters<CreateAgentSessionRuntimeFactory>[0] & {
+			sessionStartEvent: SessionStartEvent & { reason: SessionShutdownEvent["reason"] };
+		},
+	): Promise<void> {
+		const candidate = await this.createRuntime(options);
+		await this.teardownCurrent(options.sessionStartEvent.reason, options.sessionManager.getSessionFile());
+		this.apply(candidate);
+	}
+
 	private async finishSessionReplacement(withSession?: (ctx: ReplacedSessionContext) => Promise<void>): Promise<void> {
 		if (this.rebindSession) {
 			await this.rebindSession(this.session);
@@ -190,16 +204,12 @@ export class AgentSessionRuntime {
 		const previousSessionFile = this.session.sessionFile;
 		const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
 		assertSessionCwdExists(sessionManager, this.cwd);
-		// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
-		// builtin failure aborts before the irreversible session_shutdown/dispose, leaving the live runtime intact.
-		const candidate = await this.createRuntime({
+		await this.swapRuntime({
 			cwd: sessionManager.getCwd(),
 			agentDir: this.services.agentDir,
 			sessionManager,
 			sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
 		});
-		await this.teardownCurrent("resume", sessionManager.getSessionFile());
-		this.apply(candidate);
 		await this.finishSessionReplacement(options?.withSession);
 		return { cancelled: false };
 	}
@@ -231,17 +241,13 @@ export class AgentSessionRuntime {
 			sessionManager.newSession({ parentSession: options.parentSession });
 		}
 
-		// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
-		// builtin failure aborts before the irreversible session_shutdown/dispose, leaving the live runtime intact.
-		const candidate = await this.createRuntime({
+		await this.swapRuntime({
 			cwd: this.cwd,
 			agentDir: this.services.agentDir,
 			sessionManager,
 			sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
 			inherited,
 		});
-		await this.teardownCurrent("new", sessionManager.getSessionFile());
-		this.apply(candidate);
 		if (options?.setup) {
 			await options.setup(this.session.sessionManager);
 			this.session.agent.state.messages = this.session.sessionManager.buildSessionContext().messages;
@@ -287,59 +293,52 @@ export class AgentSessionRuntime {
 			if (!targetLeafId) {
 				const sessionManager = SessionManager.create(this.cwd, sessionDir);
 				sessionManager.newSession({ parentSession: currentSessionFile });
-				// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
-				// builtin failure aborts before the irreversible session_shutdown/dispose. The fresh sessionManager
-				// is independent of the live one, so the on-disk file it wrote is an inert artifact on failure.
-				const candidate = await this.createRuntime({
+				// SCRAMJET-DIVERGENCE: newSession() writes no file until the first assistant response, so this fresh,
+				// live-independent manager leaves nothing on disk to orphan when a candidate throws.
+				await this.swapRuntime({
 					cwd: this.cwd,
 					agentDir: this.services.agentDir,
 					sessionManager,
 					sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
 				});
-				await this.teardownCurrent("fork", sessionManager.getSessionFile());
-				this.apply(candidate);
 				await this.finishSessionReplacement(options?.withSession);
 				return { cancelled: false, selectedText };
 			}
 
 			const sourceManager = SessionManager.open(currentSessionFile, sessionDir);
+			// SCRAMJET-DIVERGENCE: createBranchedSession() writes the branch .jsonl now when the branch contains an
+			// assistant message — before candidate preparation — so a throwing candidate orphans that file.
+			// sourceManager/sessionManager are independent of the live manager, so the live runtime survives.
 			const forkedSessionPath = sourceManager.createBranchedSession(targetLeafId);
 			if (!forkedSessionPath) {
 				throw new Error("Failed to create forked session");
 			}
 			const sessionManager = SessionManager.open(forkedSessionPath, sessionDir);
-			// SCRAMJET-DIVERGENCE: prepare the candidate before teardown; sourceManager/sessionManager are
-			// independent of the live manager, so a failed candidate leaves the live runtime intact.
-			const candidate = await this.createRuntime({
+			await this.swapRuntime({
 				cwd: sessionManager.getCwd(),
 				agentDir: this.services.agentDir,
 				sessionManager,
 				sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
 			});
-			await this.teardownCurrent("fork", sessionManager.getSessionFile());
-			this.apply(candidate);
 			await this.finishSessionReplacement(options?.withSession);
 			return { cancelled: false, selectedText };
 		}
 
 		// SCRAMJET-DIVERGENCE: clone the live in-memory manager into an independent target before branching, so a
 		// failed candidate never leaves the live in-memory SessionManager mutated (a reorder alone cannot protect
-		// this branch because newSession/createBranchedSession mutate their receiver in place). Then prepare the
-		// candidate before teardown, mirroring the persisted branches.
+		// this branch because newSession/createBranchedSession mutate their receiver in place).
 		const sessionManager = this.session.sessionManager.cloneInMemory();
 		if (!targetLeafId) {
 			sessionManager.newSession({ parentSession: this.session.sessionFile });
 		} else {
 			sessionManager.createBranchedSession(targetLeafId);
 		}
-		const candidate = await this.createRuntime({
+		await this.swapRuntime({
 			cwd: this.cwd,
 			agentDir: this.services.agentDir,
 			sessionManager,
 			sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
 		});
-		await this.teardownCurrent("fork", sessionManager.getSessionFile());
-		this.apply(candidate);
 		await this.finishSessionReplacement(options?.withSession);
 		return { cancelled: false, selectedText };
 	}
@@ -369,22 +368,21 @@ export class AgentSessionRuntime {
 		}
 
 		const previousSessionFile = this.session.sessionFile;
+		// SCRAMJET-DIVERGENCE: copyFileSync copies the source .jsonl into the session dir now, before candidate
+		// preparation, so a throwing candidate leaves that copied file behind. The opened manager is independent
+		// of the live one, so the live runtime survives on failure.
 		if (resolve(destinationPath) !== resolvedPath) {
 			copyFileSync(resolvedPath, destinationPath);
 		}
 
 		const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
 		assertSessionCwdExists(sessionManager, this.cwd);
-		// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
-		// builtin failure aborts before the irreversible session_shutdown/dispose, leaving the live runtime intact.
-		const candidate = await this.createRuntime({
+		await this.swapRuntime({
 			cwd: sessionManager.getCwd(),
 			agentDir: this.services.agentDir,
 			sessionManager,
 			sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
 		});
-		await this.teardownCurrent("resume", sessionManager.getSessionFile());
-		this.apply(candidate);
 		await this.finishSessionReplacement();
 		return { cancelled: false };
 	}

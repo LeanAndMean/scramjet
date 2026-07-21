@@ -298,6 +298,44 @@ describe("AgentSessionRuntime — atomic fork/clone (Stage 4)", () => {
 		}
 	});
 
+	const persistedForkSuccessCases: Array<{
+		name: string;
+		setup: (fx: Fixture) => { entryId: string; position: "before" | "at" };
+	}> = [
+		{
+			name: "persisted root fork (no leaf)",
+			setup: (fx) => ({
+				entryId: fx.runtime.session.sessionManager.appendMessage(userMessage("hi")),
+				position: "before",
+			}),
+		},
+		{
+			name: "persisted branched fork (clone via at)",
+			setup: (fx) => {
+				const sm = fx.runtime.session.sessionManager;
+				sm.appendMessage(userMessage("hi"));
+				// The assistant message flushes the session file so the branched path can reopen it.
+				const a1 = sm.appendMessage(assistantText("ok"));
+				return { entryId: a1, position: "at" };
+			},
+		},
+	];
+
+	for (const { name, setup } of persistedForkSuccessCases) {
+		it(`${name}: a successful fork commits the replacement and preserves ordering`, async () => {
+			const fx = await buildFixture({ initialInMemory: false });
+			const { entryId, position } = setup(fx);
+			const before = fx.runtime.session;
+
+			const result = await fx.runtime.fork(entryId, { position });
+
+			expect(result.cancelled).toBe(false);
+			expect(fx.runtime.session).not.toBe(before);
+			expect(fx.events).toEqual(["session_shutdown", "session_start"]);
+			expect(fx.rebindCalls).toHaveLength(1);
+		});
+	}
+
 	it("a successful in-memory fork/clone preserves ordering and never mutates the source manager", async () => {
 		const fx = await buildFixture({ initialInMemory: true });
 		const sourceManager = fx.runtime.session.sessionManager;

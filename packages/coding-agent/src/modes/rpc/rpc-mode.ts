@@ -20,6 +20,7 @@ import type {
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.js";
 import { takeOverStdout, writeRawStdout } from "../../core/output-guard.js";
+import { describeRuntimeError } from "../../core/resource-loader.js";
 import { killTrackedDetachedChildren } from "../../utils/shell.js";
 import { type Theme, theme } from "../interactive/theme/theme.js";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.js";
@@ -729,13 +730,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			}
 			await checkShutdownRequested();
 		} catch (commandError: unknown) {
-			output(
-				error(
-					command.id,
-					command.type,
-					commandError instanceof Error ? commandError.message : String(commandError),
-				),
-			);
+			output(error(command.id, command.type, describeRuntimeError(commandError)));
 		}
 	};
 

@@ -119,7 +119,11 @@ describe("failed builtin init leaves previously committed loader state intact", 
 		expect(loader.getExtensions()).toBe(before);
 	});
 
-	it("preserves settings (no settings reload on the failing load)", async () => {
+	// Scoped to the standalone loader path (a bare `loader.reload()`, as used by createAgentSessionServices and
+	// sdk.ts): the loader itself performs no settings reload until its post-builtin commit block, so a failing
+	// load never reloads settings. This does NOT hold for AgentSession.reload(), which reloads settings before
+	// the builtin can throw (see agent-session.ts).
+	it("standalone loader preserves settings (no settings reload on the failing load)", async () => {
 		const settingsManager = SettingsManager.inMemory();
 		const { loader } = makeLoader({ settingsManager, builtinInit: succeedThenThrow(new Error("second load")) });
 		await loader.reload();

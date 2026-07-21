@@ -162,4 +162,29 @@ describe("AgentSession.reload() — transactional required-builtin validation (S
 
 		expect(fx.events).toEqual(["session_start", "session_shutdown", "session_start"]);
 	});
+
+	it("a successful reload reaches resetApiProviders (a non-builtin sentinel provider is wiped)", async () => {
+		const fx = await buildFixture();
+
+		// The mirror of the failure test: since resetApiProviders() re-registers only the built-ins, the sentinel
+		// surviving proved reset was skipped on failure. Here the sentinel being gone proves reset was reached on
+		// success — pinning that the deliberate move of resetApiProviders() after resourceLoader.reload() did not
+		// drop it from the success path.
+		const sentinelSource = "reload-transactional-success-sentinel";
+		const sentinelStream = (() => {
+			throw new Error("sentinel stream must never be invoked");
+		}) as never;
+		registerApiProvider(
+			{ api: "reload-success-sentinel-api", stream: sentinelStream, streamSimple: sentinelStream },
+			sentinelSource,
+		);
+
+		try {
+			expect(getApiProvider("reload-success-sentinel-api")).toBeDefined();
+			await fx.session.reload();
+			expect(getApiProvider("reload-success-sentinel-api")).toBeUndefined();
+		} finally {
+			unregisterApiProviders(sentinelSource);
+		}
+	});
 });

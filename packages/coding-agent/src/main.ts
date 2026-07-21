@@ -31,7 +31,7 @@ import { KeybindingsManager } from "./core/keybindings.js";
 import type { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
-import { RequiredBuiltinInitError } from "./core/resource-loader.js";
+import { RequiredBuiltinInitError, renderRequiredBuiltinInitCause } from "./core/resource-loader.js";
 import type { CreateAgentSessionOptions } from "./core/sdk.js";
 import {
 	formatMissingSessionCwdPrompt,
@@ -644,10 +644,9 @@ export async function main(args: string[], options?: MainOptions) {
 		// diagnostic path.
 		if (error instanceof RequiredBuiltinInitError) {
 			console.error(chalk.red(`Error: ${error.message}`));
-			if (error.cause instanceof Error) {
-				console.error(chalk.dim(error.cause.stack ?? error.cause.message));
-			} else if (error.cause !== undefined) {
-				console.error(chalk.dim(String(error.cause)));
+			const detail = renderRequiredBuiltinInitCause(error);
+			if (detail !== undefined) {
+				console.error(chalk.dim(detail));
 			}
 			process.exit(1);
 		}

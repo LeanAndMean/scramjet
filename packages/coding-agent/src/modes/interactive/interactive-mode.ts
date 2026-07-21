@@ -66,7 +66,7 @@ import { createCompactionSummaryMessage } from "../../core/messages.js";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.js";
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
-import type { ResourceDiagnostic } from "../../core/resource-loader.js";
+import { describeRuntimeError, type ResourceDiagnostic } from "../../core/resource-loader.js";
 import { parseScramjetCommandBlock } from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: scramjet-command block parsing (issue 82)
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
 import { type SessionContext, SessionManager } from "../../core/session-manager.js";
@@ -1627,8 +1627,7 @@ export class InteractiveMode {
 	}
 
 	private async handleFatalRuntimeError(prefix: string, error: unknown): Promise<never> {
-		const message = error instanceof Error ? error.message : String(error);
-		this.showError(`${prefix}: ${message}`);
+		this.showError(`${prefix}: ${describeRuntimeError(error)}`);
 		stopThemeWatcher();
 		this.stop();
 		process.exit(1);
@@ -4961,7 +4960,7 @@ export class InteractiveMode {
 			this.showStatus("Reloaded keybindings, extensions, skills, prompts, themes");
 		} catch (error) {
 			dismissReloadBox(previousEditor as Component);
-			this.showError(`Reload failed: ${error instanceof Error ? error.message : String(error)}`);
+			this.showError(`Reload failed: ${describeRuntimeError(error)}`);
 		}
 	}
 
