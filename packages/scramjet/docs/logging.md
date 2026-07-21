@@ -1,6 +1,6 @@
 # Structured Logging
 
-Scramjet journals diagnostic and lifecycle events via Pi's `appendEntry()` mechanism. All log entries are written to the session JSONL file and are queryable with standard tools. No separate log file is produced.
+Scramjet journals diagnostic and lifecycle events via Pi's `appendEntry()` mechanism. Successfully persisted log entries are written to the session JSONL file and are queryable with standard tools. No separate log file is produced.
 
 ## Entry schema
 
@@ -33,6 +33,14 @@ interface ScramjetLogEntry {
 | `lifecycle` | Structured state transitions and decision points | Never |
 
 The `hasUI` flag is captured on `session_start`. Before TUI detection completes, stderr is the safe default (hasUI starts false).
+
+## Persistence failures
+
+A failed `appendEntry()` call remains non-fatal. The logger attempts one direct stderr diagnostic per logger lifetime, whether the failure occurs in TUI, headless, or pre-session operation. The diagnostic identifies the original log category and message and includes the persistence error. Later log calls continue attempting `appendEntry()`, but additional failures do not repeat the fallback diagnostic.
+
+The fallback writes directly to stderr rather than routing through `ScramjetLogger`, preventing recursion through the failed journal path. Formatting and stderr output are protected so that a broken stderr sink also remains non-fatal. For a headless `warn()`, this persistence diagnostic is separate from the ordinary warning output described above, so the first failed warning attempts both writes.
+
+The fallback does not serialize the entry's `data`, retry or roll back persistence, or write to an external file or logging backend. Successful TUI logging remains stderr-silent.
 
 ## Categories
 
@@ -338,3 +346,4 @@ When a session misbehaves (command didn't chain, probe didn't fire, unexpected p
 | Probe fired but no chain | `"probe watchdog fired"` or `"status probe turn ended without a valid status report"` | Agent didn't call `report_scramjet_command_status` |
 | Double agent_end | Two `"agent_end observed"` without intervening probe | Fast successive turns; second skipped by lifecycle guard |
 | Self-heal to dormant | `"lifecycle: enterDormant"` after probe | Probe ended without report; command preserved for resume |
+| `[scramjet/logger] Failed to persist ...` on stderr | Category, message, and persistence error in the fallback diagnostic | Session journal persistence failed; later appends are still attempted, but the fallback appears only once per logger lifetime |
