@@ -148,9 +148,17 @@ describe("Agent.runHarnessTool", () => {
 		);
 
 		let agentRef!: Agent;
+		let harnessPromise!: Promise<void>;
 		const readTool = makeReadTool(async () => {
-			// Queue a harness tool mid-run; it must not execute until the turn boundary.
-			await agentRef.runHarnessTool(harnessTool, { note: "midrun" });
+			// Capture the promise mid-run WITHOUT awaiting it: the queued call cannot drain until this
+			// tool returns, so an inline await would deadlock. Record its settlement into the shared
+			// timeline — it must land AFTER the tool executes ("harness"), proving the promise resolves
+			// on execution and not at enqueue time.
+			harnessPromise = agentRef.runHarnessTool(harnessTool, { note: "midrun" });
+			harnessPromise.then(
+				() => order.push("harness-settled"),
+				() => order.push("harness-settled"),
+			);
 			return { content: [{ type: "text", text: "ok" }], details: undefined };
 		});
 		const agent = new Agent({
@@ -161,11 +169,16 @@ describe("Agent.runHarnessTool", () => {
 		agentRef = agent;
 
 		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+		// Settlement (#341): the promise resolves only after the queued call actually executes.
+		await expect(harnessPromise).resolves.toBeUndefined();
 
+		// The promise settled only AFTER the queued call executed — not at enqueue time. A regression
+		// that resolved at enqueue would push "harness-settled" before "harness".
+		expect(order.indexOf("harness-settled")).toBeGreaterThan(order.indexOf("harness"));
 		expect(record).toEqual(["midrun"]);
 		expect(calls).toHaveLength(2);
 		// The harness tool executed after the first LLM call and before the second one.
-		expect(order).toEqual(["stream-1", "harness", "stream-2"]);
+		expect(order.filter((e) => e !== "harness-settled")).toEqual(["stream-1", "harness", "stream-2"]);
 		// The first call's context holds only the user message. The second call's context holds the
 		// real tool call plus the drained harness tool call — proving the harness call was spliced in
 		// before the next LLM request.
@@ -345,12 +358,14 @@ describe("Agent.runHarnessTool", () => {
 		expect(ids[2]).toBe("custom_id-1");
 	});
 
-	it("reset() warns with queued harness tool names when discarding the queue", async () => {
+	it("reset() rejects a queued harness tool and warns with its name", async () => {
 		const warnings: string[] = [];
 		const originalWarn = console.warn;
 		console.warn = (msg?: unknown) => {
 			warnings.push(String(msg));
 		};
+		let queuedPromise!: Promise<void>;
+		let rejection: unknown;
 		try {
 			const { fn } = createRecordingStreamFn([makeTextAssistantMessage("done")]);
 			let agentRef!: Agent;
@@ -362,8 +377,15 @@ describe("Agent.runHarnessTool", () => {
 			agentRef = agent;
 			agent.subscribe((event) => {
 				if (event.type === "message_start" && event.message.role === "user") {
-					// Queue a harness call mid-run, then reset before the turn boundary drains it.
-					void agentRef.runHarnessTool(makeHarnessTool([]), { note: "discarded" });
+					// Queue a harness call mid-run, observe its rejection immediately (before reset can
+					// reject it), then reset before the turn boundary drains it.
+					queuedPromise = agentRef.runHarnessTool(makeHarnessTool([]), { note: "discarded" });
+					queuedPromise.then(
+						() => {},
+						(err) => {
+							rejection = err;
+						},
+					);
 					agentRef.reset();
 				}
 			});
@@ -373,8 +395,146 @@ describe("Agent.runHarnessTool", () => {
 			console.warn = originalWarn;
 		}
 
+		// The queued call's promise rejects rather than silently resolving — an awaiting caller sees the
+		// discard (#341).
+		await expect(queuedPromise).rejects.toThrow(/discarded unsettled harness tool call/);
+		expect(rejection).toBeInstanceOf(Error);
 		// The count identifies how many were lost; the names identify which transcript artifacts.
-		expect(warnings.some((w) => w.includes("discarded 1 queued harness tool call"))).toBe(true);
+		expect(warnings.some((w) => w.includes("rejected 1 unsettled harness tool call"))).toBe(true);
 		expect(warnings.some((w) => w.includes("harness_notice"))).toBe(true);
+	});
+
+	it("rejects an in-flight transient harness tool on reset yet completes the underlying work", async () => {
+		const originalWarn = console.warn;
+		console.warn = () => {};
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let executed = false;
+		const slowTool: AgentTool = {
+			name: "slow_notice",
+			label: "Slow Notice",
+			description: "harness tool that resolves on an external gate",
+			parameters: { type: "object", properties: {}, required: [] },
+			execute: async () => {
+				await gate;
+				executed = true;
+				return { content: [{ type: "text", text: "slow done" }], details: undefined };
+			},
+		};
+		const agent = new Agent({ initialState: { model: testModel, tools: [] } });
+		// The underlying transient work finishes with the tool-result message_end even after the
+		// public promise is revoked; observe that event deterministically.
+		let underlyingDone!: () => void;
+		const underlyingComplete = new Promise<void>((resolve) => {
+			underlyingDone = resolve;
+		});
+		agent.subscribe((event) => {
+			if (event.type === "message_end" && event.message.role === "toolResult") underlyingDone();
+		});
+
+		try {
+			// Idle transient run (not queued). Observe its rejection immediately, then reset while it is
+			// gated — outside any queue.
+			const transient = agent.runHarnessTool(slowTool, {});
+			const rejection = expect(transient).rejects.toThrow(/discarded unsettled harness tool call/);
+			agent.reset();
+			await rejection;
+
+			// The public guarantee was revoked, but the underlying work still runs to completion.
+			release();
+			await underlyingComplete;
+			expect(executed).toBe(true);
+		} finally {
+			console.warn = originalWarn;
+		}
+	});
+
+	it("fulfills the promise (with an isError result) when the tool's execute throws", async () => {
+		const throwingTool: AgentTool = {
+			name: "boom",
+			label: "Boom",
+			description: "harness tool whose execute throws",
+			parameters: { type: "object", properties: {}, required: [] },
+			execute: async () => {
+				throw new Error("tool exploded");
+			},
+		};
+		const agent = new Agent({ initialState: { model: testModel, tools: [] } });
+
+		// A tool's own execute() error is not an infrastructure failure: the promise resolves.
+		await expect(agent.runHarnessTool(throwingTool, {})).resolves.toBeUndefined();
+
+		const result = agent.state.messages.find((m) => m.role === "toolResult");
+		expect(result).toBeDefined();
+		expect((result as any).isError).toBe(true);
+		expect((result as any).content[0].text).toContain("tool exploded");
+	});
+
+	it("rejects the failing and remnant final-flush calls without erasing partial artifacts", async () => {
+		const originalWarn = console.warn;
+		console.warn = () => {};
+		const { fn } = createRecordingStreamFn([makeTextAssistantMessage("done")]);
+		let agentRef!: Agent;
+		const agent = new Agent({
+			initialState: { model: testModel, tools: [] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+		});
+		agentRef = agent;
+
+		const makeNamed = (name: string): AgentTool => ({
+			name,
+			label: name,
+			description: "harness tool",
+			parameters: { type: "object", properties: {}, required: [] },
+			execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
+		});
+
+		let listenerFailed = false;
+		let p1!: Promise<void>;
+		let p2!: Promise<void>;
+		agent.subscribe((event) => {
+			// Queue two calls during the run's final turn (agent_end), each observed immediately.
+			if (event.type === "agent_end") {
+				p1 = agentRef.runHarnessTool(makeNamed("harness_a"), {});
+				p1.catch(() => {});
+				p2 = agentRef.runHarnessTool(makeNamed("harness_b"), {});
+				p2.catch(() => {});
+				return;
+			}
+			// Force an infrastructure failure on the first call's tool-result event: a listener throw
+			// escapes the pipeline during the final flush.
+			if (
+				event.type === "message_end" &&
+				event.message.role === "toolResult" &&
+				event.message.toolName === "harness_a" &&
+				!listenerFailed
+			) {
+				listenerFailed = true;
+				throw new Error("listener exploded");
+			}
+		});
+
+		// The run's promise rejects with the drain failure — the failure remains observable.
+		await expect(agent.prompt({ role: "user", content: "go", timestamp: Date.now() })).rejects.toThrow(
+			"listener exploded",
+		);
+
+		// The failing call and the un-executed remnant both reject.
+		await expect(p1).rejects.toThrow("listener exploded");
+		await expect(p2).rejects.toThrow("listener exploded");
+
+		// harness_b never ran (its record was rejected as a remnant), but harness_a's assistant
+		// tool-call message was already emitted before the failure — rejection is not artifact absence.
+		expect(
+			agent.state.messages.some(
+				(m) => m.role === "assistant" && m.content.some((c) => c.type === "toolCall" && c.name === "harness_a"),
+			),
+		).toBe(true);
+		expect(agent.state.messages.some((m) => m.role === "toolResult" && m.toolName === "harness_b")).toBe(false);
+
+		console.warn = originalWarn;
 	});
 });

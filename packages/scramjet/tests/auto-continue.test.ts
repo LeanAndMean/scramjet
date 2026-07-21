@@ -3781,12 +3781,14 @@ describe("next-step selection record tool", () => {
 		});
 	});
 
-	it("records headless autopilot auto-dispatch as selected, before dispatch", async () => {
+	it("records headless autopilot auto-dispatch as selected, before a fresh-session replacement (T10)", async () => {
 		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
 		const state = runningState(def, { enabled: true });
 		const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
-		// Gate the record invocation to prove the headless .then dispatch waits for it
-		// to settle, independent of microtask draining (S2).
+		// Issue 362 evidence: gate the record invocation to prove the headless .then dispatch does not
+		// begin the fresh-session replacement until the record promise settles — the consumer-side
+		// counterpart to the runtime persisted-settlement boundary (#341). invokeHarnessTool settling on
+		// actual persistence is what makes this ordering real (not merely incidental) in production.
 		let releaseRecord: () => void = () => {};
 		const recordGate = new Promise<void>((resolve) => {
 			releaseRecord = resolve;
@@ -3800,12 +3802,13 @@ describe("next-step selection record tool", () => {
 		await simulateTwoTurns(bag, ctxBag, report, {
 			status: "completed",
 			summary: "done",
-			next_steps: [{ message: "/b:ok", reason: "continue" }],
+			next_steps: [{ message: "/b:ok", reason: "continue", fresh_session: true }],
 			recommended_next_step: 0,
 		});
 		await flushMicrotasks();
 
-		// Record captured, but dispatch is still blocked behind the unresolved record promise.
+		// Record captured, but neither the session replacement nor the dispatch has started while the
+		// record promise is still unresolved.
 		const calls = recordCalls(bag.pi);
 		expect(calls).toHaveLength(1);
 		expect(calls[0].args).toMatchObject({
@@ -3814,11 +3817,14 @@ describe("next-step selection record tool", () => {
 			sourceCommand: "a:cmd",
 			source: "completion",
 		});
+		expect(ctxBag.newSessionCalls).toHaveLength(0);
 		expect(ctxBag.dispatched).toEqual([]);
 
 		releaseRecord();
 		await flushMicrotasks();
-		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+		// Exactly one replacement, and the dispatch flows through the new-session context.
+		expect(ctxBag.newSessionCalls).toHaveLength(1);
+		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "new" }]);
 	});
 
 	it("headless: a non-stringifiable record rejection is swallowed and dispatch still fires (S1)", async () => {

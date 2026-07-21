@@ -1269,7 +1269,7 @@ export interface ExtensionAPI {
 	/** Set the active tools by name. */
 	setActiveTools(toolNames: string[]): void;
 
-	// SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
+	// SCRAMJET-DIVERGENCE: harness-tool invocation (#244), persisted-settlement boundary (#341).
 	/**
 	 * Execute a registered tool as a harness-originated call, without the model requesting it.
 	 *
@@ -1278,7 +1278,18 @@ export interface ExtensionAPI {
 	 * produces the same live `tool_execution_*`/message events, persisted session entries, and
 	 * `tool_call`/`tool_result` extension hooks as a normal tool call, but emits no run/turn
 	 * framing. When idle the call executes immediately; when a run is active it is queued and
-	 * drained before the next intra-run LLM call. Rejects if no tool with `name` is registered.
+	 * drained before the next intra-run LLM call.
+	 *
+	 * The returned promise resolves only after the resulting tool-result message has been persisted
+	 * to the session (#341) — a strictly stronger guarantee than Agent-core execution alone — so a
+	 * consumer that must not replace or tear down the session until the record row exists can safely
+	 * `await` it. It rejects if no tool with `name` is registered, if a matching event fails to
+	 * process/persist, if the session is disposed before it settles or is called after disposal, or if
+	 * an explicit {@link InvokeHarnessToolOptions.toolCallId} is malformed or already pending.
+	 * **Rejection means the pipeline
+	 * did not complete — it does not prove the artifact is absent** (state and persistence may have
+	 * partially completed), so do not blindly retry. A tool's own `execute()` error resolves normally
+	 * as an `isError` result.
 	 */
 	invokeHarnessTool(name: string, args: unknown, options?: InvokeHarnessToolOptions): Promise<void>;
 
@@ -1514,7 +1525,10 @@ export type SetModelHandler = (model: Model<any>) => Promise<boolean>;
 // SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
 /** Options for {@link ExtensionAPI.invokeHarnessTool}. */
 export interface InvokeHarnessToolOptions {
-	/** Explicit tool-call id. Defaults to a provider-safe generated id when omitted. */
+	/**
+	 * Explicit tool-call id — must be provider-safe (1-64 characters of `[a-zA-Z0-9_-]`); an invalid
+	 * id is rejected. Defaults to a provider-safe generated id when omitted.
+	 */
 	toolCallId?: string;
 }
 

@@ -93,6 +93,9 @@ interface AgentSession {
   cycleModel(): Promise<ModelCycleResult | undefined>;
   cycleThinkingLevel(): ThinkingLevel | undefined;
 
+  // Harness-originated tool execution (resolves after the tool-result is persisted)
+  invokeHarnessTool(name: string, args: unknown, options?: { toolCallId?: string }): Promise<void>;
+
   // State access
   agent: Agent;
   model: Model | undefined;
@@ -116,6 +119,8 @@ interface AgentSession {
 ```
 
 Session replacement APIs such as new-session, resume, fork, and import live on `AgentSessionRuntime`, not on `AgentSession`.
+
+`invokeHarnessTool(name, args, options?)` runs a registered tool as a harness-originated call (not model-requested) through the real execution pipeline — same events, persistence, and hooks, but no run/turn framing. Its promise resolves only after the resulting tool-result message has been persisted to the session, so a consumer can `await` it before replacing or tearing down the session. It rejects on unknown tool, a matching event failing to persist, disposal before settlement or a call after disposal, or a malformed or duplicate explicit `toolCallId`; rejection does not prove the artifact is absent, so do not blindly retry. A tool's own `execute()` error resolves as an `isError` result rather than rejecting.
 
 ### createAgentSessionRuntime() and AgentSessionRuntime
 
