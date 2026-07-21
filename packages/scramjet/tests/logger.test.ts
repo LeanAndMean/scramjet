@@ -133,7 +133,40 @@ describe("createLogger", () => {
 		expect(() => logger.lifecycle("transition", { from: "idle", to: "running" })).not.toThrow();
 	});
 
-	it("still writes stderr when appendEntry throws and hasUI is false", () => {
+	it("writes one persistence fallback when appendEntry throws in TUI mode", () => {
+		const appendEntry = vi.fn(() => {
+			throw new Error("disk full");
+		});
+		const logger = createLogger({ appendEntry } as any);
+		logger.setHasUI(true);
+
+		expect(() => logger.debug("discovery", "bridge info")).not.toThrow();
+		expect(appendEntry).toHaveBeenCalledOnce();
+		expect(stderrSpy).toHaveBeenCalledOnce();
+		const written = String(stderrSpy.mock.calls[0][0]);
+		expect(written).toContain("discovery");
+		expect(written).toContain("bridge info");
+		expect(written).toContain("disk full");
+	});
+
+	it("continues append attempts but writes only the first persistence fallback", () => {
+		const appendEntry = vi.fn(() => {
+			throw new Error("disk full");
+		});
+		const logger = createLogger({ appendEntry } as any);
+		logger.setHasUI(true);
+
+		logger.debug("discovery", "first failure");
+		logger.lifecycle("second failure", { from: "idle", to: "running" });
+
+		expect(appendEntry).toHaveBeenCalledTimes(2);
+		expect(stderrSpy).toHaveBeenCalledOnce();
+		const written = String(stderrSpy.mock.calls[0][0]);
+		expect(written).toContain("first failure");
+		expect(written).not.toContain("second failure");
+	});
+
+	it("keeps the ordinary headless warning separate from the persistence fallback", () => {
 		const pi = {
 			appendEntry() {
 				throw new Error("disk full");
@@ -141,9 +174,27 @@ describe("createLogger", () => {
 		};
 		const logger = createLogger(pi as any);
 		logger.warn("scope", "visible warning");
+		expect(stderrSpy).toHaveBeenCalledTimes(2);
+		const writes = stderrSpy.mock.calls.map((call) => String(call[0]));
+		expect(writes.filter((written) => written.includes("disk full"))).toHaveLength(1);
+		expect(writes.filter((written) => written.includes("visible warning"))).toHaveLength(2);
+	});
+
+	it("attempts a broken persistence fallback only once", () => {
+		stderrSpy.mockRestore();
+		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+			throw new Error("EPIPE");
+		});
+		const appendEntry = vi.fn(() => {
+			throw new Error("disk full");
+		});
+		const logger = createLogger({ appendEntry } as any);
+		logger.setHasUI(true);
+
+		expect(() => logger.debug("discovery", "first failure")).not.toThrow();
+		expect(() => logger.debug("discovery", "second failure")).not.toThrow();
+		expect(appendEntry).toHaveBeenCalledTimes(2);
 		expect(stderrSpy).toHaveBeenCalledOnce();
-		const written = stderrSpy.mock.calls[0][0];
-		expect(written).toContain("visible warning");
 	});
 
 	it("swallows stderr write failures without propagating", () => {

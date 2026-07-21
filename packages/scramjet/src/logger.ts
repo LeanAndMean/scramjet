@@ -19,6 +19,7 @@ export interface ScramjetLogger {
 
 export function createLogger(pi: ExtensionAPI): ScramjetLogger {
 	let hasUI = false;
+	let persistenceFallbackAttempted = false;
 
 	function append(
 		level: ScramjetLogEntry["level"],
@@ -30,7 +31,13 @@ export function createLogger(pi: ExtensionAPI): ScramjetLogger {
 		if (data !== undefined) entry.data = data;
 		try {
 			pi.appendEntry(SCRAMJET_LOG_TYPE, entry);
-		} catch {}
+		} catch (error) {
+			if (persistenceFallbackAttempted) return;
+			persistenceFallbackAttempted = true;
+			try {
+				process.stderr.write(`[scramjet/logger] Failed to persist ${category}: ${message}: ${String(error)}\n`);
+			} catch {}
+		}
 	}
 
 	return {

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.56.1 — Surface journal persistence failures safely
+
+Adds a one-shot direct stderr diagnostic when Scramjet cannot persist a structured log entry. Persistence failures remain non-fatal, later journal appends are still attempted, and headless warnings retain their separate stderr output. Fixes [#358](https://github.com/LeanAndMean/scramjet/issues/358).
+
+### Changed
+
+- `logger.ts`: reports the first `appendEntry()` failure directly to stderr with the original category, message, and persistence error while protecting against broken stderr sinks.
+- `logging.md`: documents degraded persistence behavior, limits, and troubleshooting guidance.
+
+### Tests
+
+- `logger.test.ts`: covers TUI fallback output, repeated persistence failures, separate headless warning output, and broken stderr handling.
+
 ## 0.56.0 — Settle harness-tool promises on execution and persistence
 
 Makes the harness-tool-invocation primitive settle truthfully instead of resolving at enqueue time. `Agent.runHarnessTool()` now returns a deferred promise that resolves only after the full Agent-core pipeline finishes (synthetic assistant message, prepare/execute/finalize, tool-result message, state reduction, awaited listeners), and rejects when reset/teardown revokes an unsettled invocation, an infrastructure/listener/hook failure escapes, or a failed final drain strands later queued calls. `AgentSession.invokeHarnessTool()` layers a strictly stronger persisted-settlement boundary on top: it resolves only after the matching tool-result `message_end` is persisted (via a tool-call-id-keyed acknowledgement, never by globally draining the event queue), so a consumer can `await` it before replacing or tearing down the session. In both layers a tool's own `execute()` error still resolves as a normal `isError` result — rejection means the pipeline did not complete, not that the artifact is absent. Fixes [#341](https://github.com/LeanAndMean/scramjet/issues/341).
