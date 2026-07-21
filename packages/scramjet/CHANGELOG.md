@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.56.0 — Settle harness-tool promises on execution and persistence
+
+Makes the harness-tool-invocation primitive settle truthfully instead of resolving at enqueue time. `Agent.runHarnessTool()` now returns a deferred promise that resolves only after the full Agent-core pipeline finishes (synthetic assistant message, prepare/execute/finalize, tool-result message, state reduction, awaited listeners), and rejects when reset/teardown revokes an unsettled invocation, an infrastructure/listener/hook failure escapes, or a failed final drain strands later queued calls. `AgentSession.invokeHarnessTool()` layers a strictly stronger persisted-settlement boundary on top: it resolves only after the matching tool-result `message_end` is persisted (via a tool-call-id-keyed acknowledgement, never by globally draining the event queue), so a consumer can `await` it before replacing or tearing down the session. In both layers a tool's own `execute()` error still resolves as a normal `isError` result — rejection means the pipeline did not complete, not that the artifact is absent. Fixes [#341](https://github.com/LeanAndMean/scramjet/issues/341).
+
+### Changed
+
+- `packages/agent` (`agent.ts`): `runHarnessTool` returns a deferred promise that settles on actual execution; added an all-unsettled invocation set with once-only settlement, `rejectUnsettledHarnessTools()` (wired into `reset()` and the final-drain failure path), remnant rejection preserving the thrown run failure, and exported `generateHarnessToolCallId`.
+- `packages/coding-agent` (`agent-session.ts`): `invokeHarnessTool` resolves after Agent execution and the matching tool-result `message_end` is persisted, via a tool-call-id-keyed acknowledgement map; `dispose()` is now idempotent, rejects pending acknowledgements, and calls `rejectUnsettledHarnessTools()`; post-disposal invocations reject before executing anything; duplicate explicit `toolCallId` rejects.
+- `packages/coding-agent` (`extensions/types.ts`): documented the `ExtensionAPI.invokeHarnessTool` persisted-settlement contract in JSDoc.
+- `auto-continue.ts`: replaced the stale "resolves immediately when queued mid-run" ordering caveats with the truthful settlement behavior (best-effort record note preserved).
+- `extensions.md`, `sdk.md`, `CLAUDE.md`, `UPSTREAM_DIVERGENCE.md`: documented the two settlement boundaries and rejection semantics.
+
+### Tests
+
+- `packages/agent/tests/harness-tool-call.test.ts`: mid-run promise settles after execution (not at enqueue); reset/teardown rejections fire; transient reset rejects yet underlying work completes; tool `execute()` error resolves with `isError`; final-flush failure rejects the failing call and the remnant while preserving the run failure.
+- `packages/coding-agent/tests/harness-tool-invocation.test.ts`: gated persisted-settlement stays pending until the tool-result is persisted then resolves; duplicate explicit id rejects; persistence failure rejects after Agent ran; `dispose()` rejects a pending invocation and post-dispose calls execute nothing.
+- `auto-continue.test.ts`: headless ordering — no fresh-session replacement or dispatch until the next-step record persists, then exactly one replacement dispatched through the new-session context.
+
 ## 0.55.3 — Fix lifecycle replay for consumed replies and unknown-slash exits
 
 Adds two durable lifecycle-replay outcomes so `pi --resume`, fork, and tree navigation reconstruct the correct resting state. A consumed parked freetext reply now journals `scramjet:user-input-parked` with `{ parked: false }` (only after a successful `resumeFromParkedInput()`), so replay reconstructs **dormant** instead of waiting; the reply text is never persisted. An unknown-slash workflow exit now journals a new `scramjet:command-exited` entry (only after a successful `clearActiveCommand()`), so replay reconstructs **idle** instead of dormant; known Pi commands and `getCommands()` lookup failures preserve the workflow and emit nothing. `replayHistory()` becomes a chronological selected-branch fold. No `LifecycleState` or Pi-runtime changes. Fixes [#352](https://github.com/LeanAndMean/scramjet/issues/352).
