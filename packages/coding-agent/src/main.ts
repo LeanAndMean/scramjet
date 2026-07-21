@@ -31,7 +31,7 @@ import { KeybindingsManager } from "./core/keybindings.js";
 import type { ModelRegistry } from "./core/model-registry.js";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.js";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.js";
-import { RequiredBuiltinInitError, renderRequiredBuiltinInitCause } from "./core/resource-loader.js";
+import { isRequiredBuiltinInitError, renderRequiredBuiltinInitCause } from "./core/resource-loader.js";
 import type { CreateAgentSessionOptions } from "./core/sdk.js";
 import {
 	formatMissingSessionCwdPrompt,
@@ -642,7 +642,7 @@ export async function main(args: string[], options?: MainOptions) {
 		// before any productless AgentSession or session_start. Surface it as a fatal, product-attributed error
 		// (retaining the original cause) with a non-zero exit, never an anonymous crash or the optional-extension
 		// diagnostic path.
-		if (error instanceof RequiredBuiltinInitError) {
+		if (isRequiredBuiltinInitError(error)) {
 			console.error(chalk.red(`Error: ${error.message}`));
 			const detail = renderRequiredBuiltinInitCause(error);
 			if (detail !== undefined) {

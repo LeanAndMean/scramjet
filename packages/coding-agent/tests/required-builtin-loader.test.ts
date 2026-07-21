@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DefaultResourceLoaderOptions } from "../src/core/resource-loader.js";
-import { DefaultResourceLoader, RequiredBuiltinInitError } from "../src/core/resource-loader.js";
+import { DefaultResourceLoader, describeRuntimeError, RequiredBuiltinInitError } from "../src/core/resource-loader.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 import type { SourceInfo } from "../src/core/source-info.js";
 
@@ -160,5 +160,28 @@ describe("failed builtin init leaves previously committed loader state intact", 
 		expect(maps.extensionSkillSourceInfos.has("marker-path")).toBe(true);
 		expect(maps.extensionPromptSourceInfos.has("marker-path")).toBe(true);
 		expect(maps.extensionThemeSourceInfos.has("marker-path")).toBe(true);
+	});
+});
+
+describe("describeRuntimeError", () => {
+	it("appends the unwrapped cause chain for a RequiredBuiltinInitError", () => {
+		const root = new Error("root boom");
+		const wrapper = new Error("wrapper", { cause: root });
+		const text = describeRuntimeError(new RequiredBuiltinInitError(wrapper));
+		expect(text.startsWith("Scramjet product initialization failed\n")).toBe(true);
+		expect(text).toContain("wrapper");
+		expect(text).toContain("Caused by: ");
+		expect(text).toContain("root boom");
+	});
+
+	it("returns only the product message when there is no cause", () => {
+		expect(describeRuntimeError(new RequiredBuiltinInitError(undefined))).toBe(
+			"Scramjet product initialization failed",
+		);
+	});
+
+	it("passes other errors and non-errors through unchanged", () => {
+		expect(describeRuntimeError(new Error("plain"))).toBe("plain");
+		expect(describeRuntimeError("stringy")).toBe("stringy");
 	});
 });

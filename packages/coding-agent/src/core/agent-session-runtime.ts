@@ -178,8 +178,19 @@ export class AgentSessionRuntime {
 			sessionStartEvent: SessionStartEvent & { reason: SessionShutdownEvent["reason"] };
 		},
 	): Promise<void> {
+		if (options.sessionManager === this.session.sessionManager) {
+			throw new Error("swapRuntime requires a sessionManager independent of the live session's");
+		}
 		const candidate = await this.createRuntime(options);
-		await this.teardownCurrent(options.sessionStartEvent.reason, options.sessionManager.getSessionFile());
+		try {
+			await this.teardownCurrent(options.sessionStartEvent.reason, options.sessionManager.getSessionFile());
+		} catch (teardownError) {
+			// The prepared candidate would otherwise leak undisposed; never mask the teardown error.
+			try {
+				candidate.session.dispose();
+			} catch {}
+			throw teardownError;
+		}
 		this.apply(candidate);
 	}
 
@@ -388,12 +399,7 @@ export class AgentSessionRuntime {
 	}
 
 	async dispose(): Promise<void> {
-		await emitSessionShutdownEvent(this.session.extensionRunner, {
-			type: "session_shutdown",
-			reason: "quit",
-		});
-		this.beforeSessionInvalidate?.();
-		this.session.dispose();
+		await this.teardownCurrent("quit");
 	}
 }
 

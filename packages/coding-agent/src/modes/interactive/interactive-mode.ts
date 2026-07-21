@@ -4238,7 +4238,7 @@ export class InteractiveMode {
 						this.showStatus("Forked to new session");
 					} catch (error: unknown) {
 						done();
-						this.showError(error instanceof Error ? error.message : String(error));
+						this.showError(describeRuntimeError(error));
 					}
 				},
 				() => {
@@ -4269,7 +4269,7 @@ export class InteractiveMode {
 			this.editor.setText("");
 			this.showStatus("Cloned to new session");
 		} catch (error: unknown) {
-			this.showError(error instanceof Error ? error.message : String(error));
+			this.showError(describeRuntimeError(error));
 		}
 	}
 

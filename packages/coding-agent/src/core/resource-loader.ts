@@ -38,23 +38,35 @@ export class RequiredBuiltinInitError extends Error {
 }
 
 // SCRAMJET-DIVERGENCE: RequiredBuiltinInitError exposes only a generic product message and carries the real
-// failure as `cause`. Render that cause for display — the stack for an Error, the stringified value otherwise,
+// failure as `cause`. Render the cause chain for display — the stack for an Error, the stringified value otherwise,
 // or nothing when there is no cause — so post-startup sinks can surface it the same way main.ts does at startup.
 export function renderRequiredBuiltinInitCause(error: RequiredBuiltinInitError): string | undefined {
-	if (error.cause instanceof Error) {
-		return error.cause.stack ?? error.cause.message;
+	const parts: string[] = [];
+	let cause: unknown = error.cause;
+	for (let depth = 0; cause !== undefined && depth < 5; depth++) {
+		if (cause instanceof Error) {
+			parts.push(cause.stack ?? cause.message);
+			cause = cause.cause;
+		} else {
+			parts.push(String(cause));
+			break;
+		}
 	}
-	if (error.cause !== undefined) {
-		return String(error.cause);
-	}
-	return undefined;
+	return parts.length > 0 ? parts.join("\nCaused by: ") : undefined;
+}
+
+// Fallback name check guards against a module-boundary instanceof miss (duplicate module instances).
+export function isRequiredBuiltinInitError(error: unknown): error is RequiredBuiltinInitError {
+	return (
+		error instanceof RequiredBuiltinInitError || (error instanceof Error && error.name === "RequiredBuiltinInitError")
+	);
 }
 
 // SCRAMJET-DIVERGENCE: post-startup sinks (interactive reload / fatal-runtime handler, RPC command catch)
 // render error.message. A RequiredBuiltinInitError's message is a generic product string, so append the
 // unwrapped cause detail to keep those surfaces actionable; any other error renders exactly as before.
 export function describeRuntimeError(error: unknown): string {
-	if (error instanceof RequiredBuiltinInitError) {
+	if (isRequiredBuiltinInitError(error)) {
 		const detail = renderRequiredBuiltinInitCause(error);
 		return detail === undefined ? error.message : `${error.message}\n${detail}`;
 	}

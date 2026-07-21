@@ -2647,7 +2647,9 @@ export class AgentSession {
 	async reload(): Promise<void> {
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		// SCRAMJET-DIVERGENCE: the Scramjet builtin is a required product component, so reload must validate
-		// the replacement loader before any irreversible live mutation. settingsManager.reload() runs first
+		// the replacement loader before any irreversible runtime mutation. settingsManager.reload() runs first —
+		// it commits fresh settings before the loader can throw, but the re-read is idempotent, so a failed reload
+		// leaves the runtime itself untouched. It also runs first
 		// because the loader's path resolution reads live settings (the loader defers its own settings/source-map
 		// commit until after the builtin init succeeds, so on this path the shared manager is intentionally read
 		// twice). resourceLoader.reload() then re-runs the required

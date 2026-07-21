@@ -97,11 +97,13 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 	}
 
 	let mode: "succeed" | "throw" = "succeed";
+	const createdSessions: AgentSession[] = [];
 	const createRuntime: CreateAgentSessionRuntimeFactory = async (opts) => {
 		if (mode === "throw") {
 			throw new RequiredBuiltinInitError(new Error("candidate builtin boom"));
 		}
 		const session = makeSession(opts.sessionManager, opts.sessionStartEvent);
+		createdSessions.push(session);
 		return {
 			session,
 			modelFallbackMessage: undefined,
@@ -136,6 +138,7 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 		events,
 		rebindCalls,
 		beforeInvalidateCalls,
+		createdSessions,
 		initialServices: runtime.services,
 		setMode: (m: "succeed" | "throw") => {
 			mode = m;
@@ -183,6 +186,28 @@ describe("AgentSessionRuntime — atomic replacement (Stage 3)", () => {
 				expect(fx.beforeInvalidateCalls).toHaveLength(0);
 				expect(fx.rebindCalls).toHaveLength(0);
 			});
+		}
+	});
+
+	it("newSession: a throwing teardown disposes the prepared candidate and rethrows", async () => {
+		const fx = await buildFixture();
+		const before = fx.runtime.session;
+		const teardownError = new Error("invalidate boom");
+		fx.runtime.setBeforeSessionInvalidate(() => {
+			throw teardownError;
+		});
+
+		const disposeSpy = vi.spyOn(AgentSession.prototype, "dispose");
+		try {
+			await expect(fx.runtime.newSession()).rejects.toBe(teardownError);
+
+			// createdSessions[0] is the initial live session; [1] is the prepared candidate.
+			expect(fx.createdSessions).toHaveLength(2);
+			expect(disposeSpy.mock.instances).toContain(fx.createdSessions[1]);
+			expect(disposeSpy.mock.instances).not.toContain(fx.createdSessions[0]);
+			expect(fx.runtime.session).toBe(before);
+		} finally {
+			disposeSpy.mockRestore();
 		}
 	});
 
@@ -298,28 +323,7 @@ describe("AgentSessionRuntime — atomic fork/clone (Stage 4)", () => {
 		}
 	});
 
-	const persistedForkSuccessCases: Array<{
-		name: string;
-		setup: (fx: Fixture) => { entryId: string; position: "before" | "at" };
-	}> = [
-		{
-			name: "persisted root fork (no leaf)",
-			setup: (fx) => ({
-				entryId: fx.runtime.session.sessionManager.appendMessage(userMessage("hi")),
-				position: "before",
-			}),
-		},
-		{
-			name: "persisted branched fork (clone via at)",
-			setup: (fx) => {
-				const sm = fx.runtime.session.sessionManager;
-				sm.appendMessage(userMessage("hi"));
-				// The assistant message flushes the session file so the branched path can reopen it.
-				const a1 = sm.appendMessage(assistantText("ok"));
-				return { entryId: a1, position: "at" };
-			},
-		},
-	];
+	const persistedForkSuccessCases = forkCases.filter((c) => !c.initialInMemory);
 
 	for (const { name, setup } of persistedForkSuccessCases) {
 		it(`${name}: a successful fork commits the replacement and preserves ordering`, async () => {
