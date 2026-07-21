@@ -340,6 +340,28 @@ describe("AgentSession harness-tool invocation", () => {
 
 		release();
 		await expect(first).resolves.toBeUndefined();
+
+		// Sequential reuse of the same explicit id AFTER the first settled must succeed: the
+		// identity-checked `finally` cleanup dropped the ack, so it is no longer "already pending". The
+		// gate is already released, so this idle invocation runs straight through.
+		await expect(
+			session.invokeHarnessTool("harness_gated", { note: "reused" }, { toolCallId: "dup-id" }),
+		).resolves.toBeUndefined();
+		expect(calls).toEqual([{ note: "first" }, { note: "reused" }]);
+	});
+
+	it("rejects an invocation whose explicit tool-call id is not provider-safe", async () => {
+		const { tool: notice, calls } = makeNoticeTool();
+		const { session } = await createFixture([notice]);
+
+		await session.prompt("hi");
+
+		// A malformed explicit id (invalid charset) is rejected at the public boundary before it can
+		// reach the synthetic assistant message and the provider — nothing executes.
+		await expect(
+			session.invokeHarnessTool("harness_notice", { note: "bad" }, { toolCallId: "has spaces!" }),
+		).rejects.toThrow(/1-64 characters/i);
+		expect(calls).toEqual([]);
 	});
 
 	it("rejects the invocation when persisting the tool-result fails, after Agent execution ran", async () => {
@@ -363,6 +385,31 @@ describe("AgentSession harness-tool invocation", () => {
 		expect(calls).toEqual([{ note: "boom" }]);
 	});
 
+	it("rejects the invocation when persisting the synthetic assistant tool-call message fails", async () => {
+		const { tool: notice } = makeNoticeTool();
+		const { session, sessionManager } = await createFixture([notice]);
+
+		await session.prompt("hi");
+
+		const persistError = new Error("assistant appendMessage boom");
+		const original = sessionManager.appendMessage.bind(sessionManager);
+		sessionManager.appendMessage = ((message: Parameters<typeof original>[0]) => {
+			if (
+				message.role === "assistant" &&
+				Array.isArray(message.content) &&
+				message.content.some((c) => c.type === "toolCall" && c.name === "harness_notice")
+			) {
+				throw persistError;
+			}
+			return original(message);
+		}) as typeof original;
+
+		// The synthetic assistant tool-call message is persisted before the tool-result; a failure THERE
+		// rejects via the assistant branch of _harnessAckIdForEvent (the tool-result test only gates the
+		// result append).
+		await expect(session.invokeHarnessTool("harness_notice", { note: "boom" })).rejects.toBe(persistError);
+	});
+
 	it("rejects a pending invocation on dispose and refuses post-dispose invocations", async () => {
 		const { tool, calls, started, release } = makeGatedTool();
 		const { session } = await createFixture([tool]);
@@ -384,6 +431,16 @@ describe("AgentSession harness-tool invocation", () => {
 		// Release the underlying (now-orphaned) work so the transient run finishes and nothing leaks.
 		release();
 		await flushMicrotasks();
+	});
+
+	it("dispose() is idempotent — a second call is a no-op", async () => {
+		const { tool: notice } = makeNoticeTool();
+		const { session } = await createFixture([notice]);
+
+		await session.prompt("hi");
+		session.dispose();
+		// The _disposed guard makes a second dispose a no-op: no throw, no re-teardown, no double-reject.
+		expect(() => session.dispose()).not.toThrow();
 	});
 
 	it("places the harness toolCall/result in the next LLM completion context (between-turns)", async () => {

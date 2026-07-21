@@ -1284,8 +1284,9 @@ export interface ExtensionAPI {
 	 * to the session (#341) — a strictly stronger guarantee than Agent-core execution alone — so a
 	 * consumer that must not replace or tear down the session until the record row exists can safely
 	 * `await` it. It rejects if no tool with `name` is registered, if a matching event fails to
-	 * process/persist, if the session is disposed before it settles, or if an explicit
-	 * {@link InvokeHarnessToolOptions.toolCallId} is already pending. **Rejection means the pipeline
+	 * process/persist, if the session is disposed before it settles or is called after disposal, or if
+	 * an explicit {@link InvokeHarnessToolOptions.toolCallId} is malformed or already pending.
+	 * **Rejection means the pipeline
 	 * did not complete — it does not prove the artifact is absent** (state and persistence may have
 	 * partially completed), so do not blindly retry. A tool's own `execute()` error resolves normally
 	 * as an `isError` result.
@@ -1524,7 +1525,10 @@ export type SetModelHandler = (model: Model<any>) => Promise<boolean>;
 // SCRAMJET-DIVERGENCE: harness-tool invocation (#244).
 /** Options for {@link ExtensionAPI.invokeHarnessTool}. */
 export interface InvokeHarnessToolOptions {
-	/** Explicit tool-call id. Defaults to a provider-safe generated id when omitted. */
+	/**
+	 * Explicit tool-call id — must be provider-safe (1-64 characters of `[a-zA-Z0-9_-]`); an invalid
+	 * id is rejected. Defaults to a provider-safe generated id when omitted.
+	 */
 	toolCallId?: string;
 }
 

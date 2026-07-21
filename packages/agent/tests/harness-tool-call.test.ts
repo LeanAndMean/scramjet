@@ -400,7 +400,7 @@ describe("Agent.runHarnessTool", () => {
 		await expect(queuedPromise).rejects.toThrow(/discarded unsettled harness tool call/);
 		expect(rejection).toBeInstanceOf(Error);
 		// The count identifies how many were lost; the names identify which transcript artifacts.
-		expect(warnings.some((w) => w.includes("discarded 1 unsettled harness tool call"))).toBe(true);
+		expect(warnings.some((w) => w.includes("rejected 1 unsettled harness tool call"))).toBe(true);
 		expect(warnings.some((w) => w.includes("harness_notice"))).toBe(true);
 	});
 

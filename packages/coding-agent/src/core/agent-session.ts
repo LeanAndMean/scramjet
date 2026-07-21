@@ -257,7 +257,10 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 
 // SCRAMJET-DIVERGENCE: harness-tool persisted-settlement acknowledgement (#341). One deferred
 // promise per in-flight harness-tool invocation, resolved after the matching tool-result message_end
-// is persisted and rejected if that processing fails or the session is disposed first.
+// is persisted and rejected if that processing fails or the session is disposed first. resolve/reject
+// are called directly at several sites with no explicit settled-once guard (unlike the Agent-side
+// settleHarnessInvocation choke point): that is safe because native Promise settlement is
+// first-settlement-wins, so a later resolve/reject on an already-settled ack is a no-op.
 type HarnessPersistenceAck = {
 	promise: Promise<void>;
 	resolve: () => void;
@@ -550,6 +553,15 @@ export class AgentSession {
 	private async _processAgentEventTracked(event: AgentEvent): Promise<void> {
 		const ackId = this._harnessAckIdForEvent(event);
 		const ack = ackId !== undefined ? this._harnessPersistenceAcks.get(ackId) : undefined;
+		// Decide from the ORIGINAL event, before _processAgentEvent runs, whether this is the
+		// ack-resolving tool-result: a message_end hook can replace event.message in place
+		// (_replaceMessageInPlace), so re-reading role/toolCallId after the await could miss the match
+		// and strand the acknowledgement.
+		const resolvesAck =
+			ack !== undefined &&
+			event.type === "message_end" &&
+			event.message.role === "toolResult" &&
+			event.message.toolCallId === ackId;
 		try {
 			await this._processAgentEvent(event);
 		} catch (err) {
@@ -558,13 +570,11 @@ export class AgentSession {
 			}
 			throw err;
 		}
-		if (
-			ack &&
-			event.type === "message_end" &&
-			event.message.role === "toolResult" &&
-			event.message.toolCallId === ackId
-		) {
-			ack.resolve();
+		// Resolving here counts as "persisted" only because SessionManager persistence is synchronous
+		// (appendFileSync): _processAgentEvent has already written the tool-result row by the time it
+		// returns. If _persist ever becomes async, this would resolve before persistence completes.
+		if (resolvesAck) {
+			ack?.resolve();
 		}
 	}
 
@@ -1019,6 +1029,15 @@ export class AgentSession {
 	// id on the (astronomically unlikely) collision with a pending one.
 	private _allocateHarnessToolCallId(explicit?: string): string {
 		if (explicit !== undefined) {
+			// Validate at the public trust boundary (invokeHarnessTool is on ExtensionAPI): an explicit
+			// id flows straight into the synthetic assistant message and on to the provider, so it must
+			// meet the provider-safe shape generateHarnessToolCallId guarantees (Anthropic's
+			// ^[a-zA-Z0-9_-]+$, bounded length).
+			if (!/^[a-zA-Z0-9_-]{1,64}$/.test(explicit)) {
+				throw new Error(
+					`Cannot invoke harness tool with tool-call id "${explicit}": ids must be 1-64 characters of [a-zA-Z0-9_-].`,
+				);
+			}
 			if (this._harnessPersistenceAcks.has(explicit)) {
 				throw new Error(
 					`Cannot invoke harness tool with tool-call id "${explicit}": an invocation with that id is already pending.`,

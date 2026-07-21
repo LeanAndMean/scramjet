@@ -187,7 +187,6 @@ type HarnessToolInvocation = {
 	promise: Promise<void>;
 	resolve: () => void;
 	reject: (reason: Error) => void;
-	settled: boolean;
 };
 
 /**
@@ -374,13 +373,16 @@ export class Agent {
 		this._state.errorMessage = undefined;
 		this.clearFollowUpQueue();
 		this.clearSteeringQueue();
-		// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244, settlement #341). Unsettled
-		// harness tool invocations are discarded on reset; surface it so a lost record row is
-		// diagnosable, then reject their promises so awaiting callers observe the discard.
+		// SCRAMJET-DIVERGENCE: harness-tool-invocation primitive (#244, settlement #341). reset()
+		// rejects the public promise of every unsettled harness invocation so awaiting callers stop
+		// waiting. The effect on the record row differs by kind: a queued (not-yet-draining) call loses
+		// its row entirely, while a transient in-flight call keeps running — reset() does not abort
+		// transientRunAbort — so its row is still emitted and persisted; only its promise is rejected.
+		// The warning surfaces the rejection so a lost queued row is diagnosable.
 		if (this.unsettledHarnessTools.size > 0) {
 			const names = [...this.unsettledHarnessTools].map((record) => record.tool.name).join(", ");
 			console.warn(
-				`Agent.reset() discarded ${this.unsettledHarnessTools.size} unsettled harness tool call(s): ${names}`,
+				`Agent.reset() rejected ${this.unsettledHarnessTools.size} unsettled harness tool call(s): ${names}`,
 			);
 		}
 		this.rejectUnsettledHarnessTools(new Error("Agent.reset() discarded unsettled harness tool call"));
@@ -537,9 +539,12 @@ export class Agent {
 		this._state.streamingMessage = undefined;
 		this._state.errorMessage = undefined;
 
-		// SCRAMJET-DIVERGENCE (#341): a failed final flush leaves later queued calls unable to
-		// execute. Capture it (rejecting remnants below) and re-throw after finishRun so the run's
-		// promise still rejects with it, without a lint-flagged throw inside a finally block.
+		// SCRAMJET-DIVERGENCE (#341): a failed final flush leaves later queued calls unable to execute.
+		// Capture it (rejecting remnants below) and re-throw after finishRun so the error propagates out
+		// of prompt()/continue() — not activeRun.promise, which finishRun always resolves — without a
+		// lint-flagged throw inside a finally block. The { error } wrapper (not a bare `unknown` field)
+		// is deliberate: it distinguishes "no drain error" from a falsy throw (e.g. `throw undefined`),
+		// which a `!== undefined` check on a bare field would silently swallow.
 		let finalDrainError: { error: unknown } | undefined;
 		try {
 			// Wait for in-flight transient harness-tool runs so their events do not interleave
@@ -731,17 +736,17 @@ export class Agent {
 			resolve = res;
 			reject = rej;
 		});
-		const record: HarnessToolInvocation = { tool, args, toolCallId, promise, resolve, reject, settled: false };
+		const record: HarnessToolInvocation = { tool, args, toolCallId, promise, resolve, reject };
 		this.unsettledHarnessTools.add(record);
 		return record;
 	}
 
-	// SCRAMJET-DIVERGENCE (#341): settle a harness invocation exactly once. A later settlement attempt
-	// (e.g. underlying transient work finishing after reset already rejected the record) is ignored.
+	// SCRAMJET-DIVERGENCE (#341): settle a harness invocation exactly once. Set membership is the
+	// settled flag: unsettledHarnessTools.delete() returns false when the record was already removed
+	// (e.g. underlying transient work finishing after reset already rejected it), so a later attempt
+	// is a no-op.
 	private settleHarnessInvocation(record: HarnessToolInvocation, error?: Error): void {
-		if (record.settled) return;
-		record.settled = true;
-		this.unsettledHarnessTools.delete(record);
+		if (!this.unsettledHarnessTools.delete(record)) return;
 		if (error) record.reject(error);
 		else record.resolve();
 	}
