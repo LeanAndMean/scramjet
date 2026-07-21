@@ -64,9 +64,11 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 /**
  * Owns the current AgentSession plus its cwd-bound services.
  *
- * Session replacement methods tear down the current runtime first, then create
- * and apply the next runtime. If creation fails, the error is propagated to the
- * caller. The caller is responsible for user-facing error handling.
+ * switchSession, newSession, and importFromJsonl prepare the next runtime first
+ * and only tear down the current one once creation succeeds, so a failed creation
+ * (e.g. a required builtin throwing) leaves the live runtime intact. fork() still
+ * tears down first pending its own atomicity fix. If creation fails, the error is
+ * propagated to the caller, which is responsible for user-facing error handling.
  */
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
@@ -188,15 +190,16 @@ export class AgentSessionRuntime {
 		const previousSessionFile = this.session.sessionFile;
 		const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
 		assertSessionCwdExists(sessionManager, this.cwd);
+		// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
+		// builtin failure aborts before the irreversible session_shutdown/dispose, leaving the live runtime intact.
+		const candidate = await this.createRuntime({
+			cwd: sessionManager.getCwd(),
+			agentDir: this.services.agentDir,
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
+		});
 		await this.teardownCurrent("resume", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: sessionManager.getCwd(),
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
-			}),
-		);
+		this.apply(candidate);
 		await this.finishSessionReplacement(options?.withSession);
 		return { cancelled: false };
 	}
@@ -228,16 +231,17 @@ export class AgentSessionRuntime {
 			sessionManager.newSession({ parentSession: options.parentSession });
 		}
 
+		// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
+		// builtin failure aborts before the irreversible session_shutdown/dispose, leaving the live runtime intact.
+		const candidate = await this.createRuntime({
+			cwd: this.cwd,
+			agentDir: this.services.agentDir,
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
+			inherited,
+		});
 		await this.teardownCurrent("new", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: this.cwd,
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "new", previousSessionFile },
-				inherited,
-			}),
-		);
+		this.apply(candidate);
 		if (options?.setup) {
 			await options.setup(this.session.sessionManager);
 			this.session.agent.state.messages = this.session.sessionManager.buildSessionContext().messages;
@@ -365,15 +369,16 @@ export class AgentSessionRuntime {
 
 		const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
 		assertSessionCwdExists(sessionManager, this.cwd);
+		// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
+		// builtin failure aborts before the irreversible session_shutdown/dispose, leaving the live runtime intact.
+		const candidate = await this.createRuntime({
+			cwd: sessionManager.getCwd(),
+			agentDir: this.services.agentDir,
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
+		});
 		await this.teardownCurrent("resume", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: sessionManager.getCwd(),
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "resume", previousSessionFile },
-			}),
-		);
+		this.apply(candidate);
 		await this.finishSessionReplacement();
 		return { cancelled: false };
 	}
