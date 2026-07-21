@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
-import type { AssistantMessage } from "@leanandmean/ai";
+import type { AssistantMessage, UserMessage } from "@leanandmean/ai";
 import { createAssistantMessageEventStream } from "@leanandmean/ai";
 import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
@@ -31,6 +31,10 @@ function assistantText(text: string): AssistantMessage {
 	};
 }
 
+function userMessage(text: string): UserMessage {
+	return { role: "user", content: text, timestamp: Date.now() };
+}
+
 function writeSessionFile(path: string, cwd: string): void {
 	const header = {
 		type: "session",
@@ -42,7 +46,7 @@ function writeSessionFile(path: string, cwd: string): void {
 	writeFileSync(path, `${JSON.stringify(header)}\n`);
 }
 
-async function buildFixture() {
+async function buildFixture(opts?: { initialInMemory?: boolean }) {
 	const dir = mkdtempSync(join(tmpdir(), "runtime-replacement-"));
 	const cwd = dir;
 	const agentDir = join(dir, "agent");
@@ -109,7 +113,7 @@ async function buildFixture() {
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd,
 		agentDir,
-		sessionManager: SessionManager.create(cwd, sessionDir),
+		sessionManager: opts?.initialInMemory ? SessionManager.inMemory(cwd) : SessionManager.create(cwd, sessionDir),
 	});
 
 	// Mirror production: rebind binds the replacement session, which is what emits session_start.
@@ -221,5 +225,96 @@ describe("AgentSessionRuntime — atomic replacement (Stage 3)", () => {
 		expect(fx.runtime.session).not.toBe(before);
 		expect(fx.events).toEqual(["session_shutdown", "session_start"]);
 		expect(fx.rebindCalls).toHaveLength(1);
+	});
+});
+
+const forkCases: Array<{
+	name: string;
+	initialInMemory: boolean;
+	setup: (fx: Fixture) => { entryId: string; position: "before" | "at" };
+}> = [
+	{
+		name: "persisted root fork (no leaf)",
+		initialInMemory: false,
+		setup: (fx) => ({
+			entryId: fx.runtime.session.sessionManager.appendMessage(userMessage("hi")),
+			position: "before",
+		}),
+	},
+	{
+		name: "persisted branched fork (clone via at)",
+		initialInMemory: false,
+		setup: (fx) => {
+			const sm = fx.runtime.session.sessionManager;
+			sm.appendMessage(userMessage("hi"));
+			// The assistant message flushes the session file to disk so the branched path can reopen it.
+			const a1 = sm.appendMessage(assistantText("ok"));
+			return { entryId: a1, position: "at" };
+		},
+	},
+	{
+		name: "in-memory root fork (no leaf)",
+		initialInMemory: true,
+		setup: (fx) => ({
+			entryId: fx.runtime.session.sessionManager.appendMessage(userMessage("hi")),
+			position: "before",
+		}),
+	},
+	{
+		name: "in-memory branched fork (clone via at)",
+		initialInMemory: true,
+		setup: (fx) => ({ entryId: fx.runtime.session.sessionManager.appendMessage(userMessage("hi")), position: "at" }),
+	},
+];
+
+describe("AgentSessionRuntime — atomic fork/clone (Stage 4)", () => {
+	describe("failed candidate preparation preserves the live runtime", () => {
+		for (const { name, initialInMemory, setup } of forkCases) {
+			it(`${name}: a throwing candidate preserves the session and never mutates the live manager`, async () => {
+				const fx = await buildFixture({ initialInMemory });
+				const { entryId, position } = setup(fx);
+				const before = fx.runtime.session;
+				const beforeManager = before.sessionManager;
+				const beforeId = beforeManager.getSessionId();
+				const beforeEntries = beforeManager.getEntries();
+				const beforeLeaf = beforeManager.getLeafId();
+				const disposeSpy = vi.spyOn(before, "dispose");
+
+				fx.setMode("throw");
+				await expect(fx.runtime.fork(entryId, { position })).rejects.toBeInstanceOf(RequiredBuiltinInitError);
+
+				expect(fx.runtime.session).toBe(before);
+				expect(fx.runtime.services).toBe(fx.initialServices);
+				expect(fx.events).not.toContain("session_shutdown");
+				expect(disposeSpy).not.toHaveBeenCalled();
+				expect(fx.beforeInvalidateCalls).toHaveLength(0);
+				expect(fx.rebindCalls).toHaveLength(0);
+				// F1: the live in-memory SessionManager must be untouched by a failed preflight.
+				expect(fx.runtime.session.sessionManager).toBe(beforeManager);
+				expect(beforeManager.getSessionId()).toBe(beforeId);
+				expect(beforeManager.getEntries()).toEqual(beforeEntries);
+				expect(beforeManager.getLeafId()).toBe(beforeLeaf);
+			});
+		}
+	});
+
+	it("a successful in-memory fork/clone preserves ordering and never mutates the source manager", async () => {
+		const fx = await buildFixture({ initialInMemory: true });
+		const sourceManager = fx.runtime.session.sessionManager;
+		const entryId = sourceManager.appendMessage(userMessage("hi"));
+		const sourceId = sourceManager.getSessionId();
+		const sourceEntries = sourceManager.getEntries();
+		const before = fx.runtime.session;
+
+		const result = await fx.runtime.fork(entryId, { position: "at" });
+
+		expect(result.cancelled).toBe(false);
+		expect(fx.runtime.session).not.toBe(before);
+		expect(fx.runtime.session.sessionManager).not.toBe(sourceManager);
+		expect(fx.events).toEqual(["session_shutdown", "session_start"]);
+		expect(fx.rebindCalls).toHaveLength(1);
+		// Even on the happy path the target is an independent clone: the source manager is untouched.
+		expect(sourceManager.getSessionId()).toBe(sourceId);
+		expect(sourceManager.getEntries()).toEqual(sourceEntries);
 	});
 });

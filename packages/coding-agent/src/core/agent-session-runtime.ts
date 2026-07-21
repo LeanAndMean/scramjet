@@ -64,11 +64,11 @@ function extractUserMessageText(content: string | Array<{ type: string; text?: s
 /**
  * Owns the current AgentSession plus its cwd-bound services.
  *
- * switchSession, newSession, and importFromJsonl prepare the next runtime first
- * and only tear down the current one once creation succeeds, so a failed creation
- * (e.g. a required builtin throwing) leaves the live runtime intact. fork() still
- * tears down first pending its own atomicity fix. If creation fails, the error is
- * propagated to the caller, which is responsible for user-facing error handling.
+ * switchSession, newSession, importFromJsonl, and fork prepare the next runtime
+ * first and only tear down the current one once creation succeeds, so a failed
+ * creation (e.g. a required builtin throwing) leaves the live runtime intact. If
+ * creation fails, the error is propagated to the caller, which is responsible for
+ * user-facing error handling.
  */
 export class AgentSessionRuntime {
 	private rebindSession?: (session: AgentSession) => Promise<void>;
@@ -287,15 +287,17 @@ export class AgentSessionRuntime {
 			if (!targetLeafId) {
 				const sessionManager = SessionManager.create(this.cwd, sessionDir);
 				sessionManager.newSession({ parentSession: currentSessionFile });
+				// SCRAMJET-DIVERGENCE: prepare the candidate before tearing down the current runtime so a required
+				// builtin failure aborts before the irreversible session_shutdown/dispose. The fresh sessionManager
+				// is independent of the live one, so the on-disk file it wrote is an inert artifact on failure.
+				const candidate = await this.createRuntime({
+					cwd: this.cwd,
+					agentDir: this.services.agentDir,
+					sessionManager,
+					sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
+				});
 				await this.teardownCurrent("fork", sessionManager.getSessionFile());
-				this.apply(
-					await this.createRuntime({
-						cwd: this.cwd,
-						agentDir: this.services.agentDir,
-						sessionManager,
-						sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
-					}),
-				);
+				this.apply(candidate);
 				await this.finishSessionReplacement(options?.withSession);
 				return { cancelled: false, selectedText };
 			}
@@ -306,34 +308,38 @@ export class AgentSessionRuntime {
 				throw new Error("Failed to create forked session");
 			}
 			const sessionManager = SessionManager.open(forkedSessionPath, sessionDir);
+			// SCRAMJET-DIVERGENCE: prepare the candidate before teardown; sourceManager/sessionManager are
+			// independent of the live manager, so a failed candidate leaves the live runtime intact.
+			const candidate = await this.createRuntime({
+				cwd: sessionManager.getCwd(),
+				agentDir: this.services.agentDir,
+				sessionManager,
+				sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
+			});
 			await this.teardownCurrent("fork", sessionManager.getSessionFile());
-			this.apply(
-				await this.createRuntime({
-					cwd: sessionManager.getCwd(),
-					agentDir: this.services.agentDir,
-					sessionManager,
-					sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
-				}),
-			);
+			this.apply(candidate);
 			await this.finishSessionReplacement(options?.withSession);
 			return { cancelled: false, selectedText };
 		}
 
-		const sessionManager = this.session.sessionManager;
+		// SCRAMJET-DIVERGENCE: clone the live in-memory manager into an independent target before branching, so a
+		// failed candidate never leaves the live in-memory SessionManager mutated (a reorder alone cannot protect
+		// this branch because newSession/createBranchedSession mutate their receiver in place). Then prepare the
+		// candidate before teardown, mirroring the persisted branches.
+		const sessionManager = this.session.sessionManager.cloneInMemory();
 		if (!targetLeafId) {
 			sessionManager.newSession({ parentSession: this.session.sessionFile });
 		} else {
 			sessionManager.createBranchedSession(targetLeafId);
 		}
+		const candidate = await this.createRuntime({
+			cwd: this.cwd,
+			agentDir: this.services.agentDir,
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
+		});
 		await this.teardownCurrent("fork", sessionManager.getSessionFile());
-		this.apply(
-			await this.createRuntime({
-				cwd: this.cwd,
-				agentDir: this.services.agentDir,
-				sessionManager,
-				sessionStartEvent: { type: "session_start", reason: "fork", previousSessionFile },
-			}),
-		);
+		this.apply(candidate);
 		await this.finishSessionReplacement(options?.withSession);
 		return { cancelled: false, selectedText };
 	}
