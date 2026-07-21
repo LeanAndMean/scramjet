@@ -26,6 +26,53 @@ import type { Skill } from "./skills.js";
 import { loadSkills } from "./skills.js";
 import { createSourceInfo, type SourceInfo } from "./source-info.js";
 
+// SCRAMJET-DIVERGENCE: the builtin passed via builtinInit is a required product component. When its
+// initialization fails, the loader rethrows this product-attributed error (preserving the original
+// failure as `cause`) instead of recording an anonymous `<builtin>` diagnostic, so no runtime is ever
+// activated without the product. Identify the failure by this type, not by matching the `<builtin>` path.
+export class RequiredBuiltinInitError extends Error {
+	constructor(cause: unknown) {
+		super("Scramjet product initialization failed", { cause });
+		this.name = "RequiredBuiltinInitError";
+	}
+}
+
+// SCRAMJET-DIVERGENCE: RequiredBuiltinInitError exposes only a generic product message and carries the real
+// failure as `cause`. Render the cause chain for display — the stack for an Error, the stringified value otherwise,
+// or nothing when there is no cause — so post-startup sinks can surface it the same way main.ts does at startup.
+export function renderRequiredBuiltinInitCause(error: RequiredBuiltinInitError): string | undefined {
+	const parts: string[] = [];
+	let cause: unknown = error.cause;
+	for (let depth = 0; cause !== undefined && depth < 5; depth++) {
+		if (cause instanceof Error) {
+			parts.push(cause.stack ?? cause.message);
+			cause = cause.cause;
+		} else {
+			parts.push(String(cause));
+			break;
+		}
+	}
+	return parts.length > 0 ? parts.join("\nCaused by: ") : undefined;
+}
+
+// Fallback name check guards against a module-boundary instanceof miss (duplicate module instances).
+export function isRequiredBuiltinInitError(error: unknown): error is RequiredBuiltinInitError {
+	return (
+		error instanceof RequiredBuiltinInitError || (error instanceof Error && error.name === "RequiredBuiltinInitError")
+	);
+}
+
+// SCRAMJET-DIVERGENCE: post-startup sinks (interactive reload / fatal-runtime handler, RPC command catch)
+// render error.message. A RequiredBuiltinInitError's message is a generic product string, so append the
+// unwrapped cause detail to keep those surfaces actionable; any other error renders exactly as before.
+export function describeRuntimeError(error: unknown): string {
+	if (isRequiredBuiltinInitError(error)) {
+		const detail = renderRequiredBuiltinInitCause(error);
+		return detail === undefined ? error.message : `${error.message}\n${detail}`;
+	}
+	return error instanceof Error ? error.message : String(error);
+}
+
 export interface ResourceExtensionPaths {
 	skillPaths?: Array<{ path: string; metadata: PathMetadata }>;
 	promptPaths?: Array<{ path: string; metadata: PathMetadata }>;
@@ -330,16 +377,16 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	async reload(): Promise<void> {
-		await this.settingsManager.reload();
+		// SCRAMJET-DIVERGENCE: settings reload and source-map clearing are deferred to the commit block below
+		// (after the required builtin init succeeds) so a throwing builtin leaves previously committed loader state
+		// intact. Path resolution reads whatever the shared SettingsManager currently holds — freshly loaded at
+		// construction for the standalone callers (createAgentSessionServices, sdk.ts), or caller-reloaded first on
+		// the AgentSession.reload() path; a caller needing fresh settings must reload before invoking reload().
 		const resolvedPaths = await this.packageManager.resolve();
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
 		});
 		const metadataByPath = new Map<string, PathMetadata>();
-
-		this.extensionSkillSourceInfos = new Map();
-		this.extensionPromptSourceInfos = new Map();
-		this.extensionThemeSourceInfos = new Map();
 
 		// Helper to extract enabled paths and store metadata
 		const getEnabledResources = (
@@ -418,10 +465,19 @@ export class DefaultResourceLoader implements ResourceLoader {
 				);
 				extensionsResult.extensions.unshift(builtin);
 			} catch (error) {
-				const message = error instanceof Error ? error.message : "failed to load builtin";
-				extensionsResult.errors.push({ path: "<builtin>", error: message });
+				// SCRAMJET-DIVERGENCE: a required builtin failure aborts the reload before any live-loader
+				// mutation, so the previously committed runtime survives. It is never a diagnostic.
+				throw new RequiredBuiltinInitError(error);
 			}
 		}
+
+		// SCRAMJET-DIVERGENCE: commit live-loader mutations only now that the required builtin init has
+		// succeeded. Everything above operated on candidate-local state.
+		await this.settingsManager.reload();
+		this.extensionSkillSourceInfos = new Map();
+		this.extensionPromptSourceInfos = new Map();
+		this.extensionThemeSourceInfos = new Map();
+
 		const inlineExtensions = await this.loadExtensionFactories(extensionsResult.runtime);
 		extensionsResult.extensions.push(...inlineExtensions.extensions);
 		extensionsResult.errors.push(...inlineExtensions.errors);

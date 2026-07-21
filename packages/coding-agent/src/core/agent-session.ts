@@ -2646,10 +2646,20 @@ export class AgentSession {
 
 	async reload(): Promise<void> {
 		const previousFlagValues = this._extensionRunner.getFlagValues();
-		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
+		// SCRAMJET-DIVERGENCE: the Scramjet builtin is a required product component, so reload must validate
+		// the replacement loader before any irreversible runtime mutation. settingsManager.reload() runs first —
+		// it commits fresh settings before the loader can throw, but the re-read is idempotent, so a failed reload
+		// leaves the runtime itself untouched. It also runs first
+		// because the loader's path resolution reads live settings (the loader defers its own settings/source-map
+		// commit until after the builtin init succeeds, so on this path the shared manager is intentionally read
+		// twice). resourceLoader.reload() then re-runs the required
+		// builtin and throws RequiredBuiltinInitError on failure — before session_shutdown is emitted and before
+		// resetApiProviders(). A throwing builtin therefore leaves the current runner, resources, and providers
+		// intact and fires no session_shutdown; only a validated candidate proceeds to teardown and rebuild.
 		await this.settingsManager.reload();
-		resetApiProviders();
 		await this._resourceLoader.reload();
+		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
+		resetApiProviders();
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,

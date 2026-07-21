@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Required Scramjet builtin init across session replacement**: a throwing `builtinInit` now throws a product-attributed `RequiredBuiltinInitError` (original error preserved as `cause`) instead of an anonymous `<builtin>` diagnostic, and is fatal at initial startup. `reload()` is atomic — it validates the required builtin before `emitSessionShutdownEvent`/`resetApiProviders()`, so a throwing builtin rejects before any irreversible mutation and fires no `session_shutdown`. New / resume / import / fork / clone prepare the replacement candidate before tearing down the current runtime; the in-memory branch clones the live manager (`cloneInMemory()`) into an independent target so a failed candidate never mutates the live `SessionManager`. Optional third-party extension failures remain non-fatal diagnostics. ([#361](https://github.com/LeanAndMean/scramjet/issues/361))
+
 ### Fixed
 
 - **Model isolation for in-process session replacement**: `newSession()` now inherits the live session's model and thinking level instead of reading the shared `settings.json`. Prevents cross-instance contamination when multiple terminals run concurrently — a model switch in one terminal no longer affects fresh-session dispatches (`/new`, `/clear`, next-step chaining) in other terminals. Inherited values take highest precedence, above CLI `--model` and `--thinking`. ([#186](https://github.com/LeanAndMean/scramjet/issues/186))

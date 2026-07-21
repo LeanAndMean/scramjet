@@ -1298,6 +1298,17 @@ export class SessionManager {
 		return undefined;
 	}
 
+	// SCRAMJET-DIVERGENCE: independent in-memory copy so fork/clone can prepare a target without mutating the
+	// live manager. newSession()/createBranchedSession() reassign fileEntries rather than mutating entries in
+	// place, so the shallow copy is safe: applying them to the clone leaves this manager's state intact.
+	cloneInMemory(): SessionManager {
+		const clone = new SessionManager(this.cwd, this.sessionDir, undefined, false);
+		clone.sessionId = this.sessionId;
+		clone.fileEntries = [...this.fileEntries];
+		clone._buildIndex();
+		return clone;
+	}
+
 	/**
 	 * Create a new session.
 	 * @param cwd Working directory (stored in session header)

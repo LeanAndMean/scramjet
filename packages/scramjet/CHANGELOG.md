@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.57.0 — Treat Scramjet builtin init as required across session replacement
+
+Makes Scramjet builtin initialization a required product invariant across startup, reload, and every session replacement, so a replacement runtime can never activate without the product's capabilities. A throwing `builtinInit` now fails fast with a product-attributed error instead of an anonymous `<builtin>` diagnostic, and every replacement path (new / resume / import / fork / clone / reload) prepares the candidate runtime before tearing down the current one, so a failure aborts before the irreversible `session_shutdown`/`dispose`. Optional third-party extension failures remain non-fatal diagnostics. This is a Pi-runtime (`@leanandmean/coding-agent`) hardening change; the Scramjet product package carries the version bump. Fixes [#361](https://github.com/LeanAndMean/scramjet/issues/361).
+
+### Changed
+
+- `@leanandmean/coding-agent` (`resource-loader.ts`): a throwing `builtinInit` throws a product-attributed `RequiredBuiltinInitError` (preserving the original error as `cause`); `reload()` is atomic — settings reload, source-map clearing, and result assembly commit only after the builtin init succeeds, and the reload validates the required builtin before `emitSessionShutdownEvent`/`resetApiProviders()`.
+- `@leanandmean/coding-agent` (`main.ts`): a required-builtin failure at initial startup is surfaced as a fatal, product-attributed error (non-zero exit) rather than routed through the optional-extension diagnostic aggregation.
+- `@leanandmean/coding-agent` (`agent-session-runtime.ts`, `agent-session.ts`, `session-manager.ts`, `interactive-mode.ts`, `rpc-mode.ts`): new / resume / import / fork / clone prepare the replacement candidate before teardown; the in-memory branch clones the live manager (`cloneInMemory()`) into an independent target so a failed candidate never mutates the live `SessionManager`.
+- `extensions.md`, `UPSTREAM_DIVERGENCE.md`: documented the required-builtin product invariant and consolidated the divergence table for every edited Pi file.
+
+### Tests
+
+- `required-builtin-loader`, `required-builtin-startup`, `runtime-replacement`, `reload-transactional`, `session-manager-clone`: cover fatal-at-startup attribution, prepare-before-teardown across every replacement path, atomic reload ordering, and independent in-memory clone targets.
+
 ## 0.56.1 — Surface journal persistence failures safely
 
 Adds a one-shot direct stderr diagnostic when Scramjet cannot persist a structured log entry. Persistence failures remain non-fatal, later journal appends are still attempted, and headless warnings retain their separate stderr output. Fixes [#358](https://github.com/LeanAndMean/scramjet/issues/358).

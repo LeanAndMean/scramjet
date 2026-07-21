@@ -336,6 +336,16 @@ exit (Ctrl+C, Ctrl+D, SIGHUP, SIGTERM)
   └─► session_shutdown
 ```
 
+### Required Scramjet Builtin
+
+Scramjet initializes as a **required builtin** through the resource loader (`builtinInit`), separately from optional disk-discovered extensions. Its successful initialization is a product invariant across **startup, reload, and every session replacement** (`/new`, resume, fork, clone, import):
+
+- The candidate runtime's loader is validated **before** any irreversible live mutation. On reload the loader runs before `session_shutdown` and `resetApiProviders()`; on session replacement the candidate is prepared before the current session is torn down.
+- If the Scramjet builtin fails to initialize, the loader throws a product-attributed `RequiredBuiltinInitError` (preserving the original failure as `cause`). The transition aborts, no `session_shutdown` fires, and the current runtime — runner, resources, providers — is left intact. At initial startup the same failure is fatal and exits non-zero.
+- This is distinct from optional-extension failures: a throwing disk or inline extension remains a non-fatal diagnostic and never aborts the session. Only the required product builtin fails fast.
+
+Extension authors do not interact with this directly, but it explains why a broken product init never leaves a session running without Scramjet.
+
 ### Resource Events
 
 #### resources_discover
