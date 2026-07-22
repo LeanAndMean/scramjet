@@ -303,7 +303,7 @@ describe("mach12 delivery-unit linkage contract", () => {
 		const push = prCreate.indexOf("git push -u origin <branch-name>");
 		const finalDerivation = prCreate.indexOf("After the push and immediately before `gh pr create`");
 		const bodyComparison = prCreate.indexOf("compare the fresh result with the final approved body");
-		const create = prCreate.indexOf('gh pr create --title');
+		const create = prCreate.indexOf("gh pr create --title");
 		const verification = prCreate.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
 
 		expect(push).toBeGreaterThan(-1);
@@ -313,6 +313,49 @@ describe("mach12 delivery-unit linkage contract", () => {
 		expect(verification).toBeGreaterThan(create);
 		expect(prCreate).toContain("Require `verdict: ok` for both linked and explicit-none PRs");
 		expect(prCreate).toContain("Leave `next_steps` empty; do not recommend `mach12:pr-review`");
+	});
+
+	it("enforces delivery identity before and after pre-merge mutations", () => {
+		const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
+		const checkout = preMerge.indexOf("gh pr checkout <pr-number>");
+		const earlyVerification = preMerge.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
+		const pull = preMerge.indexOf("git pull");
+		const finalVerification = preMerge.indexOf("Before presenting readiness, rerun fresh verification");
+		const lastCiRead = preMerge.lastIndexOf("gh pr checks <pr-number> --json name,state,bucket,link");
+		const report = preMerge.indexOf("## Step 9: Present pre-merge report");
+
+		expect(earlyVerification).toBeGreaterThan(checkout);
+		expect(earlyVerification).toBeLessThan(pull);
+		expect(finalVerification).toBeGreaterThan(lastCiRead);
+		expect(finalVerification).toBeLessThan(report);
+		expect(preMerge.match(/\/mach12:gh-delivery-unit --pr <pr-number>/g)).toHaveLength(2);
+		expect(preMerge).toContain("Missing identity is a non-forceable blocker");
+		expect(preMerge).toContain("there is no unrelated or not-applicable path");
+		expect(preMerge).toContain("legacy or external PR");
+		expect(preMerge).toContain("Never infer identity from existing closers");
+		expect(preMerge).toContain("never auto-edit the PR body");
+		expect(preMerge).toContain("- [ ] Linkage:");
+		expect(preMerge).toContain("Leave `next_steps` empty if linkage verification holds");
+	});
+
+	it("keeps final merge verification adjacent and non-forceable", () => {
+		const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
+		const readiness = merge.indexOf("gh pr view <pr-number> --json state,mergeable");
+		const verification = merge.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
+		const mergeCommand = merge.indexOf("gh pr merge <pr-number> --delete-branch");
+		const commandBlocks = [...merge.matchAll(/```\n([^`]+)\n```/g)].map((match) => match[1].trim());
+		const verificationBlock = commandBlocks.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
+
+		expect(verification).toBeGreaterThan(readiness);
+		expect(mergeCommand).toBeGreaterThan(verification);
+		expect(commandBlocks[verificationBlock + 1]).toBe("gh pr merge <pr-number> --delete-branch");
+		expect(merge).toContain("No mutation, release work, branch cleanup, cached-context reuse, or other action");
+		expect(merge).toContain("Missing identity is a non-forceable blocker");
+		expect(merge).toContain("there is no unrelated or not-applicable path");
+		expect(merge).toContain("legacy or external PR");
+		expect(merge).toContain("Never infer identity from existing closers");
+		expect(merge).toContain("never auto-edit the PR body");
+		expect(merge).toContain("A linkage hold is non-forceable");
 	});
 
 	it("keeps advisory sub-issue discovery out of destructive linkage", () => {
