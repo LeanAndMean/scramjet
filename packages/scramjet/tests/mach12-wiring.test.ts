@@ -344,7 +344,9 @@ reason: pr-read-failed|missing-delivery-identity|malformed-delivery-identity`);
 		expect(prCreate).toContain("Require `verdict: ok` for both linked and explicit-none PRs");
 		expect(prCreate).toContain("If verification returns `hold`");
 		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
-		expect(prCreate).toContain('Reserve `status: "completed"` for a successfully created PR whose post-create verification returned `ok`');
+		expect(prCreate).toContain(
+			'Reserve `status: "completed"` for a successfully created PR whose post-create verification returned `ok`',
+		);
 		expect(prCreate).toContain("Leave `next_steps` empty; do not recommend `mach12:pr-review`");
 	});
 
@@ -384,8 +386,10 @@ reason: pr-read-failed|missing-delivery-identity|malformed-delivery-identity`);
 		]) {
 			expect(preMerge).toContain(ciDestination);
 		}
-		expect(preMerge).toContain('Only when final linkage verification returns `verdict: ok`, report `status: "completed"`');
-		expect(preMerge).toContain('On `verdict: hold`');
+		expect(preMerge).toContain(
+			'Only when final linkage verification returns `verdict: ok`, report `status: "completed"`',
+		);
+		expect(preMerge).toContain("On `verdict: hold`");
 		expect(preMerge).toContain('Report `status: "blocked"` and leave `next_steps` empty');
 		expect(preMerge).toContain("verified ordinary/batch with exact close set and optional `part-of: #<initiative>`");
 	});
