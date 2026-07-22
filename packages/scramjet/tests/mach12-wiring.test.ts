@@ -262,6 +262,12 @@ describe("mach12 delivery-unit linkage contract", () => {
 			"material body or comment requirement added after the plan requires a revised plan",
 			"exact retained native member set",
 			"exactly one claiming PR in any state",
+			"blocker-only **historical context**",
+			"unit and retained members must be closed as completed",
+			"recursively deriving the blocker as an ordinary or batch unit in historical context succeeds",
+			"Apply exactly one claimant rule",
+			"replace the top-level mode's claimant rule with this rule",
+			"the union of claimant results for `D` and every retained source must be exactly one PR",
 			"sole claimant is merged",
 		]) {
 			expect(deliveryUnit).toContain(semanticPin);
@@ -300,18 +306,27 @@ describe("mach12 delivery-unit linkage contract", () => {
 
 	it("re-derives after push, compares before creation, and verifies after creation", () => {
 		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
+		const initialDerivation = prCreate.indexOf("/mach12:gh-delivery-unit <D>");
+		const approval = prCreate.indexOf("Present the title and complete body");
 		const push = prCreate.indexOf("git push -u origin <branch-name>");
 		const finalDerivation = prCreate.indexOf("After the push and immediately before `gh pr create`");
+		const secondCreationCall = prCreate.indexOf("/mach12:gh-delivery-unit <D>", initialDerivation + 1);
 		const bodyComparison = prCreate.indexOf("compare the fresh result with the final approved body");
 		const create = prCreate.indexOf("gh pr create --title");
 		const verification = prCreate.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
 
-		expect(push).toBeGreaterThan(-1);
+		expect(prCreate.match(/\/mach12:gh-delivery-unit <D>/g)).toHaveLength(2);
+		expect(initialDerivation).toBeGreaterThan(-1);
+		expect(initialDerivation).toBeLessThan(approval);
+		expect(push).toBeGreaterThan(approval);
 		expect(finalDerivation).toBeGreaterThan(push);
-		expect(bodyComparison).toBeGreaterThan(finalDerivation);
+		expect(secondCreationCall).toBeGreaterThan(finalDerivation);
+		expect(bodyComparison).toBeGreaterThan(secondCreationCall);
 		expect(create).toBeGreaterThan(bodyComparison);
 		expect(verification).toBeGreaterThan(create);
 		expect(prCreate).toContain("Require `verdict: ok` for both linked and explicit-none PRs");
+		expect(prCreate).toContain("If verification returns `hold`");
+		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
 		expect(prCreate).toContain("Leave `next_steps` empty; do not recommend `mach12:pr-review`");
 	});
 
@@ -335,7 +350,8 @@ describe("mach12 delivery-unit linkage contract", () => {
 		expect(preMerge).toContain("Never infer identity from existing closers");
 		expect(preMerge).toContain("never auto-edit the PR body");
 		expect(preMerge).toContain("- [ ] Linkage:");
-		expect(preMerge).toContain("Leave `next_steps` empty if linkage verification holds");
+		expect(preMerge).toContain("after all checklist edits, commits, pushes, tests, and CI checks");
+		expect(preMerge).toContain("Leave `next_steps` empty if linkage verification returns `hold`");
 	});
 
 	it("keeps final merge verification adjacent and non-forceable", () => {

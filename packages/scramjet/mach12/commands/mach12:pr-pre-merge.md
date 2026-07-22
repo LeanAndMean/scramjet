@@ -306,7 +306,7 @@ gh pr checks <pr-number> --json name,state,bucket,link
 
 Do not attempt a second fix cycle — a persistent failure after one fix always escalates.
 
-Before presenting readiness, rerun fresh verification after every checklist edit, commit, push, test, and CI check:
+Before presenting readiness, rerun fresh verification after all checklist edits, commits, pushes, tests, and CI checks:
 
 ```
 /mach12:gh-delivery-unit --pr <pr-number>
@@ -332,4 +332,4 @@ After delivering your answer, call `report_scramjet_command_status`: summarize t
 - Always include an entry with `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when merging is appropriate.
 - Always include an entry with `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a fix pass is warranted.
 - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-merge` (index 0) when the checklist passed cleanly and no issues remain; recommend `mach12:pr-review-fix` (index 1) when the checklist surfaced issues that warrant code changes.
-- Leave `next_steps` empty if linkage verification holds or the PR should otherwise be held open (waiting on an external decision, discussion ongoing, or no clear next action). Linkage holds cannot be force-merged or bypassed by user skip directives. If the checklist was not completed, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
+- Leave `next_steps` empty if linkage verification returns `hold` or the PR should otherwise be held open (waiting on an external decision, discussion ongoing, or no clear next action). Linkage holds cannot be force-merged or bypassed by user skip directives. If the checklist was not completed, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.

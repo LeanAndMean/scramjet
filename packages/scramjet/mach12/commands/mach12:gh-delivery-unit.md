@@ -100,6 +100,8 @@ On success, skip issue derivation and return `verdict: ok`, `mode: verification`
 
 For linked identity, obtain `D` only from `Delivery-unit: #<D>` and continue. In creation mode, `D` is the validated argument.
 
+Recursive blocker derivation uses a blocker-only **historical context**. This is internal validation context, not an accepted argument mode. Historical context retains every normal topology, classification, membership-history, plan, identity, exact close-set, `Part of`, disposition, recursive dependency, cycle, and fail-closed read check. It changes only the incompatible live-candidate requirements stated below: the unit and retained members must be closed as completed, and their sole canonical claimant must be merged. Never apply historical context to the top-level creation or verification target.
+
 ## Step 4: Read the complete linked-unit graph
 
 Read fresh state for `D`: issue fields, all comments, direct children, parent, direct blockers, and all claiming PRs.
@@ -131,7 +133,9 @@ Apply the role matrix:
 - An ordinary issue directly under a batch is source-only; hold with reason `source-owned-by-batch` and redirect to that batch number.
 - A nested initiative, nested batch, initiative under any parent, batch under a non-initiative parent, non-ordinary batch child, or any other combination holds.
 
-Require `D` to be open and not terminally dispositioned. A closed unit, an issue closed as not planned, or any active disposition on `D` cannot receive a PR.
+Outside historical context, require `D` to be open and not terminally dispositioned. A closed unit, an issue closed as not planned, or any active disposition on `D` cannot receive a PR.
+
+In historical context, require `D` to be closed as completed and to have no active terminal disposition. An open unit, a unit closed for any other reason, or any active disposition is not a delivered blocker.
 
 ## Step 6: Validate membership-decision history
 
@@ -209,7 +213,7 @@ Semantically compare the plan with every retained member's current body and comp
 
 On failure, use reason `stale-or-incomplete-plan` and direct the caller to revise membership or planning through the batch workflow. Never author the revision.
 
-Require every retained member to exist, be open, classify as ordinary, have no children, report `D` as parent, have no active disposition, and be coherent with the other retained sources. A stale, conflicting, incomplete, independently delivered, mis-parented, missing, or separately claimed retained member holds. Partial completion never silently narrows the close set: move incomplete work to explicitly linked successor units through an approved membership revision and publish a newer exact plan first.
+Require every retained member to exist, classify as ordinary, have no children, report `D` as parent, have no active disposition, and be coherent with the other retained sources. Outside historical context, each retained member must be open; in historical context, each must be closed as completed. A stale, conflicting, incomplete, independently delivered, mis-parented, missing, or separately claimed retained member holds. Partial completion never silently narrows the close set: move incomplete work to explicitly linked successor units through an approved membership revision and publish a newer exact plan first.
 
 ## Step 9: Validate blockers as canonically delivered
 
@@ -220,7 +224,7 @@ A blocker is delivered only when all of these are true:
 - it is closed as completed and has no active terminal disposition masquerading as delivery;
 - it has exactly one claiming PR in any state;
 - that sole claimant is merged and carries exact Mach 12 provenance and `Delivery-unit: #<blocker>` identity;
-- recursively deriving the blocker as an ordinary or batch unit succeeds;
+- recursively deriving the blocker as an ordinary or batch unit in historical context succeeds;
 - the merged claimant's complete actual `closingIssuesReferences` exactly equal the blocker's canonical ordinary/batch close set;
 - its standalone `Part of` line exactly matches its direct initiative parent, if any, and is absent otherwise.
 
@@ -230,8 +234,11 @@ A closed blocker with no canonical merged delivery PR, multiple claimants, a clo
 
 Use complete claimant results for `D` and every retained source.
 
-- **Creation mode:** `D` and every retained source must have zero claiming PRs in every state.
-- **Verification mode:** `D` and every retained source must have claimant set exactly `{current PR}`. Any additional draft, open, closed-unmerged, or merged claimant holds.
+Apply exactly one claimant rule:
+
+- **Top-level creation target:** `D` and every retained source must have zero claiming PRs in every state.
+- **Top-level verification target:** `D` and every retained source must have claimant set exactly `{current PR}`. Any additional draft, open, closed-unmerged, or merged claimant holds.
+- **Recursive historical blocker:** replace the top-level mode's claimant rule with this rule: the union of claimant results for `D` and every retained source must be exactly one PR; that sole claimant must be merged, carry exact Mach 12 provenance and `Delivery-unit: #D` identity, have complete actual `closingIssuesReferences` exactly equal to the recursively derived close set, and have the exact standalone `Part of` line required by `D`'s direct initiative parent or none otherwise.
 
 A merged other claimant means the unit or source is already delivered. A closed-unmerged claimant must be reopened/reused or the unit retired/replaced. Never ignore an older or non-open claimant.
 

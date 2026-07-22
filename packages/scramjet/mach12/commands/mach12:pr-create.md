@@ -169,13 +169,13 @@ After successful creation, resolve the new PR number and delegate to:
 
 Require `verdict: ok` for both linked and explicit-none PRs. For linked PRs this confirms the actual interpreted closing set, exact identity and `Part of` relationship, and that the new PR is the sole claimant. For explicit-none PRs it confirms exact identity with zero closing references and zero standalone `Part of` lines.
 
-If verification holds, report that the PR exists but linkage verification failed, include the exact reason and reconciliation guidance, and do not delete or auto-edit the PR. Leave `next_steps` empty; do not recommend `mach12:pr-review`.
+If verification returns `hold`, report that the PR exists but linkage verification failed, include the exact reason and reconciliation guidance, and do not delete or auto-edit the PR. Leave `next_steps` empty; do not recommend `mach12:pr-review`.
 
-Only after verification succeeds, report the PR number, URL, and linked delivery unit or explicit unlinked status.
+Only after verification returns `ok`, report the PR number, URL, and linked delivery unit or explicit unlinked status.
 
-After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include a selector-visible next step only when post-create verification returned `ok`:
+After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`. Report `status: "incomplete"` if the user cancelled. Reserve `status: "completed"` for a successfully created PR whose post-create verification returned `ok`, and include this selector-visible next step:
 
 - `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`
 - `reason`: the PR's exact delivery linkage was verified and it is ready for automated review
 
-Set `recommended_next_step` to `0` when included. Leave `next_steps` empty if the user cancelled or post-create verification held. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
+Set `recommended_next_step` to `0` when included. Leave `next_steps` empty if post-create verification returned `hold`. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
