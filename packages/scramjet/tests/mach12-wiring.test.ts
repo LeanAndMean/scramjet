@@ -284,6 +284,37 @@ describe("mach12 delivery-unit linkage contract", () => {
 		}
 	});
 
+	it("makes PR creation derive and freeze canonical linkage", () => {
+		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
+
+		expect(prCreate).toContain("/mach12:gh-delivery-unit <D>");
+		expect(prCreate).not.toContain("/mach12:gh-sub-issues");
+		expect(prCreate).toContain("Any hold for an identified unit stops PR creation");
+		expect(prCreate).toContain("never offer to create an unlinked PR as a workaround");
+		expect(prCreate).toContain("Delivery-unit: #<D>");
+		expect(prCreate).toContain("Delivery-unit: none");
+		expect(prCreate).toContain("exactly one standalone `Fixes #N` line for each derived close-set issue");
+		expect(prCreate).toContain("exactly one standalone `Part of #I` line only when");
+		expect(prCreate).toContain("Removing a closer for partial completion is not allowed");
+	});
+
+	it("re-derives after push, compares before creation, and verifies after creation", () => {
+		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
+		const push = prCreate.indexOf("git push -u origin <branch-name>");
+		const finalDerivation = prCreate.indexOf("After the push and immediately before `gh pr create`");
+		const bodyComparison = prCreate.indexOf("compare the fresh result with the final approved body");
+		const create = prCreate.indexOf('gh pr create --title');
+		const verification = prCreate.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
+
+		expect(push).toBeGreaterThan(-1);
+		expect(finalDerivation).toBeGreaterThan(push);
+		expect(bodyComparison).toBeGreaterThan(finalDerivation);
+		expect(create).toBeGreaterThan(bodyComparison);
+		expect(verification).toBeGreaterThan(create);
+		expect(prCreate).toContain("Require `verdict: ok` for both linked and explicit-none PRs");
+		expect(prCreate).toContain("Leave `next_steps` empty; do not recommend `mach12:pr-review`");
+	});
+
 	it("keeps advisory sub-issue discovery out of destructive linkage", () => {
 		const subIssues = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-sub-issues.md`), "utf-8");
 		expect(subIssues).toContain("advisory and may fail open through body parsing");
