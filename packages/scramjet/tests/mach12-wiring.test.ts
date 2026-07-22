@@ -83,6 +83,7 @@ const WIRING: WiringRow[] = [
 	{ basename: "gh-issue-read", expected: null, delegateOnly: true },
 	{ basename: "gh-pr-read", expected: null, delegateOnly: true },
 	{ basename: "gh-sub-issues", expected: null, delegateOnly: true },
+	{ basename: "gh-delivery-unit", expected: null, delegateOnly: true },
 	{ basename: "gh-assign", expected: null, delegateOnly: true },
 	{ basename: "gh-comment", expected: null, delegateOnly: true },
 ];
@@ -191,6 +192,103 @@ describe("mach12 wiring — bundled command set", () => {
 		]) {
 			expect(content).toContain(agent);
 		}
+	});
+});
+
+describe("mach12 delivery-unit linkage contract", () => {
+	const deliveryUnitPath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-delivery-unit.md`);
+	const deliveryUnit = readFileSync(deliveryUnitPath, "utf-8");
+
+	it("is a tightly scoped delegate-only subroutine", () => {
+		const result = parseCommandFile(deliveryUnitPath, deliveryUnit, SET_NAME);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		expect(result.def.delegateOnly).toBe(true);
+		expect(result.def.allowedTools).toEqual(["bash"]);
+		expect(result.def.next).toBeUndefined();
+		expect(deliveryUnit.match(/\$ARGUMENTS/g)).toHaveLength(1);
+		expect(deliveryUnit).not.toContain("report_scramjet_command_status");
+	});
+
+	it("pins exact linked and explicit-none identity with universal absent-identity hold", () => {
+		expect(deliveryUnit).toContain("<!-- mach12-pr -->\n<!-- mach12-delivery-unit-v1 -->\nDelivery-unit: #<D>");
+		expect(deliveryUnit).toContain("<!-- mach12-pr -->\n<!-- mach12-delivery-unit-v1 -->\nDelivery-unit: none");
+		expect(deliveryUnit).toContain("Absent identity always returns `verdict: hold`");
+		expect(deliveryUnit).toContain("Identity without exact provenance also holds");
+		expect(deliveryUnit).toContain("zero actual `closingIssuesReferences`");
+		expect(deliveryUnit).toContain("zero standalone closing-keyword lines");
+		expect(deliveryUnit).toContain("zero standalone `Part of #<number>` lines");
+		expect(deliveryUnit).toContain("There is no unlinked representation other than exact `Delivery-unit: none`");
+		expect(deliveryUnit).not.toContain("verdict: not-applicable");
+	});
+
+	it("requires informed manual migration without inference or body mutation", () => {
+		expect(deliveryUnit).toContain("legacy or external PR");
+		expect(deliveryUnit).toContain("inspect the intended delivery scope before repairing or redrafting");
+		expect(deliveryUnit).toContain("Never infer identity from existing closers");
+		expect(deliveryUnit).toContain("auto-edit the body");
+		expect(deliveryUnit).toContain("Verification never edits the PR body");
+	});
+
+	it("pins complete fail-closed native relationship and PR reads", () => {
+		for (const endpoint of [
+			"issues/<issue>/comments?per_page=100",
+			"issues/<issue>/sub_issues?per_page=100",
+			"issues/<issue>/parent",
+			"issues/<issue>/dependencies/blocked_by?per_page=100",
+		]) {
+			expect(deliveryUnit).toContain(endpoint);
+		}
+		expect(deliveryUnit).toContain("No parent issue found");
+		expect(deliveryUnit).toContain("includeClosedPrs: true");
+		expect(deliveryUnit).toContain("pageInfo { hasNextPage endCursor }");
+		expect(deliveryUnit).toContain("missing or non-advancing `endCursor` holds");
+		expect(deliveryUnit).not.toContain("mach12:gh-sub-issues");
+	});
+
+	it("pins classification, audit records, plan freshness, and blocker delivery", () => {
+		for (const semanticPin of [
+			"first nonblank line is exactly `<!-- mach12-initiative-v1 -->`",
+			"first nonblank line is exactly `<!-- mach12-batch-v1 -->`",
+			"<!-- mach12-membership-decision-v1 -->",
+			"Plan-impact: initial-plan-required|replan-required",
+			"Approval: user-confirmed",
+			"Supersedes: issuecomment-<id>|none",
+			"<!-- mach12-disposition-v1 -->",
+			"Every later active `Before`, `Destination-before`, and `Dependencies-before`",
+			"Final active snapshots",
+			"latest exact `<!-- mach12-plan -->` comment",
+			"material body or comment requirement added after the plan requires a revised plan",
+			"exact retained native member set",
+			"exactly one claiming PR in any state",
+			"sole claimant is merged",
+		]) {
+			expect(deliveryUnit).toContain(semanticPin);
+		}
+	});
+
+	it("pins exact creation and verification safety outcomes", () => {
+		for (const semanticPin of [
+			"close set is exactly `{D}`",
+			"close set is exactly `{D} ∪ exact current direct retained source members}`",
+			"`part-of` is exactly that initiative",
+			"Partial completion never silently narrows the close set",
+			"must have zero claiming PRs in every state",
+			"must have claimant set exactly `{current PR}`",
+			"report sorted `missing` and `extra` issue numbers",
+			"Never close an initiative, sibling, removed source, successor, transitive descendant",
+			"Return only one of these verdicts: `ok` or `hold`",
+		]) {
+			expect(deliveryUnit).toContain(semanticPin);
+		}
+	});
+
+	it("keeps advisory sub-issue discovery out of destructive linkage", () => {
+		const subIssues = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-sub-issues.md`), "utf-8");
+		expect(subIssues).toContain("advisory and may fail open through body parsing");
+		expect(subIssues).toContain("Never use it for PR close-set derivation or delivery verification");
+		expect(subIssues).toContain("must use `mach12:gh-delivery-unit`");
 	});
 });
 
