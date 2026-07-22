@@ -20,10 +20,12 @@ This subroutine is `gh`-specific. GitHub native issue relationships and GraphQL 
 
 Accept exactly one of these forms:
 
-- **Creation mode:** one positive decimal issue number, the candidate delivery unit `D`.
-- **Verification mode:** `--pr` followed by one positive decimal PR number.
+- **Creation mode:** one canonical positive decimal issue number, the candidate delivery unit `D`.
+- **Verification mode:** `--pr` followed by one canonical positive decimal PR number.
 
-Reject missing, zero, negative, mixed, duplicate, reordered, or trailing arguments. Return `verdict: hold` with reason `invalid-arguments`; do not guess a number.
+The canonical positive-decimal grammar is `[1-9][0-9]*`. Apply it consistently to arguments, `Delivery-unit: #<D>`, and every issue-number field in this contract; zero, signs, and leading zeroes are malformed.
+
+Reject missing, zero, negative, mixed, duplicate, reordered, malformed, or trailing arguments. Return `verdict: hold`, `mode: unknown`, `delivery-unit: unknown`, and reason `invalid-arguments`; do not guess a mode or number.
 
 Resolve the repository once with `gh repo view --json nameWithOwner --jq .nameWithOwner`, split it into owner and name, and use that same repository for every REST and GraphQL read.
 
@@ -98,7 +100,7 @@ If the identity is `Delivery-unit: none`, require all of the following:
 
 On success, skip issue derivation and return `verdict: ok`, `mode: verification`, `delivery-unit: none`, `classification: unlinked`, `close-set: []`, `part-of: none`, and the empty claimant facts. There is no unlinked representation other than exact `Delivery-unit: none`.
 
-For linked identity, obtain `D` only from `Delivery-unit: #<D>` and continue. In creation mode, `D` is the validated argument.
+For linked identity, require `<D>` to match the canonical positive-decimal grammar, obtain `D` only from `Delivery-unit: #<D>`, and continue. In creation mode, `D` is the validated argument.
 
 Recursive blocker derivation uses a blocker-only **historical context**. This is internal validation context, not an accepted argument mode. Historical context retains every normal topology, classification, membership-history, plan, identity, exact close-set, `Part of`, disposition, recursive dependency, cycle, and fail-closed read check. It changes only the incompatible live-candidate requirements stated below: the unit and retained members must be closed as completed, and their sole canonical claimant must be merged. Never apply historical context to the top-level creation or verification target.
 
@@ -202,7 +204,7 @@ A malformed, conflicting, partially materialized, or multiple active disposition
 
 ## Step 8: Validate the canonical batch plan and retained members
 
-For a batch, inspect all comments for every marker beginning `mach12-plan`. Hold malformed marker variants. Select the latest exact `<!-- mach12-plan -->` comment by `created_at`, with numeric comment ID as deterministic tie-breaker. Require a plan and require it to postdate every active membership decision affecting the batch or retained membership.
+For a batch, inspect all comments for every marker beginning `mach12-plan`. Hold malformed marker variants. An exact plan record is one comment containing exactly one exact single-line `<!-- mach12-plan -->` marker. Duplicate exact markers in one comment or any otherwise ambiguous plan record hold with reason `stale-or-incomplete-plan`; never choose among duplicate markers. Select the latest exact plan record by `created_at`, with numeric comment ID as deterministic tie-breaker. Require a plan and require it to postdate every active membership decision affecting the batch or retained membership.
 
 Semantically compare the plan with every retained member's current body and complete comments:
 
@@ -267,13 +269,33 @@ Deleting closers while identity remains re-derives `D` and reports missing close
 
 ## Step 12: Return structured prose
 
-Return only one of these verdicts: `ok` or `hold`. Always include:
+Return only one of these verdicts: `ok` or `hold`. Invalid arguments use this parse-failure variant:
+
+```text
+verdict: hold
+mode: unknown
+delivery-unit: unknown
+reason: invalid-arguments
+```
+
+A successfully parsed verification request that holds before identity resolution uses:
+
+```text
+verdict: hold
+mode: verification
+delivery-unit: unknown
+reason: pr-read-failed|missing-delivery-identity|malformed-delivery-identity
+```
+
+Use the precise applicable reason, not the literal alternatives above. After creation arguments parse or verification identity resolves, always include:
 
 ```text
 verdict: ok|hold
 mode: creation|verification
 delivery-unit: #<D>|none
 ```
+
+Reserve `delivery-unit: none` for a verification request whose PR has the exact explicit-unlinked identity. Never use it when identity is unresolved.
 
 For `ok`, also include:
 

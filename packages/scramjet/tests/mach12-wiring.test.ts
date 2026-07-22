@@ -247,6 +247,21 @@ describe("mach12 delivery-unit linkage contract", () => {
 		expect(deliveryUnit).not.toContain("mach12:gh-sub-issues");
 	});
 
+	it("pins canonical arguments and truthful unresolved result variants", () => {
+		expect(deliveryUnit).toContain(
+			"Apply it consistently to arguments, `Delivery-unit: #<D>`, and every issue-number field in this contract; zero, signs, and leading zeroes are malformed.",
+		);
+		expect(deliveryUnit).toContain(`verdict: hold
+mode: unknown
+delivery-unit: unknown
+reason: invalid-arguments`);
+		expect(deliveryUnit).toContain(`verdict: hold
+mode: verification
+delivery-unit: unknown
+reason: pr-read-failed|missing-delivery-identity|malformed-delivery-identity`);
+		expect(deliveryUnit).toContain("Never use it when identity is unresolved");
+	});
+
 	it("pins classification, audit records, plan freshness, and blocker delivery", () => {
 		for (const semanticPin of [
 			"first nonblank line is exactly `<!-- mach12-initiative-v1 -->`",
@@ -258,7 +273,9 @@ describe("mach12 delivery-unit linkage contract", () => {
 			"<!-- mach12-disposition-v1 -->",
 			"Every later active `Before`, `Destination-before`, and `Dependencies-before`",
 			"Final active snapshots",
-			"latest exact `<!-- mach12-plan -->` comment",
+			"exact plan record is one comment containing exactly one exact single-line `<!-- mach12-plan -->` marker",
+			"Duplicate exact markers in one comment or any otherwise ambiguous plan record hold",
+			"latest exact plan record",
 			"material body or comment requirement added after the plan requires a revised plan",
 			"exact retained native member set",
 			"exactly one claiming PR in any state",
@@ -327,6 +344,7 @@ describe("mach12 delivery-unit linkage contract", () => {
 		expect(prCreate).toContain("Require `verdict: ok` for both linked and explicit-none PRs");
 		expect(prCreate).toContain("If verification returns `hold`");
 		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
+		expect(prCreate).toContain('Reserve `status: "completed"` for a successfully created PR whose post-create verification returned `ok`');
 		expect(prCreate).toContain("Leave `next_steps` empty; do not recommend `mach12:pr-review`");
 	});
 
@@ -335,15 +353,19 @@ describe("mach12 delivery-unit linkage contract", () => {
 		const checkout = preMerge.indexOf("gh pr checkout <pr-number>");
 		const earlyVerification = preMerge.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
 		const pull = preMerge.indexOf("git pull");
-		const finalVerification = preMerge.indexOf("Before presenting readiness, rerun fresh verification");
 		const lastCiRead = preMerge.lastIndexOf("gh pr checks <pr-number> --json name,state,bucket,link");
-		const report = preMerge.indexOf("## Step 9: Present pre-merge report");
+		const finalVerification = preMerge.indexOf("## Step 9: Run final delivery-linkage verification");
+		const report = preMerge.indexOf("## Step 10: Present pre-merge report");
 
+		for (const anchor of [checkout, earlyVerification, pull, lastCiRead, finalVerification, report]) {
+			expect(anchor).toBeGreaterThan(-1);
+		}
 		expect(earlyVerification).toBeGreaterThan(checkout);
 		expect(earlyVerification).toBeLessThan(pull);
 		expect(finalVerification).toBeGreaterThan(lastCiRead);
 		expect(finalVerification).toBeLessThan(report);
 		expect(preMerge.match(/\/mach12:gh-delivery-unit --pr <pr-number>/g)).toHaveLength(2);
+		expect(preMerge).toContain("do not pull, edit, commit, or push before initial delivery-linkage verification");
 		expect(preMerge).toContain("Missing identity is a non-forceable blocker");
 		expect(preMerge).toContain("there is no unrelated or not-applicable path");
 		expect(preMerge).toContain("legacy or external PR");
@@ -351,7 +373,21 @@ describe("mach12 delivery-unit linkage contract", () => {
 		expect(preMerge).toContain("never auto-edit the PR body");
 		expect(preMerge).toContain("- [ ] Linkage:");
 		expect(preMerge).toContain("after all checklist edits, commits, pushes, tests, and CI checks");
-		expect(preMerge).toContain("Leave `next_steps` empty if linkage verification returns `hold`");
+		expect(preMerge).toContain(
+			"Every non-terminal Step 8 outcome—including skipped CI, initially passing CI, no reported checks, and passing CI after a fix—must converge here",
+		);
+		for (const ciDestination of [
+			'skip this step, record "CI: skipped per user request", and proceed to Step 9',
+			"All checks pass** (`bucket` is `pass` for every check): CI is green. Proceed to Step 9",
+			"If none appear, note this for the report and proceed to Step 9",
+			"All checks pass**: CI is green. Proceed to Step 9",
+		]) {
+			expect(preMerge).toContain(ciDestination);
+		}
+		expect(preMerge).toContain('Only when final linkage verification returns `verdict: ok`, report `status: "completed"`');
+		expect(preMerge).toContain('On `verdict: hold`');
+		expect(preMerge).toContain('Report `status: "blocked"` or `status: "incomplete"` as appropriate and leave `next_steps` empty');
+		expect(preMerge).toContain("verified ordinary/batch with exact close set and optional `part-of: #<initiative>`");
 	});
 
 	it("keeps final merge verification adjacent and non-forceable", () => {
