@@ -325,7 +325,7 @@ Present a summary of what was done:
 - [ ] CHANGELOG: [updated / no changelog maintained / no changes needed / skipped per user request]
 - [ ] Tests: [all passing / N failures noted / skipped per user request]
 - [ ] CI: [all checks passing / fixed: <summary of what was fixed> / failing: <summary> (escalated) / pending (no checks reported) / skipped per user request]
-- [ ] Linkage: [verified ordinary/batch with exact close set and optional `part-of: #<initiative>` / verified explicitly unlinked through `Delivery-unit: none` / hold: <exact mismatch>]
+- [ ] Linkage: [verified ordinary/batch with exact close set and optional `part-of: #<initiative>` / verified explicitly unlinked through `Delivery-unit: none` / not verified (escalated at Step N) / hold: <exact mismatch>]
 
 Report any items that need follow-up (test failures, manual conflict resolution, etc.) so the user can decide how to proceed.
 
@@ -335,6 +335,6 @@ After delivering your answer, call `report_scramjet_command_status` and summariz
   - `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, with a reason explaining when merging is appropriate.
   - `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, with a reason explaining when a fix pass is warranted.
   - Recommend `mach12:pr-merge` (index 0) when the checklist passed cleanly and no issues remain; recommend `mach12:pr-review-fix` (index 1) when the checklist surfaced issues that warrant code changes.
-- **Linkage hold:** Report `status: "blocked"` or `status: "incomplete"` as appropriate and leave `next_steps` empty. A linkage hold cannot be force-merged or bypassed by user skip directives.
+- **Linkage hold:** Report `status: "blocked"` and leave `next_steps` empty. A linkage hold cannot be force-merged or bypassed by user skip directives.
 
 If the PR should otherwise remain open or the checklist did not complete, report the matching non-completed status and leave `next_steps` empty. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

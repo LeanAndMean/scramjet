@@ -56,8 +56,8 @@ If both are empty, stop and explain that the branch has no changes relative to t
 Resolve an issue as follows:
 
 1. If the user supplied an issue number, delegate to `/mach12:gh-issue-read <issue-number>`. If that read fails, report the error and stop.
-2. Otherwise, infer an issue only from a clear branch-name pattern such as `feature/issue-55-*`, `fix/issue-55-*`, or `55-some-description`, then delegate to `/mach12:gh-issue-read <inferred-issue-number>`.
-3. If no issue can be identified, proceed as explicitly unlinked.
+2. Otherwise, infer an issue only from a clear branch-name pattern such as `feature/issue-55-*`, `fix/issue-55-*`, or `55-some-description`, then delegate to `/mach12:gh-issue-read <inferred-issue-number>`. If the inferred issue read fails, report the error and stop.
+3. If no issue number could be extracted from the branch name, proceed as explicitly unlinked.
 
 Issue comments may inform the summary and test plan but must not be copied verbatim.
 
@@ -178,4 +178,4 @@ After delivering your answer, call `report_scramjet_command_status`: summarize t
 - `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`
 - `reason`: the PR's exact delivery linkage was verified and it is ready for automated review
 
-Set `recommended_next_step` to `0` when included. Leave `next_steps` empty if post-create verification returned `hold`. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
+Set `recommended_next_step` to `0` when included. If post-create verification returned `hold`, report `status: "blocked"` and leave `next_steps` empty. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

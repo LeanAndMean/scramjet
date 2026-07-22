@@ -294,7 +294,7 @@ reason: pr-read-failed|missing-delivery-identity|malformed-delivery-identity`);
 	it("pins exact creation and verification safety outcomes", () => {
 		for (const semanticPin of [
 			"close set is exactly `{D}`",
-			"close set is exactly `{D} ∪ exact current direct retained source members}`",
+			"close set is exactly `{D} ∪ {exact current direct retained source members}`",
 			"`part-of` is exactly that initiative",
 			"Partial completion never silently narrows the close set",
 			"must have zero claiming PRs in every state",
@@ -386,7 +386,7 @@ reason: pr-read-failed|missing-delivery-identity|malformed-delivery-identity`);
 		}
 		expect(preMerge).toContain('Only when final linkage verification returns `verdict: ok`, report `status: "completed"`');
 		expect(preMerge).toContain('On `verdict: hold`');
-		expect(preMerge).toContain('Report `status: "blocked"` or `status: "incomplete"` as appropriate and leave `next_steps` empty');
+		expect(preMerge).toContain('Report `status: "blocked"` and leave `next_steps` empty');
 		expect(preMerge).toContain("verified ordinary/batch with exact close set and optional `part-of: #<initiative>`");
 	});
 

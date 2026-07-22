@@ -249,7 +249,7 @@ A merged other claimant means the unit or source is already delivered. A closed-
 Derive only after every prior validation succeeds:
 
 - **Ordinary:** close set is exactly `{D}`.
-- **Batch:** close set is exactly `{D} ∪ exact current direct retained source members}`.
+- **Batch:** close set is exactly `{D} ∪ {exact current direct retained source members}`.
 - Order canonical body lines as `D` first, then batch members in ascending numeric order.
 - If `D` has a direct initiative parent, `part-of` is exactly that initiative; otherwise it is none.
 
