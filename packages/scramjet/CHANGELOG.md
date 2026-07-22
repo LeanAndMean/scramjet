@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.58.0 — Make Mach 12 PR linkage delivery-unit aware
+
+Adds a fail-closed delivery-unit derivation and verification subroutine so a PR closes exactly its delivery unit — an ordinary issue or a batch's retained sources — and never an initiative or sibling work by accident. PR creation now derives, freezes, and verifies the exact closing linkage before offering review, and both the pre-merge checklist and the merge command re-verify fresh delivery linkage as a non-forceable safety gate. Linkage identity is carried by an explicit `Delivery-unit: #D`/`Delivery-unit: none` block under the `mach12-pr` provenance marker; missing identity holds and requires informed manual migration rather than inference from mutable closers. Fixes [#354](https://github.com/LeanAndMean/scramjet/issues/354).
+
+### Added
+
+- `mach12:gh-delivery-unit`: a read-only, fail-closed subroutine that derives or verifies a delivery unit's exact PR linkage from fresh GitHub state (native issue relationships and GraphQL PR connections), covering canonical identity, issue topology, membership-decision and disposition history, batch plans, blocker delivery, and claimant cardinality.
+
+### Changed
+
+- `mach12:pr-create`: derives the delivery unit, freezes exact closing linkage into the PR body with explicit `Delivery-unit` identity and provenance, and verifies it before offering review.
+- `mach12:pr-pre-merge`, `mach12:pr-merge`: verify fresh delivery linkage as a non-forceable gate — before checklist mutation and again immediately before merge — that no skip directive can bypass.
+- `mach12:gh-sub-issues`, `CLAUDE.md`: aligned subroutine wiring and the bundled-command-set architecture description with the new subroutine.
+
+### Tests
+
+- `mach12-wiring.test.ts`, `integration-smoke.test.ts`: cover delivery-unit identity, close-set ordering, migration guidance for missing identity, and safety-gate behavior.
+
 ## 0.57.0 — Treat Scramjet builtin init as required across session replacement
 
 Makes Scramjet builtin initialization a required product invariant across startup, reload, and every session replacement, so a replacement runtime can never activate without the product's capabilities. A throwing `builtinInit` now fails fast with a product-attributed error instead of an anonymous `<builtin>` diagnostic, and every replacement path (new / resume / import / fork / clone / reload) prepares the candidate runtime before tearing down the current one, so a failure aborts before the irreversible `session_shutdown`/`dispose`. Optional third-party extension failures remain non-fatal diagnostics. This is a Pi-runtime (`@leanandmean/coding-agent`) hardening change; the Scramjet product package carries the version bump. Fixes [#361](https://github.com/LeanAndMean/scramjet/issues/361).
