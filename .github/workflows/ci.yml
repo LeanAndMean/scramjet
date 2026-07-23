@@ -23,7 +23,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        # --ignore-scripts skips postinstall; CI doesn't need Mach 12 seeded.
+        # --ignore-scripts skips postinstall; command-set seeding has a dedicated smoke test.
         run: npm ci --ignore-scripts
 
       - name: Type-check
@@ -67,18 +67,27 @@ jobs:
           grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/commands/mach12:issue-create.md' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
+          grep -qF 'package/scramjet/set.yaml' "$TARBALL_CONTENTS"
+          grep -qF 'package/scramjet/commands/scramjet:troubleshoot.md' "$TARBALL_CONTENTS"
           XDG_DATA_HOME="$PREFIX/data" npm install --prefix "$PREFIX" -g \
             "$PACK_DIR"/leanandmean-tui-*.tgz \
             "$PACK_DIR"/leanandmean-ai-*.tgz \
             "$PACK_DIR"/leanandmean-agent-*.tgz \
             "$PACK_DIR"/leanandmean-coding-agent-*.tgz \
             "$SCRAMJET_TARBALL"
+          test -f "$PREFIX/data/scramjet/mach12/commands/mach12:issue-create.md"
+          test -f "$PREFIX/data/scramjet/scramjet/commands/scramjet:troubleshoot.md"
+          test -f "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
+          test -f "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
           XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --help >/dev/null
+          printf '%s\n' '{"id":"commands","type":"get_commands"}' \
+            | SCRAMJET_OFFLINE=1 XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --mode rpc --no-session \
+            | jq -e 'select(.id == "commands") | any(.data.commands[]; .name == "scramjet:troubleshoot")'
           rm -rf "$PACK_DIR" "$PREFIX" "$TARBALL_CONTENTS"
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary
-        # XDG_DATA_HOME and verify it seeds mach12/ with manifest.
+        # XDG_DATA_HOME and verify both bundled sets and manifests.
         run: |
           set -euo pipefail
           TMP=$(mktemp -d)
@@ -87,8 +96,14 @@ jobs:
           test -d "$TMP/scramjet/mach12/agents"
           test -f "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
           test -f "$TMP/scramjet/mach12/.seed-manifest.json"
-          # Second run: same-version short-circuit preserves user edits.
+          test -d "$TMP/scramjet/scramjet/commands"
+          test -f "$TMP/scramjet/scramjet/set.yaml"
+          test -f "$TMP/scramjet/scramjet/commands/scramjet:troubleshoot.md"
+          test -f "$TMP/scramjet/scramjet/.seed-manifest.json"
+          # Second run: same-version short-circuit preserves user additions.
           echo "user edit" > "$TMP/scramjet/mach12/USER-MARKER"
+          echo "user edit" > "$TMP/scramjet/scramjet/USER-MARKER"
           XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
           test -f "$TMP/scramjet/mach12/USER-MARKER"
+          test -f "$TMP/scramjet/scramjet/USER-MARKER"
           rm -rf "$TMP"

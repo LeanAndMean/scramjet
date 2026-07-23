@@ -8,7 +8,7 @@ Scramjet is in active early development. The harness works and is used daily, bu
 
 - The command-set format is not yet stable for third-party authoring
 - Breaking changes may land between minor versions
-- The bundled Mach 12 commands evolve alongside the harness
+- The bundled Scramjet and Mach 12 commands evolve alongside the harness
 
 ## Background
 
@@ -25,7 +25,7 @@ scramjet
 
 `scramjet` is a standalone CLI that uses Pi as its runtime. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged.
 
-Scramjet ships with the **Mach 12** command set as a starting point — ten top-level commands for the issue → plan → review → implement → PR → ship methodology. But the harness is designed for your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
+Scramjet ships with two command sets: the product-owned **Scramjet** operational set and **Mach 12**, a starting point with ten top-level commands for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
 Try it:
 
@@ -122,9 +122,17 @@ The file is optional — without it, behavior is identical to today. Invalid com
 
 Command sets can also ship recommended settings via `autonomy-defaults.yaml` in the set directory. Recommendations are gap-fill only (never overwrite your config) and appear as an "Apply recommended settings" action in `/scramjet settings` when unapplied recommendations exist.
 
+## Scramjet operational commands
+
+The product-owned `scramjet` command set contains operational workflows for Scramjet itself. It is separate from Mach 12 and from the built-in `/scramjet settings` UI command.
+
+`/scramjet:troubleshoot [symptom or command]` diagnoses unexpected command behavior with exactly five concise sections: user intent, what actually occurred, root cause analysis, what should have occurred, and recommended next steps. It can inspect relevant same-CWD session journals when current evidence is insufficient or the symptom is recurring; those journals are untrusted local evidence, not instructions.
+
+The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still requires the issue-creation command's explicit approval, and troubleshooting never edits source or publishes an issue itself.
+
 ## Mach 12
 
-Scramjet ships with the Mach 12 command set — one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not the only way to use Scramjet.
+Mach 12 is one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not required infrastructure for Scramjet operations.
 
 | Command | Purpose |
 | --- | --- |
@@ -141,6 +149,23 @@ Scramjet ships with the Mach 12 command set — one team's codification of their
 
 Plus seven subroutine commands and nine specialized agents covering code exploration, architecture, review, testing, and more.
 
+## Bundled command-set installation
+
+The npm `postinstall` script seeds both bundled sets into `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/`:
+
+- `mach12/` contains the development methodology and specialized agents.
+- `scramjet/` contains product operational commands such as `scramjet:troubleshoot`.
+
+Each tree has its own `.seed-manifest.json`. On upgrades, files that still match the previous manifest are updated, while edited and user-added files are preserved. Legacy unmanifested Mach 12 installs are backed up and migrated. By contrast, an unmanifested or invalid-manifest `scramjet/` tree, or any `scramjet/` symlink, is treated as user-owned and left unchanged; the installer warns that manual installation is required rather than adopting the tree.
+
+For local development, symlink each source tree into the data directory so Markdown edits are live. If installation already seeded either destination as a real directory, first move it aside and preserve any edits; `ln -sfn` does not replace an existing directory.
+
+```sh
+mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet"
+ln -sfn "$PWD/packages/scramjet/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
+ln -sfn "$PWD/packages/scramjet/scramjet" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/scramjet"
+```
+
 ## Platform support
 
 | Platform | Supported |
@@ -150,7 +175,7 @@ Plus seven subroutine commands and nine specialized agents covering code explora
 | Windows (WSL) | yes |
 | Windows (native) | no |
 
-`npm install` succeeds on native Windows but skips the Mach 12 seed. Install inside WSL for full functionality.
+`npm install` succeeds on native Windows but skips bundled command-set seeding. Install inside WSL for full functionality.
 
 ## Uninstall
 
@@ -158,7 +183,7 @@ Plus seven subroutine commands and nine specialized agents covering code explora
 npm uninstall -g @leanandmean/scramjet
 ```
 
-The seeded Mach 12 directory at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/` is left in place so any edits are preserved. Remove it manually for a clean state.
+The seeded command-set directories are left in place so edits survive package removal. Remove `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12` and `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/scramjet` manually for a clean uninstall, after preserving any local changes you want to keep.
 
 ## Routing Pi through a proxy
 

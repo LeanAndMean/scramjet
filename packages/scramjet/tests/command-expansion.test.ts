@@ -120,25 +120,28 @@ describe("input handler — expansion transform", () => {
 	});
 });
 
-describe("static tag removal validation", () => {
-	const commandsDir = join(__dirname, "../mach12/commands");
-	const files = readdirSync(commandsDir).filter((f) => f.endsWith(".md"));
+describe("static command framing validation", () => {
+	const commandDirs = [join(__dirname, "../mach12/commands"), join(__dirname, "../scramjet/commands")];
+	const commands = commandDirs.flatMap((dir) =>
+		readdirSync(dir)
+			.filter((file) => file.endsWith(".md"))
+			.map((file) => ({ file, content: readFileSync(join(dir, file), "utf-8") })),
+	);
 
-	it("no .md command file contains static <scramjet-command tags", () => {
-		for (const file of files) {
-			const content = readFileSync(join(commandsDir, file), "utf-8");
+	it("no bundled command contains static scramjet-command tags", () => {
+		for (const { file, content } of commands) {
 			expect(content, `${file} still contains <scramjet-command`).not.toMatch(/<scramjet-command/);
 			expect(content, `${file} still contains </scramjet-command`).not.toMatch(/<\/scramjet-command>/);
 		}
 	});
 
-	it("all command files preserve <user-context> or <caller-context> tags", () => {
-		const filesWithContext = files.filter((f) => f !== "mach12:find-contribution-guidelines.md");
-		for (const file of filesWithContext) {
-			const content = readFileSync(join(commandsDir, file), "utf-8");
-			const hasUserCtx = content.includes("<user-context>");
-			const hasCallerCtx = content.includes("<caller-context>");
-			expect(hasUserCtx || hasCallerCtx, `${file} is missing context tags`).toBe(true);
+	it("all contextual commands contain one framed ARGUMENTS expansion", () => {
+		const commandsWithContext = commands.filter(({ file }) => file !== "mach12:find-contribution-guidelines.md");
+		for (const { file, content } of commandsWithContext) {
+			const contextBlock = content.match(/<(user|caller)-context>[\s\S]*?<\/(user|caller)-context>/)?.[0];
+			expect(contextBlock, `${file} is missing context tags`).toBeDefined();
+			expect(content.match(/\$ARGUMENTS/g), `${file} must expand arguments exactly once`).toHaveLength(1);
+			expect(contextBlock, `${file} must frame its argument expansion`).toContain("$ARGUMENTS");
 		}
 	});
 });

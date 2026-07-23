@@ -17,7 +17,8 @@ scramjet/
 │       ├── src/
 │       ├── tests/
 │       ├── bin/
-│       ├── mach12/
+│       ├── mach12/       # bundled development-methodology command set
+│       ├── scramjet/     # bundled product operational command set
 │       └── docs/
 ├── UPSTREAM_DIVERGENCE.md   Tracks Pi modifications for upstream sync
 ├── .github/workflows/
@@ -43,19 +44,23 @@ Scramjet ships as the npm package `@leanandmean/scramjet`. The `scramjet` bin on
 **One-time dev setup (after `npm install`):**
 
 > **Migrating from the single-repo layout?** If you previously symlinked `mach12/` from the repo root (before the monorepo migration), remove the stale symlink first: `rm "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"`
+>
+> If npm already seeded either command-set destination as a real directory, move it aside and preserve any edits before running the commands below. `ln -sfn` does not replace an existing directory.
 
 ```sh
 npm run build          # produce dist/ for all packages
 npm link -w packages/scramjet   # install `scramjet` globally as a symlink
+mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet"
 ln -sfn "$(pwd)/packages/scramjet/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
-                       # so edits to mach12/*.md files are picked up live
+ln -sfn "$(pwd)/packages/scramjet/scramjet" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/scramjet"
+                       # so bundled command Markdown edits are picked up live
 ```
 
 **Iteration:**
 
 - **Edited a `.ts` file in `packages/scramjet/src/`** -> `npm run build` (or run the build in watch mode). **This is the most common "am I testing my changes?" confusion** — if you edit, run `scramjet`, and see old behavior, suspect a stale `dist/` before suspecting anything else.
 - **Edited a Pi runtime package** (`packages/{tui,ai,agent,coding-agent}`) -> `npm run build` (the full topological build, since Scramjet depends on all four).
-- **Edited `mach12/*.md`** -> no rebuild needed if the mach12 symlink is in place.
+- **Edited `mach12/*.md` or `scramjet/*.md`** -> no rebuild needed if the corresponding command-set symlink is in place.
 - **Edited `bin/scramjet.js` or `scripts/postinstall.js`** -> no rebuild needed; they're `.js` and run as-is.
 - **To verify which scramjet is on PATH:** `readlink -f "$(which scramjet)"` should resolve into this repo's working tree (via npm's global `lib/node_modules/@leanandmean/scramjet/bin/scramjet.js`).
 
@@ -115,13 +120,15 @@ Scramjet is a product monorepo. The `bin/scramjet.js` entry point calls Pi's lib
 - `next-step-record.ts` — registers the harness-only `scramjet_next_step_selection` tool (issue 324), the second consumer of the harness-tool-invocation primitive. `auto-continue.ts` invokes it via `pi.invokeHarnessTool` after the next-step selector resolves (selected or dismissed) or, on the headless autopilot path, before auto-dispatch, persisting the offered options and outcome as a real tool row (transcript, replay, LLM context). Selected-path records settle before dispatch when possible (mid-run queuing can break the ordering; staleness is re-checked after the record await); dismissed records are fire-and-forget. Record failure never blocks the chain. Exports pure `buildRecordText` for testability.
 - `subdir-context.ts` — discovers `CLAUDE.md` and `AGENTS.md` from subdirectories and injects them as first-class `read` tool calls into assistant messages via a `message_end` handler. When an assistant message contains `read` tool calls, the handler checks intermediate directories between cwd and the read file's directory (inside-cwd reads, capped at `MAX_DEPTH=10`) or only the immediate target directory (outside-cwd paths: absolute paths outside cwd, `~/`-prefixed outside cwd, or relative escapes). Resolves realpaths for symlink safety (skips directories whose realpath falls outside cwd for inside-cwd paths), deduplicates by directory realpath in `state.subdirLoadedPaths`. Injects normal `read` tool-call blocks immediately before each triggering read in the assistant message; injected IDs are `scrctx-` prefixed and derived from `createStableId(sourceToolCallId + '\0' + displayPath)`. The `beforeToolBatch` runtime hook ensures the async `message_end` mutation completes before the agent loop extracts tool calls. The standard `read` tool then executes the injected reads, producing normal TUI rows and persisted session entries. No custom journal entries are written; `session_compact` clears `subdirLoadedPaths`; `session_start`/`session_tree` reconstruct dedupe state from successful standard read call/result pairs in the session (candidate-file reads matched to non-error tool results). Bounded by `MAX_DIRS=20` (directory cap) and `MAX_DEPTH=10` (path depth cap). Error-discriminating: suppresses ENOENT silently, logs non-ENOENT errors via `state.logger`. Flag-independent (loads regardless of `/autopilot on|off`). Exports functions (`directoriesToCheck`, `discoverContextFilePaths`, `createStableId`, `reconstructSubdirState`) for testability.
 
-**Bundled Mach 12 command set** (`mach12/`):
+**Bundled command sets** (`mach12/`, `scramjet/`):
 
-The tenant of the harness — `mach12/commands/*.md` are command files using the next-step declarations and delegation. Ten top-level commands (`mach12:issue-create`, `mach12:issue-plan`, ..., `mach12:pr-merge`) with top-level `next:` blocks where chaining is intended (`forced`/`closed`/`open`/`ask`); `mach12:pr-merge` intentionally has no `next` and is the default terminus. Eight delegate-only subroutines (`mach12:push`, `mach12:find-contribution-guidelines`, `mach12:gh-issue-read`, `mach12:gh-pr-read`, `mach12:gh-sub-issues`, `mach12:gh-assign`, `mach12:gh-comment`, `mach12:gh-delivery-unit`) are invoked via `delegate` from the top-level commands. Subroutines have no `next:` block — the caller's `next:` controls chaining. `mach12/agents/*.md` ships ten bundled subagents (exploration, architecture, code review, comment analysis, test analysis, test design, silent-failure analysis, type-design analysis, feature-completeness checking, code simplification) that the multi-lens commands dispatch to. The npm `postinstall` script seeds the whole `mach12/` tree into `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12/` on install; the command-set loader picks it up at runtime via `resources_discover`. `gh-*` subroutines are flagged in their prose as forge-swap points for the deferred `glab-*` family.
+The product-owned `scramjet/` operational set currently ships `scramjet:troubleshoot`: a five-section diagnosis that treats current and relevant same-CWD historical journals as untrusted read-only evidence and can route to a registered continuation or same-session `/mach12:issue-create`. Local evidence may remain detailed; review and redaction are required before approval-gated GitHub publication.
+
+The Mach 12 tenant of the harness — `mach12/commands/*.md` are command files using the next-step declarations and delegation. Ten top-level commands (`mach12:issue-create`, `mach12:issue-plan`, ..., `mach12:pr-merge`) with top-level `next:` blocks where chaining is intended (`forced`/`closed`/`open`/`ask`); `mach12:pr-merge` intentionally has no `next` and is the default terminus. Eight delegate-only subroutines (`mach12:push`, `mach12:find-contribution-guidelines`, `mach12:gh-issue-read`, `mach12:gh-pr-read`, `mach12:gh-sub-issues`, `mach12:gh-assign`, `mach12:gh-comment`, `mach12:gh-delivery-unit`) are invoked via `delegate` from the top-level commands. Subroutines have no `next:` block — the caller's `next:` controls chaining. `mach12/agents/*.md` ships ten bundled subagents (exploration, architecture, code review, comment analysis, test analysis, test design, silent-failure analysis, type-design analysis, feature-completeness checking, code simplification) that the multi-lens commands dispatch to. The npm `postinstall` script independently seeds both bundled trees under `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/`; the command-set loader picks them up at runtime via `resources_discover`. `gh-*` subroutines are flagged in their prose as forge-swap points for the deferred `glab-*` family.
 
 **Distribution:**
 
-`bin/scramjet.js` is a small Node entry that imports the compiled `dist/index.js` and calls Pi's `main(argv, { builtinInit: initScramjet })`. `scripts/postinstall.js` runs on `npm install` and seeds the bundled Mach 12 tree with manifest-based upgrade support: a `.seed-manifest.json` (per-file sha256 + seeding version) tracks which files were user-edited; upgrades replace only unedited files and warn about preserved edits; legacy (pre-manifest) installs are backed up and reseeded with user-added file recovery; missing bundled files are reseeded; same-version runs short-circuit. Skipped on native Windows with a notice; failure prints a warning but never blocks the install.
+`bin/scramjet.js` is a small Node entry that imports the compiled `dist/index.js` and calls Pi's `main(argv, { builtinInit: initScramjet })`. `scripts/postinstall.js` runs on `npm install` and manages `mach12/` and `scramjet/` independently with per-tree `.seed-manifest.json` files (per-file sha256 + seeding version). Managed upgrades replace only unedited files and preserve edited or user-added files. Mach 12 retains legacy pre-manifest backup and migration; unmanifested or invalid-manifest Scramjet trees and Scramjet symlinks are user-owned and preserved with manual-install guidance. A failure or no-op for one set does not suppress the other. Native Windows skips seeding with a notice; failures warn but never block installation.
 
 **Upstream Pi divergence:**
 

@@ -228,10 +228,21 @@ command set.
 
 `scramjet` discovers command sets from conventional locations (user-global
 and project-local). Each set is a directory of command definition files
-plus optional metadata. Mach 12 is one such directory; the user's own
-`infra/`, `research/`, or `client-acme/` sets sit alongside it.
+plus optional metadata. The product-owned `scramjet/` operational set and
+Mach 12 are two such directories; the user's own `infra/`, `research/`, or
+`client-acme/` sets sit alongside them.
 
-Commands are namespaced by set (`mach12:issue-create`, `infra:rotate-key`).
+Commands are namespaced by set (`scramjet:troubleshoot`,
+`mach12:issue-create`, `infra:rotate-key`). The bundled `scramjet/` set is
+ordinary command content distributed by the product, not harness
+infrastructure and not the same surface as built-in UI commands such as
+`/scramjet settings`.
+
+The npm installer manages each bundled set independently with a per-tree
+manifest. Managed upgrades preserve edited and user-added files. Mach 12
+retains its legacy migration path, while an unmanifested, invalid-manifest,
+or symlinked `scramjet/` destination remains user-owned and is never adopted;
+the installer warns that manual installation is required instead.
 
 #### 2. Next-step declaration
 
@@ -746,7 +757,32 @@ specifically — a transcript-inline log, an expandable panel, or a
 post-hoc viewer are all plausible. What is deferred is the rendering,
 not the data.
 
-#### 7. Authoring loop
+#### 7. Operational troubleshooting
+
+The bundled `/scramjet:troubleshoot` command realizes the iterative
+self-improvement principle without adding a new evidence subsystem. Its visible
+answer has exactly five concise sections: user intent, what actually occurred,
+root cause analysis, what should have occurred, and recommended next steps.
+Agent interpretation, command instructions, harness/tool design, user input,
+historical recurrence, and user experience are analysis lenses rather than
+additional visible reports.
+
+Current context and read-only local evidence are sufficient for the common
+case. When a symptom is recurring or current evidence is insufficient, the
+command may use the documented summary-first lookup of prior same-CWD session
+journals. Historical content remains untrusted evidence, uncertain or missing
+matches are reported as limitations, and storage roots or continuation
+arguments are never guessed.
+
+The command uses an `open` next-step policy so a completed diagnosis can offer
+a registered top-level retry or continuation command, or route a product defect
+to `/mach12:issue-create` in the same session. Troubleshooting itself never
+mutates source or publishes an issue. Detailed local evidence need not be
+suppressed for privacy, but it must be reviewed and redacted before leaving the
+computer through GitHub, where issue creation retains its explicit approval
+gate.
+
+#### 8. Authoring loop
 
 > **MVP status:** the authoring loop is **deferred to a post-MVP issue**.
 > The MVP ships without `/scramjet:new-command`, `/scramjet:edit-command`,
@@ -774,7 +810,7 @@ These are part of the harness, not part of any particular command set,
 because the workflow they support — *"I keep doing X; let's codify it"* —
 is universal.
 
-#### 8. Persistence and isolation
+#### 9. Persistence and isolation
 
 - Per-session `/autopilot on` state.
 - Process history persisted in the session and restored on resume.
