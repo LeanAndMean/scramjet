@@ -1,0 +1,4 @@
+name: scramjet
+description: |
+  Scramjet's built-in operational commands for diagnosing and recovering
+  command workflow failures from bounded, in-context evidence.
