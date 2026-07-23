@@ -11,6 +11,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+	chmodSync,
 	cpSync,
 	existsSync,
 	lstatSync,
@@ -67,11 +68,18 @@ function sha256(filePath: string): string {
 	return createHash("sha256").update(content).digest("hex");
 }
 
-function readManifest(destDir: string): { version: string; files: Record<string, string> } {
+interface SeedManifest {
+	schemaVersion?: number;
+	setId?: string;
+	version: string;
+	files: Record<string, string>;
+}
+
+function readManifest(destDir: string): SeedManifest {
 	return JSON.parse(readFileSync(join(destDir, MANIFEST_NAME), "utf-8"));
 }
 
-function writeManifest(destDir: string, manifest: { version: string; files: Record<string, string> }): void {
+function writeManifest(destDir: string, manifest: SeedManifest): void {
 	writeFileSync(join(destDir, MANIFEST_NAME), `${JSON.stringify(manifest, null, "\t")}\n`);
 }
 
@@ -264,8 +272,8 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 
 		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 		expect(result.status).toBe(0);
-		// No seeded message, no migration, no backup
-		expect(result.stdout).not.toContain("Seeded");
+		// The linked set is skipped independently.
+		expect(result.stdout).not.toContain("Seeded Mach 12");
 		expect(result.stderr).not.toContain("migrated");
 		expect(result.stderr).not.toContain("backup");
 		// Symlink still healthy
@@ -356,6 +364,175 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 		expect(result.stderr).toContain("Removing dangling symlink");
 		expect(result.stdout).toContain("Seeded Mach 12 command set");
 		expect(existsSync(join(dest, MANIFEST_NAME))).toBe(true);
+	});
+});
+
+describe("scripts/postinstall.js — independent set ownership", () => {
+	let workDir: string;
+	let xdgHome: string;
+	let fakeHome: string;
+
+	beforeEach(() => {
+		workDir = mkdtempSync(join(tmpdir(), "scramjet-postinstall-ownership-"));
+		xdgHome = join(workDir, "xdg");
+		fakeHome = join(workDir, "home");
+		mkdirSync(fakeHome, { recursive: true });
+	});
+
+	afterEach(() => {
+		rmSync(workDir, { recursive: true, force: true });
+	});
+
+	it("fresh-seeds both sets with set-bound schema-v1 manifests", () => {
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		expect(result.status).toBe(0);
+
+		for (const setId of ["mach12", "scramjet"]) {
+			const manifest = readManifest(join(xdgHome, "scramjet", setId));
+			expect(manifest).toMatchObject({ schemaVersion: 1, setId, version: PKG_VERSION });
+		}
+		expect(existsSync(join(xdgHome, "scramjet", "scramjet", "commands", "scramjet:troubleshoot.md"))).toBe(true);
+	});
+
+	it("refuses a manifestless user-owned scramjet tree byte-for-byte while seeding Mach 12", () => {
+		const dest = join(xdgHome, "scramjet", "scramjet");
+		mkdirSync(join(dest, "commands"), { recursive: true });
+		const userFile = join(dest, "commands", "scramjet:troubleshoot.md");
+		writeFileSync(userFile, "user-owned command");
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("ownership is unknown");
+		expect(readFileSync(userFile, "utf-8")).toBe("user-owned command");
+		expect(existsSync(join(dest, MANIFEST_NAME))).toBe(false);
+		expect(existsSync(join(xdgHome, "scramjet", "mach12", MANIFEST_NAME))).toBe(true);
+	});
+
+	it("refuses the legacy manifest shape for a user-owned scramjet tree", () => {
+		const dest = join(xdgHome, "scramjet", "scramjet");
+		mkdirSync(dest, { recursive: true });
+		const legacy = { version: "old", files: {} };
+		writeManifest(dest, legacy);
+		const before = readFileSync(join(dest, MANIFEST_NAME), "utf-8");
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("invalid manifest");
+		expect(readFileSync(join(dest, MANIFEST_NAME), "utf-8")).toBe(before);
+	});
+
+	it("preserves edited owned Scramjet files and user-added files during upgrade", () => {
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		const dest = join(xdgHome, "scramjet", "scramjet");
+		const command = join(dest, "commands", "scramjet:troubleshoot.md");
+		const userFile = join(dest, "commands", "scramjet:custom.md");
+		writeFileSync(command, "edited official command");
+		writeFileSync(userFile, "user command");
+		const manifest = readManifest(dest);
+		manifest.version = "old";
+		writeManifest(dest, manifest);
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("Scramjet upgraded");
+		expect(readFileSync(command, "utf-8")).toBe("edited official command");
+		expect(readFileSync(userFile, "utf-8")).toBe("user command");
+		expect(readManifest(dest)).toMatchObject({ schemaVersion: 1, setId: "scramjet", version: PKG_VERSION });
+	});
+
+	it("preserves invalid manifests and isolates the other set", () => {
+		const mach12Dest = join(xdgHome, "scramjet", "mach12");
+		mkdirSync(mach12Dest, { recursive: true });
+		const invalidManifest = '{"schemaVersion":1,"setId":"scramjet","version":"x","files":{}}\n';
+		writeFileSync(join(mach12Dest, MANIFEST_NAME), invalidManifest);
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("invalid manifest");
+		expect(readFileSync(join(mach12Dest, MANIFEST_NAME), "utf-8")).toBe(invalidManifest);
+		expect(existsSync(join(xdgHome, "scramjet", "scramjet", MANIFEST_NAME))).toBe(true);
+	});
+
+	it.each(["../escape.md", "/absolute.md", "commands\\escape.md", "commands/../escape.md", MANIFEST_NAME])(
+		"rejects the manifest path %s without writing outside the set",
+		(hostilePath) => {
+			const dest = join(xdgHome, "scramjet", "mach12");
+			mkdirSync(dest, { recursive: true });
+			writeManifest(dest, {
+				schemaVersion: 1,
+				setId: "mach12",
+				version: "old",
+				files: { [hostilePath]: "a".repeat(64) },
+			});
+			const before = readFileSync(join(dest, MANIFEST_NAME), "utf-8");
+
+			const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+			expect(result.status).toBe(0);
+			expect(result.stderr).toContain("invalid manifest");
+			expect(readFileSync(join(dest, MANIFEST_NAME), "utf-8")).toBe(before);
+			expect(existsSync(join(xdgHome, "scramjet", "escape.md"))).toBe(false);
+		},
+	);
+
+	it.each(["target", "parent"])("refuses an owned upgrade containing a nested symlink %s", (kind) => {
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		const dest = join(xdgHome, "scramjet", "scramjet");
+		const manifest = readManifest(dest);
+		manifest.version = "old";
+		writeManifest(dest, manifest);
+		const outside = join(workDir, "outside");
+		mkdirSync(outside);
+		const outsideFile = join(outside, "scramjet:troubleshoot.md");
+		writeFileSync(outsideFile, "outside");
+		const commands = join(dest, "commands");
+		if (kind === "parent") {
+			rmSync(commands, { recursive: true });
+			symlinkSync(outside, commands);
+		} else {
+			const target = join(commands, "scramjet:troubleshoot.md");
+			rmSync(target);
+			symlinkSync(outsideFile, target);
+		}
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("unsafe destination tree");
+		expect(readFileSync(outsideFile, "utf-8")).toBe("outside");
+		expect(readManifest(dest).version).toBe("old");
+	});
+
+	it("skips one healthy development symlink without suppressing the other set", () => {
+		const dest = join(xdgHome, "scramjet", "mach12");
+		const target = join(workDir, "mach12-dev");
+		mkdirSync(dirname(dest), { recursive: true });
+		mkdirSync(target);
+		symlinkSync(target, dest);
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(lstatSync(dest).isSymbolicLink()).toBe(true);
+		expect(existsSync(join(xdgHome, "scramjet", "scramjet", MANIFEST_NAME))).toBe(true);
+	});
+
+	it("continues to Scramjet when Mach 12 inspection fails", () => {
+		const dest = join(xdgHome, "scramjet", "mach12");
+		mkdirSync(dest, { recursive: true });
+		chmodSync(dest, 0o000);
+		try {
+			const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+			expect(result.status).toBe(0);
+			expect(result.stderr).toContain("Mach 12 seeding failed");
+			expect(existsSync(join(xdgHome, "scramjet", "scramjet", MANIFEST_NAME))).toBe(true);
+		} finally {
+			chmodSync(dest, 0o700);
+		}
 	});
 });
 
