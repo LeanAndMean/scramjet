@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-// Seeds the bundled Mach 12 command set with manifest-based upgrade support.
-// Fresh installs: atomic copy + manifest written. Upgrades: unedited files are
-// replaced, edited files are preserved with a warning, removed files are cleaned.
-// Legacy installs (pre-manifest): backup-and-reseed with user-added file recovery.
-// Never blocks `npm install` — any failure prints a warning and exits 0.
 
+import { createHash } from "node:crypto";
 import {
 	copyFileSync,
 	cpSync,
@@ -19,13 +15,12 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
 import { homedir, platform } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 if (platform() === "win32") {
-	console.warn("[scramjet] Mach 12 seeding skipped on native Windows.");
+	console.warn("[scramjet] Command-set seeding skipped on native Windows.");
 	console.warn("[scramjet] Install inside WSL for full functionality.");
 	process.exit(0);
 }
@@ -33,7 +28,6 @@ if (platform() === "win32") {
 const configDir = join(homedir(), ".scramjet");
 const extSubagent = join(configDir, "agent", "extensions", "subagent");
 const staleSubagentFiles = ["agents.ts", "index.ts"];
-
 const MANIFEST_NAME = ".seed-manifest.json";
 
 function errorCode(err) {
@@ -45,8 +39,7 @@ function errorMessage(err) {
 }
 
 function sha256(filePath) {
-	const content = readFileSync(filePath);
-	return createHash("sha256").update(content).digest("hex");
+	return createHash("sha256").update(readFileSync(filePath)).digest("hex");
 }
 
 function walkDir(dir) {
@@ -56,8 +49,7 @@ function walkDir(dir) {
 }
 
 function ensureParentDir(filePath) {
-	const dir = dirname(filePath);
-	mkdirSync(dir, { recursive: true });
+	mkdirSync(dirname(filePath), { recursive: true });
 }
 
 function isOldSubagentExampleSymlink(dir, file) {
@@ -90,9 +82,7 @@ function cleanupStaleSubagentExtension() {
 				rmSync(extSubagent, { recursive: true, force: true });
 				return;
 			}
-			console.warn(
-				`[scramjet] Preserving ${extSubagent}; remove it manually if it is the deprecated subagent extension.`,
-			);
+			console.warn(`[scramjet] Preserving ${extSubagent}; remove it manually if it is the deprecated subagent extension.`);
 		}
 	} catch (err) {
 		if (errorCode(err) !== "ENOENT") {
@@ -104,204 +94,223 @@ function cleanupStaleSubagentExtension() {
 cleanupStaleSubagentExtension();
 
 const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
-const src = join(pkgRoot, "mach12");
-
-if (!existsSync(src)) {
-	console.warn(`[scramjet] Bundled Mach 12 source missing at ${src}; skipping seed.`);
-	process.exit(0);
-}
-
-const destParent =
-	process.env.SCRAMJET_CACHE ??
-	join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "scramjet");
-if (!isAbsolute(destParent)) {
-	console.warn(`[scramjet] Computed data dir (${destParent}) is not absolute; skipping Mach 12 seed.`);
-	process.exit(0);
-}
-const dest = join(destParent, "mach12");
-
-// Healthy symlink — dev tree setup. Exit before any manifest logic.
-try {
-	const destStat = lstatSync(dest);
-	if (destStat.isSymbolicLink()) {
-		if (existsSync(dest)) {
-			// Healthy symlink (target exists) — dev setup, leave untouched.
-			process.exit(0);
-		}
-		// Dangling symlink — remove it and proceed to fresh seed.
-		console.warn(`[scramjet] Removing dangling symlink at ${dest}`);
-		unlinkSync(dest);
-	}
-} catch (err) {
-	if (errorCode(err) !== "ENOENT") {
-		console.warn(`[scramjet] Cannot inspect ${dest}: ${errorMessage(err)}`);
-	}
-	// ENOENT means dest doesn't exist — fall through to fresh seed.
-}
-
 const pkgVersion = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf-8")).version;
-const manifestPath = join(dest, MANIFEST_NAME);
+const destParent =
+	process.env.SCRAMJET_CACHE ?? join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "scramjet");
 
-function buildManifestFromSrc() {
+if (!isAbsolute(destParent)) {
+	console.warn(`[scramjet] Computed data dir (${destParent}) is not absolute; skipping command-set seed.`);
+	process.exit(0);
+}
+
+const sets = [
+	{ name: "mach12", label: "Mach 12", migrateLegacy: true },
+	{ name: "scramjet", label: "Scramjet", migrateLegacy: false },
+];
+
+function isPlainObject(value) {
+	return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function isSafeRelativePath(rel, dest) {
+	if (typeof rel !== "string" || rel.length === 0 || rel.includes("\0") || rel.includes("\\") || isAbsolute(rel)) {
+		return false;
+	}
+	if (normalize(rel) !== rel || rel === "." || rel.split("/").some((part) => part === "" || part === "." || part === "..")) {
+		return false;
+	}
+	const resolved = resolve(dest, rel);
+	const fromDest = relative(resolve(dest), resolved);
+	return fromDest !== "" && !fromDest.startsWith("..") && !isAbsolute(fromDest);
+}
+
+function validateManifest(value, dest) {
+	if (!isPlainObject(value) || typeof value.version !== "string" || !isPlainObject(value.files)) return null;
+	for (const [rel, hash] of Object.entries(value.files)) {
+		if (!isSafeRelativePath(rel, dest) || typeof hash !== "string" || !/^[a-f0-9]{64}$/i.test(hash)) return null;
+	}
+	return value;
+}
+
+function rejectSymlinkComponents(dest, rel) {
+	let current = dest;
+	for (const part of rel.split("/")) {
+		current = join(current, part);
+		try {
+			if (lstatSync(current).isSymbolicLink()) throw new Error(`managed path contains a symlink: ${rel}`);
+		} catch (err) {
+			if (errorCode(err) === "ENOENT") return;
+			throw err;
+		}
+	}
+}
+
+function buildManifest(src) {
 	const files = {};
 	for (const filePath of walkDir(src)) {
-		const rel = relative(src, filePath);
-		files[rel] = sha256(filePath);
+		files[relative(src, filePath)] = sha256(filePath);
 	}
 	return { version: pkgVersion, files };
 }
 
-function freshSeed() {
-	const tmp = `${dest}.tmp-${process.pid}`;
-	try {
-		mkdirSync(destParent, { recursive: true });
-		cpSync(src, tmp, { recursive: true });
-		const manifest = buildManifestFromSrc();
-		writeFileSync(join(tmp, MANIFEST_NAME), JSON.stringify(manifest, null, "\t") + "\n");
-		renameSync(tmp, dest);
-		console.log(`[scramjet] Seeded Mach 12 command set at ${dest}`);
-	} catch (err) {
-		try {
-			rmSync(tmp, { recursive: true, force: true });
-		} catch (_) {}
-		console.warn(`[scramjet] Mach 12 seed failed: ${errorMessage(err)}`);
-		console.warn(`[scramjet] Continuing install; copy mach12/ manually to ${dest} if needed.`);
-	}
-}
-
-function writeManifest(manifest) {
+function writeManifest(manifestPath, manifest) {
 	const tmp = `${manifestPath}.tmp-${process.pid}`;
-	writeFileSync(tmp, JSON.stringify(manifest, null, "\t") + "\n");
+	writeFileSync(tmp, `${JSON.stringify(manifest, null, "\t")}\n`);
 	renameSync(tmp, manifestPath);
 }
 
-// dest does not exist — fresh seed
-if (!existsSync(dest)) {
-	freshSeed();
-	process.exit(0);
-}
-
-// dest exists — check for manifest
-let manifest = null;
-try {
-	if (existsSync(manifestPath)) {
-		manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-	}
-} catch (err) {
-	console.warn(`[scramjet] Could not read manifest: ${errorMessage(err)}; treating as legacy install.`);
-}
-
-if (manifest && manifest.version === pkgVersion) {
-	// Same version — short-circuit, nothing to do.
-	process.exit(0);
-}
-
-if (manifest) {
-	// Manifest-based upgrade
+function freshSeed(set, src, dest) {
+	const tmp = `${dest}.tmp-${process.pid}`;
 	try {
-		const newManifest = buildManifestFromSrc();
-		const oldFiles = manifest.files || {};
-		const newFiles = newManifest.files;
+		mkdirSync(destParent, { recursive: true });
+		rmSync(tmp, { recursive: true, force: true });
+		cpSync(src, tmp, { recursive: true });
+		writeFileSync(join(tmp, MANIFEST_NAME), `${JSON.stringify(buildManifest(src), null, "\t")}\n`);
+		renameSync(tmp, dest);
+		console.log(`[scramjet] Seeded ${set.label} command set at ${dest}`);
+		return true;
+	} catch (err) {
+		try {
+			rmSync(tmp, { recursive: true, force: true });
+		} catch {}
+		console.warn(`[scramjet] ${set.label} seed failed: ${errorMessage(err)}`);
+		console.warn(`[scramjet] Continuing install; copy ${set.name}/ manually to ${dest} if needed.`);
+		return false;
+	}
+}
+
+function warnUnowned(set, dest) {
+	console.warn(`[scramjet] Preserving unowned ${set.label} command set at ${dest}.`);
+	console.warn(`[scramjet] To install the bundled set, move the existing path and copy ${set.name}/ manually to ${dest}.`);
+}
+
+function upgrade(set, src, dest, manifestPath, manifest) {
+	try {
+		const newManifest = buildManifest(src);
 		const warnings = [];
 
-		// Update/add files from bundle
-		for (const [rel, newHash] of Object.entries(newFiles)) {
+		for (const [rel, newHash] of Object.entries(newManifest.files)) {
+			rejectSymlinkComponents(dest, rel);
 			const destFile = join(dest, rel);
 			if (!existsSync(destFile)) {
-				// Missing on disk — reseed from bundle
 				ensureParentDir(destFile);
 				copyFileSync(join(src, rel), destFile);
 				continue;
 			}
 			const installedHash = sha256(destFile);
-			const oldHash = oldFiles[rel];
+			const oldHash = manifest.files[rel];
 			if (oldHash && installedHash !== oldHash) {
 				warnings.push(rel);
 				continue;
 			}
 			if (!oldHash && installedHash !== newHash) {
-				// File exists on disk but wasn't in old manifest — user-created, preserve
 				warnings.push(`${rel} (new in bundle but pre-existing on disk)`);
 				continue;
 			}
-			if (installedHash === newHash) {
-				continue;
-			}
-			ensureParentDir(destFile);
-			copyFileSync(join(src, rel), destFile);
+			if (installedHash !== newHash) copyFileSync(join(src, rel), destFile);
 		}
 
-		// Remove files that were in the old manifest but not in the new bundle
-		for (const rel of Object.keys(oldFiles)) {
-			if (rel in newFiles) continue;
+		for (const rel of Object.keys(manifest.files)) {
+			if (rel in newManifest.files) continue;
+			rejectSymlinkComponents(dest, rel);
 			const destFile = join(dest, rel);
 			if (!existsSync(destFile)) continue;
-			const installedHash = sha256(destFile);
-			if (installedHash === oldFiles[rel]) {
-				// Unedited — safe to delete
+			if (sha256(destFile) === manifest.files[rel]) {
 				rmSync(destFile);
-				// Clean up empty parent directories
-				try {
-					const parent = dirname(destFile);
-					if (parent !== dest && readdirSync(parent).length === 0) {
-						rmSync(parent, { recursive: true });
-					}
-				} catch (_) {}
+				const parent = dirname(destFile);
+				if (parent !== dest && readdirSync(parent).length === 0) rmSync(parent, { recursive: true });
 			} else {
 				warnings.push(`${rel} (removed from bundle but edited — preserved)`);
 			}
 		}
 
-		writeManifest(newManifest);
-
+		writeManifest(manifestPath, newManifest);
 		if (warnings.length > 0) {
-			console.warn(`[scramjet] Mach 12 upgraded to ${pkgVersion}. Preserved edited files:`);
-			for (const w of warnings) {
-				console.warn(`[scramjet]   ${w}`);
-			}
+			console.warn(`[scramjet] ${set.label} upgraded to ${pkgVersion}. Preserved edited files:`);
+			for (const warning of warnings) console.warn(`[scramjet]   ${warning}`);
 		} else {
-			console.log(`[scramjet] Mach 12 upgraded to ${pkgVersion}.`);
+			console.log(`[scramjet] ${set.label} upgraded to ${pkgVersion}.`);
 		}
 	} catch (err) {
-		console.warn(`[scramjet] Mach 12 upgrade failed: ${errorMessage(err)}`);
+		console.warn(`[scramjet] ${set.label} upgrade failed: ${errorMessage(err)}`);
 		console.warn(`[scramjet] Continuing; existing commands preserved.`);
 	}
-	process.exit(0);
 }
 
-// Legacy migration — dest exists with no manifest
-try {
-	const backupName = `mach12.pre-upgrade-${Date.now()}`;
-	const backupPath = join(destParent, backupName);
-	renameSync(dest, backupPath);
+function migrateLegacy(set, src, dest) {
+	const backupPath = join(destParent, `${set.name}.pre-upgrade-${Date.now()}`);
+	try {
+		renameSync(dest, backupPath);
+		if (!freshSeed(set, src, dest)) {
+			renameSync(backupPath, dest);
+			return;
+		}
+		const bundledFiles = new Set(walkDir(src).map((file) => relative(src, file)));
+		for (const backupFile of walkDir(backupPath)) {
+			const rel = relative(backupPath, backupFile);
+			if (rel === MANIFEST_NAME || bundledFiles.has(rel)) continue;
+			const destFile = join(dest, rel);
+			ensureParentDir(destFile);
+			copyFileSync(backupFile, destFile);
+		}
+		console.warn(`[scramjet] Legacy ${set.label} install migrated. Previous tree backed up at:`);
+		console.warn(`[scramjet]   ${backupPath}`);
+		console.warn(`[scramjet] User-added files were copied into the new tree.`);
+		console.warn(`[scramjet] If you had edited bundled commands, re-apply edits from the backup.`);
+	} catch (err) {
+		console.warn(`[scramjet] Legacy migration failed: ${errorMessage(err)}`);
+		console.warn(`[scramjet] Continuing; check ${dest} manually.`);
+	}
+}
 
-	// Fresh seed with manifest
-	freshSeed();
+function seedSet(set) {
+	const src = join(pkgRoot, set.name);
+	const dest = join(destParent, set.name);
+	if (!existsSync(src)) {
+		console.warn(`[scramjet] Bundled ${set.label} source missing at ${src}; skipping seed.`);
+		return;
+	}
+
+	try {
+		const stat = lstatSync(dest);
+		if (stat.isSymbolicLink()) {
+			if (set.migrateLegacy && !existsSync(dest)) {
+				console.warn(`[scramjet] Removing dangling symlink at ${dest}`);
+				unlinkSync(dest);
+			} else {
+				if (!set.migrateLegacy) console.warn(`[scramjet] Preserving ${set.label} symlink at ${dest}.`);
+				return;
+			}
+		}
+	} catch (err) {
+		if (errorCode(err) !== "ENOENT") {
+			console.warn(`[scramjet] Cannot inspect ${dest}: ${errorMessage(err)}`);
+			return;
+		}
+	}
 
 	if (!existsSync(dest)) {
-		// freshSeed failed (it already warned) — restore backup
-		renameSync(backupPath, dest);
-		process.exit(0);
+		freshSeed(set, src, dest);
+		return;
 	}
 
-	// Copy back user-added files (files in backup that are NOT in the bundle)
-	const bundledFiles = new Set(walkDir(src).map((f) => relative(src, f)));
-	for (const backupFile of walkDir(backupPath)) {
-		const rel = relative(backupPath, backupFile);
-		if (rel === MANIFEST_NAME) continue;
-		if (bundledFiles.has(rel)) continue;
-		// User-added file — copy back
-		const destFile = join(dest, rel);
-		ensureParentDir(destFile);
-		copyFileSync(backupFile, destFile);
+	const manifestPath = join(dest, MANIFEST_NAME);
+	let parsed = null;
+	let manifestPresent = false;
+	try {
+		manifestPresent = existsSync(manifestPath);
+		if (manifestPresent) parsed = JSON.parse(readFileSync(manifestPath, "utf-8"));
+	} catch (err) {
+		console.warn(`[scramjet] Could not read ${set.label} manifest: ${errorMessage(err)}.`);
 	}
-
-	console.warn(`[scramjet] Legacy Mach 12 install migrated. Previous tree backed up at:`);
-	console.warn(`[scramjet]   ${backupPath}`);
-	console.warn(`[scramjet] User-added files were copied into the new tree.`);
-	console.warn(`[scramjet] If you had edited bundled commands, re-apply edits from the backup.`);
-} catch (err) {
-	console.warn(`[scramjet] Legacy migration failed: ${errorMessage(err)}`);
-	console.warn(`[scramjet] Continuing; check ${dest} manually.`);
+	const manifest = validateManifest(parsed, dest);
+	if (!manifest) {
+		if (set.migrateLegacy) migrateLegacy(set, src, dest);
+		else warnUnowned(set, dest);
+		return;
+	}
+	if (manifest.version === pkgVersion) return;
+	upgrade(set, src, dest, manifestPath, manifest);
 }
-process.exit(0);
+
+for (const set of sets) seedSet(set);
