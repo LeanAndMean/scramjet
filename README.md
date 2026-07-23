@@ -1,5 +1,9 @@
 # Scramjet
 
+<p align="center">
+  <img src="packages/scramjet/assets/scramjet-logo.png" alt="Scramjet logo" width="600">
+</p>
+
 A high-velocity harness for agentic development.
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
