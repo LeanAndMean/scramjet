@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.59.1 — Add the Scramjet logo to published documentation
+
+Adds a canonical Scramjet logo to the root and package READMEs, includes the asset in the published npm package, and verifies its exact tarball path in CI. Fixes [#379](https://github.com/LeanAndMean/scramjet/issues/379).
+
+### Added
+
+- `packages/scramjet/assets/scramjet-logo.png`: canonical logo displayed in both primary READMEs and distributed with the npm package.
+
+### Tests
+
+- The npm-pack CI smoke now asserts that `package/assets/scramjet-logo.png` is present in the published tarball.
+
 ## 0.59.0 — Add actionable troubleshooting and bundled Scramjet operational commands
 
 Adds a product-owned `scramjet/` command set with a concise `/scramjet:troubleshoot` workflow that explains unexpected command behavior in five sections, can inspect relevant same-CWD historical journals as untrusted evidence, and routes users toward safe next steps such as issue drafting or verified continuation. It also hardens next-step dispatch by rejecting unknown and delegate-only command suggestions, and updates postinstall/packaging so the bundled Scramjet operational set is distributed independently with ownership-safe upgrades and strict manifest validation. Fixes [#376](https://github.com/LeanAndMean/scramjet/issues/376).
