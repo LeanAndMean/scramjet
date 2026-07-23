@@ -1,8 +1,8 @@
-# Scramjet
-
 <p align="center">
   <img src="assets/scramjet-logo.png" alt="Scramjet logo" width="600">
 </p>
+
+# Scramjet
 
 A high-velocity harness for agentic development. Uses the [Pi](https://github.com/earendil-works/pi-mono) runtime.
 
