@@ -389,13 +389,17 @@ describe("scripts/postinstall.js — independent bundled sets", () => {
 	it.each([
 		["non-object root", []],
 		["missing version", { files: {} }],
+		["non-string version", { version: 1, files: {} }],
 		["non-object files", { version: "old", files: [] }],
 		["empty path", { version: "old", files: { "": "a".repeat(64) } }],
 		["absolute path", { version: "old", files: { "/tmp/outside": "a".repeat(64) } }],
 		["traversal path", { version: "old", files: { "../outside": "a".repeat(64) } }],
 		["non-normal path", { version: "old", files: { "commands/../outside": "a".repeat(64) } }],
+		["separator-ambiguous path", { version: "old", files: { "commands//outside": "a".repeat(64) } }],
+		["NUL path", { version: "old", files: { "commands/\0outside": "a".repeat(64) } }],
 		["backslash path", { version: "old", files: { "commands\\outside": "a".repeat(64) } }],
 		["invalid hash", { version: "old", files: { "set.yaml": "invalid" } }],
+		["same-version invalid hash", { version: PKG_VERSION, files: { "set.yaml": "invalid" } }],
 	])("preserves Scramjet when its manifest has an invalid %s", (_name, manifest) => {
 		const dest = join(xdgHome, "scramjet", "scramjet");
 		mkdirSync(dest, { recursive: true });
@@ -406,6 +410,20 @@ describe("scripts/postinstall.js — independent bundled sets", () => {
 
 		expect(result.status).toBe(0);
 		expect(readFileSync(join(dest, "owned.txt"), "utf-8")).toBe("user content");
+		expect(result.stderr).toContain("Preserving unowned Scramjet command set");
+		expect(existsSync(join(xdgHome, "scramjet", "mach12", MANIFEST_NAME))).toBe(true);
+	});
+
+	it("preserves Scramjet when its manifest is malformed JSON", () => {
+		const dest = join(xdgHome, "scramjet", "scramjet");
+		mkdirSync(dest, { recursive: true });
+		writeFileSync(join(dest, "owned.txt"), "user content");
+		writeFileSync(join(dest, MANIFEST_NAME), "{not-json");
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(readFileSync(join(dest, "owned.txt"), "utf-8")).toBe("user content");
+		expect(result.stderr).toContain("Could not read Scramjet manifest");
 		expect(result.stderr).toContain("Preserving unowned Scramjet command set");
 		expect(existsSync(join(xdgHome, "scramjet", "mach12", MANIFEST_NAME))).toBe(true);
 	});
@@ -443,6 +461,28 @@ describe("scripts/postinstall.js — independent bundled sets", () => {
 		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 
 		expect(readFileSync(outsideCommand, "utf-8")).toBe("outside sentinel");
+		expect(result.stderr).toContain("Scramjet upgrade failed");
+	});
+
+	it("preflights every managed path before updating an earlier file", () => {
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		const dest = join(xdgHome, "scramjet", "scramjet");
+		const setFile = join(dest, "set.yaml");
+		const oldContent = "old bundled content";
+		writeFileSync(setFile, oldContent);
+		const manifest = readManifest(dest);
+		manifest.version = "0.0.0-old";
+		manifest.files["set.yaml"] = sha256(setFile);
+		writeManifest(dest, manifest);
+		const outside = join(workDir, "outside");
+		mkdirSync(outside, { recursive: true });
+		rmSync(join(dest, "commands"), { recursive: true });
+		symlinkSync(outside, join(dest, "commands"));
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(readFileSync(setFile, "utf-8")).toBe(oldContent);
+		expect(readManifest(dest).version).toBe("0.0.0-old");
 		expect(result.stderr).toContain("Scramjet upgrade failed");
 	});
 
@@ -484,6 +524,41 @@ describe("scripts/postinstall.js — independent bundled sets", () => {
 
 		expect(result.stderr).toContain(`Bundled ${missingLabel} source missing`);
 		expect(existsSync(join(xdgHome, "scramjet", expectedDest, MANIFEST_NAME))).toBe(true);
+	});
+
+	it.each([
+		["healthy symlink", "mach12", "scramjet"],
+		["healthy symlink", "scramjet", "mach12"],
+		["same version", "mach12", "scramjet"],
+		["same version", "scramjet", "mach12"],
+		["recoverable upgrade failure", "mach12", "scramjet"],
+		["recoverable upgrade failure", "scramjet", "mach12"],
+	] as const)("a %s for %s does not suppress %s processing", (scenario, target, sibling) => {
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		const root = join(xdgHome, "scramjet");
+		const targetDest = join(root, target);
+		rmSync(join(root, sibling), { recursive: true, force: true });
+
+		if (scenario === "healthy symlink") {
+			const linkTarget = join(workDir, `${target}-link-target`);
+			mkdirSync(linkTarget, { recursive: true });
+			writeFileSync(join(linkTarget, "custom.md"), "custom");
+			rmSync(targetDest, { recursive: true });
+			symlinkSync(linkTarget, targetDest);
+		} else if (scenario === "recoverable upgrade failure") {
+			const manifest = readManifest(targetDest);
+			manifest.version = "0.0.0-old";
+			writeManifest(targetDest, manifest);
+			const outside = join(workDir, `${target}-outside`);
+			mkdirSync(outside, { recursive: true });
+			rmSync(join(targetDest, "commands"), { recursive: true });
+			symlinkSync(outside, join(targetDest, "commands"));
+		}
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(existsSync(join(root, sibling, MANIFEST_NAME))).toBe(true);
 	});
 
 	it("managed Scramjet upgrades preserve edited files and update the manifest", () => {

@@ -188,6 +188,8 @@ function upgrade(set, src, dest, manifestPath, manifest) {
 	try {
 		const newManifest = buildManifest(src);
 		const warnings = [];
+		const managedPaths = new Set([...Object.keys(newManifest.files), ...Object.keys(manifest.files)]);
+		for (const rel of managedPaths) rejectSymlinkComponents(dest, rel);
 
 		for (const [rel, newHash] of Object.entries(newManifest.files)) {
 			rejectSymlinkComponents(dest, rel);
@@ -212,7 +214,6 @@ function upgrade(set, src, dest, manifestPath, manifest) {
 
 		for (const rel of Object.keys(manifest.files)) {
 			if (rel in newManifest.files) continue;
-			rejectSymlinkComponents(dest, rel);
 			const destFile = join(dest, rel);
 			if (!existsSync(destFile)) continue;
 			if (sha256(destFile) === manifest.files[rel]) {
@@ -233,7 +234,7 @@ function upgrade(set, src, dest, manifestPath, manifest) {
 		}
 	} catch (err) {
 		console.warn(`[scramjet] ${set.label} upgrade failed: ${errorMessage(err)}`);
-		console.warn(`[scramjet] Continuing; existing commands preserved.`);
+		console.warn(`[scramjet] Continuing; command files may be partially updated and the manifest was left unchanged.`);
 	}
 }
 
@@ -296,10 +297,8 @@ function seedSet(set) {
 
 	const manifestPath = join(dest, MANIFEST_NAME);
 	let parsed = null;
-	let manifestPresent = false;
 	try {
-		manifestPresent = existsSync(manifestPath);
-		if (manifestPresent) parsed = JSON.parse(readFileSync(manifestPath, "utf-8"));
+		if (existsSync(manifestPath)) parsed = JSON.parse(readFileSync(manifestPath, "utf-8"));
 	} catch (err) {
 		console.warn(`[scramjet] Could not read ${set.label} manifest: ${errorMessage(err)}.`);
 	}

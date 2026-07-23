@@ -887,6 +887,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					phase: lp(state.lifecycle),
 					detail: { reason: result.reason ?? "no-valid-options" },
 				});
+				if (result.reason) ctx.ui.notify(`scramjet: ${result.reason}`, "warning");
 				return;
 			}
 

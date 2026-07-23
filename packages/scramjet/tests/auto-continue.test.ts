@@ -3458,6 +3458,42 @@ describe("suggestion drain (idle branch)", () => {
 		expect(rendered).not.toContain("auto-selects");
 	});
 
+	it("warns when registry reassignment invalidates every suggested command", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([
+			{ message: "/mach12:pr-review 248", reason: "review" },
+			{ message: "/mach12:pr-pre-merge 248", reason: "pre-merge" },
+		]);
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		state.registry = new Map();
+		await flushDrain();
+
+		expect(ctxBag.customComponents).toHaveLength(0);
+		expect(ctxBag.notifications).toEqual([
+			{ message: "scramjet: mach12:pr-review is not registered", type: "warning" },
+		]);
+	});
+
+	it("retains valid suggestions after registry reassignment invalidates a mixed option set", async () => {
+		const { state, bag, ctxBag } = idleWithSuggestion([
+			{ message: "/mach12:pr-review 248", reason: "review" },
+			{ message: "/mach12:pr-pre-merge 248", reason: "pre-merge" },
+		]);
+
+		bag.pi.isStreaming = true;
+		await bag.emit("agent_end", {}, ctxBag.ctx);
+		bag.pi.isStreaming = false;
+		state.registry = registryWith(defWithPolicy("mach12:pr-pre-merge", undefined));
+		await flushDrain();
+
+		expect(ctxBag.customComponents).toHaveLength(1);
+		const rendered = ctxBag.customComponents[0].render(80).join("\n");
+		expect(rendered).toContain("/mach12:pr-pre-merge 248");
+		expect(rendered).not.toContain("/mach12:pr-review 248");
+	});
+
 	it("Enter dispatches the selected command via dispatchUserInput", async () => {
 		const { bag, ctxBag } = idleWithSuggestion([{ message: "/mach12:pr-review 248", reason: "review" }], {
 			recommendedIndex: 0,
