@@ -25,6 +25,7 @@ import { registerSubdirContext } from "./subdir-context.js";
 import { registerSuggestNextStepsTool } from "./suggest-next-steps.js";
 import { registerTerminalIndicators } from "./terminal-indicators.js";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
+import { registerTroubleshootingEvidenceTool } from "./troubleshooting-evidence.js";
 import type { ScramjetState } from "./types.js";
 import { registerUserInputTool } from "./user-input.js";
 
@@ -58,6 +59,7 @@ export function initScramjet(pi: ExtensionAPI) {
 
 	registerCommandStatusTool(pi, state);
 	registerUserInputTool(pi, state);
+	registerTroubleshootingEvidenceTool(pi, state);
 	registerDelegateTool(pi, state);
 	registerToolCallAdvisor(pi, state);
 	registerSubagentOutputAdvisor(pi, state);
