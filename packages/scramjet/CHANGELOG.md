@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.59.0 — Add actionable troubleshooting and bundled Scramjet operational commands
+
+Adds a product-owned `scramjet/` command set with a concise `/scramjet:troubleshoot` workflow that explains unexpected command behavior in five sections, can inspect relevant same-CWD historical journals as untrusted evidence, and routes users toward safe next steps such as issue drafting or verified continuation. It also hardens next-step dispatch by rejecting unknown and delegate-only command suggestions, and updates postinstall/packaging so the bundled Scramjet operational set is distributed independently with ownership-safe upgrades and strict manifest validation. Fixes [#376](https://github.com/LeanAndMean/scramjet/issues/376).
+
+### Added
+
+- Bundled `scramjet/` operational command set with `scramjet:troubleshoot`, plus contract and framing coverage for its five-section diagnosis, historical lookup guidance, and actionable routing.
+
+### Changed
+
+- `auto-continue.ts`, `command-authoring.md`: next-step validation now skips unknown and delegate-only command options while preserving registered top-level commands and open-policy prose follow-ups.
+- `scripts/postinstall.js`, `package.json`, `.github/workflows/ci.yml`: package, install, manifest, and smoke-test wiring now distribute both bundled command sets independently and preserve user-owned Scramjet trees.
+- `README.md`, `packages/scramjet/README.md`, `packages/scramjet/docs/scramjet-vision.md`, `CLAUDE.md`: synchronized product, design, and contributor documentation for the new operational command set and troubleshooting contract.
+
+### Tests
+
+- `scramjet-wiring`, `command-expansion`, `auto-continue`, `postinstall`, and CI/install smoke coverage now cover the troubleshooting command, runtime next-step validation, and independent bundled-set distribution.
+
 ## 0.58.0 — Make Mach 12 PR linkage delivery-unit aware
 
 Adds a fail-closed delivery-unit derivation and verification subroutine so a PR closes exactly its delivery unit — an ordinary issue or a batch's retained sources — and never an initiative or sibling work by accident. PR creation now derives, freezes, and verifies the exact closing linkage before offering review, and both the pre-merge checklist and the merge command re-verify fresh delivery linkage as a non-forceable safety gate. Linkage identity is carried by an explicit `Delivery-unit: #D`/`Delivery-unit: none` block under the `mach12-pr` provenance marker; missing identity holds and requires informed manual migration rather than inference from mutable closers. Fixes [#354](https://github.com/LeanAndMean/scramjet/issues/354).
