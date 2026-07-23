@@ -70,8 +70,8 @@ constraint.** Once
 cross-harness portability is dropped, declared next-step policies and
 declared delegation are strictly more expressive than prose-only edges,
 and they make the chain visible to the harness itself (which is necessary
-for the history sidebar, the authoring loop, and reliable enforcement of
-"no choice" follow-ups).
+for the history sidebar, evidence-bounded troubleshooting, explicitly
+approved authoring, and reliable enforcement of "no choice" follow-ups).
 
 This is a rewrite of the principle, not an extension of it. The
 *motivation* (workflows are emergent, the user is in control, simplicity
@@ -94,8 +94,9 @@ wins) is preserved; the *mechanism* (LLM reads prose) is replaced.
   When `/autopilot off`, the harness behaves like any standard coding
   agent (Claude Code, Codex, Pi). The history sidebar is a small visual
   affordance, not a behavioral one — see §6.
-- **Authoring is a first-class flow.** Creating and editing commands lives
-  inside `scramjet` itself, not in a separate toolchain.
+- **Improvement is evidence-led and explicitly approved.** Troubleshooting
+  recovers the user's task first, evaluates bounded evidence, and proposes the
+  smallest disposition before any separate authoring flow may edit a command.
 - **Informed decisions and informed consent.** Users should be empowered to
   make informed decisions and give informed consent before actions with
   consequences.
@@ -738,41 +739,45 @@ depth, timestamp) are journaled via `appendEntry` and rebuilt on
 top-level command; delegated entries (`depth > 0`, currently
 `origin: "agent"`) remain visible in the log but do not replace the active
 top-level command. This is enough for forward compat (so when a UI lands,
-no data has been thrown away) and is load-bearing for any future
-`/scramjet:rewire`-style command that needs to read observed run history.
+no data has been thrown away) and supplies the session artifacts consumed by
+bounded troubleshooting evidence.
 
 Note: the eventual visualization may not need to be a sidebar
 specifically — a transcript-inline log, an expandable panel, or a
 post-hoc viewer are all plausible. What is deferred is the rendering,
 not the data.
 
-#### 7. Authoring loop
+#### 7. Troubleshooting and command improvement
 
-> **MVP status:** the authoring loop is **deferred to a post-MVP issue**.
-> The MVP ships without `/scramjet:new-command`, `/scramjet:edit-command`,
-> `/scramjet:rewire`, and `/scramjet:new-set`. Demand for these is not
-> yet validated by usage, and `/scramjet:rewire` in particular has no
-> known analog in adjacent Pi-consumer projects (gsd-2 etc.) and needs a
-> concrete spec — what does an actionable suggestion look like? how is
-> it presented? — before it is worth building. The data model for
-> `/scramjet:rewire` (sidebar history journal) lands in the MVP per §6,
-> so a future authoring loop has the data it needs. The vision below is
-> retained as the intended shape.
+The bundled Scramjet command-development set provides
+`/scramjet:troubleshoot [focus or symptom]`. It operates only on the current
+session and current selected branch. A builtin read-only evidence tool validates
+bounded ancestry, issues opaque snapshot-scoped references, and projects only
+explicitly selected evidence; the command never asks the model to inspect raw
+journal, session, entry, or tool-call IDs.
 
-`scramjet` ships harness-level commands for managing command sets:
+The workflow is recovery-first. It identifies the target invocation, reconciles
+prior side effects against current local and external state, and never repeats an
+action already confirmed applied. Target clarification and fresh approval for a
+destructive, externally visible, or non-idempotent retry use the existing
+`get_scramjet_user_input` tool. Recovery uses existing normal tools, and
+completion uses `report_scramjet_command_status`; troubleshooting introduces no
+separate clarification, recovery, or completion primitive.
 
-- `/scramjet:new-command [set]` — interactively scaffold a new command in
-  a set, ask about its place in existing chains, and offer to update
-  `next.candidates` on related commands so the new step dovetails in.
-- `/scramjet:edit-command <name>` — open the command body for editing,
-  with awareness of which other commands reference or delegate to it.
-- `/scramjet:rewire <name>` — propose changes to `next` policies and
-  candidate lists based on observed run history.
-- `/scramjet:new-set <name>` — scaffold a brand-new command set.
+Only after recovery is resolved does the command evaluate invocation-time prose,
+exact transcript/tool evidence, summaries, diagnostics, the current winning
+source candidate, project context, and the canonical authoring guide. It emits
+one redacted handoff in the transcript with opaque evidence references, explicit
+gaps, bounded confidence, and the smallest evidence-supported disposition.
+Interpreter feedback remains retrospective and non-authoritative.
 
-These are part of the harness, not part of any particular command set,
-because the workflow they support — *"I keep doing X; let's codify it"* —
-is universal.
+Troubleshooting never edits command sources, invokes authoring, creates issues,
+writes a handoff file, or publishes automatically. The improvement sequence is:
+troubleshoot → evaluate the handoff → explicitly approve a separate authoring or
+ordinary issue flow. Future `/scramjet:new-command`,
+`/scramjet:edit-command`, and `/scramjet:new-set` flows may implement that
+approved authoring step; speculative automatic `rewire` behavior is not the
+direction.
 
 #### 8. Persistence and isolation
 
@@ -826,7 +831,7 @@ inconsistent with the runtime and has been corrected.
 Mach 12 is the command set that codifies the Mach 10 development
 methodology under the Mach-12-era `scramjet`. It is the analog of today's
 `mach10` plugin, rewritten to take advantage of `scramjet`'s next-step
-policies, command delegation, and authoring loop.
+policies, command delegation, and evidence-led improvement flow.
 
 ### Distinction from skills
 

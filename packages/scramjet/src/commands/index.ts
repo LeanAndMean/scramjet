@@ -33,9 +33,12 @@ function safeReaddir(dir: string, warnings: string[]): { name: string; isDirecto
 			} catch (err) {
 				const code = (err as NodeJS.ErrnoException).code;
 				if (code === "ENOENT") {
-					warnings.push(
-						`[scramjet/discovery] symlink ${join(dir, name)} has a missing target; if you migrated from the single-repo layout, remove the old symlink and re-run: ln -sfn "$(pwd)/packages/scramjet/mach12" "${join(dir, name)}"`,
-					);
+					const symlinkPath = join(dir, name);
+					const repair =
+						name === "mach12" || name === "scramjet"
+							? `remove the old symlink and re-run: ln -sfn "$(pwd)/packages/scramjet/${name}" "${symlinkPath}"`
+							: "remove the old symlink and recreate it with the intended target";
+					warnings.push(`[scramjet/discovery] symlink ${symlinkPath} has a missing target; ${repair}`);
 				} else {
 					warnings.push(
 						`[scramjet/discovery] could not stat symlink ${join(dir, name)} (${code ?? "unknown"}: ${(err as Error).message}); treating as non-directory`,

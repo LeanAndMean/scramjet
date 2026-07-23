@@ -8,7 +8,7 @@ Scramjet is in active early development. The harness works and is used daily, bu
 
 - The command-set format is not yet stable for third-party authoring
 - Breaking changes may land between minor versions
-- The bundled Mach 12 commands evolve alongside the harness
+- The bundled Mach 12 and Scramjet command sets evolve alongside the harness
 
 ## Background
 
@@ -25,7 +25,7 @@ scramjet
 
 `scramjet` is a standalone CLI that uses Pi as its runtime. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged.
 
-Scramjet ships with the **Mach 12** command set as a starting point — ten top-level commands for the issue → plan → review → implement → PR → ship methodology. But the harness is designed for your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
+Scramjet ships with two command sets: **Mach 12**, with ten top-level commands for the issue → plan → review → implement → PR → ship methodology, and **Scramjet**, with command-development workflows such as recovery-first troubleshooting. The harness is also designed for your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
 Try it:
 
@@ -139,7 +139,15 @@ Scramjet ships with the Mach 12 command set — one team's codification of their
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus seven subroutine commands and nine specialized agents covering code exploration, architecture, review, testing, and more.
+Plus delegate-only subroutines and specialized agents covering code exploration, architecture, review, testing, and more.
+
+## Scramjet command development
+
+The separately bundled Scramjet set contains `/scramjet:troubleshoot [focus or symptom]`. Run it after a failed, blocked, degraded, or confusing command execution to recover the user's task before diagnosing the command workflow.
+
+Troubleshooting is deliberately bounded to the current session and current selected branch. A builtin read-only evidence tool validates that ancestry and issues opaque references; the command never asks the model to inspect raw journal, session, or tool-call IDs. It reconciles local and external side effects before retrying anything, uses the existing user-input tool for target clarification and fresh approval of non-idempotent retries, uses normal project tools for recovery, and uses the existing status tool for completion.
+
+The result is one redacted troubleshooting handoff in the transcript. It separates exact evidence from summaries, diagnostics, current source, normative authoring guidance, interpreter feedback, and evidence gaps. The handoff recommends the smallest evidence-supported disposition; it does not automatically edit command sources, invoke authoring, create issues, or publish the result.
 
 ## Platform support
 
@@ -150,7 +158,7 @@ Plus seven subroutine commands and nine specialized agents covering code explora
 | Windows (WSL) | yes |
 | Windows (native) | no |
 
-`npm install` succeeds on native Windows but skips the Mach 12 seed. Install inside WSL for full functionality.
+`npm install` succeeds on native Windows but skips bundled command-set seeding. Install inside WSL for full functionality.
 
 ## Uninstall
 
@@ -158,7 +166,7 @@ Plus seven subroutine commands and nine specialized agents covering code explora
 npm uninstall -g @leanandmean/scramjet
 ```
 
-The seeded Mach 12 directory at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/` is left in place so any edits are preserved. Remove it manually for a clean state.
+The seeded command-set directories at `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/` are left in place so any edits are preserved. Remove them manually for a clean state.
 
 ## Routing Pi through a proxy
 

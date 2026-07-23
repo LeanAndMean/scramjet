@@ -23,7 +23,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        # --ignore-scripts skips postinstall; CI doesn't need Mach 12 seeded.
+        # --ignore-scripts skips postinstall; CI doesn't need bundled command sets seeded.
         run: npm ci --ignore-scripts
 
       - name: Type-check
@@ -67,6 +67,8 @@ jobs:
           grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/commands/mach12:issue-create.md' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
+          grep -qF 'package/scramjet/set.yaml' "$TARBALL_CONTENTS"
+          grep -qF 'package/scramjet/commands/scramjet:troubleshoot.md' "$TARBALL_CONTENTS"
           XDG_DATA_HOME="$PREFIX/data" npm install --prefix "$PREFIX" -g \
             "$PACK_DIR"/leanandmean-tui-*.tgz \
             "$PACK_DIR"/leanandmean-ai-*.tgz \
@@ -78,7 +80,7 @@ jobs:
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary
-        # XDG_DATA_HOME and verify it seeds mach12/ with manifest.
+        # XDG_DATA_HOME and verify both command sets seed independently.
         run: |
           set -euo pipefail
           TMP=$(mktemp -d)
@@ -87,8 +89,12 @@ jobs:
           test -d "$TMP/scramjet/mach12/agents"
           test -f "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
           test -f "$TMP/scramjet/mach12/.seed-manifest.json"
-          # Second run: same-version short-circuit preserves user edits.
-          echo "user edit" > "$TMP/scramjet/mach12/USER-MARKER"
+          test -f "$TMP/scramjet/scramjet/commands/scramjet:troubleshoot.md"
+          test -f "$TMP/scramjet/scramjet/.seed-manifest.json"
+          # Second run: same-version short-circuit preserves edits in both sets.
+          echo "user edit" > "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
+          echo "user edit" > "$TMP/scramjet/scramjet/commands/scramjet:troubleshoot.md"
           XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
-          test -f "$TMP/scramjet/mach12/USER-MARKER"
+          grep -qxF "user edit" "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
+          grep -qxF "user edit" "$TMP/scramjet/scramjet/commands/scramjet:troubleshoot.md"
           rm -rf "$TMP"

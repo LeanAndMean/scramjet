@@ -6,7 +6,7 @@ A high-velocity harness for agentic development.
 
 ## Overview
 
-Scramjet is a product built on the [Pi](https://github.com/earendil-works/pi-mono) runtime that loads command sets — directories of user-defined slash commands — and wires them into emergent workflows through declared next-step policies and command delegation. It ships with Mach 12, a methodology for issue → plan → review → implement → PR → ship.
+Scramjet is a product built on the [Pi](https://github.com/earendil-works/pi-mono) runtime that loads command sets — directories of user-defined slash commands — and wires them into emergent workflows through declared next-step policies and command delegation. It ships with Mach 12, a methodology for issue → plan → review → implement → PR → ship, and a separate Scramjet command-development set for recovery-first workflow troubleshooting.
 
 Active early development. Used daily, but the command-set format is not yet stable for third-party authoring. See the [package README](packages/scramjet/README.md) for install and usage.
 

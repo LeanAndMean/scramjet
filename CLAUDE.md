@@ -18,6 +18,7 @@ scramjet/
 │       ├── tests/
 │       ├── bin/
 │       ├── mach12/
+│       ├── scramjet/
 │       └── docs/
 ├── UPSTREAM_DIVERGENCE.md   Tracks Pi modifications for upstream sync
 ├── .github/workflows/
@@ -44,18 +45,26 @@ Scramjet ships as the npm package `@leanandmean/scramjet`. The `scramjet` bin on
 
 > **Migrating from the single-repo layout?** If you previously symlinked `mach12/` from the repo root (before the monorepo migration), remove the stale symlink first: `rm "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"`
 
+The postinstall may already have created regular command-set directories. Inspect them for edits and move each regular directory to a new backup path before linking; `ln -sfn` does not replace a real directory.
+
 ```sh
 npm run build          # produce dist/ for all packages
 npm link -w packages/scramjet   # install `scramjet` globally as a symlink
-ln -sfn "$(pwd)/packages/scramjet/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
-                       # so edits to mach12/*.md files are picked up live
+DATA_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/scramjet"
+mkdir -p "$DATA_ROOT"
+# If present as regular directories, inspect and move them aside first, for example:
+# mv "$DATA_ROOT/mach12" "$DATA_ROOT/mach12.pre-dev"
+# mv "$DATA_ROOT/scramjet" "$DATA_ROOT/scramjet.pre-dev"
+ln -sfn "$(pwd)/packages/scramjet/mach12" "$DATA_ROOT/mach12"
+ln -sfn "$(pwd)/packages/scramjet/scramjet" "$DATA_ROOT/scramjet"
+                       # so edits to bundled command-set files are picked up live
 ```
 
 **Iteration:**
 
 - **Edited a `.ts` file in `packages/scramjet/src/`** -> `npm run build` (or run the build in watch mode). **This is the most common "am I testing my changes?" confusion** — if you edit, run `scramjet`, and see old behavior, suspect a stale `dist/` before suspecting anything else.
 - **Edited a Pi runtime package** (`packages/{tui,ai,agent,coding-agent}`) -> `npm run build` (the full topological build, since Scramjet depends on all four).
-- **Edited `mach12/*.md`** -> no rebuild needed if the mach12 symlink is in place.
+- **Edited `mach12/*.md` or `scramjet/*.md`** -> no rebuild needed if the matching command-set symlink is in place.
 - **Edited `bin/scramjet.js` or `scripts/postinstall.js`** -> no rebuild needed; they're `.js` and run as-is.
 - **To verify which scramjet is on PATH:** `readlink -f "$(which scramjet)"` should resolve into this repo's working tree (via npm's global `lib/node_modules/@leanandmean/scramjet/bin/scramjet.js`).
 
@@ -115,13 +124,16 @@ Scramjet is a product monorepo. The `bin/scramjet.js` entry point calls Pi's lib
 - `next-step-record.ts` — registers the harness-only `scramjet_next_step_selection` tool (issue 324), the second consumer of the harness-tool-invocation primitive. `auto-continue.ts` invokes it via `pi.invokeHarnessTool` after the next-step selector resolves (selected or dismissed) or, on the headless autopilot path, before auto-dispatch, persisting the offered options and outcome as a real tool row (transcript, replay, LLM context). Selected-path records settle before dispatch when possible (mid-run queuing can break the ordering; staleness is re-checked after the record await); dismissed records are fire-and-forget. Record failure never blocks the chain. Exports pure `buildRecordText` for testability.
 - `subdir-context.ts` — discovers `CLAUDE.md` and `AGENTS.md` from subdirectories and injects them as first-class `read` tool calls into assistant messages via a `message_end` handler. When an assistant message contains `read` tool calls, the handler checks intermediate directories between cwd and the read file's directory (inside-cwd reads, capped at `MAX_DEPTH=10`) or only the immediate target directory (outside-cwd paths: absolute paths outside cwd, `~/`-prefixed outside cwd, or relative escapes). Resolves realpaths for symlink safety (skips directories whose realpath falls outside cwd for inside-cwd paths), deduplicates by directory realpath in `state.subdirLoadedPaths`. Injects normal `read` tool-call blocks immediately before each triggering read in the assistant message; injected IDs are `scrctx-` prefixed and derived from `createStableId(sourceToolCallId + '\0' + displayPath)`. The `beforeToolBatch` runtime hook ensures the async `message_end` mutation completes before the agent loop extracts tool calls. The standard `read` tool then executes the injected reads, producing normal TUI rows and persisted session entries. No custom journal entries are written; `session_compact` clears `subdirLoadedPaths`; `session_start`/`session_tree` reconstruct dedupe state from successful standard read call/result pairs in the session (candidate-file reads matched to non-error tool results). Bounded by `MAX_DIRS=20` (directory cap) and `MAX_DEPTH=10` (path depth cap). Error-discriminating: suppresses ENOENT silently, logs non-ENOENT errors via `state.logger`. Flag-independent (loads regardless of `/autopilot on|off`). Exports functions (`directoriesToCheck`, `discoverContextFilePaths`, `createStableId`, `reconstructSubdirState`) for testability.
 
-**Bundled Mach 12 command set** (`mach12/`):
+- `troubleshooting-evidence.ts` — registers the sequential `get_scramjet_troubleshooting_evidence` tool used only by an active `scramjet:troubleshoot` command. It validates a bounded metadata-only session graph, walks only the selected ancestry, snapshots an immutable target boundary, and exposes exact safe envelopes through opaque snapshot, invocation, evidence, and cursor references. Projection excludes sibling content, raw structural IDs, hidden reasoning, images, binary/opaque payloads, and tool-result details; dynamic JSON is allowlist-sanitized and bounded. `open`/`select` identify a prior top-level invocation, while `index`/`read` expose selected transcript, tool, status, log, summary, current-source, and normative-guide evidence.
 
-The tenant of the harness — `mach12/commands/*.md` are command files using the next-step declarations and delegation. Ten top-level commands (`mach12:issue-create`, `mach12:issue-plan`, ..., `mach12:pr-merge`) with top-level `next:` blocks where chaining is intended (`forced`/`closed`/`open`/`ask`); `mach12:pr-merge` intentionally has no `next` and is the default terminus. Eight delegate-only subroutines (`mach12:push`, `mach12:find-contribution-guidelines`, `mach12:gh-issue-read`, `mach12:gh-pr-read`, `mach12:gh-sub-issues`, `mach12:gh-assign`, `mach12:gh-comment`, `mach12:gh-delivery-unit`) are invoked via `delegate` from the top-level commands. Subroutines have no `next:` block — the caller's `next:` controls chaining. `mach12/agents/*.md` ships ten bundled subagents (exploration, architecture, code review, comment analysis, test analysis, test design, silent-failure analysis, type-design analysis, feature-completeness checking, code simplification) that the multi-lens commands dispatch to. The npm `postinstall` script seeds the whole `mach12/` tree into `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12/` on install; the command-set loader picks it up at runtime via `resources_discover`. `gh-*` subroutines are flagged in their prose as forge-swap points for the deferred `glab-*` family.
+**Bundled command sets:**
+
+- `mach12/` is the tenant methodology: ten top-level commands (`mach12:issue-create`, `mach12:issue-plan`, ..., `mach12:pr-merge`), delegate-only subroutines, and specialized subagents for the issue → plan → review → implement → PR → ship flow. `gh-*` subroutines are forge-swap points for the deferred `glab-*` family.
+- `scramjet/` is the product's command-development set. `/scramjet:troubleshoot` performs current-session/current-selected-branch, recovery-first troubleshooting through the builtin read-only evidence tool and produces one redacted transcript handoff. Clarification and retry approval use `get_scramjet_user_input`; recovery uses normal tools; completion uses `report_scramjet_command_status`. It proposes an evidence-supported disposition but never edits command sources or starts authoring automatically.
 
 **Distribution:**
 
-`bin/scramjet.js` is a small Node entry that imports the compiled `dist/index.js` and calls Pi's `main(argv, { builtinInit: initScramjet })`. `scripts/postinstall.js` runs on `npm install` and seeds the bundled Mach 12 tree with manifest-based upgrade support: a `.seed-manifest.json` (per-file sha256 + seeding version) tracks which files were user-edited; upgrades replace only unedited files and warn about preserved edits; legacy (pre-manifest) installs are backed up and reseeded with user-added file recovery; missing bundled files are reseeded; same-version runs short-circuit. Skipped on native Windows with a notice; failure prints a warning but never blocks the install.
+`bin/scramjet.js` is a small Node entry that imports the compiled `dist/index.js` and calls Pi's `main(argv, { builtinInit: initScramjet })`. `scripts/postinstall.js` runs on `npm install` and processes literal `mach12` and `scramjet` descriptors independently. Each owned set has a set-bound `.seed-manifest.json`; upgrades replace only unedited owned files and preserve user additions. Manifestless Mach 12 retains its legacy backup/reseed migration, while a manifestless or invalid Scramjet tree is preserved without adoption. Healthy development symlinks skip only their own set, failures are isolated per descriptor, and native Windows seeding remains skipped.
 
 **Upstream Pi divergence:**
 
@@ -132,12 +144,12 @@ Pi packages are vendored from the LeanAndMean fork of upstream Pi (base version 
 The architecture section above describes the **current** shape of the code. The **target** shape is laid out in `packages/scramjet/docs/scramjet-vision.md`, which is the source-of-truth design document for the next major rewrite (the "vision MVP"). Consult the vision doc when:
 
 - Planning work that introduces, removes, or reshapes a harness capability (command sets, next-step declarations, delegation, the `/autopilot on/off` flag, history journaling).
-- Deciding what is in scope vs. deferred for the MVP. The vision doc carries the MVP-vs-post-MVP boundaries and the per-section deferrals (sidebar UI, hard tool-scoping enforcement, authoring loop).
+- Deciding what is in scope vs. deferred for the MVP. The vision doc carries the MVP-vs-post-MVP boundaries and the per-section deferrals (sidebar UI, hard tool-scoping enforcement, explicitly approved authoring).
 - Resolving "should we add X?" questions about the harness — the vision doc states the non-goals as well as the goals, and several common asks (workflow DAG, conditional next-step DSL, prose-replacement abstractions) are explicit non-goals.
 - Reviewing a design decision and wanting to know what was already considered and rejected, and why.
 - Reviewing or planning work that touches design principles, harness behavior, or command-set conventions — the elaborated principles section grounds decisions with context, examples, and counterexamples.
 
-The MVP buildout shipped under GitHub issue 23 (umbrella). Subissues 24-33 carried the individual stages; the staged plan and per-stage progress comments live on issue 23 for the historical record. Post-MVP work (sidebar UI, hard tool-scoping enforcement, authoring loop) is tracked as separate issues — consult the vision doc for the deferred-scope catalog. The CLAUDE.md design-philosophy section below was rewritten to match the vision (commands declare their edges, MVP-specific rationales are explicit); when those bullets reference design decisions you don't recognize, the vision doc is where the long-form reasoning lives.
+The MVP buildout shipped under GitHub issue 23 (umbrella). Subissues 24-33 carried the individual stages; the staged plan and per-stage progress comments live on issue 23 for the historical record. Post-MVP work (sidebar UI, hard tool-scoping enforcement, and explicitly approved authoring after troubleshooting/evaluation) is tracked as separate issues — consult the vision doc for the deferred-scope catalog. The CLAUDE.md design-philosophy section below was rewritten to match the vision (commands declare their edges, MVP-specific rationales are explicit); when those bullets reference design decisions you don't recognize, the vision doc is where the long-form reasoning lives.
 
 ## Design philosophy
 

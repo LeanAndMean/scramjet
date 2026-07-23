@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -409,6 +409,49 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		}) as { promptPaths: string[] };
 		expect(state.registry.has("mach12:issue-plan")).toBe(true);
 		expect(result.promptPaths.length).toBeGreaterThan(0);
+	});
+
+	it.each(["mach12", "scramjet"])("gives set-aware guidance for a dangling %s development symlink", (setName) => {
+		const globalRoot = mkdtempSync(join(tmpdir(), "scramjet-loader-dangling-"));
+		try {
+			symlinkSync(join(globalRoot, "missing-target"), join(globalRoot, setName));
+			process.env.SCRAMJET_CACHE = globalRoot;
+			const { pi, handlers, appended } = recordingPi();
+			const state = freshState({ logger: createLogger(pi) });
+			registerCommandLoader(pi, state);
+			const handler = handlers.get("resources_discover")![0];
+			handler?.({ type: "resources_discover", cwd: join(FIXTURES, "does-not-exist"), reason: "startup" });
+
+			const warnings = appended
+				.filter((entry) => (entry.data as any).level === "warn")
+				.map((entry) => (entry.data as any).message as string);
+			expect(warnings).toContainEqual(expect.stringContaining(`packages/scramjet/${setName}`));
+			expect(warnings).toContainEqual(expect.stringContaining(join(globalRoot, setName)));
+		} finally {
+			rmSync(globalRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("does not invent a bundled source path for a dangling custom-set symlink", () => {
+		const globalRoot = mkdtempSync(join(tmpdir(), "scramjet-loader-custom-dangling-"));
+		try {
+			symlinkSync(join(globalRoot, "missing-target"), join(globalRoot, "my-team"));
+			process.env.SCRAMJET_CACHE = globalRoot;
+			const { pi, handlers, appended } = recordingPi();
+			const state = freshState({ logger: createLogger(pi) });
+			registerCommandLoader(pi, state);
+			const handler = handlers.get("resources_discover")![0];
+			handler?.({ type: "resources_discover", cwd: join(FIXTURES, "does-not-exist"), reason: "startup" });
+
+			const warning = appended
+				.filter((entry) => (entry.data as any).level === "warn")
+				.map((entry) => (entry.data as any).message as string)
+				.find((message) => message.includes(join(globalRoot, "my-team")));
+			expect(warning).toContain("recreate it with the intended target");
+			expect(warning).not.toContain("packages/scramjet/my-team");
+		} finally {
+			rmSync(globalRoot, { recursive: true, force: true });
+		}
 	});
 });
 
