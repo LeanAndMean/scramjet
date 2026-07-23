@@ -1,16 +1,36 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { open } from "node:fs/promises";
+import { isProxy } from "node:util/types";
 import { StringEnum } from "@leanandmean/ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { getDocPath } from "./docs-registry.js";
 import { COMMAND_START_TYPE, COMMAND_STATUS_TYPE } from "./history.js";
 import { activeCommandName } from "./lifecycle.js";
+import { SCRAMJET_LOG_TYPE } from "./logger.js";
 import type { ScramjetState } from "./types.js";
 
 export const MAX_SESSION_ENTRIES = 10_000;
 export const MAX_BRANCH_ANCESTRY = 2_000;
 const MAX_CANDIDATES = 20;
 const MAX_SNAPSHOTS = 4;
+export const MAX_INVOCATION_ENTRIES = 1_000;
+export const MAX_INDEX_ITEMS = 50;
+export const MAX_READ_REFS = 12;
+export const MAX_SAFE_JSON_DEPTH = 5;
+export const MAX_SAFE_JSON_ITEMS = 32;
+export const MAX_MESSAGE_CONTENT_BLOCKS = 32;
+export const MAX_SAFE_JSON_NODES = 256;
+export const MAX_SAFE_JSON_BYTES = 8 * 1024;
+export const MAX_TEXT_BYTES = 2_000;
+export const MAX_RESOURCE_BYTES = 256 * 1024;
+export const MAX_PAGE_BYTES = 32 * 1024;
+export const MAX_PAGE_LINES = 200;
+export const MAX_CURSOR_PAGES = 32;
+const MAX_CURSORS = 64;
+const MAX_EVIDENCE_RECORDS = MAX_INDEX_ITEMS * MAX_CURSOR_PAGES;
+const INVOCATION_LIMIT_SIGNAL = Symbol("invocation-limit");
 const SCHEMA = "scramjet.troubleshooting-evidence/v1" as const;
 const TROUBLESHOOT_COMMAND = "scramjet:troubleshoot";
 
@@ -18,6 +38,11 @@ const ID_PATTERN = /^(?:[0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89
 const COMMAND_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}:[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
 const PROVIDER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const TOOL_PATTERN = /^[A-Za-z][A-Za-z0-9._:-]{0,63}$/;
+const SUBTYPE_PATTERN = /^[A-Za-z][A-Za-z0-9._:-]{0,95}$/;
+const CATEGORY_PATTERN = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
+const MAX_SOURCE_ALLOWED_TOOLS = 32;
+const MAX_EXECUTION_MODELS = 32;
 
 const SNAPSHOT_PATTERN = "^snp-v1-[a-z2-7]{26}$";
 const INVOCATION_PATTERN = "^inv-v1-[a-z2-7]{26}$";
@@ -25,6 +50,156 @@ const CURSOR_PATTERN = "^cur-v1-[a-z2-7]{26}$";
 
 const INVALID_SNAPSHOT = "snp-v1-aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const INVALID_TARGET = "inv-v1-aaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+function fixedGap<C extends string>(code: C, message: string) {
+	return Object.freeze({ code, message });
+}
+
+export const EVIDENCE_GAPS = Object.freeze({
+	SOURCE_UNAVAILABLE: fixedGap("missing-current-source", "Current command source is unavailable."),
+	GUIDE_MISSING: fixedGap("missing-authoring-guide", "The command authoring guide is unavailable."),
+	GUIDE_OVERSIZE: fixedGap("oversized-authoring-guide", "The command authoring guide exceeds the resource limit."),
+	GUIDE_READ_FAILED: fixedGap("authoring-guide-read-failed", "The command authoring guide could not be read."),
+	HIDDEN_CONTENT_EXCLUDED: fixedGap("excluded-thinking", "Hidden reasoning content was excluded."),
+	IMAGE_CONTENT_EXCLUDED: fixedGap("excluded-image", "Image content was excluded."),
+	DETAILS_EXCLUDED: fixedGap("excluded-details", "Opaque detail content was excluded."),
+	UNSUPPORTED_CONTENT_EXCLUDED: fixedGap("unsupported-entry", "Unsupported content was excluded."),
+	IDENTIFIERS_PSEUDONYMIZED: fixedGap("pseudonymized-identifier", "An unsafe identifier was pseudonymized."),
+	UNKNOWN_ENUM_MAPPED: fixedGap("mapped-unknown-enum", "An unknown enum value was mapped to a safe constant."),
+	CONTENT_TRUNCATED: fixedGap("truncation", "Evidence content was truncated to a fixed limit."),
+	CWD_MISMATCH: fixedGap("cwd-mismatch", "The live working directory differs from the session header."),
+	CWD_HEADER_MISSING: fixedGap("cwd-header-missing", "The session header has no working directory."),
+} as const);
+
+type EvidenceGap = (typeof EVIDENCE_GAPS)[keyof typeof EVIDENCE_GAPS];
+
+function omissionCodes(gaps: readonly EvidenceGap[]): string[] {
+	return gaps.map((gap) => gap.code);
+}
+
+export type TruncationReason = "depth" | "items" | "nodes" | "bytes" | "unsupported-value";
+export type SafeJsonValue =
+	| null
+	| boolean
+	| number
+	| string
+	| SafeJsonValue[]
+	| { [key: string]: SafeJsonValue }
+	| { $scramjet: "truncated"; reason: TruncationReason };
+
+export interface SanitizationCounts {
+	omitted_keys: number;
+	truncated_strings: number;
+	truncated_containers: number;
+	unsupported_values: number;
+}
+
+export type EvidenceClass =
+	| "transcript"
+	| "tool-call"
+	| "tool-result"
+	| "status"
+	| "log"
+	| "compaction"
+	| "source"
+	| "guide";
+export type EvidenceFidelity =
+	| "exact"
+	| "exact-partial"
+	| "summary"
+	| "diagnostic"
+	| "current-winning-candidate"
+	| "normative";
+
+export interface EvidenceDescriptor {
+	evidence_ref: string;
+	class: EvidenceClass;
+	subtype: string;
+	fidelity: EvidenceFidelity;
+	content_available: boolean;
+}
+
+type TranscriptContent =
+	| { type: "user-transcript"; text: string }
+	| { type: "assistant-transcript"; text: string; provider: string; model: string }
+	| { type: "custom-transcript"; subtype: string; display: boolean; text: string }
+	| {
+			type: "bash-transcript";
+			command: string;
+			output: string;
+			exit_code: number | null;
+			cancelled: boolean;
+			truncated: boolean;
+	  };
+type ToolCallContent = {
+	type: "tool-call";
+	tool: string;
+	call_ref: string;
+	arguments: SafeJsonValue;
+	sanitization: SanitizationCounts;
+};
+type ToolResultContent = {
+	type: "tool-result";
+	tool: string;
+	call_ref: string;
+	is_error: boolean;
+	text: string;
+};
+type StatusContent = { type: "status"; command: string; status: string; summary: string };
+type LogContent = {
+	type: "log";
+	level: "debug" | "warn" | "lifecycle" | "unknown";
+	category: string;
+	message: string;
+	data: SafeJsonValue | null;
+	sanitization: SanitizationCounts;
+};
+type SummaryContent = { type: "summary"; kind: "compaction" | "branch"; text: string };
+type SourceContent = {
+	type: "current-source";
+	command: string;
+	description: string | null;
+	argument_hint: string | null;
+	delegate_only: boolean;
+	allowed_tools: string[] | null;
+	body: string;
+	hash: string;
+};
+type GuideContent = { type: "authoring-guide"; guide: "command-authoring"; body: string; hash: string };
+
+export type EvidenceItem =
+	| EvidenceItemBase<"transcript", "exact" | "exact-partial", TranscriptContent>
+	| EvidenceItemBase<"tool-call", "exact" | "exact-partial", ToolCallContent>
+	| EvidenceItemBase<"tool-result", "exact" | "exact-partial", ToolResultContent>
+	| EvidenceItemBase<"status", "summary", StatusContent>
+	| EvidenceItemBase<"log", "diagnostic", LogContent>
+	| EvidenceItemBase<"compaction", "summary", SummaryContent>
+	| EvidenceItemBase<"source", "current-winning-candidate", SourceContent>
+	| EvidenceItemBase<"guide", "normative", GuideContent>;
+
+export interface EvidenceItemBase<C extends EvidenceClass, F extends EvidenceFidelity, T> {
+	evidence_ref: string;
+	class: C;
+	fidelity: F;
+	chunk: { sequence: number; complete: boolean };
+	omissions: string[];
+	content: T;
+}
+
+interface EvidenceRecord {
+	descriptor: EvidenceDescriptor;
+	item: EvidenceItem;
+}
+
+interface Cursor {
+	id: string;
+	snapshotId: string;
+	targetId: string;
+	action: "index" | "read";
+	refs: string[];
+	offset: number;
+	page: number;
+}
 
 const ActionSchema = StringEnum(["open", "select", "index", "read"] as const);
 const PARAMETERS = Type.Object(
@@ -136,6 +311,19 @@ interface Candidate {
 	terminalStatus: string;
 }
 
+interface SelectionData {
+	handoff_id: string;
+	target_ref: string;
+	command: string;
+	relation: Candidate["relation"];
+	terminal_status: string;
+	cwd_relation: Snapshot["cwdRelation"];
+	execution_models: ReadonlyArray<Readonly<{ provider: string; model: string }>>;
+	troubleshooting_model: Readonly<{ provider: string; model: string }> | null;
+	current_source: Readonly<{ available: boolean; evidence_ref?: string; hash?: string }>;
+	authoring_guide: Readonly<{ available: boolean; evidence_ref?: string; hash?: string }>;
+}
+
 interface Snapshot {
 	id: string;
 	sessionId: string;
@@ -150,6 +338,14 @@ interface Snapshot {
 	commandRefs: Map<string, string>;
 	providerRefs: Map<string, string>;
 	modelRefs: Map<string, string>;
+	toolRefs: Map<string, string>;
+	callRefs: Map<string, string>;
+	subtypeRefs: Map<string, string>;
+	categoryRefs: Map<string, string>;
+	rawIds: Set<string>;
+	evidence: EvidenceRecord[] | null;
+	selectionData: Readonly<SelectionData> | null;
+	gaps: readonly EvidenceGap[];
 }
 
 interface ValidBranch {
@@ -294,8 +490,10 @@ function safeNamed(
 	prefix: string,
 	refs: Map<string, string>,
 	used: Set<string>,
+	gaps?: Set<EvidenceGap>,
 ): string {
 	if (pattern.test(value)) return value;
+	gaps?.add(EVIDENCE_GAPS.IDENTIFIERS_PSEUDONYMIZED);
 	const existing = refs.get(value);
 	if (existing) return existing;
 	const generated = opaque(prefix, used);
@@ -328,6 +526,7 @@ function collectModels(
 	providerRefs: Map<string, string>,
 	modelRefs: Map<string, string>,
 	used: Set<string>,
+	gaps: Set<EvidenceGap>,
 ) {
 	const models: Array<{ provider: string; model: string }> = [];
 	const seen = new Set<string>();
@@ -336,12 +535,15 @@ function collectModels(
 		if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
 		const provider = (entry.message as { provider?: unknown }).provider;
 		const model = (entry.message as { model?: unknown }).model;
-		if (typeof provider !== "string" || typeof model !== "string") continue;
-		const safeProvider = safeNamed(provider, PROVIDER_PATTERN, "prv-v1", providerRefs, used);
-		const safeModel = safeNamed(model, MODEL_PATTERN, "mdl-v1", modelRefs, used);
+		const safeProvider = safeIdentifier(provider, PROVIDER_PATTERN, "prv-v1", providerRefs, used, gaps);
+		const safeModel = safeIdentifier(model, MODEL_PATTERN, "mdl-v1", modelRefs, used, gaps);
 		const key = `${safeProvider}\0${safeModel}`;
 		if (!seen.has(key)) {
 			seen.add(key);
+			if (models.length >= MAX_EXECUTION_MODELS) {
+				gaps.add(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+				break;
+			}
 			models.push({ provider: safeProvider, model: safeModel });
 		}
 	}
@@ -375,10 +577,778 @@ function revalidateSnapshot(ctx: ExtensionContext, snapshot: Snapshot): Validati
 	return validation;
 }
 
+function hash(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function truncateUtf8(value: string, limit = MAX_TEXT_BYTES): { value: string; truncated: boolean } {
+	const bytes = Buffer.from(value);
+	if (bytes.length <= limit) return { value, truncated: false };
+	let end = limit;
+	while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+	return { value: `${bytes.subarray(0, end).toString("utf8")}…<scramjet-truncated>`, truncated: true };
+}
+
+function scrubRawText(value: unknown, rawIds: ReadonlySet<string>): string {
+	if (typeof value !== "string") return "";
+	let scrubbed = value;
+	for (const id of rawIds) {
+		if (id && scrubbed.includes(id)) scrubbed = scrubbed.split(id).join("<scramjet-id>");
+	}
+	return scrubbed;
+}
+
+function scrubText(value: unknown, rawIds: ReadonlySet<string>, gaps?: Set<EvidenceGap>): string {
+	const result = truncateUtf8(scrubRawText(value, rawIds));
+	if (result.truncated) gaps?.add(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+	return result.value;
+}
+
+const SAFE_KEY = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+const FORBIDDEN_OBJECT_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const DANGEROUS_NORMALIZED_KEYS = new Set([
+	"thinking",
+	"thought",
+	"reasoning",
+	"signature",
+	"image",
+	"images",
+	"mime",
+	"mimetype",
+	"base64",
+	"binary",
+	"blob",
+	"buffer",
+	"bytes",
+	"raw",
+	"details",
+	"authorization",
+	"cookie",
+	"setcookie",
+	"token",
+	"accesstoken",
+	"refreshtoken",
+	"apikey",
+	"password",
+	"passphrase",
+	"secret",
+	"clientsecret",
+	"privatekey",
+	"credential",
+	"connectionstring",
+]);
+const DANGEROUS_SUFFIXES = [
+	"authorization",
+	"cookie",
+	"token",
+	"password",
+	"passphrase",
+	"secret",
+	"credential",
+	"apikey",
+	"accesstoken",
+	"refreshtoken",
+	"clientsecret",
+	"privatekey",
+	"connectionstring",
+];
+
+function dangerousKey(key: string): boolean {
+	const normalized = key.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+	return DANGEROUS_NORMALIZED_KEYS.has(normalized) || DANGEROUS_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+}
+
+function scrubRawKey(key: string, rawIds: ReadonlySet<string>): string {
+	let scrubbed = key;
+	for (const id of rawIds) {
+		if (id && scrubbed.includes(id)) scrubbed = scrubbed.split(id).join("scramjet-id");
+	}
+	return scrubbed;
+}
+
+function sanitizationCounts(): SanitizationCounts {
+	return { omitted_keys: 0, truncated_strings: 0, truncated_containers: 0, unsupported_values: 0 };
+}
+
+function sanitizeJson(
+	value: unknown,
+	rawIds: ReadonlySet<string>,
+): { value: SafeJsonValue; counts: SanitizationCounts } {
+	const counts = sanitizationCounts();
+	let nodes = 0;
+	const sentinel = (reason: TruncationReason): SafeJsonValue => ({ $scramjet: "truncated", reason });
+	const visit = (input: unknown, depth: number): SafeJsonValue => {
+		if (++nodes > MAX_SAFE_JSON_NODES) {
+			counts.truncated_containers++;
+			return sentinel("nodes");
+		}
+		if (input === null || typeof input === "boolean") return input;
+		if (typeof input === "number") {
+			if (Number.isFinite(input)) return input;
+			counts.unsupported_values++;
+			return sentinel("unsupported-value");
+		}
+		if (typeof input === "string") {
+			const scrubbed = scrubRawText(input, rawIds);
+			const result = truncateUtf8(scrubbed);
+			if (result.truncated) counts.truncated_strings++;
+			return result.value;
+		}
+		if (depth >= MAX_SAFE_JSON_DEPTH) {
+			counts.truncated_containers++;
+			return sentinel("depth");
+		}
+		if (typeof input === "object" && isProxy(input)) {
+			counts.unsupported_values++;
+			return sentinel("unsupported-value");
+		}
+		if (Array.isArray(input)) {
+			const output: SafeJsonValue[] = [];
+			const lengthDescriptor = Object.getOwnPropertyDescriptor(input, "length");
+			const rawLength = lengthDescriptor && "value" in lengthDescriptor ? lengthDescriptor.value : 0;
+			const arrayLength =
+				typeof rawLength === "number" && Number.isSafeInteger(rawLength) && rawLength >= 0 ? rawLength : 0;
+			const length = Math.min(arrayLength, MAX_SAFE_JSON_ITEMS);
+			for (let index = 0; index < length; index++) {
+				const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
+				if (!descriptor || !("value" in descriptor)) {
+					counts.unsupported_values++;
+					output.push(sentinel("unsupported-value"));
+				} else output.push(visit(descriptor.value, depth + 1));
+			}
+			if (arrayLength > length) {
+				counts.truncated_containers++;
+				output.push(sentinel("items"));
+			}
+			return output;
+		}
+		if (typeof input !== "object") {
+			counts.unsupported_values++;
+			return sentinel("unsupported-value");
+		}
+		const prototype = Object.getPrototypeOf(input);
+		if (prototype !== Object.prototype && prototype !== null) {
+			counts.unsupported_values++;
+			return sentinel("unsupported-value");
+		}
+		const keys: string[] = [];
+		for (const rawKey in input) {
+			if (!Object.hasOwn(input, rawKey)) continue;
+			if (keys.length >= MAX_SAFE_JSON_ITEMS) {
+				counts.truncated_containers++;
+				return sentinel("items");
+			}
+			keys.push(rawKey);
+		}
+		keys.sort();
+		const output = Object.create(null) as Record<string, SafeJsonValue>;
+		for (const rawKey of keys) {
+			const key = scrubRawKey(rawKey, rawIds);
+			const descriptor = Object.getOwnPropertyDescriptor(input, rawKey);
+			if (!descriptor?.enumerable) continue;
+			if (
+				key === "$scramjet" ||
+				FORBIDDEN_OBJECT_KEYS.has(key) ||
+				!SAFE_KEY.test(key) ||
+				Buffer.byteLength(key) > 64 ||
+				dangerousKey(key) ||
+				Object.hasOwn(output, key) ||
+				!("value" in descriptor)
+			) {
+				counts.omitted_keys++;
+				continue;
+			}
+			Object.defineProperty(output, key, {
+				value: visit(descriptor.value, depth + 1),
+				enumerable: true,
+				writable: true,
+				configurable: true,
+			});
+		}
+		return output;
+	};
+	let sanitized = visit(value, 0);
+	if (Buffer.byteLength(JSON.stringify(sanitized)) > MAX_SAFE_JSON_BYTES) {
+		counts.truncated_containers++;
+		sanitized = sentinel("bytes");
+	}
+	return { value: sanitized, counts };
+}
+
+function dataProperty(value: object, key: string): unknown {
+	const descriptor = Object.getOwnPropertyDescriptor(value, key);
+	return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
+interface InspectedContentBlock {
+	type: unknown;
+	text: unknown;
+	id: unknown;
+	name: unknown;
+	arguments: unknown;
+}
+
+function inspectContentBlocks(content: unknown): { blocks: InspectedContentBlock[]; truncated: boolean } {
+	if (!Array.isArray(content)) return { blocks: [], truncated: false };
+	const lengthDescriptor = Object.getOwnPropertyDescriptor(content, "length");
+	const rawLength = lengthDescriptor && "value" in lengthDescriptor ? lengthDescriptor.value : 0;
+	const length = typeof rawLength === "number" && Number.isSafeInteger(rawLength) && rawLength >= 0 ? rawLength : 0;
+	const inspected = Math.min(length, MAX_MESSAGE_CONTENT_BLOCKS);
+	const blocks: InspectedContentBlock[] = [];
+	for (let index = 0; index < inspected; index++) {
+		const descriptor = Object.getOwnPropertyDescriptor(content, String(index));
+		if (!descriptor || !("value" in descriptor) || !descriptor.value || typeof descriptor.value !== "object") {
+			blocks.push({ type: undefined, text: undefined, id: undefined, name: undefined, arguments: undefined });
+			continue;
+		}
+		const block = descriptor.value;
+		blocks.push({
+			type: dataProperty(block, "type"),
+			text: dataProperty(block, "text"),
+			id: dataProperty(block, "id"),
+			name: dataProperty(block, "name"),
+			arguments: dataProperty(block, "arguments"),
+		});
+	}
+	return { blocks, truncated: length > inspected };
+}
+
+function textContent(
+	content: unknown,
+	rawIds: ReadonlySet<string>,
+): { text: string; partial: boolean; gaps: EvidenceGap[]; blocks: InspectedContentBlock[] } {
+	if (typeof content === "string") {
+		const result = truncateUtf8(scrubRawText(content, rawIds));
+		return {
+			text: result.value,
+			partial: result.truncated,
+			gaps: result.truncated ? [EVIDENCE_GAPS.CONTENT_TRUNCATED] : [],
+			blocks: [],
+		};
+	}
+	if (!Array.isArray(content)) {
+		return { text: "", partial: true, gaps: [EVIDENCE_GAPS.UNSUPPORTED_CONTENT_EXCLUDED], blocks: [] };
+	}
+	const inspected = inspectContentBlocks(content);
+	const parts: string[] = [];
+	const gaps = new Set<EvidenceGap>();
+	if (inspected.truncated) gaps.add(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+	for (const block of inspected.blocks) {
+		if (block.type === "text" && typeof block.text === "string") {
+			const part = truncateUtf8(scrubRawText(block.text, rawIds));
+			parts.push(part.value);
+			if (part.truncated) gaps.add(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+		} else if (block.type === "thinking" || block.type === "reasoning")
+			gaps.add(EVIDENCE_GAPS.HIDDEN_CONTENT_EXCLUDED);
+		else if (block.type === "image") gaps.add(EVIDENCE_GAPS.IMAGE_CONTENT_EXCLUDED);
+		else if (block.type !== "toolCall") gaps.add(EVIDENCE_GAPS.UNSUPPORTED_CONTENT_EXCLUDED);
+	}
+	const result = truncateUtf8(parts.join("\n"));
+	if (result.truncated) gaps.add(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+	return { text: result.value, partial: gaps.size > 0, gaps: [...gaps], blocks: inspected.blocks };
+}
+
+function safeIdentifier(
+	value: unknown,
+	pattern: RegExp,
+	prefix: string,
+	refs: Map<string, string>,
+	used: Set<string>,
+	gaps?: Set<EvidenceGap>,
+): string {
+	if (typeof value !== "string") {
+		gaps?.add(EVIDENCE_GAPS.IDENTIFIERS_PSEUDONYMIZED);
+		return opaque(prefix, used);
+	}
+	return safeNamed(value, pattern, prefix, refs, used, gaps);
+}
+
+function makeRecord(
+	snapshot: Snapshot,
+	className: EvidenceClass,
+	subtype: string,
+	fidelity: EvidenceFidelity,
+	content: EvidenceItem["content"],
+	omissions: string[] = [],
+): EvidenceRecord {
+	const evidenceRef = opaque("evd-v1", snapshot.usedRefs);
+	const descriptor: EvidenceDescriptor = {
+		evidence_ref: evidenceRef,
+		class: className,
+		subtype,
+		fidelity,
+		content_available: true,
+	};
+	return {
+		descriptor,
+		item: {
+			evidence_ref: evidenceRef,
+			class: className,
+			fidelity,
+			chunk: { sequence: 0, complete: true },
+			omissions,
+			content,
+		} as EvidenceItem,
+	};
+}
+
+async function buildEvidence(
+	snapshot: Snapshot,
+	entries: SessionEntry[],
+	start: number,
+	end: number,
+	source: SourceContent | null,
+	gaps: Set<EvidenceGap>,
+	state: ScramjetState,
+): Promise<EvidenceRecord[]> {
+	const records: EvidenceRecord[] = [];
+	const append = (record: EvidenceRecord) => {
+		if (records.length >= MAX_EVIDENCE_RECORDS) throw INVOCATION_LIMIT_SIGNAL;
+		records.push(record);
+	};
+	const addProjectedGaps = (projected: { gaps: EvidenceGap[] }) => {
+		for (const gap of projected.gaps) gaps.add(gap);
+	};
+	const addSanitizationGaps = (counts: SanitizationCounts) => {
+		if (counts.omitted_keys > 0) gaps.add(EVIDENCE_GAPS.DETAILS_EXCLUDED);
+		if (counts.unsupported_values > 0) gaps.add(EVIDENCE_GAPS.UNSUPPORTED_CONTENT_EXCLUDED);
+		if (counts.truncated_strings > 0 || counts.truncated_containers > 0) gaps.add(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+	};
+	for (let index = start; index < end; index++) {
+		const entry = entries[index];
+		if (!entry) continue;
+		if (entry.type === "message") {
+			const message = entry.message as any;
+			if (message.role === "user") {
+				const projected = textContent(message.content, snapshot.rawIds);
+				addProjectedGaps(projected);
+				append(
+					makeRecord(
+						snapshot,
+						"transcript",
+						"user",
+						projected.partial ? "exact-partial" : "exact",
+						{ type: "user-transcript", text: projected.text },
+						omissionCodes(projected.gaps),
+					),
+				);
+			} else if (message.role === "assistant") {
+				const projected = textContent(message.content, snapshot.rawIds);
+				addProjectedGaps(projected);
+				const provider = safeIdentifier(
+					message.provider,
+					PROVIDER_PATTERN,
+					"prv-v1",
+					snapshot.providerRefs,
+					snapshot.usedRefs,
+					gaps,
+				);
+				const model = safeIdentifier(
+					message.model,
+					MODEL_PATTERN,
+					"mdl-v1",
+					snapshot.modelRefs,
+					snapshot.usedRefs,
+					gaps,
+				);
+				append(
+					makeRecord(
+						snapshot,
+						"transcript",
+						"assistant",
+						projected.partial ? "exact-partial" : "exact",
+						{ type: "assistant-transcript", text: projected.text, provider, model },
+						omissionCodes(projected.gaps),
+					),
+				);
+				for (const block of projected.blocks) {
+					if (block.type !== "toolCall") continue;
+					const callRef = safeIdentifier(block.id, /$a/, "cal-v1", snapshot.callRefs, snapshot.usedRefs, gaps);
+					const tool = safeIdentifier(
+						block.name,
+						TOOL_PATTERN,
+						"tol-v1",
+						snapshot.toolRefs,
+						snapshot.usedRefs,
+						gaps,
+					);
+					const sanitized = sanitizeJson(block.arguments, snapshot.rawIds);
+					addSanitizationGaps(sanitized.counts);
+					append(
+						makeRecord(
+							snapshot,
+							"tool-call",
+							"tool-call",
+							"exact-partial",
+							{
+								type: "tool-call",
+								tool,
+								call_ref: callRef,
+								arguments: sanitized.value,
+								sanitization: sanitized.counts,
+							},
+							[EVIDENCE_GAPS.DETAILS_EXCLUDED.code],
+						),
+					);
+				}
+			} else if (message.role === "toolResult") {
+				const callRef = safeIdentifier(
+					message.toolCallId,
+					/$a/,
+					"cal-v1",
+					snapshot.callRefs,
+					snapshot.usedRefs,
+					gaps,
+				);
+				const tool = safeIdentifier(
+					message.toolName,
+					TOOL_PATTERN,
+					"tol-v1",
+					snapshot.toolRefs,
+					snapshot.usedRefs,
+					gaps,
+				);
+				const projected = textContent(message.content, snapshot.rawIds);
+				addProjectedGaps(projected);
+				gaps.add(EVIDENCE_GAPS.DETAILS_EXCLUDED);
+				append(
+					makeRecord(
+						snapshot,
+						"tool-result",
+						"tool-result",
+						"exact-partial",
+						{
+							type: "tool-result",
+							tool,
+							call_ref: callRef,
+							is_error: message.isError === true,
+							text: projected.text,
+						},
+						omissionCodes([EVIDENCE_GAPS.DETAILS_EXCLUDED, ...projected.gaps]),
+					),
+				);
+			} else if (message.role === "bashExecution") {
+				const omissionGaps: EvidenceGap[] = [];
+				if (message.fullOutputPath) omissionGaps.push(EVIDENCE_GAPS.DETAILS_EXCLUDED);
+				if (message.truncated === true) omissionGaps.push(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+				for (const gap of omissionGaps) gaps.add(gap);
+				append(
+					makeRecord(
+						snapshot,
+						"transcript",
+						"bash",
+						"exact-partial",
+						{
+							type: "bash-transcript",
+							command: scrubText(message.command, snapshot.rawIds, gaps),
+							output: scrubText(message.output, snapshot.rawIds, gaps),
+							exit_code: Number.isFinite(message.exitCode) ? message.exitCode : null,
+							cancelled: message.cancelled === true,
+							truncated: message.truncated === true,
+						},
+						omissionCodes(omissionGaps),
+					),
+				);
+			} else if (message.role === "custom") {
+				const projected = textContent(message.content, snapshot.rawIds);
+				addProjectedGaps(projected);
+				gaps.add(EVIDENCE_GAPS.DETAILS_EXCLUDED);
+				const subtype = safeIdentifier(
+					message.customType,
+					SUBTYPE_PATTERN,
+					"sub-v1",
+					snapshot.subtypeRefs,
+					snapshot.usedRefs,
+					gaps,
+				);
+				append(
+					makeRecord(
+						snapshot,
+						"transcript",
+						"custom",
+						"exact-partial",
+						{ type: "custom-transcript", subtype, display: message.display === true, text: projected.text },
+						omissionCodes([EVIDENCE_GAPS.DETAILS_EXCLUDED, ...projected.gaps]),
+					),
+				);
+			}
+		} else if (entry.type === "custom_message") {
+			const projected = textContent(entry.content, snapshot.rawIds);
+			addProjectedGaps(projected);
+			gaps.add(EVIDENCE_GAPS.DETAILS_EXCLUDED);
+			const subtype = safeIdentifier(
+				entry.customType,
+				SUBTYPE_PATTERN,
+				"sub-v1",
+				snapshot.subtypeRefs,
+				snapshot.usedRefs,
+				gaps,
+			);
+			append(
+				makeRecord(
+					snapshot,
+					"transcript",
+					"custom",
+					"exact-partial",
+					{ type: "custom-transcript", subtype, display: entry.display, text: projected.text },
+					omissionCodes([EVIDENCE_GAPS.DETAILS_EXCLUDED, ...projected.gaps]),
+				),
+			);
+		} else if (entry.type === "custom" && entry.customType === COMMAND_STATUS_TYPE) {
+			const data = entry.data && typeof entry.data === "object" ? (entry.data as any) : {};
+			const command = safeIdentifier(
+				data.commandName,
+				COMMAND_PATTERN,
+				"cmd-v1",
+				snapshot.commandRefs,
+				snapshot.usedRefs,
+				gaps,
+			);
+			const status = ["completed", "blocked", "incomplete", "continuing"].includes(data.status)
+				? data.status
+				: "unknown";
+			if (status === "unknown") gaps.add(EVIDENCE_GAPS.UNKNOWN_ENUM_MAPPED);
+			append(
+				makeRecord(snapshot, "status", "command-status", "summary", {
+					type: "status",
+					command,
+					status,
+					summary: scrubText(data.summary, snapshot.rawIds, gaps),
+				}),
+			);
+		} else if (entry.type === "custom" && entry.customType === SCRAMJET_LOG_TYPE) {
+			const data = entry.data && typeof entry.data === "object" ? (entry.data as any) : {};
+			const level = ["debug", "warn", "lifecycle"].includes(data.level) ? data.level : "unknown";
+			if (level === "unknown") gaps.add(EVIDENCE_GAPS.UNKNOWN_ENUM_MAPPED);
+			const category = safeIdentifier(
+				data.category,
+				CATEGORY_PATTERN,
+				"cat-v1",
+				snapshot.categoryRefs,
+				snapshot.usedRefs,
+				gaps,
+			);
+			const sanitized =
+				data.data === undefined
+					? { value: null as SafeJsonValue, counts: sanitizationCounts() }
+					: sanitizeJson(data.data, snapshot.rawIds);
+			addSanitizationGaps(sanitized.counts);
+			append(
+				makeRecord(snapshot, "log", "scramjet-log", "diagnostic", {
+					type: "log",
+					level,
+					category,
+					message: scrubText(data.message, snapshot.rawIds, gaps),
+					data: sanitized.value,
+					sanitization: sanitized.counts,
+				}),
+			);
+		} else if (entry.type === "compaction" || entry.type === "branch_summary") {
+			gaps.add(EVIDENCE_GAPS.DETAILS_EXCLUDED);
+			append(
+				makeRecord(
+					snapshot,
+					"compaction",
+					entry.type === "compaction" ? "compaction" : "branch",
+					"summary",
+					{
+						type: "summary",
+						kind: entry.type === "compaction" ? "compaction" : "branch",
+						text: scrubText(entry.summary, snapshot.rawIds, gaps),
+					},
+					[EVIDENCE_GAPS.DETAILS_EXCLUDED.code],
+				),
+			);
+		}
+	}
+	if (source) append(makeRecord(snapshot, "source", "current-source", "current-winning-candidate", source));
+	else gaps.add(EVIDENCE_GAPS.SOURCE_UNAVAILABLE);
+
+	const guide = await readBoundedResource(getDocPath("command-authoring"));
+	if (guide.status === "available") {
+		append(
+			makeRecord(snapshot, "guide", "command-authoring", "normative", {
+				type: "authoring-guide",
+				guide: "command-authoring",
+				body: scrubRawText(guide.body, snapshot.rawIds),
+				hash: hash(guide.body),
+			}),
+		);
+	} else if (guide.status === "missing") gaps.add(EVIDENCE_GAPS.GUIDE_MISSING);
+	else if (guide.status === "oversize") gaps.add(EVIDENCE_GAPS.GUIDE_OVERSIZE);
+	else {
+		gaps.add(EVIDENCE_GAPS.GUIDE_READ_FAILED);
+		state.logger.warn("troubleshooting-evidence", "The command authoring guide could not be read.");
+	}
+	return records;
+}
+
+function captureSource(
+	snapshot: Snapshot,
+	state: ScramjetState,
+	command: string,
+	gaps: Set<EvidenceGap>,
+): SourceContent | null {
+	const definition = state.registry.get(command);
+	if (!definition || Buffer.byteLength(definition.body) > MAX_RESOURCE_BYTES) return null;
+	const allowedTools = definition.allowedTools?.slice(0, MAX_SOURCE_ALLOWED_TOOLS) ?? null;
+	if (definition.allowedTools && definition.allowedTools.length > MAX_SOURCE_ALLOWED_TOOLS) {
+		gaps.add(EVIDENCE_GAPS.CONTENT_TRUNCATED);
+	}
+	return {
+		type: "current-source",
+		command: safeNamed(definition.name, COMMAND_PATTERN, "cmd-v1", snapshot.commandRefs, snapshot.usedRefs, gaps),
+		description: definition.description ? scrubText(definition.description, snapshot.rawIds, gaps) : null,
+		argument_hint: definition.argumentHint ? scrubText(definition.argumentHint, snapshot.rawIds, gaps) : null,
+		delegate_only: definition.delegateOnly === true,
+		allowed_tools:
+			allowedTools?.map((tool) =>
+				safeIdentifier(tool, TOOL_PATTERN, "tol-v1", snapshot.toolRefs, snapshot.usedRefs, gaps),
+			) ?? null,
+		body: scrubRawText(definition.body, snapshot.rawIds),
+		hash: hash(definition.body),
+	};
+}
+
+type BoundedResource = { status: "available"; body: string } | { status: "missing" | "oversize" | "failed" };
+
+async function readBoundedResource(path: string): Promise<BoundedResource> {
+	let handle: Awaited<ReturnType<typeof open>> | undefined;
+	try {
+		handle = await open(path, "r");
+		const stats = await handle.stat();
+		if (stats.size > MAX_RESOURCE_BYTES) return { status: "oversize" };
+		const buffer = Buffer.alloc(MAX_RESOURCE_BYTES + 1);
+		const { bytesRead } = await handle.read(buffer, 0, MAX_RESOURCE_BYTES + 1, 0);
+		if (bytesRead > MAX_RESOURCE_BYTES) return { status: "oversize" };
+		return { status: "available", body: buffer.subarray(0, bytesRead).toString("utf8") };
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? { status: "missing" } : { status: "failed" };
+	} finally {
+		await handle?.close().catch(() => {});
+	}
+}
+
+function splitUtf8(value: string, limit = MAX_TEXT_BYTES): string[] {
+	const byteChunks: string[] = [];
+	let remaining = value;
+	while (Buffer.byteLength(remaining) > limit) {
+		const bytes = Buffer.from(remaining);
+		let end = limit;
+		while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+		byteChunks.push(bytes.subarray(0, end).toString("utf8"));
+		remaining = bytes.subarray(end).toString("utf8");
+	}
+	byteChunks.push(remaining);
+
+	const chunks: string[] = [];
+	for (const byteChunk of byteChunks) {
+		const lines = byteChunk.match(/[^\n]*\n|[^\n]+$/g) ?? [""];
+		for (let index = 0; index < lines.length; index += MAX_PAGE_LINES - 20) {
+			chunks.push(lines.slice(index, index + MAX_PAGE_LINES - 20).join(""));
+		}
+	}
+	return chunks;
+}
+
+function chunksForRecord(record: EvidenceRecord): EvidenceItem[] {
+	if (record.item.content.type !== "current-source" && record.item.content.type !== "authoring-guide") {
+		return [record.item];
+	}
+	const bodies = splitUtf8(record.item.content.body);
+	return bodies.map(
+		(body, sequence) =>
+			({
+				...record.item,
+				chunk: { sequence, complete: sequence === bodies.length - 1 },
+				content: { ...record.item.content, body },
+			}) as EvidenceItem,
+	);
+}
+
+function logicalNewlines(value: unknown): number {
+	if (typeof value === "string") return (value.match(/\n/g) ?? []).length;
+	if (!value || typeof value !== "object") return 0;
+	let lines = 0;
+	for (const key in value) {
+		if (Object.hasOwn(value, key)) lines += logicalNewlines((value as Record<string, unknown>)[key]);
+	}
+	return lines;
+}
+
+function pageMetrics(items: unknown[]): { output_bytes: number; output_lines: number } {
+	return {
+		output_bytes: Buffer.byteLength(JSON.stringify(items)),
+		output_lines: items.length + logicalNewlines(items),
+	};
+}
+
+function takePage<T>(
+	items: T[],
+	offset: number,
+	maxItems = Number.POSITIVE_INFINITY,
+): { items: T[]; next: number } | null {
+	const page: T[] = [];
+	let next = offset;
+	while (next < items.length && page.length < maxItems) {
+		const candidate = [...page, items[next] as T];
+		const metrics = pageMetrics(candidate);
+		if (metrics.output_bytes > MAX_PAGE_BYTES || metrics.output_lines > MAX_PAGE_LINES) {
+			if (page.length === 0) return null;
+			break;
+		}
+		page.push(items[next] as T);
+		next++;
+	}
+	return { items: page, next };
+}
+
+function pageCount<T>(items: T[], maxItems = Number.POSITIVE_INFINITY): number | null {
+	let offset = 0;
+	let pages = 0;
+	while (offset < items.length) {
+		const next = takePage(items, offset, maxItems);
+		if (!next || next.next === offset) return null;
+		offset = next.next;
+		pages++;
+	}
+	return pages;
+}
+
+function withinPageLimit<T>(items: T[], maxItems = Number.POSITIVE_INFINITY): boolean {
+	const pages = pageCount(items, maxItems);
+	return pages !== null && pages <= MAX_CURSOR_PAGES;
+}
+
+function evidenceWithinLimits(records: EvidenceRecord[]): boolean {
+	const descriptors = records.map((record) => record.descriptor);
+	if (!withinPageLimit(descriptors, MAX_INDEX_ITEMS)) return false;
+	const content = records.flatMap(chunksForRecord);
+	if (!withinPageLimit(content)) return false;
+	const largestReadCosts = records
+		.map((record) => pageCount(chunksForRecord(record)))
+		.sort((left, right) => (right ?? MAX_CURSOR_PAGES + 1) - (left ?? MAX_CURSOR_PAGES + 1))
+		.slice(0, MAX_READ_REFS);
+	return (
+		largestReadCosts.every((pages) => pages !== null) &&
+		largestReadCosts.reduce((total, pages) => total + (pages ?? 0), 0) <= MAX_CURSOR_PAGES
+	);
+}
+
 export function registerTroubleshootingEvidenceTool(pi: ExtensionAPI, state: ScramjetState) {
 	const snapshots = new Map<string, Snapshot>();
+	const cursors = new Map<string, Cursor>();
 
-	const clear = () => snapshots.clear();
+	const clear = () => {
+		snapshots.clear();
+		cursors.clear();
+	};
+	const deleteSnapshot = (snapshotId: string) => {
+		snapshots.delete(snapshotId);
+		for (const [cursorId, cursor] of cursors) {
+			if (cursor.snapshotId === snapshotId) cursors.delete(cursorId);
+		}
+	};
 	pi.on("session_start", clear);
 	pi.on("session_tree", clear);
 
@@ -439,6 +1409,10 @@ export function registerTroubleshootingEvidenceTool(pi: ExtensionAPI, state: Scr
 						bounded[MAX_CANDIDATES - 1] = nearestNonTroubleshoot;
 					}
 					const usedRefs = new Set<string>([INVALID_SNAPSHOT, INVALID_TARGET]);
+					const openGaps = new Set<EvidenceGap>();
+					const relationToCwd = cwdRelation(ctx);
+					if (relationToCwd === "mismatch") openGaps.add(EVIDENCE_GAPS.CWD_MISMATCH);
+					else if (relationToCwd === "header-missing") openGaps.add(EVIDENCE_GAPS.CWD_HEADER_MISSING);
 					const commandRefs = new Map<string, string>();
 					let nearestFound = false;
 					const candidates: Candidate[] = bounded.map((start) => {
@@ -455,11 +1429,14 @@ export function registerTroubleshootingEvidenceTool(pi: ExtensionAPI, state: Scr
 						return {
 							rawId: start.rawId,
 							ref: opaque("inv-v1", usedRefs, INVALID_TARGET),
-							command: safeNamed(start.command, COMMAND_PATTERN, "cmd-v1", commandRefs, usedRefs),
+							command: safeNamed(start.command, COMMAND_PATTERN, "cmd-v1", commandRefs, usedRefs, openGaps),
 							relation,
 							terminalStatus: terminalStatus(entries, start.index, end, start.command),
 						};
 					});
+					if (candidates.some((candidate) => candidate.terminalStatus === "unknown")) {
+						openGaps.add(EVIDENCE_GAPS.UNKNOWN_ENUM_MAPPED);
+					}
 					const proposed = candidates.find((candidate) => candidate.relation === "nearest-non-troubleshoot");
 
 					let snapshotId: string;
@@ -474,16 +1451,29 @@ export function registerTroubleshootingEvidenceTool(pi: ExtensionAPI, state: Scr
 						candidates,
 						selectedTargetId: null,
 						handoffId: null,
-						cwdRelation: cwdRelation(ctx),
+						cwdRelation: relationToCwd,
 						usedRefs,
 						commandRefs,
 						providerRefs: new Map(),
 						modelRefs: new Map(),
+						toolRefs: new Map(),
+						callRefs: new Map(),
+						subtypeRefs: new Map(),
+						categoryRefs: new Map(),
+						rawIds: new Set([
+							ctx.sessionManager.getSessionId(),
+							...validation.branch.metadata.flatMap((entry) =>
+								entry.parentId ? [entry.id, entry.parentId] : [entry.id],
+							),
+						]),
+						evidence: null,
+						selectionData: null,
+						gaps: Object.freeze([...openGaps]),
 					};
 					if (snapshots.size >= MAX_SNAPSHOTS) {
 						const oldestUnselected = [...snapshots.values()].find((item) => item.selectedTargetId === null);
 						const evicted = oldestUnselected?.id ?? snapshots.keys().next().value;
-						if (evicted) snapshots.delete(evicted);
+						if (evicted) deleteSnapshot(evicted);
 					}
 					snapshots.set(snapshotId, snapshot);
 					return result({
@@ -502,7 +1492,7 @@ export function registerTroubleshootingEvidenceTool(pi: ExtensionAPI, state: Scr
 								terminal_status: candidate.terminalStatus,
 							})),
 						},
-						gaps: [],
+						gaps: snapshot.gaps,
 					});
 				}
 
@@ -517,6 +1507,16 @@ export function registerTroubleshootingEvidenceTool(pi: ExtensionAPI, state: Scr
 					if (snapshot.selectedTargetId !== null && snapshot.selectedTargetId !== candidate.rawId) {
 						return result(errorEnvelope("TARGET_OUTSIDE_SNAPSHOT"));
 					}
+					if (snapshot.selectionData) {
+						return result({
+							schema: SCHEMA,
+							ok: true,
+							action: "select",
+							snapshot_id: snapshot.id,
+							data: snapshot.selectionData,
+							gaps: snapshot.gaps,
+						});
+					}
 					const entries = validation.branch.entries;
 					const startIndex = entries.findIndex((entry) => entry.id === candidate.rawId);
 					if (startIndex < 0) return result(errorEnvelope("TARGET_NOT_ON_BRANCH"));
@@ -524,51 +1524,226 @@ export function registerTroubleshootingEvidenceTool(pi: ExtensionAPI, state: Scr
 						(entry, index) => index > startIndex && commandStartData(entry)?.depth === 0,
 					);
 					const end = nextTopLevel < 0 ? entries.length : nextTopLevel;
-					snapshot.selectedTargetId = candidate.rawId;
-					snapshot.handoffId ??= opaque("sth-v1", snapshot.usedRefs);
-					const troubleshootingModel = ctx.model
-						? {
-								provider: safeNamed(
-									ctx.model.provider,
-									PROVIDER_PATTERN,
-									"prv-v1",
-									snapshot.providerRefs,
-									snapshot.usedRefs,
-								),
-								model: safeNamed(ctx.model.id, MODEL_PATTERN, "mdl-v1", snapshot.modelRefs, snapshot.usedRefs),
+					if (end - startIndex > MAX_INVOCATION_ENTRIES) return result(errorEnvelope("INVOCATION_LIMIT"));
+					let executionModels: Array<{ provider: string; model: string }>;
+					let troubleshootingModel: { provider: string; model: string } | null;
+					if (snapshot.evidence === null) {
+						const gaps = new Set(snapshot.gaps);
+						for (let index = startIndex; index < end; index++) {
+							const entry = entries[index];
+							if (entry?.type !== "message") continue;
+							const message = entry.message as any;
+							if (typeof message.toolCallId === "string") snapshot.rawIds.add(message.toolCallId);
+							const inspected = inspectContentBlocks(message.content);
+							for (const block of inspected.blocks) {
+								if (typeof block.id === "string") snapshot.rawIds.add(block.id);
 							}
-						: null;
+						}
+						const rawCommand = commandStartData(entries[startIndex] as SessionEntry)?.command ?? "";
+						const source = captureSource(snapshot, state, rawCommand, gaps);
+						let evidence: EvidenceRecord[];
+						try {
+							evidence = await buildEvidence(snapshot, entries, startIndex, end, source, gaps, state);
+						} catch (error) {
+							if (error === INVOCATION_LIMIT_SIGNAL) return result(errorEnvelope("INVOCATION_LIMIT"));
+							throw error;
+						}
+						executionModels = collectModels(
+							entries,
+							startIndex,
+							end,
+							snapshot.providerRefs,
+							snapshot.modelRefs,
+							snapshot.usedRefs,
+							gaps,
+						);
+						troubleshootingModel = ctx.model
+							? {
+									provider: safeNamed(
+										ctx.model.provider,
+										PROVIDER_PATTERN,
+										"prv-v1",
+										snapshot.providerRefs,
+										snapshot.usedRefs,
+										gaps,
+									),
+									model: safeNamed(
+										ctx.model.id,
+										MODEL_PATTERN,
+										"mdl-v1",
+										snapshot.modelRefs,
+										snapshot.usedRefs,
+										gaps,
+									),
+								}
+							: null;
+						if (!evidenceWithinLimits(evidence)) return result(errorEnvelope("INVOCATION_LIMIT"));
+						snapshot.evidence = evidence;
+						snapshot.gaps = Object.freeze([...gaps]);
+					} else {
+						const gaps = new Set(snapshot.gaps);
+						executionModels = collectModels(
+							entries,
+							startIndex,
+							end,
+							snapshot.providerRefs,
+							snapshot.modelRefs,
+							snapshot.usedRefs,
+							gaps,
+						);
+						troubleshootingModel = ctx.model
+							? {
+									provider: safeNamed(
+										ctx.model.provider,
+										PROVIDER_PATTERN,
+										"prv-v1",
+										snapshot.providerRefs,
+										snapshot.usedRefs,
+										gaps,
+									),
+									model: safeNamed(
+										ctx.model.id,
+										MODEL_PATTERN,
+										"mdl-v1",
+										snapshot.modelRefs,
+										snapshot.usedRefs,
+										gaps,
+									),
+								}
+							: null;
+						snapshot.gaps = Object.freeze([...gaps]);
+					}
+					snapshot.selectedTargetId = candidate.rawId;
+					snapshot.handoffId = opaque("sth-v1", snapshot.usedRefs);
+					const sourceRecord = snapshot.evidence.find((item) => item.descriptor.class === "source");
+					const guideRecord = snapshot.evidence.find((item) => item.descriptor.class === "guide");
+					const currentSource = sourceRecord
+						? Object.freeze({
+								available: true,
+								evidence_ref: sourceRecord.descriptor.evidence_ref,
+								hash: (sourceRecord.item.content as SourceContent).hash,
+							})
+						: Object.freeze({ available: false });
+					const authoringGuide = guideRecord
+						? Object.freeze({
+								available: true,
+								evidence_ref: guideRecord.descriptor.evidence_ref,
+								hash: (guideRecord.item.content as GuideContent).hash,
+							})
+						: Object.freeze({ available: false });
+					snapshot.selectionData = Object.freeze({
+						handoff_id: snapshot.handoffId,
+						target_ref: candidate.ref,
+						command: candidate.command,
+						relation: candidate.relation,
+						terminal_status: candidate.terminalStatus,
+						cwd_relation: snapshot.cwdRelation,
+						execution_models: Object.freeze(executionModels.map((model) => Object.freeze(model))),
+						troubleshooting_model: troubleshootingModel ? Object.freeze(troubleshootingModel) : null,
+						current_source: currentSource,
+						authoring_guide: authoringGuide,
+					});
 					return result({
 						schema: SCHEMA,
 						ok: true,
 						action: "select",
 						snapshot_id: snapshot.id,
-						data: {
-							handoff_id: snapshot.handoffId,
-							target_ref: candidate.ref,
-							command: candidate.command,
-							relation: candidate.relation,
-							terminal_status: candidate.terminalStatus,
-							cwd_relation: snapshot.cwdRelation,
-							execution_models: collectModels(
-								entries,
-								startIndex,
-								end,
-								snapshot.providerRefs,
-								snapshot.modelRefs,
-								snapshot.usedRefs,
-							),
-							troubleshooting_model: troubleshootingModel,
-							current_source_available: state.registry.has(
-								commandStartData(entries[startIndex] as SessionEntry)?.command ?? "",
-							),
-						},
-						gaps: [],
+						data: snapshot.selectionData,
+						gaps: snapshot.gaps,
 					});
 				}
 
-				if (snapshot.selectedTargetId === null) return result(errorEnvelope("UNKNOWN_REFERENCE"));
-				return result(errorEnvelope("RESOURCE_LIMIT"));
+				if (snapshot.selectedTargetId === null || snapshot.evidence === null)
+					return result(errorEnvelope("UNKNOWN_REFERENCE"));
+
+				let cursor: Cursor | undefined;
+				if (params.cursor) {
+					cursor = cursors.get(params.cursor);
+					if (!cursor) return result(errorEnvelope("CURSOR_NOT_FOUND"));
+					if (
+						cursor.action !== params.action ||
+						cursor.snapshotId !== snapshot.id ||
+						cursor.targetId !== snapshot.selectedTargetId
+					) {
+						return result(errorEnvelope("CURSOR_MISMATCH"));
+					}
+					if (cursor.page >= MAX_CURSOR_PAGES) return result(errorEnvelope("RESOURCE_LIMIT"));
+					cursors.delete(cursor.id);
+				}
+
+				const createCursor = (action: "index" | "read", refs: string[], offset: number, page: number): string => {
+					const id = opaque("cur-v1", snapshot.usedRefs);
+					if (cursors.size >= MAX_CURSORS) {
+						const oldest = cursors.keys().next().value;
+						if (oldest) cursors.delete(oldest);
+					}
+					cursors.set(id, {
+						id,
+						snapshotId: snapshot.id,
+						targetId: snapshot.selectedTargetId as string,
+						action,
+						refs,
+						offset,
+						page,
+					});
+					return id;
+				};
+
+				if (params.action === "index") {
+					const offset = cursor?.offset ?? 0;
+					const pageNumber = cursor?.page ?? 0;
+					const descriptors = snapshot.evidence.map((record) => record.descriptor);
+					const page = takePage(descriptors, offset, MAX_INDEX_ITEMS);
+					if (!page) return result(errorEnvelope("RESOURCE_LIMIT"));
+					const nextCursor =
+						page.next < descriptors.length ? createCursor("index", [], page.next, pageNumber + 1) : null;
+					const metrics = pageMetrics(page.items);
+					return result({
+						schema: SCHEMA,
+						ok: true,
+						action: "index",
+						snapshot_id: snapshot.id,
+						data: { page: pageNumber, items: page.items, next_cursor: nextCursor, ...metrics },
+						gaps: snapshot.gaps,
+					});
+				}
+
+				let refs: string[];
+				let offset: number;
+				let pageNumber: number;
+				if (cursor) {
+					refs = cursor.refs;
+					offset = cursor.offset;
+					pageNumber = cursor.page;
+				} else {
+					refs = [...new Set(params.evidence_refs ?? [])];
+					offset = 0;
+					pageNumber = 0;
+					const issued = new Set(snapshot.evidence.map((record) => record.descriptor.evidence_ref));
+					if (refs.some((ref) => !issued.has(ref))) return result(errorEnvelope("UNKNOWN_REFERENCE"));
+				}
+				const byRef = new Map(snapshot.evidence.map((record) => [record.descriptor.evidence_ref, record]));
+				const requestedItems: EvidenceItem[] = [];
+				for (const ref of refs) {
+					const record = byRef.get(ref);
+					if (!record) return result(errorEnvelope("UNKNOWN_REFERENCE"));
+					requestedItems.push(...chunksForRecord(record));
+				}
+				const page = takePage(requestedItems, offset);
+				if (!page) return result(errorEnvelope("RESOURCE_LIMIT"));
+				const items = page.items;
+				const nextOffset = page.next;
+				const nextCursor =
+					nextOffset < requestedItems.length ? createCursor("read", refs, nextOffset, pageNumber + 1) : null;
+				const metrics = pageMetrics(items);
+				return result({
+					schema: SCHEMA,
+					ok: true,
+					action: "read",
+					snapshot_id: snapshot.id,
+					data: { page: pageNumber, items, next_cursor: nextCursor, ...metrics },
+					gaps: snapshot.gaps,
+				});
 			} catch {
 				return result(errorEnvelope("INTERNAL_ERROR"));
 			}
