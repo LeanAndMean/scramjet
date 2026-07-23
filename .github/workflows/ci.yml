@@ -62,6 +62,7 @@ jobs:
           test -n "$SCRAMJET_TARBALL" || { echo "no Scramjet tarball produced" >&2; exit 1; }
           TARBALL_CONTENTS=$(mktemp)
           tar -tzf "$SCRAMJET_TARBALL" > "$TARBALL_CONTENTS"
+          grep -qxF 'package/assets/scramjet-logo.png' "$TARBALL_CONTENTS"
           grep -qF 'package/dist/index.js' "$TARBALL_CONTENTS"
           grep -qF 'package/bin/scramjet.js' "$TARBALL_CONTENTS"
           grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
