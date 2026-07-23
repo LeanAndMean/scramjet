@@ -179,6 +179,11 @@ describe("mach12 wiring — bundled command set", () => {
 			const content = readFileSync(filePath, "utf-8");
 			expect(content).toContain("mach12:independent-assessor");
 			expect(content).not.toContain("general-purpose subagent");
+
+			const result = parseCommandFile(filePath, content, SET_NAME);
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.def.allowedTools).toContain("subagent");
 		}
 	});
 

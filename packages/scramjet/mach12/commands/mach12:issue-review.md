@@ -123,7 +123,7 @@ Create an initial findings list with stable identifiers:
 
 ## Step 6: Independently assess the findings
 
-Before presenting findings to the user, run an independent assessment pass. Dispatch it to the `mach12:independent-assessor` subagent. Provide it with:
+Before presenting findings to the user, run an independent assessment pass. Dispatch it to the `mach12:independent-assessor` subagent. The subagent owns the classification: do **not** pre-classify findings, pre-judge their validity, or run the classification yourself after dispatch. Provide it with:
 
 - The issue title/body and full comment stream.
 - The current implementation plan.
@@ -131,7 +131,7 @@ Before presenting findings to the user, run an independent assessment pass. Disp
 - The key codebase evidence from Step 4.
 - The initial F/S findings from Step 5.
 
-For each F/S item, verify against the issue, plan, comments, and relevant code. Classify it as one of:
+The brief should instruct the assessor to, for each F/S item, verify against the issue, plan, comments, and relevant code, then classify it as one of:
 
 - **Genuine blocker** -- the plan is likely to fail or produce incorrect results unless this is fixed.
 - **Genuine issue** -- the plan has a significant gap or risk that should be addressed before implementation.
