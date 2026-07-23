@@ -123,7 +123,7 @@ Create an initial findings list with stable identifiers:
 
 ## Step 6: Independently assess the findings
 
-Before presenting findings to the user, run an independent assessment pass. Use a general-purpose subagent or a clearly separate self-review pass that has not seen only the initial conclusion. Provide it with:
+Before presenting findings to the user, run an independent assessment pass. Dispatch it to the `mach12:independent-assessor` subagent. Provide it with:
 
 - The issue title/body and full comment stream.
 - The current implementation plan.

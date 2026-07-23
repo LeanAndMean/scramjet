@@ -122,6 +122,7 @@ const EXPECTED_AGENTS = [
 	"mach12:code-simplifier",
 	"mach12:comment-analyzer",
 	"mach12:feature-completeness-checker",
+	"mach12:independent-assessor",
 	"mach12:silent-failure-hunter",
 	"mach12:test-analyzer",
 	"mach12:test-designer",
@@ -171,6 +172,15 @@ describe("mach12 wiring — bundled command set", () => {
 			expect(content).toContain("summarize the work you performed in `summary`");
 		},
 	);
+
+	it("routes both independent-assessment steps to mach12:independent-assessor with no dangling general-purpose reference", () => {
+		for (const basename of ["pr-review-assessment", "issue-review"]) {
+			const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
+			const content = readFileSync(filePath, "utf-8");
+			expect(content).toContain("mach12:independent-assessor");
+			expect(content).not.toContain("general-purpose subagent");
+		}
+	});
 
 	it("pr-review is wired to invoke the bundled Mach 12 reviewer agents", () => {
 		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review.md`);

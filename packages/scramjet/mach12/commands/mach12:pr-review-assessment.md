@@ -69,7 +69,7 @@ Save the review comment content and its numeric comment ID for later steps.
 - **Main agent:** parse the input, gather the PR and review context (Steps 1-2), build the subagent brief, and dispatch. Do **not** pre-classify findings, pre-judge their validity, or inject leading conclusions into the brief before dispatch.
 - **Subagent:** owns the classification, the reasoning, and -- for genuine issues -- the fix approach.
 
-Dispatch the assessment to a general-purpose subagent. Include the review text and the PR context (title, body, and all comments) directly in the subagent brief -- do not ask the subagent to re-fetch them.
+Dispatch the assessment to the `mach12:independent-assessor` subagent. Include the review text and the PR context (title, body, and all comments) directly in the subagent brief -- do not ask the subagent to re-fetch them.
 
 The brief should instruct the assessor to:
 
