@@ -1,0 +1,5 @@
+name: scramjet
+description: |
+  Scramjet operational commands diagnose and resolve problems with command,
+  harness, and tool behavior. They use ordinary command-set discovery and
+  next-step policies alongside other installed command sets.
