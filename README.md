@@ -6,7 +6,7 @@ A high-velocity harness for agentic development.
 
 ## Overview
 
-Scramjet is a product built on the [Pi](https://github.com/earendil-works/pi-mono) runtime that loads command sets — directories of user-defined slash commands — and wires them into emergent workflows through declared next-step policies and command delegation. It ships with Mach 12, a methodology for issue → plan → review → implement → PR → ship.
+Scramjet is a product built on the [Pi](https://github.com/earendil-works/pi-mono) runtime that loads command sets — directories of user-defined slash commands — and wires them into emergent workflows through declared next-step policies and command delegation. It ships with a product-owned Scramjet operational set and Mach 12, a methodology for issue → plan → review → implement → PR → ship.
 
 Active early development. Used daily, but the command-set format is not yet stable for third-party authoring. See the [package README](packages/scramjet/README.md) for install and usage.
 
@@ -20,7 +20,7 @@ Active early development. Used daily, but the command-set format is not yet stab
 | `packages/coding-agent` | CLI, tools, sessions (Pi runtime entry point) |
 | `packages/scramjet` | The product: commands, orchestration, distribution |
 
-The four Pi runtime packages are vendored from the [LeanAndMean fork](https://github.com/LeanAndMean/pi-mono) and modified directly where needed. `packages/scramjet` is the primary published package (`@leanandmean/scramjet`).
+The four Pi runtime packages are vendored from the [LeanAndMean fork](https://github.com/LeanAndMean/pi-mono) and modified directly where needed. `packages/scramjet` is the primary published package (`@leanandmean/scramjet`); its `scramjet/` directory contains product operational commands, while `mach12/` contains the bundled development methodology.
 
 ## Development
 

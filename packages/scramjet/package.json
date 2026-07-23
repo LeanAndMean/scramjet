@@ -18,6 +18,7 @@
     "bin/",
     "dist/",
     "mach12/",
+    "scramjet/",
     "themes/",
     "scripts/",
     "docs/",
