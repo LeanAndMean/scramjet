@@ -138,7 +138,7 @@ next:
 
 **When to use:** When the valid next steps are known and fixed — the outcome determines which path, but only these paths exist.
 
-**Behavior:** The harness validates the agent's `next_steps[].message` against the candidate list. A `message` whose parsed command name is not in `candidates` is rejected.
+**Behavior:** The harness validates the agent's `next_steps[].message` against the candidate list and current command registry. A `message` whose parsed command name is not in `candidates`, is not registered, or names a delegate-only command is skipped. Remaining valid options keep their original indexes; if `recommended_next_step` points to a skipped option, automatic dispatch is disabled rather than falling back to another option.
 
 ### `open`
 
@@ -163,7 +163,7 @@ next:
 
 **When to use:** When there are natural next steps but the command's outcome might warrant an unlisted command (e.g., creating an issue for a discovered problem).
 
-**Behavior:** Candidates are suggestions, not constraints. The agent can propose any registered command not in `blacklist`. Non-command messages (plain text pasted into the editor) are also valid under `open` mode.
+**Behavior:** Candidates are suggestions, not constraints. The agent can propose any registered top-level command not in `blacklist`; unknown and delegate-only command options are skipped. Non-command messages (plain text pasted into the editor) remain valid under `open` mode. Remaining valid options keep their original indexes; if `recommended_next_step` points to a skipped option, automatic dispatch is disabled rather than falling back to another option.
 
 ### `ask`
 

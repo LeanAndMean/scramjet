@@ -48,6 +48,11 @@ function logMessages(pi: any): string[] {
 function runningState(def: CommandDef, extra: Partial<ScramjetState> = {}): ScramjetState {
 	const { registry: extraRegistry, lifecycle: overrideLifecycle, ...rest } = extra;
 	const registry = new Map<string, CommandDef>([[def.name, def]]);
+	if (def.next?.mode === "closed" || def.next?.mode === "open") {
+		for (const candidate of def.next.candidates) {
+			registry.set(candidate.name, defWithPolicy(candidate.name, undefined));
+		}
+	}
 	if (extraRegistry) for (const [name, d] of extraRegistry) registry.set(name, d);
 	const lifecycle = overrideLifecycle ?? lifecycleFor("running", def.name);
 	return freshState({ registry, lifecycle, ...rest });
@@ -1134,7 +1139,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 		it("open valid recommendation + enabled=false shows the selector and does not dispatch", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: false });
+			const externalDef = defWithPolicy("other-extension:cmd", undefined);
+			const state = runningState(def, { enabled: false, registry: registryWith(externalDef) });
 			const { bag, ctxBag, report } = bootstrap(state);
 
 			await simulateTwoTurns(bag, ctxBag, report, {
@@ -1165,6 +1171,48 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.dispatched).toEqual([]);
 			expect(ctxBag.notifications[0]).toMatchObject({ type: "warning" });
 			expect(ctxBag.notifications[0].message).toContain("not in closed candidates");
+		});
+
+		it("rejects unknown closed-policy commands even when they are declared candidates", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:missing" }] });
+			const state = runningState(def, { enabled: true });
+			state.registry.delete("b:missing");
+			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "done",
+				next_steps: [{ message: "/b:missing", reason: "declared but unavailable" }],
+				recommended_next_step: 0,
+			});
+
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.notifications.some((n: any) => n.message.includes("not registered"))).toBe(true);
+		});
+
+		it("rejects unknown open-policy commands while retaining registered and non-command options", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: false });
+			const { bag, ctxBag, report } = bootstrap(state);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "done",
+				next_steps: [
+					{ message: "/z:missing", reason: "unknown command" },
+					{ message: "/b:ok", reason: "registered command" },
+					{ message: "Continue with more context.", reason: "open follow-up" },
+				],
+				recommended_next_step: 0,
+			});
+
+			expect(ctxBag.customComponents).toHaveLength(1);
+			const rendered = ctxBag.customComponents[0].render(80).join("\n");
+			expect(rendered).not.toContain("/z:missing");
+			expect(rendered).toContain("/b:ok");
+			expect(rendered).toContain("Continue with more context.");
+			expect(ctxBag.notifications.some((n: any) => n.message.includes("not registered"))).toBe(true);
+			expect(ctxBag.notifications.some((n: any) => n.message.includes("points to invalid next step"))).toBe(true);
 		});
 
 		it("skips delegate-only next_steps entries via commandCheck", async () => {
@@ -1262,7 +1310,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 		it("open command recommendation can dispatch a non-Scramjet slash command", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: true });
+			const externalDef = defWithPolicy("other-extension:cmd", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(externalDef) });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 
 			await simulateTwoTurns(bag, ctxBag, report, {
@@ -1518,7 +1567,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// PR and asks for approval via get_scramjet_user_input freetext, then
 			// after the user approves it creates the PR (completed) and offers mach12:pr-review.
 			const def = defWithPolicy("mach12:pr-create", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: true });
+			const reviewDef = defWithPolicy("mach12:pr-review", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(reviewDef) });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 			registerHistory(bag.pi, state);
 
@@ -1604,7 +1654,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const def = defWithPolicy("mach12:pr-create", { mode: "open", candidates: [] });
 			// The registry is in-memory (not journaled); the phase starts idle and is
 			// reconstructed from the replayed branch on session_start.
-			const state = freshState({ enabled: true, registry: new Map([[def.name, def]]) });
+			const reviewDef = defWithPolicy("mach12:pr-review", undefined);
+			const state = freshState({ enabled: true, registry: registryWith(def, reviewDef) });
 			return state;
 		}
 
@@ -1716,7 +1767,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 		it("warns when the fresh-session replacement is cancelled", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: true });
+			const target = defWithPolicy("b:ok", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 			ctxBag.cancelNewSession = true;
 
@@ -1735,7 +1787,8 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 		it("warns when replacement-context dispatch rejects", async () => {
 			const def = defWithPolicy("a:cmd", { mode: "open", candidates: [] });
-			const state = runningState(def, { enabled: true });
+			const target = defWithPolicy("b:ok", undefined);
+			const state = runningState(def, { enabled: true, registry: registryWith(target) });
 			const { bag, ctxBag, report } = bootstrap(state, { hasUI: false });
 			ctxBag.rejectDispatchWith = new Error("fresh boom");
 
@@ -3355,8 +3408,14 @@ describe("suggestion drain (idle branch)", () => {
 		steps: Array<{ message: string; reason?: string; fresh_session?: boolean }>,
 		opts: { recommendedIndex?: number; enabled?: boolean; hasUI?: boolean; freetextAwaitingReply?: boolean } = {},
 	) {
+		const registry = new Map<string, CommandDef>();
+		for (const step of steps) {
+			const parsed = step.message.match(/^\/([^\s]+)/);
+			if (parsed) registry.set(parsed[1], defWithPolicy(parsed[1], undefined));
+		}
 		const state = freshState({
 			enabled: opts.enabled ?? true,
+			registry,
 			lifecycle: lifecycleFor("idle"),
 			pendingSuggestion: {
 				steps,
@@ -3549,6 +3608,7 @@ describe("suggestion drain (idle branch)", () => {
 			generation: 0,
 		};
 		state.pendingSuggestion = newSuggestion;
+		state.registry.set("second:cmd", defWithPolicy("second:cmd", undefined));
 
 		// First tick fires but sees identity mismatch → stale
 		await flushDrain();
@@ -3622,8 +3682,10 @@ describe("suggestion drain (idle branch)", () => {
 	it("model-cycling path uses the custom title from suggestions", async () => {
 		const modelA = { provider: "anthropic", id: "claude-opus-4", name: "Claude Opus 4" };
 		const modelB = { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" };
+		const reviewDef = defWithPolicy("mach12:pr-review", undefined);
 		const state = freshState({
 			enabled: true,
+			registry: registryWith(reviewDef),
 			lifecycle: lifecycleFor("idle"),
 			pendingSuggestion: {
 				steps: [{ message: "/mach12:pr-review 248", reason: "review" }],
@@ -3752,8 +3814,10 @@ describe("next-step selection record tool", () => {
 
 	it("records suggestion selections with source=suggestion", async () => {
 		const steps = [{ message: "/mach12:pr-review 248", reason: "review" }];
+		const reviewDef = defWithPolicy("mach12:pr-review", undefined);
 		const state = freshState({
 			enabled: true,
+			registry: registryWith(reviewDef),
 			lifecycle: lifecycleFor("idle"),
 			pendingSuggestion: { steps, recommendedIndex: 0, generation: 0 },
 		});

@@ -254,9 +254,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 		return { name: parsed.name, args: parsed.args, freshSession: option.freshSession, reason: option.reason };
 	}
 
-	function delegateOnlyCheck(name: string): string | null {
+	function topLevelCommandCheck(name: string): string | null {
 		const def = state.registry.get(name);
-		if (def?.delegateOnly) return `${name} is delegate-only (invoke via delegate, not top-level dispatch)`;
+		if (!def) return `${name} is not registered`;
+		if (def.delegateOnly) return `${name} is delegate-only (invoke via delegate, not top-level dispatch)`;
 		return null;
 	}
 
@@ -702,7 +703,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			return;
 		}
 
-		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step, delegateOnlyCheck);
+		const result = validateNextSteps(status.next_steps, policy, status.recommended_next_step, topLevelCommandCheck);
 		if (!result.valid.length) {
 			state.logger.lifecycle("next-step dispatch skipped", {
 				phase: lp(state.lifecycle),
@@ -880,7 +881,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 
 			// Re-validate against current registry (may have been reassigned)
 			const openPolicy = { mode: "open" as const, candidates: [] };
-			const result = validateNextSteps(consumed.steps, openPolicy, consumed.recommendedIndex, delegateOnlyCheck);
+			const result = validateNextSteps(consumed.steps, openPolicy, consumed.recommendedIndex, topLevelCommandCheck);
 			if (!result.valid.length) {
 				state.logger.lifecycle("suggestion dispatch dropped", {
 					phase: lp(state.lifecycle),
