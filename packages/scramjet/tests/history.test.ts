@@ -838,24 +838,60 @@ describe("registerHistory — input event", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
 		});
 
-		it("resumes cancellation-eligible dormancy and persists consumption without reply text", async () => {
-			const state = freshState({
-				registry: registryOf(["mach12:pr-create"]),
-				lifecycle: {
-					...lifecycleFor("dormant", "mach12:pr-create"),
-					cancellationResumeEligible: true,
-				},
-			});
-			const { pi, appended, emit } = recordingPi();
-			registerHistory(pi, state);
-			await emit("input", { text: "private continuation", source: "interactive" });
-			expect(derivedPhase(state.lifecycle)).toBe("running");
-			expect(appended).toContainEqual({
-				customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
-				data: { commandName: "mach12:pr-create", resumable: false },
-			});
-			expect(JSON.stringify(appended)).not.toContain("private continuation");
-		});
+		it.each([
+			[
+				"interactive prose",
+				{ text: "private continuation", source: "interactive" },
+				"running",
+				false,
+				"mach12:pr-create",
+			],
+			["extension prose", { text: "continue", source: "extension" }, "dormant", true, "mach12:pr-create"],
+			["RPC prose", { text: "continue", source: "rpc" }, "dormant", true, "mach12:pr-create"],
+			["known slash", { text: "/help", source: "interactive" }, "dormant", true, "mach12:pr-create"],
+			[
+				"registered same-name command",
+				{ text: "/mach12:pr-create", source: "interactive" },
+				"running",
+				false,
+				"mach12:pr-create",
+			],
+			[
+				"registered different command",
+				{ text: "/mach12:other", source: "interactive" },
+				"running",
+				false,
+				"mach12:other",
+			],
+			["unknown slash", { text: "/unknown", source: "interactive" }, "idle", false, null],
+		] as const)(
+			"handles cancellation eligibility at the %s boundary",
+			async (_label, event, phase, eligible, command) => {
+				const state = freshState({
+					registry: registryOf(["mach12:pr-create", "mach12:other"]),
+					lifecycle: {
+						...lifecycleFor("dormant", "mach12:pr-create"),
+						cancellationResumeEligible: true,
+					},
+				});
+				const { pi, appended, emit } = recordingPi();
+				(pi as any).getCommands = () => [{ name: "help" }];
+				registerHistory(pi, state);
+
+				await emit("input", event);
+
+				expect(derivedPhase(state.lifecycle)).toBe(phase);
+				expect(state.lifecycle.cancellationResumeEligible).toBe(eligible);
+				expect(activeCommandName(state.lifecycle)).toBe(command);
+				if (_label === "interactive prose") {
+					expect(appended).toContainEqual({
+						customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+						data: { commandName: "mach12:pr-create", resumable: false },
+					});
+					expect(JSON.stringify(appended)).not.toContain("private continuation");
+				}
+			},
+		);
 
 		it("leaves cancellation-eligible dormancy unchanged when consumption persistence fails", async () => {
 			const state = freshState({

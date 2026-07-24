@@ -88,7 +88,7 @@ Every mutation validates post-conditions, bumps `lifecycleGeneration`, and logs 
 | `acceptProbeContinuing(holder)` | `probeInFlight`, under continue limit | Clears `probeInFlight`, arms probe, increments counter |
 | `acceptDormantContinuing(holder)` | Dormant | Arms probe, resets counter to 0 |
 | `acceptTerminalReport(holder, payload)` | `probeArmed`, `probeInFlight`, or dormant, non-continuing status | Clears `probeArmed` and `probeInFlight`, stores report, resets counter and cancellation eligibility |
-| `cancelStructuredInput(holder)` | Active command in running or probing shape | Atomically clears probing/running facts and grants cancellation resume eligibility in dormant shape |
+| `cancelStructuredInput(holder)` | Active command without a pending terminal report | Atomically replaces running, probing, dormant, or waiting facts with cancellation resume eligibility in dormant shape |
 | `resumeAfterCancelledInput(holder)` | Cancellation-eligible dormant command | Atomically clears eligibility and arms the existing probe path |
 | `parkForFreetext(holder)` | Active command | Sets `parkedForInput`, clears all other mode flags, counter, and cancellation eligibility |
 | `resumeFromParkedInput(holder)` | `parkedForInput` | Clears `parkedForInput`, arms probe, resets counter |

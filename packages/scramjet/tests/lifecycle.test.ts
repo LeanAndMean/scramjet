@@ -270,16 +270,26 @@ describe("enterDormant", () => {
 });
 
 describe("cancelStructuredInput", () => {
-	it.each(["running", "probing"] as const)("atomically grants resumability from %s", (phase) => {
-		const h = freshLifecycleHolder({
-			activeCommand: "cmd",
-			probeArmed: phase === "running",
-			probeInFlight: phase === "probing",
-		});
+	it.each([
+		["running", { probeArmed: true }],
+		["probing", { probeInFlight: true, continueCount: 1 }],
+		["dormant", {}],
+		["waiting", { parkedForInput: true }],
+	] as const)("atomically grants resumability from %s", (_phase, facts) => {
+		const h = freshLifecycleHolder({ activeCommand: "cmd", ...facts });
 		ok(cancelStructuredInput(h));
 		expect(isDormant(h.lifecycle)).toBe(true);
 		expect(h.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(h.lifecycle.continueCount).toBe(0);
 		expect(h.lifecycleGeneration).toBe(1);
+	});
+
+	it("rejects idle and reported states", () => {
+		fails(cancelStructuredInput(freshLifecycleHolder()), "no active command");
+		fails(
+			cancelStructuredInput(freshLifecycleHolder({ activeCommand: "cmd", lastReport: completedPayload })),
+			"terminal report pending",
+		);
 	});
 
 	it("resumes only eligible dormant commands in one generation bump", () => {

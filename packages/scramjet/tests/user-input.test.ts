@@ -787,6 +787,26 @@ describe("registerUserInputTool — dormant phase behavior", () => {
 });
 
 describe("registerUserInputTool — cancellation behavior", () => {
+	it.each([
+		["dormant", "confirm", { type: "confirm", message: "Continue?" }],
+		["dormant", "select", { type: "select", message: "Pick", options: [{ value: "a", label: "A" }] }],
+		["waiting", "confirm", { type: "confirm", message: "Continue?" }],
+		["waiting", "select", { type: "select", message: "Pick", options: [{ value: "a", label: "A" }] }],
+	] as const)("grants and journals resumability for cancelled %s %s input", async (phase, _type, params) => {
+		const state = freshState({ lifecycle: lifecycleFor(phase, "mach12:test") });
+		const { execute, pi } = toolFor(state);
+
+		const result = await execute(params, mockUICtx(null));
+
+		expect(result.terminate).toBe(true);
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(pi.appended).toContainEqual({
+			customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+			data: { commandName: "mach12:test", resumable: true },
+		});
+	});
+
 	it("transitions running to dormant on cancellation (not waiting)", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
 		const { execute } = toolFor(state);

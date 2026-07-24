@@ -233,8 +233,8 @@ export function cancelStructuredInput(holder: LifecycleHolder): MutationResult {
 	if (holder.lifecycle.activeCommand === null) {
 		return { ok: false, reason: "no active command; cannot grant cancellation resume" };
 	}
-	if (!holder.lifecycle.probeArmed && !holder.lifecycle.probeInFlight) {
-		return { ok: false, reason: "not running or probing; cannot grant cancellation resume" };
+	if (holder.lifecycle.lastReport !== null) {
+		return { ok: false, reason: "terminal report pending; cannot grant cancellation resume" };
 	}
 	const lc = holder.lifecycle as MutableLifecycle;
 	lc.probeArmed = false;

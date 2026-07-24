@@ -515,8 +515,21 @@ describe("integration smoke — lifecycle event sequences", () => {
 		const ctx = lifecycleCtx();
 		ctx.hasUI = true;
 		let selectorCalls = 0;
-		ctx.ui.custom = () => {
+		let selectorText = "";
+		ctx.ui.custom = (factory: any) => {
 			selectorCalls++;
+			if (selectorCalls === 2) {
+				const component = factory(
+					{ requestRender() {} },
+					{
+						fg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					},
+					{},
+					() => {},
+				);
+				selectorText = component.render(120).join("\n");
+			}
 			return Promise.resolve(null);
 		};
 		wireAll(bag, state);
@@ -534,6 +547,13 @@ describe("integration smoke — lifecycle event sequences", () => {
 		expect(derivedPhase(state.lifecycle)).toBe("dormant");
 		expect(selectorCalls).toBe(1);
 
+		ctx.sessionManager = {
+			getBranch: () => bag.appended.map((entry) => ({ type: "custom", customType: entry.type, data: entry.data })),
+		};
+		await bag.emit("session_start", {}, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+
 		await bag.emit("input", { text: "Use the other approach", source: "interactive" }, ctx);
 		expect(derivedPhase(state.lifecycle)).toBe("running");
 		await fireProbe(bag, ctx);
@@ -549,6 +569,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 		});
 		await endProbeTurn(bag, ctx);
 		expect(selectorCalls).toBe(2);
+		expect(selectorText).toContain("/int:next");
 	});
 
 	it("cancelled select → prose continuation → hidden completion probe", async () => {
