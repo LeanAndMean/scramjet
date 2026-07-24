@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.60.2 — Prefer selectors for actionable command recommendations
+
+Teaches agents to prefer the next-step selector when users request a Scramjet command or when recommending a concrete registered command at an idle natural pause, while preserving concise supporting prose and existing safety constraints. Fixes [#385](https://github.com/LeanAndMean/scramjet/issues/385).
+
+### Changed
+
+- `suggest-next-steps.ts`: add agent-facing guidance that prefers `suggest_scramjet_next_steps` over prose-only actionable command recommendations in eligible interactive sessions.
+
+### Tests
+
+- `suggest-next-steps.test.ts`: cover the positive selector-preference contract and retained natural-pause, once-per-topic, dismissal, external-content, and noninteractive safeguards.
+
 ## 0.60.1 — Resume commands after cancelled structured input
 
 Preserves cancellation-specific resume eligibility across session reconstruction so the next interactive reply can restore completion probing and next-step selection without reviving unrelated dormant commands. Adds privacy-safe runtime, command-source, and cancellation lifecycle diagnostics. Fixes [#383](https://github.com/LeanAndMean/scramjet/issues/383).
