@@ -6,6 +6,7 @@ import {
 	isParkedForInput,
 	type LifecycleState,
 	reconstructLifecycle,
+	resumeAfterCancelledInput,
 	resumeFromParkedInput,
 	startCommand,
 } from "./lifecycle.js";
@@ -14,9 +15,25 @@ import type { CommandDef, CommandRegistry, CommandStatusPayload, ScramjetState, 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
 export const USER_INPUT_PARKED_TYPE = "scramjet:user-input-parked";
+export const STRUCTURED_INPUT_CANCELLATION_TYPE = "scramjet:structured-input-cancellation";
 export const COMMAND_EXIT_TYPE = "scramjet:command-exited";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
+
+export function logCancellationResume(
+	state: ScramjetState,
+	message: string,
+	command: string | null,
+	source: string,
+	reason: string,
+): void {
+	state.logger.debug("cancellation-resume", message, {
+		command,
+		generation: state.lifecycleGeneration,
+		source,
+		reason,
+	});
+}
 
 // Pi built-ins that the F25 clear-on-unknown-slash path must NOT treat as
 // a workflow exit. Used only when pi.getCommands() is unavailable (older Pi,
@@ -104,6 +121,7 @@ export function recordCommandInvocation(
 		depth,
 		timestamp: Date.now(),
 	};
+	pi.appendEntry(COMMAND_START_TYPE, entry);
 	if (depth === 0) {
 		state.clearLifecycleTimers?.();
 		const result = startCommand(state, name);
@@ -116,7 +134,6 @@ export function recordCommandInvocation(
 		}
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
-	pi.appendEntry(COMMAND_START_TYPE, entry);
 }
 
 // Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
@@ -163,6 +180,16 @@ export function recordCommandStatus(
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
 }
 
+export interface StructuredInputCancellationData {
+	commandName: string;
+	resumable: boolean;
+}
+
+export function recordStructuredInputCancellation(pi: ExtensionAPI, commandName: string, resumable: boolean): void {
+	const data: StructuredInputCancellationData = { commandName, resumable };
+	pi.appendEntry(STRUCTURED_INPUT_CANCELLATION_TYPE, data);
+}
+
 export interface ReplayResult {
 	sidebarLog: SidebarEntry[];
 	// null when no toggle entry was found on the replayed branch — caller
@@ -178,6 +205,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	let enabled: boolean | null = null;
 	let activeTopLevelCommand: string | null = null;
 	let parkedForInput = false;
+	let cancellationResumeEligible = false;
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
@@ -186,11 +214,12 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			// missing/non-string command would erase activeTopLevelCommand and
 			// silently break all subsequent next-step policy lookups. The TS cast
 			// above otherwise hides this from the compiler. (F10)
-			if (!data || typeof data.command !== "string" || data.command === "") continue;
+			if (!data || typeof data.command !== "string" || data.command.trim() === "") continue;
 			sidebarLog = appendSidebarEntry(sidebarLog, data);
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
 				parkedForInput = false;
+				cancellationResumeEligible = false;
 			}
 		} else if (entry.customType === ENABLED_TOGGLE_TYPE) {
 			const data = entry.data as EnabledToggleData | undefined;
@@ -205,6 +234,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			}
 			// blocked/incomplete: command stays associated (dormant)
 			parkedForInput = false;
+			cancellationResumeEligible = false;
 		} else if (entry.customType === USER_INPUT_PARKED_TYPE) {
 			const data = entry.data as { commandName?: unknown; parked?: unknown } | undefined;
 			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
@@ -216,16 +246,24 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 				parkedForInput = false;
 			} else if (data.parked === undefined || data.parked === true) {
 				parkedForInput = true;
+				cancellationResumeEligible = false;
 			}
+		} else if (entry.customType === STRUCTURED_INPUT_CANCELLATION_TYPE) {
+			const data = entry.data as { commandName?: unknown; resumable?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand || typeof data.resumable !== "boolean") continue;
+			cancellationResumeEligible = data.resumable;
+			if (data.resumable) parkedForInput = false;
 		} else if (entry.customType === COMMAND_EXIT_TYPE) {
 			const data = entry.data as { commandName?: unknown } | undefined;
 			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
 			if (data.commandName !== activeTopLevelCommand) continue;
 			activeTopLevelCommand = null;
 			parkedForInput = false;
+			cancellationResumeEligible = false;
 		}
 	}
-	const lifecycle = reconstructLifecycle(activeTopLevelCommand, parkedForInput);
+	const lifecycle = reconstructLifecycle(activeTopLevelCommand, parkedForInput, cancellationResumeEligible);
 	return { sidebarLog, enabled, lifecycle };
 }
 
@@ -235,6 +273,12 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const result = replayHistory(ctx.sessionManager.getBranch());
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
+		state.lifecycleGeneration++;
+		state.logger.lifecycle("lifecycle: rebuild", {
+			command: state.lifecycle.activeCommand ?? "(none)",
+			generation: state.lifecycleGeneration,
+			source: "history",
+		});
 		// pendingForcedDispatch is a transient runtime flag tied to a specific
 		// in-flight forced dispatch; it has no meaning after navigation or
 		// resume. Clear it explicitly so a stale value (e.g. a forced target
@@ -267,15 +311,38 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		state.freetextAwaitingReply = false;
 	});
 
-	pi.on("input", async (event) => {
+	pi.on("input", async (event, ctx) => {
 		state.pendingSuggestion = null;
 		state.freetextAwaitingReply = false;
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
-			// Resume a parked command on an interactive non-slash reply. Only
-			// parked-for-input (freetext park) auto-resumes; dormant commands
-			// require the agent to explicitly call `continuing` after seeing
-			// the dormant notice (issue 215).
+			if (
+				event.source === "interactive" &&
+				!event.text.startsWith("/") &&
+				state.lifecycle.cancellationResumeEligible
+			) {
+				const command = activeCommandName(state.lifecycle);
+				if (!command) return;
+				try {
+					recordStructuredInputCancellation(pi, command, false);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					state.logger.warn("history", "failed to persist structured input cancellation consumption", {
+						command,
+						error: message,
+					});
+					ctx.ui?.notify(
+						"scramjet: your reply could not durably resume the cancelled command; please try again.",
+						"warning",
+					);
+					return;
+				}
+				resumeAfterCancelledInput(state);
+				logCancellationResume(state, "eligibility consumed", command, event.source, "interactive-reply");
+				return;
+			}
+			// Resume a parked command on an interactive non-slash reply. Generic
+			// dormant commands still require an explicit `continuing` report.
 			if (event.source === "interactive" && !event.text.startsWith("/") && isParkedForInput(state.lifecycle)) {
 				const command = activeCommandName(state.lifecycle);
 				const result = resumeFromParkedInput(state);
@@ -301,14 +368,30 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			if (event.text.startsWith("/") && activeCommandName(state.lifecycle) !== null) {
 				if (!isKnownSlashCommand(event.text, pi, state)) {
 					const command = activeCommandName(state.lifecycle);
+					const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
+					if (command) pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: command });
 					state.clearLifecycleTimers?.();
 					const result = clearActiveCommand(state, "unknown-slash");
-					// Record the exit only when the active command was actually cleared,
-					// so replay reconstructs idle rather than dormant.
-					if (result.ok && command) {
-						pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: command });
+					if (result.ok && command && invalidatedCancellation) {
+						logCancellationResume(state, "eligibility invalidated", command, event.source, "unknown-slash");
 					}
+				} else if (state.lifecycle.cancellationResumeEligible) {
+					logCancellationResume(
+						state,
+						"eligibility preserved",
+						activeCommandName(state.lifecycle),
+						event.source,
+						"known-slash",
+					);
 				}
+			} else if (state.lifecycle.cancellationResumeEligible) {
+				logCancellationResume(
+					state,
+					"input ignored",
+					activeCommandName(state.lifecycle),
+					event.source,
+					"non-interactive-input",
+				);
 			}
 			return;
 		}
@@ -327,7 +410,12 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const argsString = extractArgs(event.text);
 		const wrapped = buildCommandExpansion(name, def, argsString);
 
+		const supersededCancellation = state.lifecycle.cancellationResumeEligible;
+		const supersededCommand = activeCommandName(state.lifecycle);
 		recordCommandStart(pi, state, name, origin);
+		if (supersededCancellation) {
+			logCancellationResume(state, "eligibility invalidated", supersededCommand, event.source, "command-start");
+		}
 		return { action: "transform" as const, text: wrapped };
 	});
 }

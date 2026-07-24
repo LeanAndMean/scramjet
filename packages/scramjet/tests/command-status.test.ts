@@ -5,7 +5,7 @@ import {
 	registerCommandStatusTool,
 	registerDormantCommandNotice,
 } from "../src/command-status.js";
-import { COMMAND_STATUS_TYPE } from "../src/history.js";
+import { COMMAND_STATUS_TYPE, STRUCTURED_INPUT_CANCELLATION_TYPE } from "../src/history.js";
 import { isProbeDue, isProbeInFlight } from "../src/lifecycle.js";
 import type { CommandStatusPayload } from "../src/types.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
@@ -377,6 +377,31 @@ describe("registerCommandStatusTool — dormant continuing", () => {
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
 	});
 
+	it("persists cancellation consumption before eligible dormant continuing", async () => {
+		const lifecycle = { ...lifecycleFor("dormant", "mach12:test"), cancellationResumeEligible: true };
+		const { state, pi, execute } = toolFor(freshState({ lifecycle }));
+		const result = await execute({ status: "continuing", summary: "resuming" });
+		expect(result.details.status).toBe("continuing");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(false);
+		expect(pi.appended[0]).toEqual({
+			customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+			data: { commandName: "mach12:test", resumable: false },
+		});
+	});
+
+	it("leaves eligible dormancy unarmed when consumption persistence fails", async () => {
+		const lifecycle = { ...lifecycleFor("dormant", "mach12:test"), cancellationResumeEligible: true };
+		const state = freshState({ lifecycle });
+		const { pi, execute } = toolFor(state);
+		pi.appendEntry = () => {
+			throw new Error("disk full");
+		};
+		const result = await execute({ status: "continuing", summary: "resuming" });
+		expect(result.details.error).toBe("persistence-failed");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(isProbeDue(state.lifecycle)).toBe(false);
+	});
+
 	it("journals dormant continuing with its incremental summary", async () => {
 		const { pi, execute } = toolFor(freshState({ lifecycle: lifecycleFor("dormant", "mach12:test") }));
 		await execute({ status: "continuing", summary: "resuming" });
@@ -394,6 +419,31 @@ describe("registerCommandStatusTool — dormant continuing", () => {
 		expect(result.details.status).toBe("continuing");
 		expect(state.lifecycle.continueCount).toBe(0);
 		expect(isProbeDue(state.lifecycle)).toBe(true);
+	});
+
+	it("persists cancellation consumption before an eligible dormant terminal report", async () => {
+		const lifecycle = { ...lifecycleFor("dormant", "mach12:test"), cancellationResumeEligible: true };
+		const { state, pi, execute } = toolFor(freshState({ lifecycle }));
+		const result = await execute({ status: "completed", summary: "done" });
+		expect(result.details.status).toBe("completed");
+		expect(state.lifecycle.lastReport?.status).toBe("completed");
+		expect(pi.appended).toContainEqual({
+			customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+			data: { commandName: "mach12:test", resumable: false },
+		});
+	});
+
+	it("rejects an eligible dormant terminal report when consumption persistence fails", async () => {
+		const lifecycle = { ...lifecycleFor("dormant", "mach12:test"), cancellationResumeEligible: true };
+		const state = freshState({ lifecycle });
+		const { pi, execute } = toolFor(state);
+		pi.appendEntry = () => {
+			throw new Error("disk full");
+		};
+		const result = await execute({ status: "completed", summary: "done" });
+		expect(result.details.error).toBe("persistence-failed");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(state.lifecycle.lastReport).toBeNull();
 	});
 
 	it("rejects continuing from waiting (parked for input)", async () => {
@@ -475,6 +525,12 @@ describe("buildDormantCommandNotice", () => {
 	it("names the dormant command", () => {
 		const notice = buildDormantCommandNotice("mach12:issue-plan");
 		expect(notice).toContain("mach12:issue-plan");
+	});
+
+	it("distinguishes cancellation-resumable dormancy", () => {
+		const notice = buildDormantCommandNotice("test:cmd", true);
+		expect(notice).toContain("next interactive non-slash user reply will resume");
+		expect(notice).not.toContain("do NOT auto-resume");
 	});
 
 	it("explains that ordinary replies do not auto-resume", () => {

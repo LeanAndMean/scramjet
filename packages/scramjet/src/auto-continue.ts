@@ -50,7 +50,12 @@ import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
-import { COMMAND_EXIT_TYPE, recordCommandStatus } from "./history.js";
+import {
+	COMMAND_EXIT_TYPE,
+	logCancellationResume,
+	recordCommandStatus,
+	recordStructuredInputCancellation,
+} from "./history.js";
 import {
 	activeCommandName,
 	beginProbe,
@@ -958,7 +963,28 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				});
 				ctx.ui.notify(`scramjet: aborted — discarding "${discarded}" status report for ${activeName}`, "warning");
 			}
+			if (state.lifecycle.cancellationResumeEligible) {
+				try {
+					recordStructuredInputCancellation(pi, activeName, false);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					state.logger.warn("history", "failed to persist structured input cancellation invalidation", {
+						command: activeName,
+						error: message,
+						reason: "aborted",
+					});
+					ctx.ui.notify(
+						"scramjet: abort could not durably revoke cancellation resumability; the command remains resumable.",
+						"warning",
+					);
+					return;
+				}
+			}
+			const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
 			enterDormant(state, "aborted");
+			if (invalidatedCancellation) {
+				logCancellationResume(state, "eligibility invalidated", activeName, "agent-end", "aborted");
+			}
 			return;
 		}
 
@@ -989,13 +1015,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				detail: { reason: "active-command-not-in-registry" },
 			});
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
+			pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: activeName });
 			const result = clearActiveCommand(state, "active-command-not-in-registry");
-			// Record the exit only when the active command was actually cleared, so replay
-			// reconstructs idle rather than dormant (mirrors the unknown-slash exit).
-			if (result.ok) {
-				pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: activeName });
-			}
-			state.clearLifecycleTimers?.("active-command-missing");
+			if (result.ok) state.clearLifecycleTimers?.("active-command-missing");
 			return;
 		}
 

@@ -348,7 +348,9 @@ encouraged but optional.
   policy. Chaining still requires an explicit `completed` report, so an
   off-topic reply can only trigger a harmless re-probe, never a chain
   (issue 88, issue 156). Confirm/select cancellation does not park; it
-  terminates the turn and leaves the command dormant.
+  terminates the turn in cancellation-resumable dormancy. Only the next
+  interactive non-slash reply consumes that durable grant and re-arms probing;
+  unrelated generic dormant commands remain inert.
 
 #### 3. Intra-command interactions
 
@@ -372,7 +374,9 @@ Successful confirm/select input **does not end the agent's turn**. The harness
 displays the appropriate UI, blocks until the user responds, and returns the
 result as a normal tool result. The agent continues executing with the answer in
 context. If the user cancels a confirm/select prompt, the tool terminates the
-turn and leaves the command dormant.
+turn and grants cancellation-resumable dormancy. A later interactive non-slash
+reply resumes the existing probe path; generic dormancy still requires explicit
+`continuing` or a terminal report.
 
 Freetext is intentionally a wait/resume path. It does not open a TUI text input
 and does not return `{ text: string }`. Instead, the tool call renderer makes
@@ -384,7 +388,7 @@ This is the key distinction from `report_scramjet_command_status`: the status
 tool is a terminal lifecycle signal ("I'm done or stuck"), while
 `get_scramjet_user_input` is a user-input request. Confirm/select can be
 within-turn on success; freetext parks the command in `waiting` for a later user
-reply; cancellation enters dormant.
+reply; cancellation creates a distinct resumable provenance on dormant.
 
 ##### The probe-as-router extension
 
@@ -430,7 +434,8 @@ The two tools are complementary:
   Confirm/select collect input and return it as a tool result on success.
   Freetext renders the prompt in the tool row, ends the turn, and parks the
   command in `waiting` for a later standard-editor reply. Cancellation enters
-  dormant and does not journal a parked marker.
+  cancellation-resumable dormant and journals a dedicated true/false outcome,
+  not a parked marker.
 - **`report_scramjet_command_status`** — "I'm done or stuck." Terminal lifecycle
   signal. The turn ends. Chaining may follow.
 
@@ -451,7 +456,8 @@ For proactive calls during normal command work, successful confirm/select input
 does not change lifecycle state: `probeArmed` remains true, no status report is
 generated, and the agent's turn continues after the tool result returns. Freetext
 parks the command (`parkedForInput = true`), journals `scramjet:user-input-parked`,
-and terminates the turn. Cancellation enters dormant and terminates the turn.
+and terminates the turn. Cancellation grants cancellation-resumable dormancy
+and terminates the turn.
 
 For probe-time confirm/select calls, the tool is the handoff from status-check
 probing back to active command work:
@@ -459,8 +465,9 @@ probing back to active command work:
 - `probeInFlight` remains true while the UI is pending.
 - The probe watchdog is suspended and is not re-armed after the response.
 - After a successful confirm/select response, `probeInFlight` is cleared and `probeArmed` is set.
-- If the user cancels, the command enters dormant and the turn terminates.
-- The next `agent_end` schedules a fresh status probe only after successful input resumes command work.
+- If the user cancels, the command enters cancellation-resumable dormant and the turn terminates.
+- The next interactive non-slash reply consumes the durable grant and arms a fresh status probe. Known slash commands preserve it; registered command starts and workflow exits supersede it.
+- The next `agent_end` schedules a fresh status probe only after successful input or cancellation-origin continuation resumes command work.
 
 Probe-time freetext parks the command (`parkedForInput = true`), journals
 `scramjet:user-input-parked`, returns the parked marker with `terminate: true`,
@@ -822,8 +829,13 @@ is universal.
   journaled, and replay restores the stable `waiting` state when a parked entry
   exists for the active command, so a `pi --resume` / branch switch mid-question
   can still be answered and the command resumed. Confirm/select cancellation
-  enters dormant and is not reconstructed as parked input.
-  The transient mid-turn phases are deliberately not journaled, and a
+  is not reconstructed as parked input; it uses
+  `scramjet:structured-input-cancellation` true/false outcomes to reconstruct
+  only cancellation-origin eligibility on the selected branch. Every lifecycle
+  rebuild advances the generation so pending same-name UI results become stale.
+  Grant persistence failure falls back to generic dormant; consumption failure
+  leaves the command eligible dormant. The transient mid-turn phases are
+  deliberately not journaled, and a
   command that already completed reconstructs to idle (never re-fired)
   (issue 88, issue 156).
 - Command sets isolated by namespace.
@@ -838,6 +850,7 @@ is universal.
   in the YAML schema. This is deliberate: the YAML is meant to be
   reliably parseable and visually summarizable, not to encode arbitrary
   control flow.
+- **No generalized dormant auto-resume.** Cancellation eligibility is narrow provenance, not a dormant-reason hierarchy or a fifth lifecycle mode. Blocked, incomplete, aborted, watchdog, reportless-probe, and historical dormant commands remain inert on ordinary replies.
 - **No replacement for prose.** Commands are still primarily English
   descriptions of processes. `scramjet` provides connective tissue and
   visibility around those descriptions; it does not interpret them.

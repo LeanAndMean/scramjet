@@ -11,6 +11,7 @@ import {
 	COMMAND_STATUS_TYPE,
 	registerHistory,
 	replayHistory,
+	STRUCTURED_INPUT_CANCELLATION_TYPE,
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
@@ -522,6 +523,45 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.lifecycleTimers!.isProbeScheduled()).toBe(false);
 			expect(state.lifecycleTimers!.isWatchdogActive()).toBe(false);
 			expect(state.lifecycleTimers!.isDispatchScheduled()).toBe(false);
+		});
+
+		it("aborted while cancellation-resumable persists invalidation and enters generic dormant", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const lifecycle = lifecycleFor("dormant", "a:cmd");
+			lifecycle.cancellationResumeEligible = true;
+			const state = runningState(def, { enabled: true, lifecycle });
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			expect(state.lifecycle.cancellationResumeEligible).toBe(false);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(bag.pi.appended).toContainEqual({
+				customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+				data: { commandName: "a:cmd", resumable: false },
+			});
+		});
+
+		it("aborted cancellation invalidation persistence failure leaves eligibility unchanged", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const lifecycle = lifecycleFor("dormant", "a:cmd");
+			lifecycle.cancellationResumeEligible = true;
+			const state = runningState(def, { enabled: true, lifecycle });
+			const { bag, ctxBag } = bootstrap(state);
+			const appendEntry = bag.pi.appendEntry;
+			bag.pi.appendEntry = (type: string, data: unknown) => {
+				if (type === STRUCTURED_INPUT_CANCELLATION_TYPE) throw new Error("disk full");
+				appendEntry(type, data);
+			};
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(ctxBag.notifications).toContainEqual({
+				message: expect.stringContaining("could not durably revoke"),
+				type: "warning",
+			});
 		});
 
 		it("aborted during probing clears probe and enters dormant", async () => {
@@ -1821,6 +1861,26 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			expect(bag.pi.sent).toHaveLength(0);
 			expect(ctxBag.notifications[0].message).toContain("a:missing");
+		});
+
+		it("active command missing from registry stays active when exit persistence fails", async () => {
+			const clearLifecycleTimers = vi.fn();
+			const state = freshState({
+				enabled: true,
+				registry: new Map(),
+				lifecycle: lifecycleFor("running", "a:missing"),
+				clearLifecycleTimers,
+			});
+			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
+			bag.pi.appendEntry = (type: string) => {
+				if (type === COMMAND_EXIT_TYPE) throw new Error("disk full");
+			};
+
+			await expect(bag.emit("agent_end", {}, ctxBag.ctx)).rejects.toThrow("disk full");
+
+			expect(activeCommandName(state.lifecycle)).toBe("a:missing");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+			expect(clearLifecycleTimers).not.toHaveBeenCalled();
 		});
 
 		it("does not register the removed /scramjet-exec-fresh command", () => {
@@ -4246,8 +4306,8 @@ describe("issue 352 — actual-journal replay characterization", () => {
 		await start(bag, def);
 
 		// The active command's definition disappears from the registry (removed
-		// command, reloaded command set). agent_end clears live state to idle and
-		// journals the durable exit so replay reconstructs idle, not dormant —
+		// command, reloaded command set). agent_end journals the durable exit and
+		// then clears live state so replay reconstructs idle, not dormant —
 		// mirroring the unknown-slash exit (S4).
 		state.registry.delete("a:cmd");
 		await bag.emit("agent_end", {}, ctxBag.ctx);

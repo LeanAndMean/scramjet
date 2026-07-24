@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
 import { packageRoot } from "../docs-registry.js";
@@ -74,6 +75,15 @@ function collectEntries(rootDir: string, scope: "global" | "project", subdir: st
 	return entries;
 }
 
+export function commandFingerprint(content: string): string {
+	return createHash("sha256").update(content).digest("hex").slice(0, 12);
+}
+
+export function normalizedCommandSource(scope: "global" | "project", setName: string, filePath: string): string {
+	const relative = `${setName}/commands/${basename(filePath)}`;
+	return scope === "project" ? `.scramjet/${relative}` : relative;
+}
+
 function globalRoot(): string {
 	// Mirror scripts/postinstall.js: honor SCRAMJET_CACHE (explicit override),
 	// else XDG_DATA_HOME (XDG spec), else ~/.local/share/scramjet. If the
@@ -103,8 +113,20 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 
 			const globalEntries = collectEntries(globalDir, "global", "commands", discoveryWarnings);
 			const projectEntries = collectEntries(projectDir, "project", "commands", discoveryWarnings);
-			const { registry, warnings } = buildRegistry([...globalEntries, ...projectEntries]);
+			const commandEntries = [...globalEntries, ...projectEntries];
+			const { registry, warnings } = buildRegistry(commandEntries);
 			state.registry = registry;
+			const entriesByPath = new Map(commandEntries.map((entry) => [entry.filePath, entry]));
+			for (const def of registry.values()) {
+				const entry = entriesByPath.get(def.filePath);
+				if (!entry) continue;
+				state.logger.debug("discovery", "command discovered", {
+					command: def.name,
+					scope: entry.scope,
+					source: normalizedCommandSource(entry.scope, entry.setName, entry.filePath),
+					fingerprint: commandFingerprint(entry.content),
+				});
+			}
 
 			const globalAgentEntries = collectEntries(globalDir, "global", "agents", discoveryWarnings);
 			const projectAgentEntries = collectEntries(projectDir, "project", "agents", discoveryWarnings);

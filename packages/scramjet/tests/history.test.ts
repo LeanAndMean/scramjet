@@ -13,6 +13,7 @@ import {
 	registerHistory,
 	replayHistory,
 	SIDEBAR_MAX,
+	STRUCTURED_INPUT_CANCELLATION_TYPE,
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
@@ -194,7 +195,7 @@ describe("replayHistory", () => {
 		expect(result.sidebarLog.map((e) => e.command)).toEqual(["ok"]);
 	});
 
-	it("ignores command-start entries with non-string or empty command field (F10)", () => {
+	it("ignores command-start entries with non-string, empty, or whitespace-only command fields (F10)", () => {
 		// A corrupt journal entry where data.command is undefined/null/empty
 		// would otherwise set activeTopLevelCommand to a bogus value and break
 		// subsequent policy lookups. The TS cast at the read site otherwise
@@ -203,6 +204,7 @@ describe("replayHistory", () => {
 			cmdStart("first"),
 			customEntry(COMMAND_START_TYPE, { origin: "user", depth: 0, timestamp: 0 }),
 			customEntry(COMMAND_START_TYPE, { command: "", origin: "user", depth: 0, timestamp: 0 }),
+			customEntry(COMMAND_START_TYPE, { command: " \t", origin: "user", depth: 0, timestamp: 0 }),
 			customEntry(COMMAND_START_TYPE, { command: 42, origin: "user", depth: 0, timestamp: 0 }),
 		];
 		const result = replayHistory(entries);
@@ -456,6 +458,50 @@ describe("replayHistory — issue 352 durable outcome fold", () => {
 	});
 });
 
+describe("replayHistory — structured input cancellation", () => {
+	const cancellation = (commandName: string, resumable: unknown) =>
+		customEntry(STRUCTURED_INPUT_CANCELLATION_TYPE, { commandName, resumable });
+
+	it("reconstructs cancellation-resumable dormancy from a matching grant", () => {
+		const result = replayHistory([cmdStart("a"), cancellation("a", true)]);
+		expect(result.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+	});
+
+	it("folds grant and consume chronologically", () => {
+		const consumed = replayHistory([cmdStart("a"), cancellation("a", true), cancellation("a", false)]);
+		expect(consumed.lifecycle.cancellationResumeEligible).toBe(false);
+		const rewound = replayHistory([cmdStart("a"), cancellation("a", true)]);
+		expect(rewound.lifecycle.cancellationResumeEligible).toBe(true);
+	});
+
+	it("ignores malformed and mismatched outcomes and resets on same-name restart", () => {
+		const result = replayHistory([
+			cmdStart("a"),
+			cancellation("b", true),
+			cancellation("a", "yes"),
+			cancellation("a", true),
+			cmdStart("a"),
+		]);
+		expect(result.lifecycle.cancellationResumeEligible).toBe(false);
+	});
+
+	it("terminal status, freetext park, and exit supersede a grant", () => {
+		expect(
+			replayHistory([cmdStart("a"), cancellation("a", true), cmdStatus("a", "blocked")]).lifecycle
+				.cancellationResumeEligible,
+		).toBe(false);
+		expect(
+			replayHistory([cmdStart("a"), cancellation("a", true), userInputParked("a")]).lifecycle
+				.cancellationResumeEligible,
+		).toBe(false);
+		expect(
+			replayHistory([cmdStart("a"), cancellation("a", true), customEntry(COMMAND_EXIT_TYPE, { commandName: "a" })])
+				.lifecycle.cancellationResumeEligible,
+		).toBe(false);
+	});
+});
+
 describe("recordCommandStatus", () => {
 	it("appends a COMMAND_STATUS_TYPE journal entry with the summary and mutates no state", () => {
 		const { pi, appended } = recordingPi();
@@ -568,6 +614,16 @@ describe("registerHistory — handler registration", () => {
 		expect(handlers.get("session_start")).toHaveLength(1);
 		expect(handlers.get("session_tree")).toHaveLength(1);
 		expect(handlers.get("before_agent_start")).toHaveLength(1);
+	});
+
+	it("advances generation whenever reconstruction replaces lifecycle state", async () => {
+		const state = freshState({ lifecycleGeneration: 7 });
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("session_start", {}, ctxWithEntries([]));
+		expect(state.lifecycleGeneration).toBe(8);
+		await emit("session_tree", {}, ctxWithEntries([]));
+		expect(state.lifecycleGeneration).toBe(9);
 	});
 });
 
@@ -781,6 +837,121 @@ describe("registerHistory — input event", () => {
 			expect(activeCommandName(state.lifecycle)).toBeNull();
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
 			expect(derivedPhase(state.lifecycle)).toBe("idle");
+		});
+
+		it.each([
+			[
+				"interactive prose",
+				{ text: "private continuation", source: "interactive" },
+				"running",
+				false,
+				"mach12:pr-create",
+			],
+			["extension prose", { text: "continue", source: "extension" }, "dormant", true, "mach12:pr-create"],
+			["RPC prose", { text: "continue", source: "rpc" }, "dormant", true, "mach12:pr-create"],
+			["known slash", { text: "/help", source: "interactive" }, "dormant", true, "mach12:pr-create"],
+			[
+				"registered same-name command",
+				{ text: "/mach12:pr-create", source: "interactive" },
+				"running",
+				false,
+				"mach12:pr-create",
+			],
+			[
+				"registered different command",
+				{ text: "/mach12:other", source: "interactive" },
+				"running",
+				false,
+				"mach12:other",
+			],
+			["unknown slash", { text: "/unknown", source: "interactive" }, "idle", false, null],
+		] as const)(
+			"handles cancellation eligibility at the %s boundary",
+			async (_label, event, phase, eligible, command) => {
+				const state = freshState({
+					registry: registryOf(["mach12:pr-create", "mach12:other"]),
+					lifecycle: {
+						...lifecycleFor("dormant", "mach12:pr-create"),
+						cancellationResumeEligible: true,
+					},
+				});
+				const { pi, appended, emit } = recordingPi();
+				(pi as any).getCommands = () => [{ name: "help" }];
+				registerHistory(pi, state);
+
+				await emit("input", event);
+
+				expect(derivedPhase(state.lifecycle)).toBe(phase);
+				expect(state.lifecycle.cancellationResumeEligible).toBe(eligible);
+				expect(activeCommandName(state.lifecycle)).toBe(command);
+				if (_label === "interactive prose") {
+					expect(appended).toContainEqual({
+						customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+						data: { commandName: "mach12:pr-create", resumable: false },
+					});
+					expect(JSON.stringify(appended)).not.toContain("private continuation");
+				}
+			},
+		);
+
+		it("leaves cancellation-eligible dormancy unchanged and warns when consumption persistence fails", async () => {
+			const state = freshState({
+				registry: registryOf(["mach12:pr-create"]),
+				lifecycle: {
+					...lifecycleFor("dormant", "mach12:pr-create"),
+					cancellationResumeEligible: true,
+				},
+			});
+			const { pi, emit } = recordingPi();
+			const notify = vi.fn();
+			pi.appendEntry = () => {
+				throw new Error("disk full");
+			};
+			registerHistory(pi, state);
+			await emit("input", { text: "continue", source: "interactive" }, { ui: { notify } });
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("could not durably resume"), "warning");
+		});
+
+		it("preserves cancellation eligibility when replacement command persistence fails", () => {
+			const state = freshState({
+				lifecycle: {
+					...lifecycleFor("dormant", "old:cmd"),
+					cancellationResumeEligible: true,
+				},
+				clearLifecycleTimers: vi.fn(),
+			});
+			const { pi } = recordingPi();
+			pi.appendEntry = () => {
+				throw new Error("disk full");
+			};
+
+			expect(() => recordCommandInvocation(pi, state, "new:cmd", "user", 0)).toThrow("disk full");
+			expect(activeCommandName(state.lifecycle)).toBe("old:cmd");
+			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(state.clearLifecycleTimers).not.toHaveBeenCalled();
+		});
+
+		it("preserves cancellation eligibility when workflow-exit persistence fails", async () => {
+			const state = freshState({
+				lifecycle: {
+					...lifecycleFor("dormant", "old:cmd"),
+					cancellationResumeEligible: true,
+				},
+				clearLifecycleTimers: vi.fn(),
+			});
+			const { pi, emit } = recordingPi();
+			pi.getCommands = () => [];
+			pi.appendEntry = () => {
+				throw new Error("disk full");
+			};
+			registerHistory(pi, state);
+
+			await expect(emit("input", { text: "/unknown", source: "interactive" })).rejects.toThrow("disk full");
+			expect(activeCommandName(state.lifecycle)).toBe("old:cmd");
+			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(state.clearLifecycleTimers).not.toHaveBeenCalled();
 		});
 
 		it("does NOT auto-resume dormant on interactive non-slash reply (issue 215: agent-controlled resumption)", async () => {

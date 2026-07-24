@@ -1,6 +1,11 @@
 import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { USER_INPUT_PARKED_TYPE } from "../src/history.js";
+import {
+	COMMAND_START_TYPE,
+	registerHistory,
+	STRUCTURED_INPUT_CANCELLATION_TYPE,
+	USER_INPUT_PARKED_TYPE,
+} from "../src/history.js";
 import { isDormant, isParkedForInput, isProbeDue, isProbeInFlight } from "../src/lifecycle.js";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
@@ -550,13 +555,15 @@ describe("registerUserInputTool — confirm interaction", () => {
 	});
 
 	it("returns confirmed: false when user selects No", async () => {
-		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const state = freshState({ lifecycle: lifecycleFor("running") });
+		const { execute } = toolFor(state);
 		const ctx = mockUICtx("no");
 		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ confirmed: false });
 		expect(result.details.confirmed).toBe(false);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(false);
 	});
 
 	it("returns cancelled: true and terminates when user presses Escape", async () => {
@@ -600,7 +607,8 @@ describe("registerUserInputTool — select interaction", () => {
 	};
 
 	it("returns selected value when user picks an option", async () => {
-		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const state = freshState({ lifecycle: lifecycleFor("running") });
+		const { execute } = toolFor(state);
 		const ctx = mockUICtx("minor");
 		const result = await execute(selectParams, ctx);
 
@@ -609,6 +617,7 @@ describe("registerUserInputTool — select interaction", () => {
 		expect(result.details.type).toBe("select");
 		expect(result.details.selected).toBe("minor");
 		expect(result.details.options).toEqual(selectParams.options);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(false);
 	});
 
 	it("returns cancelled: true and terminates when user presses Escape", async () => {
@@ -779,9 +788,49 @@ describe("registerUserInputTool — dormant phase behavior", () => {
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE)).toHaveLength(1);
 	});
+
+	it("preserves cancellation eligibility when parked-marker persistence fails", async () => {
+		const state = freshState({
+			lifecycle: {
+				...lifecycleFor("dormant", "mach12:test"),
+				cancellationResumeEligible: true,
+			},
+		});
+		const { execute, pi } = toolFor(state);
+		const appendEntry = pi.appendEntry;
+		pi.appendEntry = (type: string, data: unknown) => {
+			if (type === USER_INPUT_PARKED_TYPE) throw new Error("disk full");
+			appendEntry(type, data);
+		};
+
+		await expect(execute({ type: "freetext", message: "Release title?" })).rejects.toThrow("disk full");
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(state.freetextAwaitingReply).toBe(false);
+	});
 });
 
 describe("registerUserInputTool — cancellation behavior", () => {
+	it.each([
+		["dormant", "confirm", { type: "confirm", message: "Continue?" }],
+		["dormant", "select", { type: "select", message: "Pick", options: [{ value: "a", label: "A" }] }],
+		["waiting", "confirm", { type: "confirm", message: "Continue?" }],
+		["waiting", "select", { type: "select", message: "Pick", options: [{ value: "a", label: "A" }] }],
+	] as const)("grants and journals resumability for cancelled %s %s input", async (phase, _type, params) => {
+		const state = freshState({ lifecycle: lifecycleFor(phase, "mach12:test") });
+		const { execute, pi } = toolFor(state);
+
+		const result = await execute(params, mockUICtx(null));
+
+		expect(result.terminate).toBe(true);
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(pi.appended).toContainEqual({
+			customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+			data: { commandName: "mach12:test", resumable: true },
+		});
+	});
+
 	it("transitions running to dormant on cancellation (not waiting)", async () => {
 		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
 		const { execute } = toolFor(state);
@@ -790,6 +839,7 @@ describe("registerUserInputTool — cancellation behavior", () => {
 		expect(result.terminate).toBe(true);
 		expect(isDormant(state.lifecycle)).toBe(true);
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
 	});
 
 	it("transitions probing to dormant on cancellation", async () => {
@@ -800,6 +850,7 @@ describe("registerUserInputTool — cancellation behavior", () => {
 		expect(result.terminate).toBe(true);
 		expect(isDormant(state.lifecycle)).toBe(true);
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
 	});
 
 	it("does NOT journal user-input-parked on cancellation", async () => {
@@ -816,6 +867,40 @@ describe("registerUserInputTool — cancellation behavior", () => {
 		await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(1);
+		expect(pi.appended.filter((e: any) => e.customType === STRUCTURED_INPUT_CANCELLATION_TYPE)).toEqual([
+			{
+				customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+				data: { commandName: "mach12:test", resumable: true },
+			},
+		]);
+	});
+
+	it("falls back to generic dormant when cancellation grant persistence fails", async () => {
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn() };
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test"), logger: logger as any });
+		const { execute, pi } = toolFor(state);
+		const appendEntry = pi.appendEntry;
+		pi.appendEntry = (type: string, data: unknown) => {
+			if (type === STRUCTURED_INPUT_CANCELLATION_TYPE) throw new Error("disk full");
+			appendEntry(type, data);
+		};
+
+		const ctx = mockUICtx(null) as any;
+		ctx.ui.notify = vi.fn();
+		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		expect(result.terminate).toBe(true);
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(false);
+		expect(logger.warn).toHaveBeenCalledWith(
+			"input",
+			"failed to persist structured input cancellation; resumability disabled",
+			expect.objectContaining({ command: "mach12:test", error: "disk full" }),
+		);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			"scramjet: cancellation resumability could not be saved; the command remains dormant",
+			"warning",
+		);
 	});
 
 	it.each([
@@ -863,6 +948,84 @@ describe("registerUserInputTool — cancellation behavior", () => {
 			expect.objectContaining({ expectedCommand: "mach12:test", currentCommand: "mach12:other" }),
 		);
 	});
+
+	it.each(["session_start", "session_tree"])(
+		"ignores a pending confirm after same-name %s reconstruction",
+		async (eventName) => {
+			let resolveInput: (result: unknown) => void = () => {};
+			const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+			const { pi, handlers, execute } = toolFor(state);
+			registerHistory(pi, state);
+			const promise = execute(
+				{ type: "confirm", message: "Continue?" },
+				{
+					ui: {
+						custom: () =>
+							new Promise((resolve) => {
+								resolveInput = resolve;
+							}),
+					},
+				},
+			);
+			await Promise.resolve();
+
+			const branch = [
+				{
+					type: "custom",
+					customType: COMMAND_START_TYPE,
+					data: { command: "mach12:test", origin: "user", depth: 0, timestamp: 1 },
+				},
+			];
+			for (const handler of handlers.get(eventName) ?? []) {
+				await handler({}, { sessionManager: { getBranch: () => branch } });
+			}
+			resolveInput("yes");
+			const result = await promise;
+
+			expect(result.details.error).toBe("stale-result");
+			expect(isDormant(state.lifecycle)).toBe(true);
+			expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		},
+	);
+
+	it.each(["session_start", "session_tree"])(
+		"ignores a pending select after same-name %s reconstruction",
+		async (eventName) => {
+			let resolveInput: (result: unknown) => void = () => {};
+			const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+			const { pi, handlers, execute } = toolFor(state);
+			registerHistory(pi, state);
+			const promise = execute(
+				{ type: "select", message: "Pick", options: [{ value: "a", label: "A" }] },
+				{
+					ui: {
+						custom: () =>
+							new Promise((resolve) => {
+								resolveInput = resolve;
+							}),
+					},
+				},
+			);
+			await Promise.resolve();
+
+			const branch = [
+				{
+					type: "custom",
+					customType: COMMAND_START_TYPE,
+					data: { command: "mach12:test", origin: "user", depth: 0, timestamp: 1 },
+				},
+			];
+			for (const handler of handlers.get(eventName) ?? []) {
+				await handler({}, { sessionManager: { getBranch: () => branch } });
+			}
+			resolveInput("a");
+			const result = await promise;
+
+			expect(result.details.error).toBe("stale-result");
+			expect(isDormant(state.lifecycle)).toBe(true);
+			expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		},
+	);
 
 	it("ignores stale probing results without resuming the replacement probe", async () => {
 		let resolveInput: (result: unknown) => void = () => {};
