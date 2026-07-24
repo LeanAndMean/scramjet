@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.60.1 — Resume commands after cancelled structured input
+
+Preserves cancellation-specific resume eligibility across session reconstruction so the next interactive reply can restore completion probing and next-step selection without reviving unrelated dormant commands. Adds privacy-safe runtime, command-source, and cancellation lifecycle diagnostics. Fixes [#383](https://github.com/LeanAndMean/scramjet/issues/383).
+
+### Changed
+
+- `lifecycle.ts`, `user-input.ts`, `history.ts`, `command-status.ts`, `auto-continue.ts`: track, persist, reconstruct, consume, and invalidate cancellation-specific resume eligibility while keeping generic dormant commands inert.
+- `index.ts`, `commands/index.ts`, `logging.md`: record loaded package versions, winning command fingerprints, and cancellation-resume boundaries without logging reply text or command content.
+- Lifecycle, command-authoring, vision, and repository guidance now document cancellation-resumable dormancy and its replay contract.
+
+### Tests
+
+- Lifecycle, history, structured-input, command-status, command-loader, and integration coverage now exercises cancelled confirm/select continuation, reconstruction, stale-result rejection, persistence failures, and privacy-safe diagnostics.
+
 ## 0.60.0 — Add an independent-assessor agent for the Mach 12 assessment commands
 
 Adds a dedicated `mach12:independent-assessor` subagent so the two Mach 12 commands that ran an independent-assessment step no longer dispatch to a "general-purpose subagent" that did not exist in the bundled roster. The new agent re-derives a verdict on each supplied finding independent of the original author's conclusion, and both call sites are repointed at it. Fixes [#377](https://github.com/LeanAndMean/scramjet/issues/377).
