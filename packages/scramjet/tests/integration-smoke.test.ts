@@ -428,6 +428,9 @@ describe("integration smoke — lifecycle event sequences", () => {
 		const dispatched: { input: string; options?: any }[] = [];
 		const ctx: any = {
 			hasUI: false,
+			scopedModels: [],
+			modelRegistry: { getAvailable: () => [] },
+			model: null,
 			ui: {
 				notify: (m: string, t?: string) => notifications.push({ message: m, type: t }),
 				custom: <T>(_factory: any) => Promise.resolve(undefined as T),
@@ -518,6 +521,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 			status: "completed",
 			summary: "plan completed",
 			next_steps: [{ message: "/int:next", fresh_session: false, reason: "Continue" }],
+			recommended_next_step: 0,
 		});
 		await endProbeTurn(bag, ctx);
 		expect(selectorCalls).toBe(2);

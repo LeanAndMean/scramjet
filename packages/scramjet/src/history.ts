@@ -6,6 +6,7 @@ import {
 	isParkedForInput,
 	type LifecycleState,
 	reconstructLifecycle,
+	resumeAfterCancelledInput,
 	resumeFromParkedInput,
 	startCommand,
 } from "./lifecycle.js";
@@ -300,10 +301,28 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		state.freetextAwaitingReply = false;
 		const name = parseSlashCommand(event.text, state.registry);
 		if (!name) {
-			// Resume a parked command on an interactive non-slash reply. Only
-			// parked-for-input (freetext park) auto-resumes; dormant commands
-			// require the agent to explicitly call `continuing` after seeing
-			// the dormant notice (issue 215).
+			if (
+				event.source === "interactive" &&
+				!event.text.startsWith("/") &&
+				state.lifecycle.cancellationResumeEligible
+			) {
+				const command = activeCommandName(state.lifecycle);
+				if (!command) return;
+				try {
+					recordStructuredInputCancellation(pi, command, false);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					state.logger.warn("history", "failed to persist structured input cancellation consumption", {
+						command,
+						error: message,
+					});
+					return;
+				}
+				resumeAfterCancelledInput(state);
+				return;
+			}
+			// Resume a parked command on an interactive non-slash reply. Generic
+			// dormant commands still require an explicit `continuing` report.
 			if (event.source === "interactive" && !event.text.startsWith("/") && isParkedForInput(state.lifecycle)) {
 				const command = activeCommandName(state.lifecycle);
 				const result = resumeFromParkedInput(state);

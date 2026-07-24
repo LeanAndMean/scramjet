@@ -15,7 +15,7 @@
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.js";
-import { recordCommandStatus } from "./history.js";
+import { recordCommandStatus, recordStructuredInputCancellation } from "./history.js";
 import {
 	acceptDormantContinuing,
 	acceptProbeContinuing,
@@ -123,10 +123,12 @@ type WireStatus = Static<typeof STATUS_SCHEMA>;
 const _statusWireMatchesInterface = (status: WireStatus): CommandStatusPayload["status"] => status;
 const _statusInterfaceMatchesWire = (status: CommandStatusPayload["status"]): WireStatus => status;
 
-export function buildDormantCommandNotice(commandName: string): string {
+export function buildDormantCommandNotice(commandName: string, cancellationResumeEligible = false): string {
 	return (
 		`The command \`${commandName}\` is dormant — it started but is not currently active.\n` +
-		"Ordinary user replies do NOT auto-resume a dormant command.\n" +
+		(cancellationResumeEligible
+			? "The next interactive non-slash user reply will resume it because structured input was cancelled.\n"
+			: "Ordinary user replies do NOT auto-resume a dormant command.\n") +
 		"You have two options:\n" +
 		'- To resume work, call `report_scramjet_command_status` with `status: "continuing"`.\n' +
 		"- If the work is already done, report a terminal status directly " +
@@ -142,7 +144,7 @@ export function registerDormantCommandNotice(pi: ExtensionAPI, state: ScramjetSt
 		return {
 			systemPromptSection: {
 				id: "scramjet:dormant-command",
-				text: `\n\n# Dormant Scramjet Command\n\n${buildDormantCommandNotice(command)}`,
+				text: `\n\n# Dormant Scramjet Command\n\n${buildDormantCommandNotice(command, state.lifecycle.cancellationResumeEligible)}`,
 				cacheRetention: "none",
 			},
 		};
@@ -243,6 +245,22 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 
 				// Dormant continuing
 				if (canAcceptDormantContinuing(state.lifecycle)) {
+					if (state.lifecycle.cancellationResumeEligible) {
+						try {
+							recordStructuredInputCancellation(pi, command, false);
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error);
+							state.logger.warn("status", "failed to persist structured input cancellation consumption", {
+								command,
+								error: message,
+							});
+							const details: CommandStatusDetails = { error: "persistence-failed" };
+							return {
+								content: [{ type: "text", text: "Continuing transition could not be persisted." }],
+								details,
+							};
+						}
+					}
 					const result = acceptDormantContinuing(state);
 					if (!result.ok) {
 						state.logger.lifecycle("status report rejected", {
@@ -296,6 +314,23 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 					content: [{ type: "text", text: outOfPhaseError(state.lifecycle) }],
 					details,
 				};
+			}
+
+			if (state.lifecycle.cancellationResumeEligible) {
+				try {
+					recordStructuredInputCancellation(pi, command, false);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					state.logger.warn("status", "failed to persist structured input cancellation consumption", {
+						command,
+						error: message,
+					});
+					const details: CommandStatusDetails = { error: "persistence-failed" };
+					return {
+						content: [{ type: "text", text: "Status transition could not be persisted." }],
+						details,
+					};
+				}
 			}
 
 			const payload: CommandStatusRestingPayload = {
