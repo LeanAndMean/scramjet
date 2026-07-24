@@ -550,7 +550,7 @@ Confirm and select return `{ "cancelled": true }` with `terminate: true` when th
 The tool is callable in any lifecycle phase except `reported` (when a terminal status report is pending dispatch). In that phase it returns a non-terminating error so the agent can still report status.
 
 - **Idle** (no active command): the tool works as a pure UI interaction. Confirm/select return the user's answer; freetext returns `terminate: true`. No lifecycle mutations occur — `parkForFreetext`, `enterDormant`, and `cancelStructuredInput` no-op without an active command.
-- **Running / dormant / waiting** (active command, various mode flags): full lifecycle behavior applies. Freetext parks the command (`parkedForInput = true`) and journals a `scramjet:user-input-parked` entry (`{ commandName, parked: true }`) after a successful park. Confirm/select Escape transitions to cancellation-resumable dormant; explicit confirm No and successful select are ordinary successful results and do not grant resumability.
+- **Running / dormant / waiting** (active command, various mode flags): full lifecycle behavior applies. Freetext journals a `scramjet:user-input-parked` entry (`{ commandName, parked: true }`) before parking the command (`parkedForInput = true`); append failure leaves lifecycle state unchanged. Confirm/select Escape transitions to cancellation-resumable dormant; explicit confirm No and successful select are ordinary successful results and do not grant resumability.
 - **Probing** (probe in flight): confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the probe is cleared and re-armed without incrementing `continueCount`, so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures during a probe leave it reportable so the agent can still report `blocked` or `incomplete`. Freetext parks the command from this state.
 
 ### Journaling
@@ -561,7 +561,7 @@ When an interactive non-slash reply consumes a parked command, Scramjet resumes 
 
 Confirm/select Escape uses a separate `scramjet:structured-input-cancellation` outcome with `{ commandName, resumable: true }`; successful interactive consumption or explicit dormant `continuing` records `resumable: false` before arming. Replay folds these outcomes along the selected branch, so eligibility survives resume and branch navigation while branch rewinds restore the state at that ancestry point. If granting cannot be persisted, Scramjet falls back to generic dormant; if consumption cannot be persisted, it remains eligible dormant rather than claiming a non-durable resume. These custom cancellation outcomes never include prompt answers or reply text.
 
-When a truly unknown slash exits the workflow, Scramjet clears the active command and journals a `scramjet:command-exited` entry (`{ commandName }`), so replay reconstructs `idle` rather than `dormant`. Known Pi commands and command-lookup failures preserve the workflow and emit no exit.
+When a truly unknown slash exits the workflow, Scramjet journals a `scramjet:command-exited` entry (`{ commandName }`) before clearing the active command and timers, so replay reconstructs `idle` rather than `dormant`. Append failure leaves lifecycle state and timers unchanged. Known Pi commands and command-lookup failures preserve the workflow and emit no exit.
 
 ### Don't
 

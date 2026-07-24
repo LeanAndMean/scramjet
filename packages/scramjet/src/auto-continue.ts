@@ -1015,13 +1015,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				detail: { reason: "active-command-not-in-registry" },
 			});
 			ctx.ui.notify(`scramjet: active command "${activeName}" not in registry; auto-continue skipped`, "warning");
+			pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: activeName });
 			const result = clearActiveCommand(state, "active-command-not-in-registry");
-			// Record the exit only when the active command was actually cleared, so replay
-			// reconstructs idle rather than dormant (mirrors the unknown-slash exit).
-			if (result.ok) {
-				pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: activeName });
-			}
-			state.clearLifecycleTimers?.("active-command-missing");
+			if (result.ok) state.clearLifecycleTimers?.("active-command-missing");
 			return;
 		}
 

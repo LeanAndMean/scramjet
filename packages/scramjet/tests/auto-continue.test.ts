@@ -1863,6 +1863,26 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.notifications[0].message).toContain("a:missing");
 		});
 
+		it("active command missing from registry stays active when exit persistence fails", async () => {
+			const clearLifecycleTimers = vi.fn();
+			const state = freshState({
+				enabled: true,
+				registry: new Map(),
+				lifecycle: lifecycleFor("running", "a:missing"),
+				clearLifecycleTimers,
+			});
+			const { bag, ctxBag } = bootstrap(state, { hasUI: false });
+			bag.pi.appendEntry = (type: string) => {
+				if (type === COMMAND_EXIT_TYPE) throw new Error("disk full");
+			};
+
+			await expect(bag.emit("agent_end", {}, ctxBag.ctx)).rejects.toThrow("disk full");
+
+			expect(activeCommandName(state.lifecycle)).toBe("a:missing");
+			expect(derivedPhase(state.lifecycle)).toBe("running");
+			expect(clearLifecycleTimers).not.toHaveBeenCalled();
+		});
+
 		it("does not register the removed /scramjet-exec-fresh command", () => {
 			const { bag } = bootstrap(freshState());
 			expect(bag.commands.find((command) => command.name === "scramjet-exec-fresh")).toBeUndefined();
@@ -4286,8 +4306,8 @@ describe("issue 352 — actual-journal replay characterization", () => {
 		await start(bag, def);
 
 		// The active command's definition disappears from the registry (removed
-		// command, reloaded command set). agent_end clears live state to idle and
-		// journals the durable exit so replay reconstructs idle, not dormant —
+		// command, reloaded command set). agent_end journals the durable exit and
+		// then clears live state so replay reconstructs idle, not dormant —
 		// mirroring the unknown-slash exit (S4).
 		state.registry.delete("a:cmd");
 		await bag.emit("agent_end", {}, ctxBag.ctx);

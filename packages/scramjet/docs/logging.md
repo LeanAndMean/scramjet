@@ -171,7 +171,7 @@ Besides command-status reports, custom entries record lifecycle transitions that
   "data": { "commandName": "mach12:issue-plan", "parked": true } }
 ```
 
-- `parked: true` — the command parked on a freetext prompt (written only after a successful park). Reconstructs `waiting`.
+- `parked: true` — written before the command parks on a freetext prompt; append failure leaves lifecycle state unchanged. Reconstructs `waiting`.
 - `parked: false` — an interactive non-slash reply consumed the park (written only after a successful resume). Reconstructs `dormant`. This custom outcome does not duplicate the reply text; the editor reply remains a normal persisted user message.
 - **Legacy:** entries written before the flag existed omit `parked` and mean `parked: true`. Match legacy-or-parked with `(.data.parked != false)`.
 
@@ -188,7 +188,7 @@ Besides command-status reports, custom entries record lifecycle transitions that
 - Matching outcomes are branch-local and chronological. Later command starts, terminal statuses, freetext parks, and workflow exits supersede grants.
 - Neither entry nor its diagnostic log includes prompt answers or reply text.
 
-**Workflow-exit outcomes** (`scramjet:command-exited`) carry `{ commandName }`, written only after a truly unknown slash successfully cleared the active command (known Pi commands and lookup failures emit nothing). Reconstructs `idle`.
+**Workflow-exit outcomes** (`scramjet:command-exited`) carry `{ commandName }`, written before a truly unknown slash clears the active command and timers; append failure leaves lifecycle state and timers unchanged (known Pi commands and lookup failures emit nothing). Reconstructs `idle`.
 
 ```jsonc
 { "type": "custom", "customType": "scramjet:command-exited",
