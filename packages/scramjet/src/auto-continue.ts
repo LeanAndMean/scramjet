@@ -50,7 +50,12 @@ import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
-import { COMMAND_EXIT_TYPE, recordCommandStatus, recordStructuredInputCancellation } from "./history.js";
+import {
+	COMMAND_EXIT_TYPE,
+	logCancellationResume,
+	recordCommandStatus,
+	recordStructuredInputCancellation,
+} from "./history.js";
 import {
 	activeCommandName,
 	beginProbe,
@@ -974,12 +979,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
 			enterDormant(state, "aborted");
 			if (invalidatedCancellation) {
-				state.logger.debug("cancellation-resume", "eligibility invalidated", {
-					command: activeName,
-					generation: state.lifecycleGeneration,
-					source: "agent-end",
-					reason: "aborted",
-				});
+				logCancellationResume(state, "eligibility invalidated", activeName, "agent-end", "aborted");
 			}
 			return;
 		}

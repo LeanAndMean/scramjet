@@ -82,11 +82,11 @@ Every mutation validates post-conditions, bumps `lifecycleGeneration`, and logs 
 |---|---|---|
 | `startCommand(holder, command)` | Non-empty command string | Sets `activeCommand`, arms probe, resets all other facts |
 | `clearActiveCommand(holder, reason)` | Active command exists | Clears all facts to idle |
-| `enterDormant(holder, reason)` | Active command exists | Clears all mode flags and counter; command stays associated |
-| `armProbe(holder, reason)` | Active command, no probe in flight, not parked, no pending report | Sets `probeArmed` |
+| `enterDormant(holder, reason)` | Active command exists | Clears all mode flags, counter, and cancellation eligibility; command stays associated |
+| `armProbe(holder, reason)` | Active command, no probe in flight, not parked, no pending report | Sets `probeArmed` and clears cancellation eligibility |
 | `beginProbe(holder, reason)` | Active command, `probeArmed` | Clears `probeArmed`, sets `probeInFlight` |
 | `acceptProbeContinuing(holder)` | `probeInFlight`, under continue limit | Clears `probeInFlight`, arms probe, increments counter |
-| `acceptDormantContinuing(holder)` | Dormant | Arms probe, resets counter to 0 |
+| `acceptDormantContinuing(holder)` | Dormant | Arms probe, resets counter to 0, and clears cancellation eligibility |
 | `acceptTerminalReport(holder, payload)` | `probeArmed`, `probeInFlight`, or dormant, non-continuing status | Clears `probeArmed` and `probeInFlight`, stores report, resets counter and cancellation eligibility |
 | `cancelStructuredInput(holder)` | Active command without a pending terminal report | Atomically replaces running, probing, dormant, or waiting facts with cancellation resume eligibility in dormant shape |
 | `resumeAfterCancelledInput(holder)` | Cancellation-eligible dormant command | Atomically clears eligibility and arms the existing probe path |

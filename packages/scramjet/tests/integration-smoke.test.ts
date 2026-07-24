@@ -8,7 +8,7 @@ import { registerCommandStatusTool } from "../src/command-status.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import { registerDelegateTool } from "../src/delegate.js";
 import { registerHistory } from "../src/history.js";
-import { initScramjet, runtimeVersions } from "../src/index.js";
+import { initScramjet } from "../src/index.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
@@ -186,7 +186,7 @@ describe("integration smoke — runtime provenance wired into the extension fact
 		);
 		const version = (workspace: string) =>
 			JSON.parse(readFileSync(resolve(HERE, "..", "..", workspace, "package.json"), "utf8")).version;
-		expect(entry?.data.data).toEqual(runtimeVersions());
+		expect(entry).toBeDefined();
 		expect(entry?.data.data).toEqual({
 			scramjet: version("scramjet"),
 			agent: version("agent"),

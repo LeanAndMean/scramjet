@@ -15,7 +15,7 @@
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { type Static, Type } from "typebox";
 import { parseSlashCommand } from "./commands/validator.js";
-import { recordCommandStatus, recordStructuredInputCancellation } from "./history.js";
+import { logCancellationResume, recordCommandStatus, recordStructuredInputCancellation } from "./history.js";
 import {
 	acceptDormantContinuing,
 	acceptProbeContinuing,
@@ -257,7 +257,9 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 							});
 							const details: CommandStatusDetails = { error: "persistence-failed" };
 							return {
-								content: [{ type: "text", text: "Continuing transition could not be persisted." }],
+								content: [
+									{ type: "text", text: "Continuing transition could not be persisted; retry the report." },
+								],
 								details,
 							};
 						}
@@ -279,12 +281,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 						detail: { summary: params.summary },
 					});
 					if (consumedCancellation) {
-						state.logger.debug("cancellation-resume", "eligibility consumed", {
-							command,
-							generation: state.lifecycleGeneration,
-							source: "status-tool",
-							reason: "continuing-report",
-						});
+						logCancellationResume(state, "eligibility consumed", command, "status-tool", "continuing-report");
 					}
 					recordCommandStatus(pi, command, "continuing", params.summary);
 					const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
@@ -326,6 +323,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 			}
 
 			const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
+			// Persist cancellation invalidation eagerly so an accepted report cannot leave a durable auto-resume grant.
 			if (invalidatedCancellation) {
 				try {
 					recordStructuredInputCancellation(pi, command, false);
@@ -337,7 +335,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 					});
 					const details: CommandStatusDetails = { error: "persistence-failed" };
 					return {
-						content: [{ type: "text", text: "Status transition could not be persisted." }],
+						content: [{ type: "text", text: "Status transition could not be persisted; retry the report." }],
 						details,
 					};
 				}
@@ -373,12 +371,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				},
 			});
 			if (invalidatedCancellation) {
-				state.logger.debug("cancellation-resume", "eligibility invalidated", {
-					command,
-					generation: state.lifecycleGeneration,
-					source: "status-tool",
-					reason: "terminal-report",
-				});
+				logCancellationResume(state, "eligibility invalidated", command, "status-tool", "terminal-report");
 			}
 
 			const next =

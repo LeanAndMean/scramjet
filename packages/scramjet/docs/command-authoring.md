@@ -549,7 +549,7 @@ Confirm and select return `{ "cancelled": true }` with `terminate: true` when th
 
 The tool is callable in any lifecycle phase except `reported` (when a terminal status report is pending dispatch). In that phase it returns a non-terminating error so the agent can still report status.
 
-- **Idle** (no active command): the tool works as a pure UI interaction. Confirm/select return the user's answer; freetext returns `terminate: true`. No lifecycle mutations occur — `parkForFreetext` and `enterDormant` no-op without an active command.
+- **Idle** (no active command): the tool works as a pure UI interaction. Confirm/select return the user's answer; freetext returns `terminate: true`. No lifecycle mutations occur — `parkForFreetext`, `enterDormant`, and `cancelStructuredInput` no-op without an active command.
 - **Running / dormant / waiting** (active command, various mode flags): full lifecycle behavior applies. Freetext parks the command (`parkedForInput = true`) and journals a `scramjet:user-input-parked` entry (`{ commandName, parked: true }`) after a successful park. Confirm/select Escape transitions to cancellation-resumable dormant; explicit confirm No and successful select are ordinary successful results and do not grant resumability.
 - **Probing** (probe in flight): confirm and select suspend the probe watchdog while awaiting user input; after a successful response, the probe is cleared and re-armed without incrementing `continueCount`, so the agent can continue work in the same turn and Scramjet can probe again when that work ends. UI failures during a probe leave it reportable so the agent can still report `blocked` or `incomplete`. Freetext parks the command from this state.
 

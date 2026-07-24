@@ -47,7 +47,7 @@ function packageVersion(packageName: string): string {
 		const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as { name?: string; version?: string };
 		if (metadata.name === packageName && metadata.version) return metadata.version;
 	}
-	throw new Error(`Could not resolve package metadata for ${packageName}`);
+	return "unknown";
 }
 
 export function runtimeVersions(): RuntimeVersions {

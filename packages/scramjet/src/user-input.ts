@@ -6,7 +6,7 @@ import {
 } from "@leanandmean/coding-agent";
 import { Container, Markdown, Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
-import { recordStructuredInputCancellation, USER_INPUT_PARKED_TYPE } from "./history.js";
+import { logCancellationResume, recordStructuredInputCancellation, USER_INPUT_PARKED_TYPE } from "./history.js";
 import {
 	activeCommandName,
 	cancelStructuredInput,
@@ -184,7 +184,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			// Post-interaction lifecycle transitions
 			if (wasProbing && result) {
 				if (result.cancelled) {
-					grantCancellationResume(pi, state);
+					grantCancellationResume(pi, state, ctx);
 				} else {
 					// Success during probe → resume with probe re-armed, preserving continueCount
 					resumeAfterProbeInput(state);
@@ -199,7 +199,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 
 			const toolResult = { content: result.content, details: result.details };
 			if (result.cancelled) {
-				if (!wasProbing) grantCancellationResume(pi, state);
+				if (!wasProbing) grantCancellationResume(pi, state, ctx);
 				return { ...toolResult, terminate: true };
 			}
 
@@ -208,18 +208,13 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 	});
 }
 
-function grantCancellationResume(pi: ExtensionAPI, state: ScramjetState): void {
+function grantCancellationResume(pi: ExtensionAPI, state: ScramjetState, ctx: ExtensionContext): void {
 	const command = activeCommandName(state.lifecycle);
 	const mutation = cancelStructuredInput(state);
 	if (!mutation.ok || !command) return;
-	state.logger.debug("cancellation-resume", "eligibility granted", {
-		command,
-		generation: state.lifecycleGeneration,
-		source: "structured-input",
-		reason: "cancelled",
-	});
 	try {
 		recordStructuredInputCancellation(pi, command, true);
+		logCancellationResume(state, "eligibility granted", command, "structured-input", "cancelled");
 	} catch (error) {
 		const fallback = enterDormant(state, "structured-input-cancellation-persistence-failed");
 		const message = error instanceof Error ? error.message : String(error);
@@ -228,12 +223,8 @@ function grantCancellationResume(pi: ExtensionAPI, state: ScramjetState): void {
 			error: message,
 			fallback: fallback.ok,
 		});
-		state.logger.debug("cancellation-resume", "eligibility invalidated", {
-			command,
-			generation: state.lifecycleGeneration,
-			source: "structured-input",
-			reason: "grant-persistence-failed",
-		});
+		ctx.ui.notify("scramjet: cancellation resumability could not be saved; the command remains dormant", "warning");
+		logCancellationResume(state, "eligibility invalidated", command, "structured-input", "grant-persistence-failed");
 	}
 }
 

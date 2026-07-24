@@ -11,6 +11,7 @@ import {
 	COMMAND_STATUS_TYPE,
 	registerHistory,
 	replayHistory,
+	STRUCTURED_INPUT_CANCELLATION_TYPE,
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
@@ -522,6 +523,41 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(state.lifecycleTimers!.isProbeScheduled()).toBe(false);
 			expect(state.lifecycleTimers!.isWatchdogActive()).toBe(false);
 			expect(state.lifecycleTimers!.isDispatchScheduled()).toBe(false);
+		});
+
+		it("aborted while cancellation-resumable persists invalidation and enters generic dormant", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const lifecycle = lifecycleFor("dormant", "a:cmd");
+			lifecycle.cancellationResumeEligible = true;
+			const state = runningState(def, { enabled: true, lifecycle });
+			const { bag, ctxBag } = bootstrap(state);
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			expect(state.lifecycle.cancellationResumeEligible).toBe(false);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(bag.pi.appended).toContainEqual({
+				customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+				data: { commandName: "a:cmd", resumable: false },
+			});
+		});
+
+		it("aborted cancellation invalidation persistence failure leaves eligibility unchanged", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+			const lifecycle = lifecycleFor("dormant", "a:cmd");
+			lifecycle.cancellationResumeEligible = true;
+			const state = runningState(def, { enabled: true, lifecycle });
+			const { bag, ctxBag } = bootstrap(state);
+			const appendEntry = bag.pi.appendEntry;
+			bag.pi.appendEntry = (type: string, data: unknown) => {
+				if (type === STRUCTURED_INPUT_CANCELLATION_TYPE) throw new Error("disk full");
+				appendEntry(type, data);
+			};
+
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+
+			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 		});
 
 		it("aborted during probing clears probe and enters dormant", async () => {

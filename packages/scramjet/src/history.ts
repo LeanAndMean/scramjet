@@ -20,6 +20,21 @@ export const COMMAND_EXIT_TYPE = "scramjet:command-exited";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
 
+export function logCancellationResume(
+	state: ScramjetState,
+	message: string,
+	command: string | null,
+	source: string,
+	reason: string,
+): void {
+	state.logger.debug("cancellation-resume", message, {
+		command,
+		generation: state.lifecycleGeneration,
+		source,
+		reason,
+	});
+}
+
 // Pi built-ins that the F25 clear-on-unknown-slash path must NOT treat as
 // a workflow exit. Used only when pi.getCommands() is unavailable (older Pi,
 // test fakes that don't stub it); the normal path consults the live command
@@ -319,12 +334,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 					return;
 				}
 				resumeAfterCancelledInput(state);
-				state.logger.debug("cancellation-resume", "eligibility consumed", {
-					command,
-					generation: state.lifecycleGeneration,
-					source: event.source,
-					reason: "interactive-reply",
-				});
+				logCancellationResume(state, "eligibility consumed", command, event.source, "interactive-reply");
 				return;
 			}
 			// Resume a parked command on an interactive non-slash reply. Generic
@@ -362,29 +372,26 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 					if (result.ok && command) {
 						pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: command });
 						if (invalidatedCancellation) {
-							state.logger.debug("cancellation-resume", "eligibility invalidated", {
-								command,
-								generation: state.lifecycleGeneration,
-								source: event.source,
-								reason: "unknown-slash",
-							});
+							logCancellationResume(state, "eligibility invalidated", command, event.source, "unknown-slash");
 						}
 					}
 				} else if (state.lifecycle.cancellationResumeEligible) {
-					state.logger.debug("cancellation-resume", "eligibility preserved", {
-						command: activeCommandName(state.lifecycle),
-						generation: state.lifecycleGeneration,
-						source: event.source,
-						reason: "known-slash",
-					});
+					logCancellationResume(
+						state,
+						"eligibility preserved",
+						activeCommandName(state.lifecycle),
+						event.source,
+						"known-slash",
+					);
 				}
 			} else if (state.lifecycle.cancellationResumeEligible) {
-				state.logger.debug("cancellation-resume", "input ignored", {
-					command: activeCommandName(state.lifecycle),
-					generation: state.lifecycleGeneration,
-					source: event.source,
-					reason: "non-interactive-input",
-				});
+				logCancellationResume(
+					state,
+					"input ignored",
+					activeCommandName(state.lifecycle),
+					event.source,
+					"non-interactive-input",
+				);
 			}
 			return;
 		}
@@ -407,12 +414,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const supersededCommand = activeCommandName(state.lifecycle);
 		recordCommandStart(pi, state, name, origin);
 		if (supersededCancellation) {
-			state.logger.debug("cancellation-resume", "eligibility invalidated", {
-				command: supersededCommand,
-				generation: state.lifecycleGeneration,
-				source: event.source,
-				reason: "command-start",
-			});
+			logCancellationResume(state, "eligibility invalidated", supersededCommand, event.source, "command-start");
 		}
 		return { action: "transform" as const, text: wrapped };
 	});

@@ -555,13 +555,15 @@ describe("registerUserInputTool — confirm interaction", () => {
 	});
 
 	it("returns confirmed: false when user selects No", async () => {
-		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const state = freshState({ lifecycle: lifecycleFor("running") });
+		const { execute } = toolFor(state);
 		const ctx = mockUICtx("no");
 		const result = await execute({ type: "confirm", message: "Deploy?" }, ctx);
 
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ confirmed: false });
 		expect(result.details.confirmed).toBe(false);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(false);
 	});
 
 	it("returns cancelled: true and terminates when user presses Escape", async () => {
@@ -605,7 +607,8 @@ describe("registerUserInputTool — select interaction", () => {
 	};
 
 	it("returns selected value when user picks an option", async () => {
-		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const state = freshState({ lifecycle: lifecycleFor("running") });
+		const { execute } = toolFor(state);
 		const ctx = mockUICtx("minor");
 		const result = await execute(selectParams, ctx);
 
@@ -614,6 +617,7 @@ describe("registerUserInputTool — select interaction", () => {
 		expect(result.details.type).toBe("select");
 		expect(result.details.selected).toBe("minor");
 		expect(result.details.options).toEqual(selectParams.options);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(false);
 	});
 
 	it("returns cancelled: true and terminates when user presses Escape", async () => {
@@ -861,7 +865,9 @@ describe("registerUserInputTool — cancellation behavior", () => {
 			appendEntry(type, data);
 		};
 
-		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
+		const ctx = mockUICtx(null) as any;
+		ctx.ui.notify = vi.fn();
+		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
 
 		expect(result.terminate).toBe(true);
 		expect(isDormant(state.lifecycle)).toBe(true);
@@ -870,6 +876,10 @@ describe("registerUserInputTool — cancellation behavior", () => {
 			"input",
 			"failed to persist structured input cancellation; resumability disabled",
 			expect.objectContaining({ command: "mach12:test", error: "disk full" }),
+		);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			"scramjet: cancellation resumability could not be saved; the command remains dormant",
+			"warning",
 		);
 	});
 

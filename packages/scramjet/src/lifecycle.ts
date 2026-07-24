@@ -67,10 +67,6 @@ export function checkInvariants(lifecycle: LifecycleState): MutationResult {
 	if (lifecycle.cancellationResumeEligible && !isDormant(lifecycle)) {
 		return { ok: false, reason: "cancellationResumeEligible requires exact dormant shape" };
 	}
-	if (lifecycle.cancellationResumeEligible && lifecycle.continueCount !== 0) {
-		return { ok: false, reason: "cancellationResumeEligible requires continueCount === 0" };
-	}
-
 	if (lifecycle.lastReport !== null && (lifecycle.lastReport.status as string) === "continuing") {
 		return { ok: false, reason: "lastReport.status must not be 'continuing'" };
 	}
