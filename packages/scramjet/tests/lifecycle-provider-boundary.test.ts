@@ -23,6 +23,7 @@ import { registerDormantCommandNotice } from "../src/command-status.js";
 import { registerHistory } from "../src/history.js";
 import { activeCommandName, beginProbe, startCommand } from "../src/lifecycle.js";
 import type { CommandDef, ScramjetState } from "../src/types.js";
+import { registerUserInputTool } from "../src/user-input.js";
 import { derivedPhase, freshState } from "./helpers.js";
 
 // issue 352 (Stage 2): prove the provider-boundary invariant through real public
@@ -90,6 +91,7 @@ interface Fixture {
 	 * command-start journaled — the shape replayHistory reconstructs as dormant.
 	 */
 	startCommand(name: string): Promise<void>;
+	userInputTool(): any;
 }
 
 // auto-continue is registered only where its compaction stabilization is exercised.
@@ -110,6 +112,7 @@ async function makeFixture(opts: { autoContinue?: boolean } = {}): Promise<Fixtu
 
 	const captures: StreamCapture[] = [];
 	let currentState!: ScramjetState;
+	let currentUserInputTool: any;
 
 	const buildSession = async (
 		sessionManager: SessionManager,
@@ -130,6 +133,16 @@ async function makeFixture(opts: { autoContinue?: boolean } = {}): Promise<Fixtu
 			// section), then auto-continue (compaction stabilization) where exercised.
 			registerHistory(pi, state);
 			registerDormantCommandNotice(pi, state);
+			const inputPi = new Proxy(pi, {
+				get(target, property, receiver) {
+					if (property !== "registerTool") return Reflect.get(target, property, receiver);
+					return (tool: any) => {
+						currentUserInputTool = tool;
+						target.registerTool(tool);
+					};
+				},
+			});
+			registerUserInputTool(inputPi, state);
 			if (opts.autoContinue) registerAutoContinue(pi, state);
 			// Test-local deterministic compaction output — no network. Mirrors an extension
 			// that supplies compaction content via session_before_compact.
@@ -215,6 +228,7 @@ async function makeFixture(opts: { autoContinue?: boolean } = {}): Promise<Fixtu
 			// a caller ever opts into auto-continue.
 			currentState.clearLifecycleTimers?.();
 		},
+		userInputTool: () => currentUserInputTool,
 	};
 }
 
@@ -339,6 +353,33 @@ describe("lifecycle provider boundary (issue 352 Stage 2)", () => {
 		const captureB = fx.captures[before];
 		expectDormantNotice(captureB, "b:cmd");
 		expect(systemPromptText(captureB)).not.toContain("`a:cmd`");
+	});
+
+	it.each([
+		["confirm", { type: "confirm", message: "Continue?" }, "yes"],
+		["select", { type: "select", message: "Pick", options: [{ value: "a", label: "A" }] }, "a"],
+	] as const)("tree navigation invalidates unresolved same-name %s input", async (_type, params, answer) => {
+		fx = await makeFixture();
+		await fx.startCommand("a:cmd");
+		const sameCommandTip = fx.runtime.session.sessionManager.getLeafId();
+		let resolveInput: (value: unknown) => void = () => {};
+		const pending = fx.userInputTool().execute("pending-input", params, undefined, undefined, {
+			ui: {
+				custom: () =>
+					new Promise((resolve) => {
+						resolveInput = resolve;
+					}),
+			},
+		});
+		await Promise.resolve();
+
+		await fx.runtime.session.navigateTree(sameCommandTip);
+		expect(activeCommandName(fx.state().lifecycle)).toBe("a:cmd");
+		resolveInput(answer);
+		const result = await pending;
+
+		expect(result.details.error).toBe("stale-result");
+		expect(derivedPhase(fx.state().lifecycle)).toBe("dormant");
 	});
 
 	it("compaction while probing stabilizes to dormant and delivers it immediately to the next provider request", async () => {

@@ -1,6 +1,6 @@
 import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { USER_INPUT_PARKED_TYPE } from "../src/history.js";
+import { COMMAND_START_TYPE, registerHistory, USER_INPUT_PARKED_TYPE } from "../src/history.js";
 import { isDormant, isParkedForInput, isProbeDue, isProbeInFlight } from "../src/lifecycle.js";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
@@ -863,6 +863,84 @@ describe("registerUserInputTool — cancellation behavior", () => {
 			expect.objectContaining({ expectedCommand: "mach12:test", currentCommand: "mach12:other" }),
 		);
 	});
+
+	it.each(["session_start", "session_tree"])(
+		"ignores a pending confirm after same-name %s reconstruction",
+		async (eventName) => {
+			let resolveInput: (result: unknown) => void = () => {};
+			const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+			const { pi, handlers, execute } = toolFor(state);
+			registerHistory(pi, state);
+			const promise = execute(
+				{ type: "confirm", message: "Continue?" },
+				{
+					ui: {
+						custom: () =>
+							new Promise((resolve) => {
+								resolveInput = resolve;
+							}),
+					},
+				},
+			);
+			await Promise.resolve();
+
+			const branch = [
+				{
+					type: "custom",
+					customType: COMMAND_START_TYPE,
+					data: { command: "mach12:test", origin: "user", depth: 0, timestamp: 1 },
+				},
+			];
+			for (const handler of handlers.get(eventName) ?? []) {
+				await handler({}, { sessionManager: { getBranch: () => branch } });
+			}
+			resolveInput("yes");
+			const result = await promise;
+
+			expect(result.details.error).toBe("stale-result");
+			expect(isDormant(state.lifecycle)).toBe(true);
+			expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		},
+	);
+
+	it.each(["session_start", "session_tree"])(
+		"ignores a pending select after same-name %s reconstruction",
+		async (eventName) => {
+			let resolveInput: (result: unknown) => void = () => {};
+			const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+			const { pi, handlers, execute } = toolFor(state);
+			registerHistory(pi, state);
+			const promise = execute(
+				{ type: "select", message: "Pick", options: [{ value: "a", label: "A" }] },
+				{
+					ui: {
+						custom: () =>
+							new Promise((resolve) => {
+								resolveInput = resolve;
+							}),
+					},
+				},
+			);
+			await Promise.resolve();
+
+			const branch = [
+				{
+					type: "custom",
+					customType: COMMAND_START_TYPE,
+					data: { command: "mach12:test", origin: "user", depth: 0, timestamp: 1 },
+				},
+			];
+			for (const handler of handlers.get(eventName) ?? []) {
+				await handler({}, { sessionManager: { getBranch: () => branch } });
+			}
+			resolveInput("a");
+			const result = await promise;
+
+			expect(result.details.error).toBe("stale-result");
+			expect(isDormant(state.lifecycle)).toBe(true);
+			expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		},
+	);
 
 	it("ignores stale probing results without resuming the replacement probe", async () => {
 		let resolveInput: (result: unknown) => void = () => {};

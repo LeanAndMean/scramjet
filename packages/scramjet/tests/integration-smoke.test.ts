@@ -411,6 +411,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 			appendEntry(type: string, data: unknown) {
 				appended.push({ type, data });
 			},
+			invokeHarnessTool: async () => ({ content: [], details: {} }),
 			sendMessage(message: any, options?: any) {
 				if (pi.isStreaming) return;
 				probes.push({ message, options });
@@ -467,6 +468,95 @@ describe("integration smoke — lifecycle event sequences", () => {
 		bag.pi.isStreaming = false;
 		await vi.advanceTimersByTimeAsync(0);
 	}
+
+	it("cancelled confirm → prose continuation → completed probe → selector-visible next step", async () => {
+		const cmd: CommandDef = {
+			name: "int:confirm",
+			filePath: "/fake/int:confirm.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const next: CommandDef = { name: "int:next", filePath: "/fake/int:next.md", body: "" };
+		const state = freshState({
+			registry: new Map([
+				[cmd.name, cmd],
+				[next.name, next],
+			]),
+			enabled: true,
+		});
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		ctx.hasUI = true;
+		let selectorCalls = 0;
+		ctx.ui.custom = () => {
+			selectorCalls++;
+			return Promise.resolve(null);
+		};
+		wireAll(bag, state);
+
+		await bag.emit("input", { text: "/int:confirm", source: "interactive" }, ctx);
+		const userInputTool = findTool(bag, "get_scramjet_user_input");
+		const cancelled = await userInputTool.execute(
+			"call-confirm",
+			{ type: "confirm", message: "Use this approach?" },
+			undefined,
+			undefined,
+			ctx,
+		);
+		expect(cancelled.details.cancelled).toBe(true);
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(selectorCalls).toBe(1);
+
+		await bag.emit("input", { text: "Use the other approach", source: "interactive" }, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		await fireProbe(bag, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
+		expect(bag.probes).toHaveLength(1);
+
+		const statusTool = findTool(bag, "report_scramjet_command_status");
+		await statusTool.execute("call-status", {
+			status: "completed",
+			summary: "plan completed",
+			next_steps: [{ message: "/int:next", fresh_session: false, reason: "Continue" }],
+		});
+		await endProbeTurn(bag, ctx);
+		expect(selectorCalls).toBe(2);
+	});
+
+	it("cancelled select → prose continuation → hidden completion probe", async () => {
+		const cmd: CommandDef = {
+			name: "int:select",
+			filePath: "/fake/int:select.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const state = freshState({ registry: new Map([[cmd.name, cmd]]), enabled: true });
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		ctx.hasUI = true;
+		ctx.ui.custom = () => Promise.resolve(null);
+		wireAll(bag, state);
+
+		await bag.emit("input", { text: "/int:select", source: "interactive" }, ctx);
+		const userInputTool = findTool(bag, "get_scramjet_user_input");
+		const cancelled = await userInputTool.execute(
+			"call-select",
+			{ type: "select", message: "Choose", options: [{ value: "a", label: "A" }] },
+			undefined,
+			undefined,
+			ctx,
+		);
+		expect(cancelled.details.cancelled).toBe(true);
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+
+		await bag.emit("input", { text: "Continue with A", source: "interactive" }, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		await fireProbe(bag, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
+		expect(bag.probes).toHaveLength(1);
+		expect(bag.probes[0].message.display).toBe(false);
+		expect(bag.probes[0].options).toEqual({ triggerTurn: true });
+	});
 
 	it("probe self-heal → dormant → interactive reply stays dormant (issue 215: agent-controlled resumption)", async () => {
 		const cmd: CommandDef = {
