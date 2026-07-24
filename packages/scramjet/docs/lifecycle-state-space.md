@@ -10,6 +10,7 @@ Scramjet command lifecycle behavior is driven by orthogonal boolean facts on `Sc
 | Probe armed | `lifecycle.probeArmed` | Should the next `agent_end` fire a status probe? |
 | Probe in flight | `lifecycle.probeInFlight` | Is a probe turn currently running? |
 | Parked for input | `lifecycle.parkedForInput` | Waiting for user freetext reply? |
+| Cancellation resume eligible | `lifecycle.cancellationResumeEligible` | Did Escape from confirm/select create a dormant command that the next interactive non-slash reply may resume? |
 | Continue count | `lifecycle.continueCount` | Bounds consecutive `continuing` reports within one engagement. |
 | Last report | `lifecycle.lastReport` | Terminal status payload set by the tool, consumed by `agent_end`. |
 | Lifecycle generation | `ScramjetState.lifecycleGeneration` | Monotonic counter; deferred timer callbacks verify they still belong to the active command. |
@@ -26,6 +27,7 @@ interface LifecycleState {
   probeArmed: boolean;
   probeInFlight: boolean;
   parkedForInput: boolean;
+  cancellationResumeEligible: boolean;
   continueCount: number;
   lastReport: CommandStatusRestingPayload | null;
 }
@@ -44,6 +46,7 @@ The lifecycle module enforces these invariants on every mutation:
 - `continueCount` is a non-negative integer.
 - `parkedForInput` and `lastReport` both require `continueCount === 0`.
 - Dormant (no mode flags active, but command associated) requires `continueCount === 0`.
+- `cancellationResumeEligible` requires an active command in the exact dormant shape and `continueCount === 0`. It is provenance on dormant, not another mode flag or phase.
 
 ## Derived phases (diagnostic only)
 
@@ -84,8 +87,10 @@ Every mutation validates post-conditions, bumps `lifecycleGeneration`, and logs 
 | `beginProbe(holder, reason)` | Active command, `probeArmed` | Clears `probeArmed`, sets `probeInFlight` |
 | `acceptProbeContinuing(holder)` | `probeInFlight`, under continue limit | Clears `probeInFlight`, arms probe, increments counter |
 | `acceptDormantContinuing(holder)` | Dormant | Arms probe, resets counter to 0 |
-| `acceptTerminalReport(holder, payload)` | `probeArmed`, `probeInFlight`, or dormant, non-continuing status | Clears `probeArmed` and `probeInFlight`, stores report, resets counter |
-| `parkForFreetext(holder)` | Active command | Sets `parkedForInput`, clears all other mode flags and counter |
+| `acceptTerminalReport(holder, payload)` | `probeArmed`, `probeInFlight`, or dormant, non-continuing status | Clears `probeArmed` and `probeInFlight`, stores report, resets counter and cancellation eligibility |
+| `cancelStructuredInput(holder)` | Active command in running or probing shape | Atomically clears probing/running facts and grants cancellation resume eligibility in dormant shape |
+| `resumeAfterCancelledInput(holder)` | Cancellation-eligible dormant command | Atomically clears eligibility and arms the existing probe path |
+| `parkForFreetext(holder)` | Active command | Sets `parkedForInput`, clears all other mode flags, counter, and cancellation eligibility |
 | `resumeFromParkedInput(holder)` | `parkedForInput` | Clears `parkedForInput`, arms probe, resets counter |
 | `resumeAfterProbeInput(holder)` | `probeInFlight` | Clears `probeInFlight`, arms probe, preserves counter |
 
@@ -119,7 +124,7 @@ The `agent_end` handler in `auto-continue.ts` evaluates lifecycle facts in this 
 
 Timer handles (probe, watchdog, dispatch, selector) are closure-local in `auto-continue.ts`. All deferred callbacks verify `lifecycleGeneration` and active command before performing side effects.
 
-Timers are cleared on: command replacement, workflow exit (unknown slash), active command missing from registry, completed clear, blocked/incomplete dormant resolution, freetext park, confirm/select cancellation, abort, and session navigation events (`session_start`, `session_tree`, `session_compact`, `session_shutdown`).
+Timers are cleared on: command replacement, workflow exit (unknown slash), active command missing from registry, completed clear, blocked/incomplete dormant resolution, freetext park, confirm/select cancellation, abort, and session navigation events (`session_start`, `session_tree`, `session_compact`, `session_shutdown`). Every lifecycle reconstruction on `session_start` or `session_tree` also increments `lifecycleGeneration`, even when the rebuilt command and facts are identical, so an unresolved confirm/select result from the prior tree cannot pass same-name generation guards.
 
 The `setTimeout(0)` deferral for probe scheduling and completed dispatch remains load-bearing: Pi is still streaming during `agent_end` handlers, and the defer ensures `isStreaming` has cleared and `agent.prompt()` has resolved.
 
@@ -127,32 +132,35 @@ The `setTimeout(0)` deferral for probe scheduling and completed dispatch remains
 
 Every accepted status report is journaled as a `scramjet:command-status` entry — including `continuing` (issue 278) — so that incremental work summaries form a searchable artifact trail. Terminal statuses (`completed`/`blocked`/`incomplete`) are journaled at `agent_end` dispatch time (`auto-continue.ts`), not at tool-execute time — so an abort before `agent_end` prevents the entry from being written and replay reconstructs dormant (issue 336). `continuing` statuses are journaled at tool-execute time (`command-status.ts`) since they are replay-inert. Persisted `continuing` summaries are **observational only**: `VALID_RESTING_STATUSES` excludes `continuing`, so replay ignores them entirely and never reconstructs a resting state from a `continuing` entry.
 
-Two additional durable outcomes cover the transitions that mutate live lifecycle facts but previously left replay reconstructing the *preceding* durable shape (issue 352):
+Durable outcomes cover transitions that mutate live lifecycle facts but would otherwise leave replay reconstructing the preceding durable shape:
 
 - **Consumed parked reply** (`scramjet:user-input-parked` with `{ commandName, parked: false }`): written only after a successful `resumeFromParkedInput()` when an interactive non-slash reply consumes a parked command. The reply text is never persisted. The original park entry carries `{ commandName, parked: true }`; a legacy entry that omits `parked` is treated as `parked: true`.
 - **Workflow exit** (`scramjet:command-exited` with `{ commandName }`): written only after a successful `clearActiveCommand()` when a truly unknown slash exits the workflow. Known Pi commands and `getCommands()` lookup failures preserve the workflow and emit no exit.
+- **Structured-input cancellation** (`scramjet:structured-input-cancellation` with `{ commandName, resumable }`): `resumable: true` grants cancellation-origin eligibility after Escape; `resumable: false` consumes or invalidates that grant. Grant persistence happens after the lifecycle mutation; if append fails, Scramjet falls back to generic dormant. Consumption is persisted before arming; if append fails, Scramjet remains eligible dormant. Neither outcome contains prompt answers or reply text.
 
 Reconstruction is driven by command-start entries, parked markers, consumed-reply outcomes, workflow exits, and terminal statuses, folded chronologically over the selected branch (`parentId` ancestry, not physical JSONL order):
 
 - A depth-0 command start resets the fold, associating the command in the dormant shape and clearing any parked state. Later starts, statuses, parks, consumed outcomes, and exits supersede earlier outcomes.
-- A matching `parked: true` (or omitted) sets waiting; a matching `parked: false` sets waiting to false; a malformed `parked` value is inert.
-- A matching exit (same active command) clears the command and parked state to idle; an exit naming a different command, or a malformed exit, is inert.
+- A matching `parked: true` (or omitted) sets waiting and clears cancellation eligibility; a matching `parked: false` sets waiting to false; a malformed `parked` value is inert.
+- A matching structured-input cancellation sets eligibility to its boolean `resumable` value only for the active command; malformed or mismatched entries are inert. A later depth-zero start, terminal status, park, or exit supersedes the grant. Branch rewinds follow selected ancestry, so rewinding before a `resumable: false` consumption restores the earlier grant.
+- A matching exit (same active command) clears the command, parked state, and cancellation eligibility to idle; an exit naming a different command, or a malformed exit, is inert.
 
 The command-name payloads carry no independent same-name invocation identity: a depth-0 start resets the chronological fold, so a later matching start re-associates the command regardless of prior outcomes. A later park after a consumed reply restores waiting; a rewind to before consumption remains waiting because the consumed outcome is not on the selected ancestry.
 
 Replay reconstructs only stable resting states from journal entries:
 
 - **Parked** (`parkedForInput = true`): when the last parked outcome for the active command is `parked: true` (or a legacy park with no `parked` field) and no later consumed-reply outcome or exit supersedes it.
-- **Dormant** (no mode flags): when a command start is associated but no parked entry is active (including after a consumed reply) and no terminal status was reported. No-policy commands reconstruct to dormant identically — they resume via explicit `continuing` through the status tool.
+- **Cancellation-resumable dormant** (`cancellationResumeEligible = true`): when the latest unsuperseded matching structured-input outcome is `resumable: true`. Only the next interactive non-slash reply consumes it and arms probing; known slash commands preserve it, while a registered command start or unknown-slash workflow exit supersedes it.
+- **Generic dormant** (no mode flags and `cancellationResumeEligible = false`): when a command start is associated but no parked entry or cancellation grant is active (including after a consumed reply) and no terminal status was reported. It resumes only through explicit `continuing` or a direct terminal report.
 - **Idle**: when no active command is resumable, when a workflow exit cleared the active command, or when the active command's last status was `completed`.
 
-Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = false`, `lastReport = null`, `continueCount = 0`.
+Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = false`, `lastReport = null`, `continueCount = 0`. Cancellation eligibility is the narrow durable exception because it is reconstructed from dedicated true/false outcomes.
 
 ## Module ownership map
 
 - `lifecycle.ts`: defines `LifecycleState` (fact interface), invariant checks, query helpers, and mutation helpers with generation bumping and logging.
 - `types.ts`: defines status payloads, `ScramjetState` (extending `LifecycleHolder`), and `LifecycleTimerAccessors`.
-- `history.ts`: owns command-start journaling, replay reconstruction (chronological selected-branch fold), interactive reply resume with consumed-reply (`parked: false`) journaling, and workflow exit on unknown slash input with `scramjet:command-exited` journaling.
+- `history.ts`: owns command-start journaling, replay reconstruction (chronological selected-branch fold), interactive reply resume for parked and cancellation-eligible commands, cancellation true/false outcomes, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns `agent_end` decision tree, probe scheduling, timer management, status routing, selector/dispatch timers, and terminal resolution.
 - `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and `continuing` status journaling.
 - `auto-continue.ts` also owns terminal status journaling (deferred to `agent_end` dispatch time so aborts prevent the entry from being written — issue 336).
@@ -160,7 +168,7 @@ Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = 
 
 ## Runtime diagnosis
 
-All lifecycle mutations and decision points are instrumented via `state.logger.lifecycle(...)`. Lifecycle log messages from `lifecycle.ts` are prefixed `lifecycle: <event>` (e.g., `lifecycle: startCommand`, `lifecycle: enterDormant`). Log entries from `auto-continue.ts` use descriptive labels (e.g., `agent_end observed`, `status probe preparing`, `status probe sent`). Entries from `auto-continue.ts` include a `phase` field with the derived phase label for filtering. Entries from `lifecycle.ts` include a fact snapshot (`probeArmed`, `probeInFlight`, `parkedForInput`, `continueCount`, `hasReport`) from which the phase can be derived.
+All lifecycle mutations and decision points are instrumented via `state.logger.lifecycle(...)`. Lifecycle log messages from `lifecycle.ts` are prefixed `lifecycle: <event>` (e.g., `lifecycle: startCommand`, `lifecycle: enterDormant`). Log entries from `auto-continue.ts` use descriptive labels (e.g., `agent_end observed`, `status probe preparing`, `status probe sent`). Entries from `auto-continue.ts` include a `phase` field with the derived phase label for filtering. Entries from `lifecycle.ts` include a fact snapshot (`probeArmed`, `probeInFlight`, `parkedForInput`, `cancellationResumeEligible`, `continueCount`, `hasReport`) from which the phase can be derived. Cancellation grant/consume/invalidate/preserve/ignore boundaries use the `cancellation-resume` debug category with command, generation, input source where applicable, and a reason; they never include reply text or command arguments.
 
 To diagnose why a transition did or didn't happen, query the session JSONL for `scramjet:log` entries. See `docs/logging.md` for the entry schema, query patterns, and a step-by-step diagnostic workflow.
 
@@ -170,6 +178,6 @@ The fact-based lifecycle replaces the prior discriminated phase union (`phase-ma
 
 Key behavioral changes from the phase machine:
 - `blocked` and `incomplete` statuses keep the command associated (dormant), rather than dropping to idle and losing the command.
-- Dormant commands resume through explicit `continuing` via the status tool, not through any user reply. Dormant commands can also report terminal status directly without resuming.
+- Generic dormant commands resume through explicit `continuing` via the status tool, not through user replies. The narrow exception is cancellation-resumable dormancy: the next interactive non-slash reply consumes the durable grant and arms the normal probe path. Any dormant command can also report terminal status directly.
 - Abort is a simple fact mutation (disarm and enter dormant), not a transition table edge.
 - Error handling is retry-safe: probe-armed and probe-in-flight state survive errors so Pi retries can naturally trigger probes or report status on success.
