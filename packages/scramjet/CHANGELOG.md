@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.60.0 — Add an independent-assessor agent for the Mach 12 assessment commands
+
+Adds a dedicated `mach12:independent-assessor` subagent so the two Mach 12 commands that ran an independent-assessment step no longer dispatch to a "general-purpose subagent" that did not exist in the bundled roster. The new agent re-derives a verdict on each supplied finding independent of the original author's conclusion, and both call sites are repointed at it. Fixes [#377](https://github.com/LeanAndMean/scramjet/issues/377).
+
+### Added
+
+- `packages/scramjet/mach12/agents/mach12:independent-assessor.md`: a taxonomy-agnostic adjudicator that re-derives a verdict on each supplied finding on two axes (is the problem real; is the suggested change a net improvement), covering both the code-review and issue/plan assessment call sites.
+
+### Changed
+
+- `mach12:pr-review-assessment.md`, `mach12:issue-review.md`: dispatch the independent-assessment step to `mach12:independent-assessor` by name instead of a nonexistent general-purpose subagent; drop the now-unneeded "or a clearly separate self-review pass" hedge in issue-review.
+- `CLAUDE.md`: updated the bundled-subagent roster count and description to include the finding-adjudication agent.
+
+### Tests
+
+- `packages/scramjet/tests/mach12-wiring.test.ts`: added `mach12:independent-assessor` to the roster and asserted that both commands reference the agent and neither references "general-purpose subagent".
+
 ## 0.59.1 — Add the Scramjet logo to published documentation
 
 Adds a canonical Scramjet logo to the root and package READMEs, includes the asset in the published npm package, and verifies its exact tarball path in CI. Fixes [#379](https://github.com/LeanAndMean/scramjet/issues/379).
