@@ -263,7 +263,9 @@ This is more explicit than a generic "populate `next_steps` based on the outcome
 
 ## 4. Delegation Pattern
 
-Commands can invoke other commands as subroutines using the `delegate` tool. The delegated command's body is returned as text in the tool result — the agent reads it and follows its instructions within the same conversation.
+Commands can invoke other commands as subroutines using the `delegate` tool. The delegated command's body is returned as text in the tool result — the agent reads it and follows its instructions within the same conversation. The complete body remains model-visible and persisted in the transcript, while the TUI shows a compact invocation by default. The global tool-output expansion binding (Ctrl+O by default) reveals or re-collapses the complete delegated content.
+
+Delegate diagnostics fail open: unknown commands, cycles, runtime errors, partial results, and malformed legacy results remain visible while collapsed. A successful delegation with an empty effective tool scope keeps a concise warning visible even though its body is collapsed.
 
 ### Invoking a delegate
 

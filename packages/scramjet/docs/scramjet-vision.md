@@ -612,9 +612,11 @@ execute it.)
   only at the top level. Delegated commands return to their caller; the
   caller's `next` controls what (if anything) chains afterward.
 - **Output visibility:** the delegated body is materialized into the
-  transcript as a tool result, so it is visible by construction. There
-  is no separate "collapsed" vs "inline" decision — the agent sees what
-  it acted on.
+  transcript as a tool result, so the agent sees what it acted on and the
+  complete content remains persisted. The TUI is a compact projection:
+  successful delegations show only their invocation by default, and the
+  global tool-output expansion binding reveals or re-collapses the full
+  body. Diagnostics remain visible while collapsed.
 
 ##### Tool-scoping enforcement (advisory in MVP)
 
@@ -1046,10 +1048,12 @@ edges, and stays out of the way.
   reads it and follows its instructions in the same conversation
   context. Subprocess-based dispatch was considered (and prior
   assessments recommended it) but is superseded.
-- **Output visibility of delegated commands.** Resolved by the dispatch
-  decision: the delegated body materializes in the transcript as a
-  tool result and is visible by construction. No separate
-  "collapsed-vs-inline" knob.
+- **Output visibility of delegated commands.** Resolved by separating
+  transcript semantics from presentation: the delegated body materializes
+  in the transcript as a model-visible, persisted tool result, while the
+  TUI presents successful delegations compactly by default. The existing
+  global tool-output expansion binding reveals or re-collapses the full
+  body; there is no delegate-specific visibility state.
 
 ### Mach 12-level
 

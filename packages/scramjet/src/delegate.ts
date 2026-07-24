@@ -1,4 +1,5 @@
-import type { ExtensionAPI } from "@leanandmean/coding-agent";
+import { type ExtensionAPI, keyText } from "@leanandmean/coding-agent";
+import { Container, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { parseDelegateArgs, substituteArguments } from "./commands/substitute.js";
 import { recordCommandInvocation } from "./history.js";
@@ -11,6 +12,51 @@ interface DelegateDetails {
 	effectiveAllowedTools?: string[];
 	error?: "unknown_command" | "cycle";
 	chain?: string;
+}
+
+const MAX_RENDERED_ARGS = 60;
+
+function renderedArgs(args: unknown): string {
+	if (typeof args !== "string") return "";
+	const singleLine = args.replace(/\s+/g, " ").trim();
+	return singleLine.length <= MAX_RENDERED_ARGS ? singleLine : `${singleLine.slice(0, MAX_RENDERED_ARGS)}…`;
+}
+
+function textContent(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((entry): entry is { type: "text"; text: string } => {
+			return typeof entry === "object" && entry !== null && entry.type === "text" && typeof entry.text === "string";
+		})
+		.map((entry) => entry.text)
+		.join("\n");
+}
+
+function recognizedSuccess(
+	result: unknown,
+	isPartial: boolean,
+	isError: boolean,
+): result is {
+	content: [{ type: "text"; text: string }];
+	details: DelegateDetails;
+} {
+	if (isPartial || isError || typeof result !== "object" || result === null) return false;
+	const { content, details } = result as { content?: unknown; details?: unknown };
+	if (typeof details !== "object" || details === null || Array.isArray(details)) return false;
+	if (!("command" in details) || typeof details.command !== "string" || details.command.length === 0) return false;
+	if ("error" in details) return false;
+	if ("effectiveAllowedTools" in details) {
+		if (!Array.isArray(details.effectiveAllowedTools)) return false;
+		if (!details.effectiveAllowedTools.every((tool) => typeof tool === "string")) return false;
+	}
+	return (
+		Array.isArray(content) &&
+		content.length === 1 &&
+		typeof content[0] === "object" &&
+		content[0] !== null &&
+		content[0].type === "text" &&
+		typeof content[0].text === "string"
+	);
 }
 
 export function detectCycle(stack: DelegateFrame[], commandName: string): boolean {
@@ -44,6 +90,33 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 					'Argument string (bash-style: whitespace-split, single/double quotes group). Pass "" for no arguments.',
 			}),
 		}),
+		renderCall(args, theme) {
+			const command = typeof args?.command === "string" && args.command.length > 0 ? `/${args.command}` : "delegate";
+			const compactArgs = renderedArgs(args?.args);
+			const invocation = compactArgs ? `${command} ${compactArgs}` : command;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("delegate")) +
+					theme.fg("toolOutput", ` ${invocation}`) +
+					theme.fg("dim", ` (${keyText("app.tools.expand")} to expand)`),
+				0,
+				0,
+			);
+		},
+		renderResult(result, options, theme, context) {
+			const fullText = textContent(result.content);
+			if (!recognizedSuccess(result, options.isPartial, context.isError)) {
+				return new Text(theme.fg("toolOutput", fullText), 0, 0);
+			}
+			if (options.expanded) return new Text(theme.fg("toolOutput", result.content[0].text), 0, 0);
+			if (result.details.effectiveAllowedTools?.length === 0) {
+				return new Text(
+					theme.fg("warning", "WARNING: effective allowed-tools scope is empty; this delegate cannot use tools."),
+					0,
+					0,
+				);
+			}
+			return new Container();
+		},
 		async execute(_id, params) {
 			const def = state.registry.get(params.command);
 			if (!def) {
