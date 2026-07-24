@@ -33,6 +33,9 @@ export function registerSuggestNextStepsTool(pi: ExtensionAPI, state: ScramjetSt
 			"The user can accept (Enter) to dispatch or dismiss (Escape) with no side effects. " +
 			"Only available when no Scramjet command is active (idle state).",
 		promptSnippet: PROMPT_SNIPPET,
+		promptGuidelines: [
+			"When idle in an interactive session, prefer `suggest_scramjet_next_steps` when the user explicitly asks for the next Scramjet command or when you independently recommend a concrete registered command at an idle natural pause. Concise supporting prose is allowed, but do not leave an otherwise eligible actionable command as prose-only text. Treat the available command catalog as the authority for command names and required arguments.",
+		],
 		parameters: Type.Object({
 			next_steps: Type.Array(NEXT_STEP_SCHEMA, {
 				minItems: 1,

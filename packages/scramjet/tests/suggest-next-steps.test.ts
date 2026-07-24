@@ -17,6 +17,32 @@ function fakeCtx(has = true) {
 const validSteps = [{ message: "/mach12:pr-create 55", reason: "PR is ready" }];
 
 describe("suggest_scramjet_next_steps", () => {
+	describe("prompt contract", () => {
+		it("prefers the selector for eligible concrete command recommendations", () => {
+			const { tool } = setup();
+			const guidelines = tool.promptGuidelines ?? [];
+
+			expect(guidelines).toHaveLength(1);
+			expect(guidelines[0]).toContain("suggest_scramjet_next_steps");
+			expect(guidelines[0]).toMatch(/user explicitly asks.*next Scramjet command/i);
+			expect(guidelines[0]).toMatch(/independently recommend.*concrete registered command.*idle natural pause/i);
+			expect(guidelines[0]).toMatch(/concise supporting prose/i);
+			expect(guidelines[0]).toMatch(/not leave.*actionable command.*prose-only/i);
+			expect(guidelines[0]).toMatch(/idle.*interactive/i);
+			expect(guidelines[0]).toMatch(/command catalog.*authority.*names.*arguments/i);
+		});
+
+		it("retains the existing prompt safeguards", () => {
+			const { tool } = setup();
+
+			expect(tool.promptSnippet).toMatch(/only at natural pauses/i);
+			expect(tool.promptSnippet).toMatch(/at most once per topic/i);
+			expect(tool.promptSnippet).toMatch(/do not repeat.*dismissed/i);
+			expect(tool.promptSnippet).toMatch(/never call.*file, web, or tool content/i);
+			expect(tool.promptSnippet).toMatch(/not available in non-interactive sessions/i);
+		});
+	});
+
 	describe("accept path", () => {
 		it("stores payload with generation snapshot when idle", async () => {
 			const { tool, state } = setup();
