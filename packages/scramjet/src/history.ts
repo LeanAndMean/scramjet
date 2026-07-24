@@ -121,6 +121,7 @@ export function recordCommandInvocation(
 		depth,
 		timestamp: Date.now(),
 	};
+	pi.appendEntry(COMMAND_START_TYPE, entry);
 	if (depth === 0) {
 		state.clearLifecycleTimers?.();
 		const result = startCommand(state, name);
@@ -133,7 +134,6 @@ export function recordCommandInvocation(
 		}
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
-	pi.appendEntry(COMMAND_START_TYPE, entry);
 }
 
 // Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
@@ -214,7 +214,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			// missing/non-string command would erase activeTopLevelCommand and
 			// silently break all subsequent next-step policy lookups. The TS cast
 			// above otherwise hides this from the compiler. (F10)
-			if (!data || typeof data.command !== "string" || data.command === "") continue;
+			if (!data || typeof data.command !== "string" || data.command.trim() === "") continue;
 			sidebarLog = appendSidebarEntry(sidebarLog, data);
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
@@ -311,7 +311,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		state.freetextAwaitingReply = false;
 	});
 
-	pi.on("input", async (event) => {
+	pi.on("input", async (event, ctx) => {
 		state.pendingSuggestion = null;
 		state.freetextAwaitingReply = false;
 		const name = parseSlashCommand(event.text, state.registry);
@@ -331,6 +331,10 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 						command,
 						error: message,
 					});
+					ctx.ui?.notify(
+						"scramjet: your reply could not durably resume the cancelled command; please try again.",
+						"warning",
+					);
 					return;
 				}
 				resumeAfterCancelledInput(state);
@@ -365,15 +369,11 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 				if (!isKnownSlashCommand(event.text, pi, state)) {
 					const command = activeCommandName(state.lifecycle);
 					const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
+					if (command) pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: command });
 					state.clearLifecycleTimers?.();
 					const result = clearActiveCommand(state, "unknown-slash");
-					// Record the exit only when the active command was actually cleared,
-					// so replay reconstructs idle rather than dormant.
-					if (result.ok && command) {
-						pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: command });
-						if (invalidatedCancellation) {
-							logCancellationResume(state, "eligibility invalidated", command, event.source, "unknown-slash");
-						}
+					if (result.ok && command && invalidatedCancellation) {
+						logCancellationResume(state, "eligibility invalidated", command, event.source, "unknown-slash");
 					}
 				} else if (state.lifecycle.cancellationResumeEligible) {
 					logCancellationResume(

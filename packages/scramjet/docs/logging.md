@@ -172,7 +172,7 @@ Besides command-status reports, custom entries record lifecycle transitions that
 ```
 
 - `parked: true` — the command parked on a freetext prompt (written only after a successful park). Reconstructs `waiting`.
-- `parked: false` — an interactive non-slash reply consumed the park (written only after a successful resume). Reconstructs `dormant`. The reply text is never persisted.
+- `parked: false` — an interactive non-slash reply consumed the park (written only after a successful resume). Reconstructs `dormant`. This custom outcome does not duplicate the reply text; the editor reply remains a normal persisted user message.
 - **Legacy:** entries written before the flag existed omit `parked` and mean `parked: true`. Match legacy-or-parked with `(.data.parked != false)`.
 
 **Structured-input cancellation outcomes** (`scramjet:structured-input-cancellation`) carry `{ commandName, resumable }`:
@@ -254,9 +254,9 @@ Search for issue numbers, PR numbers, filenames, component names, or decision ke
 
 ## Runtime and command provenance
 
-At each `session_start`, Scramjet emits `category: "runtime"`, `message: "runtime versions"` with exact versions for `@leanandmean/scramjet`, `coding-agent`, `agent`, `ai`, and `tui`. Versions describe the current runtime only; old sessions cannot be retroactively attributed.
+At each `session_start`, Scramjet emits `category: "runtime"`, `message: "runtime versions"` with resolved versions for `@leanandmean/scramjet`, `coding-agent`, `agent`, `ai`, and `tui`. Any version whose package metadata cannot be resolved, read, parsed, or validated is recorded as `unknown`. Versions describe the current runtime only; old sessions cannot be retroactively attributed.
 
-Command discovery emits one `category: "discovery"`, `message: "command discovered"` entry per winning command definition. Data includes `command`, `scope` (`global` or `project`), a privacy-safe normalized `source`, and a 12-character SHA-256 content `fingerprint`. Global sources are relative to the command-set root (for example `mach12/commands/mach12:issue-plan.md`); project sources are prefixed `.scramjet/`. Raw home directories, command bodies, and arguments are not logged. When duplicate names exist, only the registry winner is logged.
+Command discovery emits one `category: "discovery"`, `message: "command discovered"` entry per winning command definition. Data includes `command`, `scope` (`global` or `project`), a privacy-safe normalized `source`, and a 12-character SHA-256 content `fingerprint`. Global sources are relative to the command-set root (for example `mach12/commands/mach12:issue-plan.md`); project sources are prefixed `.scramjet/`. These successful provenance entries omit raw home directories, command bodies, and arguments; discovery warnings may include absolute paths needed to diagnose filesystem failures. When duplicate names exist, only the registry winner is logged.
 
 ```sh
 jq -c 'select(.type == "custom" and .customType == "scramjet:log" and (.data.category == "runtime" or (.data.category == "discovery" and .data.message == "command discovered"))) | .data' session.jsonl
@@ -378,5 +378,5 @@ When a session misbehaves (command didn't chain, probe didn't fire, unexpected p
 | Double agent_end | Two `"agent_end observed"` without intervening probe | Fast successive turns; second skipped by lifecycle guard |
 | Self-heal to dormant | `"lifecycle: enterDormant"` after probe | Probe ended without report; command preserved for explicit resume |
 | Cancelled prompt did not resume | `cancellation-resume` timeline plus structured cancellation outcomes | Confirm/select grant failed to persist, input was not interactive non-slash, or another boundary superseded eligibility |
-| Wrong build or command content suspected | `runtime versions` and winning `command discovered` fingerprint | Compare exact package versions, scope/source, and content fingerprint without exposing local paths or command bodies |
+| Wrong build or command content suspected | `runtime versions` and winning `command discovered` fingerprint | Compare resolved package versions (`unknown` when metadata is unavailable), scope/source, and content fingerprint; successful provenance entries omit raw home paths and command bodies |
 | `[scramjet/logger] Failed to persist ...` on stderr | Category, message, and persistence error in the fallback diagnostic | Session journal persistence failed; later appends are still attempted, but the fallback appears only once per logger lifetime |

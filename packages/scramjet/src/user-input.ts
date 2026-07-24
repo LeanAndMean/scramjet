@@ -121,13 +121,11 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 					interactionType: params.type,
 					message: params.message,
 				});
+				const command = activeCommandName(state.lifecycle);
+				if (command) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: command, parked: true });
 				if (isProbeInFlight(state.lifecycle)) state.suspendProbeWatchdog?.();
 				const parkResult = parkForFreetext(state);
-				if (parkResult.ok) {
-					state.freetextAwaitingReply = true;
-					const command = activeCommandName(state.lifecycle);
-					if (command) pi.appendEntry(USER_INPUT_PARKED_TYPE, { commandName: command, parked: true });
-				}
+				if (parkResult.ok) state.freetextAwaitingReply = true;
 				return {
 					content: [{ type: "text", text: JSON.stringify({ parked: parkResult.ok }) }],
 					details: { type: "freetext", parked: parkResult.ok },

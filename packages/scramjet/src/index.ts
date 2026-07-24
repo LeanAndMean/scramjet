@@ -40,20 +40,34 @@ export interface RuntimeVersions {
 	tui: string;
 }
 
+export function readPackageVersion(metadataPath: string, packageName: string): string {
+	try {
+		const metadata: unknown = JSON.parse(readFileSync(metadataPath, "utf8"));
+		if (!metadata || typeof metadata !== "object") return "unknown";
+		const { name, version } = metadata as { name?: unknown; version?: unknown };
+		return name === packageName && typeof version === "string" && version.trim() !== "" ? version : "unknown";
+	} catch {
+		return "unknown";
+	}
+}
+
 function packageVersion(packageName: string): string {
-	for (const root of createRequire(import.meta.url).resolve.paths(packageName) ?? []) {
-		const metadataPath = join(root, packageName, "package.json");
-		if (!existsSync(metadataPath)) continue;
-		const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as { name?: string; version?: string };
-		if (metadata.name === packageName && metadata.version) return metadata.version;
+	try {
+		for (const root of createRequire(import.meta.url).resolve.paths(packageName) ?? []) {
+			const metadataPath = join(root, packageName, "package.json");
+			if (!existsSync(metadataPath)) continue;
+			const version = readPackageVersion(metadataPath, packageName);
+			if (version !== "unknown") return version;
+		}
+	} catch {
+		return "unknown";
 	}
 	return "unknown";
 }
 
 export function runtimeVersions(): RuntimeVersions {
-	const scramjet = JSON.parse(readFileSync(join(packageRoot(), "package.json"), "utf8")) as { version: string };
 	return {
-		scramjet: scramjet.version,
+		scramjet: readPackageVersion(join(packageRoot(), "package.json"), "@leanandmean/scramjet"),
 		agent: packageVersion("@leanandmean/agent"),
 		ai: packageVersion("@leanandmean/ai"),
 		codingAgent: packageVersion("@leanandmean/coding-agent"),

@@ -788,6 +788,26 @@ describe("registerUserInputTool — dormant phase behavior", () => {
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_PARKED_TYPE)).toHaveLength(1);
 	});
+
+	it("preserves cancellation eligibility when parked-marker persistence fails", async () => {
+		const state = freshState({
+			lifecycle: {
+				...lifecycleFor("dormant", "mach12:test"),
+				cancellationResumeEligible: true,
+			},
+		});
+		const { execute, pi } = toolFor(state);
+		const appendEntry = pi.appendEntry;
+		pi.appendEntry = (type: string, data: unknown) => {
+			if (type === USER_INPUT_PARKED_TYPE) throw new Error("disk full");
+			appendEntry(type, data);
+		};
+
+		await expect(execute({ type: "freetext", message: "Release title?" })).rejects.toThrow("disk full");
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(state.freetextAwaitingReply).toBe(false);
+	});
 });
 
 describe("registerUserInputTool — cancellation behavior", () => {

@@ -558,6 +558,10 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
 			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(ctxBag.notifications).toContainEqual({
+				message: expect.stringContaining("could not durably revoke"),
+				type: "warning",
+			});
 		});
 
 		it("aborted during probing clears probe and enters dormant", async () => {

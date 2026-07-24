@@ -195,7 +195,7 @@ describe("replayHistory", () => {
 		expect(result.sidebarLog.map((e) => e.command)).toEqual(["ok"]);
 	});
 
-	it("ignores command-start entries with non-string or empty command field (F10)", () => {
+	it("ignores command-start entries with non-string, empty, or whitespace-only command fields (F10)", () => {
 		// A corrupt journal entry where data.command is undefined/null/empty
 		// would otherwise set activeTopLevelCommand to a bogus value and break
 		// subsequent policy lookups. The TS cast at the read site otherwise
@@ -204,6 +204,7 @@ describe("replayHistory", () => {
 			cmdStart("first"),
 			customEntry(COMMAND_START_TYPE, { origin: "user", depth: 0, timestamp: 0 }),
 			customEntry(COMMAND_START_TYPE, { command: "", origin: "user", depth: 0, timestamp: 0 }),
+			customEntry(COMMAND_START_TYPE, { command: " \t", origin: "user", depth: 0, timestamp: 0 }),
 			customEntry(COMMAND_START_TYPE, { command: 42, origin: "user", depth: 0, timestamp: 0 }),
 		];
 		const result = replayHistory(entries);
@@ -893,7 +894,7 @@ describe("registerHistory — input event", () => {
 			},
 		);
 
-		it("leaves cancellation-eligible dormancy unchanged when consumption persistence fails", async () => {
+		it("leaves cancellation-eligible dormancy unchanged and warns when consumption persistence fails", async () => {
 			const state = freshState({
 				registry: registryOf(["mach12:pr-create"]),
 				lifecycle: {
@@ -902,13 +903,55 @@ describe("registerHistory — input event", () => {
 				},
 			});
 			const { pi, emit } = recordingPi();
+			const notify = vi.fn();
 			pi.appendEntry = () => {
 				throw new Error("disk full");
 			};
 			registerHistory(pi, state);
-			await emit("input", { text: "continue", source: "interactive" });
+			await emit("input", { text: "continue", source: "interactive" }, { ui: { notify } });
 			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(notify).toHaveBeenCalledWith(expect.stringContaining("could not durably resume"), "warning");
+		});
+
+		it("preserves cancellation eligibility when replacement command persistence fails", () => {
+			const state = freshState({
+				lifecycle: {
+					...lifecycleFor("dormant", "old:cmd"),
+					cancellationResumeEligible: true,
+				},
+				clearLifecycleTimers: vi.fn(),
+			});
+			const { pi } = recordingPi();
+			pi.appendEntry = () => {
+				throw new Error("disk full");
+			};
+
+			expect(() => recordCommandInvocation(pi, state, "new:cmd", "user", 0)).toThrow("disk full");
+			expect(activeCommandName(state.lifecycle)).toBe("old:cmd");
+			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(state.clearLifecycleTimers).not.toHaveBeenCalled();
+		});
+
+		it("preserves cancellation eligibility when workflow-exit persistence fails", async () => {
+			const state = freshState({
+				lifecycle: {
+					...lifecycleFor("dormant", "old:cmd"),
+					cancellationResumeEligible: true,
+				},
+				clearLifecycleTimers: vi.fn(),
+			});
+			const { pi, emit } = recordingPi();
+			pi.getCommands = () => [];
+			pi.appendEntry = () => {
+				throw new Error("disk full");
+			};
+			registerHistory(pi, state);
+
+			await expect(emit("input", { text: "/unknown", source: "interactive" })).rejects.toThrow("disk full");
+			expect(activeCommandName(state.lifecycle)).toBe("old:cmd");
+			expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+			expect(state.clearLifecycleTimers).not.toHaveBeenCalled();
 		});
 
 		it("does NOT auto-resume dormant on interactive non-slash reply (issue 215: agent-controlled resumption)", async () => {

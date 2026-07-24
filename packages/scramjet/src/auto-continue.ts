@@ -973,6 +973,10 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 						error: message,
 						reason: "aborted",
 					});
+					ctx.ui.notify(
+						"scramjet: abort could not durably revoke cancellation resumability; the command remains resumable.",
+						"warning",
+					);
 					return;
 				}
 			}

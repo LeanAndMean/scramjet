@@ -1,4 +1,5 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,7 @@ import { registerCommandStatusTool } from "../src/command-status.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import { registerDelegateTool } from "../src/delegate.js";
 import { registerHistory } from "../src/history.js";
-import { initScramjet } from "../src/index.js";
+import { initScramjet, readPackageVersion } from "../src/index.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
@@ -174,6 +175,33 @@ describe("integration smoke — advisory warning against real subroutine scope",
 // section (the identity anchor is unique to the base directives, so its presence
 // proves the injector ran).
 describe("integration smoke — runtime provenance wired into the extension factory", () => {
+	it("returns unknown for unreadable, malformed, or structurally invalid package metadata", () => {
+		const dir = mkdtempSync(join(tmpdir(), "scramjet-runtime-version-"));
+		try {
+			const metadataPath = join(dir, "package.json");
+			expect(readPackageVersion(metadataPath, "example")).toBe("unknown");
+
+			writeFileSync(metadataPath, "{");
+			expect(readPackageVersion(metadataPath, "example")).toBe("unknown");
+
+			for (const metadata of [
+				{},
+				{ name: "example" },
+				{ name: "example", version: 3 },
+				{ name: "other", version: "1.0.0" },
+				{ name: "example", version: " " },
+			]) {
+				writeFileSync(metadataPath, JSON.stringify(metadata));
+				expect(readPackageVersion(metadataPath, "example")).toBe("unknown");
+			}
+
+			writeFileSync(metadataPath, JSON.stringify({ name: "example", version: "1.2.3" }));
+			expect(readPackageVersion(metadataPath, "example")).toBe("1.2.3");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("logs exact Scramjet runtime versions at session start", async () => {
 		const { pi, handlers } = recordingPi();
 		initScramjet(pi);
