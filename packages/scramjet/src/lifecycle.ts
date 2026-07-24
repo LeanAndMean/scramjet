@@ -6,6 +6,7 @@ export interface LifecycleState {
 	readonly probeArmed: boolean;
 	readonly probeInFlight: boolean;
 	readonly parkedForInput: boolean;
+	readonly cancellationResumeEligible: boolean;
 	readonly continueCount: number;
 	readonly lastReport: CommandStatusRestingPayload | null;
 }
@@ -28,6 +29,7 @@ export function createLifecycle(): LifecycleState {
 		probeArmed: false,
 		probeInFlight: false,
 		parkedForInput: false,
+		cancellationResumeEligible: false,
 		continueCount: 0,
 		lastReport: null,
 	};
@@ -38,6 +40,9 @@ export function checkInvariants(lifecycle: LifecycleState): MutationResult {
 		if (lifecycle.probeArmed) return { ok: false, reason: "probeArmed must be false when no active command" };
 		if (lifecycle.probeInFlight) return { ok: false, reason: "probeInFlight must be false when no active command" };
 		if (lifecycle.parkedForInput) return { ok: false, reason: "parkedForInput must be false when no active command" };
+		if (lifecycle.cancellationResumeEligible) {
+			return { ok: false, reason: "cancellationResumeEligible must be false when no active command" };
+		}
 		if (lifecycle.continueCount !== 0) return { ok: false, reason: "continueCount must be 0 when no active command" };
 		if (lifecycle.lastReport !== null) return { ok: false, reason: "lastReport must be null when no active command" };
 		return { ok: true };
@@ -57,6 +62,13 @@ export function checkInvariants(lifecycle: LifecycleState): MutationResult {
 			ok: false,
 			reason: "only one mode flag may be active (probeArmed, probeInFlight, parkedForInput, lastReport)",
 		};
+	}
+
+	if (lifecycle.cancellationResumeEligible && !isDormant(lifecycle)) {
+		return { ok: false, reason: "cancellationResumeEligible requires exact dormant shape" };
+	}
+	if (lifecycle.cancellationResumeEligible && lifecycle.continueCount !== 0) {
+		return { ok: false, reason: "cancellationResumeEligible requires continueCount === 0" };
 	}
 
 	if (lifecycle.lastReport !== null && (lifecycle.lastReport.status as string) === "continuing") {
@@ -153,6 +165,7 @@ function snapshotFacts(lifecycle: LifecycleState): Record<string, unknown> {
 		probeArmed: lifecycle.probeArmed,
 		probeInFlight: lifecycle.probeInFlight,
 		parkedForInput: lifecycle.parkedForInput,
+		cancellationResumeEligible: lifecycle.cancellationResumeEligible,
 		continueCount: lifecycle.continueCount,
 		hasReport: lifecycle.lastReport !== null,
 	};
@@ -174,6 +187,7 @@ export function startCommand(holder: LifecycleHolder, command: string): Mutation
 	lc.probeArmed = true;
 	lc.probeInFlight = false;
 	lc.parkedForInput = false;
+	lc.cancellationResumeEligible = false;
 	lc.continueCount = 0;
 	lc.lastReport = null;
 	bumpAndLog(holder, "startCommand", { command });
@@ -191,6 +205,7 @@ export function clearActiveCommand(holder: LifecycleHolder, reason: string): Mut
 	lc.probeArmed = false;
 	lc.probeInFlight = false;
 	lc.parkedForInput = false;
+	lc.cancellationResumeEligible = false;
 	lc.continueCount = 0;
 	lc.lastReport = null;
 	bumpAndLog(holder, "clearActiveCommand", { previousCommand: prev, reason });
@@ -206,10 +221,42 @@ export function enterDormant(holder: LifecycleHolder, reason: string): MutationR
 	lc.probeArmed = false;
 	lc.probeInFlight = false;
 	lc.parkedForInput = false;
+	lc.cancellationResumeEligible = false;
 	lc.continueCount = 0;
 	lc.lastReport = null;
 	bumpAndLog(holder, "enterDormant", { reason });
 	assertPostCondition(holder.lifecycle, "enterDormant");
+	return { ok: true };
+}
+
+export function cancelStructuredInput(holder: LifecycleHolder): MutationResult {
+	if (holder.lifecycle.activeCommand === null) {
+		return { ok: false, reason: "no active command; cannot grant cancellation resume" };
+	}
+	if (!holder.lifecycle.probeArmed && !holder.lifecycle.probeInFlight) {
+		return { ok: false, reason: "not running or probing; cannot grant cancellation resume" };
+	}
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeArmed = false;
+	lc.probeInFlight = false;
+	lc.parkedForInput = false;
+	lc.cancellationResumeEligible = true;
+	lc.continueCount = 0;
+	lc.lastReport = null;
+	bumpAndLog(holder, "cancelStructuredInput");
+	assertPostCondition(holder.lifecycle, "cancelStructuredInput");
+	return { ok: true };
+}
+
+export function resumeAfterCancelledInput(holder: LifecycleHolder): MutationResult {
+	if (!isDormant(holder.lifecycle) || !holder.lifecycle.cancellationResumeEligible) {
+		return { ok: false, reason: "not eligible to resume after cancelled input" };
+	}
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.cancellationResumeEligible = false;
+	lc.probeArmed = true;
+	bumpAndLog(holder, "resumeAfterCancelledInput");
+	assertPostCondition(holder.lifecycle, "resumeAfterCancelledInput");
 	return { ok: true };
 }
 
@@ -226,7 +273,9 @@ export function armProbe(holder: LifecycleHolder, reason: string): MutationResul
 	if (holder.lifecycle.lastReport !== null) {
 		return { ok: false, reason: "terminal report pending; cannot arm probe" };
 	}
-	(holder.lifecycle as MutableLifecycle).probeArmed = true;
+	const lc = holder.lifecycle as MutableLifecycle;
+	lc.probeArmed = true;
+	lc.cancellationResumeEligible = false;
 	bumpAndLog(holder, "armProbe", { reason });
 	assertPostCondition(holder.lifecycle, "armProbe");
 	return { ok: true };
@@ -242,6 +291,7 @@ export function beginProbe(holder: LifecycleHolder, reason: string): MutationRes
 	const lc = holder.lifecycle as MutableLifecycle;
 	lc.probeArmed = false;
 	lc.probeInFlight = true;
+	lc.cancellationResumeEligible = false;
 	bumpAndLog(holder, "beginProbe", { reason });
 	assertPostCondition(holder.lifecycle, "beginProbe");
 	return { ok: true };
@@ -257,6 +307,7 @@ export function acceptProbeContinuing(holder: LifecycleHolder): MutationResult {
 	const lc = holder.lifecycle as MutableLifecycle;
 	lc.probeInFlight = false;
 	lc.probeArmed = true;
+	lc.cancellationResumeEligible = false;
 	lc.continueCount++;
 	bumpAndLog(holder, "acceptProbeContinuing", { continueCount: lc.continueCount });
 	assertPostCondition(holder.lifecycle, "acceptProbeContinuing");
@@ -269,6 +320,7 @@ export function acceptDormantContinuing(holder: LifecycleHolder): MutationResult
 	}
 	const lc = holder.lifecycle as MutableLifecycle;
 	lc.probeArmed = true;
+	lc.cancellationResumeEligible = false;
 	lc.continueCount = 0;
 	bumpAndLog(holder, "acceptDormantContinuing");
 	assertPostCondition(holder.lifecycle, "acceptDormantContinuing");
@@ -285,6 +337,7 @@ export function acceptTerminalReport(holder: LifecycleHolder, payload: CommandSt
 	const lc = holder.lifecycle as MutableLifecycle;
 	lc.probeArmed = false;
 	lc.probeInFlight = false;
+	lc.cancellationResumeEligible = false;
 	lc.lastReport = payload;
 	lc.continueCount = 0;
 	bumpAndLog(holder, "acceptTerminalReport", { status: payload.status });
@@ -300,6 +353,7 @@ export function parkForFreetext(holder: LifecycleHolder): MutationResult {
 	lc.probeArmed = false;
 	lc.probeInFlight = false;
 	lc.parkedForInput = true;
+	lc.cancellationResumeEligible = false;
 	lc.continueCount = 0;
 	lc.lastReport = null;
 	bumpAndLog(holder, "parkForFreetext");
@@ -314,6 +368,7 @@ export function resumeFromParkedInput(holder: LifecycleHolder): MutationResult {
 	const lc = holder.lifecycle as MutableLifecycle;
 	lc.parkedForInput = false;
 	lc.probeArmed = true;
+	lc.cancellationResumeEligible = false;
 	lc.continueCount = 0;
 	bumpAndLog(holder, "resumeFromParkedInput");
 	assertPostCondition(holder.lifecycle, "resumeFromParkedInput");
@@ -327,16 +382,22 @@ export function resumeAfterProbeInput(holder: LifecycleHolder): MutationResult {
 	const lc = holder.lifecycle as MutableLifecycle;
 	lc.probeInFlight = false;
 	lc.probeArmed = true;
+	lc.cancellationResumeEligible = false;
 	bumpAndLog(holder, "resumeAfterProbeInput", { continueCount: holder.lifecycle.continueCount });
 	assertPostCondition(holder.lifecycle, "resumeAfterProbeInput");
 	return { ok: true };
 }
 
-export function reconstructLifecycle(activeCommand: string | null, parkedForInput: boolean): LifecycleState {
+export function reconstructLifecycle(
+	activeCommand: string | null,
+	parkedForInput: boolean,
+	cancellationResumeEligible = false,
+): LifecycleState {
 	const lc = createLifecycle() as MutableLifecycle;
 	if (activeCommand) {
 		lc.activeCommand = activeCommand;
 		if (parkedForInput) lc.parkedForInput = true;
+		else if (cancellationResumeEligible) lc.cancellationResumeEligible = true;
 	}
 	return lc;
 }

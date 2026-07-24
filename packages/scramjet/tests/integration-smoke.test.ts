@@ -8,7 +8,7 @@ import { registerCommandStatusTool } from "../src/command-status.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import { registerDelegateTool } from "../src/delegate.js";
 import { registerHistory } from "../src/history.js";
-import { initScramjet } from "../src/index.js";
+import { initScramjet, runtimeVersions } from "../src/index.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
@@ -173,6 +173,30 @@ describe("integration smoke — advisory warning against real subroutine scope",
 // before_agent_start confirms the directives are returned as a cache-aware
 // section (the identity anchor is unique to the base directives, so its presence
 // proves the injector ran).
+describe("integration smoke — runtime provenance wired into the extension factory", () => {
+	it("logs exact Scramjet runtime versions at session start", async () => {
+		const { pi, handlers } = recordingPi();
+		initScramjet(pi);
+
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, { hasUI: true });
+
+		const entry = pi.appended.find(
+			(e: any) =>
+				e.customType === "scramjet:log" && e.data.category === "runtime" && e.data.message === "runtime versions",
+		);
+		const version = (workspace: string) =>
+			JSON.parse(readFileSync(resolve(HERE, "..", "..", workspace, "package.json"), "utf8")).version;
+		expect(entry?.data.data).toEqual(runtimeVersions());
+		expect(entry?.data.data).toEqual({
+			scramjet: version("scramjet"),
+			agent: version("agent"),
+			ai: version("ai"),
+			codingAgent: version("coding-agent"),
+			tui: version("tui"),
+		});
+	});
+});
+
 describe("integration smoke — base directives wired into the extension factory", () => {
 	it("scramjet() registers the injector so before_agent_start contributes the directives section", async () => {
 		const { pi, handlers } = recordingPi();
@@ -411,6 +435,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 			appendEntry(type: string, data: unknown) {
 				appended.push({ type, data });
 			},
+			invokeHarnessTool: async () => ({ content: [], details: {} }),
 			sendMessage(message: any, options?: any) {
 				if (pi.isStreaming) return;
 				probes.push({ message, options });
@@ -427,6 +452,9 @@ describe("integration smoke — lifecycle event sequences", () => {
 		const dispatched: { input: string; options?: any }[] = [];
 		const ctx: any = {
 			hasUI: false,
+			scopedModels: [],
+			modelRegistry: { getAvailable: () => [] },
+			model: null,
 			ui: {
 				notify: (m: string, t?: string) => notifications.push({ message: m, type: t }),
 				custom: <T>(_factory: any) => Promise.resolve(undefined as T),
@@ -467,6 +495,96 @@ describe("integration smoke — lifecycle event sequences", () => {
 		bag.pi.isStreaming = false;
 		await vi.advanceTimersByTimeAsync(0);
 	}
+
+	it("cancelled confirm → prose continuation → completed probe → selector-visible next step", async () => {
+		const cmd: CommandDef = {
+			name: "int:confirm",
+			filePath: "/fake/int:confirm.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const next: CommandDef = { name: "int:next", filePath: "/fake/int:next.md", body: "" };
+		const state = freshState({
+			registry: new Map([
+				[cmd.name, cmd],
+				[next.name, next],
+			]),
+			enabled: true,
+		});
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		ctx.hasUI = true;
+		let selectorCalls = 0;
+		ctx.ui.custom = () => {
+			selectorCalls++;
+			return Promise.resolve(null);
+		};
+		wireAll(bag, state);
+
+		await bag.emit("input", { text: "/int:confirm", source: "interactive" }, ctx);
+		const userInputTool = findTool(bag, "get_scramjet_user_input");
+		const cancelled = await userInputTool.execute(
+			"call-confirm",
+			{ type: "confirm", message: "Use this approach?" },
+			undefined,
+			undefined,
+			ctx,
+		);
+		expect(cancelled.details.cancelled).toBe(true);
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+		expect(selectorCalls).toBe(1);
+
+		await bag.emit("input", { text: "Use the other approach", source: "interactive" }, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		await fireProbe(bag, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
+		expect(bag.probes).toHaveLength(1);
+
+		const statusTool = findTool(bag, "report_scramjet_command_status");
+		await statusTool.execute("call-status", {
+			status: "completed",
+			summary: "plan completed",
+			next_steps: [{ message: "/int:next", fresh_session: false, reason: "Continue" }],
+			recommended_next_step: 0,
+		});
+		await endProbeTurn(bag, ctx);
+		expect(selectorCalls).toBe(2);
+	});
+
+	it("cancelled select → prose continuation → hidden completion probe", async () => {
+		const cmd: CommandDef = {
+			name: "int:select",
+			filePath: "/fake/int:select.md",
+			body: "",
+			next: { mode: "open", candidates: [] },
+		};
+		const state = freshState({ registry: new Map([[cmd.name, cmd]]), enabled: true });
+		const bag = lifecyclePi();
+		const ctx = lifecycleCtx();
+		ctx.hasUI = true;
+		ctx.ui.custom = () => Promise.resolve(null);
+		wireAll(bag, state);
+
+		await bag.emit("input", { text: "/int:select", source: "interactive" }, ctx);
+		const userInputTool = findTool(bag, "get_scramjet_user_input");
+		const cancelled = await userInputTool.execute(
+			"call-select",
+			{ type: "select", message: "Choose", options: [{ value: "a", label: "A" }] },
+			undefined,
+			undefined,
+			ctx,
+		);
+		expect(cancelled.details.cancelled).toBe(true);
+		expect(derivedPhase(state.lifecycle)).toBe("dormant");
+
+		await bag.emit("input", { text: "Continue with A", source: "interactive" }, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("running");
+		await fireProbe(bag, ctx);
+		expect(derivedPhase(state.lifecycle)).toBe("probing");
+		expect(bag.probes).toHaveLength(1);
+		expect(bag.probes[0].message.display).toBe(false);
+		expect(bag.probes[0].options).toEqual({ triggerTurn: true });
+	});
 
 	it("probe self-heal → dormant → interactive reply stays dormant (issue 215: agent-controlled resumption)", async () => {
 		const cmd: CommandDef = {

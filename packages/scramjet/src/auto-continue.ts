@@ -50,7 +50,7 @@ import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
-import { COMMAND_EXIT_TYPE, recordCommandStatus } from "./history.js";
+import { COMMAND_EXIT_TYPE, recordCommandStatus, recordStructuredInputCancellation } from "./history.js";
 import {
 	activeCommandName,
 	beginProbe,
@@ -958,7 +958,29 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 				});
 				ctx.ui.notify(`scramjet: aborted — discarding "${discarded}" status report for ${activeName}`, "warning");
 			}
+			if (state.lifecycle.cancellationResumeEligible) {
+				try {
+					recordStructuredInputCancellation(pi, activeName, false);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					state.logger.warn("history", "failed to persist structured input cancellation invalidation", {
+						command: activeName,
+						error: message,
+						reason: "aborted",
+					});
+					return;
+				}
+			}
+			const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
 			enterDormant(state, "aborted");
+			if (invalidatedCancellation) {
+				state.logger.debug("cancellation-resume", "eligibility invalidated", {
+					command: activeName,
+					generation: state.lifecycleGeneration,
+					source: "agent-end",
+					reason: "aborted",
+				});
+			}
 			return;
 		}
 

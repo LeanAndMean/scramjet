@@ -9,6 +9,7 @@ import {
 	CONTINUE_LIMIT,
 	canAcceptDormantContinuing,
 	canAcceptTerminalReport,
+	cancelStructuredInput,
 	checkInvariants,
 	clearActiveCommand,
 	createLifecycle,
@@ -21,6 +22,7 @@ import {
 	type LifecycleState,
 	type MutationResult,
 	parkForFreetext,
+	resumeAfterCancelledInput,
 	resumeAfterProbeInput,
 	resumeFromParkedInput,
 	startCommand,
@@ -50,6 +52,7 @@ describe("createLifecycle", () => {
 		expect(lc.probeArmed).toBe(false);
 		expect(lc.probeInFlight).toBe(false);
 		expect(lc.parkedForInput).toBe(false);
+		expect(lc.cancellationResumeEligible).toBe(false);
 		expect(lc.continueCount).toBe(0);
 		expect(lc.lastReport).toBeNull();
 		expect(checkInvariants(lc).ok).toBe(true);
@@ -263,6 +266,48 @@ describe("enterDormant", () => {
 	it("rejects when no active command", () => {
 		const h = freshLifecycleHolder();
 		fails(enterDormant(h, "test"), "no active command");
+	});
+});
+
+describe("cancelStructuredInput", () => {
+	it.each(["running", "probing"] as const)("atomically grants resumability from %s", (phase) => {
+		const h = freshLifecycleHolder({
+			activeCommand: "cmd",
+			probeArmed: phase === "running",
+			probeInFlight: phase === "probing",
+		});
+		ok(cancelStructuredInput(h));
+		expect(isDormant(h.lifecycle)).toBe(true);
+		expect(h.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(h.lifecycleGeneration).toBe(1);
+	});
+
+	it("resumes only eligible dormant commands in one generation bump", () => {
+		const h = freshLifecycleHolder({ activeCommand: "cmd", cancellationResumeEligible: true });
+		ok(resumeAfterCancelledInput(h));
+		expect(h.lifecycle.cancellationResumeEligible).toBe(false);
+		expect(h.lifecycle.probeArmed).toBe(true);
+		expect(h.lifecycleGeneration).toBe(1);
+	});
+
+	it("rejects eligibility outside exact dormant shape", () => {
+		const invalid = {
+			...createLifecycle(),
+			activeCommand: "cmd",
+			probeArmed: true,
+			cancellationResumeEligible: true,
+		};
+		expect(checkInvariants(invalid).ok).toBe(false);
+		const h = freshLifecycleHolder({ activeCommand: "cmd" });
+		fails(resumeAfterCancelledInput(h), "not eligible");
+	});
+
+	it("clears eligibility on superseding transitions", () => {
+		const h = freshLifecycleHolder({ activeCommand: "cmd", cancellationResumeEligible: true });
+		ok(startCommand(h, "cmd"));
+		expect(h.lifecycle.cancellationResumeEligible).toBe(false);
+		ok(parkForFreetext(h));
+		expect(h.lifecycle.cancellationResumeEligible).toBe(false);
 	});
 });
 

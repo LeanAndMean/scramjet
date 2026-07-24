@@ -6,9 +6,10 @@ import {
 } from "@leanandmean/coding-agent";
 import { Container, Markdown, Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
-import { USER_INPUT_PARKED_TYPE } from "./history.js";
+import { recordStructuredInputCancellation, USER_INPUT_PARKED_TYPE } from "./history.js";
 import {
 	activeCommandName,
+	cancelStructuredInput,
 	enterDormant,
 	hasTerminalReport,
 	isProbeInFlight,
@@ -183,8 +184,7 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			// Post-interaction lifecycle transitions
 			if (wasProbing && result) {
 				if (result.cancelled) {
-					// Cancellation during probe → dormant (no parked marker)
-					enterDormant(state, "confirm/select-cancelled");
+					grantCancellationResume(pi, state);
 				} else {
 					// Success during probe → resume with probe re-armed, preserving continueCount
 					resumeAfterProbeInput(state);
@@ -199,15 +199,42 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 
 			const toolResult = { content: result.content, details: result.details };
 			if (result.cancelled) {
-				if (!wasProbing) {
-					enterDormant(state, "confirm/select-cancelled");
-				}
+				if (!wasProbing) grantCancellationResume(pi, state);
 				return { ...toolResult, terminate: true };
 			}
 
 			return toolResult;
 		},
 	});
+}
+
+function grantCancellationResume(pi: ExtensionAPI, state: ScramjetState): void {
+	const command = activeCommandName(state.lifecycle);
+	const mutation = cancelStructuredInput(state);
+	if (!mutation.ok || !command) return;
+	state.logger.debug("cancellation-resume", "eligibility granted", {
+		command,
+		generation: state.lifecycleGeneration,
+		source: "structured-input",
+		reason: "cancelled",
+	});
+	try {
+		recordStructuredInputCancellation(pi, command, true);
+	} catch (error) {
+		const fallback = enterDormant(state, "structured-input-cancellation-persistence-failed");
+		const message = error instanceof Error ? error.message : String(error);
+		state.logger.warn("input", "failed to persist structured input cancellation; resumability disabled", {
+			command,
+			error: message,
+			fallback: fallback.ok,
+		});
+		state.logger.debug("cancellation-resume", "eligibility invalidated", {
+			command,
+			generation: state.lifecycleGeneration,
+			source: "structured-input",
+			reason: "grant-persistence-failed",
+		});
+	}
 }
 
 function staleResult(expectedCommand: string | null, expectedGeneration: number, state: ScramjetState) {
