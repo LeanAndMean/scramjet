@@ -1,4 +1,5 @@
-import { initTheme, keyText, ToolExecutionComponent } from "@leanandmean/coding-agent";
+import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
+import { getKeybindings, KeybindingsManager, setKeybindings } from "@leanandmean/tui";
 import { describe, expect, it } from "vitest";
 import { parseDelegateArgs, substituteArguments } from "../src/commands/substitute.js";
 import { detectCycle, intersectTools, registerDelegateTool } from "../src/delegate.js";
@@ -178,18 +179,30 @@ describe("registerDelegateTool — registration shape", () => {
 
 describe("registerDelegateTool — compact rendering", () => {
 	it("renders a compact command call with normalized, bounded arguments and the configured expansion key", () => {
-		const tool = delegateTool();
-		const output = renderText(
-			tool.renderCall({ command: "mach12:push", args: `first\n${"x".repeat(100)}` }, renderTheme, {
-				argsComplete: true,
-			}),
+		const originalKeybindings = getKeybindings();
+		setKeybindings(
+			new KeybindingsManager(
+				{ "app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" } },
+				{ "app.tools.expand": "alt+e" },
+			),
 		);
+		try {
+			const tool = delegateTool();
+			const output = renderText(
+				tool.renderCall({ command: "mach12:push", args: `first\n${"x".repeat(100)}` }, renderTheme, {
+					argsComplete: true,
+				}),
+			);
 
-		expect(output).toContain("/mach12:push first x");
-		expect(output).toContain(keyText("app.tools.expand"));
-		expect(output).toContain("…");
-		expect(output).not.toContain("\n");
-		expect(output.length).toBeLessThan(120);
+			expect(output).toContain("/mach12:push first x");
+			expect(output).toContain("alt+e to toggle details");
+			expect(output).not.toContain("ctrl+o");
+			expect(output).toContain("…");
+			expect(output).not.toContain("\n");
+			expect(output.length).toBeLessThan(120);
+		} finally {
+			setKeybindings(originalKeybindings);
+		}
 	});
 
 	it.each([{}, { command: 42 }, { command: "mach12:push", args: 42 }])(
@@ -220,7 +233,10 @@ describe("registerDelegateTool — compact rendering", () => {
 			tool.renderResult(successResult([]), { expanded: false, isPartial: false }, renderTheme, { isError: false }),
 		);
 
-		expect(collapsed).toContain("allowed-tools scope");
+		expect(collapsed).toContain("allowed-tools scopes do not overlap");
+		expect(collapsed).toContain("advisory violations");
+		expect(collapsed).toContain("Widen the caller");
+		expect(collapsed).toContain("scope or abort delegation");
 		expect(collapsed).not.toContain("BODY_START");
 	});
 
@@ -230,15 +246,14 @@ describe("registerDelegateTool — compact rendering", () => {
 		["runtime error", successResult(), true],
 		["partial result", successResult(), false, true],
 		["missing details", { ...successResult(), details: undefined }, false],
-		["invalid scope", { ...successResult(), details: { command: "a", effectiveAllowedTools: [1] } }, false],
+		["missing depth", { ...successResult(), details: { command: "a" } }, false],
+		["invalid depth", { ...successResult(), details: { command: "a", depth: 0 } }, false],
+		["error-only chain", { ...successResult(), details: { command: "a", depth: 1, chain: "a -> b" } }, false],
+		["unknown metadata", { ...successResult(), details: { command: "a", depth: 1, diagnostic: true } }, false],
+		["invalid scope", { ...successResult(), details: { command: "a", depth: 1, effectiveAllowedTools: [1] } }, false],
 		[
 			"multiple content",
 			{ ...successResult(), content: [...successResult().content, { type: "text", text: "more" }] },
-			false,
-		],
-		[
-			"unsupported content",
-			{ ...successResult(), content: [{ type: "image", data: "x", mimeType: "image/png" }] },
 			false,
 		],
 	])("fails open for %s", (_name, result, isError, isPartial = false) => {
@@ -248,9 +263,23 @@ describe("registerDelegateTool — compact rendering", () => {
 		for (const text of expected) expect(output).toContain(text);
 	});
 
-	it("toggles a completed live row and a replay-shaped row through the shared component", () => {
+	it.each([
+		[{ type: "image", data: "x", mimeType: "image/png" }],
+		[{ type: "text", text: "" }],
+		[{ type: "text", text: "   " }],
+	])("shows an explicit warning when content has no visible text", (content) => {
 		const tool = delegateTool();
-		const makeComponent = () => {
+		const result = { ...successResult(), content };
+		const output = renderText(
+			tool.renderResult(result, { expanded: false, isPartial: false }, renderTheme, { isError: false }),
+		);
+
+		expect(output).toContain("WARNING: delegate result contains unsupported or malformed content.");
+	});
+
+	it("toggles a completed live row and restores replay results after global expansion state", () => {
+		const tool = delegateTool();
+		const makeComponent = (expandedBeforeResult = false) => {
 			const component = new ToolExecutionComponent(
 				"delegate",
 				"call-id",
@@ -262,6 +291,7 @@ describe("registerDelegateTool — compact rendering", () => {
 			);
 			component.markExecutionStarted();
 			component.setArgsComplete();
+			if (expandedBeforeResult) component.setExpanded(true);
 			component.updateResult({ ...successResult(), isError: false }, false);
 			return component;
 		};
@@ -272,7 +302,7 @@ describe("registerDelegateTool — compact rendering", () => {
 		expect(renderText(live)).toContain("BODY_START");
 		live.setExpanded(false);
 		expect(renderText(live)).not.toContain("BODY_START");
-		expect(renderText(makeComponent())).not.toContain("BODY_START");
+		expect(renderText(makeComponent(true))).toContain("BODY_START");
 	});
 });
 
@@ -408,6 +438,8 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(result.content[0].text).toMatch(
 			/\[scramjet\/delegate\] WARNING: effective allowed-tools scope for 'callee' is empty/,
 		);
+		expect(result.content[0].text).toContain("Tool calls will trigger advisory warnings rather than be blocked");
+		expect(result.content[0].text).toContain("widening the caller's scope or aborting the delegation");
 		expect(result.content[0].text).toContain("callee-body");
 	});
 

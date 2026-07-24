@@ -395,7 +395,7 @@ If a command declares no `allowed-tools` (unrestricted), it inherits the caller'
 
 1. **Top-level command scope** is the declared `allowed-tools` (or unrestricted if omitted).
 2. **Every delegation** (first, sibling, or nested) intersects the top-level scope with the subroutine's declared scope.
-3. **Empty intersection** (top-level and callee declare disjoint tools) produces a warning prepended to the delegated body. The frame is effectively locked — no tools pass the advisory check.
+3. **Empty intersection** (top-level and callee declare disjoint tools) produces a warning prepended to the delegated body. Tool calls fall outside the declared scope and trigger advisory warnings; they are not blocked.
 
 ### Advisory enforcement (MVP)
 
