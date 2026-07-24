@@ -245,7 +245,8 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 
 				// Dormant continuing
 				if (canAcceptDormantContinuing(state.lifecycle)) {
-					if (state.lifecycle.cancellationResumeEligible) {
+					const consumedCancellation = state.lifecycle.cancellationResumeEligible;
+					if (consumedCancellation) {
 						try {
 							recordStructuredInputCancellation(pi, command, false);
 						} catch (error) {
@@ -277,6 +278,14 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 						command,
 						detail: { summary: params.summary },
 					});
+					if (consumedCancellation) {
+						state.logger.debug("cancellation-resume", "eligibility consumed", {
+							command,
+							generation: state.lifecycleGeneration,
+							source: "status-tool",
+							reason: "continuing-report",
+						});
+					}
 					recordCommandStatus(pi, command, "continuing", params.summary);
 					const details: CommandStatusDetails = { status: "continuing", summary: params.summary };
 					return {
@@ -316,7 +325,8 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				};
 			}
 
-			if (state.lifecycle.cancellationResumeEligible) {
+			const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
+			if (invalidatedCancellation) {
 				try {
 					recordStructuredInputCancellation(pi, command, false);
 				} catch (error) {
@@ -362,6 +372,14 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 					recommendedNextStep: params.recommended_next_step,
 				},
 			});
+			if (invalidatedCancellation) {
+				state.logger.debug("cancellation-resume", "eligibility invalidated", {
+					command,
+					generation: state.lifecycleGeneration,
+					source: "status-tool",
+					reason: "terminal-report",
+				});
+			}
 
 			const next =
 				params.recommended_next_step === undefined

@@ -212,6 +212,12 @@ function grantCancellationResume(pi: ExtensionAPI, state: ScramjetState): void {
 	const command = activeCommandName(state.lifecycle);
 	const mutation = cancelStructuredInput(state);
 	if (!mutation.ok || !command) return;
+	state.logger.debug("cancellation-resume", "eligibility granted", {
+		command,
+		generation: state.lifecycleGeneration,
+		source: "structured-input",
+		reason: "cancelled",
+	});
 	try {
 		recordStructuredInputCancellation(pi, command, true);
 	} catch (error) {
@@ -221,6 +227,12 @@ function grantCancellationResume(pi: ExtensionAPI, state: ScramjetState): void {
 			command,
 			error: message,
 			fallback: fallback.ok,
+		});
+		state.logger.debug("cancellation-resume", "eligibility invalidated", {
+			command,
+			generation: state.lifecycleGeneration,
+			source: "structured-input",
+			reason: "grant-persistence-failed",
 		});
 	}
 }

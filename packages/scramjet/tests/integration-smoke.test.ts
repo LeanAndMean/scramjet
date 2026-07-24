@@ -8,7 +8,7 @@ import { registerCommandStatusTool } from "../src/command-status.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import { registerDelegateTool } from "../src/delegate.js";
 import { registerHistory } from "../src/history.js";
-import { initScramjet } from "../src/index.js";
+import { initScramjet, runtimeVersions } from "../src/index.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
@@ -173,6 +173,30 @@ describe("integration smoke — advisory warning against real subroutine scope",
 // before_agent_start confirms the directives are returned as a cache-aware
 // section (the identity anchor is unique to the base directives, so its presence
 // proves the injector ran).
+describe("integration smoke — runtime provenance wired into the extension factory", () => {
+	it("logs exact Scramjet runtime versions at session start", async () => {
+		const { pi, handlers } = recordingPi();
+		initScramjet(pi);
+
+		await handlers.get("session_start")?.[0]?.({ type: "session_start" }, { hasUI: true });
+
+		const entry = pi.appended.find(
+			(e: any) =>
+				e.customType === "scramjet:log" && e.data.category === "runtime" && e.data.message === "runtime versions",
+		);
+		const version = (workspace: string) =>
+			JSON.parse(readFileSync(resolve(HERE, "..", "..", workspace, "package.json"), "utf8")).version;
+		expect(entry?.data.data).toEqual(runtimeVersions());
+		expect(entry?.data.data).toEqual({
+			scramjet: version("scramjet"),
+			agent: version("agent"),
+			ai: version("ai"),
+			codingAgent: version("coding-agent"),
+			tui: version("tui"),
+		});
+	});
+});
+
 describe("integration smoke — base directives wired into the extension factory", () => {
 	it("scramjet() registers the injector so before_agent_start contributes the directives section", async () => {
 		const { pi, handlers } = recordingPi();

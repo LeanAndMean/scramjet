@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerCommandLoader } from "../src/commands/index.js";
+import { commandFingerprint, normalizedCommandSource, registerCommandLoader } from "../src/commands/index.js";
 import {
 	type AgentFileEntry,
 	buildAgentRegistry,
@@ -288,6 +288,27 @@ describe("buildRegistry — collision and skip semantics", () => {
 	});
 });
 
+describe("command provenance", () => {
+	it("uses stable, change-sensitive short fingerprints", () => {
+		expect(commandFingerprint("same")).toBe(commandFingerprint("same"));
+		expect(commandFingerprint("same")).not.toBe(commandFingerprint("changed"));
+		expect(commandFingerprint("same")).toMatch(/^[a-f0-9]{12}$/);
+	});
+
+	it("normalizes sources without retaining installation roots", () => {
+		expect(
+			normalizedCommandSource(
+				"global",
+				"mach12",
+				"/home/private/.local/share/scramjet/mach12/commands/mach12:test.md",
+			),
+		).toBe("mach12/commands/mach12:test.md");
+		expect(normalizedCommandSource("project", "local", "/secret/repo/.scramjet/local/commands/local:test.md")).toBe(
+			".scramjet/local/commands/local:test.md",
+		);
+	});
+});
+
 describe("registerCommandLoader — fixture-backed integration", () => {
 	let originalCache: string | undefined;
 	let originalAgentDir: string | undefined;
@@ -361,6 +382,19 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(warnings.some((m) => m.includes("issue-plan.md") && m.includes("mach12:"))).toBe(true);
 		expect(warnings.some((m) => m.includes("mach12:broken"))).toBe(true);
 		expect(warnings.some((m) => m.includes("project") && m.includes("mach12:issue-plan"))).toBe(true);
+
+		const provenance = appended
+			.filter((e) => (e.data as any).category === "discovery" && (e.data as any).message === "command discovered")
+			.map((e) => (e.data as any).data);
+		expect(provenance).toHaveLength(state.registry.size);
+		expect(provenance).toContainEqual({
+			command: "mach12:issue-plan",
+			scope: "global",
+			source: "mach12/commands/mach12:issue-plan.md",
+			fingerprint: expect.stringMatching(/^[a-f0-9]{12}$/),
+		});
+		expect(JSON.stringify(provenance)).not.toContain("loader-global");
+		expect(JSON.stringify(provenance)).not.toContain("loader-project");
 	});
 
 	it("rebuilds the registry on each handler invocation", () => {

@@ -971,7 +971,16 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 					return;
 				}
 			}
+			const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
 			enterDormant(state, "aborted");
+			if (invalidatedCancellation) {
+				state.logger.debug("cancellation-resume", "eligibility invalidated", {
+					command: activeName,
+					generation: state.lifecycleGeneration,
+					source: "agent-end",
+					reason: "aborted",
+				});
+			}
 			return;
 		}
 

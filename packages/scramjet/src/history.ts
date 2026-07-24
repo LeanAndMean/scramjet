@@ -319,6 +319,12 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 					return;
 				}
 				resumeAfterCancelledInput(state);
+				state.logger.debug("cancellation-resume", "eligibility consumed", {
+					command,
+					generation: state.lifecycleGeneration,
+					source: event.source,
+					reason: "interactive-reply",
+				});
 				return;
 			}
 			// Resume a parked command on an interactive non-slash reply. Generic
@@ -348,14 +354,37 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			if (event.text.startsWith("/") && activeCommandName(state.lifecycle) !== null) {
 				if (!isKnownSlashCommand(event.text, pi, state)) {
 					const command = activeCommandName(state.lifecycle);
+					const invalidatedCancellation = state.lifecycle.cancellationResumeEligible;
 					state.clearLifecycleTimers?.();
 					const result = clearActiveCommand(state, "unknown-slash");
 					// Record the exit only when the active command was actually cleared,
 					// so replay reconstructs idle rather than dormant.
 					if (result.ok && command) {
 						pi.appendEntry(COMMAND_EXIT_TYPE, { commandName: command });
+						if (invalidatedCancellation) {
+							state.logger.debug("cancellation-resume", "eligibility invalidated", {
+								command,
+								generation: state.lifecycleGeneration,
+								source: event.source,
+								reason: "unknown-slash",
+							});
+						}
 					}
+				} else if (state.lifecycle.cancellationResumeEligible) {
+					state.logger.debug("cancellation-resume", "eligibility preserved", {
+						command: activeCommandName(state.lifecycle),
+						generation: state.lifecycleGeneration,
+						source: event.source,
+						reason: "known-slash",
+					});
 				}
+			} else if (state.lifecycle.cancellationResumeEligible) {
+				state.logger.debug("cancellation-resume", "input ignored", {
+					command: activeCommandName(state.lifecycle),
+					generation: state.lifecycleGeneration,
+					source: event.source,
+					reason: "non-interactive-input",
+				});
 			}
 			return;
 		}
@@ -374,7 +403,17 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const argsString = extractArgs(event.text);
 		const wrapped = buildCommandExpansion(name, def, argsString);
 
+		const supersededCancellation = state.lifecycle.cancellationResumeEligible;
+		const supersededCommand = activeCommandName(state.lifecycle);
 		recordCommandStart(pi, state, name, origin);
+		if (supersededCancellation) {
+			state.logger.debug("cancellation-resume", "eligibility invalidated", {
+				command: supersededCommand,
+				generation: state.lifecycleGeneration,
+				source: event.source,
+				reason: "command-start",
+			});
+		}
 		return { action: "transform" as const, text: wrapped };
 	});
 }

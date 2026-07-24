@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { registerAgentCatalog } from "./agent-catalog.js";
 import { registerAutoContinue } from "./auto-continue.js";
@@ -9,6 +12,7 @@ import { registerCommandCatalog } from "./command-catalog.js";
 import { registerCommandStatusTool, registerDormantCommandNotice } from "./command-status.js";
 import { registerCommandLoader } from "./commands/index.js";
 import { registerDelegateTool } from "./delegate.js";
+import { packageRoot } from "./docs-registry.js";
 import { registerHistory } from "./history.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createLogger } from "./logger.js";
@@ -27,6 +31,35 @@ import { registerTerminalIndicators } from "./terminal-indicators.js";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
 import type { ScramjetState } from "./types.js";
 import { registerUserInputTool } from "./user-input.js";
+
+export interface RuntimeVersions {
+	scramjet: string;
+	agent: string;
+	ai: string;
+	codingAgent: string;
+	tui: string;
+}
+
+function packageVersion(packageName: string): string {
+	for (const root of createRequire(import.meta.url).resolve.paths(packageName) ?? []) {
+		const metadataPath = join(root, packageName, "package.json");
+		if (!existsSync(metadataPath)) continue;
+		const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as { name?: string; version?: string };
+		if (metadata.name === packageName && metadata.version) return metadata.version;
+	}
+	throw new Error(`Could not resolve package metadata for ${packageName}`);
+}
+
+export function runtimeVersions(): RuntimeVersions {
+	const scramjet = JSON.parse(readFileSync(join(packageRoot(), "package.json"), "utf8")) as { version: string };
+	return {
+		scramjet: scramjet.version,
+		agent: packageVersion("@leanandmean/agent"),
+		ai: packageVersion("@leanandmean/ai"),
+		codingAgent: packageVersion("@leanandmean/coding-agent"),
+		tui: packageVersion("@leanandmean/tui"),
+	};
+}
 
 export function initScramjet(pi: ExtensionAPI) {
 	const logger = createLogger(pi);
@@ -54,6 +87,7 @@ export function initScramjet(pi: ExtensionAPI) {
 
 	pi.on("session_start", (_event, ctx) => {
 		logger.setHasUI(ctx.hasUI);
+		logger.debug("runtime", "runtime versions", { ...runtimeVersions() });
 	});
 
 	registerCommandStatusTool(pi, state);
