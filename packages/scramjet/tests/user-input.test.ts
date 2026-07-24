@@ -1,6 +1,11 @@
 import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { COMMAND_START_TYPE, registerHistory, USER_INPUT_PARKED_TYPE } from "../src/history.js";
+import {
+	COMMAND_START_TYPE,
+	registerHistory,
+	STRUCTURED_INPUT_CANCELLATION_TYPE,
+	USER_INPUT_PARKED_TYPE,
+} from "../src/history.js";
 import { isDormant, isParkedForInput, isProbeDue, isProbeInFlight } from "../src/lifecycle.js";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
@@ -790,6 +795,7 @@ describe("registerUserInputTool — cancellation behavior", () => {
 		expect(result.terminate).toBe(true);
 		expect(isDormant(state.lifecycle)).toBe(true);
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
 	});
 
 	it("transitions probing to dormant on cancellation", async () => {
@@ -800,6 +806,7 @@ describe("registerUserInputTool — cancellation behavior", () => {
 		expect(result.terminate).toBe(true);
 		expect(isDormant(state.lifecycle)).toBe(true);
 		expect(state.lifecycle.activeCommand).toBe("mach12:test");
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
 	});
 
 	it("does NOT journal user-input-parked on cancellation", async () => {
@@ -816,6 +823,34 @@ describe("registerUserInputTool — cancellation behavior", () => {
 		await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
 
 		expect(pi.appended.filter((e: any) => e.customType === USER_INPUT_TYPE)).toHaveLength(1);
+		expect(pi.appended.filter((e: any) => e.customType === STRUCTURED_INPUT_CANCELLATION_TYPE)).toEqual([
+			{
+				customType: STRUCTURED_INPUT_CANCELLATION_TYPE,
+				data: { commandName: "mach12:test", resumable: true },
+			},
+		]);
+	});
+
+	it("falls back to generic dormant when cancellation grant persistence fails", async () => {
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn() };
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test"), logger: logger as any });
+		const { execute, pi } = toolFor(state);
+		const appendEntry = pi.appendEntry;
+		pi.appendEntry = (type: string, data: unknown) => {
+			if (type === STRUCTURED_INPUT_CANCELLATION_TYPE) throw new Error("disk full");
+			appendEntry(type, data);
+		};
+
+		const result = await execute({ type: "confirm", message: "Continue?" }, mockUICtx(null));
+
+		expect(result.terminate).toBe(true);
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(false);
+		expect(logger.warn).toHaveBeenCalledWith(
+			"input",
+			"failed to persist structured input cancellation; resumability disabled",
+			expect.objectContaining({ command: "mach12:test", error: "disk full" }),
+		);
 	});
 
 	it.each([

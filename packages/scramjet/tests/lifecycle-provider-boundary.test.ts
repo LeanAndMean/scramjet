@@ -20,7 +20,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { registerAutoContinue } from "../src/auto-continue.js";
 import { registerDormantCommandNotice } from "../src/command-status.js";
-import { registerHistory } from "../src/history.js";
+import { COMMAND_START_TYPE, registerHistory } from "../src/history.js";
 import { activeCommandName, beginProbe, startCommand } from "../src/lifecycle.js";
 import type { CommandDef, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
@@ -361,7 +361,10 @@ describe("lifecycle provider boundary (issue 352 Stage 2)", () => {
 	] as const)("tree navigation invalidates unresolved same-name %s input", async (_type, params, answer) => {
 		fx = await makeFixture();
 		await fx.startCommand("a:cmd");
-		const sameCommandTip = fx.runtime.session.sessionManager.getLeafId();
+		const commandStart = fx.runtime.session.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === COMMAND_START_TYPE);
+		if (!commandStart) throw new Error("expected command-start entry");
 		let resolveInput: (value: unknown) => void = () => {};
 		const pending = fx.userInputTool().execute("pending-input", params, undefined, undefined, {
 			ui: {
@@ -373,7 +376,7 @@ describe("lifecycle provider boundary (issue 352 Stage 2)", () => {
 		});
 		await Promise.resolve();
 
-		await fx.runtime.session.navigateTree(sameCommandTip);
+		await fx.runtime.session.navigateTree(commandStart.id);
 		expect(activeCommandName(fx.state().lifecycle)).toBe("a:cmd");
 		resolveInput(answer);
 		const result = await pending;

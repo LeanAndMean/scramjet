@@ -13,6 +13,7 @@ import {
 	registerHistory,
 	replayHistory,
 	SIDEBAR_MAX,
+	STRUCTURED_INPUT_CANCELLATION_TYPE,
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
@@ -456,6 +457,50 @@ describe("replayHistory — issue 352 durable outcome fold", () => {
 	});
 });
 
+describe("replayHistory — structured input cancellation", () => {
+	const cancellation = (commandName: string, resumable: unknown) =>
+		customEntry(STRUCTURED_INPUT_CANCELLATION_TYPE, { commandName, resumable });
+
+	it("reconstructs cancellation-resumable dormancy from a matching grant", () => {
+		const result = replayHistory([cmdStart("a"), cancellation("a", true)]);
+		expect(result.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(derivedPhase(result.lifecycle)).toBe("dormant");
+	});
+
+	it("folds grant and consume chronologically", () => {
+		const consumed = replayHistory([cmdStart("a"), cancellation("a", true), cancellation("a", false)]);
+		expect(consumed.lifecycle.cancellationResumeEligible).toBe(false);
+		const rewound = replayHistory([cmdStart("a"), cancellation("a", true)]);
+		expect(rewound.lifecycle.cancellationResumeEligible).toBe(true);
+	});
+
+	it("ignores malformed and mismatched outcomes and resets on same-name restart", () => {
+		const result = replayHistory([
+			cmdStart("a"),
+			cancellation("b", true),
+			cancellation("a", "yes"),
+			cancellation("a", true),
+			cmdStart("a"),
+		]);
+		expect(result.lifecycle.cancellationResumeEligible).toBe(false);
+	});
+
+	it("terminal status, freetext park, and exit supersede a grant", () => {
+		expect(
+			replayHistory([cmdStart("a"), cancellation("a", true), cmdStatus("a", "blocked")]).lifecycle
+				.cancellationResumeEligible,
+		).toBe(false);
+		expect(
+			replayHistory([cmdStart("a"), cancellation("a", true), userInputParked("a")]).lifecycle
+				.cancellationResumeEligible,
+		).toBe(false);
+		expect(
+			replayHistory([cmdStart("a"), cancellation("a", true), customEntry(COMMAND_EXIT_TYPE, { commandName: "a" })])
+				.lifecycle.cancellationResumeEligible,
+		).toBe(false);
+	});
+});
+
 describe("recordCommandStatus", () => {
 	it("appends a COMMAND_STATUS_TYPE journal entry with the summary and mutates no state", () => {
 		const { pi, appended } = recordingPi();
@@ -568,6 +613,16 @@ describe("registerHistory — handler registration", () => {
 		expect(handlers.get("session_start")).toHaveLength(1);
 		expect(handlers.get("session_tree")).toHaveLength(1);
 		expect(handlers.get("before_agent_start")).toHaveLength(1);
+	});
+
+	it("advances generation whenever reconstruction replaces lifecycle state", async () => {
+		const state = freshState({ lifecycleGeneration: 7 });
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		await emit("session_start", {}, ctxWithEntries([]));
+		expect(state.lifecycleGeneration).toBe(8);
+		await emit("session_tree", {}, ctxWithEntries([]));
+		expect(state.lifecycleGeneration).toBe(9);
 	});
 });
 

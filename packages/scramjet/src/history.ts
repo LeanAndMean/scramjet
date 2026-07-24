@@ -14,6 +14,7 @@ import type { CommandDef, CommandRegistry, CommandStatusPayload, ScramjetState, 
 export const COMMAND_START_TYPE = "scramjet:command-start";
 export const COMMAND_STATUS_TYPE = "scramjet:command-status";
 export const USER_INPUT_PARKED_TYPE = "scramjet:user-input-parked";
+export const STRUCTURED_INPUT_CANCELLATION_TYPE = "scramjet:structured-input-cancellation";
 export const COMMAND_EXIT_TYPE = "scramjet:command-exited";
 export const ENABLED_TOGGLE_TYPE = "scramjet:enabled-toggle";
 export const SIDEBAR_MAX = 50;
@@ -163,6 +164,16 @@ export function recordCommandStatus(
 	pi.appendEntry(COMMAND_STATUS_TYPE, data);
 }
 
+export interface StructuredInputCancellationData {
+	commandName: string;
+	resumable: boolean;
+}
+
+export function recordStructuredInputCancellation(pi: ExtensionAPI, commandName: string, resumable: boolean): void {
+	const data: StructuredInputCancellationData = { commandName, resumable };
+	pi.appendEntry(STRUCTURED_INPUT_CANCELLATION_TYPE, data);
+}
+
 export interface ReplayResult {
 	sidebarLog: SidebarEntry[];
 	// null when no toggle entry was found on the replayed branch — caller
@@ -178,6 +189,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	let enabled: boolean | null = null;
 	let activeTopLevelCommand: string | null = null;
 	let parkedForInput = false;
+	let cancellationResumeEligible = false;
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
@@ -191,6 +203,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
 				parkedForInput = false;
+				cancellationResumeEligible = false;
 			}
 		} else if (entry.customType === ENABLED_TOGGLE_TYPE) {
 			const data = entry.data as EnabledToggleData | undefined;
@@ -205,6 +218,7 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 			}
 			// blocked/incomplete: command stays associated (dormant)
 			parkedForInput = false;
+			cancellationResumeEligible = false;
 		} else if (entry.customType === USER_INPUT_PARKED_TYPE) {
 			const data = entry.data as { commandName?: unknown; parked?: unknown } | undefined;
 			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
@@ -216,16 +230,24 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 				parkedForInput = false;
 			} else if (data.parked === undefined || data.parked === true) {
 				parkedForInput = true;
+				cancellationResumeEligible = false;
 			}
+		} else if (entry.customType === STRUCTURED_INPUT_CANCELLATION_TYPE) {
+			const data = entry.data as { commandName?: unknown; resumable?: unknown } | undefined;
+			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
+			if (data.commandName !== activeTopLevelCommand || typeof data.resumable !== "boolean") continue;
+			cancellationResumeEligible = data.resumable;
+			if (data.resumable) parkedForInput = false;
 		} else if (entry.customType === COMMAND_EXIT_TYPE) {
 			const data = entry.data as { commandName?: unknown } | undefined;
 			if (!data || typeof data.commandName !== "string" || data.commandName === "") continue;
 			if (data.commandName !== activeTopLevelCommand) continue;
 			activeTopLevelCommand = null;
 			parkedForInput = false;
+			cancellationResumeEligible = false;
 		}
 	}
-	const lifecycle = reconstructLifecycle(activeTopLevelCommand, parkedForInput);
+	const lifecycle = reconstructLifecycle(activeTopLevelCommand, parkedForInput, cancellationResumeEligible);
 	return { sidebarLog, enabled, lifecycle };
 }
 
@@ -235,6 +257,12 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		const result = replayHistory(ctx.sessionManager.getBranch());
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
+		state.lifecycleGeneration++;
+		state.logger.lifecycle("lifecycle: rebuild", {
+			command: state.lifecycle.activeCommand ?? "(none)",
+			generation: state.lifecycleGeneration,
+			source: "history",
+		});
 		// pendingForcedDispatch is a transient runtime flag tied to a specific
 		// in-flight forced dispatch; it has no meaning after navigation or
 		// resume. Clear it explicitly so a stale value (e.g. a forced target
