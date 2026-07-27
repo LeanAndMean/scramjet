@@ -1212,12 +1212,12 @@ async function generateModels() {
 			candidate.contextWindow = 272000;
 			candidate.maxTokens = 128000;
 		}
-		if (candidate.provider === "openai" && (candidate.id === "gpt-5.6-sol" || candidate.id === "gpt-5.6-terra")) {
-			candidate.contextWindow = 1000000;
-			candidate.maxTokens = 128000;
-		}
-		if (candidate.provider === "openai" && candidate.id === "gpt-5.6-luna") {
-			candidate.contextWindow = 400000;
+		if (
+			candidate.provider === "openai" &&
+			(candidate.id === "gpt-5.6-sol" || candidate.id === "gpt-5.6-terra" || candidate.id === "gpt-5.6-luna")
+		) {
+			// Store advertised total capacity; runtime consumers derive the usable budget.
+			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
 		// Keep selected OpenRouter model metadata stable until upstream settles.
@@ -1432,7 +1432,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-			contextWindow: 1000000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		});
 	}
@@ -1447,7 +1447,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-			contextWindow: 1000000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		});
 	}
@@ -1462,7 +1462,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-			contextWindow: 400000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		});
 	}
@@ -1585,7 +1585,7 @@ async function generateModels() {
 
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
-	// Context window is based on observed server limits (400s above ~272k), not marketing numbers.
+	// Retain explicit client catalog values without asserting backend limits; GPT-5.6 matches Codex's bundled metadata.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
 	const CODEX_MAX_TOKENS = 128000;
