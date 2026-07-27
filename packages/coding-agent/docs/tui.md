@@ -8,6 +8,8 @@ Extensions and custom tools can render custom TUI components for interactive use
 
 ## Transcript Rendering
 
+**Scramjet divergence source:** [`packages/tui/src/tui.ts`](../../tui/src/tui.ts)
+
 The interactive mode separates terminal output into append-only committed history and a bounded live canvas. Finalized transcript components are retained for later rebuilds but written to native scrollback only once during routine rendering. Streaming messages, running tools, status, widgets, the editor, footer, autocomplete, and overlays stay live.
 
 Mutable output is tail-windowed to at most `terminal.rows - 1` rendered lines before it is written, so live content cannot push mutable rows into native scrollback. Finalization removes the mutable preview and commits the complete component once. Pending tools form an ordering barrier, and image-backed tools commit only after their conversions settle.

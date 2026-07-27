@@ -140,7 +140,7 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 				// Ignore cleanup errors
 			}
 			this.tui.start();
-			// SCRAMJET-DIVERGENCE: external-editor return deliberately recommits retained history (#389).
+			// SCRAMJET-DIVERGENCE: external-editor return deliberately rebuilds retained history (#389).
 			this.tui.rebuild();
 		}
 	}

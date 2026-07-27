@@ -2970,7 +2970,8 @@ export class InteractiveMode {
 				const runGeneration = this.agentRunGeneration;
 				const pendingToolFinalizations = this.pendingToolFinalizations;
 				await Promise.all(pendingToolFinalizations);
-				if (runGeneration !== this.agentRunGeneration) break;
+				if (runGeneration !== this.agentRunGeneration || pendingToolFinalizations !== this.pendingToolFinalizations)
+					break;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}

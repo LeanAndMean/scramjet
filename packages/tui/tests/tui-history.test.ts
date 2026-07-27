@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor, type EditorTheme } from "../src/components/editor.js";
-import { hyperlink } from "../src/terminal-image.js";
+import { Image } from "../src/components/image.js";
+import { hyperlink, resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.js";
 import type { Component } from "../src/tui.js";
 import { Container, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { HeadlessTerminal } from "./helpers/headless-terminal.js";
@@ -13,6 +14,14 @@ class MutableComponent implements Component {
 	}
 }
 
+class CountingComponent extends MutableComponent {
+	renderCount = 0;
+	override render(): string[] {
+		this.renderCount += 1;
+		return super.render();
+	}
+}
+
 async function render(tui: TUI, terminal: HeadlessTerminal): Promise<void> {
 	void tui;
 	await vi.runAllTimersAsync();
@@ -21,7 +30,10 @@ async function render(tui: TUI, terminal: HeadlessTerminal): Promise<void> {
 
 describe("TUI committed history", () => {
 	beforeEach(() => vi.useFakeTimers());
-	afterEach(() => vi.useRealTimers());
+	afterEach(() => {
+		resetCapabilitiesCache();
+		vi.useRealTimers();
+	});
 
 	it("bounds mutable output to the live canvas", async () => {
 		const terminal = new HeadlessTerminal(30, 5);
@@ -98,6 +110,61 @@ describe("TUI committed history", () => {
 		}
 		expect(output.match(/\x1b\]8;;https:\/\/example\.com\/(?:one|two)\x1b\\/g)).toHaveLength(2);
 		expect(output.match(/\x1b\]8;;\x1b\\/g)).toHaveLength(2);
+	});
+
+	it("omits an iTerm2 placement when its reserved rows are clipped", async () => {
+		setCapabilities({ images: "iterm2", trueColor: true, hyperlinks: true });
+		const terminal = new HeadlessTerminal(30, 3);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["COMMITTED-HISTORY"]);
+		const live = new Container();
+		live.addChild(
+			new Image(
+				"image-data",
+				"image/png",
+				{ fallbackColor: (text) => text },
+				{ maxWidthCells: 6, maxHeightCells: 6 },
+				{ widthPx: 54, heightPx: 108 },
+			),
+		);
+		live.addChild(new MutableComponent(["editor"]));
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		const output = terminal.writes.join("");
+		expect(output).not.toContain("\x1b]1337;File=");
+		expect(output).not.toContain("\x1b[5A");
+		expect(terminal.bufferLines().join("\n")).toContain("COMMITTED-HISTORY");
+	});
+
+	it("reuses committed renders during routine live updates", async () => {
+		const terminal = new HeadlessTerminal(30, 5);
+		const tui = new TUI(terminal);
+		const history = new CountingComponent(["history"]);
+		const live = new MutableComponent(["editor"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+		expect(history.renderCount).toBe(1);
+
+		live.lines = ["status", "editor"];
+		tui.requestRender();
+		await render(tui, terminal);
+		expect(history.renderCount).toBe(1);
+
+		history.lines.push("finalized");
+		tui.commit();
+		await render(tui, terminal);
+		expect(history.renderCount).toBe(2);
+
+		tui.rebuild();
+		await render(tui, terminal);
+		expect(history.renderCount).toBe(3);
 	});
 
 	it("commits a complete tail-windowed response exactly once", async () => {

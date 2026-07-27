@@ -224,7 +224,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	async waitForImageConversions(): Promise<void> {
-		await Promise.all(this.imageConversions.values());
+		if (!this.result) return;
+		const conversions = this.result.content
+			.filter((content) => content.type === "image" && content.data && content.mimeType)
+			.map((content) => this.imageConversions.get(`${content.mimeType}\0${content.data}`))
+			.filter((conversion): conversion is Promise<void> => conversion !== undefined);
+		await Promise.all(conversions);
 	}
 
 	seal(): void {

@@ -1045,6 +1045,16 @@ export class TUI extends Container {
 		return lines;
 	}
 
+	private tailWindowLiveLines(lines: string[], capacity: number): string[] {
+		if (capacity === 0) return [];
+		const start = Math.max(0, lines.length - capacity);
+		return lines.slice(start).map((line, index) => {
+			const placement = line.match(/^\x1b\[(\d+)A\x1b\]1337;File=[^\x07]*\x07$/);
+			if (placement && start + index - Number(placement[1]) < start) return "";
+			return line;
+		});
+	}
+
 	private doCommittedRender(): void {
 		const boundary = this.liveRegionStart ? this.children.indexOf(this.liveRegionStart) : -1;
 		if (boundary < 0) throw new Error("Live region start must remain a direct TUI child");
@@ -1053,20 +1063,22 @@ export class TUI extends Container {
 		const height = this.terminal.rows;
 		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
 		const forcedRebuild = this.previousWidth === -1;
-		let sourceCommitted = this.renderChildren(this.children.slice(0, boundary), width);
+		const rebuild = this.previousWidth === 0 || widthChanged || forcedRebuild;
+		const sourceCommitted =
+			rebuild || this.commitRequested
+				? this.applyLineResets(this.renderChildren(this.children.slice(0, boundary), width))
+				: this.committedLines;
 		let liveLines = this.renderChildren(this.children.slice(boundary), width);
 		const liveCapacity = Math.max(0, height - 1);
 		// Reserve one terminal row so live repainting cannot push finalized history into scrollback.
-		liveLines = liveCapacity === 0 ? [] : liveLines.slice(-liveCapacity);
+		liveLines = this.tailWindowLiveLines(liveLines, liveCapacity);
 		if (this.overlayStack.length > 0) {
 			const compositedLines = this.compositeOverlays(liveLines, width, liveCapacity);
-			liveLines = liveCapacity === 0 ? [] : compositedLines.slice(-liveCapacity);
+			liveLines = this.tailWindowLiveLines(compositedLines, liveCapacity);
 		}
 		const cursorPos = this.extractCursorPosition(liveLines, height);
-		sourceCommitted = this.applyLineResets(sourceCommitted);
 		liveLines = this.applyLineResets(liveLines);
 
-		const rebuild = this.previousWidth === 0 || widthChanged || forcedRebuild;
 		if (rebuild) {
 			let buffer = "\x1b[?2026h";
 			if (widthChanged || forcedRebuild) {

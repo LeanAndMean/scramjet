@@ -547,6 +547,64 @@ describe("interactive assistant history", () => {
 		expect(chatContainer.children).toHaveLength(1);
 	});
 
+	it("does not let a suspended agent end mutate a replaced transcript", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: null) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { emit, mode, chatContainer } = createInteractiveHarness();
+		await emit({ type: "tool_execution_start", toolCallId: "old", toolName: "unknown", args: {} });
+		const oldCompletion = emit({
+			type: "tool_execution_end",
+			toolCallId: "old",
+			result: { content: [{ type: "image", data: "old-jpeg", mimeType: "image/jpeg" }] },
+			isError: false,
+		});
+		const oldAgentEnd = emit({ type: "agent_end", messages: [] });
+		await Promise.resolve();
+
+		(mode.pendingTools as Map<string, unknown>).clear();
+		(mode.clearTranscript as () => void).call(mode);
+		await emit({ type: "tool_execution_start", toolCallId: "new", toolName: "unknown", args: {} });
+		settle(null);
+		await Promise.all([oldCompletion, oldAgentEnd]);
+
+		expect((mode.pendingTools as Map<string, unknown>).has("new")).toBe(true);
+		expect(chatContainer.children).toHaveLength(1);
+	});
+
+	it("does not await a superseded partial image when the final result is text", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: null) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { emit, committedChatContainer, chatContainer } = createInteractiveHarness();
+		await emit({ type: "tool_execution_start", toolCallId: "changing", toolName: "unknown", args: {} });
+		await emit({
+			type: "tool_execution_update",
+			toolCallId: "changing",
+			partialResult: { content: [{ type: "image", data: "partial-jpeg", mimeType: "image/jpeg" }] },
+		});
+
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "changing",
+			result: { content: [{ type: "text", text: "final-text" }] },
+			isError: false,
+		});
+
+		expect(committedChatContainer.render(80).join("\n")).toContain("final-text");
+		expect(chatContainer.children).toHaveLength(0);
+		settle(null);
+		await Promise.resolve();
+	});
+
 	it("does not await unresolved finalizations from a replaced transcript", async () => {
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 		let settle: (result: null) => void = () => {};
