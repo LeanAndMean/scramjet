@@ -216,23 +216,32 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 		issueCreate.indexOf("## Step 5: Create"),
 	);
 
-	it("requires a structured selection and recommends proceeding by semantic identity", () => {
+	it("requires a structured selection with a contextual recommendation", () => {
 		expect(ambiguousMatches).toContain('`get_scramjet_user_input` with `type: "select"`');
-		expect(ambiguousMatches).toContain("include all three choices in its `options`");
-		expect(ambiguousMatches).toMatch(
-			/derive the `recommended` index for \*\*Proceed without linking or mentioning matches\*\*.*locating that choice/i,
+		expect(ambiguousMatches).toContain("include all four choices in its `options`");
+		expect(ambiguousMatches).toContain(
+			"recommend the choice best supported by the matches and the user's stated intent",
 		);
+		expect(ambiguousMatches).toContain("Derive its runtime `recommended` index by locating that choice");
+		expect(ambiguousMatches).toContain("do not prescribe a globally recommended choice");
 		expect(ambiguousMatches).not.toMatch(/["`]?recommended["`]?(?:\s+index)?\s*(?::|=|\bis\b|\bto\b)\s*`?\d/i);
-		expect(ambiguousMatches).not.toMatch(/recommend(?:ed)?\s+(?:the\s+)?(?:first|second|third)\b/i);
+		expect(ambiguousMatches).not.toMatch(/recommend(?:ed)?\s+(?:the\s+)?(?:first|second|third|fourth)\b/i);
 	});
 
-	it("preserves the approved issue when proceeding", () => {
+	it("offers both create outcomes", () => {
+		expect(ambiguousMatches).toContain("**Create without mentioning matches**");
+		expect(ambiguousMatches).toContain("**Create and mention selected matches**");
+		expect(ambiguousMatches).toContain("Add references only to the matches the user explicitly selected");
+		expect(ambiguousMatches).toContain("return to Step 3 for explicit approval");
+	});
+
+	it("preserves the approved issue when creating without references", () => {
 		expect(ambiguousMatches).toContain("approved title and body unchanged");
 		expect(ambiguousMatches).toContain("Do not add links, mentions, or notes derived from the duplicate search");
 		expect(ambiguousMatches).toContain("do not post comments to any matched issue");
 	});
 
-	it("links exactly one selected match and skips creation", () => {
+	it("comments on exactly one selected match and skips creation", () => {
 		expect(ambiguousMatches).toContain("ask the user to select exactly one of the listed issues");
 		expect(ambiguousMatches).toContain("Only after the user explicitly selects the target");
 		expect(ambiguousMatches).toMatch(/post the prepared comment only to that issue/i);

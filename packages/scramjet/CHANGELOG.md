@@ -2,16 +2,16 @@
 
 ## 0.62.1 — Make ambiguous duplicate handling safe
 
-Preserves approved issue drafts when proceeding past ambiguous duplicate matches and keeps linking and skipping as explicit, side-effect-safe choices. Fixes [#390](https://github.com/LeanAndMean/scramjet/issues/390).
+Makes ambiguous duplicate handling explicit without removing the choice to publish useful cross-references. Fixes [#390](https://github.com/LeanAndMean/scramjet/issues/390).
 
 ### Changed
 
-- `mach12:issue-create`: recommend proceeding by semantic choice identity, preserve the approved draft without search-derived references, and require an explicit single target before linking.
-- `command-authoring.md`: document semantic recommendation identity for structured selections.
+- `mach12:issue-create`: offer separate create-without-references and create-with-selected-references paths, require approval after reference edits, and keep comment-instead and skip outcomes explicit.
+- `command-authoring.md`: distinguish context-independent semantic preferences from recommendations derived from runtime evidence and user intent.
 
 ### Tests
 
-- Mach 12 wiring coverage now verifies safe proceeding, explicit single-target linking, and side-effect-free skipping for ambiguous duplicate matches.
+- Mach 12 wiring coverage now verifies both create outcomes, contextual recommendation policy, explicit single-target commenting, and side-effect-free skipping for ambiguous duplicate matches.
 
 ## 0.62.0 — Restore standard pull request workflows
 

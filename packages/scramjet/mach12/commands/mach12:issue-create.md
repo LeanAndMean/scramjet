@@ -163,17 +163,20 @@ Handle results based on similarity:
 
   If the near-identical match is a **closed** issue, treat it as an ambiguous match instead -- a previously-closed issue should not block creation.
 
-- **Ambiguous matches**: If results are related but not clearly duplicates, present the matches to the user (showing issue number, title, state, and URL for each). Flag closed issues prominently (e.g., "This issue was previously closed"). Ask how to proceed with these mutually exclusive choices:
+- **Ambiguous matches**: If results are related but not clearly duplicates, present the matches to the user (showing issue number, title, state, and URL for each). Flag closed issues prominently (e.g., "This issue was previously closed"). Explain whether mentioning any matches would materially improve discoverability and why, then ask how to proceed with these mutually exclusive choices:
 
-  - **Proceed without linking or mentioning matches**: Create the approved issue exactly as drafted, without references derived from the duplicate search. This is the recommended/default choice.
-  - **Link**: Add this finding as a comment on exactly one of the listed issues and do not create a new issue.
+  - **Create without mentioning matches**: Create the approved issue exactly as drafted, without references derived from the duplicate search.
+  - **Create and mention selected matches**: Let the user choose which listed issues to reference, update the draft with only those references, and obtain explicit approval of the revised body before creation.
+  - **Comment on one existing issue instead**: Add this finding as a comment on exactly one selected issue and do not create a new issue.
   - **Skip**: Create no issue and post no relationship comment.
 
-  Use `get_scramjet_user_input` with `type: "select"` and include all three choices in its `options`. Construct the choices first, then derive the `recommended` index for **Proceed without linking or mentioning matches** from the choices actually presented by locating that choice. Command requirements identify the recommendation semantically; do not prescribe a fixed numeric index.
+  Use `get_scramjet_user_input` with `type: "select"` and include all four choices in its `options`. Construct the choices first, then recommend the choice best supported by the matches and the user's stated intent. Derive its runtime `recommended` index by locating that choice in the options actually presented; do not prescribe a globally recommended choice or fixed numeric index.
 
-  If the user picks "Proceed without linking or mentioning matches", continue to Step 5 with the approved title and body unchanged. Do not add links, mentions, or notes derived from the duplicate search, and do not post comments to any matched issue.
+  If the user picks "Create without mentioning matches", continue to Step 5 with the approved title and body unchanged. Do not add links, mentions, or notes derived from the duplicate search, and do not post comments to any matched issue.
 
-  If the user picks "Link", ask the user to select exactly one of the listed issues. Only after the user explicitly selects the target, prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
+  If the user picks "Create and mention selected matches", ask which listed issue or issues to mention. Add references only to the matches the user explicitly selected, present the revised body, and return to Step 3 for explicit approval. After approval, continue to Step 5; do not post comments to the selected issues.
+
+  If the user picks "Comment on one existing issue instead", ask the user to select exactly one of the listed issues. Only after the user explicitly selects the target, prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
 
   ```
   /mach12:gh-comment issue <chosen-issue-number>
@@ -185,7 +188,7 @@ Handle results based on similarity:
 
 ## Step 5: Create
 
-After approval and duplicate check, create the issue using the approved title and body unchanged:
+After approval and duplicate check, create the issue using the latest explicitly approved title and body unchanged:
 
 ```
 gh issue create --title "..." --body "..."
