@@ -169,7 +169,7 @@ Handle results based on similarity:
   - **Link**: Add this finding as a comment on exactly one of the listed issues and do not create a new issue.
   - **Skip**: Create no issue and post no relationship comment.
 
-  Construct the choices first, then derive its `recommended` index from the choices actually presented by locating **Proceed without linking or mentioning matches**. Command requirements identify the recommendation semantically; do not prescribe a fixed numeric index.
+  Use `get_scramjet_user_input` with `type: "select"` and include all three choices in its `options`. Construct the choices first, then derive the `recommended` index for **Proceed without linking or mentioning matches** from the choices actually presented by locating that choice. Command requirements identify the recommendation semantically; do not prescribe a fixed numeric index.
 
   If the user picks "Proceed without linking or mentioning matches", continue to Step 5 with the approved title and body unchanged. Do not add links, mentions, or notes derived from the duplicate search, and do not post comments to any matched issue.
 

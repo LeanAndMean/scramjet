@@ -216,10 +216,12 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 		issueCreate.indexOf("## Step 5: Create"),
 	);
 
-	it("recommends proceeding without references by semantic identity", () => {
-		expect(ambiguousMatches).toContain("**Proceed without linking or mentioning matches**");
-		expect(ambiguousMatches).toContain("recommended/default choice");
-		expect(ambiguousMatches).toContain("derive its `recommended` index from the choices actually presented");
+	it("requires a structured selection and recommends proceeding by semantic identity", () => {
+		expect(ambiguousMatches).toContain("`get_scramjet_user_input` with `type: \"select\"`");
+		expect(ambiguousMatches).toContain("include all three choices in its `options`");
+		expect(ambiguousMatches).toMatch(
+			/derive the `recommended` index for \*\*Proceed without linking or mentioning matches\*\*.*locating that choice/i,
+		);
 		expect(ambiguousMatches).not.toMatch(/["`]?recommended["`]?(?:\s+index)?\s*(?::|=|\bis\b|\bto\b)\s*`?\d/i);
 		expect(ambiguousMatches).not.toMatch(/recommend(?:ed)?\s+(?:the\s+)?(?:first|second|third)\b/i);
 	});
