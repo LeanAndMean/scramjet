@@ -32,9 +32,21 @@ The user's input contains:
 - A **PR number** (required)
 - Additional **context** or constraints (optional)
 
-Extract the PR number from the input. If the input is ambiguous, ask the user to clarify. If context was provided, note it for use in Step 6.
+Extract the PR number from the input. If the input is ambiguous, ask the user to clarify. If context was provided, note it for use in Step 7.
 
-## Step 2: Read contribution guidelines
+## Step 2: Verify initial readiness
+
+Read ordinary GitHub readiness before changing the branch:
+
+```
+gh pr view <pr-number> --json state,isDraft,reviewDecision,mergeable,mergeStateStatus
+```
+
+Require the PR to be open, non-draft, and free of requested changes or required review. Confirm there are no merge conflicts, and read required checks with `gh pr checks <pr-number> --required`. A behind branch continues to Step 5, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
+
+No creator, provenance marker, issue linkage, or custom metadata participates in readiness.
+
+## Step 3: Read contribution guidelines
 
 Delegate to:
 
@@ -44,9 +56,9 @@ Delegate to:
 
 The subroutine returns any pre-merge requirements found in the contribution guide (version bumps, changelog entries, documentation updates, test requirements, etc.). If no contribution guide exists, the subroutine returns empty and the checklist uses the standard items below.
 
-## Step 3: Check out and prepare
+## Step 4: Check out and prepare
 
-Check out the PR branch, but do not pull, edit, commit, or push before initial delivery-linkage verification:
+Check out the PR branch:
 
 ```
 gh pr checkout <pr-number>
@@ -54,17 +66,7 @@ gh pr checkout <pr-number>
 
 If checkout fails, report the error to the user and stop.
 
-Before any branch or checklist mutation, verify the PR's explicit delivery identity from fresh GitHub state by delegating to:
-
-```
-/mach12:gh-delivery-unit --pr <pr-number>
-```
-
-Every PR must return `verdict: ok`; there is no unrelated or not-applicable path. Missing identity is a non-forceable blocker, including for legacy or external PRs with no provenance marker or closing references. On any hold, stop before branch freshness, checklist edits, commits, or pushes. Never infer identity from existing closers and never auto-edit the PR body.
-
-For a legacy or external PR without identity, explain that the user must inspect its intended delivery scope before manually repairing or redrafting the body. Show both exact identity forms, require the exact `<!-- mach12-pr -->` provenance marker, and direct the user to use `Delivery-unit: #D` only after confirming the intended unit and expected linkage, or `Delivery-unit: none` only after confirming the PR intentionally has no closers or `Part of` relationship.
-
-After verification succeeds, synchronize the checked-out branch:
+Synchronize the checked-out branch:
 
 ```
 git pull
@@ -72,7 +74,7 @@ git pull
 
 If the pull fails due to authentication, network error, or merge conflicts, report the error and stop -- the checklist cannot proceed without a clean, up-to-date working copy.
 
-## Step 4: Check branch freshness
+## Step 5: Check branch freshness
 
 Ensure the feature branch is up to date with the default branch before running the checklist.
 
@@ -91,25 +93,20 @@ Count how many commits the branch is behind:
 git rev-list --count HEAD..origin/<default-branch>
 ```
 
-If the count is **0**, the branch is current -- continue to Step 5.
+If the count is **0**, the branch is current -- continue to Step 6.
 
 If the count is **greater than 0**, inform the user that the branch is N commits behind `origin/<default-branch>`, then ask how to proceed:
 
 - **Merge**: merge the default branch into this branch now.
-- **Skip**: leave the branch as-is and continue the checklist.
 - **Cancel**: stop without running the checklist.
 
-If the user picks **Cancel**, stop the session.
-
-If the user picks **Skip**, note the skipped status for the report and continue to Step 5.
-
-If the user picks **Merge**, run:
+A behind branch is blocked until updated; do not offer a skip or bypass path. If the user picks **Cancel**, stop the session. If the user picks **Merge**, run:
 
 ```
 git merge origin/<default-branch>
 ```
 
-**If the merge succeeds cleanly**, push the merge commit (`git push`). If the push fails, report the error to the user and stop -- do not continue the checklist with an unpushed merge commit. Advise the user they can retry with `git push`, or undo the merge with `git reset --hard HEAD~1`. On success, continue to Step 5.
+**If the merge succeeds cleanly**, push the merge commit (`git push`). If the push fails, report the error to the user and stop -- do not continue the checklist with an unpushed merge commit. Advise the user they can retry with `git push`, or undo the merge with `git reset --hard HEAD~1`. On success, continue to Step 6.
 
 **If the merge has conflicts**, check whether all conflicted files are on the version-file allowlist: `plugin.json`, `package.json`, `pyproject.toml`, `setup.cfg`, `Cargo.toml`, `build.gradle`. Only files on this allowlist are eligible for auto-resolution.
 
@@ -134,9 +131,9 @@ git merge origin/<default-branch>
 
 **If the merge fails for any reason other than conflicts** (invalid ref, dirty working tree, internal error), report the full error output to the user and stop.
 
-## Step 5: Gather PR context
+## Step 6: Gather PR context
 
-Build a picture of what the PR changed so the checklist in Step 6 can make informed decisions:
+Build a picture of what the PR changed so the checklist in Step 7 can make informed decisions:
 
 1. **Changed files**: `gh pr diff <pr-number> --name-only` and `git diff origin/<default-branch>...HEAD --stat`
 2. **PR description**: `gh pr view <pr-number>`
@@ -147,9 +144,9 @@ From these, identify what features, APIs, behaviors, or configurations were adde
 - Which areas of the project are affected.
 - Whether there are user-facing behavior changes.
 
-This summary provides the foundation for the documentation, version bump, CHANGELOG, and test items in Step 6.
+This summary provides the foundation for the documentation, version bump, CHANGELOG, and test items in Step 7.
 
-## Step 6: Run pre-merge checklist
+## Step 7: Run pre-merge checklist
 
 If the user provided context, honor it as guidance for this checklist:
 
@@ -157,17 +154,17 @@ If the user provided context, honor it as guidance for this checklist:
 - **Focus directives** (e.g., "focus on docs", "scrutinize the test coverage"): examine the named section more thoroughly. Surface findings that a routine pass might overlook.
 - **Other context**: use as supplementary information when running the relevant sections (e.g., a note about what changed informs documentation review).
 
-Per-item confirmation gates inside a section that runs (e.g., the bump-level question in 6b) remain authoritative -- context can skip the whole section, but it cannot pre-answer the gates inside a section that is executing.
+Per-item confirmation gates inside a section that runs (e.g., the bump-level question in 7b) remain authoritative -- context can skip the whole section, but it cannot pre-answer the gates inside a section that is executing.
 
-Using the PR context gathered in Step 5, work through each item. For each, report whether action is needed and perform it if so.
+Using the PR context gathered in Step 6, work through each item. For each, report whether action is needed and perform it if so.
 
-### 6a. Documentation
+### 7a. Documentation
 
 - Are there new features or changed behavior that need documentation updates?
 - Check `README.md`, any `docs/` directory, docstrings, and help text.
 - Update as needed.
 
-### 6b. Version Bump
+### 7b. Version Bump
 
 - Check if the project uses semantic versioning (look for version in `package.json`, `pyproject.toml`, `setup.cfg`, `__version__`, etc.).
 - If version tracking exists, determine if a bump is warranted:
@@ -176,12 +173,12 @@ Using the PR context gathered in Step 5, work through each item. For each, repor
   - **Major**: breaking changes.
 - If the bump level is not obvious from the changes, ask the user (Patch / Minor / Major).
 
-### 6c. CHANGELOG
+### 7c. CHANGELOG
 
 - Check if the project maintains a `CHANGELOG.md` or `CHANGES.md`.
 - If so, add an entry for this PR's changes following the existing format.
 
-### 6d. Tests
+### 7d. Tests
 
 Run the project's test suite:
 
@@ -204,77 +201,56 @@ Report results. If tests fail, do NOT silently ignore failures. Attempt to diagn
 
 Do not loop beyond one fix-and-rerun cycle — a second failure always escalates.
 
-## Step 7: Commit checklist changes
+## Step 8: Commit checklist changes
 
-Check whether the checklist produced any uncommitted changes by running `git status --porcelain`. If the output is empty, no changes were made -- proceed to Step 8.
+Check whether the checklist produced any uncommitted changes by running `git status --porcelain`. If the output is empty, no changes were made -- proceed to Step 9.
 
 If there are changes, assess and commit them:
 
 1. **Scan for uncommitted/untracked files** beyond what the checklist explicitly modified. Categorize each file:
-   - **Checklist-produced** (files you modified during Steps 6a-6d): always stage.
+   - **Checklist-produced** (files you modified during Steps 7a-7d): always stage.
    - **Generated tracked artifacts** (e.g., `package-lock.json`, `yarn.lock`, `Cargo.lock`, `poetry.lock`, build outputs that the repo already tracks): stage if they changed as a side effect of checklist operations (dependency install, build step). If unsure whether the change is a side effect or pre-existing, check `git diff <file>` to understand what changed.
    - **Unrelated pre-existing files** (files that were dirty or untracked before the checklist ran, unrelated to this PR's changes): leave alone. Note them in the Step 10 report so the user is aware.
    - **Ambiguous files** (cannot determine whether they belong to this PR or are pre-existing): ask the user about the specific files before staging.
    Never use `git add -A` or `git add .` — stage files individually based on the assessment above.
-2. **Stage** the files identified for inclusion (`git add <file>...`). If staging fails, report the error to the user and proceed to Step 8.
-3. **Commit** with message: "Pre-merge checklist: [brief summary of what was updated]". If the commit fails (pre-commit hook, empty commit, permissions), report the error to the user and proceed to Step 8.
-4. **Push** to remote (`git push`). If the push fails, report the error to the user and advise them to retry manually with `git push`. Proceed to Step 8.
+2. **Stage** the files identified for inclusion (`git add <file>...`). If staging fails, report the error, report the command incomplete, and stop before CI and final readiness.
+3. **Commit** with message: "Pre-merge checklist: [brief summary of what was updated]". If the commit fails (pre-commit hook, empty commit, permissions), report the error, report the command incomplete, and stop before CI and final readiness.
+4. **Push** to remote (`git push`). If the push fails, report the error, advise the user to retry manually with `git push`, report the command incomplete, and stop before CI and final readiness. Step 9 may begin only after a successful push, or when the checklist produced no changes.
 
-## Step 8: CI verification
+## Step 9: CI verification
 
 Check whether CI is passing on the current HEAD of the PR branch. This step catches failures that local checks do not cover (lint, typecheck, build, packaging, smoke tests).
 
-If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), skip this step, record "CI: skipped per user request", and proceed to Step 9.
+If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), skip this step, record "CI: skipped per user request", and proceed to Step 10.
 
-### 8a. Check CI status
+### 9a. Check CI status
 
 ```
 gh pr checks <pr-number> --json name,state,bucket,link
 ```
 
-Evaluate the results:
+If checks are pending, poll for at most 10 minutes. If the timeout expires, report which checks remain pending and stop. If no checks appear after a short wait, note that in the report. Proceed when checks pass; diagnose failures before attempting a fix.
 
-- **All checks pass** (`bucket` is `pass` for every check): CI is green. Proceed to Step 9.
-- **Any checks pending** (`bucket` is `pending`): CI is still running. Wait for completion:
-  ```
-  gh pr checks <pr-number> --watch
-  ```
-  After it finishes, re-read the results and evaluate again.
-- **No checks reported**: CI may not have triggered yet. Wait up to 60 seconds for checks to appear, polling `gh pr checks` with a short delay. If checks appear, evaluate them. If none appear, note this for the report and proceed to Step 9.
-- **Any checks failed** (`bucket` is `fail`): proceed to 8b.
+### 9b. Diagnose failures
 
-### 8b. Diagnose failures
+Wait for running checks to settle within the same 10-minute bound, then inspect the available logs or provider links for each failure.
 
-Wait for all checks to finish before diagnosing — partial results lead to incomplete fixes and unnecessary push cycles:
-
-```
-gh pr checks <pr-number> --watch
-```
-
-Then read the logs for each failing check:
-
-```
-gh run view <run-id> --log-failed
-```
-
-Extract the run ID from the failing check's `link` field (the numeric ID in the URL path).
-
-From the logs, identify the root cause of each failure:
+Identify the root cause of each failure:
 
 - **Lint/format errors**: identify the linter and the failing files.
 - **Type errors**: identify the type-checker and the failing files.
 - **Build errors**: identify the build step and error message.
-- **Test failures**: if Step 6d already ran tests and they passed locally, these may stem from code pushed before the checklist ran, or from platform-specific differences.
+- **Test failures**: if Step 7d already ran tests and they passed locally, these may stem from code pushed before the checklist ran, or from platform-specific differences.
 - **Other failures** (packaging, smoke tests, import guards): read the log output and diagnose accordingly.
 
-### 8c. Fix and push
+### 9c. Fix and push
 
 Fix each diagnosed failure locally. For common categories:
 
 - **Lint/format**: run the project's lint-fix command (e.g., `npx biome check --write .`, `npm run lint -- --write`). Identify the correct command from `package.json` scripts or project configuration.
 - **Type errors**: fix the type issues in the identified files.
 - **Build errors**: fix the source based on the build error.
-- **Test failures**: diagnose and fix as described in Step 6d.
+- **Test failures**: diagnose and fix as described in Step 7d.
 
 After applying fixes, verify locally by running the relevant check command before pushing.
 
@@ -284,57 +260,36 @@ Delegate to push the fixes:
 /mach12:push CI fix: <brief description of what was fixed> for PR #<pr-number>
 ```
 
-### 8d. Verify
+Proceed only when the delegation confirms that the commit was pushed successfully. Otherwise report the result and stop before CI verification.
 
-Wait for CI to run on the pushed fixes:
+### 9d. Verify
 
-```
-gh pr checks <pr-number> --watch
-```
-
-Then re-read results:
-
-```
-gh pr checks <pr-number> --json name,state,bucket,link
-```
-
-- **All checks pass**: CI is green. Proceed to Step 9.
-- **Checks still failing**: escalate to the user with:
-  - Which checks are still failing and their log output.
-  - What was attempted and why it did not resolve the issue.
-  - A recommendation for next steps.
+Wait up to 10 minutes for CI on the pushed fix. Proceed to Step 10 only when CI passes. If it does not, escalate with:
+- Which checks are still unsuccessful and their log output.
+- What was attempted and why it did not resolve the issue.
+- A recommendation for next steps.
 
 Do not attempt a second fix cycle — a persistent failure after one fix always escalates.
 
-## Step 9: Run final delivery-linkage verification
+## Step 10: Final readiness and pre-merge report
 
-Every non-terminal Step 8 outcome—including skipped CI, initially passing CI, no reported checks, and passing CI after a fix—must converge here before readiness is presented. Rerun fresh verification after all checklist edits, commits, pushes, tests, and CI checks:
-
-```
-/mach12:gh-delivery-unit --pr <pr-number>
-```
-
-This final result is authoritative and must return `verdict: ok`. On `verdict: hold`, report the exact identity, membership, plan, blocker, claimant, provenance, closing-reference, or `Part of` mismatch; do not mutate the body, recommend merge, or let a skip directive bypass linkage. No checklist mutation may occur after this verification and before the readiness report.
-
-## Step 10: Present pre-merge report
+After all checklist changes are pushed and CI settles, repeat the Step 2 readiness check. Complete only when the PR is open, non-draft, free of blocking review decisions, current with the default branch, conflict-free, and passing its required checks. If mergeability remains unknown after one brief reread, report incomplete.
 
 Present a summary of what was done:
-- [ ] Branch freshness: [current with <default-branch> / merged N commits from <default-branch> / auto-resolved conflicts in: <files> / behind <default-branch> (user skipped merge)]
+- [ ] Branch freshness: [current with <default-branch> / merged N commits from <default-branch> / auto-resolved conflicts in: <files>]
 - [ ] Documentation: [updated / no changes needed / skipped per user request]
 - [ ] Version: [bumped to X.Y.Z / no version tracking / no changes needed / skipped per user request]
 - [ ] CHANGELOG: [updated / no changelog maintained / no changes needed / skipped per user request]
 - [ ] Tests: [all passing / N failures noted / skipped per user request]
 - [ ] CI: [all checks passing / fixed: <summary of what was fixed> / failing: <summary> (escalated) / pending (no checks reported) / skipped per user request]
-- [ ] Linkage: [verified ordinary/batch with exact close set and optional `part-of: #<initiative>` / verified explicitly unlinked through `Delivery-unit: none` / not verified (escalated at Step N) / hold: <exact mismatch>]
 
 Report any items that need follow-up (test failures, manual conflict resolution, etc.) so the user can decide how to proceed.
 
 After delivering your answer, call `report_scramjet_command_status` and summarize the work you performed in `summary`:
 
-- **Verified success:** Only when final linkage verification returns `verdict: ok`, report `status: "completed"` and include both declared candidates in `next_steps`:
+- Report `status: "completed"` only when every required checklist action succeeded and the final authoritative readiness reread is determinate and ready. Include both declared candidates in `next_steps`:
   - `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, with a reason explaining when merging is appropriate.
   - `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, with a reason explaining when a fix pass is warranted.
-  - Recommend `mach12:pr-merge` (index 0) when the checklist passed cleanly and no issues remain; recommend `mach12:pr-review-fix` (index 1) when the checklist surfaced issues that warrant code changes.
-- **Linkage hold:** Report `status: "blocked"` and leave `next_steps` empty. A linkage hold cannot be force-merged or bypassed by user skip directives.
-
-If the PR should otherwise remain open or the checklist did not complete, report the matching non-completed status and leave `next_steps` empty. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
+- Recommend `mach12:pr-merge` (index 0) when no issues remain; recommend `mach12:pr-review-fix` (index 1) when code changes are warranted.
+- Report `status: "blocked"` when a determinate condition requires user or repository action: a non-open PR, draft state, requested changes, required review, failing or pending required checks, a behind branch, or confirmed conflicts.
+- Report `status: "incomplete"` when readiness remains indeterminate after one reread or an execution failure prevents a trustworthy completed/blocked determination. Leave `next_steps` empty for non-completed statuses. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

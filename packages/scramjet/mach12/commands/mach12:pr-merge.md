@@ -29,55 +29,41 @@ Extract the PR number from the input. If the input is ambiguous, ask the user to
 
 ## Step 2: Verify readiness
 
-Confirm the PR is ready to merge:
+Read ordinary GitHub readiness immediately before merging:
 
 ```
-gh pr view <pr-number> --json state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup
+gh pr view <pr-number> --json state,isDraft,mergeable,mergeStateStatus,reviewDecision
 ```
 
-If there are blocking issues, report them to the user and stop. Do NOT force-merge.
+Require the PR to be open, non-draft, free of requested changes or required review, current with the default branch, conflict-free, and passing its required checks. Use `gh pr checks <pr-number> --required` to distinguish required checks; repositories without required checks may continue. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
 
-- **Failed CI checks**: list each failing check by name and its summary from `statusCheckRollup`. Suggest running `/mach12:pr-pre-merge <pr-number>`, which diagnoses CI failures, applies fixes, and pushes them.
-- **Merge conflicts**: suggest resolving conflicts manually or rebasing the branch.
-- **Missing review approval**: suggest requesting a review.
-- **Branch behind main**: when `mergeStateStatus` is `BEHIND`, suggest running `/mach12:pr-pre-merge <pr-number>` to update the branch before merging.
+No creator, provenance marker, issue linkage, or custom metadata participates in readiness. Do not offer a force merge, force push, or readiness bypass.
 
-## Step 3: Verify delivery linkage and merge
+## Step 3: Merge
 
-After all normal readiness checks pass, immediately re-derive and verify the PR's explicit delivery identity from fresh GitHub state:
-
-```
-/mach12:gh-delivery-unit --pr <pr-number>
-```
-
-Every PR must return `verdict: ok`; there is no unrelated or not-applicable path. Missing identity is a non-forceable blocker, including for legacy or external PRs with no provenance marker or closing references. `Delivery-unit: none` permits merge only when the subroutine verifies exact explicit-unlinked identity, zero closing references, and zero standalone `Part of` lines.
-
-On any hold, report the exact mismatch and stop without force-merging. Suggest `/mach12:pr-pre-merge <pr-number>`. Never infer identity from existing closers and never auto-edit the PR body. For absent identity, require the user to inspect the intended delivery scope before manual repair or redrafting; show the exact linked and unlinked identity forms and require the exact `<!-- mach12-pr -->` provenance marker.
-
-No mutation, release work, branch cleanup, cached-context reuse, or other action may occur between a successful verification and this merge command:
-
-```
-gh pr merge <pr-number> --delete-branch
-```
-
-Then update local default branch:
-
-```
-DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
-git checkout "$DEFAULT_BRANCH" && git pull
-```
-
-Clean up the local feature branch if it still exists. Get the branch name from the PR:
+Record the feature branch name, then merge without a force or readiness bypass:
 
 ```
 gh pr view <pr-number> --json headRefName --jq .headRefName
+gh pr merge <pr-number> --delete-branch
 ```
 
-Then delete the local branch:
+Before cleanup or release work, confirm that GitHub reports the PR as merged:
 
 ```
-git branch -d <branch-name-from-above>
+gh pr view <pr-number> --json state,mergeCommit
 ```
+
+If the PR is not confirmed merged, report the result and stop. After confirmation, update the local default branch and delete the local feature branch if it still exists:
+
+```
+DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+git checkout "$DEFAULT_BRANCH"
+git pull
+git branch -d <branch-name>
+```
+
+Report cleanup failures accurately without undoing or obscuring the successful merge.
 
 ## Step 4: Ask about a release
 
@@ -145,18 +131,16 @@ After approval, create the release:
 gh release create <tag> --title "..." --notes "..."
 ```
 
+If creation fails, report that the PR was merged but the release was not created. Do not claim success for an operation that failed.
+
 ## Step 6: Confirm
 
-Report to the user:
-- PR merged (with merge commit hash).
-- Feature branch deleted.
-- Release created (if applicable, with link).
-- Current state of the default branch.
+Report the merge, branch cleanup, release, and local default-branch outcomes accurately, distinguishing a successful merge from any later cleanup or release failure.
 
 ## Status Reporting
 
 After delivering your answer, report command status by calling `report_scramjet_command_status`; summarize the work you performed in `summary`, then choose the status:
 
 - After a successful merge (and optional release): report `status: "completed"` with a brief summary. Omit `next_steps` entirely — this command has no next-step policy and no chaining occurs.
-- If merge readiness or delivery-linkage checks fail (CI, conflicts, review, missing identity, or linkage drift): report `status: "blocked"` with a summary of the blocking issues. A linkage hold is non-forceable. Omit `next_steps`.
+- If merge readiness checks fail (CI, conflicts, review, or branch freshness): report `status: "blocked"` with a summary of the blocking issues. Omit `next_steps`.
 - If the command stopped before completing (user cancelled, unexpected error): report `status: "incomplete"` with a summary. Omit `next_steps`.

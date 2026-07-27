@@ -33,7 +33,6 @@ const SUBROUTINES = [
 	"gh-issue-read",
 	"gh-pr-read",
 	"gh-sub-issues",
-	"gh-delivery-unit",
 	"gh-assign",
 	"gh-comment",
 ];
