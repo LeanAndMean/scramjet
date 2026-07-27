@@ -26,6 +26,26 @@ function formatTokens(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
+// SCRAMJET-DIVERGENCE: Keep footer usage and warnings budget-based while displaying capacity (issue 398).
+export function formatContextUsage(
+	tokens: number | null,
+	percent: number | null,
+	budget: number,
+	capacity: number,
+	autoCompactEnabled: boolean,
+): { display: string; severity: "normal" | "warning" | "error" } {
+	const numerator = tokens === null ? "?" : formatTokens(tokens);
+	const percentage = percent === null ? "?" : `${percent.toFixed(1)}%`;
+	const auto = autoCompactEnabled ? ", auto" : "";
+	const split = budget === capacity ? "" : ` budget (${percentage}${auto}; ${formatTokens(capacity)} capacity)`;
+	const display = split
+		? `${numerator}/${formatTokens(budget)}${split}`
+		: `${numerator}/${formatTokens(budget)} (${percentage}${auto})`;
+	const severity =
+		percent !== null && percent > 90 ? "error" : percent !== null && percent > 70 ? "warning" : "normal";
+	return { display, severity };
+}
+
 /**
  * Footer component that shows pwd, token stats, and context usage.
  * Computes token/context stats from session, gets git branch and extension statuses from provider.
@@ -86,8 +106,15 @@ export class FooterComponent implements Component {
 		// After compaction, tokens are unknown until the next LLM response.
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
-		const contextPercentValue = contextUsage?.percent ?? 0;
-		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
+		const contextWindowBudget =
+			contextUsage?.contextWindowBudget ?? state.model?.contextWindowBudget ?? contextWindow;
+		const formattedContext = formatContextUsage(
+			contextUsage?.tokens ?? null,
+			contextUsage?.percent ?? null,
+			contextWindowBudget,
+			contextWindow,
+			this.autoCompactEnabled,
+		);
 
 		// Replace home directory with ~
 		let pwd = this.session.sessionManager.getCwd();
@@ -122,21 +149,13 @@ export class FooterComponent implements Component {
 			statsParts.push(costStr);
 		}
 
-		// Colorize context percentage based on usage
-		let contextPercentStr: string;
-		const autoIndicator = this.autoCompactEnabled ? " (auto)" : "";
-		const contextPercentDisplay =
-			contextPercent === "?"
-				? `?/${formatTokens(contextWindow)}${autoIndicator}`
-				: `${contextPercent}%/${formatTokens(contextWindow)}${autoIndicator}`;
-		if (contextPercentValue > 90) {
-			contextPercentStr = theme.fg("error", contextPercentDisplay);
-		} else if (contextPercentValue > 70) {
-			contextPercentStr = theme.fg("warning", contextPercentDisplay);
-		} else {
-			contextPercentStr = contextPercentDisplay;
+		let contextDisplay = formattedContext.display;
+		if (formattedContext.severity === "error") {
+			contextDisplay = theme.fg("error", contextDisplay);
+		} else if (formattedContext.severity === "warning") {
+			contextDisplay = theme.fg("warning", contextDisplay);
 		}
-		statsParts.push(contextPercentStr);
+		statsParts.push(contextDisplay);
 
 		let statsLeft = statsParts.join(" ");
 

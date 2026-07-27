@@ -263,7 +263,7 @@ List all configured models.
 {"type": "get_available_models"}
 ```
 
-Response contains an array of full [Model](#model) objects:
+Response contains an array of full [Model](#model) objects. `RpcClient.getAvailableModels()` projects these to `ModelInfo`, including optional `contextWindowBudget` when present; there is no separate runtime mapping:
 ```json
 {
   "type": "response",
@@ -527,13 +527,14 @@ Response:
     "contextUsage": {
       "tokens": 60000,
       "contextWindow": 200000,
+      "contextWindowBudget": 200000,
       "percent": 30
     }
   }
 }
 ```
 
-`tokens` contains assistant usage totals for the current session state. `contextUsage` contains the actual current context-window estimate used for compaction and footer display.
+`tokens` contains assistant usage totals for the current session state. `contextUsage.contextWindow` is advertised model capacity, `contextWindowBudget` is the resolved operational budget, and `percent` uses that budget as its denominator. Compaction and footer warning state also use the operational budget.
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 
@@ -1217,6 +1218,7 @@ Source files:
   "reasoning": true,
   "input": ["text", "image"],
   "contextWindow": 200000,
+  "contextWindowBudget": 180000,
   "maxTokens": 16384,
   "cost": {
     "input": 3.0,
@@ -1226,6 +1228,8 @@ Source files:
   }
 }
 ```
+
+`contextWindowBudget` is optional on transported models. When absent, consumers use `contextWindow` as the operational budget.
 
 ### UserMessage
 
