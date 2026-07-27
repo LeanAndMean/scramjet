@@ -286,8 +286,11 @@ export interface ExtensionUIContext {
 export interface ContextUsage {
 	/** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
 	tokens: number | null;
+	/** Advertised model context capacity in tokens. */
 	contextWindow: number;
-	/** Context usage as percentage of context window, or null if tokens is unknown. */
+	/** Resolved operational context budget in tokens. */
+	contextWindowBudget: number;
+	/** Context usage as percentage of the operational budget, or null if tokens is unknown. */
 	percent: number | null;
 }
 
@@ -1448,8 +1451,11 @@ export interface ProviderModelConfig {
 	input: ("text" | "image")[];
 	/** Cost per token (for tracking, can be 0). */
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-	/** Maximum context window size in tokens. */
+	/** Advertised model context capacity in tokens. */
 	contextWindow: number;
+	// SCRAMJET-DIVERGENCE: providers can distinguish model capacity from their operational context budget.
+	/** Configured operational context budget in tokens; defaults to contextWindow. */
+	contextWindowBudget?: number;
 	/** Maximum output tokens. */
 	maxTokens: number;
 	/** Custom headers for this model. */

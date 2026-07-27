@@ -571,6 +571,8 @@ export interface Model<TApi extends Api> {
 		cacheWrite: number; // $/million tokens
 	};
 	contextWindow: number;
+	// SCRAMJET-DIVERGENCE: Separate advertised model capacity from the optional operational context budget.
+	contextWindowBudget?: number;
 	maxTokens: number;
 	headers?: Record<string, string>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
@@ -584,7 +586,10 @@ export interface Model<TApi extends Api> {
 }
 
 export interface ImagesModel<TApi extends ImagesApi>
-	extends Omit<Model<Api>, "api" | "provider" | "reasoning" | "contextWindow" | "maxTokens" | "compat"> {
+	extends Omit<
+		Model<Api>,
+		"api" | "provider" | "reasoning" | "contextWindow" | "contextWindowBudget" | "maxTokens" | "compat"
+	> {
 	api: TApi;
 	provider: ImagesProvider;
 	output: ("text" | "image")[];

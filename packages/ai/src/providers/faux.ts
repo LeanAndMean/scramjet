@@ -42,6 +42,7 @@ export interface FauxModelDefinition {
 	input?: ("text" | "image")[];
 	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	contextWindow?: number;
+	contextWindowBudget?: number;
 	maxTokens?: number;
 }
 
@@ -427,6 +428,8 @@ export function registerFauxProvider(options: RegisterFauxProviderOptions = {}):
 		input: definition.input ?? ["text", "image"],
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: definition.contextWindow ?? 128000,
+		// SCRAMJET-DIVERGENCE: Preserve operational context budgets when constructing Faux models.
+		contextWindowBudget: definition.contextWindowBudget,
 		maxTokens: definition.maxTokens ?? 16384,
 	})) as [Model<string>, ...Model<string>[]];
 
