@@ -24,6 +24,7 @@ import {
 	clampThinkingLevel,
 	cleanupSessionResources,
 	flattenSystemPrompt,
+	getContextWindowBudget,
 	getSupportedThinkingLevels,
 	isContextOverflow,
 	modelsAreEqual,
@@ -2031,7 +2032,8 @@ export class AgentSession {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
 
-		const contextWindow = this.model?.contextWindow ?? 0;
+		// SCRAMJET-DIVERGENCE: operational context checks use the provider budget, not advertised capacity.
+		const contextWindow = this.model ? getContextWindowBudget(this.model) : 0;
 
 		// Skip overflow check if the message came from a different model.
 		// This handles the case where user switched from a smaller-context model (e.g. opus)
@@ -2689,7 +2691,8 @@ export class AgentSession {
 		if (message.stopReason !== "error" || !message.errorMessage) return false;
 
 		// Context overflow is handled by compaction, not retry
-		const contextWindow = this.model?.contextWindow ?? 0;
+		// SCRAMJET-DIVERGENCE: retry classification uses the provider's operational context budget.
+		const contextWindow = this.model ? getContextWindowBudget(this.model) : 0;
 		if (isContextOverflow(message, contextWindow)) return false;
 
 		const err = message.errorMessage;
@@ -3238,7 +3241,8 @@ export class AgentSession {
 		if (!model) return undefined;
 
 		const contextWindow = model.contextWindow ?? 0;
-		if (contextWindow <= 0) return undefined;
+		const contextWindowBudget = getContextWindowBudget(model);
+		if (contextWindow <= 0 || contextWindowBudget <= 0) return undefined;
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
@@ -3265,16 +3269,17 @@ export class AgentSession {
 			}
 
 			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, percent: null };
+				return { tokens: null, contextWindow, contextWindowBudget, percent: null };
 			}
 		}
 
 		const estimate = estimateContextTokens(this.messages);
-		const percent = (estimate.tokens / contextWindow) * 100;
+		const percent = (estimate.tokens / contextWindowBudget) * 100;
 
 		return {
 			tokens: estimate.tokens,
 			contextWindow,
+			contextWindowBudget,
 			percent,
 		};
 	}

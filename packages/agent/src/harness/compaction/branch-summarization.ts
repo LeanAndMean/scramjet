@@ -1,5 +1,5 @@
 import type { Model } from "@leanandmean/ai";
-import { completeSimple } from "@leanandmean/ai";
+import { completeSimple, getContextWindowBudget } from "@leanandmean/ai";
 import type { AgentMessage } from "../../types.js";
 import {
 	convertToLlm,
@@ -202,8 +202,9 @@ export async function generateBranchSummary(
 	options: GenerateBranchSummaryOptions,
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
 	const { model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
-	const contextWindow = model.contextWindow || 128000;
-	const tokenBudget = contextWindow - reserveTokens;
+	// SCRAMJET-DIVERGENCE: branch summaries fit content to the operational budget, not advertised capacity.
+	const contextWindowBudget = getContextWindowBudget(model) || 128000;
+	const tokenBudget = contextWindowBudget - reserveTokens;
 
 	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 

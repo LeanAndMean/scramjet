@@ -287,7 +287,9 @@ export interface ContextUsage {
 	/** Estimated context tokens, or null if unknown (e.g. right after compaction, before next LLM response). */
 	tokens: number | null;
 	contextWindow: number;
-	/** Context usage as percentage of context window, or null if tokens is unknown. */
+	/** Operational context budget after provider-specific limits are applied. */
+	contextWindowBudget: number;
+	/** Context usage as percentage of the operational budget, or null if tokens is unknown. */
 	percent: number | null;
 }
 

@@ -24,6 +24,7 @@ const testModel: Model<"openai-chat"> = {
 	reasoning: false,
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1_050_000,
 };
 
 function assistantText(text: string): AssistantMessage {
@@ -83,7 +84,12 @@ interface Fixture {
 
 async function createFixture(
 	responses: (callIndex: number) => AssistantMessage,
-	options?: { maxRetries?: number; baseDelayMs?: number; customTools?: ToolDefinition[] },
+	options?: {
+		maxRetries?: number;
+		baseDelayMs?: number;
+		customTools?: ToolDefinition[];
+		model?: Model<"openai-chat">;
+	},
 ): Promise<Fixture> {
 	const dir = mkdtempSync(join(tmpdir(), "retry-test-"));
 	const cwd = join(dir, "cwd");
@@ -101,7 +107,7 @@ async function createFixture(
 
 	let callIndex = 0;
 	const agent = new Agent({
-		initialState: { systemPrompt: "", model: testModel, tools: [] },
+		initialState: { systemPrompt: "", model: options?.model ?? testModel, tools: [] },
 		streamFn: () => {
 			const message = responses(callIndex++);
 			const stream = createAssistantMessageEventStream();
@@ -132,6 +138,68 @@ async function createFixture(
 function retryEvents(events: AgentSessionEvent[]) {
 	return events.filter((e) => e.type === "auto_retry_start" || e.type === "auto_retry_end");
 }
+
+describe("AgentSession context window budget", () => {
+	it("reports capacity separately and calculates usage against an explicit budget", async () => {
+		const model = { ...testModel, contextWindowBudget: 272_000 };
+		const { session } = await createFixture(
+			() => ({
+				...assistantText("ok"),
+				usage: { input: 136_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+			}),
+			{ model },
+		);
+
+		await session.prompt("hello");
+
+		expect(session.getContextUsage()).toMatchObject({
+			contextWindow: 1_050_000,
+			contextWindowBudget: 272_000,
+			percent: 50,
+		});
+	});
+
+	it("falls back to capacity when no explicit budget is present", async () => {
+		const { session } = await createFixture(() => ({
+			...assistantText("ok"),
+			usage: { input: 525_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+		}));
+
+		await session.prompt("hello");
+
+		expect(session.getContextUsage()).toMatchObject({
+			contextWindow: 1_050_000,
+			contextWindowBudget: 1_050_000,
+			percent: 50,
+		});
+	});
+
+	it("detects numeric overflow against an explicit budget", async () => {
+		const model = { ...testModel, contextWindowBudget: 272_000 };
+		const { session, events } = await createFixture(
+			() => ({
+				...assistantText("ok"),
+				usage: { input: 300_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+			}),
+			{ model },
+		);
+
+		await session.prompt("hello");
+
+		expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+	});
+
+	it("does not detect numeric overflow below fallback capacity", async () => {
+		const { session, events } = await createFixture(() => ({
+			...assistantText("ok"),
+			usage: { input: 300_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+		}));
+
+		await session.prompt("hello");
+
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+	});
+});
 
 describe("AgentSession retry bounding", () => {
 	it("single transient error retries and succeeds", async () => {
