@@ -1450,6 +1450,9 @@ export interface ProviderModelConfig {
 	cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	/** Maximum context window size in tokens. */
 	contextWindow: number;
+	// SCRAMJET-DIVERGENCE: providers can distinguish model capacity from their operational context budget.
+	/** Operational context budget in tokens. */
+	contextWindowBudget?: number;
 	/** Maximum output tokens. */
 	maxTokens: number;
 	/** Custom headers for this model. */

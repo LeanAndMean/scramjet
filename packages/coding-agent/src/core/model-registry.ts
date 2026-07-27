@@ -179,6 +179,7 @@ const ModelDefinitionSchema = Type.Object({
 		}),
 	),
 	contextWindow: Type.Optional(Type.Number()),
+	contextWindowBudget: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
@@ -199,6 +200,7 @@ const ModelOverrideSchema = Type.Object({
 		}),
 	),
 	contextWindow: Type.Optional(Type.Number()),
+	contextWindowBudget: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
@@ -225,6 +227,10 @@ const ModelsConfigSchema = Type.Object({
 const validateModelsConfig = Compile(ModelsConfigSchema);
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
+
+function isPositiveInteger(value: number): boolean {
+	return Number.isFinite(value) && Number.isInteger(value) && value > 0;
+}
 
 function formatValidationPath(error: TLocalizedValidationError): string {
 	if (error.keyword === "required") {
@@ -370,6 +376,7 @@ function mergeCompat(
  * Deep merge a model override into a model.
  * Handles nested objects (cost, compat) by merging rather than replacing.
  */
+// SCRAMJET-DIVERGENCE: model capacity and operational context budget are independently overridable.
 function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<Api> {
 	const result = { ...model };
 
@@ -381,6 +388,7 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 	}
 	if (override.input !== undefined) result.input = override.input as ("text" | "image")[];
 	if (override.contextWindow !== undefined) result.contextWindow = override.contextWindow;
+	if (override.contextWindowBudget !== undefined) result.contextWindowBudget = override.contextWindowBudget;
 	if (override.maxTokens !== undefined) result.maxTokens = override.maxTokens;
 
 	// Merge cost (partial override)
@@ -467,8 +475,17 @@ export class ModelRegistry {
 			// Keep built-in models even if custom models failed to load
 		}
 
-		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
+		let builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
 		let combined = this.mergeCustomModels(builtInModels, customModels);
+		try {
+			this.validateResolvedBudgets(combined);
+		} catch (validationError) {
+			this.loadError = `Failed to load models.json: ${validationError instanceof Error ? validationError.message : validationError}`;
+			this.providerRequestConfigs.clear();
+			this.modelRequestHeaders.clear();
+			builtInModels = this.loadBuiltInModels(new Map(), new Map());
+			combined = builtInModels;
+		}
 
 		// Let OAuth providers modify their models (e.g., update baseUrl)
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -648,6 +665,8 @@ export class ModelRegistry {
 				// Validate contextWindow/maxTokens only if provided (they have defaults)
 				if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0)
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
+				if (modelDef.contextWindowBudget !== undefined && !isPositiveInteger(modelDef.contextWindowBudget))
+					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindowBudget`);
 				if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0)
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
 
@@ -657,6 +676,12 @@ export class ModelRegistry {
 			}
 
 			for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides ?? {})) {
+				if (
+					modelOverride.contextWindowBudget !== undefined &&
+					!isPositiveInteger(modelOverride.contextWindowBudget)
+				) {
+					throw new Error(`Provider ${providerName}, model ${modelId}: invalid contextWindowBudget`);
+				}
 				const api =
 					builtInModels.find((model) => model.id === modelId)?.api ?? providerConfig.api ?? builtInDefaultApi;
 				if (api) {
@@ -714,6 +739,7 @@ export class ModelRegistry {
 					input: (modelDef.input ?? ["text"]) as ("text" | "image")[],
 					cost: modelDef.cost ?? defaultCost,
 					contextWindow: modelDef.contextWindow ?? 128000,
+					contextWindowBudget: modelDef.contextWindowBudget,
 					maxTokens: modelDef.maxTokens ?? 16384,
 					headers: undefined,
 					compat,
@@ -943,6 +969,17 @@ export class ModelRegistry {
 		}
 	}
 
+	private validateResolvedBudgets(models: Model<Api>[]): void {
+		for (const model of models) {
+			const budget = model.contextWindowBudget ?? model.contextWindow;
+			if (budget > model.contextWindow) {
+				throw new Error(
+					`${model.provider}/${model.id}: context window budget ${budget} exceeds capacity ${model.contextWindow}; lower or remove contextWindowBudget, or raise contextWindow`,
+				);
+			}
+		}
+	}
+
 	private validateProviderConfig(providerName: string, config: ProviderConfigInput): void {
 		if (config.streamSimple && !config.api) {
 			throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
@@ -964,6 +1001,12 @@ export class ModelRegistry {
 			if (!api) {
 				throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
 			}
+			if (modelDef.contextWindowBudget !== undefined && !isPositiveInteger(modelDef.contextWindowBudget)) {
+				throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindowBudget`);
+			}
+			this.validateResolvedBudgets([
+				{ ...modelDef, api, provider: providerName, baseUrl: modelDef.baseUrl ?? config.baseUrl } as Model<Api>,
+			]);
 		}
 	}
 
@@ -1013,6 +1056,7 @@ export class ModelRegistry {
 					input: modelDef.input as ("text" | "image")[],
 					cost: modelDef.cost,
 					contextWindow: modelDef.contextWindow,
+					contextWindowBudget: modelDef.contextWindowBudget,
 					maxTokens: modelDef.maxTokens,
 					headers: undefined,
 					compat: modelDef.compat,
@@ -1063,6 +1107,7 @@ export interface ProviderConfigInput {
 		input: ("text" | "image")[];
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow: number;
+		contextWindowBudget?: number;
 		maxTokens: number;
 		headers?: Record<string, string>;
 		compat?: Model<Api>["compat"];
