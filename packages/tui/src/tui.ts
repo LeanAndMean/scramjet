@@ -312,6 +312,10 @@ export class TUI extends Container {
 		this.requestRender();
 	}
 
+	rebuild(): void {
+		this.requestRender(true);
+	}
+
 	getShowHardwareCursor(): boolean {
 		return this.showHardwareCursor;
 	}
@@ -1107,7 +1111,7 @@ export class TUI extends Container {
 			const unchangedPrefix = this.committedLines.every((line, index) => sourceCommitted[index] === line);
 			if (!unchangedPrefix || sourceCommitted.length < this.committedLines.length) {
 				this.commitRequested = false;
-				throw new Error("Committed history changed; use requestRender(true) for a deliberate rebuild");
+				throw new Error("Committed history changed; use rebuild() for a deliberate rebuild");
 			}
 			suffix = sourceCommitted.slice(this.committedLines.length);
 		}

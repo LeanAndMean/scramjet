@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Editor, type EditorTheme } from "../src/components/editor.js";
 import type { Component } from "../src/tui.js";
-import { Container, TUI } from "../src/tui.js";
+import { Container, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { HeadlessTerminal } from "./helpers/headless-terminal.js";
 
 class MutableComponent implements Component {
@@ -148,6 +149,121 @@ describe("TUI committed history", () => {
 		expect(terminal.writesSince(mark)).not.toContain("OVERLAY-HISTORY");
 	});
 
+	it("rebuilds retained history through the deliberate rebuild API", async () => {
+		const terminal = new HeadlessTerminal(30, 6);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["OLD-HISTORY"]);
+		const live = new MutableComponent(["editor"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		history.lines = ["NEW-HISTORY"];
+		const mark = terminal.markWrites();
+		tui.rebuild();
+		await render(tui, terminal);
+
+		const output = terminal.writesSince(mark);
+		expect(output).toContain("\x1b[3J");
+		expect(output).toContain("NEW-HISTORY");
+		expect(terminal.bufferLines().join("\n")).not.toContain("OLD-HISTORY");
+	});
+
+	it("keeps growing and shrinking live controls inside the bounded canvas", async () => {
+		const terminal = new HeadlessTerminal(30, 6);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["CONTROL-HISTORY"]);
+		const live = new MutableComponent(["editor"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		for (const lines of [
+			["status", "widget-1", "widget-2", "suggestion-1", "suggestion-2", "editor"],
+			["suggestion-1", "editor"],
+			["editor"],
+		]) {
+			const mark = terminal.markWrites();
+			live.lines = lines;
+			tui.requestRender();
+			await render(tui, terminal);
+			const output = terminal.writesSince(mark);
+			expect(output).not.toContain("CONTROL-HISTORY");
+			expect(output).not.toContain("\x1b[2J");
+			expect(output).not.toContain("\x1b[3J");
+			expect(terminal.visibleLines().join("\n")).toContain("editor");
+		}
+	});
+
+	it("dismisses real editor autocomplete without replaying history or leaving ghost rows", async () => {
+		const terminal = new HeadlessTerminal(40, 8);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["AUTOCOMPLETE-HISTORY"]);
+		const editorTheme: EditorTheme = {
+			borderColor: (text) => text,
+			selectList: {
+				selectedPrefix: (text) => text,
+				selectedText: (text) => text,
+				description: (text) => text,
+				scrollInfo: (text) => text,
+				noMatch: (text) => text,
+			},
+		};
+		const editor = new Editor(tui, editorTheme);
+		editor.setAutocompleteProvider({
+			getSuggestions: async () => ({
+				prefix: "/",
+				items: [{ value: "/command", label: "/command", description: "suggestion-marker" }],
+			}),
+			applyCompletion: (lines, cursorLine, cursorCol) => ({ lines, cursorLine, cursorCol }),
+		});
+		tui.addChild(history);
+		tui.addChild(editor);
+		tui.setLiveRegionStart(editor);
+		tui.setFocus(editor);
+		tui.start();
+		await render(tui, terminal);
+
+		terminal.sendInput("/");
+		await render(tui, terminal);
+		expect(terminal.visibleLines().join("\n")).toContain("→ /command");
+
+		const mark = terminal.markWrites();
+		terminal.sendInput("\x1b");
+		await render(tui, terminal);
+		const output = terminal.writesSince(mark);
+		expect(output).not.toContain("AUTOCOMPLETE-HISTORY");
+		expect(output).not.toContain("\x1b[2J");
+		expect(output).not.toContain("\x1b[3J");
+		expect(terminal.visibleLines().join("\n")).not.toContain("→ /command");
+	});
+
+	it("positions the hardware cursor from a marker in a clipped live tail", async () => {
+		const terminal = new HeadlessTerminal(30, 5);
+		const tui = new TUI(terminal, true);
+		const history = new MutableComponent(["history"]);
+		const live = new MutableComponent([
+			"clipped-1",
+			"clipped-2",
+			"clipped-3",
+			"clipped-4",
+			`prompt>${CURSOR_MARKER}`,
+		]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		expect(terminal.visibleLines().join("\n")).not.toContain("clipped-1");
+		expect(terminal.writes.join("")).not.toContain(CURSOR_MARKER);
+		expect(terminal.cursorPosition()).toEqual({ row: 4, col: 7 });
+	});
+
 	it("retains Kitty ownership until a forced rebuild deletes existing images", async () => {
 		const terminal = new HeadlessTerminal(30, 6);
 		const tui = new TUI(terminal);
@@ -160,7 +276,7 @@ describe("TUI committed history", () => {
 		await render(tui, terminal);
 		const mark = terminal.markWrites();
 
-		tui.requestRender(true);
+		tui.rebuild();
 		await render(tui, terminal);
 
 		const output = terminal.writesSince(mark);

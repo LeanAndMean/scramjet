@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@leanandmean/ai";
-import { Container, resetCapabilitiesCache, setCapabilities, TUI } from "@leanandmean/tui";
+import { Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const imageConversion = vi.hoisted(() => ({
@@ -39,6 +39,7 @@ async function render(terminal: HeadlessTerminal): Promise<void> {
 
 function createInteractiveHarness(): {
 	terminal: HeadlessTerminal;
+	ui: TUI;
 	mode: Record<string, unknown>;
 	committedChatContainer: Container;
 	chatContainer: Container;
@@ -46,21 +47,29 @@ function createInteractiveHarness(): {
 } {
 	const terminal = new HeadlessTerminal(30, 5);
 	const ui = new TUI(terminal);
+	const headerContainer = new Container();
+	const builtInHeader = new Text("header", 0, 0);
 	const committedChatContainer = new Container();
 	const chatContainer = new Container();
+	const footer = new Text("footer", 0, 0);
+	headerContainer.addChild(builtInHeader);
+	ui.addChild(headerContainer);
 	ui.addChild(committedChatContainer);
 	ui.addChild(chatContainer);
 	ui.setLiveRegionStart(chatContainer);
+	ui.addChild(footer);
 	ui.start();
 
 	const mode = Object.create(InteractiveMode.prototype) as Record<string, unknown>;
 	Object.assign(mode, {
 		isInitialized: true,
 		ui,
+		headerContainer,
+		builtInHeader,
 		committedChatContainer,
 		chatContainer,
 		mutableChatComponents: new Set(),
-		footer: { invalidate() {} },
+		footer,
 		statusContainer: new Container(),
 		runtimeHost: {
 			session: {
@@ -86,6 +95,7 @@ function createInteractiveHarness(): {
 	const eventTarget = mode as unknown as { handleEvent(event: unknown): Promise<void> };
 	return {
 		terminal,
+		ui,
 		mode,
 		committedChatContainer,
 		chatContainer,
@@ -102,6 +112,30 @@ describe("interactive assistant history", () => {
 	afterEach(() => {
 		resetCapabilitiesCache();
 		vi.useRealTimers();
+	});
+
+	it("rebuilds retained headers while replacing live footers routinely", async () => {
+		const { terminal, mode, ui, committedChatContainer } = createInteractiveHarness();
+		committedChatContainer.addChild(new Text("HEADER-HISTORY", 0, 0));
+		ui.commit();
+		await render(terminal);
+
+		let mark = terminal.markWrites();
+		(mode.setExtensionHeader as (factory: () => Text) => void).call(mode, () => new Text("custom header", 0, 0));
+		await render(terminal);
+		let output = terminal.writesSince(mark);
+		expect(output).toContain("\x1b[3J");
+		expect(output).toContain("custom header");
+		expect(output).toContain("HEADER-HISTORY");
+
+		mark = terminal.markWrites();
+		(mode.setExtensionFooter as (factory: () => Text) => void).call(mode, () => new Text("custom footer", 0, 0));
+		await render(terminal);
+		output = terminal.writesSince(mark);
+		expect(output).not.toContain("\x1b[2J");
+		expect(output).not.toContain("\x1b[3J");
+		expect(output).not.toContain("HEADER-HISTORY");
+		expect(terminal.visibleLines().join("\n")).toContain("custom footer");
 	});
 
 	it("suppresses transcript zones on mutable previews and emits complete zones after finalization", () => {

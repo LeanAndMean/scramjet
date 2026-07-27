@@ -433,7 +433,7 @@ export class InteractiveMode {
 		this.mutableChatComponents.clear();
 		this.lastStatusSpacer = undefined;
 		this.lastStatusText = undefined;
-		this.ui.requestRender(true);
+		this.ui.rebuild();
 	}
 
 	private commitFinalizedChatOutput(): void {
@@ -766,7 +766,7 @@ export class InteractiveMode {
 		onThemeChange(() => {
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
-			this.ui.requestRender();
+			this.ui.rebuild();
 		});
 
 		// Set up git branch watcher (uses provider instead of footer)
@@ -1819,7 +1819,7 @@ export class InteractiveMode {
 		if (this.streamingComponent) {
 			this.streamingComponent.setHiddenThinkingLabel(this.hiddenThinkingLabel);
 		}
-		this.ui.requestRender(true);
+		this.ui.rebuild();
 	}
 
 	/**
@@ -2021,7 +2021,7 @@ export class InteractiveMode {
 			}
 		}
 
-		this.ui.requestRender();
+		this.ui.rebuild();
 	}
 
 	private addExtensionTerminalInputListener(
@@ -3558,7 +3558,7 @@ export class InteractiveMode {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
-			this.ui.requestRender(true);
+			this.ui.rebuild();
 		});
 
 		try {
@@ -3670,7 +3670,7 @@ export class InteractiveMode {
 				child.setExpanded(expanded);
 			}
 		}
-		this.ui.requestRender(true);
+		this.ui.rebuild();
 	}
 
 	private toggleThinkingBlockVisibility(): void {
@@ -3734,8 +3734,7 @@ export class InteractiveMode {
 
 			// Restart TUI
 			this.ui.start();
-			// Force full re-render since external editor uses alternate screen
-			this.ui.requestRender(true);
+			this.ui.rebuild();
 		}
 	}
 
@@ -5036,7 +5035,7 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(reloadBox);
 		this.ui.setFocus(reloadBox);
-		this.ui.requestRender(true);
+		this.ui.rebuild();
 		await new Promise((resolve) => process.nextTick(resolve));
 
 		const dismissReloadBox = (editor: Component) => {

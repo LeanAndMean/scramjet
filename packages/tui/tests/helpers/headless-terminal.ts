@@ -5,6 +5,7 @@ export class HeadlessTerminal implements TerminalContract {
 	readonly writes: string[] = [];
 	private readonly emulator: InstanceType<typeof xterm.Terminal>;
 	private pending = Promise.resolve();
+	private inputHandler?: (data: string) => void;
 	private resizeHandler?: () => void;
 	private _columns: number;
 	private _rows: number;
@@ -15,7 +16,8 @@ export class HeadlessTerminal implements TerminalContract {
 		this.emulator = new xterm.Terminal({ cols: columns, rows, scrollback: 1000, allowProposedApi: true });
 	}
 
-	start(_onInput: (data: string) => void, onResize: () => void): void {
+	start(onInput: (data: string) => void, onResize: () => void): void {
+		this.inputHandler = onInput;
 		this.resizeHandler = onResize;
 	}
 	stop(): void {}
@@ -83,6 +85,15 @@ export class HeadlessTerminal implements TerminalContract {
 	bufferLines(): string[] {
 		const buffer = this.emulator.buffer.active;
 		return Array.from({ length: buffer.length }, (_, row) => buffer.getLine(row)?.translateToString(true) ?? "");
+	}
+
+	cursorPosition(): { row: number; col: number } {
+		const buffer = this.emulator.buffer.active;
+		return { row: buffer.cursorY, col: buffer.cursorX };
+	}
+
+	sendInput(data: string): void {
+		this.inputHandler?.(data);
 	}
 
 	resize(columns: number, rows: number): void {
