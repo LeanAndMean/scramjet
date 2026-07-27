@@ -151,8 +151,8 @@ describe("generated catalog - GPT-5.6 Sol (openai)", () => {
 		expect(model.cost.cacheWrite).toBe(6.25);
 	});
 
-	it("has 1M context window", () => {
-		expect(model.contextWindow).toBe(1_000_000);
+	it("has documented context and output limits", () => {
+		expect(model.contextWindow).toBe(1_050_000);
 		expect(model.maxTokens).toBe(128_000);
 	});
 
@@ -188,8 +188,9 @@ describe("generated catalog - GPT-5.6 Terra (openai)", () => {
 		expect(model.cost.cacheWrite).toBe(3.125);
 	});
 
-	it("has 1M context window", () => {
-		expect(model.contextWindow).toBe(1_000_000);
+	it("has documented context and output limits", () => {
+		expect(model.contextWindow).toBe(1_050_000);
+		expect(model.maxTokens).toBe(128_000);
 	});
 
 	it("supports xhigh but not max", () => {
@@ -220,8 +221,9 @@ describe("generated catalog - GPT-5.6 Luna (openai)", () => {
 		expect(model.cost.cacheWrite).toBe(1.25);
 	});
 
-	it("has 400K context window", () => {
-		expect(model.contextWindow).toBe(400_000);
+	it("has documented context and output limits", () => {
+		expect(model.contextWindow).toBe(1_050_000);
+		expect(model.maxTokens).toBe(128_000);
 	});
 
 	it("supports xhigh but not max", () => {
@@ -251,6 +253,16 @@ describe("generated catalog - GPT-5.6 Codex variants", () => {
 		expect(sol.cost.cacheWrite).toBe(0);
 		expect(terra.cost.cacheWrite).toBe(0);
 		expect(luna.cost.cacheWrite).toBe(0);
+	});
+
+	it("all retain Codex catalog context and output limits", () => {
+		const sol = getModel("openai-codex", "gpt-5.6-sol");
+		const terra = getModel("openai-codex", "gpt-5.6-terra");
+		const luna = getModel("openai-codex", "gpt-5.6-luna");
+		for (const model of [sol, terra, luna]) {
+			expect(model.contextWindow).toBe(272_000);
+			expect(model.maxTokens).toBe(128_000);
+		}
 	});
 
 	it("Sol has max thinking level", () => {
