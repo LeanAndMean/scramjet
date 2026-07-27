@@ -428,11 +428,21 @@ export class InteractiveMode {
 	}
 
 	private clearTranscript(): void {
+		this.pendingToolFinalizations = new Set();
 		this.committedChatContainer.clear();
 		this.chatContainer.clear();
 		this.mutableChatComponents.clear();
 		this.lastStatusSpacer = undefined;
 		this.lastStatusText = undefined;
+		this.ui.rebuild();
+	}
+
+	private updateToolImagePresentation(update: (component: ToolExecutionComponent) => void): void {
+		for (const container of [this.committedChatContainer, this.chatContainer]) {
+			for (const child of container.children) {
+				if (child instanceof ToolExecutionComponent) update(child);
+			}
+		}
 		this.ui.rebuild();
 	}
 
@@ -2741,6 +2751,7 @@ export class InteractiveMode {
 			case "agent_start":
 				this.agentRunGeneration += 1;
 				this.pendingTools.clear();
+				this.pendingToolFinalizations = new Set();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -2925,6 +2936,7 @@ export class InteractiveMode {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
+					const pendingToolFinalizations = this.pendingToolFinalizations;
 					const finalization = component.waitForImageConversions().then(() => {
 						if (this.pendingTools.get(event.toolCallId) !== component) {
 							component.seal();
@@ -2941,11 +2953,11 @@ export class InteractiveMode {
 						this.promoteFinalizedChatPrefix();
 						this.ui.requestRender();
 					});
-					this.pendingToolFinalizations.add(finalization);
+					pendingToolFinalizations.add(finalization);
 					try {
 						await finalization;
 					} finally {
-						this.pendingToolFinalizations.delete(finalization);
+						pendingToolFinalizations.delete(finalization);
 					}
 				}
 				break;
@@ -2953,7 +2965,8 @@ export class InteractiveMode {
 
 			case "agent_end": {
 				const runGeneration = this.agentRunGeneration;
-				await Promise.all(this.pendingToolFinalizations);
+				const pendingToolFinalizations = this.pendingToolFinalizations;
+				await Promise.all(pendingToolFinalizations);
 				if (runGeneration !== this.agentRunGeneration) break;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
@@ -3338,6 +3351,7 @@ export class InteractiveMode {
 					component.updateResult(message);
 					renderedPendingTools.delete(message.toolCallId);
 					if (component.hasPendingImageConversions()) {
+						const pendingToolFinalizations = this.pendingToolFinalizations;
 						const finalization = component.waitForImageConversions().then(() => {
 							if (
 								!this.mutableChatComponents.has(component) ||
@@ -3351,8 +3365,8 @@ export class InteractiveMode {
 							this.promoteFinalizedChatPrefix();
 							this.ui.requestRender();
 						});
-						this.pendingToolFinalizations.add(finalization);
-						void finalization.finally(() => this.pendingToolFinalizations.delete(finalization));
+						pendingToolFinalizations.add(finalization);
+						void finalization.finally(() => pendingToolFinalizations.delete(finalization));
 					} else {
 						component.seal();
 						this.setChatComponentMutable(component, false);
@@ -4022,19 +4036,11 @@ export class InteractiveMode {
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setShowImages(enabled);
-							}
-						}
+						this.updateToolImagePresentation((component) => component.setShowImages(enabled));
 					},
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setImageWidthCells(width);
-							}
-						}
+						this.updateToolImagePresentation((component) => component.setImageWidthCells(width));
 					},
 					onAutoResizeImagesChange: (enabled) => {
 						this.settingsManager.setImageAutoResize(enabled);

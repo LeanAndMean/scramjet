@@ -1056,9 +1056,11 @@ export class TUI extends Container {
 		let sourceCommitted = this.renderChildren(this.children.slice(0, boundary), width);
 		let liveLines = this.renderChildren(this.children.slice(boundary), width);
 		const liveCapacity = Math.max(0, height - 1);
-		liveLines = liveLines.slice(-liveCapacity || liveLines.length);
+		// Reserve one terminal row so live repainting cannot push finalized history into scrollback.
+		liveLines = liveCapacity === 0 ? [] : liveLines.slice(-liveCapacity);
 		if (this.overlayStack.length > 0) {
-			liveLines = this.compositeOverlays(liveLines, width, liveCapacity).slice(-liveCapacity || liveLines.length);
+			const compositedLines = this.compositeOverlays(liveLines, width, liveCapacity);
+			liveLines = liveCapacity === 0 ? [] : compositedLines.slice(-liveCapacity);
 		}
 		const cursorPos = this.extractCursorPosition(liveLines, height);
 		sourceCommitted = this.applyLineResets(sourceCommitted);

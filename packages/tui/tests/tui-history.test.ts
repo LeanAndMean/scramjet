@@ -54,6 +54,9 @@ describe("TUI committed history", () => {
 		tui.setLiveRegionStart(live);
 		tui.start();
 		await render(tui, terminal);
+		terminal.scrollLines(-3);
+		const viewportY = terminal.viewportY;
+		expect(viewportY).toBeGreaterThan(0);
 		const mark = terminal.markWrites();
 
 		live.lines = ["short", "editor"];
@@ -67,7 +70,7 @@ describe("TUI committed history", () => {
 		const buffer = terminal.bufferLines().join("\n");
 		expect(buffer.match(/HISTORY-FIRST/g)).toHaveLength(1);
 		expect(buffer.match(/HISTORY-LAST/g)).toHaveLength(1);
-		expect(terminal.visibleLines().join("\n")).toContain("editor");
+		expect(terminal.viewportY).toBe(viewportY);
 	});
 
 	it("commits a complete tail-windowed response exactly once", async () => {
@@ -118,7 +121,14 @@ describe("TUI committed history", () => {
 		expect(terminal.writesSince(mark)).not.toContain("RESIZE-HISTORY");
 
 		mark = terminal.markWrites();
-		terminal.resize(24, 7);
+		terminal.resize(30, 4);
+		await render(tui, terminal);
+		expect(terminal.writesSince(mark)).not.toContain("\x1b[3J");
+		expect(terminal.writesSince(mark)).not.toContain("RESIZE-HISTORY");
+		expect(terminal.visibleLines().join("\n")).toContain("editor");
+
+		mark = terminal.markWrites();
+		terminal.resize(24, 4);
 		await render(tui, terminal);
 		expect(terminal.writesSince(mark)).toContain("\x1b[3J");
 		expect(terminal.writesSince(mark)).toContain("RESIZE-HISTORY");

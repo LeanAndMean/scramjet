@@ -87,6 +87,14 @@ export class HeadlessTerminal implements TerminalContract {
 		return Array.from({ length: buffer.length }, (_, row) => buffer.getLine(row)?.translateToString(true) ?? "");
 	}
 
+	get viewportY(): number {
+		return this.emulator.buffer.active.viewportY;
+	}
+
+	scrollLines(amount: number): void {
+		this.emulator.scrollLines(amount);
+	}
+
 	cursorPosition(): { row: number; col: number } {
 		const buffer = this.emulator.buffer.active;
 		return { row: buffer.cursorY, col: buffer.cursorX };

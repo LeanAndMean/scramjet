@@ -5,7 +5,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const imageConversion = vi.hoisted(() => ({
 	convertToPng: vi.fn(),
 }));
+const settingsSelector = vi.hoisted(() => ({
+	callbacks: undefined as
+		| {
+				onShowImagesChange(enabled: boolean): void;
+				onImageWidthCellsChange(width: number): void;
+		  }
+		| undefined,
+}));
 vi.mock("../src/utils/image-convert.js", () => imageConversion);
+vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
+	SettingsSelectorComponent: class {
+		constructor(_config: unknown, callbacks: NonNullable<typeof settingsSelector.callbacks>) {
+			settingsSelector.callbacks = callbacks;
+		}
+		getSettingsList(): this {
+			return this;
+		}
+	},
+}));
 
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
@@ -76,10 +94,31 @@ function createInteractiveHarness(): {
 				settingsManager: {
 					getCodeBlockIndent: () => 2,
 					getShowImages: () => true,
+					setShowImages: () => {},
 					getImageWidthCells: () => 60,
+					setImageWidthCells: () => {},
+					getImageAutoResize: () => true,
+					getBlockImages: () => false,
+					getEnableSkillCommands: () => true,
+					getTheme: () => "pi-dark",
+					getCollapseChangelog: () => true,
+					getDoubleEscapeAction: () => "tree",
+					getTreeFilterMode: () => "default",
+					getShowHardwareCursor: () => false,
+					getEditorPaddingX: () => 0,
+					getAutocompleteMaxVisible: () => 5,
+					getQuietStartup: () => false,
 					getShowTerminalProgress: () => false,
+					getWarnings: () => ({}),
+					getTransport: () => "sse",
+					getEnableInstallTelemetry: () => false,
 				},
 				sessionManager: { getCwd: () => process.cwd() },
+				autoCompactionEnabled: true,
+				steeringMode: "one-at-a-time",
+				followUpMode: "one-at-a-time",
+				thinkingLevel: "off",
+				getAvailableThinkingLevels: () => ["off"],
 				retryAttempt: 0,
 			},
 		},
@@ -150,11 +189,17 @@ describe("interactive assistant history", () => {
 	});
 
 	it("commits the complete final Markdown frame through the interactive event path", async () => {
-		const { terminal, emit } = createInteractiveHarness();
+		const { terminal, ui, emit, committedChatContainer } = createInteractiveHarness();
+		committedChatContainer.addChild(new Text("history-1\nhistory-2\nhistory-3\nhistory-4\nhistory-5", 0, 0));
+		ui.commit();
+		await render(terminal);
 		const partial = assistant("**first\nsecond\nthird\nfourth\nfifth");
 		await emit({ type: "message_start", message: partial });
 		await emit({ type: "message_update", message: partial });
 		await render(terminal);
+		terminal.scrollLines(-2);
+		const viewportY = terminal.viewportY;
+		expect(viewportY).toBeGreaterThan(0);
 		const mark = terminal.writes.length;
 
 		const final = assistant("**first**\nsecond\nthird\nfourth\nfifth");
@@ -168,10 +213,14 @@ describe("interactive assistant history", () => {
 		for (const marker of ["first", "second", "third", "fourth", "fifth"]) {
 			expect(buffer.match(new RegExp(marker, "g"))).toHaveLength(1);
 		}
+		expect(terminal.viewportY).toBe(viewportY);
 	});
 
 	it("commits byte-stable completion once without replaying prior history", async () => {
-		const { terminal, emit } = createInteractiveHarness();
+		const { terminal, ui, emit, committedChatContainer } = createInteractiveHarness();
+		committedChatContainer.addChild(new Text("PRIOR-HISTORY", 0, 0));
+		ui.commit();
+		await render(terminal);
 		const message = assistant("stable-one\nstable-two\nstable-three\nstable-four\nstable-five");
 		await emit({ type: "message_start", message });
 		await emit({ type: "message_update", message });
@@ -184,6 +233,7 @@ describe("interactive assistant history", () => {
 		const output = terminal.writes.slice(mark).join("");
 		expect(output).not.toContain("\x1b[2J");
 		expect(output).not.toContain("\x1b[3J");
+		expect(output).not.toContain("PRIOR-HISTORY");
 		for (const marker of ["stable-one", "stable-two", "stable-three", "stable-four", "stable-five"]) {
 			expect(terminal.bufferLines().join("\n").match(new RegExp(marker, "g"))).toHaveLength(1);
 		}
@@ -271,6 +321,64 @@ describe("interactive assistant history", () => {
 		}
 	});
 
+	it("rebuilds committed tool images when presentation settings change", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		const { terminal, emit, mode, committedChatContainer } = createInteractiveHarness();
+		const imageResult = { content: [{ type: "image", data: "png-data", mimeType: "image/png" }] };
+		await emit({ type: "tool_execution_start", toolCallId: "image", toolName: "unknown", args: {} });
+		await emit({ type: "tool_execution_end", toolCallId: "image", result: imageResult, isError: false });
+		await render(terminal);
+
+		const component = committedChatContainer.children[0];
+		mode.showSelector = (create: (done: () => void) => unknown) => create(() => {});
+		(mode.showSettingsSelector as () => void).call(mode);
+		const callbacks = settingsSelector.callbacks;
+		if (!callbacks) throw new Error("Settings callbacks were not captured");
+
+		let mark = terminal.markWrites();
+		callbacks.onShowImagesChange(false);
+		await render(terminal);
+		expect(terminal.writesSince(mark)).toContain("\x1b[3J");
+		expect(committedChatContainer.render(80).join("\n")).not.toContain("\x1b_G");
+
+		mark = terminal.markWrites();
+		callbacks.onShowImagesChange(true);
+		callbacks.onImageWidthCellsChange(80);
+		await render(terminal);
+		expect(terminal.writesSince(mark)).toContain("\x1b[3J");
+		expect((component as unknown as { imageWidthCells: number }).imageWidthCells).toBe(80);
+		expect(committedChatContainer.render(80).join("\n")).toContain("\x1b_G");
+	});
+
+	it("shrinks long partial tool output to its short committed result without replaying history", async () => {
+		const { terminal, emit } = createInteractiveHarness();
+		await emit({ type: "tool_execution_start", toolCallId: "shrinking", toolName: "unknown", args: {} });
+		await emit({
+			type: "tool_execution_update",
+			toolCallId: "shrinking",
+			partialResult: { content: [{ type: "text", text: "partial-1\npartial-2\npartial-3\npartial-4\npartial-5" }] },
+		});
+		await render(terminal);
+		expect(terminal.visibleLines().join("\n")).toContain("partial-4");
+		expect(terminal.visibleLines().join("\n")).toContain("partial-5");
+		const mark = terminal.markWrites();
+
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "shrinking",
+			result: { content: [{ type: "text", text: "short-result" }] },
+			isError: false,
+		});
+		await render(terminal);
+
+		const output = terminal.writesSince(mark);
+		expect(output).not.toContain("\x1b[2J");
+		expect(output).not.toContain("\x1b[3J");
+		expect(output).toContain("short-result");
+		expect(terminal.visibleLines().join("\n")).not.toContain("partial-4");
+		expect(terminal.visibleLines().join("\n")).not.toContain("partial-5");
+	});
+
 	it("waits for Kitty conversion before committing reconstructed tool history", async () => {
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
 		let settle: (result: { data: string; mimeType: string }) => void = () => {};
@@ -330,6 +438,53 @@ describe("interactive assistant history", () => {
 		expect((mode.pendingTools as Map<string, unknown>).has("new")).toBe(true);
 		expect(committedChatContainer.children).toHaveLength(1);
 		expect(chatContainer.children).toHaveLength(1);
+	});
+
+	it("does not await unresolved finalizations from a replaced transcript", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: null) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { emit, mode } = createInteractiveHarness();
+		await emit({ type: "tool_execution_start", toolCallId: "stale", toolName: "unknown", args: {} });
+		const staleCompletion = emit({
+			type: "tool_execution_end",
+			toolCallId: "stale",
+			result: { content: [{ type: "image", data: "stale-jpeg", mimeType: "image/jpeg" }] },
+			isError: false,
+		});
+		await Promise.resolve();
+		(mode.clearTranscript as () => void).call(mode);
+
+		await emit({ type: "agent_start" });
+		await emit({ type: "agent_end", messages: [] });
+		expect((mode.pendingToolFinalizations as Set<Promise<void>>).size).toBe(0);
+
+		settle(null);
+		await staleCompletion;
+	});
+
+	it("cleans up the spinner and commits an empty tool result at agent end", async () => {
+		const { emit, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
+		const stop = vi.fn();
+		mode.loadingAnimation = { stop };
+		(mode.statusContainer as Container).addChild(new Text("spinner", 0, 0));
+		await emit({ type: "tool_execution_start", toolCallId: "empty", toolName: "unknown", args: {} });
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "empty",
+			result: { content: [] },
+			isError: false,
+		});
+		await emit({ type: "agent_end", messages: [] });
+
+		expect(stop).toHaveBeenCalledOnce();
+		expect((mode.statusContainer as Container).children).toHaveLength(0);
+		expect(committedChatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(0);
 	});
 
 	it("does not promote a tool whose conversion settles after transcript replacement", async () => {

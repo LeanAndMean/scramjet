@@ -132,7 +132,7 @@ The following upstream Pi commits were used as reference during Scramjet-specifi
 
 These are current facts, not constraints. Pi packages are modified directly when doing so simplifies Scramjet's implementation (see CLAUDE.md "Upstream Pi sync").
 
-Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above. `packages/ai/` carries the unconditional tool-call-ID sanitization (issue #244) and the Opus 4.8/Fable 5/Sonnet 5 model support divergences (issue #245) listed in the table above. `packages/tui/` carries the OSC 11 query and StdinBuffer hold divergences (issue #298) listed in the table above.
+Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above. `packages/ai/` carries the unconditional tool-call-ID sanitization (issue #244) and the Opus 4.8/Fable 5/Sonnet 5 model support divergences (issue #245) listed in the table above. `packages/tui/` carries the OSC 11 query and StdinBuffer hold divergences (issue #298) and the committed/live renderer divergence (issue #389) listed in the table above.
 
 ## Cherry-Pick Workflow
 
