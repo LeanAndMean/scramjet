@@ -407,8 +407,8 @@ async function promptForMissingSessionCwd(
 	setKeybindings(KeybindingsManager.create());
 
 	return new Promise((resolve) => {
+		// SCRAMJET-DIVERGENCE: shrink recovery is mandatory renderer behavior; no legacy toggle is applied (#389).
 		const ui = new TUI(new ProcessTerminal(), settingsManager.getShowHardwareCursor());
-		ui.setClearOnShrink(settingsManager.getClearOnShrink());
 
 		let settled = false;
 		const finish = (result: string | undefined) => {

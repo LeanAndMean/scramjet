@@ -364,8 +364,8 @@ export class InteractiveMode {
 			await this.rebindCurrentSession();
 		});
 		this.version = VERSION;
+		// SCRAMJET-DIVERGENCE: shrink recovery is mandatory committed/live renderer behavior (#389).
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
-		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.committedChatContainer = new Container();
 		this.chatContainer = new Container();
@@ -1630,7 +1630,6 @@ export class InteractiveMode {
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
-		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
 		this.defaultEditor.setPaddingX(editorPaddingX);
@@ -4013,7 +4012,6 @@ export class InteractiveMode {
 					editorPaddingX: this.settingsManager.getEditorPaddingX(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
-					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
 				},
@@ -4123,10 +4121,6 @@ export class InteractiveMode {
 						if (this.editor !== this.defaultEditor && this.editor.setAutocompleteMaxVisible !== undefined) {
 							this.editor.setAutocompleteMaxVisible(maxVisible);
 						}
-					},
-					onClearOnShrinkChange: (enabled) => {
-						this.settingsManager.setClearOnShrink(enabled);
-						this.ui.setClearOnShrink(enabled);
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
@@ -5067,7 +5061,6 @@ export class InteractiveMode {
 				this.editor.setAutocompleteMaxVisible?.(autocompleteMaxVisible);
 			}
 			this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
-			this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 			this.setupAutocompleteProvider();
 			const runner = this.session.extensionRunner;
 			this.setupExtensionShortcuts(runner);

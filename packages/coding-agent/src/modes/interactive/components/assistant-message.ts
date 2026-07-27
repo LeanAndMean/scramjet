@@ -60,6 +60,7 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	// SCRAMJET-DIVERGENCE: clipped mutable previews omit incomplete OSC 133 transcript zones (#389).
 	setFinalized(finalized: boolean): void {
 		this.finalized = finalized;
 	}
