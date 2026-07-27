@@ -46,7 +46,7 @@ The subroutine returns any pre-merge requirements found in the contribution guid
 
 ## Step 3: Check out and prepare
 
-Check out the PR branch, but do not pull, edit, commit, or push before initial delivery-linkage verification:
+Check out the PR branch:
 
 ```
 gh pr checkout <pr-number>
@@ -54,17 +54,7 @@ gh pr checkout <pr-number>
 
 If checkout fails, report the error to the user and stop.
 
-Before any branch or checklist mutation, verify the PR's explicit delivery identity from fresh GitHub state by delegating to:
-
-```
-/mach12:gh-delivery-unit --pr <pr-number>
-```
-
-Every PR must return `verdict: ok`; there is no unrelated or not-applicable path. Missing identity is a non-forceable blocker, including for legacy or external PRs with no provenance marker or closing references. On any hold, stop before branch freshness, checklist edits, commits, or pushes. Never infer identity from existing closers and never auto-edit the PR body.
-
-For a legacy or external PR without identity, explain that the user must inspect its intended delivery scope before manually repairing or redrafting the body. Show both exact identity forms, require the exact `<!-- mach12-pr -->` provenance marker, and direct the user to use `Delivery-unit: #D` only after confirming the intended unit and expected linkage, or `Delivery-unit: none` only after confirming the PR intentionally has no closers or `Part of` relationship.
-
-After verification succeeds, synchronize the checked-out branch:
+Synchronize the checked-out branch:
 
 ```
 git pull
@@ -306,17 +296,7 @@ gh pr checks <pr-number> --json name,state,bucket,link
 
 Do not attempt a second fix cycle — a persistent failure after one fix always escalates.
 
-## Step 9: Run final delivery-linkage verification
-
-Every non-terminal Step 8 outcome—including skipped CI, initially passing CI, no reported checks, and passing CI after a fix—must converge here before readiness is presented. Rerun fresh verification after all checklist edits, commits, pushes, tests, and CI checks:
-
-```
-/mach12:gh-delivery-unit --pr <pr-number>
-```
-
-This final result is authoritative and must return `verdict: ok`. On `verdict: hold`, report the exact identity, membership, plan, blocker, claimant, provenance, closing-reference, or `Part of` mismatch; do not mutate the body, recommend merge, or let a skip directive bypass linkage. No checklist mutation may occur after this verification and before the readiness report.
-
-## Step 10: Present pre-merge report
+## Step 9: Present pre-merge report
 
 Present a summary of what was done:
 - [ ] Branch freshness: [current with <default-branch> / merged N commits from <default-branch> / auto-resolved conflicts in: <files> / behind <default-branch> (user skipped merge)]
@@ -325,16 +305,13 @@ Present a summary of what was done:
 - [ ] CHANGELOG: [updated / no changelog maintained / no changes needed / skipped per user request]
 - [ ] Tests: [all passing / N failures noted / skipped per user request]
 - [ ] CI: [all checks passing / fixed: <summary of what was fixed> / failing: <summary> (escalated) / pending (no checks reported) / skipped per user request]
-- [ ] Linkage: [verified ordinary/batch with exact close set and optional `part-of: #<initiative>` / verified explicitly unlinked through `Delivery-unit: none` / not verified (escalated at Step N) / hold: <exact mismatch>]
 
 Report any items that need follow-up (test failures, manual conflict resolution, etc.) so the user can decide how to proceed.
 
 After delivering your answer, call `report_scramjet_command_status` and summarize the work you performed in `summary`:
 
-- **Verified success:** Only when final linkage verification returns `verdict: ok`, report `status: "completed"` and include both declared candidates in `next_steps`:
+- When the checklist passes cleanly, report `status: "completed"` and include both declared candidates in `next_steps`:
   - `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, with a reason explaining when merging is appropriate.
   - `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, with a reason explaining when a fix pass is warranted.
-  - Recommend `mach12:pr-merge` (index 0) when the checklist passed cleanly and no issues remain; recommend `mach12:pr-review-fix` (index 1) when the checklist surfaced issues that warrant code changes.
-- **Linkage hold:** Report `status: "blocked"` and leave `next_steps` empty. A linkage hold cannot be force-merged or bypassed by user skip directives.
-
-If the PR should otherwise remain open or the checklist did not complete, report the matching non-completed status and leave `next_steps` empty. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
+- Recommend `mach12:pr-merge` (index 0) when no issues remain; recommend `mach12:pr-review-fix` (index 1) when code changes are warranted.
+- If the checklist did not complete, report the matching non-completed status and leave `next_steps` empty. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
