@@ -274,6 +274,8 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	private pendingToolFinalizations = new Set<Promise<void>>();
+	private agentRunGeneration = 0;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -2738,6 +2740,7 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.agentRunGeneration += 1;
 				this.pendingTools.clear();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
@@ -2867,6 +2870,7 @@ export class InteractiveMode {
 								content: [{ type: "text", text: errorMessage }],
 								isError: true,
 							});
+							component.seal();
 							this.setChatComponentMutable(component, false);
 						}
 						this.pendingTools.clear();
@@ -2922,15 +2926,36 @@ export class InteractiveMode {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
-					this.pendingTools.delete(event.toolCallId);
-					this.setChatComponentMutable(component, false);
-					this.promoteFinalizedChatPrefix();
-					this.ui.requestRender();
+					const finalization = component.waitForImageConversions().then(() => {
+						if (this.pendingTools.get(event.toolCallId) !== component) {
+							component.seal();
+							if (this.mutableChatComponents.has(component) && this.chatContainer.children.includes(component)) {
+								this.setChatComponentMutable(component, false);
+								this.promoteFinalizedChatPrefix();
+								this.ui.requestRender();
+							}
+							return;
+						}
+						component.seal();
+						this.pendingTools.delete(event.toolCallId);
+						this.setChatComponentMutable(component, false);
+						this.promoteFinalizedChatPrefix();
+						this.ui.requestRender();
+					});
+					this.pendingToolFinalizations.add(finalization);
+					try {
+						await finalization;
+					} finally {
+						this.pendingToolFinalizations.delete(finalization);
+					}
 				}
 				break;
 			}
 
-			case "agent_end":
+			case "agent_end": {
+				const runGeneration = this.agentRunGeneration;
+				await Promise.all(this.pendingToolFinalizations);
+				if (runGeneration !== this.agentRunGeneration) break;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -2945,7 +2970,10 @@ export class InteractiveMode {
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
-				for (const component of this.pendingTools.values()) this.setChatComponentMutable(component, false);
+				for (const component of this.pendingTools.values()) {
+					component.seal();
+					this.setChatComponentMutable(component, false);
+				}
 				this.pendingTools.clear();
 				this.promoteFinalizedChatPrefix();
 
@@ -2953,6 +2981,7 @@ export class InteractiveMode {
 
 				this.ui.requestRender();
 				break;
+			}
 
 			case "compaction_start": {
 				if (this.settingsManager.getShowTerminalProgress()) {
@@ -3294,6 +3323,7 @@ export class InteractiveMode {
 								errorMessage = message.errorMessage || "Error";
 							}
 							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
+							component.seal();
 							this.setChatComponentMutable(component, false);
 						} else {
 							renderedPendingTools.set(content.id, component);
@@ -3307,8 +3337,27 @@ export class InteractiveMode {
 					component.markExecutionStarted();
 					component.setArgsComplete();
 					component.updateResult(message);
-					this.setChatComponentMutable(component, false);
 					renderedPendingTools.delete(message.toolCallId);
+					if (component.hasPendingImageConversions()) {
+						const finalization = component.waitForImageConversions().then(() => {
+							if (
+								!this.mutableChatComponents.has(component) ||
+								!this.chatContainer.children.includes(component)
+							) {
+								component.seal();
+								return;
+							}
+							component.seal();
+							this.setChatComponentMutable(component, false);
+							this.promoteFinalizedChatPrefix();
+							this.ui.requestRender();
+						});
+						this.pendingToolFinalizations.add(finalization);
+						void finalization.finally(() => this.pendingToolFinalizations.delete(finalization));
+					} else {
+						component.seal();
+						this.setChatComponentMutable(component, false);
+					}
 				}
 			} else {
 				// All other messages use standard rendering

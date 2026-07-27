@@ -1,6 +1,12 @@
 import type { AssistantMessage } from "@leanandmean/ai";
-import { Container, TUI } from "@leanandmean/tui";
+import { Container, resetCapabilitiesCache, setCapabilities, TUI } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const imageConversion = vi.hoisted(() => ({
+	convertToPng: vi.fn(),
+}));
+vi.mock("../src/utils/image-convert.js", () => imageConversion);
+
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
@@ -33,6 +39,9 @@ async function render(terminal: HeadlessTerminal): Promise<void> {
 
 function createInteractiveHarness(): {
 	terminal: HeadlessTerminal;
+	mode: Record<string, unknown>;
+	committedChatContainer: Container;
+	chatContainer: Container;
 	emit: (event: unknown) => Promise<void>;
 } {
 	const terminal = new HeadlessTerminal(30, 5);
@@ -52,26 +61,48 @@ function createInteractiveHarness(): {
 		chatContainer,
 		mutableChatComponents: new Set(),
 		footer: { invalidate() {} },
+		statusContainer: new Container(),
 		runtimeHost: {
 			session: {
-				settingsManager: { getCodeBlockIndent: () => 2 },
+				settingsManager: {
+					getCodeBlockIndent: () => 2,
+					getShowImages: () => true,
+					getImageWidthCells: () => 60,
+					getShowTerminalProgress: () => false,
+				},
+				sessionManager: { getCwd: () => process.cwd() },
 				retryAttempt: 0,
 			},
 		},
+		getRegisteredToolDefinition: () => undefined,
+		toolOutputExpanded: false,
 		hideThinkingBlock: false,
 		hiddenThinkingLabel: "Thinking...",
 		pendingTools: new Map(),
+		pendingToolFinalizations: new Set(),
+		agentRunGeneration: 0,
+		checkShutdownRequested: async () => {},
 	});
 	const eventTarget = mode as unknown as { handleEvent(event: unknown): Promise<void> };
-	return { terminal, emit: (event) => eventTarget.handleEvent(event) };
+	return {
+		terminal,
+		mode,
+		committedChatContainer,
+		chatContainer,
+		emit: (event) => eventTarget.handleEvent(event),
+	};
 }
 
 describe("interactive assistant history", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		imageConversion.convertToPng.mockReset();
 		initTheme("pi-dark");
 	});
-	afterEach(() => vi.useRealTimers());
+	afterEach(() => {
+		resetCapabilitiesCache();
+		vi.useRealTimers();
+	});
 
 	it("suppresses transcript zones on mutable previews and emits complete zones after finalization", () => {
 		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", false);
@@ -122,6 +153,174 @@ describe("interactive assistant history", () => {
 		for (const marker of ["stable-one", "stable-two", "stable-three", "stable-four", "stable-five"]) {
 			expect(terminal.bufferLines().join("\n").match(new RegExp(marker, "g"))).toHaveLength(1);
 		}
+	});
+
+	it("commits parallel tools once in transcript order when they finish in reverse order", async () => {
+		const { emit, committedChatContainer, chatContainer } = createInteractiveHarness();
+		const message = assistant("");
+		message.content = [
+			{ type: "toolCall", id: "first", name: "unknown", arguments: {} },
+			{ type: "toolCall", id: "second", name: "unknown", arguments: {} },
+		];
+		await emit({ type: "message_start", message });
+		await emit({ type: "message_update", message });
+		await emit({ type: "message_end", message });
+
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "second",
+			result: { content: [{ type: "text", text: "second-result" }] },
+			isError: false,
+		});
+		expect(committedChatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(2);
+
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "first",
+			result: { content: [{ type: "text", text: "first-result" }] },
+			isError: false,
+		});
+		expect(committedChatContainer.children).toHaveLength(3);
+		expect(chatContainer.children).toHaveLength(0);
+		expect(committedChatContainer.render(80).join("\n")).toMatch(/first-result[\s\S]*second-result/);
+	});
+
+	it.each([
+		["successful", { data: "converted", mimeType: "image/png" }],
+		["failed", null],
+	])("waits for %s Kitty conversion before committing a tool", async (_label, conversionResult) => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: { data: string; mimeType: string } | null) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { terminal, emit, committedChatContainer, chatContainer } = createInteractiveHarness();
+
+		const imageResult = { content: [{ type: "image", data: "jpeg-data", mimeType: "image/jpeg" }] };
+		await emit({
+			type: "tool_execution_start",
+			toolCallId: "image-tool",
+			toolName: "unknown",
+			args: {},
+		});
+		await emit({
+			type: "tool_execution_update",
+			toolCallId: "image-tool",
+			partialResult: imageResult,
+		});
+		const completion = emit({
+			type: "tool_execution_end",
+			toolCallId: "image-tool",
+			result: imageResult,
+			isError: false,
+		});
+
+		expect(imageConversion.convertToPng).toHaveBeenCalledTimes(1);
+		expect(committedChatContainer.children).toHaveLength(0);
+		expect(chatContainer.children).toHaveLength(1);
+
+		const agentEnd = emit({ type: "agent_end", messages: [] });
+		settle(conversionResult);
+		await Promise.all([completion, agentEnd]);
+		await render(terminal);
+		expect(committedChatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(0);
+		const committedOutput = committedChatContainer.render(80).join("\n");
+		if (conversionResult) {
+			expect(committedOutput).toContain("converted");
+			expect(committedOutput).not.toContain("jpeg-data");
+		} else {
+			expect(committedOutput).toContain("image/jpeg");
+		}
+	});
+
+	it("waits for Kitty conversion before committing reconstructed tool history", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: { data: string; mimeType: string }) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { terminal, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
+		const call = assistant("");
+		call.content = [{ type: "toolCall", id: "restored", name: "unknown", arguments: {} }];
+		const result = {
+			role: "toolResult",
+			toolCallId: "restored",
+			toolName: "unknown",
+			content: [{ type: "image", data: "restored-jpeg", mimeType: "image/jpeg" }],
+			details: undefined,
+			isError: false,
+			timestamp: Date.now(),
+		};
+
+		(mode.renderSessionContext as (context: unknown) => void).call(mode, { messages: [call, result] });
+		expect(chatContainer.children).toHaveLength(1);
+		expect(committedChatContainer.children).toHaveLength(1);
+
+		settle({ data: "restored-png", mimeType: "image/png" });
+		await Promise.all(mode.pendingToolFinalizations as Set<Promise<void>>);
+		await render(terminal);
+		expect(chatContainer.children).toHaveLength(0);
+		expect(committedChatContainer.children).toHaveLength(2);
+		expect(terminal.writes.join("")).toContain("restored-png");
+	});
+
+	it("does not let an older agent end clear tools from a newer run", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: null) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { emit, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
+		await emit({ type: "tool_execution_start", toolCallId: "old", toolName: "unknown", args: {} });
+		const oldCompletion = emit({
+			type: "tool_execution_end",
+			toolCallId: "old",
+			result: { content: [{ type: "image", data: "old-jpeg", mimeType: "image/jpeg" }] },
+			isError: false,
+		});
+		const oldAgentEnd = emit({ type: "agent_end", messages: [] });
+
+		await emit({ type: "agent_start" });
+		await emit({ type: "tool_execution_start", toolCallId: "new", toolName: "unknown", args: {} });
+		settle(null);
+		await Promise.all([oldCompletion, oldAgentEnd]);
+
+		expect((mode.pendingTools as Map<string, unknown>).has("new")).toBe(true);
+		expect(committedChatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(1);
+	});
+
+	it("does not promote a tool whose conversion settles after transcript replacement", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: null) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { emit, mode, committedChatContainer } = createInteractiveHarness();
+		await emit({ type: "tool_execution_start", toolCallId: "stale", toolName: "unknown", args: {} });
+		const completion = emit({
+			type: "tool_execution_end",
+			toolCallId: "stale",
+			result: { content: [{ type: "image", data: "jpeg-data", mimeType: "image/jpeg" }] },
+			isError: false,
+		});
+		await Promise.resolve();
+		(mode.pendingTools as Map<string, unknown>).clear();
+		(mode.clearTranscript as () => void).call(mode);
+
+		settle(null);
+		await completion;
+		expect(committedChatContainer.children).toHaveLength(0);
 	});
 
 	it.each([

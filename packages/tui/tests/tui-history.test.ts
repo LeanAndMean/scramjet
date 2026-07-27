@@ -168,6 +168,28 @@ describe("TUI committed history", () => {
 		expect(output).toContain("\x1b_Ga=d,d=I,i=42,q=2\x1b\\");
 	});
 
+	it("deletes only live Kitty placements during routine repaint with complete APC sequences", async () => {
+		const terminal = new HeadlessTerminal(30, 6);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["\x1b_Gi=51,a=T;history\x1b\\"]);
+		const live = new MutableComponent(["\x1b_Gi=52,a=T;live\x1b\\"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+		const mark = terminal.markWrites();
+
+		live.lines = ["\x1b_Gi=53,a=T;replacement\x1b\\"];
+		tui.requestRender();
+		await render(tui, terminal);
+
+		const output = terminal.writesSince(mark);
+		expect(output).toContain("\x1b_Ga=d,d=I,i=52,q=2\x1b\\");
+		expect(output).not.toContain("i=51,q=2");
+		expect((output.match(/\x1b_G/g) ?? []).length).toBe((output.match(/\x1b\\/g) ?? []).length);
+	});
+
 	it("clears all mutable rows when live output becomes empty", async () => {
 		const terminal = new HeadlessTerminal(30, 5);
 		const tui = new TUI(terminal);

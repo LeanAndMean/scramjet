@@ -1,4 +1,14 @@
-import { Box, type Component, Container, getCapabilities, Image, Spacer, Text, type TUI } from "@leanandmean/tui";
+import {
+	Box,
+	type Component,
+	Container,
+	getCapabilities,
+	Image,
+	imageFallback,
+	Spacer,
+	Text,
+	type TUI,
+} from "@leanandmean/tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.js";
 import { createAllToolDefinitions, type ToolName } from "../../../core/tools/index.js";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.js";
@@ -17,7 +27,7 @@ export class ToolExecutionComponent extends Container {
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
 	private rendererState: any = {};
-	private imageComponents: Image[] = [];
+	private imageComponents: Component[] = [];
 	private imageSpacers: Spacer[] = [];
 	private toolName: string;
 	private toolCallId: string;
@@ -37,8 +47,11 @@ export class ToolExecutionComponent extends Container {
 		isError: boolean;
 		details?: any;
 	};
-	private convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
+	private convertedImages = new Map<string, { data: string; mimeType: string }>();
+	private imageConversions = new Map<string, Promise<void>>();
+	private failedImageConversions = new Set<string>();
 	private hideComponent = false;
+	private sealed = false;
 
 	constructor(
 		toolName: string,
@@ -117,6 +130,7 @@ export class ToolExecutionComponent extends Container {
 			args: this.args,
 			toolCallId: this.toolCallId,
 			invalidate: () => {
+				if (this.sealed) return;
 				this.invalidate();
 				this.ui.requestRender();
 			},
@@ -175,27 +189,46 @@ export class ToolExecutionComponent extends Container {
 		this.maybeConvertImagesForKitty();
 	}
 
+	// SCRAMJET-DIVERGENCE: finalized tools wait for deduplicated Kitty conversions before history commit (#389).
 	private maybeConvertImagesForKitty(): void {
 		const caps = getCapabilities();
-		if (caps.images !== "kitty") return;
-		if (!this.result) return;
+		if (caps.images !== "kitty" || !this.result) return;
 
-		const imageBlocks = this.result.content.filter((c) => c.type === "image");
-		for (let i = 0; i < imageBlocks.length; i++) {
-			const img = imageBlocks[i];
-			if (!img.data || !img.mimeType) continue;
-			if (img.mimeType === "image/png") continue;
-			if (this.convertedImages.has(i)) continue;
+		for (const img of this.result.content.filter((content) => content.type === "image")) {
+			if (!img.data || !img.mimeType || img.mimeType === "image/png") continue;
+			const key = `${img.mimeType}\0${img.data}`;
+			if (this.convertedImages.has(key) || this.failedImageConversions.has(key) || this.imageConversions.has(key))
+				continue;
 
-			const index = i;
-			convertToPng(img.data, img.mimeType).then((converted) => {
-				if (converted) {
-					this.convertedImages.set(index, converted);
-					this.updateDisplay();
-					this.ui.requestRender();
-				}
-			});
+			const conversion = convertToPng(img.data, img.mimeType)
+				.then((converted) => {
+					if (converted) this.convertedImages.set(key, converted);
+					else this.failedImageConversions.add(key);
+				})
+				.catch(() => {
+					this.failedImageConversions.add(key);
+				})
+				.finally(() => {
+					this.imageConversions.delete(key);
+					if (!this.sealed) {
+						this.updateDisplay();
+						this.ui.requestRender();
+					}
+				});
+			this.imageConversions.set(key, conversion);
 		}
+	}
+
+	hasPendingImageConversions(): boolean {
+		return this.imageConversions.size > 0;
+	}
+
+	async waitForImageConversions(): Promise<void> {
+		await Promise.all(this.imageConversions.values());
+	}
+
+	seal(): void {
+		this.sealed = true;
 	}
 
 	setExpanded(expanded: boolean): void {
@@ -308,10 +341,19 @@ export class ToolExecutionComponent extends Container {
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
 				if (caps.images && this.showImages && img.data && img.mimeType) {
-					const converted = this.convertedImages.get(i);
+					const key = `${img.mimeType}\0${img.data}`;
+					const converted = this.convertedImages.get(key);
 					const imageData = converted?.data ?? img.data;
 					const imageMimeType = converted?.mimeType ?? img.mimeType;
-					if (caps.images === "kitty" && imageMimeType !== "image/png") continue;
+					if (caps.images === "kitty" && imageMimeType !== "image/png") {
+						if (this.failedImageConversions.has(key)) {
+							const fallback = new Text(theme.fg("toolOutput", imageFallback(img.mimeType)), 0, 0);
+							this.imageComponents.push(fallback);
+							this.addChild(fallback);
+							hasContent = true;
+						}
+						continue;
+					}
 
 					const spacer = new Spacer(1);
 					this.addChild(spacer);
