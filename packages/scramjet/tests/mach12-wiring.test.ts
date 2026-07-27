@@ -217,7 +217,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	);
 
 	it("requires a structured selection and recommends proceeding by semantic identity", () => {
-		expect(ambiguousMatches).toContain("`get_scramjet_user_input` with `type: \"select\"`");
+		expect(ambiguousMatches).toContain('`get_scramjet_user_input` with `type: "select"`');
 		expect(ambiguousMatches).toContain("include all three choices in its `options`");
 		expect(ambiguousMatches).toMatch(
 			/derive the `recommended` index for \*\*Proceed without linking or mentioning matches\*\*.*locating that choice/i,
