@@ -1,4 +1,4 @@
-import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
+import { initTheme, keyText, ToolExecutionComponent } from "@leanandmean/coding-agent";
 import { getKeybindings, KeybindingsManager, setKeybindings } from "@leanandmean/tui";
 import { describe, expect, it } from "vitest";
 import { parseDelegateArgs, substituteArguments } from "../src/commands/substitute.js";
@@ -195,7 +195,7 @@ describe("registerDelegateTool — compact rendering", () => {
 			);
 
 			expect(output).toContain("/mach12:push first x");
-			expect(output).toContain("alt+e to toggle details");
+			expect(output).toContain(`${keyText("app.tools.expand")} to toggle details`);
 			expect(output).not.toContain("ctrl+o");
 			expect(output).toContain("…");
 			expect(output).not.toContain("\n");
