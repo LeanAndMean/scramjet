@@ -1,3 +1,5 @@
+import { initTheme, keyText, ToolExecutionComponent } from "@leanandmean/coding-agent";
+import { getKeybindings, KeybindingsManager, setKeybindings } from "@leanandmean/tui";
 import { describe, expect, it } from "vitest";
 import { parseDelegateArgs, substituteArguments } from "../src/commands/substitute.js";
 import { detectCycle, intersectTools, registerDelegateTool } from "../src/delegate.js";
@@ -5,6 +7,36 @@ import { COMMAND_START_TYPE } from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import type { CommandDef, DelegateFrame, ScramjetState, SidebarEntry } from "../src/types.js";
 import { derivedPhase, freshState, lifecycleFor, recordingPi } from "./helpers.js";
+
+initTheme(undefined, false);
+
+const renderTheme = {
+	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
+};
+
+function renderText(component: { render(width: number): string[] }): string {
+	return component
+		.render(120)
+		.map((line) => line.trimEnd())
+		.join("\n")
+		.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function delegateTool() {
+	const { pi, tools } = recordingPi();
+	registerDelegateTool(pi, freshState());
+	return tools[0];
+}
+
+function successResult(scope?: string[]) {
+	const details: Record<string, unknown> = { command: "mach12:push", depth: 1 };
+	if (scope !== undefined) details.effectiveAllowedTools = scope;
+	return {
+		content: [{ type: "text", text: "BODY_START\ndelegated instructions\nBODY_END" }],
+		details,
+	};
+}
 
 function def(name: string, body: string, allowedTools?: string[]): CommandDef {
 	const d: CommandDef = { name, filePath: `/fake/${name}.md`, body };
@@ -145,6 +177,135 @@ describe("registerDelegateTool — registration shape", () => {
 	});
 });
 
+describe("registerDelegateTool — compact rendering", () => {
+	it("renders a compact command call with normalized, bounded arguments and the configured expansion key", () => {
+		const originalKeybindings = getKeybindings();
+		setKeybindings(
+			new KeybindingsManager(
+				{ "app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" } },
+				{ "app.tools.expand": "alt+e" },
+			),
+		);
+		try {
+			const tool = delegateTool();
+			const output = renderText(
+				tool.renderCall({ command: "mach12:push", args: `first\n${"x".repeat(100)}` }, renderTheme, {
+					argsComplete: true,
+				}),
+			);
+
+			expect(output).toContain("/mach12:push first x");
+			expect(output).toContain(`${keyText("app.tools.expand")} to toggle details`);
+			expect(output).not.toContain("ctrl+o");
+			expect(output).toContain("…");
+			expect(output).not.toContain("\n");
+			expect(output.length).toBeLessThan(120);
+		} finally {
+			setKeybindings(originalKeybindings);
+		}
+	});
+
+	it.each([{}, { command: 42 }, { command: "mach12:push", args: 42 }])(
+		"does not throw for partial or malformed call arguments %#",
+		(args) => {
+			const tool = delegateTool();
+			expect(() => tool.renderCall(args, renderTheme, { argsComplete: false })).not.toThrow();
+		},
+	);
+
+	it("hides a recognized successful body while collapsed and shows it in full while expanded", () => {
+		const tool = delegateTool();
+		const collapsed = renderText(
+			tool.renderResult(successResult(), { expanded: false, isPartial: false }, renderTheme, { isError: false }),
+		);
+		const expanded = renderText(
+			tool.renderResult(successResult(), { expanded: true, isPartial: false }, renderTheme, { isError: false }),
+		);
+
+		expect(collapsed).not.toContain("BODY_START");
+		expect(expanded).toContain("BODY_START");
+		expect(expanded).toContain("BODY_END");
+	});
+
+	it("keeps an empty-scope warning visible while hiding the body when collapsed", () => {
+		const tool = delegateTool();
+		const collapsed = renderText(
+			tool.renderResult(successResult([]), { expanded: false, isPartial: false }, renderTheme, { isError: false }),
+		);
+
+		expect(collapsed).toContain("allowed-tools scopes do not overlap");
+		expect(collapsed).toContain("advisory violations");
+		expect(collapsed).toContain("Widen the caller");
+		expect(collapsed).toContain("scope or abort delegation");
+		expect(collapsed).not.toContain("BODY_START");
+	});
+
+	it.each([
+		["unknown command", { ...successResult(), details: { command: "missing", error: "unknown_command" } }, false],
+		["cycle", { ...successResult(), details: { command: "a", error: "cycle" } }, false],
+		["runtime error", successResult(), true],
+		["partial result", successResult(), false, true],
+		["missing details", { ...successResult(), details: undefined }, false],
+		["missing depth", { ...successResult(), details: { command: "a" } }, false],
+		["invalid depth", { ...successResult(), details: { command: "a", depth: 0 } }, false],
+		["error-only chain", { ...successResult(), details: { command: "a", depth: 1, chain: "a -> b" } }, false],
+		["unknown metadata", { ...successResult(), details: { command: "a", depth: 1, diagnostic: true } }, false],
+		["invalid scope", { ...successResult(), details: { command: "a", depth: 1, effectiveAllowedTools: [1] } }, false],
+		[
+			"multiple content",
+			{ ...successResult(), content: [...successResult().content, { type: "text", text: "more" }] },
+			false,
+		],
+	])("fails open for %s", (_name, result, isError, isPartial = false) => {
+		const tool = delegateTool();
+		const output = renderText(tool.renderResult(result, { expanded: false, isPartial }, renderTheme, { isError }));
+		const expected = result.content.filter((entry: any) => entry.type === "text").map((entry: any) => entry.text);
+		for (const text of expected) expect(output).toContain(text);
+	});
+
+	it.each([
+		[{ type: "image", data: "x", mimeType: "image/png" }],
+		[{ type: "text", text: "" }],
+		[{ type: "text", text: "   " }],
+	])("shows an explicit warning when content has no visible text", (content) => {
+		const tool = delegateTool();
+		const result = { ...successResult(), content };
+		const output = renderText(
+			tool.renderResult(result, { expanded: false, isPartial: false }, renderTheme, { isError: false }),
+		);
+
+		expect(output).toContain("WARNING: delegate result contains unsupported or malformed content.");
+	});
+
+	it("toggles a completed live row and restores replay results after global expansion state", () => {
+		const tool = delegateTool();
+		const makeComponent = (expandedBeforeResult = false) => {
+			const component = new ToolExecutionComponent(
+				"delegate",
+				"call-id",
+				{ command: "mach12:push", args: "386 stage 1" },
+				undefined,
+				tool,
+				{ requestRender: () => {} } as any,
+				process.cwd(),
+			);
+			component.markExecutionStarted();
+			component.setArgsComplete();
+			if (expandedBeforeResult) component.setExpanded(true);
+			component.updateResult({ ...successResult(), isError: false }, false);
+			return component;
+		};
+
+		const live = makeComponent();
+		expect(renderText(live)).not.toContain("BODY_START");
+		live.setExpanded(true);
+		expect(renderText(live)).toContain("BODY_START");
+		live.setExpanded(false);
+		expect(renderText(live)).not.toContain("BODY_START");
+		expect(renderText(makeComponent(true))).toContain("BODY_START");
+	});
+});
+
 describe("registerDelegateTool — execute paths", () => {
 	function setupWithRegistry(entries: CommandDef[]): {
 		state: ScramjetState;
@@ -277,6 +438,8 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(result.content[0].text).toMatch(
 			/\[scramjet\/delegate\] WARNING: effective allowed-tools scope for 'callee' is empty/,
 		);
+		expect(result.content[0].text).toContain("Tool calls will trigger advisory warnings rather than be blocked");
+		expect(result.content[0].text).toContain("widening the caller's scope or aborting the delegation");
 		expect(result.content[0].text).toContain("callee-body");
 	});
 
