@@ -77,13 +77,15 @@ For a linked PR, include exactly one standalone `Fixes #N` line for the selected
 
 When referring to numbered findings, suggestions, or stages, use plain words rather than `#<number>` notation so GitHub does not create accidental references. Incorporate additional user context into the summary or test plan when relevant.
 
-Present the title and complete body, then ask the user to Approve, Modify, or Cancel.
+Before presenting any initial or modified complete body, validate that it contains zero or one closing-keyword occurrence (`Fixes`, `Closes`, or `Resolves`, including accepted GitHub variants). When present, the closer must be a standalone line containing exactly one issue target; reject a line with multiple targets, multiple closing keywords, or any additional closer elsewhere in the body. If invalid, do not present it for approval; explain the invariant and ask the user to choose exactly one linked issue or no linkage.
 
-- **Approve:** continue with the displayed draft.
-- **Modify:** ask what to change, apply it, and present the complete draft again. The user may add, remove, or change linkage as part of the complete body review.
+Present the validated title and complete body, then ask the user to Approve, Modify, or Cancel.
+
+- **Approve:** revalidate the displayed complete body, then continue.
+- **Modify:** ask what to change, apply it, validate the complete body again, and only then present the complete draft again. The user may add, remove, or change linkage as long as the result retains zero or one valid closing reference.
 - **Cancel:** stop without creating a PR.
 
-Create only the exact title and body the user approves.
+Immediately before creation, validate the final approved body once more. If it no longer contains zero or one valid closing reference, stop and return to complete-body review. Create only the exact validated title and body the user approves.
 
 ## Step 4: Push and create
 

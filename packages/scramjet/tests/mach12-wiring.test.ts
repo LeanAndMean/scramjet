@@ -242,10 +242,16 @@ describe("mach12 standard PR linkage", () => {
 		expect(prCreate).not.toContain("close-set");
 	});
 
-	it("preserves full-body approval and exact approved-body creation", () => {
-		expect(prCreate).toContain("Present the title and complete body");
+	it("preserves full-body approval and validates final linkage cardinality", () => {
+		expect(prCreate).toContain("Before presenting any initial or modified complete body");
+		expect(prCreate).toContain("zero or one closing-keyword occurrence");
+		expect(prCreate).toContain("standalone line containing exactly one issue target");
+		expect(prCreate).toContain("reject a line with multiple targets, multiple closing keywords");
+		expect(prCreate).toContain("revalidate the displayed complete body");
+		expect(prCreate).toContain("Immediately before creation, validate the final approved body once more");
+		expect(prCreate.indexOf("Immediately before creation")).toBeLessThan(prCreate.indexOf("gh pr create"));
+		expect(prCreate).toContain("Present the validated title and complete body");
 		expect(prCreate).toContain("Approve, Modify, or Cancel");
-		expect(prCreate).toContain("apply it, and present the complete draft again");
 		expect(prCreate).toContain("<approved-body>");
 		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
 	});
@@ -254,38 +260,94 @@ describe("mach12 standard PR linkage", () => {
 describe("mach12 ordinary PR readiness", () => {
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
 	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
+	const readinessSection = (content: string) =>
+		content.slice(content.indexOf("## Step 2:"), content.indexOf("## Step 3:"));
 
 	it.each([
 		["pr-pre-merge", preMerge],
 		["pr-merge", merge],
-	])("%s checks ordinary readiness in safety order", (_name, content) => {
-		const open = content.indexOf("`state` is not `OPEN`");
-		const draft = content.indexOf("`isDraft` is `true`");
-		const changesRequested = content.indexOf("`CHANGES_REQUESTED`");
-		const reviewRequired = content.indexOf("`REVIEW_REQUIRED`");
-		const checks = content.indexOf("required check");
-		const behind = content.indexOf("`BEHIND`");
-		const conflicts = content.indexOf("confirmed conflicts");
-		const mutation = content.indexOf(_name === "pr-merge" ? "gh pr merge" : "gh pr checkout <pr-number>");
+	])("%s checks ordinary readiness in safety order", (name, content) => {
+		const readiness = readinessSection(content);
+		const predicates = [
+			"`state` is not `OPEN`",
+			"`isDraft` is `true`",
+			"`CHANGES_REQUESTED`",
+			"`REVIEW_REQUIRED`",
+			"gh pr checks <pr-number> --required --json name,state,bucket,link",
+			"Classify `mergeStateStatus` exhaustively",
+			"`mergeable` is `CONFLICTING`",
+			"one bounded reread",
+		];
+		for (let index = 0; index < predicates.length; index++) {
+			expect(readiness.indexOf(predicates[index]), `${name}: ${predicates[index]}`).toBeGreaterThan(
+				index === 0 ? -1 : readiness.indexOf(predicates[index - 1]),
+			);
+		}
+		expect(readiness).toContain("Empty or null `reviewDecision` is not blocking by itself");
+		expect(content.indexOf(name === "pr-merge" ? "gh pr merge" : "gh pr checkout <pr-number>")).toBeGreaterThan(
+			content.indexOf("## Step 3:"),
+		);
+	});
 
-		expect(open).toBeGreaterThan(-1);
-		expect(draft).toBeGreaterThan(open);
-		expect(changesRequested).toBeGreaterThan(draft);
-		expect(reviewRequired).toBeGreaterThan(changesRequested);
-		expect(checks).toBeGreaterThan(reviewRequired);
-		expect(behind).toBeGreaterThan(checks);
-		expect(conflicts).toBeGreaterThan(behind);
-		expect(mutation).toBeGreaterThan(conflicts);
-		expect(content).toContain("Empty or null `reviewDecision` is not blocking by itself");
+	it.each([
+		["pr-pre-merge", preMerge],
+		["pr-merge", merge],
+	])("%s defines exhaustive check buckets and merge states", (_name, content) => {
+		const readiness = readinessSection(content);
+		for (const state of ["`CLEAN`", "`HAS_HOOKS`", "`UNSTABLE`", "`BLOCKED`", "`BEHIND`", "`DIRTY`", "`UNKNOWN`"]) {
+			expect(readiness).toContain(state);
+		}
+		expect(readiness).toContain("no required checks reported on the '<branch>' branch");
+		expect(readiness).toContain("any other nonzero exit");
+	});
+
+	it("pre-merge routes remediable initial outcomes to later steps", () => {
+		const readiness = readinessSection(preMerge);
+		expect(readiness).toContain("`pass` and `skipping` as settled and nonfailing");
+		expect(readiness).toContain("record `pending` for Step 9 to wait on");
+		expect(readiness).toContain("record `fail` or `cancel` for Step 9 to diagnose and repair");
+		expect(readiness).toContain("`UNSTABLE` may continue only because Step 9 must repair or resolve CI");
+		expect(readiness).toContain("`BLOCKED` may continue only when Step 5 found a `pending`, `fail`, or `cancel`");
+	});
+
+	it("merge fails closed on unsettled checks and non-ready states", () => {
+		const readiness = readinessSection(merge);
+		expect(readiness).toContain("Buckets `pass` and `skipping` are settled and nonfailing");
+		expect(readiness).toContain("any `pending`, `fail`, or `cancel` bucket is blocked");
+		expect(readiness).toContain("`CLEAN` and `HAS_HOOKS` are ready");
+		expect(readiness).toContain("`UNSTABLE`, `BLOCKED`, and `DRAFT` are blocked");
+		expect(readiness).toContain("`DIRTY` is a confirmed conflict and blocked");
 	});
 
 	it.each([
 		["pr-pre-merge", preMerge],
 		["pr-merge", merge],
 	])("%s bounds indeterminate readiness and offers no bypass", (_name, content) => {
-		expect(content).toContain("one bounded reread");
+		expect(readinessSection(content)).toContain("one bounded reread");
 		expect(content).toContain("still indeterminate");
 		expect(content).not.toMatch(/--force|--admin/);
+	});
+
+	it("pre-merge stops when checklist changes cannot reach the PR", () => {
+		const commitSection = preMerge.slice(preMerge.indexOf("## Step 8:"), preMerge.indexOf("## Step 9:"));
+		const stageClause = commitSection.slice(
+			commitSection.indexOf("2. **Stage**"),
+			commitSection.indexOf("3. **Commit**"),
+		);
+		const commitClause = commitSection.slice(
+			commitSection.indexOf("3. **Commit**"),
+			commitSection.indexOf("4. **Push**"),
+		);
+		const pushClause = commitSection.slice(commitSection.indexOf("4. **Push**"));
+		for (const clause of [stageClause, commitClause, pushClause]) {
+			expect(clause).toContain("report the command incomplete");
+			expect(clause).toContain("stop before CI and final readiness");
+		}
+		expect(commitSection).toContain("Step 9 may begin only after a successful push");
+
+		const finalSection = preMerge.slice(preMerge.indexOf("## Step 10:"));
+		expect(finalSection).toContain("After all checklist changes are pushed and CI settles");
+		expect(finalSection).toContain("final authoritative readiness reread");
 	});
 
 	it("pre-merge defines terminal status predicates and requires final readiness", () => {

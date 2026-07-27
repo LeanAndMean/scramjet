@@ -41,10 +41,10 @@ Evaluate the response in this safety order:
 2. If `isDraft` is `true`, report blocked and stop.
 3. If `reviewDecision` is `CHANGES_REQUESTED`, report blocked and stop.
 4. If `reviewDecision` is `REVIEW_REQUIRED`, report blocked and stop. Empty or null `reviewDecision` is not blocking by itself.
-5. If any required check is failing or pending, list it and report blocked. Use `gh pr checks <pr-number> --required --json name,state,bucket,link` to distinguish required checks; if the repository has no required checks, continue.
-6. If `mergeStateStatus` is `BEHIND`, report blocked and suggest `/mach12:pr-pre-merge <pr-number>`.
-7. If `mergeable` is `CONFLICTING` or `mergeStateStatus` reports confirmed conflicts or another determinate non-mergeable state, report blocked and stop.
-8. If `mergeable` is `UNKNOWN` or either merge field is otherwise indeterminate, wait briefly and perform one bounded reread with the same `gh pr view` command. Proceed only if the reread is determinate and ready. If it is still indeterminate, report incomplete and stop.
+5. Read required checks with `gh pr checks <pr-number> --required --json name,state,bucket,link`. Buckets `pass` and `skipping` are settled and nonfailing; any `pending`, `fail`, or `cancel` bucket is blocked. The command's nonzero exit is acceptable only when stderr is the exact no-required-check diagnostic `no required checks reported on the '<branch>' branch`; any other nonzero exit is an execution failure, so report incomplete and stop.
+6. Classify `mergeStateStatus` exhaustively: `CLEAN` and `HAS_HOOKS` are ready; `BEHIND` is blocked and should route to `/mach12:pr-pre-merge <pr-number>`; `UNSTABLE`, `BLOCKED`, and `DRAFT` are blocked; `DIRTY` is a confirmed conflict and blocked; `UNKNOWN` is indeterminate.
+7. If `mergeable` is `CONFLICTING`, report blocked and stop. If it is `MERGEABLE`, proceed only when the state classification above is ready.
+8. If `mergeable` is `UNKNOWN`, `mergeStateStatus` is `UNKNOWN`, or either field has an unrecognized value, wait briefly and perform one bounded reread with the same `gh pr view` command. Proceed only if the reread maps to a determinate ready outcome. If it is still indeterminate, report incomplete and stop.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness. Do not offer a force merge, force push, or readiness bypass.
 
