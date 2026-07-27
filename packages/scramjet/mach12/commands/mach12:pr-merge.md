@@ -50,30 +50,37 @@ No creator, provenance marker, issue linkage, or custom metadata participates in
 
 ## Step 3: Merge
 
-After all normal readiness checks pass, merge without a force or readiness bypass:
-
-```
-gh pr merge <pr-number> --delete-branch
-```
-
-Then update local default branch:
-
-```
-DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
-git checkout "$DEFAULT_BRANCH" && git pull
-```
-
-Clean up the local feature branch if it still exists. Get the branch name from the PR:
+After all normal readiness checks pass, record the feature branch name:
 
 ```
 gh pr view <pr-number> --json headRefName --jq .headRefName
 ```
 
-Then delete the local branch:
+Capture stdout, stderr, and exit status. Require the pre-merge `headRefName` lookup to succeed and return one non-empty branch name; otherwise report incomplete and stop without merging. Then merge without a force or readiness bypass, again capturing stdout, stderr, and exit status:
 
 ```
-git branch -d <branch-name-from-above>
+gh pr merge <pr-number> --delete-branch
 ```
+
+After the merge attempt, independently confirm GitHub's authoritative state before any cleanup or release work:
+
+```
+gh pr view <pr-number> --json state,mergeCommit
+```
+
+If this verification fails or does not report `state: MERGED`, report the merge command result and verification evidence, report incomplete, and stop without checking out, pulling, deleting a local branch, or creating a release. A failed merge command followed by authoritative `MERGED` state means the merge completed despite the CLI error; state that distinction explicitly and continue using the verified merge commit.
+
+After confirmed merge, resolve the default branch, check it out, and pull it as separate gated operations:
+
+```
+DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
+git checkout "$DEFAULT_BRANCH"
+git pull
+```
+
+Stop on the first failure, report that the PR is already merged but local cleanup is incomplete, and report `status: "incomplete"`; do not claim the failed operation succeeded or proceed to release creation. If the feature branch still exists locally, delete the recorded branch with `git branch -d <branch-name>`. Gate that deletion the same way: on failure, preserve the branch, report the merged-but-not-cleaned-up state, report incomplete, and stop.
+
+Verify remote cleanup with `git ls-remote --heads origin <recorded-branch-name>`, capturing stdout, stderr, and exit status separately. A successful empty result confirms deletion. A lookup error or a returned branch means remote cleanup is failed or indeterminate: report that the PR is merged but remote cleanup is incomplete, report `status: "incomplete"`, and stop without claiming deletion or proceeding to release creation. Only ask about a release after local and remote cleanup are both verified.
 
 ## Step 4: Ask about a release
 
@@ -135,19 +142,23 @@ Present the draft to the user and ask:
 
 If the user picks "Modify", ask what they want to change, apply the changes, and present the updated draft for approval again. If the user picks "Skip release", skip to Step 6.
 
-After approval, create the release:
+After approval, create the release and capture stdout, stderr, and exit status:
 
 ```
 gh release create <tag> --title "..." --notes "..."
 ```
 
+If creation fails, report that the PR merge and cleanup succeeded but release creation did not, include the full error, report incomplete, and stop without claiming a release exists. On success, verify the exact tag with `gh release view <tag> --json url,tagName`. If verification fails or returns a different tag, report the partial-success state and report incomplete. Claim release creation and show its URL only after this verification succeeds.
+
 ## Step 6: Confirm
 
-Report to the user:
-- PR merged (with merge commit hash).
-- Feature branch deleted.
-- Release created (if applicable, with link).
-- Current state of the default branch.
+Report only outcomes verified by their preceding commands:
+- PR merged (with the authoritative `mergeCommit` hash).
+- Remote and local feature-branch cleanup results separately; do not claim deletion when a cleanup command failed.
+- Release created (if applicable, with the verified link).
+- Current state of the default branch after its checkout and pull succeeded.
+
+If any operation after the authoritative merge confirmation failed, distinguish the successful merge from the failed cleanup or release and report `status: "incomplete"`.
 
 ## Status Reporting
 

@@ -82,20 +82,23 @@ Before presenting any initial or modified complete body, validate that it contai
 Present the validated title and complete body, then ask the user to Approve, Modify, or Cancel.
 
 - **Approve:** revalidate the displayed complete body, then continue.
-- **Modify:** ask what to change, apply it, validate the complete body again, and only then present the complete draft again. The user may add, remove, or change linkage as long as the result retains zero or one valid closing reference.
+- **Modify:** ask what to change and apply it. If the closing reference was added or changed, treat its canonical positive issue number as a newly selected issue and repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract before using it. If that read fails, report the error and do not present or create the revised draft. Then validate the complete body again and only present the complete draft after its selected linkage has been resolved and read. The user may remove linkage without an issue read.
 - **Cancel:** stop without creating a PR.
 
 Immediately before creation, validate the final approved body once more. If it no longer contains zero or one valid closing reference, stop and return to complete-body review. Create only the exact validated title and body the user approves.
 
 ## Step 4: Push and create
 
-After approval, determine whether the branch exists remotely:
+After approval, synchronize the exact approved local revision to the remote branch. Resolve local `HEAD`, then run `git ls-remote --heads origin <branch-name>` while capturing stdout, stderr, and exit status separately:
 
 ```text
+LOCAL_HEAD=$(git rev-parse HEAD)
 git ls-remote --heads origin <branch-name>
 ```
 
-If it does not, push it with `git push -u origin <branch-name>`. If the push fails, report the full error and stop.
+If either command fails, report its full error and stop; an empty successful `ls-remote` result alone means the branch is absent. Parse the single returned branch SHA when present. If the branch is absent or its SHA differs from `LOCAL_HEAD`, use only a normal push: `git push -u origin <branch-name>`. If the push fails, report the full error and stop; never force-push or overwrite divergence.
+
+After any required push, run `git ls-remote --heads origin <branch-name>` again with stdout, stderr, and status captured separately. Stop on lookup failure, an absent or malformed result, or a remote SHA that does not exactly equal `LOCAL_HEAD`; report both SHAs when they differ. Create the PR only after this verification proves that the remote branch contains the exact approved local `HEAD`.
 
 Create the PR using a HEREDOC so the complete approved body is preserved exactly:
 

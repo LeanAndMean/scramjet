@@ -238,31 +238,24 @@ If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), s
 gh pr checks <pr-number> --json name,state,bucket,link
 ```
 
-Apply this exhaustive evaluation after every check read in Steps 9a-9d, including reads after `--watch`, polling reads, and the post-fix verification read:
+Apply this exhaustive evaluation after every check read in Steps 9a-9d, including bounded polling reads and the post-fix verification read. Evaluate these cases in order so an empty array never satisfies the green predicate:
 
-- **Settled and nonfailing** (`bucket` is `pass` or `skipping` for every check): CI is green. Proceed to the next phase.
-- **Still running** (any `bucket` is `pending`): wait with `gh pr checks <pr-number> --watch`, then re-read and apply this same evaluation.
+- **No checks reported** (the valid JSON array has zero elements): CI may not have triggered yet. Wait up to 60 seconds for checks to appear, polling `gh pr checks` with a short delay. Apply this same evaluation if checks appear. During the initial Step 9a read, if none appear by the deadline, note this for the report and proceed to Step 10. During Step 9d after a pushed CI fix, an empty array cannot verify the new revision: report the absence, report blocked, and stop.
+- **Settled and nonfailing** (the array is non-empty and `bucket` is `pass` or `skipping` for every check): CI is green. Proceed to the next phase.
+- **Still running** (any `bucket` is `pending`): poll the same JSON command every 15 seconds for at most 10 minutes, applying this evaluation after every read. Do not use an unbounded `--watch`. If the deadline expires, report the pending check names and links, report blocked, and stop.
 - **Unsuccessful** (any `bucket` is `fail` or `cancel`): proceed to Step 9b before a fix attempt; after the single fix attempt, escalate to the user.
-- **No checks reported**: CI may not have triggered yet. Wait up to 60 seconds for checks to appear, polling `gh pr checks` with a short delay. Apply this same evaluation if checks appear. If none appear, note this for the report and proceed to Step 10.
 - **Command result handling**: capture stdout, stderr, and exit status separately. Valid check JSON is classified by bucket regardless of exit status because `gh pr checks` may return nonzero for pending or unsuccessful checks. If stdout is not valid check JSON, or any bucket is unrecognized, report the full output, report incomplete, and stop; do not interpret an operational or parse failure as an empty result.
 
 ### 9b. Diagnose failures
 
-Wait for all checks to finish before diagnosing — partial results lead to incomplete fixes and unnecessary push cycles:
+Wait for all checks to finish before diagnosing — partial results lead to incomplete fixes and unnecessary push cycles. Poll the JSON command every 15 seconds for at most 10 minutes and apply Step 9a's exhaustive evaluation after every read. If the deadline expires, report the remaining pending check names and links, report blocked, and stop.
 
-```
-gh pr checks <pr-number> --watch
-```
+For each unsuccessful check, inspect its `link` before choosing the diagnostic path:
 
-Then read the logs for each failing check:
+- For a link on the repository's GitHub host whose path matches `/actions/runs/<numeric-run-id>` (with optional trailing path segments), extract that run ID and run `gh run view <run-id> --log-failed`.
+- For every other link, do not invoke `gh run view` or invent a run ID. Surface the check name, state, and provider link, and tell the user to inspect the external provider's logs. If those logs are unavailable through the current tools, report blocked and stop rather than pretending the failure was diagnosed.
 
-```
-gh run view <run-id> --log-failed
-```
-
-Extract the run ID from the failing check's `link` field (the numeric ID in the URL path).
-
-From the logs, identify the root cause of each failure:
+From the available logs, identify the root cause of each failure:
 
 - **Lint/format errors**: identify the linter and the failing files.
 - **Type errors**: identify the type-checker and the failing files.
@@ -291,19 +284,7 @@ Proceed only when the delegation confirms that the commit was pushed successfull
 
 ### 9d. Verify
 
-Wait for CI to run on the pushed fixes:
-
-```
-gh pr checks <pr-number> --watch
-```
-
-Then re-read results:
-
-```
-gh pr checks <pr-number> --json name,state,bucket,link
-```
-
-Apply the exhaustive evaluation from Step 9a. Proceed to Step 10 only when every bucket is `pass` or `skipping`. Escalate a `fail` or `cancel` result with:
+Wait for CI to run on the pushed fixes by polling `gh pr checks <pr-number> --json name,state,bucket,link` every 15 seconds for at most 10 minutes. Apply the exhaustive evaluation from Step 9a after every read; if the deadline expires, report the pending check names and links, report blocked, and stop. Proceed to Step 10 only when every bucket is `pass` or `skipping`. Escalate a `fail` or `cancel` result with:
 - Which checks are still unsuccessful and their log output.
 - What was attempted and why it did not resolve the issue.
 - A recommendation for next steps.
