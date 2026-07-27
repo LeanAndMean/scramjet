@@ -480,7 +480,9 @@ export class ModelRegistry {
 		try {
 			this.validateResolvedBudgets(combined);
 		} catch (validationError) {
-			this.loadError = `Failed to load models.json: ${validationError instanceof Error ? validationError.message : validationError}`;
+			this.appendLoadError(
+				`Failed to load models.json: ${validationError instanceof Error ? validationError.message : validationError}`,
+			);
 			this.providerRequestConfigs.clear();
 			this.modelRequestHeaders.clear();
 			builtInModels = this.loadBuiltInModels(new Map(), new Map());
@@ -491,8 +493,15 @@ export class ModelRegistry {
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {
 			const cred = this.authStorage.get(oauthProvider.id);
 			if (cred?.type === "oauth" && oauthProvider.modifyModels) {
-				combined = oauthProvider.modifyModels(combined, cred);
-				this.validateResolvedBudgets(combined);
+				try {
+					const transformed = oauthProvider.modifyModels(combined, cred);
+					this.validateResolvedBudgets(transformed);
+					combined = transformed;
+				} catch (validationError) {
+					this.appendLoadError(
+						`Failed to apply OAuth model transform for ${oauthProvider.id}: ${validationError instanceof Error ? validationError.message : validationError}`,
+					);
+				}
 			}
 		}
 
@@ -970,8 +979,15 @@ export class ModelRegistry {
 		}
 	}
 
+	private appendLoadError(error: string): void {
+		this.loadError = this.loadError ? `${this.loadError}\n${error}` : error;
+	}
+
 	private validateResolvedBudgets(models: Model<Api>[]): void {
 		for (const model of models) {
+			if (!Number.isFinite(model.contextWindow) || model.contextWindow <= 0) {
+				throw new Error(`${model.provider}/${model.id}: invalid contextWindow`);
+			}
 			if (model.contextWindowBudget !== undefined && !isPositiveInteger(model.contextWindowBudget)) {
 				throw new Error(`${model.provider}/${model.id}: invalid contextWindowBudget`);
 			}
@@ -1005,9 +1021,6 @@ export class ModelRegistry {
 			if (!api) {
 				throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
 			}
-			if (modelDef.contextWindowBudget !== undefined && !isPositiveInteger(modelDef.contextWindowBudget)) {
-				throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindowBudget`);
-			}
 			this.validateResolvedBudgets([
 				{ ...modelDef, api, provider: providerName, baseUrl: modelDef.baseUrl ?? config.baseUrl } as Model<Api>,
 			]);
@@ -1038,12 +1051,9 @@ export class ModelRegistry {
 			);
 		}
 
-		this.storeProviderRequestConfig(providerName, config);
-
 		if (config.models && config.models.length > 0) {
 			const providerModels = config.models.map((modelDef) => {
 				const api = modelDef.api || config.api;
-				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
 				return {
 					id: modelDef.id,
@@ -1067,20 +1077,34 @@ export class ModelRegistry {
 			if (config.oauth?.modifyModels) {
 				const cred = this.authStorage.get(providerName);
 				if (cred?.type === "oauth") {
-					candidateModels = config.oauth.modifyModels(candidateModels, cred);
-					this.validateResolvedBudgets(candidateModels);
+					try {
+						const transformed = config.oauth.modifyModels(candidateModels, cred);
+						this.validateResolvedBudgets(transformed);
+						candidateModels = transformed;
+					} catch (validationError) {
+						this.appendLoadError(
+							`Failed to apply OAuth model transform for ${providerName}: ${validationError instanceof Error ? validationError.message : validationError}`,
+						);
+					}
 				}
 			}
+			this.storeProviderRequestConfig(providerName, config);
+			for (const modelDef of config.models) {
+				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
+			}
 			this.models = candidateModels;
-		} else if (config.baseUrl || config.headers) {
-			// Override-only: update baseUrl for existing models. Request headers are resolved per request.
-			this.models = this.models.map((m) => {
-				if (m.provider !== providerName) return m;
-				return {
-					...m,
-					baseUrl: config.baseUrl ?? m.baseUrl,
-				};
-			});
+		} else {
+			this.storeProviderRequestConfig(providerName, config);
+			if (config.baseUrl || config.headers) {
+				// Override-only: update baseUrl for existing models. Request headers are resolved per request.
+				this.models = this.models.map((m) => {
+					if (m.provider !== providerName) return m;
+					return {
+						...m,
+						baseUrl: config.baseUrl ?? m.baseUrl,
+					};
+				});
+			}
 		}
 	}
 }

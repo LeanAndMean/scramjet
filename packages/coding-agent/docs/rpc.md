@@ -534,7 +534,7 @@ Response:
 }
 ```
 
-`tokens` contains assistant usage totals for the current session state. `contextUsage.contextWindow` is advertised model capacity, `contextWindowBudget` is the resolved operational budget, and `percent` uses that budget as its denominator. Compaction and footer warning state also use the operational budget.
+`tokens` contains assistant usage totals for the current session state. `contextUsage.contextWindow` is advertised model capacity, `contextWindowBudget` is the resolved operational budget, and `percent` uses that budget as its denominator. Compaction also uses the operational budget.
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 

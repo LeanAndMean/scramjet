@@ -4,9 +4,20 @@ import {
 	getContextWindowBudget,
 	getModel,
 	getModels,
+	getProviders,
 	getSupportedThinkingLevels,
 } from "../src/models.js";
 import type { AnthropicMessagesCompat } from "../src/types.js";
+
+describe("generated catalog invariants", () => {
+	it("keeps every operational budget within advertised capacity", () => {
+		for (const provider of getProviders()) {
+			for (const model of getModels(provider)) {
+				expect(getContextWindowBudget(model), `${provider}/${model.id}`).toBeLessThanOrEqual(model.contextWindow);
+			}
+		}
+	});
+});
 
 describe("generated catalog - Anthropic Opus 4.8", () => {
 	const model = getModel("anthropic", "claude-opus-4-8");

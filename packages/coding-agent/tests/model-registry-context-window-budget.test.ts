@@ -155,7 +155,25 @@ describe("models.json context window budgets", () => {
 });
 
 describe("OAuth-transformed context window budgets", () => {
-	it("rejects an invalid budget introduced while loading models", () => {
+	it.each([
+		["budget", { contextWindowBudget: Number.NaN }],
+		["capacity", { contextWindow: 0 }],
+	])("falls back when an OAuth transform introduces an invalid %s while loading models", (_name, invalid) => {
+		const authStorage = AuthStorage.inMemory();
+		authStorage.set("budget-test-oauth", {
+			type: "oauth",
+			access: "test",
+			refresh: "test",
+			expires: Date.now() + 60_000,
+		});
+		registerOAuthProvider(oauthProvider((models) => [{ ...models[0], ...invalid }, ...models.slice(1)]));
+
+		const registry = ModelRegistry.inMemory(authStorage);
+		expect(registry.getAll()).not.toHaveLength(0);
+		expect(registry.getError()).toMatch(/budget-test-oauth.*invalid contextWindow/);
+	});
+
+	it("preserves an earlier load error when an OAuth transform also fails", () => {
 		const authStorage = AuthStorage.inMemory();
 		authStorage.set("budget-test-oauth", {
 			type: "oauth",
@@ -166,11 +184,17 @@ describe("OAuth-transformed context window budgets", () => {
 		registerOAuthProvider(
 			oauthProvider((models) => [{ ...models[0], contextWindowBudget: Number.NaN }, ...models.slice(1)]),
 		);
+		const dir = mkdtempSync(join(tmpdir(), "model-registry-budget-"));
+		tempDirs.push(dir);
+		const path = join(dir, "models.json");
+		writeFileSync(path, JSON.stringify({ invalid: true }), "utf-8");
+		const registry = ModelRegistry.create(authStorage, path);
 
-		expect(() => ModelRegistry.inMemory(authStorage)).toThrow(/invalid contextWindowBudget/);
+		expect(registry.getError()).toContain("Invalid models.json schema");
+		expect(registry.getError()).toMatch(/budget-test-oauth.*invalid contextWindowBudget/);
 	});
 
-	it("rejects an invalid budget introduced by a dynamic provider transform", () => {
+	it("falls back to untransformed dynamic-provider models without partial request settings", async () => {
 		const authStorage = AuthStorage.inMemory();
 		authStorage.set("dynamic", {
 			type: "oauth",
@@ -179,14 +203,19 @@ describe("OAuth-transformed context window budgets", () => {
 			expires: Date.now() + 60_000,
 		});
 		const registry = ModelRegistry.inMemory(authStorage);
-		const config = dynamicConfig();
+		const config = dynamicConfig({ headers: { "X-Test": "model" } });
+		config.headers = { "X-Test": "provider" };
 		config.oauth = {
 			...oauthProvider((models) => models.map((model) => ({ ...model, contextWindowBudget: 1001 }))),
 			id: "dynamic",
 		};
 
-		expect(() => registry.registerProvider("dynamic", config)).toThrow(/budget 1001.*capacity 1000/);
-		expect(registry.find("dynamic", "test-model")).toBeUndefined();
+		registry.registerProvider("dynamic", config);
+		const registered = registry.find("dynamic", "test-model");
+		expect(registered).toMatchObject({ contextWindow: 1000, contextWindowBudget: undefined });
+		expect(registry.getError()).toMatch(/dynamic.*budget 1001.*capacity 1000/);
+		const auth = await registry.getApiKeyAndHeaders(registered!);
+		expect(auth).toMatchObject({ ok: true, headers: { "X-Test": "model" } });
 	});
 });
 
@@ -199,6 +228,16 @@ describe("dynamic provider context window budgets", () => {
 			contextWindowBudget: 800,
 		});
 	});
+
+	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+		"rejects capacity %s",
+		(contextWindow) => {
+			const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+			expect(() => registry.registerProvider("dynamic", dynamicConfig({ contextWindow }))).toThrow(
+				"invalid contextWindow",
+			);
+		},
+	);
 
 	it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
 		"rejects budget %s",

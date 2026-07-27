@@ -32,7 +32,7 @@ Auto-compaction triggers when:
 contextTokens > contextWindowBudget - reserveTokens
 ```
 
-`contextWindowBudget` resolves to `model.contextWindowBudget ?? model.contextWindow`. This separates advertised model capacity from a lower provider operational policy while preserving capacity-based behavior for ordinary models. By default, `reserveTokens` is 16384 tokens (configurable in `~/.scramjet/agent/settings.json` or `<project-dir>/.scramjet/settings.json`). This leaves room for the LLM's response.
+`contextWindowBudget` resolves to `model.contextWindowBudget ?? model.contextWindow`. This separates advertised model capacity from a lower provider operational policy while preserving capacity-based behavior for ordinary models. By default, `reserveTokens` is 16384 tokens (configurable in `~/.scramjet/agent/settings.json` or `<project-dir>/.scramjet/settings.json`). This leaves room for the LLM's response. Auto-compaction is disabled when `contextWindowBudget` is less than or equal to `reserveTokens`; lower the reserve or raise the budget to enable it.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 

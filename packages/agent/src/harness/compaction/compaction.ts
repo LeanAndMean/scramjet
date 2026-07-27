@@ -194,7 +194,8 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 
 /** Return whether context usage exceeds the configured compaction threshold. */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	if (!settings.enabled) return false;
+	// SCRAMJET-DIVERGENCE: Disable automatic compaction when the reserve consumes the operational budget (issue 398).
+	if (!settings.enabled || contextWindow <= settings.reserveTokens) return false;
 	return contextTokens > contextWindow - settings.reserveTokens;
 }
 

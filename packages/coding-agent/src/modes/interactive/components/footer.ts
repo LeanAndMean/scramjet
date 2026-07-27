@@ -1,3 +1,4 @@
+import { getContextWindowBudget } from "@leanandmean/ai";
 import { type Component, truncateToWidth, visibleWidth } from "@leanandmean/tui";
 import type { AgentSession } from "../../../core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
@@ -107,7 +108,7 @@ export class FooterComponent implements Component {
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const contextWindowBudget =
-			contextUsage?.contextWindowBudget ?? state.model?.contextWindowBudget ?? contextWindow;
+			contextUsage?.contextWindowBudget ?? (state.model ? getContextWindowBudget(state.model) : contextWindow);
 		const formattedContext = formatContextUsage(
 			contextUsage?.tokens ?? null,
 			contextUsage?.percent ?? null,

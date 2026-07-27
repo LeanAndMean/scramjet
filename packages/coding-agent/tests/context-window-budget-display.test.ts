@@ -22,6 +22,13 @@ describe("context window budget display", () => {
 		});
 	});
 
+	it("shows unknown usage cleanly after compaction on split-budget models", () => {
+		expect(formatContextUsage(null, null, 272_000, 1_050_000, true)).toEqual({
+			display: "?/272k budget (?, auto; 1.1M capacity)",
+			severity: "normal",
+		});
+	});
+
 	it("keeps ordinary footer context concise", () => {
 		expect(formatContextUsage(136_000, 50, 272_000, 272_000, false)).toEqual({
 			display: "136k/272k (50.0%)",
