@@ -29,18 +29,24 @@ Extract the PR number from the input. If the input is ambiguous, ask the user to
 
 ## Step 2: Verify readiness
 
-Confirm the PR is ready to merge:
+Read ordinary GitHub readiness immediately before merging:
 
 ```
-gh pr view <pr-number> --json state,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup
+gh pr view <pr-number> --json state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup
 ```
 
-If there are blocking issues, report them to the user and stop. Do NOT force-merge.
+Evaluate the response in this safety order:
 
-- **Failed CI checks**: list each failing check by name and its summary from `statusCheckRollup`. Suggest running `/mach12:pr-pre-merge <pr-number>`, which diagnoses CI failures, applies fixes, and pushes them.
-- **Merge conflicts**: suggest resolving conflicts manually or rebasing the branch.
-- **Missing review approval**: suggest requesting a review.
-- **Branch behind main**: when `mergeStateStatus` is `BEHIND`, suggest running `/mach12:pr-pre-merge <pr-number>` to update the branch before merging.
+1. If `state` is not `OPEN`, report blocked and stop.
+2. If `isDraft` is `true`, report blocked and stop.
+3. If `reviewDecision` is `CHANGES_REQUESTED`, report blocked and stop.
+4. If `reviewDecision` is `REVIEW_REQUIRED`, report blocked and stop. Empty or null `reviewDecision` is not blocking by itself.
+5. If any required check is failing or pending, list it and report blocked. Use `gh pr checks <pr-number> --required --json name,state,bucket,link` to distinguish required checks; if the repository has no required checks, continue.
+6. If `mergeStateStatus` is `BEHIND`, report blocked and suggest `/mach12:pr-pre-merge <pr-number>`.
+7. If `mergeable` is `CONFLICTING` or `mergeStateStatus` reports confirmed conflicts or another determinate non-mergeable state, report blocked and stop.
+8. If `mergeable` is `UNKNOWN` or either merge field is otherwise indeterminate, wait briefly and perform one bounded reread with the same `gh pr view` command. Proceed only if the reread is determinate and ready. If it is still indeterminate, report incomplete and stop.
+
+No creator, provenance marker, issue linkage, or custom metadata participates in readiness. Do not offer a force merge, force push, or readiness bypass.
 
 ## Step 3: Merge
 

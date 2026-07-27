@@ -251,6 +251,51 @@ describe("mach12 standard PR linkage", () => {
 	});
 });
 
+describe("mach12 ordinary PR readiness", () => {
+	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
+	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
+
+	it.each([
+		["pr-pre-merge", preMerge],
+		["pr-merge", merge],
+	])("%s checks ordinary readiness in safety order", (_name, content) => {
+		const open = content.indexOf("`state` is not `OPEN`");
+		const draft = content.indexOf("`isDraft` is `true`");
+		const changesRequested = content.indexOf("`CHANGES_REQUESTED`");
+		const reviewRequired = content.indexOf("`REVIEW_REQUIRED`");
+		const checks = content.indexOf("required check");
+		const behind = content.indexOf("`BEHIND`");
+		const conflicts = content.indexOf("confirmed conflicts");
+		const mutation = content.indexOf(_name === "pr-merge" ? "gh pr merge" : "gh pr checkout <pr-number>");
+
+		expect(open).toBeGreaterThan(-1);
+		expect(draft).toBeGreaterThan(open);
+		expect(changesRequested).toBeGreaterThan(draft);
+		expect(reviewRequired).toBeGreaterThan(changesRequested);
+		expect(checks).toBeGreaterThan(reviewRequired);
+		expect(behind).toBeGreaterThan(checks);
+		expect(conflicts).toBeGreaterThan(behind);
+		expect(mutation).toBeGreaterThan(conflicts);
+		expect(content).toContain("Empty or null `reviewDecision` is not blocking by itself");
+	});
+
+	it.each([
+		["pr-pre-merge", preMerge],
+		["pr-merge", merge],
+	])("%s bounds indeterminate readiness and offers no bypass", (_name, content) => {
+		expect(content).toContain("one bounded reread");
+		expect(content).toContain("still indeterminate");
+		expect(content).not.toMatch(/--force|--admin/);
+	});
+
+	it("pre-merge defines terminal status predicates and requires final readiness", () => {
+		expect(preMerge).toContain('Report `status: "completed"` only');
+		expect(preMerge).toContain('Report `status: "blocked"`');
+		expect(preMerge).toContain('Report `status: "incomplete"`');
+		expect(preMerge).toContain("final authoritative readiness reread");
+	});
+});
+
 // F18: Verify that the bundled mach12 agent files are complete and parseable,
 // and that the agent-bridge can wire them without warnings. A name mismatch
 // between a command's subagent reference and the shipped agent filename would
