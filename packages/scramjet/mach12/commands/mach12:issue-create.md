@@ -163,25 +163,29 @@ Handle results based on similarity:
 
   If the near-identical match is a **closed** issue, treat it as an ambiguous match instead -- a previously-closed issue should not block creation.
 
-- **Ambiguous matches**: If results are related but not clearly duplicates, present the matches to the user (showing issue number, title, state, and URL for each). Flag closed issues prominently (e.g., "This issue was previously closed"). Ask how to proceed:
+- **Ambiguous matches**: If results are related but not clearly duplicates, present the matches to the user (showing issue number, title, state, and URL for each). Flag closed issues prominently (e.g., "This issue was previously closed"). Ask how to proceed with these mutually exclusive choices:
 
-  - **Proceed**: Create the new issue anyway.
-  - **Link**: Add this finding as a comment on one of the listed issues.
-  - **Skip**: Do not create an issue.
+  - **Proceed without linking or mentioning matches**: Create the approved issue exactly as drafted, without references derived from the duplicate search. This is the recommended/default choice.
+  - **Link**: Add this finding as a comment on exactly one of the listed issues and do not create a new issue.
+  - **Skip**: Create no issue and post no relationship comment.
 
-  If the user picks "Link" and multiple matches were shown, ask which existing issue to link to. Prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
+  Construct the choices first, then derive its `recommended` index from the choices actually presented by locating **Proceed without linking or mentioning matches**. Command requirements identify the recommendation semantically; do not prescribe a fixed numeric index.
+
+  If the user picks "Proceed without linking or mentioning matches", continue to Step 5 with the approved title and body unchanged. Do not add links, mentions, or notes derived from the duplicate search, and do not post comments to any matched issue.
+
+  If the user picks "Link", ask the user to select exactly one of the listed issues. Only after the user explicitly selects the target, prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
 
   ```
   /mach12:gh-comment issue <chosen-issue-number>
   ```
 
-  Report the existing issue number, URL, and the comment URL to the user, then skip creation.
+  Post the prepared comment only to that issue. Report the existing issue number, URL, and the comment URL to the user, then skip creation.
 
-  If the user picks "Skip", proceed directly to Step 6 and report that issue creation was skipped.
+  If the user picks "Skip", proceed directly to Step 6 and report that issue creation was skipped; create no issue and post no relationship comment.
 
 ## Step 5: Create
 
-After approval and duplicate check, create the issue:
+After approval and duplicate check, create the issue using the approved title and body unchanged:
 
 ```
 gh issue create --title "..." --body "..."

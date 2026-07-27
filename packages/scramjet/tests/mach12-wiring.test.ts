@@ -209,6 +209,39 @@ describe("mach12 wiring — bundled command set", () => {
 	});
 });
 
+describe("mach12 issue creation — ambiguous duplicate handling", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const ambiguousMatches = issueCreate.slice(
+		issueCreate.indexOf("- **Ambiguous matches**"),
+		issueCreate.indexOf("## Step 5: Create"),
+	);
+
+	it("recommends proceeding without references by semantic identity", () => {
+		expect(ambiguousMatches).toContain("**Proceed without linking or mentioning matches**");
+		expect(ambiguousMatches).toContain("recommended/default choice");
+		expect(ambiguousMatches).toContain("derive its `recommended` index from the choices actually presented");
+		expect(ambiguousMatches).not.toMatch(/["`]?recommended["`]?(?:\s+index)?\s*(?::|=|\bis\b|\bto\b)\s*`?\d/i);
+		expect(ambiguousMatches).not.toMatch(/recommend(?:ed)?\s+(?:the\s+)?(?:first|second|third)\b/i);
+	});
+
+	it("preserves the approved issue when proceeding", () => {
+		expect(ambiguousMatches).toContain("approved title and body unchanged");
+		expect(ambiguousMatches).toContain("Do not add links, mentions, or notes derived from the duplicate search");
+		expect(ambiguousMatches).toContain("do not post comments to any matched issue");
+	});
+
+	it("links exactly one selected match and skips creation", () => {
+		expect(ambiguousMatches).toContain("ask the user to select exactly one of the listed issues");
+		expect(ambiguousMatches).toContain("Only after the user explicitly selects the target");
+		expect(ambiguousMatches).toMatch(/post the prepared comment only to that issue/i);
+		expect(ambiguousMatches).toContain("skip creation");
+	});
+
+	it("publishes nothing when skipped", () => {
+		expect(ambiguousMatches).toContain("create no issue and post no relationship comment");
+	});
+});
+
 describe("mach12 standard PR linkage", () => {
 	const activeCommands = readdirSync(MACH12_COMMANDS_DIR)
 		.filter((file) => file.endsWith(".md"))
