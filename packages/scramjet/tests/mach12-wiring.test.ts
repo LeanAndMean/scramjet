@@ -209,6 +209,47 @@ describe("mach12 wiring — bundled command set", () => {
 	});
 });
 
+describe("mach12 issue creation — ambiguous duplicate handling", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const ambiguousMatches = issueCreate.slice(
+		issueCreate.indexOf("- **Ambiguous matches**"),
+		issueCreate.indexOf("## Step 5: Create"),
+	);
+
+	it("requires a structured selection with a contextual recommendation", () => {
+		expect(ambiguousMatches).toContain('`get_scramjet_user_input` with `type: "select"`');
+		expect(ambiguousMatches).toContain("include all four choices");
+		expect(ambiguousMatches).toContain(
+			"Recommend the choice best supported by the matches and the user's stated intent",
+		);
+		expect(ambiguousMatches).toContain("no choice is globally preferred");
+	});
+
+	it("offers both create outcomes", () => {
+		expect(ambiguousMatches).toContain("**Create without mentioning matches**");
+		expect(ambiguousMatches).toContain("**Create and mention selected matches**");
+		expect(ambiguousMatches).toContain("Add references only to the matches the user explicitly selected");
+		expect(ambiguousMatches).toContain("return to Step 3 for explicit approval");
+	});
+
+	it("preserves the approved issue when creating without references", () => {
+		expect(ambiguousMatches).toContain("approved title and body unchanged");
+		expect(ambiguousMatches).toContain("Do not add links, mentions, or notes derived from the duplicate search");
+		expect(ambiguousMatches).toContain("do not post comments to any matched issue");
+	});
+
+	it("comments on exactly one selected match and skips creation", () => {
+		expect(ambiguousMatches).toContain("ask the user to select exactly one of the listed issues");
+		expect(ambiguousMatches).toContain("Only after the user explicitly selects the target");
+		expect(ambiguousMatches).toMatch(/post the prepared comment only to that issue/i);
+		expect(ambiguousMatches).toContain("skip creation");
+	});
+
+	it("publishes nothing when skipped", () => {
+		expect(ambiguousMatches).toContain("create no issue and post no relationship comment");
+	});
+});
+
 describe("mach12 standard PR linkage", () => {
 	const activeCommands = readdirSync(MACH12_COMMANDS_DIR)
 		.filter((file) => file.endsWith(".md"))

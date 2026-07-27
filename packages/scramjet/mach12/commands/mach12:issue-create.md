@@ -163,25 +163,32 @@ Handle results based on similarity:
 
   If the near-identical match is a **closed** issue, treat it as an ambiguous match instead -- a previously-closed issue should not block creation.
 
-- **Ambiguous matches**: If results are related but not clearly duplicates, present the matches to the user (showing issue number, title, state, and URL for each). Flag closed issues prominently (e.g., "This issue was previously closed"). Ask how to proceed:
+- **Ambiguous matches**: If results are related but not clearly duplicates, present the matches to the user (showing issue number, title, state, and URL for each). Flag closed issues prominently (e.g., "This issue was previously closed"). Explain whether mentioning any matches would materially improve discoverability and why, then ask how to proceed with these mutually exclusive choices:
 
-  - **Proceed**: Create the new issue anyway.
-  - **Link**: Add this finding as a comment on one of the listed issues.
-  - **Skip**: Do not create an issue.
+  - **Create without mentioning matches**: Create the approved issue exactly as drafted, without references derived from the duplicate search.
+  - **Create and mention selected matches**: Let the user choose which listed issues to reference, update the draft with only those references, and obtain explicit approval of the revised body before creation.
+  - **Comment on one existing issue instead**: Add this finding as a comment on exactly one selected issue and do not create a new issue.
+  - **Skip**: Create no issue and post no relationship comment.
 
-  If the user picks "Link" and multiple matches were shown, ask which existing issue to link to. Prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
+  Use `get_scramjet_user_input` with `type: "select"` and include all four choices. Recommend the choice best supported by the matches and the user's stated intent; no choice is globally preferred.
+
+  If the user picks "Create without mentioning matches", continue to Step 5 with the approved title and body unchanged. Do not add links, mentions, or notes derived from the duplicate search, and do not post comments to any matched issue.
+
+  If the user picks "Create and mention selected matches", ask which listed issue or issues to mention. Add references only to the matches the user explicitly selected, present the revised body, and return to Step 3 for explicit approval. After approval, continue to Step 5; do not post comments to the selected issues.
+
+  If the user picks "Comment on one existing issue instead", ask the user to select exactly one of the listed issues. Only after the user explicitly selects the target, prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
 
   ```
   /mach12:gh-comment issue <chosen-issue-number>
   ```
 
-  Report the existing issue number, URL, and the comment URL to the user, then skip creation.
+  Post the prepared comment only to that issue. Report the existing issue number, URL, and the comment URL to the user, then skip creation.
 
-  If the user picks "Skip", proceed directly to Step 6 and report that issue creation was skipped.
+  If the user picks "Skip", proceed directly to Step 6 and report that issue creation was skipped; create no issue and post no relationship comment.
 
 ## Step 5: Create
 
-After approval and duplicate check, create the issue:
+After approval and duplicate check, create the issue using the latest explicitly approved title and body unchanged:
 
 ```
 gh issue create --title "..." --body "..."

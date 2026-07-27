@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.62.1 — Make ambiguous duplicate handling safe
+
+Makes ambiguous duplicate handling explicit without removing the choice to publish useful cross-references. Fixes [#390](https://github.com/LeanAndMean/scramjet/issues/390).
+
+### Changed
+
+- `mach12:issue-create`: offer separate create-without-references and create-with-selected-references paths, require approval after reference edits, and keep comment-instead and skip outcomes explicit.
+- `command-authoring.md`: distinguish context-independent semantic preferences from recommendations derived from runtime evidence and user intent.
+
+### Tests
+
+- Mach 12 wiring coverage now verifies both create outcomes, contextual recommendation policy, explicit single-target commenting, and side-effect-free skipping for ambiguous duplicate matches.
+
 ## 0.62.0 — Restore standard pull request workflows
 
 Removes delivery-unit metadata and reconciliation from Mach 12 pull request workflows, restores optional single-issue linkage, and bases pre-merge and merge decisions on ordinary GitHub readiness signals. Fixes [#387](https://github.com/LeanAndMean/scramjet/issues/387).
