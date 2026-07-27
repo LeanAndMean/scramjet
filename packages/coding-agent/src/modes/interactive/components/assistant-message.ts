@@ -22,6 +22,7 @@ export class AssistantMessageComponent extends Container {
 		hideThinkingBlock = false,
 		markdownTheme: MarkdownTheme = getMarkdownTheme(),
 		hiddenThinkingLabel = "Thinking...",
+		private finalized = true,
 	) {
 		super();
 
@@ -59,9 +60,13 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	setFinalized(finalized: boolean): void {
+		this.finalized = finalized;
+	}
+
 	override render(width: number): string[] {
 		const lines = super.render(width);
-		if (this.hasToolCalls || lines.length === 0) {
+		if (!this.finalized || this.hasToolCalls || lines.length === 0) {
 			return lines;
 		}
 
