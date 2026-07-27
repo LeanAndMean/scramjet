@@ -234,6 +234,13 @@ describe("mach12 standard PR linkage", () => {
 		expect(prCreate).toContain("select exactly one issue or explicitly decline linkage");
 	});
 
+	it("infers supported branch issue patterns or proceeds unlinked", () => {
+		for (const pattern of ["`feature/issue-55-*`", "`fix/issue-55-*`", "`55-some-description`"]) {
+			expect(prCreate).toContain(pattern);
+		}
+		expect(prCreate).toContain("If no issue was supplied and the branch yields no candidate, proceed unlinked");
+	});
+
 	it("proposes zero or one closer without relationship expansion", () => {
 		expect(prCreate).toContain("exactly one standalone `Fixes #N` line");
 		expect(prCreate).toContain("Zero closing-keyword lines");
@@ -297,8 +304,12 @@ describe("mach12 ordinary PR readiness", () => {
 		for (const state of ["`CLEAN`", "`HAS_HOOKS`", "`UNSTABLE`", "`BLOCKED`", "`BEHIND`", "`DIRTY`", "`UNKNOWN`"]) {
 			expect(readiness).toContain(state);
 		}
+		expect(readiness).toContain("capturing stdout, stderr, and exit status separately");
+		expect(readiness).toContain("valid check JSON");
+		expect(readiness).toContain("regardless of exit status");
 		expect(readiness).toContain("no required checks reported on the '<branch>' branch");
-		expect(readiness).toContain("any other nonzero exit");
+		expect(readiness).toContain("command or parse failure");
+		expect(readiness).toContain("unrecognized bucket");
 	});
 
 	it("pre-merge routes remediable initial outcomes to later steps", () => {
@@ -307,12 +318,14 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(readiness).toContain("record `pending` for Step 9 to wait on");
 		expect(readiness).toContain("record `fail` or `cancel` for Step 9 to diagnose and repair");
 		expect(readiness).toContain("`UNSTABLE` may continue only because Step 9 must repair or resolve CI");
-		expect(readiness).toContain("`BLOCKED` may continue only when Step 5 found a `pending`, `fail`, or `cancel`");
+		expect(readiness).toContain(
+			"`BLOCKED` may continue only when readiness item 5 found a `pending`, `fail`, or `cancel`",
+		);
 	});
 
 	it("merge fails closed on unsettled checks and non-ready states", () => {
 		const readiness = readinessSection(merge);
-		expect(readiness).toContain("Buckets `pass` and `skipping` are settled and nonfailing");
+		expect(readiness).toContain("`pass` and `skipping` are settled and nonfailing");
 		expect(readiness).toContain("any `pending`, `fail`, or `cancel` bucket is blocked");
 		expect(readiness).toContain("`CLEAN` and `HAS_HOOKS` are ready");
 		expect(readiness).toContain("`UNSTABLE`, `BLOCKED`, and `DRAFT` are blocked");
@@ -348,6 +361,32 @@ describe("mach12 ordinary PR readiness", () => {
 		const finalSection = preMerge.slice(preMerge.indexOf("## Step 10:"));
 		expect(finalSection).toContain("After all checklist changes are pushed and CI settles");
 		expect(finalSection).toContain("final authoritative readiness reread");
+	});
+
+	it("pre-merge gates post-fix verification on a confirmed push and reuses exhaustive evaluation", () => {
+		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
+		const pushGate = ciSection.indexOf("delegation confirms that the commit was pushed successfully");
+		const verify = ciSection.indexOf("### 9d. Verify");
+		expect(pushGate).toBeGreaterThan(-1);
+		expect(pushGate).toBeLessThan(verify);
+		expect(ciSection).toContain("stop before watching, rereading CI, or final readiness");
+		expect(ciSection).toContain("after every check read in Steps 9a-9d");
+		expect(ciSection).toContain("including reads after `--watch`, polling reads, and the post-fix verification read");
+		expect(ciSection).toContain("Valid check JSON is classified by bucket regardless of exit status");
+		expect(ciSection).toContain("If stdout is not valid check JSON, or any bucket is unrecognized");
+		expect(ciSection).toContain("Proceed to Step 10 only when every bucket is `pass` or `skipping`");
+	});
+
+	it("pre-merge uses current checklist references", () => {
+		expect(preMerge).toContain("readiness item 5 found");
+		expect(preMerge).toContain("Steps 7a-7d");
+		expect(preMerge).not.toContain("Step 5 found");
+		expect(preMerge).not.toContain("Steps 6a-6d");
+	});
+
+	it("readiness queries omit unused rollup evidence", () => {
+		expect(readinessSection(preMerge)).not.toContain("statusCheckRollup");
+		expect(readinessSection(merge)).not.toContain("statusCheckRollup");
 	});
 
 	it("pre-merge defines terminal status predicates and requires final readiness", () => {
