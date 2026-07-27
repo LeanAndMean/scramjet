@@ -1,4 +1,5 @@
-import type { ExtensionAPI } from "@leanandmean/coding-agent";
+import { type ExtensionAPI, keyText } from "@leanandmean/coding-agent";
+import { Container, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
 import { parseDelegateArgs, substituteArguments } from "./commands/substitute.js";
 import { recordCommandInvocation } from "./history.js";
@@ -13,14 +14,74 @@ interface DelegateDetails {
 	chain?: string;
 }
 
+interface DelegateSuccessDetails {
+	command: string;
+	depth: number;
+	effectiveAllowedTools?: string[];
+}
+
+const MAX_RENDERED_ARGS = 60;
+
+function renderedArgs(args: unknown): string {
+	if (typeof args !== "string") return "";
+	const singleLine = args.replace(/\s+/g, " ").trim();
+	return singleLine.length <= MAX_RENDERED_ARGS ? singleLine : `${singleLine.slice(0, MAX_RENDERED_ARGS)}…`;
+}
+
+function textContent(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((entry): entry is { type: "text"; text: string } => {
+			return typeof entry === "object" && entry !== null && entry.type === "text" && typeof entry.text === "string";
+		})
+		.map((entry) => entry.text)
+		.join("\n");
+}
+
+function recognizedSuccess(
+	result: unknown,
+	isPartial: boolean,
+	isError: boolean,
+): result is {
+	content: [{ type: "text"; text: string }];
+	details: DelegateSuccessDetails;
+} {
+	if (isPartial || isError || typeof result !== "object" || result === null) return false;
+	const { content, details } = result as { content?: unknown; details?: unknown };
+	if (typeof details !== "object" || details === null || Array.isArray(details)) return false;
+	if (Object.keys(details).some((key) => !["command", "depth", "effectiveAllowedTools"].includes(key))) return false;
+	if (!("command" in details) || typeof details.command !== "string" || details.command.length === 0) return false;
+	if (
+		!("depth" in details) ||
+		typeof details.depth !== "number" ||
+		!Number.isInteger(details.depth) ||
+		details.depth <= 0
+	) {
+		return false;
+	}
+	if ("effectiveAllowedTools" in details) {
+		if (!Array.isArray(details.effectiveAllowedTools)) return false;
+		if (!details.effectiveAllowedTools.every((tool) => typeof tool === "string")) return false;
+	}
+	return (
+		Array.isArray(content) &&
+		content.length === 1 &&
+		typeof content[0] === "object" &&
+		content[0] !== null &&
+		content[0].type === "text" &&
+		typeof content[0].text === "string" &&
+		content[0].text.trim().length > 0
+	);
+}
+
 export function detectCycle(stack: DelegateFrame[], commandName: string): boolean {
 	return stack.some((f) => f.commandName === commandName);
 }
 
 // Returns undefined when both sides are unrestricted. Returns the other
 // side when only one is restricted. Returns the set intersection (preserving
-// callee's order) when both restrict — an empty array means "no tools allowed,"
-// distinct from undefined ("no restriction").
+// callee's order) when both restrict — an empty array means no tools are
+// inside the declared advisory scope, distinct from undefined ("no restriction").
 export function intersectTools(caller: string[] | undefined, callee: string[] | undefined): string[] | undefined {
 	if (caller === undefined && callee === undefined) return undefined;
 	if (caller === undefined) return callee;
@@ -44,6 +105,37 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 					'Argument string (bash-style: whitespace-split, single/double quotes group). Pass "" for no arguments.',
 			}),
 		}),
+		renderCall(args, theme) {
+			const command = typeof args?.command === "string" && args.command.length > 0 ? `/${args.command}` : "delegate";
+			const compactArgs = renderedArgs(args?.args);
+			const invocation = compactArgs ? `${command} ${compactArgs}` : command;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("delegate")) +
+					theme.fg("toolOutput", ` ${invocation}`) +
+					theme.fg("dim", ` (${keyText("app.tools.expand")} to toggle details)`),
+				0,
+				0,
+			);
+		},
+		renderResult(result, options, theme, context) {
+			const fullText = textContent(result.content);
+			if (!recognizedSuccess(result, options.isPartial, context.isError)) {
+				const visibleText = fullText || "WARNING: delegate result contains unsupported or malformed content.";
+				return new Text(theme.fg(fullText ? "toolOutput" : "warning", visibleText), 0, 0);
+			}
+			if (options.expanded) return new Text(theme.fg("toolOutput", result.content[0].text), 0, 0);
+			if (result.details.effectiveAllowedTools?.length === 0) {
+				return new Text(
+					theme.fg(
+						"warning",
+						"WARNING: caller and delegate allowed-tools scopes do not overlap; tool calls are advisory violations. Widen the caller scope or abort delegation.",
+					),
+					0,
+					0,
+				);
+			}
+			return new Container();
+		},
 		async execute(_id, params) {
 			const def = state.registry.get(params.command);
 			if (!def) {
@@ -88,15 +180,12 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 
 			const parsedArgs = parseDelegateArgs(params.args);
 			const body = substituteArguments(def.body, parsedArgs);
-			// When the caller/callee allowed-tools intersection is empty, the
-			// delegated frame is fully locked: no tool calls will pass the
-			// advisory check. Prepend a visible warning so the agent reading
-			// the substituted body knows up-front rather than discovering it
-			// one denied tool call at a time. Empty array is distinct from
-			// undefined ("no restriction"); see intersectTools above.
+			// Prepend a visible warning when the declared scopes do not overlap
+			// so the agent can widen the caller scope or abort before making
+			// tool calls that trigger advisory violations.
 			const bodyText =
 				effectiveAllowedTools !== undefined && effectiveAllowedTools.length === 0
-					? `[scramjet/delegate] WARNING: effective allowed-tools scope for '${params.command}' is empty (caller and callee declare disjoint allowed-tools). This delegated frame cannot use any tools; consider widening the caller's scope or aborting the delegation.\n\n${body}`
+					? `[scramjet/delegate] WARNING: effective allowed-tools scope for '${params.command}' is empty (caller and callee scopes do not overlap). Tool calls will trigger advisory warnings rather than be blocked; consider widening the caller's scope or aborting the delegation.\n\n${body}`
 					: body;
 			const alreadyWrapped = bodyText.startsWith("<scramjet-command");
 			const wrappedBody = alreadyWrapped

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.61.0 — Collapse successful delegate output by default
+
+Adds compact delegate rendering so successful delegated command bodies remain model-visible and persisted while staying collapsed in the TUI until the global tool-output expansion binding is used. Diagnostics, malformed results, partial output, runtime errors, and empty-scope warnings remain visible. Fixes [#386](https://github.com/LeanAndMean/scramjet/issues/386).
+
+### Changed
+
+- `delegate.ts`: render bounded delegate invocations, collapse structurally recognized successful results, and fail open for diagnostics and unsupported result shapes.
+- `command-authoring.md`, `scramjet-vision.md`: document the separation between persisted delegate content and compact TUI presentation.
+
+### Tests
+
+- `delegate.test.ts`: cover compact calls, expansion and re-collapse, replay-shaped results, configurable key hints, and visible error and warning paths.
+
 ## 0.60.2 — Prefer selectors for actionable command recommendations
 
 Teaches agents to prefer the next-step selector when users request a Scramjet command or when recommending a concrete registered command at an idle natural pause, while preserving concise supporting prose and existing safety constraints. Fixes [#385](https://github.com/LeanAndMean/scramjet/issues/385).
