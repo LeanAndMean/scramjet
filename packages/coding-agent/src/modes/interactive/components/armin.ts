@@ -69,7 +69,10 @@ export class ArminComponent implements Component {
 	private gridVersion = 0;
 	private cachedVersion = -1;
 
-	constructor(ui: TUI) {
+	constructor(
+		ui: TUI,
+		private onComplete: () => void,
+	) {
 		this.ui = ui;
 		this.effect = EFFECTS[Math.floor(Math.random() * EFFECTS.length)];
 		this.finalGrid = buildFinalGrid();
@@ -185,6 +188,7 @@ export class ArminComponent implements Component {
 			this.ui.requestRender();
 			if (done) {
 				this.stopAnimation();
+				this.onComplete();
 			}
 		}, 1000 / fps);
 	}

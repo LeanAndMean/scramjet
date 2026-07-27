@@ -1049,6 +1049,7 @@ export class TUI extends Container {
 		if (capacity === 0) return [];
 		const start = Math.max(0, lines.length - capacity);
 		return lines.slice(start).map((line, index) => {
+			// Suppress image placements whose cursor-up anchor was clipped from the live tail.
 			const placement = line.match(/^\x1b\[(\d+)A\x1b\]1337;File=[^\x07]*\x07$/);
 			if (placement && start + index - Number(placement[1]) < start) return "";
 			return line;
@@ -1062,8 +1063,7 @@ export class TUI extends Container {
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
-		const forcedRebuild = this.previousWidth === -1;
-		const rebuild = this.previousWidth === 0 || widthChanged || forcedRebuild;
+		const rebuild = this.previousWidth === 0 || widthChanged;
 		const sourceCommitted =
 			rebuild || this.commitRequested
 				? this.applyLineResets(this.renderChildren(this.children.slice(0, boundary), width))
@@ -1081,7 +1081,7 @@ export class TUI extends Container {
 
 		if (rebuild) {
 			let buffer = "\x1b[?2026h";
-			if (widthChanged || forcedRebuild) {
+			if (widthChanged) {
 				this.fullRedrawCount += 1;
 				buffer += this.deleteKittyImages(
 					new Set([...this.committedKittyImageIds, ...this.previousLiveKittyImageIds]),
@@ -1119,7 +1119,7 @@ export class TUI extends Container {
 		let buffer = "\x1b[?2026h";
 		buffer += this.deleteKittyImages(this.previousLiveKittyImageIds);
 		const oldHeight = this.previousLiveLines.length;
-		const oldEndRow = Math.max(this.committedLines.length, this.committedLines.length + oldHeight - 1);
+		const oldEndRow = this.committedLines.length + Math.max(0, oldHeight - 1);
 		const moveToEnd = oldEndRow - this.hardwareCursorRow;
 		if (moveToEnd > 0) buffer += `\x1b[${moveToEnd}B`;
 		else if (moveToEnd < 0) buffer += `\x1b[${-moveToEnd}A`;

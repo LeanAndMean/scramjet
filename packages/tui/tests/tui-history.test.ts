@@ -167,6 +167,25 @@ describe("TUI committed history", () => {
 		expect(history.renderCount).toBe(3);
 	});
 
+	it.each(["changes", "shrinks"])("rejects committed history that %s", async (mutation) => {
+		const terminal = new HeadlessTerminal(30, 5);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["stable-history"]);
+		const live = new MutableComponent(["editor"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		history.lines = mutation === "changes" ? ["changed-history"] : [];
+		tui.commit();
+
+		await expect(render(tui, terminal)).rejects.toThrow(
+			"Committed history changed; use rebuild() for a deliberate rebuild",
+		);
+	});
+
 	it("commits a complete tail-windowed response exactly once", async () => {
 		const terminal = new HeadlessTerminal(30, 5);
 		const tui = new TUI(terminal);

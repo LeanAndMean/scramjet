@@ -316,6 +316,42 @@ describe("interactive assistant history", () => {
 		}
 	});
 
+	it.each([
+		["Armin", "handleArminSaysHi"],
+		["Daxnuts", "handleDaxnuts"],
+	])("keeps the %s animation live until it completes", async (name, handler) => {
+		const random = name === "Armin" ? vi.spyOn(Math, "random").mockReturnValue(0) : undefined;
+		const { terminal, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
+
+		(mode[handler] as () => void).call(mode);
+		random?.mockRestore();
+
+		expect(committedChatContainer.children).toHaveLength(1);
+		expect(chatContainer.children).toHaveLength(1);
+		const component = chatContainer.children[0];
+		expect(mode.mutableChatComponents as Set<Component>).toContain(component);
+
+		await render(terminal);
+
+		expect(mode.mutableChatComponents as Set<Component>).not.toContain(component);
+		expect(chatContainer.children).toHaveLength(0);
+		expect(committedChatContainer.children).toHaveLength(2);
+	});
+
+	it("seals in-chat status rows into committed history", async () => {
+		const { terminal, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
+
+		(mode.showStatus as (message: string) => void).call(mode, "STATUS-TO-SEAL");
+		expect(chatContainer.render(80).join("\n")).toContain("STATUS-TO-SEAL");
+		expect(committedChatContainer.children).toHaveLength(0);
+
+		(mode.commitFinalizedChatOutput as () => void).call(mode);
+		await render(terminal);
+
+		expect(chatContainer.children).toHaveLength(0);
+		expect(committedChatContainer.render(80).join("\n")).toContain("STATUS-TO-SEAL");
+	});
+
 	it("commits parallel tools once in transcript order when they finish in reverse order", async () => {
 		const { emit, committedChatContainer, chatContainer } = createInteractiveHarness();
 		const message = assistant("");
@@ -454,6 +490,51 @@ describe("interactive assistant history", () => {
 		expect(output).toContain("short-result");
 		expect(terminal.visibleLines().join("\n")).not.toContain("partial-4");
 		expect(terminal.visibleLines().join("\n")).not.toContain("partial-5");
+	});
+
+	it("commits compact finalized tool calls while retaining live and expanded details", async () => {
+		const { emit, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
+		mode.getRegisteredToolDefinition = () => ({
+			renderCall: (args: { task: string }, _theme: unknown, context: { isPartial: boolean; expanded: boolean }) =>
+				new Text(context.isPartial || context.expanded ? `subagent\n${args.task}` : "subagent", 0, 0),
+		});
+		const message = assistant("");
+		message.content = [
+			{
+				type: "toolCall",
+				id: "subagent",
+				name: "subagent",
+				arguments: { task: "FULL-LIVE-TASK" },
+			},
+		];
+
+		await emit({ type: "message_start", message });
+		await emit({ type: "message_update", message });
+		expect(chatContainer.render(120).join("\n")).toContain("FULL-LIVE-TASK");
+
+		await emit({ type: "message_end", message });
+		await emit({
+			type: "tool_execution_start",
+			toolCallId: "subagent",
+			toolName: "subagent",
+			args: message.content[0].arguments,
+		});
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "subagent",
+			result: { content: [{ type: "text", text: "FINAL-SUMMARY" }] },
+			isError: false,
+		});
+
+		const committed = committedChatContainer.render(120).join("\n");
+		expect(committed).toContain("FINAL-SUMMARY");
+		expect(committed).not.toContain("FULL-LIVE-TASK");
+		const toolComponent = committedChatContainer.children[committedChatContainer.children.length - 1] as {
+			setExpanded(expanded: boolean): void;
+			render(width: number): string[];
+		};
+		toolComponent.setExpanded(true);
+		expect(toolComponent.render(120).join("\n")).toContain("FULL-LIVE-TASK");
 	});
 
 	it("removes a renderer-hidden tool preview when the tool finalizes", async () => {

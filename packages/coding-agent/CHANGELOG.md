@@ -4,7 +4,7 @@
 
 ### Added
 
-- Append-only finalized transcript history with a bounded live canvas prevents routine response completion, tool finalization, resize, and overlay updates from replaying or jumping terminal scrollback. ([#396](https://github.com/LeanAndMean/scramjet/pull/396))
+- Append-only finalized transcript history with a bounded live canvas prevents routine response completion, tool finalization, height resize, and overlay updates from replaying or jumping terminal scrollback. ([#396](https://github.com/LeanAndMean/scramjet/pull/396))
 
 ### Changed
 

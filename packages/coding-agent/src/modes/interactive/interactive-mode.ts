@@ -5464,8 +5464,14 @@ export class InteractiveMode {
 	}
 
 	private handleArminSaysHi(): void {
+		const component = new ArminComponent(this.ui, () => {
+			this.setChatComponentMutable(component, false);
+			this.promoteFinalizedChatPrefix();
+			this.ui.requestRender();
+		});
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new ArminComponent(this.ui));
+		this.chatContainer.addChild(component);
+		this.setChatComponentMutable(component, true);
 		this.commitFinalizedChatOutput();
 	}
 
@@ -5476,8 +5482,14 @@ export class InteractiveMode {
 	}
 
 	private handleDaxnuts(): void {
+		const component = new DaxnutsComponent(this.ui, () => {
+			this.setChatComponentMutable(component, false);
+			this.promoteFinalizedChatPrefix();
+			this.ui.requestRender();
+		});
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
+		this.chatContainer.addChild(component);
+		this.setChatComponentMutable(component, true);
 		this.commitFinalizedChatOutput();
 	}
 

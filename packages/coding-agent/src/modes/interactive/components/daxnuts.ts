@@ -64,7 +64,10 @@ export class DaxnutsComponent implements Component {
 	private cachedWidth = 0;
 	private cachedTick = -1;
 
-	constructor(ui: TUI) {
+	constructor(
+		ui: TUI,
+		private onComplete: () => void,
+	) {
 		this.ui = ui;
 		this.image = buildImage();
 		this.startAnimation();
@@ -79,6 +82,7 @@ export class DaxnutsComponent implements Component {
 			this.tick++;
 			if (this.tick >= this.maxTicks) {
 				this.stopAnimation();
+				this.onComplete();
 			}
 			this.cachedWidth = 0;
 			this.ui.requestRender();
