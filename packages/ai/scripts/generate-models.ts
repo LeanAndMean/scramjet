@@ -1216,7 +1216,7 @@ async function generateModels() {
 			candidate.provider === "openai" &&
 			(candidate.id === "gpt-5.6-sol" || candidate.id === "gpt-5.6-terra" || candidate.id === "gpt-5.6-luna")
 		) {
-			// Store advertised total capacity; runtime consumers derive the usable budget.
+			// Store advertised total capacity; runtime consumers derive the usable budget with output-limit and reserve handling.
 			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
@@ -1585,7 +1585,8 @@ async function generateModels() {
 
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
-	// Retain explicit client catalog values without asserting backend limits; GPT-5.6 matches Codex's bundled metadata.
+	// Retain shared constants without asserting backend limits.
+	// The three GPT-5.6 entries match Codex's current bundled metadata.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
 	const CODEX_MAX_TOKENS = 128000;
