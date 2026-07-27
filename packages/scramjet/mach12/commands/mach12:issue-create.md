@@ -170,7 +170,7 @@ Handle results based on similarity:
   - **Comment on one existing issue instead**: Add this finding as a comment on exactly one selected issue and do not create a new issue.
   - **Skip**: Create no issue and post no relationship comment.
 
-  Use `get_scramjet_user_input` with `type: "select"` and include all four choices in its `options`. Construct the choices first, then recommend the choice best supported by the matches and the user's stated intent. Derive its runtime `recommended` index by locating that choice in the options actually presented; do not prescribe a globally recommended choice or fixed numeric index.
+  Use `get_scramjet_user_input` with `type: "select"` and include all four choices. Recommend the choice best supported by the matches and the user's stated intent; no choice is globally preferred.
 
   If the user picks "Create without mentioning matches", continue to Step 5 with the approved title and body unchanged. Do not add links, mentions, or notes derived from the duplicate search, and do not post comments to any matched issue.
 

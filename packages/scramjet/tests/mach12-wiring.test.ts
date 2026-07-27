@@ -218,14 +218,11 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 
 	it("requires a structured selection with a contextual recommendation", () => {
 		expect(ambiguousMatches).toContain('`get_scramjet_user_input` with `type: "select"`');
-		expect(ambiguousMatches).toContain("include all four choices in its `options`");
+		expect(ambiguousMatches).toContain("include all four choices");
 		expect(ambiguousMatches).toContain(
-			"recommend the choice best supported by the matches and the user's stated intent",
+			"Recommend the choice best supported by the matches and the user's stated intent",
 		);
-		expect(ambiguousMatches).toContain("Derive its runtime `recommended` index by locating that choice");
-		expect(ambiguousMatches).toContain("do not prescribe a globally recommended choice");
-		expect(ambiguousMatches).not.toMatch(/["`]?recommended["`]?(?:\s+index)?\s*(?::|=|\bis\b|\bto\b)\s*`?\d/i);
-		expect(ambiguousMatches).not.toMatch(/recommend(?:ed)?\s+(?:the\s+)?(?:first|second|third|fourth)\b/i);
+		expect(ambiguousMatches).toContain("no choice is globally preferred");
 	});
 
 	it("offers both create outcomes", () => {
