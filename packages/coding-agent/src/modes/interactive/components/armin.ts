@@ -71,7 +71,7 @@ export class ArminComponent implements Component {
 
 	constructor(
 		ui: TUI,
-		private onComplete: () => void,
+		private onComplete: () => void = () => {},
 	) {
 		this.ui = ui;
 		this.effect = EFFECTS[Math.floor(Math.random() * EFFECTS.length)];

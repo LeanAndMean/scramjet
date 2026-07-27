@@ -1152,8 +1152,32 @@ export class TUI extends Container {
 		this.positionHardwareCursor(absoluteCursor, this.committedLines.length + liveLines.length);
 	}
 
+	private resetDetachedLiveRegion(): void {
+		this.previousKittyImageIds = new Set([
+			...this.previousKittyImageIds,
+			...this.committedKittyImageIds,
+			...this.previousLiveKittyImageIds,
+		]);
+		this.liveRegionStart = undefined;
+		this.previousLines = [];
+		this.committedLines = [];
+		this.previousLiveLines = [];
+		this.committedKittyImageIds.clear();
+		this.previousLiveKittyImageIds.clear();
+		this.commitRequested = false;
+		this.previousWidth = -1;
+		this.previousHeight = -1;
+		this.cursorRow = 0;
+		this.hardwareCursorRow = 0;
+		this.maxLinesRendered = 0;
+		this.previousViewportTop = 0;
+	}
+
 	private doRender(): void {
 		if (this.stopped) return;
+		if (this.liveRegionStart && !this.children.includes(this.liveRegionStart)) {
+			this.resetDetachedLiveRegion();
+		}
 		if (this.liveRegionStart) {
 			this.doCommittedRender();
 			return;

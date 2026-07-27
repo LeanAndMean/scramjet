@@ -8,6 +8,7 @@ Separates finalized terminal transcript history from the mutable live canvas so 
 
 - `@leanandmean/tui`: commit finalized output to append-only terminal history while keeping mutable rendering in a bounded tail window.
 - `@leanandmean/coding-agent`: finalize assistant and tool output once, preserve asynchronous image finality and tool ordering, and rebuild history only for deliberate presentation or session changes.
+- Render finalized collapsed subagent calls compactly while retaining full task and result detail when expanded.
 - Remove the obsolete clear-on-shrink setting and document the finalized-history/live-canvas rendering model.
 
 ### Tests

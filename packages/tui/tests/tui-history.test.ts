@@ -407,6 +407,41 @@ describe("TUI committed history", () => {
 		expect(output).toContain("\x1b_Ga=d,d=I,i=42,q=2\x1b\\");
 	});
 
+	it.each([
+		["removeChild()", (tui: TUI, live: Component) => tui.removeChild(live), true],
+		["clear()", (tui: TUI) => tui.clear(), false],
+		[
+			"direct children mutation",
+			(tui: TUI, live: Component) => tui.children.splice(tui.children.indexOf(live), 1),
+			true,
+		],
+	])(
+		"safely resets committed rendering after %s detaches the live boundary",
+		async (_name, detach, retainsHistory) => {
+			const terminal = new HeadlessTerminal(30, 6);
+			const tui = new TUI(terminal);
+			const history = new MutableComponent(["HISTORY", "\x1b_Gi=61,a=T;history\x1b\\"]);
+			const live = new MutableComponent(["LIVE", "\x1b_Gi=62,a=T;live\x1b\\"]);
+			tui.addChild(history);
+			tui.addChild(live);
+			tui.setLiveRegionStart(live);
+			tui.start();
+			await render(tui, terminal);
+			const mark = terminal.markWrites();
+
+			detach(tui, live);
+			tui.requestRender();
+			await expect(render(tui, terminal)).resolves.toBeUndefined();
+
+			const output = terminal.writesSince(mark);
+			expect(output).toContain("\x1b[2J");
+			expect(output).toContain("\x1b[3J");
+			expect(output).toContain("\x1b_Ga=d,d=I,i=61,q=2\x1b\\");
+			expect(output).toContain("\x1b_Ga=d,d=I,i=62,q=2\x1b\\");
+			expect(terminal.bufferLines().join("\n").includes("HISTORY")).toBe(retainsHistory);
+		},
+	);
+
 	it("deletes only live Kitty placements during routine repaint with complete APC sequences", async () => {
 		const terminal = new HeadlessTerminal(30, 6);
 		const tui = new TUI(terminal);

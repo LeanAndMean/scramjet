@@ -66,7 +66,7 @@ export class DaxnutsComponent implements Component {
 
 	constructor(
 		ui: TUI,
-		private onComplete: () => void,
+		private onComplete: () => void = () => {},
 	) {
 		this.ui = ui;
 		this.image = buildImage();
