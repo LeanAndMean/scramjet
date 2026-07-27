@@ -535,6 +535,8 @@ Returns `{ "confirmed": true }`, `{ "confirmed": false }`, or `{ "cancelled": tr
 
 Returns `{ "selected": "patch" }` or `{ "cancelled": true }`. The result row also shows the prompt and all presented options, including labels and descriptions. The `recommended` field (zero-based index) highlights the suggested option; it is optional.
 
+When command policy genuinely prefers one choice regardless of runtime context, identify that choice semantically in the command prose, construct the concrete `options` array, and then derive the semantic choice's runtime index for `recommended`. When the best choice depends on runtime evidence or user intent, instruct the agent to select the recommendation from that context instead of declaring a global preference. In either case, do not prescribe a numeric `recommended` value in durable workflow prose: option order can change while the recommendation does not. Numeric indexes in tool-call examples, including the example above, represent final concrete calls after the options are populated, not authoring policy. Contract tests should pin the applicable recommendation rule and consequences rather than an incidental position.
+
 **freetext** — open-ended input:
 
 ```json

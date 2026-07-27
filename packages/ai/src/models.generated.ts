@@ -2716,7 +2716,7 @@ export const MODELS = {
 				cacheRead: 0.1,
 				cacheWrite: 1.25,
 			},
-			contextWindow: 400000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.6-sol": {
@@ -2734,7 +2734,7 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.6-terra": {
@@ -2752,7 +2752,7 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 3.125,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"o1": {
@@ -7837,7 +7837,7 @@ export const MODELS = {
 				cacheRead: 0.1,
 				cacheWrite: 1.25,
 			},
-			contextWindow: 400000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-sol": {
@@ -7855,7 +7855,7 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-terra": {
@@ -7873,7 +7873,7 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 3.125,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"o1": {

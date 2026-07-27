@@ -11,7 +11,7 @@ allowed-tools:
 
 You are detecting the sub-issues of a GitHub issue. Two strategies, used in order: the API call first, the body-parse fallback only when the API call fails.
 
-This subroutine is advisory and may fail open through body parsing. Never use it for PR close-set derivation or delivery verification; destructive linkage callers must use `mach12:gh-delivery-unit`.
+This subroutine is advisory and may fail open through body parsing. Callers must not use it to expand PR closing linkage automatically.
 
 <caller-context>
 $ARGUMENTS

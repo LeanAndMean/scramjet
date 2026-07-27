@@ -83,7 +83,6 @@ const WIRING: WiringRow[] = [
 	{ basename: "gh-issue-read", expected: null, delegateOnly: true },
 	{ basename: "gh-pr-read", expected: null, delegateOnly: true },
 	{ basename: "gh-sub-issues", expected: null, delegateOnly: true },
-	{ basename: "gh-delivery-unit", expected: null, delegateOnly: true },
 	{ basename: "gh-assign", expected: null, delegateOnly: true },
 	{ basename: "gh-comment", expected: null, delegateOnly: true },
 ];
@@ -210,230 +209,217 @@ describe("mach12 wiring — bundled command set", () => {
 	});
 });
 
-describe("mach12 delivery-unit linkage contract", () => {
-	const deliveryUnitPath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-delivery-unit.md`);
-	const deliveryUnit = readFileSync(deliveryUnitPath, "utf-8");
+describe("mach12 issue creation — ambiguous duplicate handling", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const ambiguousMatches = issueCreate.slice(
+		issueCreate.indexOf("- **Ambiguous matches**"),
+		issueCreate.indexOf("## Step 5: Create"),
+	);
 
-	it("is a tightly scoped delegate-only subroutine", () => {
-		const result = parseCommandFile(deliveryUnitPath, deliveryUnit, SET_NAME);
-		expect(result.ok).toBe(true);
-		if (!result.ok) return;
-
-		expect(result.def.delegateOnly).toBe(true);
-		expect(result.def.allowedTools).toEqual(["bash"]);
-		expect(result.def.next).toBeUndefined();
-		expect(deliveryUnit.match(/\$ARGUMENTS/g)).toHaveLength(1);
-		expect(deliveryUnit).not.toContain("report_scramjet_command_status");
-	});
-
-	it("pins exact linked and explicit-none identity with universal absent-identity hold", () => {
-		expect(deliveryUnit).toContain("<!-- mach12-pr -->\n<!-- mach12-delivery-unit-v1 -->\nDelivery-unit: #<D>");
-		expect(deliveryUnit).toContain("<!-- mach12-pr -->\n<!-- mach12-delivery-unit-v1 -->\nDelivery-unit: none");
-		expect(deliveryUnit).toContain("Absent identity always returns `verdict: hold`");
-		expect(deliveryUnit).toContain("Identity without exact provenance also holds");
-		expect(deliveryUnit).toContain("zero actual `closingIssuesReferences`");
-		expect(deliveryUnit).toContain("zero standalone closing-keyword lines");
-		expect(deliveryUnit).toContain("zero standalone `Part of #<number>` lines");
-		expect(deliveryUnit).toContain("There is no unlinked representation other than exact `Delivery-unit: none`");
-		expect(deliveryUnit).not.toContain("verdict: not-applicable");
-	});
-
-	it("requires informed manual migration without inference or body mutation", () => {
-		expect(deliveryUnit).toContain("legacy or external PR");
-		expect(deliveryUnit).toContain("inspect the intended delivery scope before repairing or redrafting");
-		expect(deliveryUnit).toContain("Never infer identity from existing closers");
-		expect(deliveryUnit).toContain("auto-edit the body");
-		expect(deliveryUnit).toContain("Verification never edits the PR body");
-	});
-
-	it("pins complete fail-closed native relationship and PR reads", () => {
-		for (const endpoint of [
-			"issues/<issue>/comments?per_page=100",
-			"issues/<issue>/sub_issues?per_page=100",
-			"issues/<issue>/parent",
-			"issues/<issue>/dependencies/blocked_by?per_page=100",
-		]) {
-			expect(deliveryUnit).toContain(endpoint);
-		}
-		expect(deliveryUnit).toContain("No parent issue found");
-		expect(deliveryUnit).toContain("includeClosedPrs: true");
-		expect(deliveryUnit).toContain("pageInfo { hasNextPage endCursor }");
-		expect(deliveryUnit).toContain("missing or non-advancing `endCursor` holds");
-		expect(deliveryUnit).not.toContain("mach12:gh-sub-issues");
-	});
-
-	it("pins canonical arguments and truthful unresolved result variants", () => {
-		expect(deliveryUnit).toContain(
-			"Apply it consistently to arguments, `Delivery-unit: #<D>`, and every issue-number field in this contract; zero, signs, and leading zeroes are malformed.",
+	it("requires a structured selection with a contextual recommendation", () => {
+		expect(ambiguousMatches).toContain('`get_scramjet_user_input` with `type: "select"`');
+		expect(ambiguousMatches).toContain("include all four choices");
+		expect(ambiguousMatches).toContain(
+			"Recommend the choice best supported by the matches and the user's stated intent",
 		);
-		expect(deliveryUnit).toContain(`verdict: hold
-mode: unknown
-delivery-unit: unknown
-reason: invalid-arguments`);
-		expect(deliveryUnit).toContain(`verdict: hold
-mode: verification
-delivery-unit: unknown
-reason: pr-read-failed|missing-delivery-identity|malformed-delivery-identity`);
-		expect(deliveryUnit).toContain("Never use it when identity is unresolved");
+		expect(ambiguousMatches).toContain("no choice is globally preferred");
 	});
 
-	it("pins classification, audit records, plan freshness, and blocker delivery", () => {
-		for (const semanticPin of [
-			"first nonblank line is exactly `<!-- mach12-initiative-v1 -->`",
-			"first nonblank line is exactly `<!-- mach12-batch-v1 -->`",
-			"<!-- mach12-membership-decision-v1 -->",
-			"Plan-impact: initial-plan-required|replan-required",
-			"Approval: user-confirmed",
-			"Supersedes: issuecomment-<id>|none",
-			"<!-- mach12-disposition-v1 -->",
-			"Every later active `Before`, `Destination-before`, and `Dependencies-before`",
-			"Final active snapshots",
-			"exact plan record is one comment containing exactly one exact single-line `<!-- mach12-plan -->` marker",
-			"Duplicate exact markers in one comment or any otherwise ambiguous plan record hold",
-			"latest exact plan record",
-			"material body or comment requirement added after the plan requires a revised plan",
-			"exact retained native member set",
-			"exactly one claiming PR in any state",
-			"blocker-only **historical context**",
-			"unit and retained members must be closed as completed",
-			"recursively deriving the blocker as an ordinary or batch unit in historical context succeeds",
-			"Apply exactly one claimant rule",
-			"replace the top-level mode's claimant rule with this rule",
-			"the union of claimant results for `D` and every retained source must be exactly one PR",
-			"sole claimant is merged",
-		]) {
-			expect(deliveryUnit).toContain(semanticPin);
+	it("offers both create outcomes", () => {
+		expect(ambiguousMatches).toContain("**Create without mentioning matches**");
+		expect(ambiguousMatches).toContain("**Create and mention selected matches**");
+		expect(ambiguousMatches).toContain("Add references only to the matches the user explicitly selected");
+		expect(ambiguousMatches).toContain("return to Step 3 for explicit approval");
+	});
+
+	it("preserves the approved issue when creating without references", () => {
+		expect(ambiguousMatches).toContain("approved title and body unchanged");
+		expect(ambiguousMatches).toContain("Do not add links, mentions, or notes derived from the duplicate search");
+		expect(ambiguousMatches).toContain("do not post comments to any matched issue");
+	});
+
+	it("comments on exactly one selected match and skips creation", () => {
+		expect(ambiguousMatches).toContain("ask the user to select exactly one of the listed issues");
+		expect(ambiguousMatches).toContain("Only after the user explicitly selects the target");
+		expect(ambiguousMatches).toMatch(/post the prepared comment only to that issue/i);
+		expect(ambiguousMatches).toContain("skip creation");
+	});
+
+	it("publishes nothing when skipped", () => {
+		expect(ambiguousMatches).toContain("create no issue and post no relationship comment");
+	});
+});
+
+describe("mach12 standard PR linkage", () => {
+	const activeCommands = readdirSync(MACH12_COMMANDS_DIR)
+		.filter((file) => file.endsWith(".md"))
+		.map((file) => [file, readFileSync(join(MACH12_COMMANDS_DIR, file), "utf-8")] as const);
+	const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
+
+	it("retires delivery identity from every active command", () => {
+		for (const [file, content] of activeCommands) {
+			expect(content, file).not.toContain("mach12:gh-delivery-unit");
+			expect(content, file).not.toContain("<!-- mach12-pr -->");
+			expect(content, file).not.toContain("mach12-delivery-unit-v1");
+			expect(content, file).not.toContain("Delivery-unit:");
 		}
 	});
 
-	it("pins exact creation and verification safety outcomes", () => {
-		for (const semanticPin of [
-			"close set is exactly `{D}`",
-			"close set is exactly `{D} ∪ {exact current direct retained source members}`",
-			"`part-of` is exactly that initiative",
-			"Partial completion never silently narrows the close set",
-			"must have zero claiming PRs in every state",
-			"must have claimant set exactly `{current PR}`",
-			"report sorted `missing` and `extra` issue numbers",
-			"Never close an initiative, sibling, removed source, successor, transitive descendant",
-			"Return only one of these verdicts: `ok` or `hold`",
-		]) {
-			expect(deliveryUnit).toContain(semanticPin);
+	it("resolves ambiguous linkage before drafting", () => {
+		const ambiguity = prCreate.indexOf("Resolve issue-linkage ambiguity before constructing a draft");
+		const draft = prCreate.indexOf("## Step 3: Draft PR and get approval");
+		expect(ambiguity).toBeGreaterThan(-1);
+		expect(ambiguity).toBeLessThan(draft);
+		expect(prCreate).toContain("could be either an issue number or general context");
+		expect(prCreate).toContain("multiple plausible issue candidates");
+		expect(prCreate).toContain("select exactly one issue or explicitly decline linkage");
+	});
+
+	it("infers supported branch issue patterns or proceeds unlinked", () => {
+		for (const pattern of ["`feature/issue-55-*`", "`fix/issue-55-*`", "`55-some-description`"]) {
+			expect(prCreate).toContain(pattern);
 		}
+		expect(prCreate).toContain("If no issue was supplied and the branch yields no candidate, proceed unlinked");
 	});
 
-	it("makes PR creation derive and freeze canonical linkage", () => {
-		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
-
-		expect(prCreate).toContain("/mach12:gh-delivery-unit <D>");
-		expect(prCreate).not.toContain("/mach12:gh-sub-issues");
-		expect(prCreate).toContain("Any hold for an identified unit stops PR creation");
-		expect(prCreate).toContain("never offer to create an unlinked PR as a workaround");
-		expect(prCreate).toContain("Delivery-unit: #<D>");
-		expect(prCreate).toContain("Delivery-unit: none");
-		expect(prCreate).toContain("exactly one standalone `Fixes #N` line for each derived close-set issue");
-		expect(prCreate).toContain("exactly one standalone `Part of #I` line only when");
-		expect(prCreate).toContain("Removing a closer for partial completion is not allowed");
+	it("proposes zero or one closer without relationship expansion", () => {
+		expect(prCreate).toContain("exactly one standalone `Fixes #N` line");
+		expect(prCreate).toContain("Zero closing-keyword lines");
+		expect(prCreate).toContain("at most one proposed closer");
+		expect(prCreate).not.toContain("mach12:gh-sub-issues");
+		expect(prCreate).not.toContain("close-set");
 	});
 
-	it("re-derives after push, compares before creation, and verifies after creation", () => {
-		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
-		const initialDerivation = prCreate.indexOf("/mach12:gh-delivery-unit <D>");
-		const approval = prCreate.indexOf("Present the title and complete body");
-		const push = prCreate.indexOf("git push -u origin <branch-name>");
-		const finalDerivation = prCreate.indexOf("After the push and immediately before `gh pr create`");
-		const secondCreationCall = prCreate.indexOf("/mach12:gh-delivery-unit <D>", initialDerivation + 1);
-		const bodyComparison = prCreate.indexOf("compare the fresh result with the final approved body");
-		const create = prCreate.indexOf("gh pr create --title");
-		const verification = prCreate.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
-
-		expect(prCreate.match(/\/mach12:gh-delivery-unit <D>/g)).toHaveLength(2);
-		expect(initialDerivation).toBeGreaterThan(-1);
-		expect(initialDerivation).toBeLessThan(approval);
-		expect(push).toBeGreaterThan(approval);
-		expect(finalDerivation).toBeGreaterThan(push);
-		expect(secondCreationCall).toBeGreaterThan(finalDerivation);
-		expect(bodyComparison).toBeGreaterThan(secondCreationCall);
-		expect(create).toBeGreaterThan(bodyComparison);
-		expect(verification).toBeGreaterThan(create);
-		expect(prCreate).toContain("Require `verdict: ok` for both linked and explicit-none PRs");
-		expect(prCreate).toContain("If verification returns `hold`");
+	it("preserves full-body approval and validates final linkage cardinality", () => {
+		expect(prCreate).toContain("Before presenting any initial or modified complete body");
+		expect(prCreate).toContain("zero or one closing-keyword occurrence");
+		expect(prCreate).toContain("standalone line containing exactly one issue target");
+		expect(prCreate).toContain("reject a line with multiple targets, multiple closing keywords");
+		expect(prCreate).toContain("revalidate the displayed complete body");
+		expect(prCreate).toContain("Immediately before creation, validate the final approved body once more");
+		expect(prCreate.indexOf("Immediately before creation")).toBeLessThan(prCreate.indexOf("gh pr create"));
+		expect(prCreate).toContain("Present the validated title and complete body");
+		expect(prCreate).toContain("Approve, Modify, or Cancel");
+		expect(prCreate).toContain("<approved-body>");
 		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
-		expect(prCreate).toContain(
-			'Reserve `status: "completed"` for a successfully created PR whose post-create verification returned `ok`',
-		);
-		expect(prCreate).toContain("Leave `next_steps` empty; do not recommend `mach12:pr-review`");
 	});
 
-	it("enforces delivery identity before and after pre-merge mutations", () => {
-		const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
-		const checkout = preMerge.indexOf("gh pr checkout <pr-number>");
-		const earlyVerification = preMerge.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
-		const pull = preMerge.indexOf("git pull");
-		const lastCiRead = preMerge.lastIndexOf("gh pr checks <pr-number> --json name,state,bucket,link");
-		const finalVerification = preMerge.indexOf("## Step 9: Run final delivery-linkage verification");
-		const report = preMerge.indexOf("## Step 10: Present pre-merge report");
+	it("re-resolves changed linkage and pushes without force", () => {
+		expect(prCreate).toContain("closing reference was added or changed");
+		expect(prCreate).toContain("repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract");
+		expect(prCreate).toContain("git push -u origin <branch-name>");
+		expect(prCreate).not.toMatch(/git push (?:--force|-f)\b/);
+	});
+});
 
-		for (const anchor of [checkout, earlyVerification, pull, lastCiRead, finalVerification, report]) {
-			expect(anchor).toBeGreaterThan(-1);
+describe("mach12 ordinary PR readiness", () => {
+	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
+	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
+	const readinessSection = (content: string) =>
+		content.slice(content.indexOf("## Step 2:"), content.indexOf("## Step 3:"));
+
+	it.each([
+		["pr-pre-merge", preMerge],
+		["pr-merge", merge],
+	])("%s states ordinary readiness before mutation", (name, content) => {
+		const readiness = readinessSection(content);
+		for (const predicate of ["open", "non-draft", "required review", "conflict", "checks"]) {
+			expect(readiness, `${name}: ${predicate}`).toContain(predicate);
 		}
-		expect(earlyVerification).toBeGreaterThan(checkout);
-		expect(earlyVerification).toBeLessThan(pull);
-		expect(finalVerification).toBeGreaterThan(lastCiRead);
-		expect(finalVerification).toBeLessThan(report);
-		expect(preMerge.match(/\/mach12:gh-delivery-unit --pr <pr-number>/g)).toHaveLength(2);
-		expect(preMerge).toContain("do not pull, edit, commit, or push before initial delivery-linkage verification");
-		expect(preMerge).toContain("Missing identity is a non-forceable blocker");
-		expect(preMerge).toContain("there is no unrelated or not-applicable path");
-		expect(preMerge).toContain("legacy or external PR");
-		expect(preMerge).toContain("Never infer identity from existing closers");
-		expect(preMerge).toContain("never auto-edit the PR body");
-		expect(preMerge).toContain("- [ ] Linkage:");
-		expect(preMerge).toContain("after all checklist edits, commits, pushes, tests, and CI checks");
-		expect(preMerge).toContain(
-			"Every non-terminal Step 8 outcome—including skipped CI, initially passing CI, no reported checks, and passing CI after a fix—must converge here",
+		expect(readiness).toContain("one brief reread");
+		expect(content.indexOf(name === "pr-merge" ? "gh pr merge" : "gh pr checkout <pr-number>")).toBeGreaterThan(
+			content.indexOf("## Step 3:"),
 		);
-		for (const ciDestination of [
-			'skip this step, record "CI: skipped per user request", and proceed to Step 9',
-			"All checks pass** (`bucket` is `pass` for every check): CI is green. Proceed to Step 9",
-			"If none appear, note this for the report and proceed to Step 9",
-			"All checks pass**: CI is green. Proceed to Step 9",
-		]) {
-			expect(preMerge).toContain(ciDestination);
+	});
+
+	it("pre-merge routes remediable outcomes to later steps", () => {
+		const readiness = readinessSection(preMerge);
+		expect(readiness).toContain("A behind branch continues to Step 5");
+		expect(readiness).toContain("pending or failing checks continue to Step 9");
+	});
+
+	it("merge requires ordinary GitHub readiness", () => {
+		const readiness = readinessSection(merge);
+		expect(readiness).toContain("current with the default branch");
+		expect(readiness).toContain("passing its required checks");
+		expect(readiness).toContain("repositories without required checks may continue");
+	});
+
+	it.each([
+		["pr-pre-merge", preMerge],
+		["pr-merge", merge],
+	])("%s bounds indeterminate readiness and offers no bypass", (_name, content) => {
+		expect(readinessSection(content)).toContain("one brief reread");
+		expect(readinessSection(content)).toContain("report incomplete rather than guessing");
+		expect(content).not.toMatch(/--force|--admin/);
+	});
+
+	it("pre-merge stops when checklist changes cannot reach the PR", () => {
+		const commitSection = preMerge.slice(preMerge.indexOf("## Step 8:"), preMerge.indexOf("## Step 9:"));
+		const stageClause = commitSection.slice(
+			commitSection.indexOf("2. **Stage**"),
+			commitSection.indexOf("3. **Commit**"),
+		);
+		const commitClause = commitSection.slice(
+			commitSection.indexOf("3. **Commit**"),
+			commitSection.indexOf("4. **Push**"),
+		);
+		const pushClause = commitSection.slice(commitSection.indexOf("4. **Push**"));
+		for (const clause of [stageClause, commitClause, pushClause]) {
+			expect(clause).toContain("report the command incomplete");
+			expect(clause).toContain("stop before CI and final readiness");
 		}
-		expect(preMerge).toContain(
-			'Only when final linkage verification returns `verdict: ok`, report `status: "completed"`',
-		);
-		expect(preMerge).toContain("On `verdict: hold`");
-		expect(preMerge).toContain('Report `status: "blocked"` and leave `next_steps` empty');
-		expect(preMerge).toContain("verified ordinary/batch with exact close set and optional `part-of: #<initiative>`");
+		expect(commitSection).toContain("Step 9 may begin only after a successful push");
+
+		const finalSection = preMerge.slice(preMerge.indexOf("## Step 10:"));
+		expect(finalSection).toContain("After all checklist changes are pushed and CI settles");
+		expect(finalSection).toContain("final authoritative readiness reread");
 	});
 
-	it("keeps final merge verification adjacent and non-forceable", () => {
-		const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
-		const readiness = merge.indexOf("gh pr view <pr-number> --json state,mergeable");
-		const verification = merge.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
-		const mergeCommand = merge.indexOf("gh pr merge <pr-number> --delete-branch");
-		const commandBlocks = [...merge.matchAll(/```\n([^`]+)\n```/g)].map((match) => match[1].trim());
-		const verificationBlock = commandBlocks.indexOf("/mach12:gh-delivery-unit --pr <pr-number>");
-
-		expect(verification).toBeGreaterThan(readiness);
-		expect(mergeCommand).toBeGreaterThan(verification);
-		expect(commandBlocks[verificationBlock + 1]).toBe("gh pr merge <pr-number> --delete-branch");
-		expect(merge).toContain("No mutation, release work, branch cleanup, cached-context reuse, or other action");
-		expect(merge).toContain("Missing identity is a non-forceable blocker");
-		expect(merge).toContain("there is no unrelated or not-applicable path");
-		expect(merge).toContain("legacy or external PR");
-		expect(merge).toContain("Never infer identity from existing closers");
-		expect(merge).toContain("never auto-edit the PR body");
-		expect(merge).toContain("A linkage hold is non-forceable");
+	it("pre-merge gates post-fix verification on a confirmed push", () => {
+		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
+		const pushGate = ciSection.indexOf("delegation confirms that the commit was pushed successfully");
+		const verify = ciSection.indexOf("### 9d. Verify");
+		expect(pushGate).toBeGreaterThan(-1);
+		expect(pushGate).toBeLessThan(verify);
+		expect(ciSection).toContain("Otherwise report the result and stop before CI verification");
+		expect(ciSection).toContain("Wait up to 10 minutes for CI on the pushed fix");
 	});
 
-	it("keeps advisory sub-issue discovery out of destructive linkage", () => {
-		const subIssues = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-sub-issues.md`), "utf-8");
-		expect(subIssues).toContain("advisory and may fail open through body parsing");
-		expect(subIssues).toContain("Never use it for PR close-set derivation or delivery verification");
-		expect(subIssues).toContain("must use `mach12:gh-delivery-unit`");
+	it("pre-merge uses current checklist references", () => {
+		expect(preMerge).toContain("Steps 7a-7d");
+		expect(preMerge).not.toContain("Steps 6a-6d");
+	});
+
+	it("readiness queries omit unused rollup evidence", () => {
+		expect(readinessSection(preMerge)).not.toContain("statusCheckRollup");
+		expect(readinessSection(merge)).not.toContain("statusCheckRollup");
+	});
+
+	it("pre-merge bounds CI waits", () => {
+		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
+		expect(ciSection).toContain("poll for at most 10 minutes");
+		expect(ciSection).toContain("report which checks remain pending");
+		expect(ciSection).toContain("available logs or provider links");
+		expect(ciSection).not.toMatch(/gh pr checks[^\n]*--watch/);
+	});
+
+	it("merge confirms GitHub state before cleanup or release", () => {
+		const mergeSection = merge.slice(merge.indexOf("## Step 3:"), merge.indexOf("## Step 4:"));
+		const mergeCommand = mergeSection.indexOf("gh pr merge <pr-number> --delete-branch");
+		const confirmation = mergeSection.indexOf("gh pr view <pr-number> --json state,mergeCommit");
+		const cleanup = mergeSection.indexOf("git checkout");
+		expect(mergeCommand).toBeGreaterThan(-1);
+		expect(confirmation).toBeGreaterThan(mergeCommand);
+		expect(cleanup).toBeGreaterThan(confirmation);
+		expect(mergeSection).toContain("Before cleanup or release work");
+	});
+
+	it("pre-merge defines terminal status predicates and requires final readiness", () => {
+		expect(preMerge).toContain('Report `status: "completed"` only');
+		expect(preMerge).toContain('Report `status: "blocked"`');
+		expect(preMerge).toContain('Report `status: "incomplete"`');
+		expect(preMerge).toContain("final authoritative readiness reread");
 	});
 });
 

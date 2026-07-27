@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.62.2 — Correct GPT-5.6 context metadata
+
+Corrects direct OpenAI and derived Azure GPT-5.6 model limits while preserving the distinct Codex catalog defaults. Fixes [#395](https://github.com/LeanAndMean/scramjet/issues/395).
+
+### Changed
+
+- `@leanandmean/ai`: set GPT-5.6 Sol, Terra, and Luna direct-provider context capacity to 1,050,000 tokens with a 128,000-token output limit.
+- OpenAI Codex GPT-5.6 entries retain their 272,000-token catalog context and now describe that value without unsupported backend-limit claims.
+
+### Tests
+
+- Generated model catalog coverage now verifies direct OpenAI and Codex provider limits independently.
+
+## 0.62.1 — Make ambiguous duplicate handling safe
+
+Makes ambiguous duplicate handling explicit without removing the choice to publish useful cross-references. Fixes [#390](https://github.com/LeanAndMean/scramjet/issues/390).
+
+### Changed
+
+- `mach12:issue-create`: offer separate create-without-references and create-with-selected-references paths, require approval after reference edits, and keep comment-instead and skip outcomes explicit.
+- `command-authoring.md`: distinguish context-independent semantic preferences from recommendations derived from runtime evidence and user intent.
+
+### Tests
+
+- Mach 12 wiring coverage now verifies both create outcomes, contextual recommendation policy, explicit single-target commenting, and side-effect-free skipping for ambiguous duplicate matches.
+
+## 0.62.0 — Restore standard pull request workflows
+
+Removes delivery-unit metadata and reconciliation from Mach 12 pull request workflows, restores optional single-issue linkage, and bases pre-merge and merge decisions on ordinary GitHub readiness signals. Fixes [#387](https://github.com/LeanAndMean/scramjet/issues/387).
+
+### Changed
+
+- `mach12:pr-create`, `mach12:pr-pre-merge`, `mach12:pr-merge`: use standard pull request bodies and exhaustive GitHub readiness checks without custom delivery-unit metadata.
+- `mach12:gh-sub-issues`: narrow the subroutine to reporting direct sub-issues after delivery-unit reconciliation was removed.
+- `CLAUDE.md`: update the bundled Mach 12 command inventory.
+
+### Removed
+
+- `mach12:gh-delivery-unit`: remove delivery-unit derivation, validation, and workflow wiring.
+
+### Tests
+
+- Mach 12 wiring and integration smoke coverage now verifies the simplified command inventory, optional single-issue linkage, and readiness contracts.
+
 ## 0.61.0 — Collapse successful delegate output by default
 
 Adds compact delegate rendering so successful delegated command bodies remain model-visible and persisted while staying collapsed in the TUI until the global tool-output expansion binding is used. Diagnostics, malformed results, partial output, runtime errors, and empty-scope warnings remain visible. Fixes [#386](https://github.com/LeanAndMean/scramjet/issues/386).
