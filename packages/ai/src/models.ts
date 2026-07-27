@@ -36,6 +36,11 @@ export function getModels<TProvider extends KnownProvider>(
 	return models ? (Array.from(models.values()) as Model<ModelApi<TProvider, keyof (typeof MODELS)[TProvider]>>[]) : [];
 }
 
+// SCRAMJET-DIVERGENCE: Resolve operational context budgets independently from advertised model capacity.
+export function getContextWindowBudget<TApi extends Api>(model: Model<TApi>): number {
+	return model.contextWindowBudget ?? model.contextWindow;
+}
+
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
 	usage.cost.input = (model.cost.input / 1000000) * usage.input;
 	usage.cost.output = (model.cost.output / 1000000) * usage.output;

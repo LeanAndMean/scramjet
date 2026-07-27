@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { clampThinkingLevel, getModel, getModels, getSupportedThinkingLevels } from "../src/models.js";
+import {
+	clampThinkingLevel,
+	getContextWindowBudget,
+	getModel,
+	getModels,
+	getSupportedThinkingLevels,
+} from "../src/models.js";
 import type { AnthropicMessagesCompat } from "../src/types.js";
 
 describe("generated catalog - Anthropic Opus 4.8", () => {
@@ -255,14 +261,22 @@ describe("generated catalog - GPT-5.6 Codex variants", () => {
 		expect(luna.cost.cacheWrite).toBe(0);
 	});
 
-	it("all retain Codex catalog context and output limits", () => {
+	it("all expose documented capacity with the Codex operational budget", () => {
 		const sol = getModel("openai-codex", "gpt-5.6-sol");
 		const terra = getModel("openai-codex", "gpt-5.6-terra");
 		const luna = getModel("openai-codex", "gpt-5.6-luna");
 		for (const model of [sol, terra, luna]) {
-			expect(model.contextWindow).toBe(272_000);
+			expect(model.contextWindow).toBe(1_050_000);
+			expect(model.contextWindowBudget).toBe(272_000);
 			expect(model.maxTokens).toBe(128_000);
+			expect(getContextWindowBudget(model)).toBe(272_000);
 		}
+	});
+
+	it("falls back to model capacity when no operational budget is configured", () => {
+		const model = getModel("openai-codex", "gpt-5.5");
+		expect(model.contextWindowBudget).toBeUndefined();
+		expect(getContextWindowBudget(model)).toBe(model.contextWindow);
 	});
 
 	it("Sol has max thinking level", () => {

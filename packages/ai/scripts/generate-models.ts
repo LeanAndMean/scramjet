@@ -1586,9 +1586,9 @@ async function generateModels() {
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
 	// Retain shared constants without asserting backend limits.
-	// The three GPT-5.6 entries match Codex's current bundled metadata.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	const CODEX_CONTEXT = 272000;
+	const GPT_5_6_CONTEXT = 1050000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
 		{
@@ -1696,7 +1696,9 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
+			// SCRAMJET-DIVERGENCE: Report documented capacity while retaining Codex's operational budget.
+			contextWindow: GPT_5_6_CONTEXT,
+			contextWindowBudget: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1708,7 +1710,8 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
+			contextWindow: GPT_5_6_CONTEXT,
+			contextWindowBudget: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1720,7 +1723,8 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
+			contextWindow: GPT_5_6_CONTEXT,
+			contextWindowBudget: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -2078,6 +2082,9 @@ export const MODELS = {
 			output += `\t\t\t\tcacheWrite: ${model.cost.cacheWrite},\n`;
 			output += `\t\t\t},\n`;
 			output += `\t\t\tcontextWindow: ${model.contextWindow},\n`;
+			if (model.contextWindowBudget !== undefined) {
+				output += `\t\t\tcontextWindowBudget: ${model.contextWindowBudget},\n`;
+			}
 			output += `\t\t\tmaxTokens: ${model.maxTokens},\n`;
 			output += `\t\t} satisfies Model<"${model.api}">,\n`;
 		}
