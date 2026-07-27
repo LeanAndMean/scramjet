@@ -42,16 +42,7 @@ Read ordinary GitHub readiness before changing the branch:
 gh pr view <pr-number> --json state,isDraft,reviewDecision,mergeable,mergeStateStatus
 ```
 
-Evaluate the response in this safety order:
-
-1. If `state` is not `OPEN`, report blocked and stop.
-2. If `isDraft` is `true`, report blocked and stop.
-3. If `reviewDecision` is `CHANGES_REQUESTED`, report blocked and stop.
-4. If `reviewDecision` is `REVIEW_REQUIRED`, report blocked and stop. Empty or null `reviewDecision` is not blocking by itself.
-5. Read required checks with `gh pr checks <pr-number> --required --json name,state,bucket,link`, capturing stdout, stderr, and exit status separately. When stdout is valid check JSON, classify every returned bucket regardless of exit status: treat `pass` and `skipping` as settled and nonfailing, record `pending` for Step 9 to wait on, and record `fail` or `cancel` for Step 9 to diagnose and repair. If any unrecognized bucket is returned, report incomplete and stop. When stdout is not valid check JSON, a nonzero exit is acceptable only when stderr is the exact no-required-check diagnostic `no required checks reported on the '<branch>' branch`; treat every other command or parse failure as an execution failure, report incomplete, and stop.
-6. Classify `mergeStateStatus` exhaustively for initial readiness: `CLEAN` and `HAS_HOOKS` may continue; `BEHIND` continues only to the branch-freshness step; `UNSTABLE` may continue only because Step 9 must repair or resolve CI; `BLOCKED` may continue only when readiness item 5 found a `pending`, `fail`, or `cancel` required check that Step 9 can remediate, and is otherwise blocked; `DRAFT` is blocked; `DIRTY` is a confirmed conflict and blocked; `UNKNOWN` is indeterminate.
-7. If `mergeable` is `CONFLICTING`, report blocked and stop. If it is `MERGEABLE`, continue subject to the state classification above.
-8. If `mergeable` is `UNKNOWN`, `mergeStateStatus` is `UNKNOWN`, or either field has an unrecognized value, wait briefly and perform one bounded reread with the same `gh pr view` command. Continue only if the reread maps to a determinate outcome; if it is still indeterminate, report incomplete and stop.
+Require the PR to be open, non-draft, and free of requested changes or required review. Confirm there are no merge conflicts, and read required checks with `gh pr checks <pr-number> --required`. A behind branch continues to Step 5, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness.
 
@@ -238,24 +229,13 @@ If the user provided a skip directive for CI (e.g., "skip CI", "no CI check"), s
 gh pr checks <pr-number> --json name,state,bucket,link
 ```
 
-Apply this exhaustive evaluation after every check read in Steps 9a-9d, including bounded polling reads and the post-fix verification read. Evaluate these cases in order so an empty array never satisfies the green predicate:
-
-- **No checks reported** (the valid JSON array has zero elements): CI may not have triggered yet. Wait up to 60 seconds for checks to appear, polling `gh pr checks` with a short delay. Apply this same evaluation if checks appear. During the initial Step 9a read, if none appear by the deadline, note this for the report and proceed to Step 10. During Step 9d after a pushed CI fix, an empty array cannot verify the new revision: report the absence, report blocked, and stop.
-- **Settled and nonfailing** (the array is non-empty and `bucket` is `pass` or `skipping` for every check): CI is green. Proceed to the next phase.
-- **Still running** (any `bucket` is `pending`): poll the same JSON command every 15 seconds for at most 10 minutes, applying this evaluation after every read. Do not use an unbounded `--watch`. If the deadline expires, report the pending check names and links, report blocked, and stop.
-- **Unsuccessful** (any `bucket` is `fail` or `cancel`): proceed to Step 9b before a fix attempt; after the single fix attempt, escalate to the user.
-- **Command result handling**: capture stdout, stderr, and exit status separately. Valid check JSON is classified by bucket regardless of exit status because `gh pr checks` may return nonzero for pending or unsuccessful checks. If stdout is not valid check JSON, or any bucket is unrecognized, report the full output, report incomplete, and stop; do not interpret an operational or parse failure as an empty result.
+If checks are pending, poll for at most 10 minutes. If the timeout expires, report which checks remain pending and stop. If no checks appear after a short wait, note that in the report. Proceed when checks pass; diagnose failures before attempting a fix.
 
 ### 9b. Diagnose failures
 
-Wait for all checks to finish before diagnosing — partial results lead to incomplete fixes and unnecessary push cycles. Poll the JSON command every 15 seconds for at most 10 minutes and apply Step 9a's exhaustive evaluation after every read. If the deadline expires, report the remaining pending check names and links, report blocked, and stop.
+Wait for running checks to settle within the same 10-minute bound, then inspect the available logs or provider links for each failure.
 
-For each unsuccessful check, inspect its `link` before choosing the diagnostic path:
-
-- For a link on the repository's GitHub host whose path matches `/actions/runs/<numeric-run-id>` (with optional trailing path segments), extract that run ID and run `gh run view <run-id> --log-failed`.
-- For every other link, do not invoke `gh run view` or invent a run ID. Surface the check name, state, and provider link, and tell the user to inspect the external provider's logs. If those logs are unavailable through the current tools, report blocked and stop rather than pretending the failure was diagnosed.
-
-From the available logs, identify the root cause of each failure:
+Identify the root cause of each failure:
 
 - **Lint/format errors**: identify the linter and the failing files.
 - **Type errors**: identify the type-checker and the failing files.
@@ -280,11 +260,11 @@ Delegate to push the fixes:
 /mach12:push CI fix: <brief description of what was fixed> for PR #<pr-number>
 ```
 
-Proceed only when the delegation confirms that the commit was pushed successfully. If the push failed or its completion is indeterminate, report the result, report the command incomplete, and stop before watching, rereading CI, or final readiness.
+Proceed only when the delegation confirms that the commit was pushed successfully. Otherwise report the result and stop before CI verification.
 
 ### 9d. Verify
 
-Wait for CI to run on the pushed fixes by polling `gh pr checks <pr-number> --json name,state,bucket,link` every 15 seconds for at most 10 minutes. Apply the exhaustive evaluation from Step 9a after every read; if the deadline expires, report the pending check names and links, report blocked, and stop. Proceed to Step 10 only when every bucket is `pass` or `skipping`. Escalate a `fail` or `cancel` result with:
+Wait up to 10 minutes for CI on the pushed fix. Proceed to Step 10 only when CI passes. If it does not, escalate with:
 - Which checks are still unsuccessful and their log output.
 - What was attempted and why it did not resolve the issue.
 - A recommendation for next steps.
@@ -293,7 +273,7 @@ Do not attempt a second fix cycle — a persistent failure after one fix always 
 
 ## Step 10: Final readiness and pre-merge report
 
-After all checklist changes are pushed and CI settles, perform a final authoritative readiness reread using the Step 2 commands. Final readiness is stricter than the initial pass: valid check JSON is classified regardless of exit status; required-check buckets `pass` and `skipping` are ready; `pending`, `fail`, or `cancel` are blocked; and every unrecognized bucket or parse failure is incomplete. `CLEAN` and `HAS_HOOKS` are ready; `BEHIND`, `UNSTABLE`, `BLOCKED`, `DRAFT`, and `DIRTY` are blocked. Apply the same exact no-required-check diagnostic and fail closed on every other command error. `UNKNOWN`, an unrecognized value, or `mergeable: UNKNOWN` gets one bounded reread; if it remains indeterminate, report incomplete.
+After all checklist changes are pushed and CI settles, repeat the Step 2 readiness check. Complete only when the PR is open, non-draft, free of blocking review decisions, current with the default branch, conflict-free, and passing its required checks. If mergeability remains unknown after one brief reread, report incomplete.
 
 Present a summary of what was done:
 - [ ] Branch freshness: [current with <default-branch> / merged N commits from <default-branch> / auto-resolved conflicts in: <files>]

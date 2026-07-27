@@ -89,16 +89,7 @@ Immediately before creation, validate the final approved body once more. If it n
 
 ## Step 4: Push and create
 
-After approval, synchronize the exact approved local revision to the remote branch. Resolve local `HEAD`, then run `git ls-remote --heads origin <branch-name>` while capturing stdout, stderr, and exit status separately:
-
-```text
-LOCAL_HEAD=$(git rev-parse HEAD)
-git ls-remote --heads origin <branch-name>
-```
-
-If either command fails, report its full error and stop; an empty successful `ls-remote` result alone means the branch is absent. Parse the single returned branch SHA when present. If the branch is absent or its SHA differs from `LOCAL_HEAD`, use only a normal push: `git push -u origin <branch-name>`. If the push fails, report the full error and stop; never force-push or overwrite divergence.
-
-After any required push, run `git ls-remote --heads origin <branch-name>` again with stdout, stderr, and status captured separately. Stop on lookup failure, an absent or malformed result, or a remote SHA that does not exactly equal `LOCAL_HEAD`; report both SHAs when they differ. Create the PR only after this verification proves that the remote branch contains the exact approved local `HEAD`.
+After approval, push the current branch with `git push -u origin <branch-name>`. If the push fails, report the error and stop; never force-push.
 
 Create the PR using a HEREDOC so the complete approved body is preserved exactly:
 

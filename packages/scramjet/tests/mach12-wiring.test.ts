@@ -263,15 +263,10 @@ describe("mach12 standard PR linkage", () => {
 		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
 	});
 
-	it("re-resolves changed linkage and verifies the exact remote revision", () => {
+	it("re-resolves changed linkage and pushes without force", () => {
 		expect(prCreate).toContain("closing reference was added or changed");
 		expect(prCreate).toContain("repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract");
-		expect(prCreate).toContain("capturing stdout, stderr, and exit status separately");
-		expect(prCreate).toContain("an empty successful `ls-remote` result alone means the branch is absent");
-		expect(prCreate).toContain("remote SHA that does not exactly equal `LOCAL_HEAD`");
-		expect(prCreate.indexOf("remote branch contains the exact approved local `HEAD`")).toBeLessThan(
-			prCreate.indexOf("gh pr create"),
-		);
+		expect(prCreate).toContain("git push -u origin <branch-name>");
 		expect(prCreate).not.toMatch(/git push (?:--force|-f)\b/);
 	});
 });
@@ -285,71 +280,36 @@ describe("mach12 ordinary PR readiness", () => {
 	it.each([
 		["pr-pre-merge", preMerge],
 		["pr-merge", merge],
-	])("%s checks ordinary readiness in safety order", (name, content) => {
+	])("%s states ordinary readiness before mutation", (name, content) => {
 		const readiness = readinessSection(content);
-		const predicates = [
-			"`state` is not `OPEN`",
-			"`isDraft` is `true`",
-			"`CHANGES_REQUESTED`",
-			"`REVIEW_REQUIRED`",
-			"gh pr checks <pr-number> --required --json name,state,bucket,link",
-			"Classify `mergeStateStatus` exhaustively",
-			"`mergeable` is `CONFLICTING`",
-			"one bounded reread",
-		];
-		for (let index = 0; index < predicates.length; index++) {
-			expect(readiness.indexOf(predicates[index]), `${name}: ${predicates[index]}`).toBeGreaterThan(
-				index === 0 ? -1 : readiness.indexOf(predicates[index - 1]),
-			);
+		for (const predicate of ["open", "non-draft", "required review", "conflict", "checks"]) {
+			expect(readiness, `${name}: ${predicate}`).toContain(predicate);
 		}
-		expect(readiness).toContain("Empty or null `reviewDecision` is not blocking by itself");
+		expect(readiness).toContain("one brief reread");
 		expect(content.indexOf(name === "pr-merge" ? "gh pr merge" : "gh pr checkout <pr-number>")).toBeGreaterThan(
 			content.indexOf("## Step 3:"),
 		);
 	});
 
-	it.each([
-		["pr-pre-merge", preMerge],
-		["pr-merge", merge],
-	])("%s defines exhaustive check buckets and merge states", (_name, content) => {
-		const readiness = readinessSection(content);
-		for (const state of ["`CLEAN`", "`HAS_HOOKS`", "`UNSTABLE`", "`BLOCKED`", "`BEHIND`", "`DIRTY`", "`UNKNOWN`"]) {
-			expect(readiness).toContain(state);
-		}
-		expect(readiness).toContain("capturing stdout, stderr, and exit status separately");
-		expect(readiness).toContain("valid check JSON");
-		expect(readiness).toContain("regardless of exit status");
-		expect(readiness).toContain("no required checks reported on the '<branch>' branch");
-		expect(readiness).toContain("command or parse failure");
-		expect(readiness).toContain("unrecognized bucket");
-	});
-
-	it("pre-merge routes remediable initial outcomes to later steps", () => {
+	it("pre-merge routes remediable outcomes to later steps", () => {
 		const readiness = readinessSection(preMerge);
-		expect(readiness).toContain("`pass` and `skipping` as settled and nonfailing");
-		expect(readiness).toContain("record `pending` for Step 9 to wait on");
-		expect(readiness).toContain("record `fail` or `cancel` for Step 9 to diagnose and repair");
-		expect(readiness).toContain("`UNSTABLE` may continue only because Step 9 must repair or resolve CI");
-		expect(readiness).toContain(
-			"`BLOCKED` may continue only when readiness item 5 found a `pending`, `fail`, or `cancel`",
-		);
+		expect(readiness).toContain("A behind branch continues to Step 5");
+		expect(readiness).toContain("pending or failing checks continue to Step 9");
 	});
 
-	it("merge fails closed on unsettled checks and non-ready states", () => {
+	it("merge requires ordinary GitHub readiness", () => {
 		const readiness = readinessSection(merge);
-		expect(readiness).toContain("`pass` and `skipping` are settled and nonfailing");
-		expect(readiness).toContain("any `pending`, `fail`, or `cancel` bucket is blocked");
-		expect(readiness).toContain("`CLEAN` and `HAS_HOOKS` are ready");
-		expect(readiness).toContain("`UNSTABLE`, `BLOCKED`, and `DRAFT` are blocked");
-		expect(readiness).toContain("`DIRTY` is a confirmed conflict and blocked");
+		expect(readiness).toContain("current with the default branch");
+		expect(readiness).toContain("passing its required checks");
+		expect(readiness).toContain("repositories without required checks may continue");
 	});
 
 	it.each([
 		["pr-pre-merge", preMerge],
 		["pr-merge", merge],
 	])("%s bounds indeterminate readiness and offers no bypass", (_name, content) => {
-		expect(readinessSection(content)).toContain("one bounded reread");
-		expect(content).toContain("still indeterminate");
+		expect(readinessSection(content)).toContain("one brief reread");
+		expect(readinessSection(content)).toContain("report incomplete rather than guessing");
 		expect(content).not.toMatch(/--force|--admin/);
 	});
 
@@ -375,24 +335,18 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(finalSection).toContain("final authoritative readiness reread");
 	});
 
-	it("pre-merge gates post-fix verification on a confirmed push and reuses exhaustive evaluation", () => {
+	it("pre-merge gates post-fix verification on a confirmed push", () => {
 		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
 		const pushGate = ciSection.indexOf("delegation confirms that the commit was pushed successfully");
 		const verify = ciSection.indexOf("### 9d. Verify");
 		expect(pushGate).toBeGreaterThan(-1);
 		expect(pushGate).toBeLessThan(verify);
-		expect(ciSection).toContain("stop before watching, rereading CI, or final readiness");
-		expect(ciSection).toContain("after every check read in Steps 9a-9d");
-		expect(ciSection).toContain("including bounded polling reads and the post-fix verification read");
-		expect(ciSection).toContain("Valid check JSON is classified by bucket regardless of exit status");
-		expect(ciSection).toContain("If stdout is not valid check JSON, or any bucket is unrecognized");
-		expect(ciSection).toContain("Proceed to Step 10 only when every bucket is `pass` or `skipping`");
+		expect(ciSection).toContain("Otherwise report the result and stop before CI verification");
+		expect(ciSection).toContain("Wait up to 10 minutes for CI on the pushed fix");
 	});
 
 	it("pre-merge uses current checklist references", () => {
-		expect(preMerge).toContain("readiness item 5 found");
 		expect(preMerge).toContain("Steps 7a-7d");
-		expect(preMerge).not.toContain("Step 5 found");
 		expect(preMerge).not.toContain("Steps 6a-6d");
 	});
 
@@ -401,40 +355,23 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(readinessSection(merge)).not.toContain("statusCheckRollup");
 	});
 
-	it("pre-merge distinguishes empty checks, bounds waits, and hands off external providers", () => {
+	it("pre-merge bounds CI waits", () => {
 		const ciSection = preMerge.slice(preMerge.indexOf("## Step 9:"), preMerge.indexOf("## Step 10:"));
-		const empty = ciSection.indexOf("valid JSON array has zero elements");
-		const green = ciSection.indexOf("array is non-empty");
-		expect(empty).toBeGreaterThan(-1);
-		expect(empty).toBeLessThan(green);
-		expect(ciSection).toContain("poll the same JSON command every 15 seconds for at most 10 minutes");
-		expect(ciSection).toContain("report the pending check names and links");
-		expect(ciSection).toContain("During the initial Step 9a read");
-		expect(ciSection).toContain("During Step 9d after a pushed CI fix");
-		expect(ciSection).toContain("an empty array cannot verify the new revision");
+		expect(ciSection).toContain("poll for at most 10 minutes");
+		expect(ciSection).toContain("report which checks remain pending");
+		expect(ciSection).toContain("available logs or provider links");
 		expect(ciSection).not.toMatch(/gh pr checks[^\n]*--watch/);
-		expect(ciSection).toContain("/actions/runs/<numeric-run-id>");
-		expect(ciSection).toContain("For every other link, do not invoke `gh run view`");
-		expect(ciSection).toContain("check name, state, and provider link");
 	});
 
-	it("merge confirms GitHub state and gates cleanup and release claims", () => {
+	it("merge confirms GitHub state before cleanup or release", () => {
 		const mergeSection = merge.slice(merge.indexOf("## Step 3:"), merge.indexOf("## Step 4:"));
-		expect(mergeSection).toContain("gh pr view <pr-number> --json state,mergeCommit");
-		expect(mergeSection.indexOf("Require the pre-merge `headRefName` lookup")).toBeLessThan(
-			mergeSection.indexOf("gh pr merge <pr-number> --delete-branch"),
-		);
-		expect(mergeSection.indexOf("state: MERGED")).toBeLessThan(mergeSection.indexOf("git checkout"));
-		expect(mergeSection).toContain("PR is already merged but local cleanup is incomplete");
-		expect(mergeSection).toContain("git ls-remote --heads origin <recorded-branch-name>");
-		expect(mergeSection).toContain("A successful empty result confirms deletion");
-		expect(mergeSection.indexOf("remote cleanup are both verified")).toBeLessThan(merge.indexOf("## Step 4:"));
-		expect(mergeSection).toContain('report `status: "incomplete"`');
-
-		const releaseSection = merge.slice(merge.indexOf("## Step 5:"), merge.indexOf("## Step 6:"));
-		expect(releaseSection).toContain("gh release view <tag> --json url,tagName");
-		expect(releaseSection).toContain("PR merge and cleanup succeeded but release creation did not");
-		expect(releaseSection).toContain("Claim release creation");
+		const mergeCommand = mergeSection.indexOf("gh pr merge <pr-number> --delete-branch");
+		const confirmation = mergeSection.indexOf("gh pr view <pr-number> --json state,mergeCommit");
+		const cleanup = mergeSection.indexOf("git checkout");
+		expect(mergeCommand).toBeGreaterThan(-1);
+		expect(confirmation).toBeGreaterThan(mergeCommand);
+		expect(cleanup).toBeGreaterThan(confirmation);
+		expect(mergeSection).toContain("Before cleanup or release work");
 	});
 
 	it("pre-merge defines terminal status predicates and requires final readiness", () => {
