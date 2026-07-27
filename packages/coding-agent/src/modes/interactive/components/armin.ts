@@ -68,6 +68,7 @@ export class ArminComponent implements Component {
 	private cachedWidth = 0;
 	private gridVersion = 0;
 	private cachedVersion = -1;
+	private completed = false;
 
 	constructor(
 		ui: TUI,
@@ -184,12 +185,9 @@ export class ArminComponent implements Component {
 		const fps = this.effect === "glitch" ? 60 : 30;
 		this.interval = setInterval(() => {
 			const done = this.tickEffect();
-			this.updateDisplay();
+			this.gridVersion++;
 			this.ui.requestRender();
-			if (done) {
-				this.stopAnimation();
-				this.onComplete();
-			}
+			if (done) this.complete();
 		}, 1000 / fps);
 	}
 
@@ -376,11 +374,14 @@ export class ArminComponent implements Component {
 		return false;
 	}
 
-	private updateDisplay(): void {
-		this.gridVersion++;
+	private complete(): void {
+		if (this.completed) return;
+		this.completed = true;
+		this.stopAnimation();
+		this.onComplete();
 	}
 
 	dispose(): void {
-		this.stopAnimation();
+		this.complete();
 	}
 }

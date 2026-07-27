@@ -35,6 +35,29 @@ describe("TUI committed history", () => {
 		vi.useRealTimers();
 	});
 
+	it("renders and exits through the legacy differential path", async () => {
+		const terminal = new HeadlessTerminal(30, 6);
+		const tui = new TUI(terminal);
+		const first = new MutableComponent(["first"]);
+		const middle = new MutableComponent(["middle"]);
+		const last = new MutableComponent(["last"]);
+		tui.addChild(first);
+		tui.addChild(middle);
+		tui.addChild(last);
+		tui.start();
+		await render(tui, terminal);
+		const mark = terminal.markWrites();
+
+		middle.lines = ["changed"];
+		tui.requestRender();
+		await render(tui, terminal);
+
+		expect(terminal.writesSince(mark)).not.toContain("\x1b[2J");
+		const stopMark = terminal.markWrites();
+		tui.stop();
+		expect(terminal.writesSince(stopMark)).toContain("\x1b[2B\r\n");
+	});
+
 	it("bounds mutable output to the live canvas", async () => {
 		const terminal = new HeadlessTerminal(30, 5);
 		const tui = new TUI(terminal);
@@ -247,6 +270,41 @@ describe("TUI committed history", () => {
 		expect(terminal.writesSince(mark)).toContain("RESIZE-HISTORY");
 	});
 
+	it("commits new history after a width-resize rebuild", async () => {
+		const terminal = new HeadlessTerminal(30, 5);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["history"]);
+		const live = new MutableComponent(["editor"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		terminal.resize(24, 5);
+		await render(tui, terminal);
+		history.lines.push("after-resize");
+		tui.commit();
+		await expect(render(tui, terminal)).resolves.toBeUndefined();
+		expect(terminal.bufferLines().join("\n")).toContain("after-resize");
+	});
+
+	it("rejects changing a live boundary after history is committed", async () => {
+		const terminal = new HeadlessTerminal(30, 5);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["history"]);
+		const live = new MutableComponent(["editor"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		expect(() => tui.setLiveRegionStart(history)).toThrow(
+			"Cannot change live region start after history has been committed",
+		);
+	});
+
 	it("shows and dismisses overlays without replaying history", async () => {
 		const terminal = new HeadlessTerminal(30, 6);
 		const tui = new TUI(terminal);
@@ -439,6 +497,13 @@ describe("TUI committed history", () => {
 			expect(output).toContain("\x1b_Ga=d,d=I,i=61,q=2\x1b\\");
 			expect(output).toContain("\x1b_Ga=d,d=I,i=62,q=2\x1b\\");
 			expect(terminal.bufferLines().join("\n").includes("HISTORY")).toBe(retainsHistory);
+
+			const replacement = new MutableComponent(["replacement"]);
+			tui.addChild(replacement);
+			tui.setLiveRegionStart(replacement);
+			tui.requestRender();
+			await expect(render(tui, terminal)).resolves.toBeUndefined();
+			expect(terminal.visibleLines().join("\n")).toContain("replacement");
 		},
 	);
 

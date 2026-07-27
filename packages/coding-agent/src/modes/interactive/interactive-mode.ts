@@ -364,7 +364,7 @@ export class InteractiveMode {
 			await this.rebindCurrentSession();
 		});
 		this.version = VERSION;
-		// SCRAMJET-DIVERGENCE: shrink recovery is mandatory committed/live renderer behavior (#389).
+		// SCRAMJET-DIVERGENCE: mandatory committed/live rendering and injectable terminals (#389).
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.headerContainer = new Container();
 		this.committedChatContainer = new Container();
@@ -2941,20 +2941,15 @@ export class InteractiveMode {
 					component.updateResult({ ...event.result, isError: event.isError });
 					const pendingToolFinalizations = this.pendingToolFinalizations;
 					const finalization = component.waitForImageConversions().then(() => {
-						if (this.pendingTools.get(event.toolCallId) !== component) {
-							component.seal();
-							if (this.mutableChatComponents.has(component) && this.chatContainer.children.includes(component)) {
-								this.setChatComponentMutable(component, false);
-								this.promoteFinalizedChatPrefix();
-								this.ui.requestRender();
-							}
-							return;
-						}
 						component.seal();
-						this.pendingTools.delete(event.toolCallId);
-						this.setChatComponentMutable(component, false);
-						this.promoteFinalizedChatPrefix();
-						this.ui.requestRender();
+						if (this.pendingTools.get(event.toolCallId) === component) {
+							this.pendingTools.delete(event.toolCallId);
+						}
+						if (this.mutableChatComponents.has(component) && this.chatContainer.children.includes(component)) {
+							this.setChatComponentMutable(component, false);
+							this.promoteFinalizedChatPrefix();
+							this.ui.requestRender();
+						}
 					});
 					pendingToolFinalizations.add(finalization);
 					try {
@@ -5465,6 +5460,7 @@ export class InteractiveMode {
 
 	private handleArminSaysHi(): void {
 		const component = new ArminComponent(this.ui, () => {
+			if (!this.mutableChatComponents.has(component) || !this.chatContainer.children.includes(component)) return;
 			this.setChatComponentMutable(component, false);
 			this.promoteFinalizedChatPrefix();
 			this.ui.requestRender();
@@ -5483,6 +5479,7 @@ export class InteractiveMode {
 
 	private handleDaxnuts(): void {
 		const component = new DaxnutsComponent(this.ui, () => {
+			if (!this.mutableChatComponents.has(component) || !this.chatContainer.children.includes(component)) return;
 			this.setChatComponentMutable(component, false);
 			this.promoteFinalizedChatPrefix();
 			this.ui.requestRender();

@@ -27,7 +27,9 @@ vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 }));
 
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
+import { ArminComponent } from "../src/modes/interactive/components/armin.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
+import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
 
@@ -338,6 +340,40 @@ describe("interactive assistant history", () => {
 		expect(committedChatContainer.children).toHaveLength(2);
 	});
 
+	it.each([
+		["Armin", ArminComponent],
+		["Daxnuts", DaxnutsComponent],
+	])("settles %s completion exactly once when disposed", (_name, ComponentClass) => {
+		const terminal = new HeadlessTerminal(30, 5);
+		const ui = new TUI(terminal);
+		const onComplete = vi.fn();
+		const component = new ComponentClass(ui, onComplete);
+
+		component.dispose();
+		component.dispose();
+
+		expect(onComplete).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		["Armin", "handleArminSaysHi"],
+		["Daxnuts", "handleDaxnuts"],
+	])("ignores stale %s completion after removal", async (name, handler) => {
+		const random = name === "Armin" ? vi.spyOn(Math, "random").mockReturnValue(0) : undefined;
+		const { terminal, mode, chatContainer } = createInteractiveHarness();
+		const promote = vi.spyOn(mode as never, "promoteFinalizedChatPrefix");
+		(mode[handler] as () => void).call(mode);
+		random?.mockRestore();
+		const component = chatContainer.children[0];
+		chatContainer.removeChild(component);
+		(mode.mutableChatComponents as Set<Component>).delete(component);
+		promote.mockClear();
+
+		await render(terminal);
+
+		expect(promote).not.toHaveBeenCalled();
+	});
+
 	it("seals in-chat status rows into committed history", async () => {
 		const { terminal, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
 
@@ -432,6 +468,21 @@ describe("interactive assistant history", () => {
 		} else {
 			expect(committedOutput).toContain("image/jpeg");
 		}
+	});
+
+	it("renders fallback text for duplicate images when Kitty conversion rejects", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		imageConversion.convertToPng.mockRejectedValueOnce(new Error("conversion failed"));
+		const { emit, committedChatContainer } = createInteractiveHarness();
+		const image = { type: "image", data: "duplicate-jpeg", mimeType: "image/jpeg" } as const;
+		const result = { content: [image, image] };
+
+		await emit({ type: "tool_execution_start", toolCallId: "image-tool", toolName: "unknown", args: {} });
+		await emit({ type: "tool_execution_end", toolCallId: "image-tool", result, isError: false });
+
+		expect(imageConversion.convertToPng).toHaveBeenCalledTimes(1);
+		const output = committedChatContainer.render(80).join("\n");
+		expect(output.match(/image\/jpeg/g)).toHaveLength(2);
 	});
 
 	it("rebuilds committed tool images when presentation settings change", async () => {
@@ -598,6 +649,30 @@ describe("interactive assistant history", () => {
 		expect(chatContainer.children).toHaveLength(0);
 		expect(committedChatContainer.children).toHaveLength(2);
 		expect(terminal.writes.join("")).toContain("restored-png");
+	});
+
+	it("keeps an unfinished reconstructed tool mutable until its result arrives", async () => {
+		const { mode, emit, committedChatContainer, chatContainer } = createInteractiveHarness();
+		const call = assistant("");
+		call.content = [{ type: "toolCall", id: "unfinished", name: "unknown", arguments: {} }];
+
+		(mode.renderSessionContext as (context: unknown) => void).call(mode, { messages: [call] });
+		const component = chatContainer.children[0];
+		expect((mode.pendingTools as Map<string, Component>).has("unfinished")).toBe(true);
+		expect(mode.mutableChatComponents as Set<Component>).toContain(component);
+
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "unfinished",
+			result: { content: [{ type: "text", text: "resumed-result" }] },
+			isError: false,
+		});
+
+		expect((mode.pendingTools as Map<string, Component>).has("unfinished")).toBe(false);
+		expect(mode.mutableChatComponents as Set<Component>).not.toContain(component);
+		expect(chatContainer.children).not.toContain(component);
+		expect(committedChatContainer.children.filter((child) => child === component)).toHaveLength(1);
+		expect(committedChatContainer.render(80).join("\n")).toContain("resumed-result");
 	});
 
 	it("does not let an older agent end clear tools from a newer run", async () => {

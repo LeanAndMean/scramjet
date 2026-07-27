@@ -63,6 +63,7 @@ export class DaxnutsComponent implements Component {
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
 	private cachedTick = -1;
+	private completed = false;
 
 	constructor(
 		ui: TUI,
@@ -80,11 +81,7 @@ export class DaxnutsComponent implements Component {
 	private startAnimation(): void {
 		this.interval = setInterval(() => {
 			this.tick++;
-			if (this.tick >= this.maxTicks) {
-				this.stopAnimation();
-				this.onComplete();
-			}
-			this.cachedWidth = 0;
+			if (this.tick >= this.maxTicks) this.complete();
 			this.ui.requestRender();
 		}, 80);
 	}
@@ -162,7 +159,14 @@ export class DaxnutsComponent implements Component {
 		return lines;
 	}
 
-	dispose(): void {
+	private complete(): void {
+		if (this.completed) return;
+		this.completed = true;
 		this.stopAnimation();
+		this.onComplete();
+	}
+
+	dispose(): void {
+		this.complete();
 	}
 }

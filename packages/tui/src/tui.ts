@@ -300,6 +300,9 @@ export class TUI extends Container {
 		if (!this.children.includes(component)) {
 			throw new Error("Live region start must be a direct TUI child");
 		}
+		if (this.liveRegionStart !== component && this.committedLines.length > 0) {
+			throw new Error("Cannot change live region start after history has been committed");
+		}
 		this.liveRegionStart = component;
 	}
 
@@ -1109,7 +1112,7 @@ export class TUI extends Container {
 		let suffix: string[] = [];
 		if (this.commitRequested) {
 			const unchangedPrefix = this.committedLines.every((line, index) => sourceCommitted[index] === line);
-			if (!unchangedPrefix || sourceCommitted.length < this.committedLines.length) {
+			if (!unchangedPrefix) {
 				this.commitRequested = false;
 				throw new Error("Committed history changed; use rebuild() for a deliberate rebuild");
 			}
@@ -1153,6 +1156,11 @@ export class TUI extends Container {
 	}
 
 	private resetDetachedLiveRegion(): void {
+		if (process.env.PI_DEBUG_REDRAW === "1") {
+			const logPath = path.join(os.homedir(), ".scramjet", "agent", "scramjet-debug.log");
+			const childName = this.liveRegionStart?.constructor.name ?? "unknown";
+			fs.appendFileSync(logPath, `[${new Date().toISOString()}] resetDetachedLiveRegion: detached ${childName}\n`);
+		}
 		this.previousKittyImageIds = new Set([
 			...this.previousKittyImageIds,
 			...this.committedKittyImageIds,
