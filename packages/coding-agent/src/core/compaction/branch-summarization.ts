@@ -288,7 +288,7 @@ export async function generateBranchSummary(
 
 	// SCRAMJET-DIVERGENCE: branch summaries fit content to the operational budget, not advertised capacity.
 	const contextWindowBudget = getContextWindowBudget(model) || 128000;
-	const tokenBudget = contextWindowBudget - reserveTokens;
+	const tokenBudget = Math.max(1, contextWindowBudget - reserveTokens);
 
 	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 

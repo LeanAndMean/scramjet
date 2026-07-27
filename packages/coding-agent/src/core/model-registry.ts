@@ -492,6 +492,7 @@ export class ModelRegistry {
 			const cred = this.authStorage.get(oauthProvider.id);
 			if (cred?.type === "oauth" && oauthProvider.modifyModels) {
 				combined = oauthProvider.modifyModels(combined, cred);
+				this.validateResolvedBudgets(combined);
 			}
 		}
 
@@ -971,6 +972,9 @@ export class ModelRegistry {
 
 	private validateResolvedBudgets(models: Model<Api>[]): void {
 		for (const model of models) {
+			if (model.contextWindowBudget !== undefined && !isPositiveInteger(model.contextWindowBudget)) {
+				throw new Error(`${model.provider}/${model.id}: invalid contextWindowBudget`);
+			}
 			const budget = model.contextWindowBudget ?? model.contextWindow;
 			if (budget > model.contextWindow) {
 				throw new Error(
@@ -1037,15 +1041,11 @@ export class ModelRegistry {
 		this.storeProviderRequestConfig(providerName, config);
 
 		if (config.models && config.models.length > 0) {
-			// Full replacement: remove existing models for this provider
-			this.models = this.models.filter((m) => m.provider !== providerName);
-
-			// Parse and add new models
-			for (const modelDef of config.models) {
+			const providerModels = config.models.map((modelDef) => {
 				const api = modelDef.api || config.api;
 				this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
 
-				this.models.push({
+				return {
 					id: modelDef.id,
 					name: modelDef.name,
 					api: api as Api,
@@ -1060,16 +1060,18 @@ export class ModelRegistry {
 					maxTokens: modelDef.maxTokens,
 					headers: undefined,
 					compat: modelDef.compat,
-				} as Model<Api>);
-			}
+				} as Model<Api>;
+			});
+			let candidateModels = [...this.models.filter((m) => m.provider !== providerName), ...providerModels];
 
-			// Apply OAuth modifyModels if credentials exist (e.g., to update baseUrl)
 			if (config.oauth?.modifyModels) {
 				const cred = this.authStorage.get(providerName);
 				if (cred?.type === "oauth") {
-					this.models = config.oauth.modifyModels(this.models, cred);
+					candidateModels = config.oauth.modifyModels(candidateModels, cred);
+					this.validateResolvedBudgets(candidateModels);
 				}
 			}
+			this.models = candidateModels;
 		} else if (config.baseUrl || config.headers) {
 			// Override-only: update baseUrl for existing models. Request headers are resolved per request.
 			this.models = this.models.map((m) => {

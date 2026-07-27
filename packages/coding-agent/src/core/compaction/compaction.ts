@@ -217,7 +217,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
  * Check if compaction should trigger based on context usage.
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	if (!settings.enabled) return false;
+	if (!settings.enabled || contextWindow <= settings.reserveTokens) return false;
 	return contextTokens > contextWindow - settings.reserveTokens;
 }
 

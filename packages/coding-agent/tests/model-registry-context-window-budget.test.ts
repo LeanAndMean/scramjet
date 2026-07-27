@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Model, OAuthCredentials } from "@leanandmean/ai";
+import { type OAuthProviderInterface, registerOAuthProvider, unregisterOAuthProvider } from "@leanandmean/ai/oauth";
 import { afterEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.js";
@@ -52,7 +54,19 @@ function dynamicConfig(
 
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	unregisterOAuthProvider("budget-test-oauth");
 });
+
+function oauthProvider(modifyModels: (models: Model<any>[]) => Model<any>[]): OAuthProviderInterface {
+	return {
+		id: "budget-test-oauth",
+		name: "Budget test OAuth",
+		login: async () => ({ access: "test", refresh: "test", expires: Date.now() + 60_000 }),
+		refreshToken: async (credentials: OAuthCredentials) => credentials,
+		getApiKey: () => "test",
+		modifyModels,
+	};
+}
 
 describe("models.json context window budgets", () => {
 	it("copies independent custom-model and override budgets", () => {
@@ -137,6 +151,42 @@ describe("models.json context window budgets", () => {
 			providers: { "openai-codex": { modelOverrides: { "gpt-5.6-sol": { contextWindow: 271999 } } } },
 		});
 		expect(loweredCapacity.getError()).toContain("openai-codex/gpt-5.6-sol");
+	});
+});
+
+describe("OAuth-transformed context window budgets", () => {
+	it("rejects an invalid budget introduced while loading models", () => {
+		const authStorage = AuthStorage.inMemory();
+		authStorage.set("budget-test-oauth", {
+			type: "oauth",
+			access: "test",
+			refresh: "test",
+			expires: Date.now() + 60_000,
+		});
+		registerOAuthProvider(
+			oauthProvider((models) => [{ ...models[0], contextWindowBudget: Number.NaN }, ...models.slice(1)]),
+		);
+
+		expect(() => ModelRegistry.inMemory(authStorage)).toThrow(/invalid contextWindowBudget/);
+	});
+
+	it("rejects an invalid budget introduced by a dynamic provider transform", () => {
+		const authStorage = AuthStorage.inMemory();
+		authStorage.set("dynamic", {
+			type: "oauth",
+			access: "test",
+			refresh: "test",
+			expires: Date.now() + 60_000,
+		});
+		const registry = ModelRegistry.inMemory(authStorage);
+		const config = dynamicConfig();
+		config.oauth = {
+			...oauthProvider((models) => models.map((model) => ({ ...model, contextWindowBudget: 1001 }))),
+			id: "dynamic",
+		};
+
+		expect(() => registry.registerProvider("dynamic", config)).toThrow(/budget 1001.*capacity 1000/);
+		expect(registry.find("dynamic", "test-model")).toBeUndefined();
 	});
 });
 

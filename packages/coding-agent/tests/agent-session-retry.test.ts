@@ -5,7 +5,7 @@ import { Agent } from "@leanandmean/agent";
 import type { AssistantMessage, Model } from "@leanandmean/ai";
 import { createAssistantMessageEventStream } from "@leanandmean/ai";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../src/core/agent-session.js";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
@@ -198,6 +198,39 @@ describe("AgentSession context window budget", () => {
 		await session.prompt("hello");
 
 		expect(events).not.toContainEqual(expect.objectContaining({ type: "compaction_start" }));
+	});
+
+	it("proactively compacts above the operational-budget threshold", async () => {
+		const model = { ...testModel, contextWindowBudget: 272_000 };
+		const { session, events } = await createFixture(
+			() => ({
+				...assistantText("ok"),
+				usage: { input: 260_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+			}),
+			{ model },
+		);
+
+		await session.prompt("hello");
+
+		expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "threshold" }));
+	});
+
+	it("compacts provider overflow errors instead of auto-retrying them", async () => {
+		const model = { ...testModel, contextWindowBudget: 272_000 };
+		const { session, events } = await createFixture(
+			(i) =>
+				i === 0
+					? assistantError("Provider returned error: maximum context length is 272000 tokens")
+					: assistantText("ok"),
+			{ model },
+		);
+
+		await session.prompt("hello");
+
+		await vi.waitFor(() => {
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+		});
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
 	});
 });
 

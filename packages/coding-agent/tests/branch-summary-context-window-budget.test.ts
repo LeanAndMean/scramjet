@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { generateBranchSummary as generateHarnessBranchSummary } from "../../agent/src/harness/compaction/branch-summarization.js";
 import type { SessionTreeEntry } from "../../agent/src/harness/types.js";
 import { generateBranchSummary as generateCodingAgentBranchSummary } from "../src/core/compaction/branch-summarization.js";
+import { shouldCompact } from "../src/core/compaction/compaction.js";
 import type { SessionEntry } from "../src/core/session-manager.js";
 
 const { completeSimple } = vi.hoisted(() => ({ completeSimple: vi.fn() }));
@@ -56,22 +57,22 @@ beforeEach(() => {
 describe.each([
 	[
 		"coding-agent",
-		(modelToUse: Model<any>) =>
+		(modelToUse: Model<any>, reserveTokens = 0) =>
 			generateCodingAgentBranchSummary(entries(), {
 				model: modelToUse,
 				apiKey: "test",
 				signal: new AbortController().signal,
-				reserveTokens: 0,
+				reserveTokens,
 			}),
 	],
 	[
 		"agent harness",
-		(modelToUse: Model<any>) =>
+		(modelToUse: Model<any>, reserveTokens = 0) =>
 			generateHarnessBranchSummary(entries() as unknown as SessionTreeEntry[], {
 				model: modelToUse,
 				apiKey: "test",
 				signal: new AbortController().signal,
-				reserveTokens: 0,
+				reserveTokens,
 			}),
 	],
 ])("%s branch summary", (_name, generate) => {
@@ -89,5 +90,19 @@ describe.each([
 		expect(capturedConversation()).toContain("newest:");
 		expect(capturedConversation()).toContain("middle:");
 		expect(capturedConversation()).toContain("oldest:");
+	});
+
+	it.each([60, 59])("does not treat budget %s as unlimited when the reserve is 60", async (contextWindowBudget) => {
+		await generate({ ...model, contextWindowBudget }, 60);
+
+		expect(completeSimple).not.toHaveBeenCalled();
+	});
+});
+
+describe("proactive compaction reserve boundary", () => {
+	it.each([60, 59])("does not repeatedly compact budget %s when the reserve is 60", (contextWindowBudget) => {
+		expect(shouldCompact(1, contextWindowBudget, { enabled: true, reserveTokens: 60, keepRecentTokens: 20 })).toBe(
+			false,
+		);
 	});
 });

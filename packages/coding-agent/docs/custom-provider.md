@@ -62,7 +62,7 @@ export default function (pi: ExtensionAPI) {
 
 The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. Scramjet waits for the factory before startup continues, so the provider is available during interactive startup and to `scramjet --list-models`.
 
-A model may set `contextWindowBudget` when its operational provider limit is lower than its advertised `contextWindow` capacity. The budget must be a positive finite integer and cannot exceed capacity; omit it to use `contextWindow`. Invalid dynamic registrations throw an error identifying the provider/model and both values. These stricter requirements apply only to `contextWindowBudget`; existing `contextWindow` validation is unchanged.
+A model may set `contextWindowBudget` when its operational provider limit is lower than its advertised `contextWindow` capacity. The budget must be a positive finite integer and cannot exceed capacity; omit it to use `contextWindow`. Invalid dynamic registrations identify the provider and model; budget-over-capacity errors also include both values. These stricter requirements apply only to `contextWindowBudget`; existing `contextWindow` validation is unchanged.
 
 ## Override Existing Provider
 
