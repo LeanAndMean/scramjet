@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.62.0 — Restore standard pull request workflows
+
+Removes delivery-unit metadata and reconciliation from Mach 12 pull request workflows, restores optional single-issue linkage, and bases pre-merge and merge decisions on ordinary GitHub readiness signals. Fixes [#387](https://github.com/LeanAndMean/scramjet/issues/387).
+
+### Changed
+
+- `mach12:pr-create`, `mach12:pr-pre-merge`, `mach12:pr-merge`: use standard pull request bodies and exhaustive GitHub readiness checks without custom delivery-unit metadata.
+- `mach12:gh-sub-issues`: narrow the subroutine to reporting direct sub-issues after delivery-unit reconciliation was removed.
+- `CLAUDE.md`: update the bundled Mach 12 command inventory.
+
+### Removed
+
+- `mach12:gh-delivery-unit`: remove delivery-unit derivation, validation, and workflow wiring.
+
+### Tests
+
+- Mach 12 wiring and integration smoke coverage now verifies the simplified command inventory, optional single-issue linkage, and readiness contracts.
+
 ## 0.61.0 — Collapse successful delegate output by default
 
 Adds compact delegate rendering so successful delegated command bodies remain model-visible and persisted while staying collapsed in the TUI until the global tool-output expansion binding is used. Diagnostics, malformed results, partial output, runtime errors, and empty-scope warnings remain visible. Fixes [#386](https://github.com/LeanAndMean/scramjet/issues/386).
