@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.62.2 — Correct GPT-5.6 context metadata
+
+Corrects direct OpenAI and derived Azure GPT-5.6 model limits while preserving the distinct Codex catalog defaults. Fixes [#395](https://github.com/LeanAndMean/scramjet/issues/395).
+
+### Changed
+
+- `@leanandmean/ai`: set GPT-5.6 Sol, Terra, and Luna direct-provider context capacity to 1,050,000 tokens with a 128,000-token output limit.
+- OpenAI Codex GPT-5.6 entries retain their 272,000-token catalog context and now describe that value without unsupported backend-limit claims.
+
+### Tests
+
+- Generated model catalog coverage now verifies direct OpenAI and Codex provider limits independently.
+
 ## 0.62.1 — Make ambiguous duplicate handling safe
 
 Makes ambiguous duplicate handling explicit without removing the choice to publish useful cross-references. Fixes [#390](https://github.com/LeanAndMean/scramjet/issues/390).
