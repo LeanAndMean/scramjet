@@ -448,8 +448,15 @@ export class InteractiveMode {
 
 	private commitFinalizedChatOutput(): void {
 		this.sealStatus();
-		this.promoteFinalizedChatPrefix();
 		this.ui.requestRender();
+	}
+
+	private bindThemeChangeHandler(): void {
+		onThemeChange(() => {
+			this.ui.invalidate();
+			this.updateEditorBorderColor();
+			this.ui.rebuild();
+		});
 	}
 
 	// SCRAMJET-DIVERGENCE: re-resolve the theme after extension themes register (or after a reload),
@@ -773,11 +780,7 @@ export class InteractiveMode {
 		this.renderInitialMessages();
 
 		// Set up theme file watcher
-		onThemeChange(() => {
-			this.ui.invalidate();
-			this.updateEditorBorderColor();
-			this.ui.rebuild();
-		});
+		this.bindThemeChangeHandler();
 
 		// Set up git branch watcher (uses provider instead of footer)
 		this.footerDataProvider.onBranchChange(() => {

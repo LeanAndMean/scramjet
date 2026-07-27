@@ -128,11 +128,11 @@ The following upstream Pi commits were used as reference during Scramjet-specifi
 | `f10cf57e96ad` | OSC 11 background query concept and response parsing approach | Reimplemented as a pure parser (`terminal-colors.ts`) with single-flight TUI method, StdinBuffer hold, discard credit, and stop/start safety. Upstream's implementation differs structurally. |
 | `f0989800cbd5` | Theme detection precedence idea (environment signals before terminal query) | Reimplemented as `detectThemeFromEnvironment()` + `detectThemeInteractive()` with strict COLORFGBG final-field parsing, Apple Terminal heuristic, luminance classification, and no-persistence semantics. |
 
-### Currently unmodified packages
+### Package modification summary
 
 These are current facts, not constraints. Pi packages are modified directly when doing so simplifies Scramjet's implementation (see CLAUDE.md "Upstream Pi sync").
 
-Note: `packages/agent/` previously had no behavioral modifications (only import renames). As of issue #196, it carries the `beforeToolBatch` hook divergence listed in the table above. `packages/ai/` carries the unconditional tool-call-ID sanitization (issue #244) and the Opus 4.8/Fable 5/Sonnet 5 model support divergences (issue #245) listed in the table above. `packages/tui/` carries the OSC 11 query and StdinBuffer hold divergences (issue #298) and the committed/live renderer divergence (issue #389) listed in the table above.
+`packages/agent/` carries the `beforeToolBatch` hook divergence from issue #196. `packages/ai/` carries the unconditional tool-call-ID sanitization (issue #244) and the Opus 4.8/Fable 5/Sonnet 5 model support divergences (issue #245). `packages/tui/` carries the OSC 11 query and StdinBuffer hold divergences (issue #298) and the committed/live renderer divergence (issue #389). See the inventory above for the affected files and behavior.
 
 ## Cherry-Pick Workflow
 
@@ -158,9 +158,8 @@ git commit
 
 ### Sync considerations
 
-- **Unmodified packages** (`tui`): merge cleanly with upstream in virtually all cases.
-- **Rename-only files** (`agent` source, most of `coding-agent` source): conflicts are limited to import lines. Resolve by applying the `@leanandmean/*` namespace to any new imports the upstream change introduces.
-- **Behaviorally-divergent files**: require manual conflict resolution. The divergence is surgical (a few lines each), so upstream changes to surrounding code should merge cleanly.
+- **Rename-only files** (most of `coding-agent` source): conflicts are limited to import lines. Resolve by applying the `@leanandmean/*` namespace to any new imports the upstream change introduces.
+- **Behaviorally-divergent files**: reconcile manually when an upstream change overlaps an inventoried file or behavior. The effort depends on the overlap's scope; changes outside those areas may still merge cleanly.
 
 ### When to sync
 

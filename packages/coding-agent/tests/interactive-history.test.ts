@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@leanandmean/ai";
-import { Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
+import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const imageConversion = vi.hoisted(() => ({
@@ -10,6 +10,7 @@ const settingsSelector = vi.hoisted(() => ({
 		| {
 				onShowImagesChange(enabled: boolean): void;
 				onImageWidthCellsChange(width: number): void;
+				onThemeChange(name: string): void;
 		  }
 		| undefined,
 }));
@@ -28,7 +29,7 @@ vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
-import { initTheme } from "../src/modes/interactive/theme/theme.js";
+import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
 
 function assistant(text: string, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
 	return {
@@ -61,6 +62,7 @@ function createInteractiveHarness(): {
 	mode: Record<string, unknown>;
 	committedChatContainer: Container;
 	chatContainer: Container;
+	setSessionMessages: (messages: unknown[]) => void;
 	emit: (event: unknown) => Promise<void>;
 } {
 	const terminal = new HeadlessTerminal(30, 5);
@@ -69,7 +71,9 @@ function createInteractiveHarness(): {
 	const builtInHeader = new Text("header", 0, 0);
 	const committedChatContainer = new Container();
 	const chatContainer = new Container();
+	const pendingMessagesContainer = new Container();
 	const footer = new Text("footer", 0, 0);
+	let sessionMessages: unknown[] = [];
 	headerContainer.addChild(builtInHeader);
 	ui.addChild(headerContainer);
 	ui.addChild(committedChatContainer);
@@ -86,8 +90,10 @@ function createInteractiveHarness(): {
 		builtInHeader,
 		committedChatContainer,
 		chatContainer,
+		pendingMessagesContainer,
 		mutableChatComponents: new Set(),
 		footer,
+		editor: { borderColor: "" },
 		statusContainer: new Container(),
 		runtimeHost: {
 			session: {
@@ -101,6 +107,7 @@ function createInteractiveHarness(): {
 					getBlockImages: () => false,
 					getEnableSkillCommands: () => true,
 					getTheme: () => "pi-dark",
+					setTheme: () => {},
 					getCollapseChangelog: () => true,
 					getDoubleEscapeAction: () => "tree",
 					getTreeFilterMode: () => "default",
@@ -113,7 +120,11 @@ function createInteractiveHarness(): {
 					getTransport: () => "sse",
 					getEnableInstallTelemetry: () => false,
 				},
-				sessionManager: { getCwd: () => process.cwd() },
+				sessionManager: {
+					getCwd: () => process.cwd(),
+					buildSessionContext: () => ({ messages: sessionMessages }),
+					getEntries: () => [],
+				},
 				autoCompactionEnabled: true,
 				steeringMode: "one-at-a-time",
 				followUpMode: "one-at-a-time",
@@ -129,7 +140,9 @@ function createInteractiveHarness(): {
 		pendingTools: new Map(),
 		pendingToolFinalizations: new Set(),
 		agentRunGeneration: 0,
+		compactionQueuedMessages: [],
 		checkShutdownRequested: async () => {},
+		flushCompactionQueue: async () => {},
 	});
 	const eventTarget = mode as unknown as { handleEvent(event: unknown): Promise<void> };
 	return {
@@ -138,6 +151,9 @@ function createInteractiveHarness(): {
 		mode,
 		committedChatContainer,
 		chatContainer,
+		setSessionMessages: (messages) => {
+			sessionMessages = messages;
+		},
 		emit: (event) => eventTarget.handleEvent(event),
 	};
 }
@@ -149,6 +165,7 @@ describe("interactive assistant history", () => {
 		initTheme("pi-dark");
 	});
 	afterEach(() => {
+		onThemeChange(() => {});
 		resetCapabilitiesCache();
 		vi.useRealTimers();
 	});
@@ -177,6 +194,58 @@ describe("interactive assistant history", () => {
 		expect(terminal.visibleLines().join("\n")).toContain("custom footer");
 	});
 
+	it("rebuilds retained history through the production theme callback", async () => {
+		const { terminal, mode, ui, committedChatContainer } = createInteractiveHarness();
+		committedChatContainer.addChild(new Text("THEME-HISTORY", 0, 0));
+		ui.commit();
+		await render(terminal);
+		(mode.bindThemeChangeHandler as () => void).call(mode);
+		mode.showSelector = (create: (done: () => void) => unknown) => create(() => {});
+		(mode.showSettingsSelector as () => void).call(mode);
+		const callbacks = settingsSelector.callbacks;
+		if (!callbacks) throw new Error("Settings callbacks were not captured");
+		const mark = terminal.markWrites();
+
+		callbacks.onThemeChange("pi-light");
+		await render(terminal);
+
+		const output = terminal.writesSince(mark);
+		expect(output).toContain("\x1b[3J");
+		expect(output).toContain("THEME-HISTORY");
+	});
+
+	it("reconstructs replaced sessions and successful compactions through deliberate rebuilds", async () => {
+		const { terminal, ui, mode, emit, committedChatContainer, setSessionMessages } = createInteractiveHarness();
+		committedChatContainer.addChild(new Text("OLD-SESSION", 0, 0));
+		ui.commit();
+		await render(terminal);
+		setSessionMessages([assistant("TREE-SESSION")]);
+		let mark = terminal.markWrites();
+
+		(mode.renderCurrentSessionState as () => void).call(mode);
+		await render(terminal);
+
+		let output = terminal.writesSince(mark);
+		expect(output).toContain("\x1b[3J");
+		expect(output).toContain("TREE-SESSION");
+		expect(terminal.bufferLines().join("\n")).not.toContain("OLD-SESSION");
+
+		setSessionMessages([assistant("COMPACTED-SESSION")]);
+		mark = terminal.markWrites();
+		await emit({
+			type: "compaction_end",
+			reason: "manual",
+			result: { summary: "summary", tokensBefore: 100 },
+			willRetry: false,
+		});
+		await render(terminal);
+
+		output = terminal.writesSince(mark);
+		expect(output).toContain("\x1b[3J");
+		expect(output).toContain("COMPACTED-SESSION");
+		expect(terminal.bufferLines().join("\n")).not.toContain("TREE-SESSION");
+	});
+
 	it("suppresses transcript zones on mutable previews and emits complete zones after finalization", () => {
 		const component = new AssistantMessageComponent(undefined, false, undefined, "Thinking...", false);
 		component.updateContent(assistant("partial"));
@@ -190,16 +259,23 @@ describe("interactive assistant history", () => {
 
 	it("commits the complete final Markdown frame through the interactive event path", async () => {
 		const { terminal, ui, emit, committedChatContainer } = createInteractiveHarness();
-		committedChatContainer.addChild(new Text("history-1\nhistory-2\nhistory-3\nhistory-4\nhistory-5", 0, 0));
+		committedChatContainer.addChild(
+			new Text(
+				"history-1\nhistory-2\nhistory-3\nhistory-4\nhistory-5\nhistory-6\nhistory-7\nhistory-8\nhistory-9\nhistory-10",
+				0,
+				0,
+			),
+		);
 		ui.commit();
 		await render(terminal);
 		const partial = assistant("**first\nsecond\nthird\nfourth\nfifth");
 		await emit({ type: "message_start", message: partial });
 		await emit({ type: "message_update", message: partial });
 		await render(terminal);
-		terminal.scrollLines(-2);
+		terminal.scrollLines(-5);
 		const viewportY = terminal.viewportY;
 		expect(viewportY).toBeGreaterThan(0);
+		const visibleLines = terminal.visibleLines();
 		const mark = terminal.writes.length;
 
 		const final = assistant("**first**\nsecond\nthird\nfourth\nfifth");
@@ -214,6 +290,7 @@ describe("interactive assistant history", () => {
 			expect(buffer.match(new RegExp(marker, "g"))).toHaveLength(1);
 		}
 		expect(terminal.viewportY).toBe(viewportY);
+		expect(terminal.visibleLines()).toEqual(visibleLines);
 	});
 
 	it("commits byte-stable completion once without replaying prior history", async () => {
@@ -377,6 +454,36 @@ describe("interactive assistant history", () => {
 		expect(output).toContain("short-result");
 		expect(terminal.visibleLines().join("\n")).not.toContain("partial-4");
 		expect(terminal.visibleLines().join("\n")).not.toContain("partial-5");
+	});
+
+	it("removes a renderer-hidden tool preview when the tool finalizes", async () => {
+		const { terminal, emit, mode, committedChatContainer } = createInteractiveHarness();
+		const hidden: Component = { render: () => [], invalidate: () => {} };
+		mode.getRegisteredToolDefinition = () => ({
+			renderShell: "self",
+			renderCall: (_args: unknown, _theme: unknown, context: { executionStarted: boolean }) =>
+				context.executionStarted ? hidden : new Text("VISIBLE-TOOL-PREVIEW", 0, 0),
+			renderResult: () => hidden,
+		});
+		const message = assistant("");
+		message.content = [{ type: "toolCall", id: "hidden", name: "hidden", arguments: {} }];
+		await emit({ type: "message_start", message });
+		await emit({ type: "message_update", message });
+		await render(terminal);
+		expect(terminal.visibleLines().join("\n")).toContain("VISIBLE-TOOL-PREVIEW");
+
+		await emit({ type: "message_end", message });
+		await emit({ type: "tool_execution_start", toolCallId: "hidden", toolName: "hidden", args: {} });
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "hidden",
+			result: { content: [] },
+			isError: false,
+		});
+		await render(terminal);
+
+		expect(terminal.visibleLines().join("\n")).not.toContain("VISIBLE-TOOL-PREVIEW");
+		expect(committedChatContainer.children).toHaveLength(2);
 	});
 
 	it("waits for Kitty conversion before committing reconstructed tool history", async () => {

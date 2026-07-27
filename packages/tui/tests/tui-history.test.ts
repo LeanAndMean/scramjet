@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Editor, type EditorTheme } from "../src/components/editor.js";
+import { hyperlink } from "../src/terminal-image.js";
 import type { Component } from "../src/tui.js";
 import { Container, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { HeadlessTerminal } from "./helpers/headless-terminal.js";
@@ -54,9 +55,10 @@ describe("TUI committed history", () => {
 		tui.setLiveRegionStart(live);
 		tui.start();
 		await render(tui, terminal);
-		terminal.scrollLines(-3);
+		terminal.scrollLines(-4);
 		const viewportY = terminal.viewportY;
 		expect(viewportY).toBeGreaterThan(0);
+		const visibleLines = terminal.visibleLines();
 		const mark = terminal.markWrites();
 
 		live.lines = ["short", "editor"];
@@ -71,6 +73,31 @@ describe("TUI committed history", () => {
 		expect(buffer.match(/HISTORY-FIRST/g)).toHaveLength(1);
 		expect(buffer.match(/HISTORY-LAST/g)).toHaveLength(1);
 		expect(terminal.viewportY).toBe(viewportY);
+		expect(terminal.visibleLines()).toEqual(visibleLines);
+	});
+
+	it("keeps OSC 8 hyperlinks balanced when tail-windowing live output", async () => {
+		const terminal = new HeadlessTerminal(30, 3);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["history"]);
+		const live = new MutableComponent([
+			hyperlink("omitted", "https://example.com/omitted"),
+			hyperlink("retained-one", "https://example.com/one"),
+			hyperlink("retained-two", "https://example.com/two"),
+		]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		const output = terminal.writes.join("");
+		expect(output).not.toContain("https://example.com/omitted");
+		for (const url of ["https://example.com/one", "https://example.com/two"]) {
+			expect(output).toContain(`\x1b]8;;${url}\x1b\\`);
+		}
+		expect(output.match(/\x1b\]8;;https:\/\/example\.com\/(?:one|two)\x1b\\/g)).toHaveLength(2);
+		expect(output.match(/\x1b\]8;;\x1b\\/g)).toHaveLength(2);
 	});
 
 	it("commits a complete tail-windowed response exactly once", async () => {
