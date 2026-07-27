@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.63.0 — Prevent TUI transcript jumps
+
+Separates finalized terminal transcript history from the mutable live canvas so response completion and routine UI updates preserve scrollback position. Fixes [#389](https://github.com/LeanAndMean/scramjet/issues/389).
+
+### Changed
+
+- `@leanandmean/tui`: commit finalized output to append-only terminal history while keeping mutable rendering in a bounded tail window.
+- `@leanandmean/coding-agent`: finalize assistant and tool output once, preserve asynchronous image finality and tool ordering, and rebuild history only for deliberate presentation or session changes.
+- Remove the obsolete clear-on-shrink setting and document the finalized-history/live-canvas rendering model.
+
+### Tests
+
+- Add headless terminal and interactive regressions for scrollback preservation, shrink recovery, resize, overlays, autocomplete, cursor placement, tool finality, and Kitty images.
+
 ## 0.62.2 — Correct GPT-5.6 context metadata
 
 Corrects direct OpenAI and derived Azure GPT-5.6 model limits while preserving the distinct Codex catalog defaults. Fixes [#395](https://github.com/LeanAndMean/scramjet/issues/395).

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Append-only finalized transcript history with a bounded live canvas prevents routine response completion, tool finalization, resize, and overlay updates from replaying or jumping terminal scrollback. ([#396](https://github.com/LeanAndMean/scramjet/pull/396))
+
 ### Changed
 
 - **Required Scramjet builtin init across session replacement**: a throwing `builtinInit` now throws a product-attributed `RequiredBuiltinInitError` (original error preserved as `cause`) instead of an anonymous `<builtin>` diagnostic, and is fatal at initial startup. `reload()` is atomic — it validates the required builtin before `emitSessionShutdownEvent`/`resetApiProviders()`, so a throwing builtin rejects before any irreversible mutation and fires no `session_shutdown`. New / resume / import / fork / clone prepare the replacement candidate before tearing down the current runtime; the in-memory branch clones the live manager (`cloneInMemory()`) into an independent target so a failed candidate never mutates the live `SessionManager`. Optional third-party extension failures remain non-fatal diagnostics. ([#361](https://github.com/LeanAndMean/scramjet/issues/361))
