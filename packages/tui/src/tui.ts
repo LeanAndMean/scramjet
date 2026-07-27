@@ -261,6 +261,14 @@ export class TUI extends Container {
 	private fullRedrawCount = 0;
 	private stopped = false;
 
+	// SCRAMJET-DIVERGENCE: append-only history and a bounded mutable canvas preserve terminal scrollback (#389).
+	private liveRegionStart: Component | undefined;
+	private committedLines: string[] = [];
+	private previousLiveLines: string[] = [];
+	private committedKittyImageIds = new Set<number>();
+	private previousLiveKittyImageIds = new Set<number>();
+	private commitRequested = false;
+
 	// OSC 11 background color query state
 	private bgColorPromise: Promise<TerminalRgb | undefined> | undefined;
 	private bgColorResolve: ((value: TerminalRgb | undefined) => void) | undefined;
@@ -287,6 +295,21 @@ export class TUI extends Container {
 
 	get fullRedraws(): number {
 		return this.fullRedrawCount;
+	}
+
+	setLiveRegionStart(component: Component): void {
+		if (!this.children.includes(component)) {
+			throw new Error("Live region start must be a direct TUI child");
+		}
+		this.liveRegionStart = component;
+	}
+
+	commit(): void {
+		if (!this.liveRegionStart) {
+			throw new Error("Cannot commit without a live region");
+		}
+		this.commitRequested = true;
+		this.requestRender();
 	}
 
 	getShowHardwareCursor(): boolean {
@@ -518,8 +541,11 @@ export class TUI extends Container {
 			this.bgColorResolve = undefined;
 		}
 		// Move cursor to the end of the content to prevent overwriting/artifacts on exit
-		if (this.previousLines.length > 0) {
-			const targetRow = this.previousLines.length; // Line after the last content
+		const renderedLineCount = this.liveRegionStart
+			? this.committedLines.length + this.previousLiveLines.length
+			: this.previousLines.length;
+		if (renderedLineCount > 0) {
+			const targetRow = renderedLineCount; // Line after the last content
 			const lineDiff = targetRow - this.hardwareCursorRow;
 			if (lineDiff > 0) {
 				this.terminal.write(`\x1b[${lineDiff}B`);
@@ -536,6 +562,8 @@ export class TUI extends Container {
 	requestRender(force = false): void {
 		if (force) {
 			this.previousLines = [];
+			this.committedLines = [];
+			this.previousLiveLines = [];
 			this.previousWidth = -1; // -1 triggers widthChanged, forcing a full clear
 			this.previousHeight = -1; // -1 triggers heightChanged, forcing a full clear
 			this.cursorRow = 0;
@@ -1021,8 +1049,111 @@ export class TUI extends Container {
 		return null;
 	}
 
+	private renderChildren(children: Component[], width: number): string[] {
+		const lines: string[] = [];
+		for (const child of children) lines.push(...child.render(width));
+		return lines;
+	}
+
+	private doCommittedRender(): void {
+		const boundary = this.liveRegionStart ? this.children.indexOf(this.liveRegionStart) : -1;
+		if (boundary < 0) throw new Error("Live region start must remain a direct TUI child");
+
+		const width = this.terminal.columns;
+		const height = this.terminal.rows;
+		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
+		const forcedRebuild = this.previousWidth === -1;
+		let sourceCommitted = this.renderChildren(this.children.slice(0, boundary), width);
+		let liveLines = this.renderChildren(this.children.slice(boundary), width);
+		const liveCapacity = Math.max(0, height - 1);
+		liveLines = liveLines.slice(-liveCapacity || liveLines.length);
+		if (this.overlayStack.length > 0) {
+			liveLines = this.compositeOverlays(liveLines, width, liveCapacity).slice(-liveCapacity || liveLines.length);
+		}
+		const cursorPos = this.extractCursorPosition(liveLines, height);
+		sourceCommitted = this.applyLineResets(sourceCommitted);
+		liveLines = this.applyLineResets(liveLines);
+
+		const rebuild = this.previousWidth === 0 || widthChanged || forcedRebuild;
+		if (rebuild) {
+			let buffer = "\x1b[?2026h";
+			if (widthChanged || forcedRebuild) {
+				this.fullRedrawCount += 1;
+				buffer += this.deleteKittyImages(
+					new Set([...this.committedKittyImageIds, ...this.previousLiveKittyImageIds]),
+				);
+				buffer += "\x1b[2J\x1b[H\x1b[3J";
+			}
+			const allLines = [...sourceCommitted, ...liveLines];
+			buffer += allLines.join("\r\n");
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+			this.committedLines = sourceCommitted;
+			this.previousLiveLines = liveLines;
+			this.committedKittyImageIds = this.collectKittyImageIds(sourceCommitted);
+			this.previousLiveKittyImageIds = this.collectKittyImageIds(liveLines);
+			this.cursorRow = Math.max(0, allLines.length - 1);
+			this.hardwareCursorRow = this.cursorRow;
+			this.previousWidth = width;
+			this.previousHeight = height;
+			this.commitRequested = false;
+			const absoluteCursor = cursorPos ? { row: sourceCommitted.length + cursorPos.row, col: cursorPos.col } : null;
+			this.positionHardwareCursor(absoluteCursor, allLines.length);
+			return;
+		}
+
+		let suffix: string[] = [];
+		if (this.commitRequested) {
+			const unchangedPrefix = this.committedLines.every((line, index) => sourceCommitted[index] === line);
+			if (!unchangedPrefix || sourceCommitted.length < this.committedLines.length) {
+				this.commitRequested = false;
+				throw new Error("Committed history changed; use requestRender(true) for a deliberate rebuild");
+			}
+			suffix = sourceCommitted.slice(this.committedLines.length);
+		}
+
+		let buffer = "\x1b[?2026h";
+		buffer += this.deleteKittyImages(this.previousLiveKittyImageIds);
+		const oldHeight = this.previousLiveLines.length;
+		const oldEndRow = Math.max(this.committedLines.length, this.committedLines.length + oldHeight - 1);
+		const moveToEnd = oldEndRow - this.hardwareCursorRow;
+		if (moveToEnd > 0) buffer += `\x1b[${moveToEnd}B`;
+		else if (moveToEnd < 0) buffer += `\x1b[${-moveToEnd}A`;
+		if (oldHeight > 1) buffer += `\x1b[${oldHeight - 1}A`;
+		buffer += "\r";
+		for (let i = 0; i < oldHeight; i++) {
+			buffer += "\x1b[2K";
+			if (i < oldHeight - 1) buffer += "\x1b[1B\r";
+		}
+		if (oldHeight > 1) buffer += `\x1b[${oldHeight - 1}A`;
+		buffer += "\r";
+		const replacement = [...suffix, ...liveLines];
+		buffer += replacement.join("\r\n");
+		buffer += "\x1b[?2026l";
+		this.terminal.write(buffer);
+
+		if (this.commitRequested) {
+			this.committedLines = sourceCommitted;
+			for (const id of this.collectKittyImageIds(suffix)) this.committedKittyImageIds.add(id);
+		}
+		this.previousLiveLines = liveLines;
+		this.previousLiveKittyImageIds = this.collectKittyImageIds(liveLines);
+		this.previousWidth = width;
+		this.previousHeight = height;
+		this.commitRequested = false;
+		this.cursorRow =
+			liveLines.length > 0 ? this.committedLines.length + liveLines.length - 1 : this.committedLines.length;
+		this.hardwareCursorRow = this.cursorRow;
+		const absoluteCursor = cursorPos ? { row: this.committedLines.length + cursorPos.row, col: cursorPos.col } : null;
+		this.positionHardwareCursor(absoluteCursor, this.committedLines.length + liveLines.length);
+	}
+
 	private doRender(): void {
 		if (this.stopped) return;
+		if (this.liveRegionStart) {
+			this.doCommittedRender();
+			return;
+		}
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
