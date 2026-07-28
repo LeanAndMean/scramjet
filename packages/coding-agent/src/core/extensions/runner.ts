@@ -1204,12 +1204,13 @@ export class ExtensionRunner {
 		const ctx = this.createContext();
 		let currentText = text;
 		let currentImages = images;
+		const sessionEntries: NonNullable<Extract<InputEventResult, { action: "transform" }>["sessionEntries"]> = [];
 
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
 				if (this.skipStale("input")) {
-					return currentText !== text || currentImages !== images
-						? { action: "transform", text: currentText, images: currentImages }
+					return currentText !== text || currentImages !== images || sessionEntries.length > 0
+						? { action: "transform", text: currentText, images: currentImages, sessionEntries }
 						: { action: "continue" };
 				}
 				try {
@@ -1219,6 +1220,7 @@ export class ExtensionRunner {
 					if (result?.action === "transform") {
 						currentText = result.text;
 						currentImages = result.images ?? currentImages;
+						sessionEntries.push(...(result.sessionEntries ?? []));
 					}
 				} catch (err) {
 					this.emitError({
@@ -1230,8 +1232,8 @@ export class ExtensionRunner {
 				}
 			}
 		}
-		return currentText !== text || currentImages !== images
-			? { action: "transform", text: currentText, images: currentImages }
+		return currentText !== text || currentImages !== images || sessionEntries.length > 0
+			? { action: "transform", text: currentText, images: currentImages, sessionEntries }
 			: { action: "continue" };
 	}
 }

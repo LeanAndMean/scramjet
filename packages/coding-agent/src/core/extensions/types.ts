@@ -814,10 +814,15 @@ export interface InputEvent {
 	source: InputSource;
 }
 
+export interface InputSessionEntry {
+	customType: string;
+	data?: unknown;
+}
+
 /** Result from input event handler */
 export type InputEventResult =
 	| { action: "continue" }
-	| { action: "transform"; text: string; images?: ImageContent[] }
+	| { action: "transform"; text: string; images?: ImageContent[]; sessionEntries?: InputSessionEntry[] }
 	| { action: "handled" };
 
 // ============================================================================

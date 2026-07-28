@@ -56,6 +56,7 @@ import {
 	type ExtensionErrorListener,
 	ExtensionRunner,
 	type ExtensionUIContext,
+	type InputSessionEntry,
 	type InputSource,
 	type InvokeHarnessToolOptions,
 	type MessageEndEvent,
@@ -292,6 +293,7 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
+	private readonly _inputSessionEntries = new WeakMap<AgentMessage, InputSessionEntry[]>();
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -657,6 +659,13 @@ export class AgentSession {
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
 				this.sessionManager.appendMessage(event.message);
+				if (event.message.role === "user") {
+					const sessionEntries = this._inputSessionEntries.get(event.message);
+					this._inputSessionEntries.delete(event.message);
+					for (const entry of sessionEntries ?? []) {
+						this.sessionManager.appendCustomEntry(entry.customType, entry.data);
+					}
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -1203,6 +1212,7 @@ export class AgentSession {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 		let messages: AgentMessage[] | undefined;
+		let inputSessionEntries: InputSessionEntry[] | undefined;
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
@@ -1232,6 +1242,7 @@ export class AgentSession {
 				if (inputResult.action === "transform") {
 					currentText = inputResult.text;
 					currentImages = inputResult.images ?? currentImages;
+					inputSessionEntries = inputResult.sessionEntries;
 				}
 			}
 
@@ -1251,9 +1262,9 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentImages, inputSessionEntries);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentImages, inputSessionEntries);
 				}
 				preflightResult?.(true);
 				return;
@@ -1293,11 +1304,15 @@ export class AgentSession {
 			if (currentImages) {
 				userContent.push(...currentImages);
 			}
-			messages.push({
+			const userMessage: AgentMessage = {
 				role: "user",
 				content: userContent,
 				timestamp: Date.now(),
-			});
+			};
+			messages.push(userMessage);
+			if (inputSessionEntries?.length) {
+				this._inputSessionEntries.set(userMessage, inputSessionEntries);
+			}
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
 			for (const msg of this._pendingNextTurnMessages) {
@@ -1458,35 +1473,51 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueSteer(
+		text: string,
+		images?: ImageContent[],
+		sessionEntries?: InputSessionEntry[],
+	): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
+		const message: AgentMessage = {
 			role: "user",
 			content,
 			timestamp: Date.now(),
-		});
+		};
+		if (sessionEntries?.length) {
+			this._inputSessionEntries.set(message, sessionEntries);
+		}
+		this.agent.steer(message);
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(
+		text: string,
+		images?: ImageContent[],
+		sessionEntries?: InputSessionEntry[],
+	): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
+		const message: AgentMessage = {
 			role: "user",
 			content,
 			timestamp: Date.now(),
-		});
+		};
+		if (sessionEntries?.length) {
+			this._inputSessionEntries.set(message, sessionEntries);
+		}
+		this.agent.followUp(message);
 	}
 
 	/**

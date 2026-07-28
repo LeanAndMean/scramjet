@@ -157,10 +157,59 @@ describe("ExtensionRunner stale short-circuit", () => {
 		}
 	});
 
-	it("R6: mid-chain invalidation in emitInput returns the partial transform", async () => {
+	it("accumulates session entries across chained input transforms", async () => {
+		const first = makeExtension("ext1", "input", [
+			() =>
+				({
+					action: "transform",
+					text: "first",
+					sessionEntries: [{ customType: "first", data: { order: 1 } }],
+				}) as any,
+		]);
+		const second = makeExtension("ext2", "input", [
+			() =>
+				({
+					action: "transform",
+					text: "second",
+					sessionEntries: [{ customType: "second", data: { order: 2 } }],
+				}) as any,
+		]);
+		const { runner } = makeRunner([first, second]);
+
+		await expect(runner.emitInput("original", undefined, "interactive")).resolves.toEqual({
+			action: "transform",
+			text: "second",
+			images: undefined,
+			sessionEntries: [
+				{ customType: "first", data: { order: 1 } },
+				{ customType: "second", data: { order: 2 } },
+			],
+		});
+	});
+
+	it("discards accumulated session entries when a later input handler handles the input", async () => {
+		const first = makeExtension("ext1", "input", [
+			() =>
+				({
+					action: "transform",
+					text: "first",
+					sessionEntries: [{ customType: "discarded" }],
+				}) as any,
+		]);
+		const second = makeExtension("ext2", "input", [() => ({ action: "handled" }) as any]);
+		const { runner } = makeRunner([first, second]);
+
+		await expect(runner.emitInput("original", undefined, "interactive")).resolves.toEqual({ action: "handled" });
+	});
+
+	it("R6: mid-chain invalidation in emitInput returns the partial transform and entries", async () => {
 		const first: HandlerFn = async () => {
 			runner.invalidate();
-			return { action: "transform", text: "transformed" } as any;
+			return {
+				action: "transform",
+				text: "transformed",
+				sessionEntries: [{ customType: "partial" }],
+			} as any;
 		};
 		let secondCalled = false;
 		const second: HandlerFn = () => {
@@ -174,7 +223,12 @@ describe("ExtensionRunner stale short-circuit", () => {
 
 		expect(secondCalled).toBe(false);
 		expect(errors).toEqual([]);
-		expect(result).toEqual({ action: "transform", text: "transformed", images: undefined });
+		expect(result).toEqual({
+			action: "transform",
+			text: "transformed",
+			images: undefined,
+			sessionEntries: [{ customType: "partial" }],
+		});
 	});
 
 	it("R6: mid-chain invalidation in emitMessageEnd returns the partially-modified message", async () => {
