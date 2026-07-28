@@ -146,7 +146,11 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 		async execute(_id, params) {
 			const reject = (error: NonNullable<DelegateDetails["error"]>, text: string, chain?: string) => ({
 				content: [{ type: "text" as const, text }],
-				details: { error, command: params.command, ...(chain === undefined ? {} : { chain }) } satisfies DelegateDetails,
+				details: {
+					error,
+					command: params.command,
+					...(chain === undefined ? {} : { chain }),
+				} satisfies DelegateDetails,
 			});
 			const activeCommand = activeCommandName(state.lifecycle);
 			if (activeCommand === null) {
@@ -170,7 +174,10 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 			}
 			const def = state.registry.get(params.command);
 			if (!def) {
-				return reject("unknown_command", `ERROR: unknown command '${params.command}'. Check the registry or fix the name.`);
+				return reject(
+					"unknown_command",
+					`ERROR: unknown command '${params.command}'. Check the registry or fix the name.`,
+				);
 			}
 			if (!def.delegateOnly) {
 				return reject(
@@ -179,7 +186,9 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 				);
 			}
 			if (params.command === activeCommand || detectCycle(state.delegateStack, params.command)) {
-				const chain = [activeCommand, ...state.delegateStack.map((f) => f.commandName), params.command].join(" -> ");
+				const chain = [activeCommand, ...state.delegateStack.map((f) => f.commandName), params.command].join(
+					" -> ",
+				);
 				return reject("cycle", `ERROR: cycle detected in delegation chain ${chain}. Refusing to recurse.`, chain);
 			}
 			const callerTools = caller.allowedTools;

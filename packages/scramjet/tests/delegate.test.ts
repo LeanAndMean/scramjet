@@ -383,13 +383,9 @@ describe("registerDelegateTool — execute paths", () => {
 				lifecycle: structuredClone(testCase.state.lifecycle),
 				generation: testCase.state.lifecycleGeneration,
 			};
-			const result = await tools[0].execute(
-				"call",
-				{ command: testCase.command, args: "" },
-				undefined,
-				undefined,
-				{ cwd: "/" },
-			);
+			const result = await tools[0].execute("call", { command: testCase.command, args: "" }, undefined, undefined, {
+				cwd: "/",
+			});
 			expect(result.details.error, testCase.name).toBe(testCase.error);
 			expect(testCase.state.delegateStack).toEqual(before.stack);
 			expect(testCase.state.sidebarLog).toEqual(before.sidebar);
@@ -564,10 +560,15 @@ describe("registerDelegateTool — execute paths", () => {
 
 	it("rejects the active caller loading itself without mutation", async () => {
 		const caller = def("caller", "body", undefined, true);
-		const state = freshState({ registry: new Map([[caller.name, caller]]), lifecycle: lifecycleFor("dormant", caller.name) });
+		const state = freshState({
+			registry: new Map([[caller.name, caller]]),
+			lifecycle: lifecycleFor("dormant", caller.name),
+		});
 		const { pi, tools } = recordingPi();
 		registerDelegateTool(pi, state);
-		const result = await tools[0].execute("call", { command: caller.name, args: "" }, undefined, undefined, { cwd: "/" });
+		const result = await tools[0].execute("call", { command: caller.name, args: "" }, undefined, undefined, {
+			cwd: "/",
+		});
 		expect(result.details.error).toBe("cycle");
 		expect(result.details.chain).toBe("caller -> caller");
 		expect(state.delegateStack).toEqual([]);

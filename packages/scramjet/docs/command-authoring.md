@@ -16,7 +16,7 @@ Every command file starts with YAML frontmatter between `---` fences. All fields
 |-------|------|----------|-------------|
 | `description` | string | No | One-line description shown in command listings and help. Feeds the command catalog in the system prompt. |
 | `argument-hint` | string | No | Usage hint shown alongside the command name (e.g., `"<issue-number> [context]"`). Feeds the command catalog. |
-| `delegate-only` | boolean | No | When `true`, marks the command as a subroutine that should only be invoked via delegation, not directly by the user. Hidden from the command catalog and refused by harness dispatch (forced/closed/open/suggestions), but remains user-typeable and in Pi autocomplete. Must be exactly `true`; any other value (including `false`) produces a load warning and is treated as absent. |
+| `delegate-only` | boolean | No | When `true`, marks the command as a same-context subcommand that may be loaded through `delegate`. Hidden from the command catalog and refused by harness dispatch (forced/closed/open/suggestions), but remains user-typeable and in Pi autocomplete. Must be exactly `true`; any other value (including `false`) produces a load warning and is treated as absent. |
 | `allowed-tools` | string[] | No | Tools this command is permitted to use. Omit for unrestricted access. |
 | `next` | object | No | Next-step policy declaring what happens after the command completes. |
 
@@ -54,7 +54,7 @@ allowed-tools:
 
 **Rules:**
 - Each entry must be a non-empty string. Non-string entries (numbers, nulls) are silently dropped with a startup warning.
-- `delegate` must be listed if the command body instructs delegation to subroutines.
+- `delegate` must be listed if the command body loads delegate-only subcommands.
 - `subagent` must be listed if the command dispatches subagents.
 - A delegate-only subroutine (never invoked directly by the user) should scope tightly to what it actually needs. When delegated, its `allowed-tools` is intersected with the caller's scope.
 
@@ -263,27 +263,36 @@ This is more explicit than a generic "populate `next_steps` based on the outcome
 
 ## 4. Delegation Pattern
 
-Commands can invoke other commands as subroutines using the `delegate` tool. The delegated command's body is returned as text in the tool result — the agent reads it and follows its instructions within the same conversation. The complete body remains model-visible and persisted in the transcript, while the TUI shows a compact invocation by default. The global tool-output expansion binding (Ctrl+O by default) reveals or re-collapses the complete delegated content.
+Commands can load other commands as subroutines using the `delegate` tool. Despite the architectural term “delegation,” this is not separate-agent dispatch: the current agent receives the substituted command body as a tool result and executes those instructions immediately in the same conversation. Use `subagent` for work that should run under a separate agent and context. Use slash dispatch, `report_scramjet_command_status`, or `suggest_scramjet_next_steps` for future top-level work; do not load an ordinary top-level command through `delegate`.
 
-Delegate diagnostics fail open: unknown commands, cycles, runtime errors, partial results, and malformed legacy results remain visible while collapsed. A successful delegation with an empty effective tool scope keeps a concise warning visible even though its body is collapsed.
+The complete body remains model-visible and persisted in the transcript, while the TUI shows a compact invocation by default. The global tool-output expansion binding (Ctrl+O by default) reveals or re-collapses the complete delegated content. Delegate diagnostics fail open: rejected calls, runtime errors, partial results, and malformed legacy results remain visible while collapsed. A successful delegation with an empty effective tool scope keeps a concise warning visible even though its body is collapsed.
 
-### Invoking a delegate
+### Loading a subcommand
 
-In the command body, instruct the agent to delegate:
+In the command body, instruct the agent to load and execute the subcommand now:
 
 ```markdown
-Delegate to:
+Load and execute this subcommand in the current conversation:
 
 \```
 /mach12:gh-issue-read <issue-number> --marker mach12-plan
 \```
 
-The subroutine returns the issue title, body, and comments.
+The subcommand returns the issue title, body, and comments.
 ```
 
 The agent calls the `delegate` tool with:
-- `command`: The qualified command name (e.g., `"mach12:gh-issue-read"`)
+- `command`: The qualified delegate-only command name (e.g., `"mach12:gh-issue-read"`)
 - `args`: The argument string (e.g., `"55 --marker mach12-plan"`)
+
+The harness accepts the call only when:
+
+- A caller is active and still exists in the live command registry.
+- No terminal status report is pending dispatch.
+- The requested target exists and declares `delegate-only: true`.
+- The target does not repeat the active caller or any subcommand already loaded this turn.
+
+Calls are legal while the active command is running, probing, waiting for freetext input, or dormant. They are rejected while idle and after a terminal report has moved the command into the report-pending phase. Every rejection occurs before the delegation stack, history sidebar, journal, or lifecycle is mutated.
 
 ### Argument substitution
 
@@ -368,13 +377,17 @@ Return the issue title, body, and comments to the caller.
 </scramjet-command>
 ```
 
+### Clean-break migration
+
+Third-party command authors migrating to this contract must mark every valid target with `delegate-only: true`, include `delegate` in each caller's `allowed-tools`, and rewrite call-site prose to say that the current agent loads and executes the returned instructions now. Ordinary top-level commands are no longer valid `delegate` targets, and idle calls are no longer valid. There is no compatibility alias, automatic migration, or discovery warning. Because the provider-visible name remains `delegate`, historical rows continue through its renderer; unsupported legacy result shapes remain visible through the renderer's fail-open path.
+
 ### Cycle detection
 
-The harness rejects delegation cycles. If command A delegates to B and B attempts to delegate back to A within the same turn, the `delegate` tool returns an error. Design subroutine graphs as DAGs.
+Cycle history is root-inclusive and latched for the turn: `[active caller, ...loaded subcommands, requested target]`. The harness rejects loading the active caller itself, a nested back-edge to it, or any subcommand already loaded during the turn. Because frames do not pop, repeating an earlier sibling also counts as a cycle. Distinct sequential siblings remain valid. Design subroutine graphs as DAGs and do not plan to invoke the same subcommand twice in one turn.
 
 ### Latched scoping
 
-Delegation frames are latched within a turn — frames push and never pop. However, each delegation independently intersects with the top-level command's scope, not the previous frame's. Sequential sibling delegations do not narrow each other. The stack resets at the start of each new turn.
+Delegation frames are latched within a turn — frames push and never pop, so distinct sequential siblings increase displayed depth. However, each delegation independently intersects with the active top-level command's scope, not the previous frame's. Sequential sibling delegations do not narrow each other. The stack resets at the start of each new turn.
 
 ---
 
@@ -405,7 +418,7 @@ In the current implementation, tool-scoping is advisory only. The harness logs w
 
 ### Don't
 
-- Don't omit `delegate` from `allowed-tools` if the command body instructs delegation.
+- Don't omit `delegate` from `allowed-tools` if the command body loads subcommands.
 - Don't omit `subagent` if the command dispatches subagents.
 - Don't declare tools a command never uses — tighter scopes are better for intersection behavior and future hard enforcement.
 
@@ -680,7 +693,7 @@ $ARGUMENTS
 
 <Instructions, possibly including delegation:>
 
-Delegate to:
+Load and execute this subcommand in the current conversation:
 
 \```
 /mach12:subroutine <args>
@@ -705,9 +718,9 @@ instructions for this command's reporting>.
 - **Single substitution rule** — `$ARGUMENTS` (or positional placeholders like `$1`, `$@`) appears exactly once in the command body, inside the context tags. Subsequent references use prose (e.g., "the user context above", "the arguments provided above") rather than re-substituting the full content. This prevents argument duplication in the expanded prompt.
 - **Title** uses `# Heading` (H1). Matches the command's purpose.
 - **Steps** are numbered `## Step N:` headings.
-- **Delegation** uses a fenced code block with the slash-command invocation.
+- **Delegation** uses a fenced code block with the slash-command invocation and explicitly tells the agent to load and execute the subcommand now in the current conversation.
 - **Status reporting** goes at the end of the last substantive step in a top-level command. It does not need its own dedicated step — most commands embed reporting instructions in the final step that also handles the last action (posting a comment, pushing code, etc.).
-- **Imperative voice** throughout: "You are doing X", "Read the issue", "Delegate to".
+- **Imperative voice** throughout: "You are doing X", "Read the issue", "Load and execute this subcommand in the current conversation".
 - **Concrete examples** over abstract descriptions. Show the exact `gh` command, the exact tool call shape, the exact `next_steps` structure.
 - **Agent orientation** — the harness injects a `# Command framing` block into the system prompt (via `base-directives.ts`) explaining what `<scramjet-command>`, `<user-context>`, and `<caller-context>` tags mean. This tells the agent to treat harness-injected command bodies as active instructions and user-pasted command bodies as ordinary content.
 - **Close-tag escaping** — if user-provided content could contain literal `</scramjet-command>` or `</user-context>` strings that would break parsing, escaping is needed. This is tracked separately in issue 183.
