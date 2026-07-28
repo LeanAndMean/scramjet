@@ -27,6 +27,7 @@ import type {
 	OverlayHandle,
 	OverlayOptions,
 	SlashCommand,
+	Terminal,
 } from "@leanandmean/tui";
 import {
 	CombinedAutocompleteProvider,
@@ -219,12 +220,15 @@ export interface InteractiveModeOptions {
 	initialMessages?: string[];
 	/** Force verbose startup (overrides quietStartup setting) */
 	verbose?: boolean;
+	terminal?: Terminal;
 }
 
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
+	private committedChatContainer: Container;
 	private chatContainer: Container;
+	private mutableChatComponents = new Set<Component>();
 	private pendingMessagesContainer: Container;
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
@@ -270,6 +274,8 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	private pendingToolFinalizations = new Set<Promise<void>>();
+	private agentRunGeneration = 0;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -358,9 +364,10 @@ export class InteractiveMode {
 			await this.rebindCurrentSession();
 		});
 		this.version = VERSION;
-		this.ui = new TUI(new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
-		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
+		// SCRAMJET-DIVERGENCE: mandatory committed/live rendering and injectable terminals (#389).
+		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.headerContainer = new Container();
+		this.committedChatContainer = new Container();
 		this.chatContainer = new Container();
 		this.pendingMessagesContainer = new Container();
 		this.statusContainer = new Container();
@@ -392,6 +399,75 @@ export class InteractiveMode {
 		// terminals would resolve the dark branch and clobber light terminals to scramjet-dark.
 		this.detectedClassification = detectThemeFromEnvironment()?.theme;
 		initTheme(this.settingsManager.getTheme(), true);
+	}
+
+	// SCRAMJET-DIVERGENCE: finalized transcript components are promoted atomically into append-only history (#389).
+	private promoteFinalizedChatPrefix(): void {
+		let promoted = false;
+		while (this.chatContainer.children.length > 0) {
+			const child = this.chatContainer.children[0];
+			if (this.mutableChatComponents.has(child)) break;
+			this.chatContainer.removeChild(child);
+			if (child instanceof ToolExecutionComponent) child.markCommitted();
+			this.committedChatContainer.addChild(child);
+			promoted = true;
+		}
+		if (promoted) this.ui.commit();
+	}
+
+	private setChatComponentMutable(component: Component, mutable: boolean): void {
+		if (mutable) this.mutableChatComponents.add(component);
+		else this.mutableChatComponents.delete(component);
+	}
+
+	private sealStatus(): void {
+		if (this.lastStatusSpacer) this.mutableChatComponents.delete(this.lastStatusSpacer);
+		if (this.lastStatusText) this.mutableChatComponents.delete(this.lastStatusText);
+		this.lastStatusSpacer = undefined;
+		this.lastStatusText = undefined;
+		this.promoteFinalizedChatPrefix();
+	}
+
+	private clearTranscript(): void {
+		this.pendingToolFinalizations = new Set();
+		const tools = new Set([
+			...this.pendingTools.values(),
+			...this.committedChatContainer.children.filter(
+				(component): component is ToolExecutionComponent => component instanceof ToolExecutionComponent,
+			),
+			...this.chatContainer.children.filter(
+				(component): component is ToolExecutionComponent => component instanceof ToolExecutionComponent,
+			),
+		]);
+		for (const tool of tools) tool.detach();
+		this.committedChatContainer.clear();
+		this.chatContainer.clear();
+		this.mutableChatComponents.clear();
+		this.lastStatusSpacer = undefined;
+		this.lastStatusText = undefined;
+		this.ui.rebuild();
+	}
+
+	private updateToolImagePresentation(update: (component: ToolExecutionComponent) => void): void {
+		for (const container of [this.committedChatContainer, this.chatContainer]) {
+			for (const child of container.children) {
+				if (child instanceof ToolExecutionComponent) update(child);
+			}
+		}
+		this.ui.rebuild();
+	}
+
+	private commitFinalizedChatOutput(): void {
+		this.sealStatus();
+		this.ui.requestRender();
+	}
+
+	private bindThemeChangeHandler(): void {
+		onThemeChange(() => {
+			this.ui.invalidate();
+			this.updateEditorBorderColor();
+			this.ui.rebuild();
+		});
 	}
 
 	// SCRAMJET-DIVERGENCE: re-resolve the theme after extension themes register (or after a reload),
@@ -581,6 +657,7 @@ export class InteractiveMode {
 			this.chatContainer.addChild(new Spacer(1));
 		}
 		this.chatContainer.addChild(new DynamicBorder());
+		this.promoteFinalizedChatPrefix();
 	}
 
 	async init(): Promise<void> {
@@ -614,7 +691,9 @@ export class InteractiveMode {
 		// Add header container as first child (content built after theme detection below)
 		this.ui.addChild(this.headerContainer);
 
+		this.ui.addChild(this.committedChatContainer);
 		this.ui.addChild(this.chatContainer);
+		this.ui.setLiveRegionStart(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer
@@ -712,11 +791,7 @@ export class InteractiveMode {
 		this.renderInitialMessages();
 
 		// Set up theme file watcher
-		onThemeChange(() => {
-			this.ui.invalidate();
-			this.updateEditorBorderColor();
-			this.ui.requestRender();
-		});
+		this.bindThemeChangeHandler();
 
 		// Set up git branch watcher (uses provider instead of footer)
 		this.footerDataProvider.onBranchChange(() => {
@@ -1533,7 +1608,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					this.clearTranscript();
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.editor.setText(result.editorText);
@@ -1570,6 +1645,7 @@ export class InteractiveMode {
 		this.setupExtensionShortcuts(extensionRunner);
 		this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
 		this.showStartupNoticesIfNeeded();
+		this.promoteFinalizedChatPrefix();
 	}
 
 	private applyRuntimeSettings(): void {
@@ -1578,7 +1654,6 @@ export class InteractiveMode {
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
-		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
 		this.defaultEditor.setPaddingX(editorPaddingX);
@@ -1634,7 +1709,7 @@ export class InteractiveMode {
 	}
 
 	private renderCurrentSessionState(): void {
-		this.chatContainer.clear();
+		this.clearTranscript();
 		this.pendingMessagesContainer.clear();
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
@@ -1759,7 +1834,7 @@ export class InteractiveMode {
 
 	private setHiddenThinkingLabel(label?: string): void {
 		this.hiddenThinkingLabel = label ?? this.defaultHiddenThinkingLabel;
-		for (const child of this.chatContainer.children) {
+		for (const child of [...this.committedChatContainer.children, ...this.chatContainer.children]) {
 			if (child instanceof AssistantMessageComponent) {
 				child.setHiddenThinkingLabel(this.hiddenThinkingLabel);
 			}
@@ -1767,7 +1842,7 @@ export class InteractiveMode {
 		if (this.streamingComponent) {
 			this.streamingComponent.setHiddenThinkingLabel(this.hiddenThinkingLabel);
 		}
-		this.ui.requestRender();
+		this.ui.rebuild();
 	}
 
 	/**
@@ -1969,7 +2044,7 @@ export class InteractiveMode {
 			}
 		}
 
-		this.ui.requestRender();
+		this.ui.rebuild();
 	}
 
 	private addExtensionTerminalInputListener(
@@ -2402,7 +2477,7 @@ export class InteractiveMode {
 				this.chatContainer.addChild(new Text(stackLines, 1, 0));
 			}
 		}
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	// =========================================================================
@@ -2688,7 +2763,9 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
+				this.agentRunGeneration += 1;
 				this.pendingTools.clear();
+				this.pendingToolFinalizations = new Set();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -2731,6 +2808,7 @@ export class InteractiveMode {
 				break;
 
 			case "message_start":
+				this.sealStatus();
 				if (event.message.role === "custom") {
 					this.addMessageToChat(event.message);
 					this.ui.requestRender();
@@ -2744,9 +2822,11 @@ export class InteractiveMode {
 						this.hideThinkingBlock,
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
+						false,
 					);
 					this.streamingMessage = event.message;
 					this.chatContainer.addChild(this.streamingComponent);
+					this.setChatComponentMutable(this.streamingComponent, true);
 					this.streamingComponent.updateContent(this.streamingMessage);
 					this.ui.requestRender();
 				}
@@ -2774,6 +2854,7 @@ export class InteractiveMode {
 								);
 								component.setExpanded(this.toolOutputExpanded);
 								this.chatContainer.addChild(component);
+								this.setChatComponentMutable(component, true);
 								this.pendingTools.set(content.id, component);
 							} else {
 								const component = this.pendingTools.get(content.id);
@@ -2801,6 +2882,8 @@ export class InteractiveMode {
 						this.streamingMessage.errorMessage = errorMessage;
 					}
 					this.streamingComponent.updateContent(this.streamingMessage);
+					this.streamingComponent.setFinalized(true);
+					this.setChatComponentMutable(this.streamingComponent, false);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -2811,6 +2894,8 @@ export class InteractiveMode {
 								content: [{ type: "text", text: errorMessage }],
 								isError: true,
 							});
+							component.seal();
+							this.setChatComponentMutable(component, false);
 						}
 						this.pendingTools.clear();
 					} else {
@@ -2819,6 +2904,7 @@ export class InteractiveMode {
 							component.setArgsComplete();
 						}
 					}
+					this.promoteFinalizedChatPrefix();
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 					this.footer.invalidate();
@@ -2827,6 +2913,7 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				this.sealStatus();
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
 					component = new ToolExecutionComponent(
@@ -2843,6 +2930,7 @@ export class InteractiveMode {
 					);
 					component.setExpanded(this.toolOutputExpanded);
 					this.chatContainer.addChild(component);
+					this.setChatComponentMutable(component, true);
 					this.pendingTools.set(event.toolCallId, component);
 				}
 				component.markExecutionStarted();
@@ -2863,13 +2951,34 @@ export class InteractiveMode {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
 					component.updateResult({ ...event.result, isError: event.isError });
-					this.pendingTools.delete(event.toolCallId);
-					this.ui.requestRender();
+					const pendingToolFinalizations = this.pendingToolFinalizations;
+					const finalization = component.waitForImageConversions().then(() => {
+						component.seal();
+						if (this.pendingTools.get(event.toolCallId) === component) {
+							this.pendingTools.delete(event.toolCallId);
+						}
+						if (this.mutableChatComponents.has(component) && this.chatContainer.children.includes(component)) {
+							this.setChatComponentMutable(component, false);
+							this.promoteFinalizedChatPrefix();
+							this.ui.requestRender();
+						}
+					});
+					pendingToolFinalizations.add(finalization);
+					try {
+						await finalization;
+					} finally {
+						pendingToolFinalizations.delete(finalization);
+					}
 				}
 				break;
 			}
 
-			case "agent_end":
+			case "agent_end": {
+				const runGeneration = this.agentRunGeneration;
+				const pendingToolFinalizations = this.pendingToolFinalizations;
+				await Promise.all(pendingToolFinalizations);
+				if (runGeneration !== this.agentRunGeneration || pendingToolFinalizations !== this.pendingToolFinalizations)
+					break;
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(false);
 				}
@@ -2880,15 +2989,22 @@ export class InteractiveMode {
 				}
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
+					this.setChatComponentMutable(this.streamingComponent, false);
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
+				for (const component of this.pendingTools.values()) {
+					component.seal();
+					this.setChatComponentMutable(component, false);
+				}
 				this.pendingTools.clear();
+				this.promoteFinalizedChatPrefix();
 
 				await this.checkShutdownRequested();
 
 				this.ui.requestRender();
 				break;
+			}
 
 			case "compaction_start": {
 				if (this.settingsManager.getShowTerminalProgress()) {
@@ -2936,7 +3052,6 @@ export class InteractiveMode {
 						this.showStatus("Auto-compaction cancelled");
 					}
 				} else if (event.result) {
-					this.chatContainer.clear();
 					this.rebuildChatFromMessages();
 					this.addMessageToChat(
 						createCompactionSummaryMessage(
@@ -2952,6 +3067,7 @@ export class InteractiveMode {
 					} else {
 						this.chatContainer.addChild(new Spacer(1));
 						this.chatContainer.addChild(new Text(theme.fg("error", event.errorMessage), 1, 0));
+						this.commitFinalizedChatOutput();
 					}
 				}
 				void this.flushCompactionQueue({ willRetry: event.willRetry });
@@ -3054,12 +3170,15 @@ export class InteractiveMode {
 		const text = new Text(theme.fg("dim", message), 1, 0);
 		this.chatContainer.addChild(spacer);
 		this.chatContainer.addChild(text);
+		this.setChatComponentMutable(spacer, true);
+		this.setChatComponentMutable(text, true);
 		this.lastStatusSpacer = spacer;
 		this.lastStatusText = text;
 		this.ui.requestRender();
 	}
 
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+		this.sealStatus();
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
@@ -3171,6 +3290,7 @@ export class InteractiveMode {
 				const _exhaustive: never = message;
 			}
 		}
+		this.promoteFinalizedChatPrefix();
 	}
 
 	/**
@@ -3212,6 +3332,7 @@ export class InteractiveMode {
 						);
 						component.setExpanded(this.toolOutputExpanded);
 						this.chatContainer.addChild(component);
+						this.setChatComponentMutable(component, true);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
 							let errorMessage: string;
@@ -3225,6 +3346,8 @@ export class InteractiveMode {
 								errorMessage = message.errorMessage || "Error";
 							}
 							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
+							component.seal();
+							this.setChatComponentMutable(component, false);
 						} else {
 							renderedPendingTools.set(content.id, component);
 						}
@@ -3238,6 +3361,27 @@ export class InteractiveMode {
 					component.setArgsComplete();
 					component.updateResult(message);
 					renderedPendingTools.delete(message.toolCallId);
+					if (component.hasPendingImageConversions()) {
+						const pendingToolFinalizations = this.pendingToolFinalizations;
+						const finalization = component.waitForImageConversions().then(() => {
+							if (
+								!this.mutableChatComponents.has(component) ||
+								!this.chatContainer.children.includes(component)
+							) {
+								component.seal();
+								return;
+							}
+							component.seal();
+							this.setChatComponentMutable(component, false);
+							this.promoteFinalizedChatPrefix();
+							this.ui.requestRender();
+						});
+						pendingToolFinalizations.add(finalization);
+						void finalization.finally(() => pendingToolFinalizations.delete(finalization));
+					} else {
+						component.seal();
+						this.setChatComponentMutable(component, false);
+					}
 				}
 			} else {
 				// All other messages use standard rendering
@@ -3248,6 +3392,7 @@ export class InteractiveMode {
 		for (const [toolCallId, component] of renderedPendingTools) {
 			this.pendingTools.set(toolCallId, component);
 		}
+		this.promoteFinalizedChatPrefix();
 		this.ui.requestRender();
 	}
 
@@ -3278,7 +3423,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
-		this.chatContainer.clear();
+		this.clearTranscript();
 		const context = this.sessionManager.buildSessionContext();
 		this.renderSessionContext(context);
 	}
@@ -3437,7 +3582,7 @@ export class InteractiveMode {
 			clearInterval(suspendKeepAlive);
 			process.removeListener("SIGINT", ignoreSigint);
 			this.ui.start();
-			this.ui.requestRender(true);
+			this.ui.rebuild();
 		});
 
 		try {
@@ -3544,12 +3689,12 @@ export class InteractiveMode {
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
 		}
-		for (const child of this.chatContainer.children) {
+		for (const child of [...this.committedChatContainer.children, ...this.chatContainer.children]) {
 			if (isExpandable(child)) {
 				child.setExpanded(expanded);
 			}
 		}
-		this.ui.requestRender();
+		this.ui.rebuild();
 	}
 
 	private toggleThinkingBlockVisibility(): void {
@@ -3557,7 +3702,6 @@ export class InteractiveMode {
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 
 		// Rebuild chat from session messages
-		this.chatContainer.clear();
 		this.rebuildChatFromMessages();
 
 		// If streaming, re-add the streaming component with updated visibility and re-render
@@ -3565,6 +3709,7 @@ export class InteractiveMode {
 			this.streamingComponent.setHideThinkingBlock(this.hideThinkingBlock);
 			this.streamingComponent.updateContent(this.streamingMessage);
 			this.chatContainer.addChild(this.streamingComponent);
+			this.setChatComponentMutable(this.streamingComponent, true);
 		}
 
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
@@ -3613,8 +3758,7 @@ export class InteractiveMode {
 
 			// Restart TUI
 			this.ui.start();
-			// Force full re-render since external editor uses alternate screen
-			this.ui.requestRender(true);
+			this.ui.rebuild();
 		}
 	}
 
@@ -3628,15 +3772,19 @@ export class InteractiveMode {
 	}
 
 	showError(errorMessage: string): void {
+		this.sealStatus();
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("error", `Error: ${errorMessage}`), 1, 0));
 		this.chatContainer.addChild(new Spacer(1));
+		this.promoteFinalizedChatPrefix();
 		this.ui.requestRender();
 	}
 
 	showWarning(warningMessage: string): void {
+		this.sealStatus();
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
+		this.promoteFinalizedChatPrefix();
 		this.ui.requestRender();
 	}
 
@@ -3657,7 +3805,7 @@ export class InteractiveMode {
 			),
 		);
 		this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("warning", text)));
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	/**
@@ -3833,11 +3981,13 @@ export class InteractiveMode {
 
 	/** Move pending bash components from pending area to chat */
 	private flushPendingBashComponents(): void {
+		if (this.pendingBashComponents.length > 0) this.sealStatus();
 		for (const component of this.pendingBashComponents) {
 			this.pendingMessagesContainer.removeChild(component);
 			this.chatContainer.addChild(component);
 		}
 		this.pendingBashComponents = [];
+		this.promoteFinalizedChatPrefix();
 	}
 
 	// =========================================================================
@@ -3888,7 +4038,6 @@ export class InteractiveMode {
 					editorPaddingX: this.settingsManager.getEditorPaddingX(),
 					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
 					quietStartup: this.settingsManager.getQuietStartup(),
-					clearOnShrink: this.settingsManager.getClearOnShrink(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
 				},
@@ -3899,19 +4048,11 @@ export class InteractiveMode {
 					},
 					onShowImagesChange: (enabled) => {
 						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setShowImages(enabled);
-							}
-						}
+						this.updateToolImagePresentation((component) => component.setShowImages(enabled));
 					},
 					onImageWidthCellsChange: (width) => {
 						this.settingsManager.setImageWidthCells(width);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setImageWidthCells(width);
-							}
-						}
+						this.updateToolImagePresentation((component) => component.setImageWidthCells(width));
 					},
 					onAutoResizeImagesChange: (enabled) => {
 						this.settingsManager.setImageAutoResize(enabled);
@@ -3959,12 +4100,11 @@ export class InteractiveMode {
 					onHideThinkingBlockChange: (hidden) => {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
-						for (const child of this.chatContainer.children) {
+						for (const child of [...this.committedChatContainer.children, ...this.chatContainer.children]) {
 							if (child instanceof AssistantMessageComponent) {
 								child.setHideThinkingBlock(hidden);
 							}
 						}
-						this.chatContainer.clear();
 						this.rebuildChatFromMessages();
 					},
 					onCollapseChangelogChange: (collapsed) => {
@@ -3999,10 +4139,6 @@ export class InteractiveMode {
 						if (this.editor !== this.defaultEditor && this.editor.setAutocompleteMaxVisible !== undefined) {
 							this.editor.setAutocompleteMaxVisible(maxVisible);
 						}
-					},
-					onClearOnShrinkChange: (enabled) => {
-						this.settingsManager.setClearOnShrink(enabled);
-						this.ui.setClearOnShrink(enabled);
 					},
 					onShowTerminalProgressChange: (enabled) => {
 						this.settingsManager.setShowTerminalProgress(enabled);
@@ -4370,7 +4506,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.chatContainer.clear();
+						this.clearTranscript();
 						this.renderInitialMessages();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.editor.setText(result.editorText);
@@ -4911,7 +5047,7 @@ export class InteractiveMode {
 		this.editorContainer.clear();
 		this.editorContainer.addChild(reloadBox);
 		this.ui.setFocus(reloadBox);
-		this.ui.requestRender(true);
+		this.ui.rebuild();
 		await new Promise((resolve) => process.nextTick(resolve));
 
 		const dismissReloadBox = (editor: Component) => {
@@ -4943,7 +5079,6 @@ export class InteractiveMode {
 				this.editor.setAutocompleteMaxVisible?.(autocompleteMaxVisible);
 			}
 			this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
-			this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 			this.setupAutocompleteProvider();
 			const runner = this.session.extensionRunner;
 			this.setupExtensionShortcuts(runner);
@@ -5086,14 +5221,14 @@ export class InteractiveMode {
 			} else {
 				this.showWarning("Usage: /name <name>");
 			}
-			this.ui.requestRender();
+			this.commitFinalizedChatOutput();
 			return;
 		}
 
 		this.session.setSessionName(name);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	private handleSessionCommand(): void {
@@ -5130,7 +5265,7 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(info, 1, 0));
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	private handleChangelogCommand(): void {
@@ -5151,7 +5286,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Markdown(changelogMarkdown, 1, 1, this.getMarkdownThemeWithSettings()));
 		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	/**
@@ -5280,7 +5415,7 @@ export class InteractiveMode {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Markdown(hotkeys.trim(), 1, 1, this.getMarkdownThemeWithSettings()));
 		this.chatContainer.addChild(new DynamicBorder());
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	private async handleClearCommand(): Promise<void> {
@@ -5297,7 +5432,7 @@ export class InteractiveMode {
 			this.renderCurrentSessionState();
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(new Text(`${theme.fg("accent", "✓ New session started")}`, 1, 1));
-			this.ui.requestRender();
+			this.commitFinalizedChatOutput();
 		} catch (error: unknown) {
 			await this.handleFatalRuntimeError("Failed to create session", error);
 		}
@@ -5333,25 +5468,39 @@ export class InteractiveMode {
 		this.chatContainer.addChild(
 			new Text(`${theme.fg("accent", "✓ Debug log written")}\n${theme.fg("muted", debugLogPath)}`, 1, 1),
 		);
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	private handleArminSaysHi(): void {
+		const component = new ArminComponent(this.ui, () => {
+			if (!this.mutableChatComponents.has(component) || !this.chatContainer.children.includes(component)) return;
+			this.setChatComponentMutable(component, false);
+			this.promoteFinalizedChatPrefix();
+			this.ui.requestRender();
+		});
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new ArminComponent(this.ui));
-		this.ui.requestRender();
+		this.chatContainer.addChild(component);
+		this.setChatComponentMutable(component, true);
+		this.commitFinalizedChatOutput();
 	}
 
 	private handleDementedDelves(): void {
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new EarendilAnnouncementComponent());
-		this.ui.requestRender();
+		this.commitFinalizedChatOutput();
 	}
 
 	private handleDaxnuts(): void {
+		const component = new DaxnutsComponent(this.ui, () => {
+			if (!this.mutableChatComponents.has(component) || !this.chatContainer.children.includes(component)) return;
+			this.setChatComponentMutable(component, false);
+			this.promoteFinalizedChatPrefix();
+			this.ui.requestRender();
+		});
 		this.chatContainer.addChild(new Spacer(1));
-		this.chatContainer.addChild(new DaxnutsComponent(this.ui));
-		this.ui.requestRender();
+		this.chatContainer.addChild(component);
+		this.setChatComponentMutable(component, true);
+		this.commitFinalizedChatOutput();
 	}
 
 	private checkDaxnutsEasterEgg(model: { provider: string; id: string }): void {
@@ -5381,6 +5530,7 @@ export class InteractiveMode {
 				this.pendingMessagesContainer.addChild(this.bashComponent);
 				this.pendingBashComponents.push(this.bashComponent);
 			} else {
+				this.sealStatus();
 				this.chatContainer.addChild(this.bashComponent);
 			}
 
@@ -5397,6 +5547,7 @@ export class InteractiveMode {
 
 			// Record the result in session
 			this.session.recordBashResult(command, result, { excludeFromContext });
+			this.promoteFinalizedChatPrefix();
 			this.bashComponent = undefined;
 			this.ui.requestRender();
 			return;
@@ -5405,6 +5556,7 @@ export class InteractiveMode {
 		// Normal execution path (possibly with custom operations)
 		const isDeferred = this.session.isStreaming;
 		this.bashComponent = new BashExecutionComponent(command, this.ui, excludeFromContext);
+		this.setChatComponentMutable(this.bashComponent, true);
 
 		if (isDeferred) {
 			// Show in pending area when agent is streaming
@@ -5412,6 +5564,7 @@ export class InteractiveMode {
 			this.pendingBashComponents.push(this.bashComponent);
 		} else {
 			// Show in chat immediately when agent is idle
+			this.sealStatus();
 			this.chatContainer.addChild(this.bashComponent);
 		}
 		this.ui.requestRender();
@@ -5443,6 +5596,8 @@ export class InteractiveMode {
 			this.showError(`Bash command failed: ${error instanceof Error ? error.message : "Unknown error"}`);
 		}
 
+		if (this.bashComponent) this.setChatComponentMutable(this.bashComponent, false);
+		this.promoteFinalizedChatPrefix();
 		this.bashComponent = undefined;
 		this.ui.requestRender();
 	}

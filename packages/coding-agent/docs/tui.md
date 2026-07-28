@@ -6,6 +6,18 @@ Extensions and custom tools can render custom TUI components for interactive use
 
 **Source:** [`@leanandmean/tui`](https://github.com/earendil-works/pi-mono/tree/main/packages/tui)
 
+## Transcript Rendering
+
+**Scramjet divergence source:** [`packages/tui/src/tui.ts`](../../tui/src/tui.ts)
+
+The interactive mode separates terminal output into append-only committed history and a bounded live canvas. Finalized transcript components are retained for later rebuilds but written to native scrollback only once during routine rendering. Streaming messages, running tools, status, widgets, the editor, footer, autocomplete, and overlays stay live.
+
+Mutable output is tail-windowed to at most `terminal.rows - 1` rendered lines before it is written, so live content cannot push mutable rows into native scrollback. Finalization removes the mutable preview and commits the component's finalized presentation once. Pending tools form an ordering barrier, and image-backed tools commit only after their conversions settle.
+
+At the TUI API level, `setLiveRegionStart(component)` selects the first direct child in the live canvas, `commit()` atomically appends newly finalized rows, and `rebuild()` deliberately repaints retained history. Detaching the selected component safely resets committed rendering and returns the TUI to legacy full-repaint rendering. Routine updates, content shrink, temporary-UI dismissal, and height-only resize do not clear scrollback or replay committed history. Width and theme changes, session reconstruction, presentation-setting changes, reload, resume, and external-editor return use deliberate rebuilds because retained output must be reflowed or restyled; those rebuilds intentionally bottom-anchor the display.
+
+Overlays remain screen-relative and are composed over the bounded live canvas. Closing an overlay or autocomplete restores the underlying live rows without mutating committed history.
+
 ## Component Interface
 
 All components implement:
