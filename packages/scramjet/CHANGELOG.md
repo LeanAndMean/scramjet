@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.63.2 — Surface npm install on the root README
+
+Adds a prominent `## Install` section to the root `README.md` so the npm install path is the first setup content a visitor sees. Fixes [#410](https://github.com/LeanAndMean/scramjet/issues/410).
+
+### Changed
+
+- Add an `## Install` section to the root `README.md` (Node >= 20 prerequisite, `npm install -g @leanandmean/scramjet`, link to the package README's Quick start) and point the Overview package-README link at usage and design docs.
+
 ## 0.63.1 — Prevent TUI transcript jumps
 
 Separates finalized terminal transcript history from the mutable live canvas so response completion and routine UI updates preserve scrollback position. Fixes [#389](https://github.com/LeanAndMean/scramjet/issues/389).
