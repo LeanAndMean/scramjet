@@ -6,6 +6,7 @@ import type { AgentSession } from "./agent-session.js";
 import type { AgentSessionRuntimeDiagnostic, AgentSessionServices } from "./agent-session-services.js";
 import type { ReplacedSessionContext, SessionShutdownEvent, SessionStartEvent } from "./extensions/index.js";
 import { emitSessionShutdownEvent } from "./extensions/runner.js";
+import { restoreScramjetCommandInvocation } from "./scramjet-command-parser.js";
 import type { CreateAgentSessionResult } from "./sdk.js";
 import { assertSessionCwdExists } from "./session-cwd.js";
 import { SessionManager } from "./session-manager.js";
@@ -48,17 +49,6 @@ export class SessionImportFileNotFoundError extends Error {
 		this.name = "SessionImportFileNotFoundError";
 		this.filePath = filePath;
 	}
-}
-
-function extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
-	if (typeof content === "string") {
-		return content;
-	}
-
-	return content
-		.filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
-		.map((part) => part.text)
-		.join("");
 }
 
 /**
@@ -291,7 +281,7 @@ export class AgentSessionRuntime {
 				throw new Error("Invalid entry ID for forking");
 			}
 			targetLeafId = selectedEntry.parentId;
-			selectedText = extractUserMessageText(selectedEntry.message.content);
+			selectedText = restoreScramjetCommandInvocation(selectedEntry, this.session.sessionManager.getEntries());
 		}
 
 		const previousSessionFile = this.session.sessionFile;

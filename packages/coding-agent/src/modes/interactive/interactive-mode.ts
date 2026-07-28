@@ -68,9 +68,9 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
 import { describeRuntimeError, type ResourceDiagnostic } from "../../core/resource-loader.js";
-import { parseScramjetCommandBlock } from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: scramjet-command block parsing (issue 82)
+import { parseScramjetCommandBlock, restoreScramjetCommandInvocation } from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: scramjet-command restoration (issues 82, 414)
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
-import { type SessionContext, SessionManager } from "../../core/session-manager.js";
+import { type SessionContext, SessionManager, type SessionMessageEntry } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
@@ -3177,7 +3177,10 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
+	private addMessageToChat(
+		message: AgentMessage,
+		options?: { populateHistory?: boolean; historyText?: string },
+	): void {
 		this.sealStatus();
 		switch (message.role) {
 			case "bashExecution": {
@@ -3240,9 +3243,11 @@ export class InteractiveMode {
 							this.chatContainer.addChild(userComponent);
 						}
 						if (options?.populateHistory) {
-							const compactForm = scramjetBlock.userContext
-								? `/${scramjetBlock.name} ${scramjetBlock.userContext}`
-								: `/${scramjetBlock.name}`;
+							const compactForm =
+								options.historyText ??
+								(scramjetBlock.userContext
+									? `/${scramjetBlock.name} ${scramjetBlock.userContext}`
+									: `/${scramjetBlock.name}`);
 							this.editor.addToHistory?.(compactForm);
 						}
 					} else {
@@ -3305,6 +3310,12 @@ export class InteractiveMode {
 	): void {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
+		const entries = options.populateHistory ? this.sessionManager.getEntries() : [];
+		const entriesByMessage = new Map<AgentMessage, SessionMessageEntry>(
+			entries
+				.filter((entry): entry is SessionMessageEntry => entry.type === "message")
+				.map((entry) => [entry.message, entry]),
+		);
 
 		if (options.updateFooter) {
 			this.footer.invalidate();
@@ -3385,7 +3396,11 @@ export class InteractiveMode {
 				}
 			} else {
 				// All other messages use standard rendering
-				this.addMessageToChat(message, options);
+				const entry = entriesByMessage.get(message);
+				this.addMessageToChat(message, {
+					...options,
+					historyText: entry ? restoreScramjetCommandInvocation(entry, entries) : undefined,
+				});
 			}
 		}
 
