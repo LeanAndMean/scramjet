@@ -2913,6 +2913,7 @@ export class InteractiveMode {
 				break;
 
 			case "tool_execution_start": {
+				this.sealStatus();
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
 					component = new ToolExecutionComponent(

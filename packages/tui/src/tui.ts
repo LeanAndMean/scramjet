@@ -1123,7 +1123,7 @@ export class TUI extends Container {
 		buffer += this.deleteKittyImages(this.previousLiveKittyImageIds);
 		const oldHeight = this.previousLiveLines.length;
 		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
-		if (heightChanged && !this.commitRequested) {
+		if (heightChanged && !this.commitRequested && this.committedLines.length + oldHeight >= height) {
 			const eraseStart = Math.max(0, Math.min(height - oldHeight, height - liveLines.length));
 			const liveStart = height - liveLines.length;
 			buffer += `\x1b[${eraseStart + 1};1H`;

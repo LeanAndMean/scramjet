@@ -215,7 +215,7 @@ export class ToolExecutionComponent extends Container {
 				})
 				.finally(() => {
 					this.imageConversions.delete(key);
-					if (!this.sealed) {
+					if (!this.sealed && !this.detached) {
 						this.updateDisplay();
 						this.ui.requestRender();
 					}

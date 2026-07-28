@@ -833,6 +833,53 @@ describe("interactive assistant history", () => {
 		expect(committedChatContainer.children).toHaveLength(0);
 	});
 
+	it("commits a tool that runs after an in-chat status without an intervening message", async () => {
+		const { emit, mode, committedChatContainer, chatContainer } = createInteractiveHarness();
+
+		(mode.showStatus as (message: string) => void).call(mode, "STATUS-BEFORE-TOOL");
+		await emit({ type: "tool_execution_start", toolCallId: "after-status", toolName: "unknown", args: {} });
+		await emit({
+			type: "tool_execution_end",
+			toolCallId: "after-status",
+			result: { content: [{ type: "text", text: "tool-after-status" }] },
+			isError: false,
+		});
+		await emit({ type: "agent_end", messages: [] });
+
+		expect(committedChatContainer.render(80).join("\n")).toContain("tool-after-status");
+		expect(chatContainer.children).toHaveLength(0);
+	});
+
+	it("does not re-render or re-run renderers when a detached unsealed conversion settles", async () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle: (result: null) => void = () => {};
+		imageConversion.convertToPng.mockReturnValueOnce(
+			new Promise((resolve) => {
+				settle = resolve;
+			}),
+		);
+		const { emit, mode, ui } = createInteractiveHarness();
+		const renderCall = vi.fn(() => new Text("tool", 0, 0));
+		mode.getRegisteredToolDefinition = () => ({ renderCall });
+		await emit({ type: "tool_execution_start", toolCallId: "pending", toolName: "unknown", args: {} });
+		await emit({
+			type: "tool_execution_update",
+			toolCallId: "pending",
+			partialResult: { content: [{ type: "image", data: "pending-jpeg", mimeType: "image/jpeg" }] },
+		});
+
+		(mode.pendingTools as Map<string, unknown>).clear();
+		(mode.clearTranscript as () => void).call(mode);
+
+		const requestRender = vi.spyOn(ui, "requestRender");
+		const rendererCallsBeforeSettle = renderCall.mock.calls.length;
+		settle(null);
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		expect(requestRender).not.toHaveBeenCalled();
+		expect(renderCall.mock.calls.length).toBe(rendererCallsBeforeSettle);
+		requestRender.mockRestore();
+	});
+
 	it.each([
 		["aborted" as const, "Operation aborted"],
 		["error" as const, "Error: provider failed"],

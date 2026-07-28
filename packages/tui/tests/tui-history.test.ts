@@ -529,6 +529,67 @@ describe("TUI committed history", () => {
 		expect((output.match(/\x1b_G/g) ?? []).length).toBe((output.match(/\x1b\\/g) ?? []).length);
 	});
 
+	it("does not duplicate the live region on height resize when content is shorter than the screen", async () => {
+		const terminal = new HeadlessTerminal(30, 10);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["h1", "h2"]);
+		const live = new MutableComponent(["live-a", "editor"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		terminal.resize(30, 14);
+		await render(tui, terminal);
+
+		let buffer = terminal.bufferLines().join("\n");
+		expect(buffer.match(/live-a/g)).toHaveLength(1);
+		expect(buffer.match(/editor/g)).toHaveLength(1);
+
+		terminal.resize(30, 7);
+		await render(tui, terminal);
+		buffer = terminal.bufferLines().join("\n");
+		expect(buffer.match(/live-a/g)).toHaveLength(1);
+		expect(buffer.match(/editor/g)).toHaveLength(1);
+	});
+
+	it("does not push ghost overlay rows into scrollback on height shrink", async () => {
+		const terminal = new HeadlessTerminal(30, 6);
+		const tui = new TUI(terminal);
+		const history = new MutableComponent(["h1", "h2", "h3", "h4", "h5", "h6"]);
+		const live = new MutableComponent(["live-b", "editor"]);
+		const overlay = new MutableComponent(["OVERLAY"]);
+		tui.addChild(history);
+		tui.addChild(live);
+		tui.setLiveRegionStart(live);
+		tui.start();
+		await render(tui, terminal);
+
+		tui.showOverlay(overlay, { anchor: "top-left", width: 10 });
+		await render(tui, terminal);
+		expect(
+			terminal
+				.bufferLines()
+				.join("\n")
+				.match(/OVERLAY/g),
+		).toHaveLength(1);
+
+		const mark = terminal.markWrites();
+		terminal.resize(30, 4);
+		await render(tui, terminal);
+
+		// The pre-reflow ghost row in scrollback is xterm's own doing (issue 399);
+		// the renderer must not paint a second OVERLAY into the viewport or emit 3J.
+		expect(terminal.writesSince(mark)).not.toContain("\x1b[3J");
+		expect(
+			terminal
+				.visibleLines()
+				.join("\n")
+				.match(/OVERLAY/g),
+		).toHaveLength(1);
+	});
+
 	it("clears all mutable rows when live output becomes empty", async () => {
 		const terminal = new HeadlessTerminal(30, 5);
 		const tui = new TUI(terminal);
