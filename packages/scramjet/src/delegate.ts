@@ -10,7 +10,7 @@ interface DelegateDetails {
 	command: string;
 	depth?: number;
 	effectiveAllowedTools?: string[];
-	error?: "unknown_command" | "cycle";
+	error?: "no_active_command" | "report_pending" | "unknown_caller" | "unknown_command" | "not_subcommand" | "cycle";
 	chain?: string;
 }
 
@@ -19,6 +19,8 @@ interface DelegateSuccessDetails {
 	depth: number;
 	effectiveAllowedTools?: string[];
 }
+
+export const DELEGATE_TOOL_NAME = "delegate";
 
 const MAX_RENDERED_ARGS = 60;
 
@@ -92,10 +94,14 @@ export function intersectTools(caller: string[] | undefined, callee: string[] | 
 
 export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 	pi.registerTool({
-		name: "delegate",
+		name: DELEGATE_TOOL_NAME,
 		label: "Delegate",
 		description:
-			"Invoke another scramjet-registered command as a subroutine. The command's body is returned as text in this tool's result; read it and follow its instructions inside the same conversation context. The `args` string is substituted into $ARGUMENTS, $@, and $1-$N within the body (plus bash-style slicing), mirroring Pi's slash-command argument expansion. Cycle detection rejects re-entering a command already on the call stack for this turn.",
+			"Load a registered delegate-only subcommand's instructions into this conversation for you, the current agent, to execute immediately yourself in the same conversation. Do not use for separate-agent work, ordinary top-level commands, completion routing, or future suggestions. The `args` string is substituted into $ARGUMENTS, $@, and $1-$N within the body (plus bash-style slicing), mirroring Pi's slash-command argument expansion. Cycle detection rejects repeating the active command or a previously loaded subcommand during this turn.",
+		promptSnippet: "Load subcommand instructions for the current agent to execute now in the same conversation.",
+		promptGuidelines: [
+			"Use `delegate` only to load delegate-only subcommands that you will execute now yourself; use `subagent` for separate-agent work and status/suggestion tools for future top-level routing.",
+		],
 		parameters: Type.Object({
 			command: Type.String({
 				description: "The qualified command name to invoke, e.g. 'mach12:push'",
@@ -137,34 +143,45 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 			return new Container();
 		},
 		async execute(_id, params) {
+			const reject = (error: NonNullable<DelegateDetails["error"]>, text: string, chain?: string) => ({
+				content: [{ type: "text" as const, text }],
+				details: { error, command: params.command, ...(chain === undefined ? {} : { chain }) } satisfies DelegateDetails,
+			});
+			const activeCommand = activeCommandName(state.lifecycle);
+			if (activeCommand === null) {
+				return reject(
+					"no_active_command",
+					"ERROR: delegate requires an active command. Start the top-level command before loading a subcommand.",
+				);
+			}
+			if (state.lifecycle.lastReport !== null) {
+				return reject(
+					"report_pending",
+					"ERROR: terminal command status is pending dispatch; no more subcommand work may start.",
+				);
+			}
+			const caller = state.registry.get(activeCommand);
+			if (!caller) {
+				return reject(
+					"unknown_caller",
+					`ERROR: active command '${activeCommand}' is absent from the live registry. Restart the command before loading a subcommand.`,
+				);
+			}
 			const def = state.registry.get(params.command);
 			if (!def) {
-				const details: DelegateDetails = { error: "unknown_command", command: params.command };
-				return {
-					content: [
-						{
-							type: "text",
-							text: `ERROR: unknown command '${params.command}'. Check the registry or fix the name.`,
-						},
-					],
-					details,
-				};
+				return reject("unknown_command", `ERROR: unknown command '${params.command}'. Check the registry or fix the name.`);
 			}
-			if (detectCycle(state.delegateStack, params.command)) {
-				const chain = [...state.delegateStack.map((f) => f.commandName), params.command].join(" -> ");
-				const details: DelegateDetails = { error: "cycle", command: params.command, chain };
-				return {
-					content: [
-						{
-							type: "text",
-							text: `ERROR: cycle detected in delegation chain ${chain}. Refusing to recurse.`,
-						},
-					],
-					details,
-				};
+			if (!def.delegateOnly) {
+				return reject(
+					"not_subcommand",
+					`ERROR: '${params.command}' is an ordinary top-level command, not a delegate-only subcommand. Use slash dispatch, status routing, or a next-step suggestion instead.`,
+				);
 			}
-			const activeCommand = activeCommandName(state.lifecycle);
-			const callerTools = activeCommand !== null ? state.registry.get(activeCommand)?.allowedTools : undefined;
+			if (params.command === activeCommand || detectCycle(state.delegateStack, params.command)) {
+				const chain = [activeCommand, ...state.delegateStack.map((f) => f.commandName), params.command].join(" -> ");
+				return reject("cycle", `ERROR: cycle detected in delegation chain ${chain}. Refusing to recurse.`, chain);
+			}
+			const callerTools = caller.allowedTools;
 			const effectiveAllowedTools = intersectTools(callerTools, def.allowedTools);
 			const frame: DelegateFrame = {
 				commandName: params.command,

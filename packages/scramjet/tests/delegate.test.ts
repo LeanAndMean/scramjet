@@ -2,7 +2,7 @@ import { initTheme, keyText, ToolExecutionComponent } from "@leanandmean/coding-
 import { getKeybindings, KeybindingsManager, setKeybindings } from "@leanandmean/tui";
 import { describe, expect, it } from "vitest";
 import { parseDelegateArgs, substituteArguments } from "../src/commands/substitute.js";
-import { detectCycle, intersectTools, registerDelegateTool } from "../src/delegate.js";
+import { DELEGATE_TOOL_NAME, detectCycle, intersectTools, registerDelegateTool } from "../src/delegate.js";
 import { COMMAND_START_TYPE } from "../src/history.js";
 import { activeCommandName } from "../src/lifecycle.js";
 import type { CommandDef, DelegateFrame, ScramjetState, SidebarEntry } from "../src/types.js";
@@ -38,9 +38,10 @@ function successResult(scope?: string[]) {
 	};
 }
 
-function def(name: string, body: string, allowedTools?: string[]): CommandDef {
+function def(name: string, body: string, allowedTools?: string[], delegateOnly = true): CommandDef {
 	const d: CommandDef = { name, filePath: `/fake/${name}.md`, body };
 	if (allowedTools !== undefined) d.allowedTools = allowedTools;
+	if (delegateOnly) d.delegateOnly = true;
 	return d;
 }
 
@@ -168,11 +169,17 @@ describe("intersectTools — caller vs callee semantics", () => {
 });
 
 describe("registerDelegateTool — registration shape", () => {
-	it("registers exactly one tool named 'delegate' and one before_agent_start handler", () => {
+	it("registers exactly one selected tool with explicit same-context guidance", () => {
 		const { pi, tools, handlers } = recordingPi();
 		registerDelegateTool(pi, freshState());
+		expect(DELEGATE_TOOL_NAME).toBe("delegate");
 		expect(tools).toHaveLength(1);
-		expect(tools[0].name).toBe("delegate");
+		expect(tools[0].name).toBe(DELEGATE_TOOL_NAME);
+		expect(tools[0].description).toMatch(/current agent.*execute immediately.*same conversation/i);
+		expect(tools[0].description).toMatch(/not.*separate-agent.*top-level.*completion routing.*future suggestions/i);
+		expect(tools[0].promptSnippet).toMatch(/current agent.*execute now.*same conversation/i);
+		expect(tools[0].promptGuidelines).toHaveLength(1);
+		expect(tools[0].promptGuidelines[0]).toMatch(/delegate-only.*execute now yourself/i);
 		expect(handlers.has("before_agent_start")).toBe(true);
 	});
 });
@@ -311,7 +318,12 @@ describe("registerDelegateTool — execute paths", () => {
 		state: ScramjetState;
 		execute: (params: { command: string; args: string }) => Promise<any>;
 	} {
-		const state = freshState({ registry: new Map(entries.map((d) => [d.name, d])) });
+		const caller = def("test:caller", "caller", undefined, false);
+		const allEntries = [caller, ...entries];
+		const state = freshState({
+			registry: new Map(allEntries.map((d) => [d.name, d])),
+			lifecycle: lifecycleFor("dormant", caller.name),
+		});
 		const { pi, tools } = recordingPi();
 		registerDelegateTool(pi, state);
 		const tool = tools[0];
@@ -321,13 +333,88 @@ describe("registerDelegateTool — execute paths", () => {
 		};
 	}
 
-	it("returns an error for an unknown command and does not push a frame", async () => {
-		const { state, execute } = setupWithRegistry([]);
-		const result = await execute({ command: "mach12:nope", args: "" });
-		expect(result.content[0].text).toContain("unknown command");
-		expect(result.content[0].text).toContain("mach12:nope");
-		expect(result.details.error).toBe("unknown_command");
-		expect(state.delegateStack).toHaveLength(0);
+	it("rejects invalid caller, lifecycle, and target states without mutation", async () => {
+		const cases = [
+			{ name: "idle", state: freshState({ registry: new Map() }), command: "missing", error: "no_active_command" },
+			{
+				name: "reported",
+				state: freshState({
+					registry: new Map([["caller", def("caller", "body", undefined, false)]]),
+					lifecycle: lifecycleFor("reported", "caller"),
+				}),
+				command: "missing",
+				error: "report_pending",
+			},
+			{
+				name: "stale caller",
+				state: freshState({ registry: new Map(), lifecycle: lifecycleFor("dormant", "stale") }),
+				command: "missing",
+				error: "unknown_caller",
+			},
+			{
+				name: "unknown target",
+				state: freshState({
+					registry: new Map([["caller", def("caller", "body", undefined, false)]]),
+					lifecycle: lifecycleFor("dormant", "caller"),
+				}),
+				command: "missing",
+				error: "unknown_command",
+			},
+			{
+				name: "top-level target",
+				state: freshState({
+					registry: new Map([
+						["caller", def("caller", "body", undefined, false)],
+						["top", def("top", "body", undefined, false)],
+					]),
+					lifecycle: lifecycleFor("dormant", "caller"),
+				}),
+				command: "top",
+				error: "not_subcommand",
+			},
+		];
+
+		for (const testCase of cases) {
+			const { pi, tools } = recordingPi();
+			registerDelegateTool(pi, testCase.state);
+			const before = {
+				stack: structuredClone(testCase.state.delegateStack),
+				sidebar: structuredClone(testCase.state.sidebarLog),
+				lifecycle: structuredClone(testCase.state.lifecycle),
+				generation: testCase.state.lifecycleGeneration,
+			};
+			const result = await tools[0].execute(
+				"call",
+				{ command: testCase.command, args: "" },
+				undefined,
+				undefined,
+				{ cwd: "/" },
+			);
+			expect(result.details.error, testCase.name).toBe(testCase.error);
+			expect(testCase.state.delegateStack).toEqual(before.stack);
+			expect(testCase.state.sidebarLog).toEqual(before.sidebar);
+			expect(testCase.state.lifecycle).toEqual(before.lifecycle);
+			expect(testCase.state.lifecycleGeneration).toBe(before.generation);
+			expect(pi.appended).toEqual([]);
+		}
+	});
+
+	it.each(["running", "probing", "waiting", "dormant"] as const)("allows calls while %s", async (phase) => {
+		const caller = def("caller", "caller", undefined, false);
+		const target = def("target", "target");
+		const state = freshState({
+			registry: new Map([
+				[caller.name, caller],
+				[target.name, target],
+			]),
+			lifecycle: lifecycleFor(phase, caller.name),
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+		const result = await tools[0].execute("call", { command: target.name, args: "" }, undefined, undefined, {
+			cwd: "/",
+		});
+		expect(result.details.error).toBeUndefined();
 	});
 
 	it("returns the substituted body and pushes a frame for a valid call", async () => {
@@ -345,7 +432,10 @@ describe("registerDelegateTool — execute paths", () => {
 
 	it("journals delegated command starts without changing activeTopLevelCommand", async () => {
 		const state = freshState({
-			registry: new Map([["mach12:push", def("mach12:push", "body")]]),
+			registry: new Map([
+				["mach12:issue-plan", def("mach12:issue-plan", "caller", undefined, false)],
+				["mach12:push", def("mach12:push", "body")],
+			]),
 			lifecycle: lifecycleFor("dormant", "mach12:issue-plan"),
 		});
 		const { pi, tools } = recordingPi();
@@ -472,6 +562,19 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(state.delegateStack[0].effectiveAllowedTools).toBeUndefined();
 	});
 
+	it("rejects the active caller loading itself without mutation", async () => {
+		const caller = def("caller", "body", undefined, true);
+		const state = freshState({ registry: new Map([[caller.name, caller]]), lifecycle: lifecycleFor("dormant", caller.name) });
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+		const result = await tools[0].execute("call", { command: caller.name, args: "" }, undefined, undefined, { cwd: "/" });
+		expect(result.details.error).toBe("cycle");
+		expect(result.details.chain).toBe("caller -> caller");
+		expect(state.delegateStack).toEqual([]);
+		expect(state.sidebarLog).toEqual([]);
+		expect(pi.appended).toEqual([]);
+	});
+
 	it("rejects a cycle and does not push a second frame for the same name", async () => {
 		const { state, execute } = setupWithRegistry([def("mach12:push", "body-with-$1", ["Read"])]);
 		await execute({ command: "mach12:push", args: "" });
@@ -497,13 +600,13 @@ describe("registerDelegateTool — execute paths", () => {
 
 		const result = await execute({ command: "a", args: "" });
 		expect(result.details.error).toBe("cycle");
-		expect(result.details.chain).toBe("a -> b -> a");
+		expect(result.details.chain).toBe("test:caller -> a -> b -> a");
 		expect(result.content[0].text).toContain("a -> b -> a");
 		// No third frame pushed; latched stack stays at depth 2.
 		expect(state.delegateStack).toHaveLength(2);
 	});
 
-	it("nested delegation with no active command: each gets own scope", async () => {
+	it("distinct sequential subcommands each get their own scope", async () => {
 		const { state, execute } = setupWithRegistry([
 			def("a", "body-a", ["Read", "Bash"]),
 			def("b", "body-b"),
@@ -523,7 +626,7 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(r3.details.depth).toBe(3);
 
 		expect(state.delegateStack.map((f) => f.commandName)).toEqual(["a", "b", "c"]);
-		// No active command: callerTools is undefined, each frame gets its own scope.
+		// The setup caller is unrestricted, so each frame keeps its own scope.
 		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["Read", "Bash"]);
 		expect(state.delegateStack[1].effectiveAllowedTools).toBeUndefined();
 		expect(state.delegateStack[2].effectiveAllowedTools).toEqual(["Bash"]);
