@@ -1122,6 +1122,36 @@ export class TUI extends Container {
 		let buffer = "\x1b[?2026h";
 		buffer += this.deleteKittyImages(this.previousLiveKittyImageIds);
 		const oldHeight = this.previousLiveLines.length;
+		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
+		if (heightChanged && !this.commitRequested) {
+			const eraseStart = Math.max(0, Math.min(height - oldHeight, height - liveLines.length));
+			const liveStart = height - liveLines.length;
+			buffer += `\x1b[${eraseStart + 1};1H`;
+			for (let row = eraseStart; row < height; row++) {
+				buffer += "\x1b[2K";
+				if (row < height - 1) buffer += "\x1b[1B\r";
+			}
+			if (liveLines.length > 0) {
+				buffer += `\x1b[${liveStart + 1};1H`;
+				buffer += liveLines.join("\r\n");
+			}
+			buffer += "\x1b[?2026l";
+			this.terminal.write(buffer);
+
+			this.previousLiveLines = liveLines;
+			this.previousLiveKittyImageIds = this.collectKittyImageIds(liveLines);
+			this.previousWidth = width;
+			this.previousHeight = height;
+			this.cursorRow =
+				liveLines.length > 0 ? this.committedLines.length + liveLines.length - 1 : this.committedLines.length;
+			this.hardwareCursorRow = this.cursorRow;
+			const absoluteCursor = cursorPos
+				? { row: this.committedLines.length + cursorPos.row, col: cursorPos.col }
+				: null;
+			this.positionHardwareCursor(absoluteCursor, this.committedLines.length + liveLines.length);
+			return;
+		}
+
 		const oldEndRow = this.committedLines.length + Math.max(0, oldHeight - 1);
 		const moveToEnd = oldEndRow - this.hardwareCursorRow;
 		if (moveToEnd > 0) buffer += `\x1b[${moveToEnd}B`;

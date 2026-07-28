@@ -408,6 +408,7 @@ export class InteractiveMode {
 			const child = this.chatContainer.children[0];
 			if (this.mutableChatComponents.has(child)) break;
 			this.chatContainer.removeChild(child);
+			if (child instanceof ToolExecutionComponent) child.markCommitted();
 			this.committedChatContainer.addChild(child);
 			promoted = true;
 		}
@@ -429,6 +430,16 @@ export class InteractiveMode {
 
 	private clearTranscript(): void {
 		this.pendingToolFinalizations = new Set();
+		const tools = new Set([
+			...this.pendingTools.values(),
+			...this.committedChatContainer.children.filter(
+				(component): component is ToolExecutionComponent => component instanceof ToolExecutionComponent,
+			),
+			...this.chatContainer.children.filter(
+				(component): component is ToolExecutionComponent => component instanceof ToolExecutionComponent,
+			),
+		]);
+		for (const tool of tools) tool.detach();
 		this.committedChatContainer.clear();
 		this.chatContainer.clear();
 		this.mutableChatComponents.clear();
@@ -3969,6 +3980,7 @@ export class InteractiveMode {
 
 	/** Move pending bash components from pending area to chat */
 	private flushPendingBashComponents(): void {
+		if (this.pendingBashComponents.length > 0) this.sealStatus();
 		for (const component of this.pendingBashComponents) {
 			this.pendingMessagesContainer.removeChild(component);
 			this.chatContainer.addChild(component);
@@ -5517,6 +5529,7 @@ export class InteractiveMode {
 				this.pendingMessagesContainer.addChild(this.bashComponent);
 				this.pendingBashComponents.push(this.bashComponent);
 			} else {
+				this.sealStatus();
 				this.chatContainer.addChild(this.bashComponent);
 			}
 
@@ -5550,6 +5563,7 @@ export class InteractiveMode {
 			this.pendingBashComponents.push(this.bashComponent);
 		} else {
 			// Show in chat immediately when agent is idle
+			this.sealStatus();
 			this.chatContainer.addChild(this.bashComponent);
 		}
 		this.ui.requestRender();

@@ -52,6 +52,9 @@ export class ToolExecutionComponent extends Container {
 	private failedImageConversions = new Set<string>();
 	private hideComponent = false;
 	private sealed = false;
+	private rendererGeneration = 0;
+	private committed = false;
+	private detached = false;
 
 	constructor(
 		toolName: string,
@@ -126,13 +129,15 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
+		const rendererGeneration = this.rendererGeneration;
 		return {
 			args: this.args,
 			toolCallId: this.toolCallId,
 			invalidate: () => {
-				if (this.sealed) return;
+				if (this.detached || rendererGeneration !== this.rendererGeneration) return;
 				this.invalidate();
-				this.ui.requestRender();
+				if (this.committed) this.ui.rebuild();
+				else this.ui.requestRender();
 			},
 			lastComponent,
 			state: this.rendererState,
@@ -233,7 +238,18 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	seal(): void {
+		if (this.sealed) return;
 		this.sealed = true;
+		this.rendererGeneration += 1;
+	}
+
+	markCommitted(): void {
+		this.committed = true;
+	}
+
+	detach(): void {
+		this.detached = true;
+		this.rendererGeneration += 1;
 	}
 
 	setExpanded(expanded: boolean): void {
