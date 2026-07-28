@@ -7,8 +7,6 @@ import type { AssistantMessage, ToolCall } from "@leanandmean/ai";
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@leanandmean/coding-agent";
 import type { ScramjetState } from "./types.js";
 
-export const MAX_DIRS = 20;
-export const MAX_DEPTH = 10;
 export const CANDIDATES = ["CLAUDE.md", "AGENTS.md"] as const;
 
 function normalizeReadPathInput(filePath: string): string {
@@ -45,7 +43,7 @@ export function directoriesToCheck(filePath: string, cwd: string): { dirs: strin
 
 	const parts = rel.split(sep).filter(Boolean);
 	const dirs: string[] = [];
-	for (let i = 0; i < Math.min(parts.length, MAX_DEPTH); i++) {
+	for (let i = 0; i < parts.length; i++) {
 		dirs.push(resolve(normalizedCwd, ...parts.slice(0, i + 1)));
 	}
 	return { dirs, outsideCwd: false };
@@ -92,8 +90,6 @@ export async function discoverContextFilePaths(
 	const normalizedCwd = resolve(cwd);
 
 	for (const dir of dirs) {
-		if (loadedPaths.size >= MAX_DIRS) break;
-
 		let realDir: string;
 		try {
 			realDir = await realpath(dir);

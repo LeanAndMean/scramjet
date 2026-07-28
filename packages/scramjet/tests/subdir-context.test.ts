@@ -4,12 +4,9 @@ import { join } from "node:path";
 import type { AssistantMessage, ToolCall, Usage } from "@leanandmean/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	CANDIDATES,
 	createStableId,
 	directoriesToCheck,
 	discoverContextFilePaths,
-	MAX_DEPTH,
-	MAX_DIRS,
 	reconstructSubdirState,
 	registerSubdirContext,
 } from "../src/subdir-context.js";
@@ -31,11 +28,13 @@ describe("directoriesToCheck", () => {
 		expect(result).toEqual({ dirs: ["/other/path"], outsideCwd: true });
 	});
 
-	it("caps at MAX_DEPTH", () => {
-		const deep = `${Array.from({ length: 15 }, (_, i) => `d${i}`).join("/")}/file.ts`;
-		const result = directoriesToCheck(deep, "/project");
-		expect(result.dirs).toHaveLength(MAX_DEPTH);
-		expect(result.outsideCwd).toBe(false);
+	it("returns every intermediate directory beyond ten levels in shallowest-first order", () => {
+		const parts = Array.from({ length: 15 }, (_, i) => `d${i}`);
+		const result = directoriesToCheck(`${parts.join("/")}/file.ts`, "/project");
+		expect(result).toEqual({
+			dirs: parts.map((_, i) => join("/project", ...parts.slice(0, i + 1))),
+			outsideCwd: false,
+		});
 	});
 
 	it("handles absolute paths inside cwd", () => {
@@ -246,21 +245,6 @@ describe("discoverContextFilePaths", () => {
 		expect(result).toHaveLength(0);
 
 		await chmod(join(subDir, "CLAUDE.md"), 0o644);
-	});
-
-	it("respects MAX_DIRS cap", async () => {
-		const loaded = new Set<string>();
-		const dirs: string[] = [];
-		for (let i = 0; i < MAX_DIRS + 5; i++) {
-			const subDir = join(tmpDir, `dir${i}`);
-			await mkdir(subDir);
-			await writeFile(join(subDir, "CLAUDE.md"), `content ${i}`);
-			dirs.push(subDir);
-		}
-
-		const result = await discoverContextFilePaths(dirs, loaded, tmpDir);
-		expect(result.length).toBeLessThanOrEqual(MAX_DIRS * CANDIDATES.length);
-		expect(loaded.size).toBeLessThanOrEqual(MAX_DIRS);
 	});
 
 	it("returns files ordered shallowest-first", async () => {
@@ -751,27 +735,28 @@ describe("registerSubdirContext — message_end handler", () => {
 		expect(result.message.content[3]).toEqual(makeReadToolCall("tc_2", "b/file.ts"));
 	});
 
-	it("discovers all intermediate directories for deep reads", async () => {
-		const dirA = join(tmpDir, "a");
-		const dirABC = join(tmpDir, "a", "b", "c");
-		await mkdir(dirABC, { recursive: true });
-		await writeFile(join(dirA, "CLAUDE.md"), "level-a");
-		await writeFile(join(dirABC, "CLAUDE.md"), "level-abc");
+	it("discovers all intermediate directories for reads deeper than ten levels", async () => {
+		const parts = Array.from({ length: 15 }, (_, i) => `d${i}`);
+		const shallowDir = join(tmpDir, parts[0]);
+		const deepDir = join(tmpDir, ...parts);
+		await mkdir(deepDir, { recursive: true });
+		await writeFile(join(shallowDir, "CLAUDE.md"), "shallow");
+		await writeFile(join(deepDir, "CLAUDE.md"), "deep");
 
 		const { pi, handlers } = recordingPi();
 		const state = freshState();
 		registerSubdirContext(pi, state);
 
-		const message = makeAssistant([makeReadToolCall("tc_1", "a/b/c/file.ts")]);
+		const readPath = join(...parts, "file.ts");
+		const message = makeAssistant([makeReadToolCall("tc_1", readPath)]);
 		const handler = handlers.get("message_end")![0];
 		const result = (await handler({ type: "message_end", message }, makeCtx(tmpDir))) as any;
 
 		expect(result).toBeDefined();
-		// Should have 2 injected + 1 original = 3
 		expect(result.message.content).toHaveLength(3);
-		expect(result.message.content[0].arguments.path).toBe(join("a", "CLAUDE.md"));
-		expect(result.message.content[1].arguments.path).toBe(join("a", "b", "c", "CLAUDE.md"));
-		expect(result.message.content[2]).toEqual(makeReadToolCall("tc_1", "a/b/c/file.ts"));
+		expect(result.message.content[0].arguments.path).toBe(join(parts[0], "CLAUDE.md"));
+		expect(result.message.content[1].arguments.path).toBe(join(...parts, "CLAUDE.md"));
+		expect(result.message.content[2]).toEqual(makeReadToolCall("tc_1", readPath));
 	});
 
 	it("at-prefixed read paths are normalized before discovery", async () => {
@@ -926,11 +911,11 @@ describe("registerSubdirContext — message_end handler", () => {
 		expect(id1).not.toBe(id2);
 	});
 
-	it("respects MAX_DIRS cap across multiple messages", async () => {
-		for (let i = 0; i < MAX_DIRS + 3; i++) {
-			const d = join(tmpDir, `d${i}`);
-			await mkdir(d);
-			await writeFile(join(d, "CLAUDE.md"), `content ${i}`);
+	it("discovers context after twenty directories were claimed", async () => {
+		for (let i = 0; i < 21; i++) {
+			const dir = join(tmpDir, `d${i}`);
+			await mkdir(dir);
+			await writeFile(join(dir, "CLAUDE.md"), `content ${i}`);
 		}
 
 		const { pi, handlers } = recordingPi();
@@ -938,11 +923,19 @@ describe("registerSubdirContext — message_end handler", () => {
 		registerSubdirContext(pi, state);
 
 		const handler = handlers.get("message_end")![0];
-		for (let i = 0; i < MAX_DIRS + 3; i++) {
-			const msg = makeAssistant([makeReadToolCall(`tc_${i}`, `d${i}/file.ts`)]);
-			await handler({ type: "message_end", message: msg }, makeCtx(tmpDir));
+		for (let i = 0; i < 20; i++) {
+			const message = makeAssistant([makeReadToolCall(`tc_${i}`, `d${i}/file.ts`)]);
+			await handler({ type: "message_end", message }, makeCtx(tmpDir));
 		}
-		expect(state.subdirLoadedPaths.size).toBeLessThanOrEqual(MAX_DIRS);
+
+		const finalRead = makeReadToolCall("tc_20", "d20/file.ts");
+		const result = (await handler(
+			{ type: "message_end", message: makeAssistant([finalRead]) },
+			makeCtx(tmpDir),
+		)) as any;
+		expect(result.message.content[0].arguments.path).toBe(join("d20", "CLAUDE.md"));
+		expect(result.message.content[1]).toEqual(finalRead);
+		expect(state.subdirLoadedPaths.size).toBe(21);
 	});
 
 	it("session_start reconstructs state from read call/result pairs", async () => {
