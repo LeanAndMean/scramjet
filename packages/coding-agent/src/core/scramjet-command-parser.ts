@@ -1,6 +1,6 @@
 // SCRAMJET-DIVERGENCE: scramjet-command block rendering and restoration (issues 82, 414)
 
-import type { SessionEntry, SessionMessageEntry } from "./session-manager.js";
+import type { CustomEntry, SessionEntry, SessionMessageEntry } from "./session-manager.js";
 
 export interface ParsedScramjetCommandBlock {
 	name: string;
@@ -65,12 +65,12 @@ export function restoreScramjetCommandInvocation(
 	if (!parsed || !/^[^\s/]+$/.test(parsed.name)) return text;
 
 	const commandStart = entries.find(
-		(entry) =>
+		(entry): entry is CustomEntry =>
 			entry.type === "custom" &&
 			entry.customType === "scramjet:command-start" &&
 			entry.parentId === selectedEntry.id,
 	);
-	if (commandStart?.type === "custom") {
+	if (commandStart) {
 		const invocation = exactInvocation(commandStart.data, parsed.name);
 		if (invocation !== null) return invocation;
 	}

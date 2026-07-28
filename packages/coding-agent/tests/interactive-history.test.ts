@@ -225,6 +225,35 @@ describe("interactive assistant history", () => {
 		expect(history).toEqual(["/mach12:issue-plan first  exact", "/mach12:issue-plan second\t exact"]);
 	});
 
+	it("does not correlate equal-but-distinct synthetic history messages", () => {
+		const { mode, setSessionMessages, setSessionEntries, history } = createInteractiveHarness();
+		const expanded = '<scramjet-command name="mach12:issue-plan">\n# Command\n</scramjet-command>';
+		const persisted = { role: "user", content: expanded, timestamp: 1 } as AgentMessage;
+		const synthetic = { ...persisted } as AgentMessage;
+		setSessionMessages([persisted, synthetic]);
+		setSessionEntries([
+			{ type: "message", id: "persisted", parentId: null, timestamp: "2026-01-01", message: persisted },
+			{
+				type: "custom",
+				id: "persisted-start",
+				parentId: "persisted",
+				timestamp: "2026-01-01",
+				customType: "scramjet:command-start",
+				data: {
+					command: "mach12:issue-plan",
+					origin: "user",
+					depth: 0,
+					timestamp: 1,
+					invocationText: "/mach12:issue-plan persisted exact",
+				},
+			},
+		]);
+
+		(mode.renderInitialMessages as () => void).call(mode);
+
+		expect(history).toEqual(["/mach12:issue-plan persisted exact", "/mach12:issue-plan"]);
+	});
+
 	it("rebuilds retained headers while replacing live footers routinely", async () => {
 		const { terminal, mode, ui, committedChatContainer } = createInteractiveHarness();
 		committedChatContainer.addChild(new Text("HEADER-HISTORY", 0, 0));

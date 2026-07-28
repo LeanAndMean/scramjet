@@ -90,6 +90,7 @@ export type {
 	GrepToolCallEvent,
 	InputEvent,
 	InputEventResult,
+	InputSessionEntry,
 	InputSource,
 	KeybindingsManager,
 	LoadExtensionsResult,

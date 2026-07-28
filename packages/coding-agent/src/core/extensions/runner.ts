@@ -35,6 +35,7 @@ import type {
 	ExtensionUIContext,
 	InputEvent,
 	InputEventResult,
+	InputSessionEntry,
 	InputSource,
 	MessageEndEvent,
 	MessageEndEventResult,
@@ -1204,7 +1205,7 @@ export class ExtensionRunner {
 		const ctx = this.createContext();
 		let currentText = text;
 		let currentImages = images;
-		const sessionEntries: NonNullable<Extract<InputEventResult, { action: "transform" }>["sessionEntries"]> = [];
+		const sessionEntries: InputSessionEntry[] = [];
 
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {

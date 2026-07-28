@@ -773,8 +773,10 @@ not the data.
 Depth-0 starts may also carry optional `invocationText`, preserving the exact
 post-editor-trim slash submission for editing, retrying, tree/fork navigation,
 and resumed history. It is restoration metadata, not sidebar data: replay
-projects only the sidebar fields, and the value is excluded from structured
-logs and model context. Because it is durable user text, it remains visible in
+projects only the sidebar fields, and this duplicate metadata field is excluded
+from structured logs and model/provider context. The slash-command arguments
+remain provider-visible inside the expanded command envelope sent as the user
+message. Because `invocationText` is durable user text, it remains visible in
 the local journal and may be retained by session exports or raw RPC entry data.
 Legacy sessions without it reconstruct compact slash syntax semantically.
 

@@ -664,7 +664,16 @@ export class AgentSession {
 					const sessionEntries = this._inputSessionEntries.get(event.message);
 					this._inputSessionEntries.delete(event.message);
 					for (const entry of sessionEntries ?? []) {
-						this.sessionManager.appendCustomEntry(entry.customType, entry.data);
+						try {
+							this.sessionManager.appendCustomEntry(entry.customType, entry.data);
+						} catch (err) {
+							this._extensionRunner.emitError({
+								extensionPath: `session-entry:${entry.customType}`,
+								event: "session_entry_persistence",
+								error: `Failed to persist attached input metadata after its user message; exact input restoration may be unavailable: ${err instanceof Error ? err.message : String(err)}`,
+								stack: err instanceof Error ? err.stack : undefined,
+							});
+						}
 					}
 				}
 			}

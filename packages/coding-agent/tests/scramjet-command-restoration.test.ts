@@ -29,6 +29,14 @@ function commandStart(parentId: string, data: unknown): CustomEntry {
 	};
 }
 
+const validCommandStartData = {
+	command: "mach12:issue-plan",
+	origin: "user",
+	depth: 0,
+	timestamp: 1,
+	invocationText: "/mach12:issue-plan exact",
+};
+
 describe("restoreScramjetCommandInvocation", () => {
 	it("restores exact invocation text from directly correlated metadata", () => {
 		const selected = messageEntry("message-1", expanded());
@@ -75,16 +83,10 @@ describe("restoreScramjetCommandInvocation", () => {
 	});
 
 	it.each([
-		["wrong command", { command: "mach12:push", origin: "user", depth: 0, invocationText: "/mach12:push" }],
-		[
-			"delegated depth",
-			{ command: "mach12:issue-plan", origin: "agent", depth: 1, invocationText: "/mach12:issue-plan exact" },
-		],
-		[
-			"wrong slash token",
-			{ command: "mach12:issue-plan", origin: "user", depth: 0, invocationText: "/mach12:issue-plan-extra" },
-		],
-		["non-string invocation", { command: "mach12:issue-plan", origin: "user", depth: 0, invocationText: 42 }],
+		["wrong command", { ...validCommandStartData, command: "mach12:push", invocationText: "/mach12:push exact" }],
+		["delegated depth", { ...validCommandStartData, origin: "agent", depth: 1 }],
+		["wrong slash token", { ...validCommandStartData, invocationText: "/mach12:issue-plan-extra" }],
+		["non-string invocation", { ...validCommandStartData, invocationText: 42 }],
 		["malformed payload", null],
 	])("rejects %s metadata and uses semantic restoration", (_label, data) => {
 		const selected = messageEntry("selected", expanded("mach12:issue-plan", "55"));

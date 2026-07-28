@@ -5,7 +5,7 @@ import type { AgentMessage } from "@leanandmean/agent";
 import { Agent } from "@leanandmean/agent";
 import type { AssistantMessage, Context, Model } from "@leanandmean/ai";
 import { createAssistantMessageEventStream } from "@leanandmean/ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -104,16 +104,22 @@ describe("input session entries", () => {
 		expect(providerMessages[0][0]).not.toHaveProperty("sessionEntries");
 	});
 
-	it("binds distinct metadata to same-name queued steer and follow-up messages", async () => {
-		const { session, sessionManager, agent } = await createFixture();
-		const queueSteer = (session as any)._queueSteer.bind(session);
-		const queueFollowUp = (session as any)._queueFollowUp.bind(session);
-		await queueSteer("expanded", undefined, [{ customType: "start", data: { invocationText: "/same first" } }]);
-		await queueFollowUp("expanded", undefined, [{ customType: "start", data: { invocationText: "/same second" } }]);
+	it("binds transformed metadata to queued steer and follow-up messages through prompt", async () => {
+		const { session, sessionManager, agent, runner } = await createFixture();
+		runner.emitInput = async (text: string) => ({
+			action: "transform",
+			text: "expanded",
+			sessionEntries: [{ customType: "start", data: { invocationText: text } }],
+		});
+		(agent as any)._state.isStreaming = true;
+
+		await session.prompt("/same first", { streamingBehavior: "steer" });
+		await session.prompt("/same second", { streamingBehavior: "followUp" });
+
+		(agent as any)._state.isStreaming = false;
 		const steer = (agent as any).steeringQueue.drain() as AgentMessage[];
 		const followUp = (agent as any).followUpQueue.drain() as AgentMessage[];
 		const process = (session as any)._processAgentEvent.bind(session);
-
 		await process({ type: "message_end", message: steer[0] });
 		await process({ type: "message_end", message: followUp[0] });
 
@@ -121,6 +127,28 @@ describe("input session entries", () => {
 			"/same first",
 			"/same second",
 		]);
+	});
+
+	it("reports attached-entry persistence failure after preserving the user message", async () => {
+		const { session, sessionManager, runner } = await createFixture();
+		const errors: unknown[] = [];
+		runner.onError((error: unknown) => errors.push(error));
+		vi.spyOn(sessionManager, "appendCustomEntry").mockImplementationOnce(() => {
+			throw new Error("disk full");
+		});
+
+		await session.prompt("/partially persisted");
+
+		expect(sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({ type: "message", message: expect.objectContaining({ role: "user" }) }),
+		);
+		expect(customEntries(sessionManager)).toEqual([]);
+		expect(errors).toContainEqual({
+			extensionPath: "session-entry:scramjet:command-start",
+			event: "session_entry_persistence",
+			error: "Failed to persist attached input metadata after its user message; exact input restoration may be unavailable: disk full",
+			stack: expect.any(String),
+		});
 	});
 
 	it("writes no attached entry when preflight fails before a user message is emitted", async () => {
