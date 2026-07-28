@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.63.2 — Surface npm install on the root README
+
+Adds a prominent `## Install` section to the root `README.md` so the npm install path is the first setup content a visitor sees. Fixes [#410](https://github.com/LeanAndMean/scramjet/issues/410).
+
+### Changed
+
+- Add an `## Install` section to the root `README.md` (Node >= 20 prerequisite, `npm install -g @leanandmean/scramjet`, link to the package README's Quick start) and point the Overview package-README link at usage and design docs.
+
+## 0.63.1 — Prevent TUI transcript jumps
+
+Separates finalized terminal transcript history from the mutable live canvas so response completion and routine UI updates preserve scrollback position. Fixes [#389](https://github.com/LeanAndMean/scramjet/issues/389).
+
+### Changed
+
+- `@leanandmean/tui`: commit finalized output to append-only terminal history while keeping mutable rendering in a bounded tail window.
+- `@leanandmean/coding-agent`: finalize assistant and tool output once, preserve asynchronous image finality and tool ordering, and rebuild history only for deliberate presentation or session changes.
+- Render finalized collapsed subagent calls compactly while retaining full task and result detail when expanded.
+- Remove the obsolete clear-on-shrink setting and document the finalized-history/live-canvas rendering model.
+
+### Tests
+
+- Add headless terminal and interactive regressions for scrollback preservation, shrink recovery, resize, overlays, autocomplete, cursor placement, tool finality, and Kitty images.
+
 ## 0.63.0 — Separate model capacity from operational budgets
 
 Adds an optional operational context budget so provider-safe runtime limits can differ from advertised model capacity. Reports the 1,050,000-token capacity of Codex GPT-5.6 Sol, Terra, and Luna while retaining their 272,000-token operational budget. Fixes [#398](https://github.com/LeanAndMean/scramjet/issues/398).

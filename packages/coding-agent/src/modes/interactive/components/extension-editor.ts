@@ -140,8 +140,8 @@ export class ExtensionEditorComponent extends Container implements Focusable {
 				// Ignore cleanup errors
 			}
 			this.tui.start();
-			// Force full re-render since external editor uses alternate screen
-			this.tui.requestRender(true);
+			// SCRAMJET-DIVERGENCE: external-editor return deliberately rebuilds retained history (#389).
+			this.tui.rebuild();
 		}
 	}
 }

@@ -41,12 +41,16 @@ function textContent(result: any): string {
 	return first?.type === "text" ? first.text : "";
 }
 
-function renderToolCall(tool: any, args: any): string {
+function renderToolCall(
+	tool: any,
+	args: any,
+	context: { isPartial: boolean; expanded: boolean } = { isPartial: true, expanded: false },
+): string {
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bold: (text: string) => text,
 	};
-	return tool.renderCall(args, theme, {}).render(120).join("\n");
+	return tool.renderCall(args, theme, context).render(120).join("\n");
 }
 
 function renderToolResult(tool: any, result: any, expanded: boolean, args?: any): string {
@@ -688,6 +692,14 @@ describe("renderCall — parallel mode", () => {
 		// Parent level from recordingPi is "high"
 		expect(rendered).toContain("[Effort:high]");
 	});
+
+	it("hides finalized collapsed tasks and restores them when expanded", () => {
+		const tool = registeredSubagentTool();
+		const args = { tasks: [{ agent: "reviewer", task: "FULL-PARALLEL-TASK" }] };
+
+		expect(renderToolCall(tool, args, { isPartial: false, expanded: false })).not.toContain("FULL-PARALLEL-TASK");
+		expect(renderToolCall(tool, args, { isPartial: false, expanded: true })).toContain("FULL-PARALLEL-TASK");
+	});
 });
 
 describe("renderCall — chain mode", () => {
@@ -733,6 +745,14 @@ describe("renderCall — chain mode", () => {
 		expect(rendered).toContain("[Effort:low]");
 		expect(rendered).toContain("[Effort:high]");
 	});
+
+	it("hides finalized collapsed steps and restores them when expanded", () => {
+		const tool = registeredSubagentTool();
+		const args = { chain: [{ agent: "explorer", task: "FULL-CHAIN-TASK" }] };
+
+		expect(renderToolCall(tool, args, { isPartial: false, expanded: false })).not.toContain("FULL-CHAIN-TASK");
+		expect(renderToolCall(tool, args, { isPartial: false, expanded: true })).toContain("FULL-CHAIN-TASK");
+	});
 });
 
 describe("renderCall — single mode", () => {
@@ -760,6 +780,14 @@ describe("renderCall — single mode", () => {
 		const rendered = renderToolCall(tool, { agent: "explorer", task: "Explore" });
 
 		expect(rendered).toContain("[Effort:high]");
+	});
+
+	it("hides the finalized collapsed task and restores it when expanded", () => {
+		const tool = registeredSubagentTool();
+		const args = { agent: "explorer", task: "FULL-SINGLE-TASK" };
+
+		expect(renderToolCall(tool, args, { isPartial: false, expanded: false })).not.toContain("FULL-SINGLE-TASK");
+		expect(renderToolCall(tool, args, { isPartial: false, expanded: true })).toContain("FULL-SINGLE-TASK");
 	});
 });
 
@@ -840,6 +868,21 @@ describe("renderResult model and effort", () => {
 			},
 		};
 	}
+
+	it("bounds finalized collapsed output and preserves the full expanded result", () => {
+		const tool = registeredSubagentTool();
+		const output = Array.from({ length: 20 }, (_, index) => `output-line-${index + 1}`).join("\n");
+		const result = singleResult({
+			messages: [{ role: "assistant", content: [{ type: "text", text: output }] }],
+		});
+
+		const collapsed = renderToolResult(tool, result, false);
+		const expanded = renderToolResult(tool, result, true);
+
+		expect(collapsed).toContain("output-line-3");
+		expect(collapsed).not.toContain("output-line-4");
+		expect(expanded).toContain("output-line-20");
+	});
 
 	it("shows model in single expanded header", () => {
 		const tool = registeredSubagentTool();

@@ -439,7 +439,7 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	args: TArgs;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
 	toolCallId: string;
-	/** Invalidate just this tool execution component for redraw. */
+	/** Invalidate this tool execution component. Stale lifecycle callbacks are ignored. */
 	invalidate: () => void;
 	/** Previously returned component for this render slot, if any. */
 	lastComponent: Component | undefined;

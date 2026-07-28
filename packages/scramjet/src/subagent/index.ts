@@ -767,8 +767,9 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 			};
 		},
 
-		renderCall(args, theme, _context) {
+		renderCall(args, theme, context) {
 			const scope: AgentScope = args.agentScope ?? "user";
+			const showTaskDetails = context.isPartial || context.expanded;
 			const parentLevel = getParentLevel();
 			const effortTag = (explicit: string | undefined) => formatEffortTag(explicit, parentLevel, theme);
 			if (args.chain && args.chain.length > 0) {
@@ -776,6 +777,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `chain (${args.chain.length} steps)`) +
 					theme.fg("muted", ` [${scope}]`);
+				if (!showTaskDetails) return new Text(text, 0, 0);
 				for (let i = 0; i < args.chain.length; i++) {
 					const step = args.chain[i];
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
@@ -794,6 +796,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("subagent ")) +
 					theme.fg("accent", `parallel (${args.tasks.length} tasks)`) +
 					theme.fg("muted", ` [${scope}]`);
+				if (!showTaskDetails) return new Text(text, 0, 0);
 				for (const t of args.tasks) {
 					text += `\n  ${theme.fg("accent", t.agent)}${effortTag(t.effort)}${theme.fg("dim", ` ${t.task}`)}`;
 				}
@@ -806,7 +809,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				theme.fg("accent", agentName) +
 				effortTag(args.effort) +
 				theme.fg("muted", ` [${scope}]`);
-			text += `\n  ${theme.fg("dim", taskText)}`;
+			if (showTaskDetails) text += `\n  ${theme.fg("dim", taskText)}`;
 			return new Text(text, 0, 0);
 		},
 
