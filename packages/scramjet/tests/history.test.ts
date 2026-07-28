@@ -42,7 +42,9 @@ function recordingPi() {
 		},
 	};
 	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-		for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+		let result: unknown;
+		for (const h of handlers.get(event) ?? []) result = await h(payload, ctx);
+		return result;
 	}
 	return { pi, handlers, appended, emit };
 }
@@ -164,6 +166,20 @@ describe("replayHistory", () => {
 		expect(activeCommandName(result.lifecycle)).toBe("c");
 		expect(derivedPhase(result.lifecycle)).toBe("dormant");
 		expect(result.lifecycle.activeCommand).toBe("c");
+	});
+
+	it("projects invocation metadata out of replayed sidebar entries", () => {
+		const result = replayHistory([
+			customEntry(COMMAND_START_TYPE, {
+				command: "a",
+				origin: "user",
+				depth: 0,
+				timestamp: 1,
+				invocationText: "/a  exact text",
+			}),
+		]);
+		expect(result.sidebarLog).toEqual([{ command: "a", origin: "user", depth: 0, timestamp: 1 }]);
+		expect(result.sidebarLog[0]).not.toHaveProperty("invocationText");
 	});
 
 	it("only updates activeTopLevelCommand from depth-0 entries (nested delegates don't overwrite the top level)", () => {
@@ -332,17 +348,14 @@ describe("replayHistory — issue 352 exit/identity characterization", () => {
 		(pi as any).getCommands = () => [{ name: "autopilot" }, { name: "clear" }];
 		registerHistory(pi, state);
 
-		// Real command start (journals a depth-0 command-start), then a true
-		// unknown-slash exit (clears the active command live, journals the exit).
-		await emit("input", { text: "/a:cmd", source: "interactive" });
+		const start = (await emit("input", { text: "/a:cmd", source: "interactive" })) as any;
 		await emit("input", { text: "/typo-or-removed", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBeNull();
 
-		// The emitted branch is the command-start followed by the durable exit.
-		expect(appended.map((a) => a.customType)).toEqual([COMMAND_START_TYPE, COMMAND_EXIT_TYPE]);
+		const persisted = [...start.sessionEntries, ...appended];
+		expect(persisted.map((a) => a.customType)).toEqual([COMMAND_START_TYPE, COMMAND_EXIT_TYPE]);
 
-		// Replaying the branch reconstructs idle: the exit supersedes the start.
-		const replayed = replayHistory(toBranch(appended));
+		const replayed = replayHistory(toBranch(persisted));
 		expect(activeCommandName(replayed.lifecycle)).toBeNull();
 		expect(derivedPhase(replayed.lifecycle)).toBe("idle");
 	});
@@ -579,6 +592,7 @@ describe("recordCommandInvocation", () => {
 		expect(state.sidebarLog[0]).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
 		expect(appended[0].customType).toBe(COMMAND_START_TYPE);
 		expect(appended[0].data as SidebarEntry).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
+		expect(appended[0].data).not.toHaveProperty("invocationText");
 	});
 
 	it("starts a depth-0 command in the running phase and clears any prior status (issue 84)", () => {
@@ -632,27 +646,46 @@ describe("registerHistory — input event", () => {
 		const state = freshState({ registry: registryOf(["mach10:push", "mach12:issue-create"]) });
 		const { pi, appended, emit } = recordingPi();
 		registerHistory(pi, state);
-		await emit("input", event);
-		return { state, appended };
+		const result = await emit("input", event);
+		return { state, appended, result };
 	}
 
-	it("records a sidebar entry and appendEntry call when a registered slash command is invoked interactively", async () => {
-		const { state, appended } = await fire({ text: "/mach10:push", source: "interactive" });
-		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
-		expect(state.sidebarLog).toHaveLength(1);
-		expect(state.sidebarLog[0].command).toBe("mach10:push");
-		expect(state.sidebarLog[0].origin).toBe("user");
-		expect(state.sidebarLog[0].depth).toBe(0);
-		expect(appended).toHaveLength(1);
-		expect(appended[0].customType).toBe(COMMAND_START_TYPE);
-		expect((appended[0].data as SidebarEntry).command).toBe("mach10:push");
-		expect((appended[0].data as SidebarEntry).origin).toBe("user");
+	it("captures the exact invocation in message-bound metadata while updating live state", async () => {
+		const invocationText = '/mach12:issue-create  repeated\t"quoted value"\nsecond line  ';
+		const { state, appended, result } = await fire({ text: invocationText, source: "interactive" });
+		expect(activeCommandName(state.lifecycle)).toBe("mach12:issue-create");
+		expect(state.sidebarLog).toEqual([
+			expect.objectContaining({ command: "mach12:issue-create", origin: "user", depth: 0 }),
+		]);
+		expect(state.sidebarLog[0]).not.toHaveProperty("invocationText");
+		expect(appended).toHaveLength(0);
+		expect(result).toMatchObject({
+			action: "transform",
+			sessionEntries: [
+				{
+					customType: COMMAND_START_TYPE,
+					data: expect.objectContaining({
+						command: "mach12:issue-create",
+						origin: "user",
+						depth: 0,
+						invocationText,
+					}),
+				},
+			],
+		});
+	});
+
+	it("captures no-context and independent same-name submissions separately", async () => {
+		const first = await fire({ text: "/mach10:push", source: "interactive" });
+		const second = await fire({ text: "/mach10:push\tsecond", source: "interactive" });
+		expect((first.result as any).sessionEntries[0].data.invocationText).toBe("/mach10:push");
+		expect((second.result as any).sessionEntries[0].data.invocationText).toBe("/mach10:push\tsecond");
 	});
 
 	it("marks extension-source invocations as 'agent' origin", async () => {
-		const { state, appended } = await fire({ text: "/mach12:issue-create 23", source: "extension" });
+		const { state, result } = await fire({ text: "/mach12:issue-create 23", source: "extension" });
 		expect(state.sidebarLog[0].origin).toBe("agent");
-		expect((appended[0].data as SidebarEntry).origin).toBe("agent");
+		expect((result as any).sessionEntries[0].data.origin).toBe("agent");
 	});
 
 	it("ignores non-slash input and unregistered slash commands", async () => {
@@ -758,12 +791,12 @@ describe("registerHistory — input event", () => {
 			registry: registryOf(["mach10:push"]),
 			pendingForcedDispatch: "mach10:push",
 		});
-		const { pi, appended, emit } = recordingPi();
+		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
-		await emit("input", { text: "/mach10:push", source: "extension" });
+		const result = (await emit("input", { text: "/mach10:push", source: "extension" })) as any;
 
 		expect(state.sidebarLog[0].origin).toBe("forced");
-		expect((appended[0].data as SidebarEntry).origin).toBe("forced");
+		expect(result.sessionEntries[0].data.origin).toBe("forced");
 		expect(state.pendingForcedDispatch).toBeNull();
 	});
 
@@ -822,11 +855,11 @@ describe("registerHistory — input event", () => {
 			const state = waitingState();
 			const { pi, appended, emit } = recordingPi();
 			registerHistory(pi, state);
-			await emit("input", { text: "/mach12:pr-create", source: "interactive" });
-			// recordCommandStart fires: phase running, active set, journaled.
+			const result = (await emit("input", { text: "/mach12:pr-create", source: "interactive" })) as any;
 			expect(derivedPhase(state.lifecycle)).toBe("running");
 			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
-			expect(appended).toHaveLength(1);
+			expect(appended).toHaveLength(0);
+			expect(result.sessionEntries).toHaveLength(1);
 		});
 
 		it("drops the waiting phase to idle when an unknown slash exits the workflow (F25)", async () => {

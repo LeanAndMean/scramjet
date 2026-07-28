@@ -75,6 +75,10 @@ export interface EnabledToggleData {
 	enabled: boolean;
 }
 
+export interface CommandStartData extends SidebarEntry {
+	invocationText?: string;
+}
+
 // Returns the qualified command name if `text` starts with a registered slash command.
 export function parseSlashCommand(text: string, registry: CommandRegistry): string | null {
 	const name = extractSlashName(text);
@@ -115,20 +119,25 @@ export function recordCommandInvocation(
 	origin: SidebarEntry["origin"],
 	depth: number,
 ): void {
-	const entry: SidebarEntry = {
-		command: name,
-		origin,
-		depth,
-		timestamp: Date.now(),
-	};
+	const entry: SidebarEntry = { command: name, origin, depth, timestamp: Date.now() };
 	pi.appendEntry(COMMAND_START_TYPE, entry);
-	if (depth === 0) {
+	applyCommandInvocation(state, entry);
+}
+
+function applyCommandInvocation(state: ScramjetState, data: SidebarEntry): void {
+	const entry: SidebarEntry = {
+		command: data.command,
+		origin: data.origin,
+		depth: data.depth,
+		timestamp: data.timestamp,
+	};
+	if (entry.depth === 0) {
 		state.clearLifecycleTimers?.();
-		const result = startCommand(state, name);
+		const result = startCommand(state, entry.command);
 		if (!result.ok) {
 			state.logger.warn("lifecycle", `lifecycle startCommand failed: ${result.reason}`, {
 				event: "command-start",
-				command: name,
+				command: entry.command,
 			});
 			return;
 		}
@@ -209,13 +218,19 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
-			const data = entry.data as SidebarEntry | undefined;
+			const data = entry.data as CommandStartData | undefined;
 			// Defend against corrupt or partially-written journal entries: a
 			// missing/non-string command would erase activeTopLevelCommand and
 			// silently break all subsequent next-step policy lookups. The TS cast
 			// above otherwise hides this from the compiler. (F10)
 			if (!data || typeof data.command !== "string" || data.command.trim() === "") continue;
-			sidebarLog = appendSidebarEntry(sidebarLog, data);
+			const sidebarEntry: SidebarEntry = {
+				command: data.command,
+				origin: data.origin,
+				depth: data.depth,
+				timestamp: data.timestamp,
+			};
+			sidebarLog = appendSidebarEntry(sidebarLog, sidebarEntry);
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
 				parkedForInput = false;
@@ -412,10 +427,21 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 
 		const supersededCancellation = state.lifecycle.cancellationResumeEligible;
 		const supersededCommand = activeCommandName(state.lifecycle);
-		recordCommandStart(pi, state, name, origin);
+		const entry: CommandStartData = {
+			command: name,
+			origin,
+			depth: 0,
+			timestamp: Date.now(),
+			invocationText: event.text,
+		};
+		applyCommandInvocation(state, entry);
 		if (supersededCancellation) {
 			logCancellationResume(state, "eligibility invalidated", supersededCommand, event.source, "command-start");
 		}
-		return { action: "transform" as const, text: wrapped };
+		return {
+			action: "transform" as const,
+			text: wrapped,
+			sessionEntries: [{ customType: COMMAND_START_TYPE, data: entry }],
+		};
 	});
 }
