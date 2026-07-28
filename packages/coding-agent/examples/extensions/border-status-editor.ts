@@ -49,11 +49,15 @@ function formatCwd(cwd: string): string {
 
 function formatContext(ctx: ExtensionContext): string {
 	const usage = ctx.getContextUsage();
-	const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow;
-	if (!contextWindow || !usage || usage.percent === null) {
+	if (!usage || usage.percent === null) {
 		return "ctx ?";
 	}
-	return `ctx ${Math.round(usage.percent)}%/${(contextWindow / 1000).toFixed(0)}k`;
+	// SCRAMJET-DIVERGENCE: Show the expanded capacity/budget ContextUsage contract (issue 398).
+	const capacity =
+		usage.contextWindowBudget === usage.contextWindow
+			? ""
+			: ` (${(usage.contextWindow / 1000).toFixed(0)}k capacity)`;
+	return `ctx ${Math.round(usage.percent)}%/${(usage.contextWindowBudget / 1000).toFixed(0)}k${capacity}`;
 }
 
 function formatThinking(level: string): string {

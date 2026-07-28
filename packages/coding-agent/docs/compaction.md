@@ -29,10 +29,10 @@ Both use the same structured summary format and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+contextTokens > contextWindowBudget - reserveTokens
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.scramjet/agent/settings.json` or `<project-dir>/.scramjet/settings.json`). This leaves room for the LLM's response.
+`contextWindowBudget` resolves to `model.contextWindowBudget ?? model.contextWindow`. This separates advertised model capacity from a lower provider operational policy while preserving capacity-based behavior for ordinary models. By default, `reserveTokens` is 16384 tokens (configurable in `~/.scramjet/agent/settings.json` or `<project-dir>/.scramjet/settings.json`). This leaves room for the LLM's response. Auto-compaction is disabled when `contextWindowBudget` is less than or equal to `reserveTokens`; lower the reserve or raise the budget to enable it.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -154,7 +154,7 @@ When you use `/tree` to navigate to a different branch, Scramjet offers to summa
 
 1. **Find common ancestor**: Deepest node shared by old and new positions
 2. **Collect entries**: Walk from old leaf back to common ancestor
-3. **Prepare with budget**: Include messages up to token budget (newest first)
+3. **Prepare with budget**: Include messages up to `contextWindowBudget - reserveTokens` (newest first)
 4. **Generate summary**: Call LLM with structured format
 5. **Append entry**: Save `BranchSummaryEntry` at navigation point
 

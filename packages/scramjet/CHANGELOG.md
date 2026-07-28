@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.63.0 — Prevent TUI transcript jumps
+## 0.63.1 — Prevent TUI transcript jumps
 
 Separates finalized terminal transcript history from the mutable live canvas so response completion and routine UI updates preserve scrollback position. Fixes [#389](https://github.com/LeanAndMean/scramjet/issues/389).
 
@@ -14,6 +14,21 @@ Separates finalized terminal transcript history from the mutable live canvas so 
 ### Tests
 
 - Add headless terminal and interactive regressions for scrollback preservation, shrink recovery, resize, overlays, autocomplete, cursor placement, tool finality, and Kitty images.
+
+## 0.63.0 — Separate model capacity from operational budgets
+
+Adds an optional operational context budget so provider-safe runtime limits can differ from advertised model capacity. Reports the 1,050,000-token capacity of Codex GPT-5.6 Sol, Terra, and Luna while retaining their 272,000-token operational budget. Fixes [#398](https://github.com/LeanAndMean/scramjet/issues/398).
+
+### Changed
+
+- `@leanandmean/ai`: add `contextWindowBudget` model metadata and a shared fallback resolver; update Codex GPT-5.6 catalog entries without understating advertised capacity.
+- `@leanandmean/agent` and `@leanandmean/coding-agent`: use operational budgets for compaction, branch summaries, overflow handling, retries, and context usage while preserving advertised capacity in public types and displays.
+- Custom and dynamic provider registration validates resolved budgets, safely rejects invalid OAuth transforms, and preserves actionable load errors.
+- CLI, footer, extension, and RPC surfaces distinguish operational budgets from advertised capacity.
+
+### Tests
+
+- Added generated-catalog, model-registry, runtime compaction and overflow, branch-summary, and display coverage for split capacity and budget behavior.
 
 ## 0.62.2 — Correct GPT-5.6 context metadata
 

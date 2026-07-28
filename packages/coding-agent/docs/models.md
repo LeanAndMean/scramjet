@@ -194,10 +194,15 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `reasoning` | No | `false` | Supports extended thinking |
 | `thinkingLevelMap` | No | omitted | Maps scramjet thinking levels to provider values and marks unsupported levels (see below) |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
-| `contextWindow` | No | `128000` | Context window size in tokens |
+| `contextWindow` | No | `128000` | Advertised model capacity in tokens |
+| `contextWindowBudget` | No | `contextWindow` | Operational token budget used for overflow handling and compaction |
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `cost` | No | all zeros | `{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}` (per million tokens) |
 | `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
+
+`contextWindowBudget`, when supplied, must be a positive finite integer no greater than the final `contextWindow`. Omit it to use the advertised capacity as the operational budget. Custom models and per-model overrides set capacity and budget independently; after all overrides are merged, an invalid budget/capacity relationship is rejected with the provider, model, and both values. The existing `contextWindow` validation remains unchanged and rejects values `<= 0`.
+
+GPT-5.6 Sol, Terra, and Luna through `openai-codex` advertise OpenAI's documented 1,050,000-token model capacity while retaining the Codex client catalog's 272,000-token operational budget. This budget is provider policy, not a claim that the backend has a 272,000-token hard limit.
 
 Current behavior:
 - `/model` and `--list-models` list entries by model `id`.

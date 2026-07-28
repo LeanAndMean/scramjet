@@ -966,10 +966,12 @@ Returns current context usage for the active model. Uses last assistant usage wh
 
 ```typescript
 const usage = ctx.getContextUsage();
-if (usage && usage.tokens > 100_000) {
+if (usage && usage.tokens !== null && usage.tokens > usage.contextWindowBudget * 0.8) {
   // ...
 }
 ```
+
+`usage.contextWindow` is advertised model capacity, while `usage.contextWindowBudget` is the resolved operational budget (`model.contextWindowBudget ?? model.contextWindow`). `usage.percent` uses the budget as its denominator. Extensions registering models may provide an optional positive finite integer budget no greater than capacity; models without one retain capacity-based behavior.
 
 ### ctx.compact()
 
