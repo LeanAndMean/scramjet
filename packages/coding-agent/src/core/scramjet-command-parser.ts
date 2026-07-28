@@ -38,6 +38,14 @@ function extractMessageText(entry: SessionMessageEntry): string {
 		.join("");
 }
 
+// exactInvocation hand-mirrors scramjet's CommandStartData / SidebarEntry shape,
+// and restoreScramjetCommandInvocation hardcodes the "scramjet:command-start"
+// custom-entry type (COMMAND_START_TYPE in packages/scramjet/src/history.ts).
+// coding-agent cannot depend on scramjet, so this duplication is structural: if
+// the field set or the type literal drifts out of sync, exact restoration
+// silently degrades to the semantic fallback with no compile or test signal here.
+// A round-trip drift-guard test lives in packages/scramjet/tests/ (which can
+// import both sides) to catch that drift. (S3, issue 414)
 function exactInvocation(data: unknown, commandName: string): string | null {
 	if (typeof data !== "object" || data === null) return null;
 	const record = data as Record<string, unknown>;
@@ -67,6 +75,7 @@ export function restoreScramjetCommandInvocation(
 	const commandStart = entries.find(
 		(entry): entry is CustomEntry =>
 			entry.type === "custom" &&
+			// Mirrors scramjet's COMMAND_START_TYPE (see exactInvocation drift note).
 			entry.customType === "scramjet:command-start" &&
 			entry.parentId === selectedEntry.id,
 	);

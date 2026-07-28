@@ -1700,9 +1700,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 		}
 
 		function branch(entries: Array<{ customType: string; data: unknown }>) {
+			const mapped = entries.map((e) => ({ type: "custom" as const, ...e }));
 			return {
 				sessionManager: {
-					getBranch: () => entries.map((e) => ({ type: "custom" as const, ...e })),
+					getBranch: () => mapped,
+					getEntries: () => mapped,
 				},
 			};
 		}
@@ -2205,7 +2207,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 					data: { command: "a:cmd", origin: "user", depth: 0, timestamp: 1 },
 				},
 			];
-			await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
+			await bag.emit(
+				"session_start",
+				{},
+				{ sessionManager: { getBranch: () => entries, getEntries: () => entries } },
+			);
 			// Rebuild reconstructs to dormant (command-start present, no terminal status).
 			expect(derivedPhase(state.lifecycle)).toBe("dormant");
 

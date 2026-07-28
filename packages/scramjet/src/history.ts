@@ -106,11 +106,12 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 	return next.length > SIDEBAR_MAX ? next.slice(-SIDEBAR_MAX) : next;
 }
 
-// Persists immediately journaled invocations and applies their live state.
-// Depth > 0 entries are delegated subroutine invocations and must not replace
-// the active top-level command whose next-step policy controls the turn.
-// Depth-0 input applies the same live state through applyCommandInvocation and
-// attaches its durable entry to the concrete user message.
+// Journals a delegated subroutine invocation and applies its live state. The
+// only live caller is the delegate tool (depth > 0): a delegated entry must not
+// replace the active top-level command whose next-step policy controls the turn.
+// The depth-0 input path does not flow through here — the input handler calls
+// applyCommandInvocation directly and attaches the durable command-start to its
+// concrete user message.
 
 export function recordCommandInvocation(
 	pi: ExtensionAPI,
@@ -145,18 +146,6 @@ function applyCommandInvocation(state: ScramjetState, data: SidebarEntry): void 
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
 }
 
-// Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
-// Pi input dispatch makes auto-continued Scramjet commands flow through the
-// same input-event handler as user-typed commands.
-export function recordCommandStart(
-	pi: ExtensionAPI,
-	state: ScramjetState,
-	name: string,
-	origin: SidebarEntry["origin"],
-): void {
-	recordCommandInvocation(pi, state, name, origin, 0);
-}
-
 // Journal entry for a command-status report (issue 88, issue 278). Records which
 // command reported, what status, and the incremental work summary. Every accepted
 // report is journaled — including "continuing" — so summaries form a searchable
@@ -170,9 +159,9 @@ export interface CommandStatusData {
 	summary: string;
 }
 
-// Journals the agent's report_scramjet_command_status report. Mirrors
-// recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
-// the live lifecycle facts are owned by command-status.ts / auto-continue.ts; this only
+// Journals the agent's report_scramjet_command_status report. A thin appendEntry
+// wrapper that mutates no state: the live lifecycle facts are owned by
+// command-status.ts / auto-continue.ts; this only
 // persists the report so resume can rebuild the resting lifecycle facts. Terminal
 // statuses are journaled — that is what lets a command
 // which waits, is answered, then completes without offering a next step reconstruct
@@ -282,21 +271,33 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	return { sidebarLog, enabled, lifecycle };
 }
 
+// An off-branch command-start is rescued into replay only when its parent is a
+// user-role message on the current branch. New-layout starts are parented on
+// their expanded user message (exactly one start child), so this reunites a start
+// with its message when a later sibling entry owns the branch leaf. Legacy
+// sessions parented starts on the prior leaf (an assistant); requiring a
+// user-message parent structurally excludes those, so a sibling branch's legacy
+// start cannot fold the wrong active command into replay. (F1, issue 414)
+function isUserMessageEntry(entry: SessionEntry | undefined): boolean {
+	return entry !== undefined && entry.type === "message" && entry.message.role === "user";
+}
+
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	const rebuild = async (_event: unknown, ctx: ExtensionContext) => {
 		state.clearLifecycleTimers?.();
 		const branch = ctx.sessionManager.getBranch();
 		const branchIds = new Set(branch.map((entry) => entry.id));
-		const replayEntries = ctx.sessionManager
-			.getEntries()
-			.filter(
-				(entry) =>
-					branchIds.has(entry.id) ||
-					(entry.type === "custom" &&
-						entry.customType === COMMAND_START_TYPE &&
-						entry.parentId !== null &&
-						branchIds.has(entry.parentId)),
-			);
+		const allEntries = ctx.sessionManager.getEntries();
+		const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
+		const replayEntries = allEntries.filter(
+			(entry) =>
+				branchIds.has(entry.id) ||
+				(entry.type === "custom" &&
+					entry.customType === COMMAND_START_TYPE &&
+					entry.parentId !== null &&
+					branchIds.has(entry.parentId) &&
+					isUserMessageEntry(byId.get(entry.parentId))),
+		);
 		const result = replayHistory(replayEntries);
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
@@ -429,7 +430,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 		} else {
 			origin = event.source === "interactive" ? "user" : "agent";
 		}
-		// Compute the transform before recording the start — recordCommandStart
+		// Compute the transform before recording the start — applyCommandInvocation
 		// mutates lifecycle state, so we must not leave it inconsistent if
 		// expansion fails.
 		const def = state.registry.get(name);

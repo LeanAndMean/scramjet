@@ -1091,6 +1091,34 @@ describe("registerHistory — replay on session events", () => {
 		expect(activeCommandName(state.lifecycle)).toBe("attached");
 	});
 
+	it("does not rescue an off-branch legacy command-start parented on an assistant (F1)", async () => {
+		// Legacy sessions parented command-starts on the prior leaf (an assistant),
+		// not on their user message. A sibling branch's legacy start whose parent
+		// (a shared assistant ancestor) is on-branch must NOT fold its command into
+		// activeTopLevelCommand — only user-message-parented starts are rescued.
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const assistant = {
+			type: "message",
+			id: "assistant",
+			parentId: null,
+			timestamp: "0",
+			message: { role: "assistant", content: "prior turn", timestamp: 0 },
+		} as SessionEntry;
+		const offBranchStart = { ...cmdStart("legacy-sibling"), parentId: assistant.id };
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [assistant],
+				getEntries: () => [assistant, offBranchStart],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
+	});
+
 	it("applies the latest enabled toggle from the branch", async () => {
 		const entries: SessionEntry[] = [
 			customEntry(ENABLED_TOGGLE_TYPE, { enabled: true }),

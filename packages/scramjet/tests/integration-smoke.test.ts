@@ -594,8 +594,10 @@ describe("integration smoke — lifecycle event sequences", () => {
 		expect(derivedPhase(state.lifecycle)).toBe("dormant");
 		expect(selectorCalls).toBe(1);
 
+		const replayEntries = bag.appended.map((entry) => ({ type: "custom", customType: entry.type, data: entry.data }));
 		ctx.sessionManager = {
-			getBranch: () => bag.appended.map((entry) => ({ type: "custom", customType: entry.type, data: entry.data })),
+			getBranch: () => replayEntries,
+			getEntries: () => replayEntries,
 		};
 		await bag.emit("session_start", {}, ctx);
 		expect(derivedPhase(state.lifecycle)).toBe("dormant");
@@ -724,7 +726,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 		// Reset state to simulate a fresh session
 		state.lifecycle = lifecycleFor("idle");
 		state.sidebarLog = [];
-		await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
+		await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries, getEntries: () => entries } });
 
 		// After replay, waiting phase should be reconstructed
 		expect(derivedPhase(state.lifecycle)).toBe("waiting");

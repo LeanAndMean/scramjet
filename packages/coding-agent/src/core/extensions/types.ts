@@ -816,6 +816,12 @@ export interface InputEvent {
 
 export interface InputSessionEntry {
 	customType: string;
+	/**
+	 * Extension-defined payload. Must be JSON-serializable: it is persisted with
+	 * JSON.stringify and restored with JSON.parse, so non-JSON values (Date, Map,
+	 * class instances) round-trip lossily and `undefined` properties are dropped.
+	 * The requirement is enforced only at persist time, not by this type.
+	 */
 	data?: unknown;
 }
 

@@ -842,7 +842,7 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
-	_persist(entry: SessionEntry, serializedEntry = this._serializeEntry(entry)): void {
+	_persist(entry: SessionEntry, serializedEntry: string): void {
 		if (!this.persist || !this.sessionFile) return;
 
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
@@ -949,7 +949,12 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Append a custom entry (for extensions), then advance leaf. Returns entry id. */
+	/**
+	 * Append a custom entry (for extensions). Parents the entry on `parentId`
+	 * (defaults to the current leaf) and then unconditionally advances the leaf to
+	 * the new entry — so passing a `parentId` other than the current leaf moves the
+	 * leaf sideways rather than extending the current chain. Returns entry id.
+	 */
 	appendCustomEntry(customType: string, data?: unknown, parentId: string | null = this.leafId): string {
 		const entry: CustomEntry = {
 			type: "custom",

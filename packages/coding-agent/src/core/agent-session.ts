@@ -663,6 +663,13 @@ export class AgentSession {
 				if (event.message.role === "user") {
 					const sessionEntries = this._inputSessionEntries.get(event.message);
 					this._inputSessionEntries.delete(event.message);
+					// This try/catch observes only failures thrown synchronously by
+					// appendCustomEntry. On the buffered first-turn path (before any
+					// assistant message) _persist stores the entry in memory with no I/O,
+					// so only metadata *serialization* failures surface here; the deferred
+					// disk write happens later in the unguarded appendMessage(assistant)
+					// flush, whose throw is swallowed by the _agentEventQueue.catch on the
+					// event-handler chain and degrades exact restoration silently.
 					for (const entry of sessionEntries ?? []) {
 						try {
 							this.sessionManager.appendCustomEntry(entry.customType, entry.data, messageEntryId);

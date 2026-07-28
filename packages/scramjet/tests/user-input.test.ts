@@ -977,7 +977,7 @@ describe("registerUserInputTool — cancellation behavior", () => {
 				},
 			];
 			for (const handler of handlers.get(eventName) ?? []) {
-				await handler({}, { sessionManager: { getBranch: () => branch } });
+				await handler({}, { sessionManager: { getBranch: () => branch, getEntries: () => branch } });
 			}
 			resolveInput("yes");
 			const result = await promise;
@@ -1016,7 +1016,7 @@ describe("registerUserInputTool — cancellation behavior", () => {
 				},
 			];
 			for (const handler of handlers.get(eventName) ?? []) {
-				await handler({}, { sessionManager: { getBranch: () => branch } });
+				await handler({}, { sessionManager: { getBranch: () => branch, getEntries: () => branch } });
 			}
 			resolveInput("a");
 			const result = await promise;

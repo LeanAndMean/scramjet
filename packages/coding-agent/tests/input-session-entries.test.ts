@@ -223,7 +223,16 @@ describe("input session entries", () => {
 				entry.message.content[0]?.type === "text" &&
 				entry.message.content[0].text === "<expanded>/valid later</expanded>",
 		);
-		expect(laterMessage?.parentId).not.toBe(invalidMessage?.id);
+		// The rejected /invalid turn restores the leaf to its user message, so that
+		// turn's assistant parents on it and /valid later parents on that assistant.
+		// Assert the concrete expected parent rather than merely "not the invalid
+		// message", which would also pass for a dangling/undefined leaf.
+		const invalidTurnAssistant = entries.find(
+			(entry) =>
+				entry.type === "message" && entry.message.role === "assistant" && entry.parentId === invalidMessage?.id,
+		);
+		expect(invalidTurnAssistant).toBeDefined();
+		expect(laterMessage?.parentId).toBe(invalidTurnAssistant?.id);
 	});
 
 	it("replaces a partial initial-flush prefix on retry", () => {
