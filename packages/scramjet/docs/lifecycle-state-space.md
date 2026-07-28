@@ -138,7 +138,11 @@ Durable outcomes cover transitions that mutate live lifecycle facts but would ot
 - **Workflow exit** (`scramjet:command-exited` with `{ commandName }`): written before `clearActiveCommand()` when a truly unknown slash exits the workflow. Append failure leaves lifecycle state and timers unchanged. Known Pi commands and `getCommands()` lookup failures preserve the workflow and emit no exit.
 - **Structured-input cancellation** (`scramjet:structured-input-cancellation` with `{ commandName, resumable }`): `resumable: true` grants cancellation-origin eligibility after Escape; `resumable: false` consumes or invalidates that grant. Grant persistence happens after the lifecycle mutation; if append fails, Scramjet falls back to generic dormant. Consumption is persisted before arming; if append fails, Scramjet remains eligible dormant. Neither outcome contains prompt answers or reply text.
 
-Reconstruction is driven by command-start entries, parked markers, consumed-reply outcomes, workflow exits, and terminal statuses, folded chronologically over the selected branch (`parentId` ancestry, not physical JSONL order):
+Reconstruction is driven by command-start entries, parked markers, consumed-reply outcomes, workflow exits, and terminal statuses, folded chronologically over the selected branch (`parentId` ancestry, not physical JSONL order).
+
+A recognized top-level slash input mutates live lifecycle/sidebar state immediately, but its durable depth-0 `scramjet:command-start` is attached to the concrete expanded user message and persisted only after that message reaches `message_end`. The start's `parentId` equals the source message entry's `id`. Failed model/authentication or `before_agent_start` preflight emits no user message and therefore no durable start. Optional `invocationText` supports editor restoration but is replay-inert: replay projects only `command`, `origin`, `depth`, and `timestamp`, keeping invocation text out of lifecycle and sidebar state. Delegated depth-positive starts retain immediate persistence and omit invocation text.
+
+During replay:
 
 - A depth-0 command start resets the fold, associating the command in the dormant shape and clearing any parked state. Later starts, statuses, parks, consumed outcomes, and exits supersede earlier outcomes.
 - A matching `parked: true` (or omitted) sets waiting and clears cancellation eligibility; a matching `parked: false` sets waiting to false; a malformed `parked` value is inert.
@@ -160,7 +164,7 @@ Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = 
 
 - `lifecycle.ts`: defines `LifecycleState` (fact interface), invariant checks, query helpers, and mutation helpers with generation bumping and logging.
 - `types.ts`: defines status payloads, `ScramjetState` (extending `LifecycleHolder`), and `LifecycleTimerAccessors`.
-- `history.ts`: owns command-start journaling, replay reconstruction (chronological selected-branch fold), interactive reply resume for parked and cancellation-eligible commands, cancellation true/false outcomes, and workflow exit on unknown slash input.
+- `history.ts`: owns immediate live application plus attached post-message persistence for depth-0 command starts, immediate journaling for delegated starts, replay reconstruction (chronological selected-branch fold), interactive reply resume for parked and cancellation-eligible commands, cancellation true/false outcomes, and workflow exit on unknown slash input.
 - `auto-continue.ts`: owns `agent_end` decision tree, probe scheduling, timer management, status routing, selector/dispatch timers, and terminal resolution.
 - `command-status.ts`: owns status tool gating, `continuing` acceptance (probe and dormant paths), terminal report storage, dormant notice prompt section, and `continuing` status journaling.
 - `auto-continue.ts` also owns terminal status journaling (deferred to `agent_end` dispatch time so aborts prevent the entry from being written — issue 336).

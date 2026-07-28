@@ -117,6 +117,24 @@ jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.leve
 jq 'select(.type == "custom" and .customType == "scramjet:log") | .data | "\(.timestamp / 1000 | strftime("%H:%M:%S")) [\(.level)/\(.category)] \(.message)"' -r session.jsonl
 ```
 
+## Command-start artifacts and invocation restoration
+
+A top-level Scramjet invocation is represented by an expanded user-message entry followed immediately by a directly correlated `scramjet:command-start` custom entry. The start entry's `parentId` is the user-message entry's `id`; this direct edge, rather than physical JSONL order or nearest ancestry, identifies the invocation that produced the expanded message.
+
+The depth-0 payload extends the sidebar fields with optional `invocationText`:
+
+```jsonc
+{ "type": "custom", "customType": "scramjet:command-start", "parentId": "<source-message-id>",
+  "data": { "command": "mach12:issue-plan", "origin": "user", "depth": 0,
+            "timestamp": 1785261600000, "invocationText": "/mach12:issue-plan 414" } }
+```
+
+`invocationText` preserves the exact post-editor-trim slash text for editing, retrying, fork/tree navigation, and resumed Up-arrow history. Restoration accepts it only when the correlated payload and expanded wrapper validate as the same top-level command. Legacy starts without `invocationText` reconstruct compact slash syntax semantically from the wrapper. Malformed or mismatched correlated metadata is not searched around or replaced from another branch.
+
+The input handler applies the live lifecycle/sidebar start before the model turn, but carries the durable depth-0 entry as input metadata bound to the concrete user message. `AgentSession` persists that message first and the attached start immediately afterward on `message_end`; failed model/authentication or `before_agent_start` preflight therefore leaves no orphan durable start. Delegated depth-positive starts remain immediate journal appends and omit `invocationText`.
+
+The invocation text is replay-inert metadata: replay projects only the sidebar fields, and Scramjet excludes it from sidebar state, structured logs, and model/provider context. It remains present in the local session journal and can therefore appear in session exports or raw RPC entry data. Treat it with the same privacy care as user-message text.
+
 ## Command-status artifacts
 
 Every **accepted** `report_scramjet_command_status` call is journaled as a `scramjet:command-status` custom entry (issue 278) — including `continuing`. The payload carries the reporting command, the status, and the incremental `summary`:
@@ -140,7 +158,7 @@ jq -c 'select(.type == "custom" and .customType == "scramjet:command-status" and
 
 ### Branch-aware invocation aggregation (from a selected leaf)
 
-The direct search above is the common path; this ancestry walk is only needed to reconstruct a single invocation's summaries in order across a forked session. Session files are trees: physical JSONL order is not branch order, and forks share a common prefix. To reconstruct one invocation's incremental summaries in order, walk `parentId` ancestry from a selected leaf entry id up to the **nearest depth-0 `scramjet:command-start`** (the invocation boundary), collecting the command-status reports on that path. Delegates (depth-1 command-starts) are *not* boundaries, so a delegated subroutine's turns stay inside the parent invocation; same-name invocations stay separate because each has its own depth-0 start; and fork-only reports on other branches never appear because they are not ancestors of the selected leaf.
+The direct search above is the common path; this ancestry walk is only needed to reconstruct a single invocation's summaries in order across a forked session. Session files are trees: physical JSONL order is not branch order, and forks share a common prefix. To reconstruct one invocation's incremental summaries in order, walk `parentId` ancestry from a selected leaf entry id up to the **nearest depth-0 `scramjet:command-start`** (the lifecycle invocation boundary), collecting the command-status reports on that path. Delegates (depth-1 command-starts) are *not* boundaries, so a delegated subroutine's turns stay inside the parent invocation; same-name invocations stay separate because each has its own depth-0 start; and fork-only reports on other branches never appear because they are not ancestors of the selected leaf.
 
 ```sh
 LEAF=<entry-id-on-the-branch-you-care-about>

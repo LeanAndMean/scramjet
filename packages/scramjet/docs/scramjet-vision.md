@@ -752,12 +752,16 @@ pi-tui or waiting for upstream to add the affordance; neither is
 appropriate in the MVP window.
 
 What ships in the MVP is the **underlying data model and persistence**:
-the sidebar log entries (slash invocation, origin marker, delegation
-depth, timestamp) are journaled via `appendEntry` and rebuilt on
-`session_start` / `session_tree`. Depth-0 entries restore the active
-top-level command; delegated entries (`depth > 0`, currently
-`origin: "agent"`) remain visible in the log but do not replace the active
-top-level command. This is enough for forward compat (so when a UI lands,
+the sidebar log entries (command name, origin marker, delegation depth,
+timestamp) are journaled and rebuilt on `session_start` / `session_tree`.
+For a depth-0 invocation, the input handler updates live lifecycle/sidebar
+state immediately, then attaches the durable `scramjet:command-start` to its
+concrete expanded user message. The message persists first and the start
+immediately afterward, with the start's `parentId` equal to the message entry
+ID. Failed model/authentication or `before_agent_start` preflight therefore
+leaves no orphan durable start. Delegated entries (`depth > 0`, currently
+`origin: "agent"`) remain immediate journal appends, visible in the log, and
+do not replace the active top-level command. This is enough for forward compat (so when a UI lands,
 no data has been thrown away) and is load-bearing for any future
 `/scramjet:rewire`-style command that needs to read observed run history.
 
@@ -765,6 +769,14 @@ Note: the eventual visualization may not need to be a sidebar
 specifically — a transcript-inline log, an expandable panel, or a
 post-hoc viewer are all plausible. What is deferred is the rendering,
 not the data.
+
+Depth-0 starts may also carry optional `invocationText`, preserving the exact
+post-editor-trim slash submission for editing, retrying, tree/fork navigation,
+and resumed history. It is restoration metadata, not sidebar data: replay
+projects only the sidebar fields, and the value is excluded from structured
+logs and model context. Because it is durable user text, it remains visible in
+the local journal and may be retained by session exports or raw RPC entry data.
+Legacy sessions without it reconstruct compact slash syntax semantically.
 
 #### 7. Operational troubleshooting
 
@@ -822,10 +834,14 @@ is universal.
 #### 9. Persistence and isolation
 
 - Per-session `/autopilot on` state.
-- Process history persisted in the session and restored on resume.
-  Cross-session workflow restore beyond the visible history is not a
-  goal of the MVP, but is not explicitly forbidden either — if it falls
-  out trivially, that's fine.
+- Process history persisted in the session and restored on resume. Exact
+  invocation text is correlated only by the direct source-message/start edge;
+  physical order, command-name matching, and nearest ancestry are not submission
+  identity. The text is replay-inert and excluded from sidebar state, logs, and
+  model context, but remains in local journals, exports, and raw RPC entry data.
+  Cross-session workflow restore beyond the visible history is not a goal of
+  the MVP, but is not explicitly forbidden either — if it falls out trivially,
+  that's fine.
 - A command parked at `waiting` (via `get_scramjet_user_input` freetext; see
   §2.1) is reconstructed on resume: `scramjet:user-input-parked` entries are
   journaled, and replay restores the stable `waiting` state when a parked entry
