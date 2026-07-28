@@ -97,6 +97,18 @@ describe("input handler — expansion transform", () => {
 		expect(result).toEqual({
 			action: "transform",
 			text: '<scramjet-command name="mach12:push">\n# Push\n\n<caller-context>\nstage 1\n</caller-context>\n</scramjet-command>',
+			sessionEntries: [
+				{
+					customType: "scramjet:command-start",
+					data: {
+						command: "mach12:push",
+						depth: 0,
+						origin: "user",
+						timestamp: expect.any(Number),
+						invocationText: "/mach12:push stage 1",
+					},
+				},
+			],
 		});
 	});
 

@@ -313,7 +313,17 @@ describe("integration smoke — end-to-end chain under /autopilot on (S21)", () 
 			},
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+			const sessionEntries: { customType: string; data: unknown }[] = [];
+			for (const h of handlers.get(event) ?? []) {
+				const result = (await h(payload, ctx)) as
+					| { action?: string; sessionEntries?: { customType: string; data: unknown }[] }
+					| undefined;
+				if (event === "input") {
+					if (result?.action === "handled") return;
+					sessionEntries.push(...(result?.sessionEntries ?? []));
+				}
+			}
+			for (const entry of sessionEntries) pi.appendEntry(entry.customType, entry.data);
 		}
 		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };
 	}
@@ -469,7 +479,17 @@ describe("integration smoke — lifecycle event sequences", () => {
 			},
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+			const sessionEntries: { customType: string; data: unknown }[] = [];
+			for (const h of handlers.get(event) ?? []) {
+				const result = (await h(payload, ctx)) as
+					| { action?: string; sessionEntries?: { customType: string; data: unknown }[] }
+					| undefined;
+				if (event === "input") {
+					if (result?.action === "handled") return;
+					sessionEntries.push(...(result?.sessionEntries ?? []));
+				}
+			}
+			for (const entry of sessionEntries) pi.appendEntry(entry.customType, entry.data);
 		}
 		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };
 	}

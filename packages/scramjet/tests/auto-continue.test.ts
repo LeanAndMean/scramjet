@@ -4242,7 +4242,15 @@ describe("issue 352 — actual-journal replay characterization", () => {
 	}
 
 	async function start(bag: ReturnType<typeof recordingPi>, def: CommandDef) {
-		await bag.emit("input", { text: `/${def.name}`, source: "interactive" });
+		const sessionEntries: { customType: string; data: unknown }[] = [];
+		for (const handler of bag.handlers.get("input") ?? []) {
+			const result = (await handler({ text: `/${def.name}`, source: "interactive" })) as
+				| { action?: string; sessionEntries?: { customType: string; data: unknown }[] }
+				| undefined;
+			if (result?.action === "handled") return;
+			sessionEntries.push(...(result?.sessionEntries ?? []));
+		}
+		for (const entry of sessionEntries) bag.pi.appendEntry(entry.customType, entry.data);
 	}
 
 	it("consumed parked reply replays dormant, not waiting", async () => {
