@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, extractStopReason, NOTIFY_MAX, registerAutoContinue } from "../src/auto-continue.js";
 import { resetCache } from "../src/autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE, registerCommandStatusTool } from "../src/command-status.js";
+import { DELEGATE_TOOL_NAME } from "../src/delegate.js";
 import {
 	COMMAND_EXIT_TYPE,
 	COMMAND_START_TYPE,
@@ -1279,7 +1280,11 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			expect(ctxBag.dispatched).toHaveLength(1);
 			expect(ctxBag.dispatched[0].input).toBe("/b:ok");
-			expect(ctxBag.notifications.some((n: any) => n.message.includes("delegate-only"))).toBe(true);
+			expect(
+				ctxBag.notifications.some(
+					(n: any) => n.message.includes("delegate-only") && n.message.includes(DELEGATE_TOOL_NAME),
+				),
+			).toBe(true);
 		});
 
 		it("user selection before countdown overrides the recommendation", async () => {

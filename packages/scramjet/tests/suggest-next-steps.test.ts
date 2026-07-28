@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DELEGATE_TOOL_NAME } from "../src/delegate.js";
 import { registerSuggestNextStepsTool } from "../src/suggest-next-steps.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
 
@@ -242,6 +243,7 @@ describe("suggest_scramjet_next_steps", () => {
 			);
 
 			expect(result.details.error).toBe("validation");
+			expect(result.content[0].text).toContain(DELEGATE_TOOL_NAME);
 			expect(state.pendingSuggestion).toBeNull();
 		});
 

@@ -37,7 +37,7 @@ Resolve issue-linkage ambiguity before constructing a draft:
 - If no issue was supplied and exactly one issue is unambiguously encoded by a branch pattern such as `feature/issue-55-*`, `fix/issue-55-*`, or `55-some-description`, use that issue.
 - If no issue was supplied and the branch yields no candidate, proceed unlinked.
 
-When one issue is selected, delegate to `/mach12:gh-issue-read <issue-number>`. If the read fails, report the error and stop. Issue comments may inform the summary and test plan but must not be copied verbatim. Never expand a parent issue, sub-issues, or other relationships into additional closers.
+When one issue is selected, load and execute in the current conversation `/mach12:gh-issue-read <issue-number>`. If the read fails, report the error and stop. Issue comments may inform the summary and test plan but must not be copied verbatim. Never expand a parent issue, sub-issues, or other relationships into additional closers.
 
 ## Step 2: Gather branch context
 

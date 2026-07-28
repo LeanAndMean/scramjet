@@ -38,7 +38,7 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue and locate the plan
 
-Delegate to:
+Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-issue-read <issue-number> --marker mach12-plan
@@ -55,7 +55,7 @@ If the marker comment was not found, fall back to identifying the most recent su
 
 ## Step 3: Read contribution guidelines
 
-Delegate to:
+Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:find-contribution-guidelines
@@ -207,7 +207,7 @@ If the user picks "Create revised plan", enter the revision loop:
 
    Only one comment is posted — the final accepted revision. Intermediate revisions are not posted.
 
-5. **Post.** When the user picks "Post revised plan", post the final revision as a comment. Include `<!-- mach12-plan -->` as the very first line of the comment body. Then delegate to:
+5. **Post.** When the user picks "Post revised plan", post the final revision as a comment. Include `<!-- mach12-plan -->` as the very first line of the comment body. Then load and execute the following subcommand in the current conversation:
 
    ```
    /mach12:gh-comment issue <issue-number>
@@ -221,7 +221,7 @@ If the user picks "Proceed as-is" and at least one Critical or Important finding
 - Each Critical and Important finding on its own line (one sentence each)
 - Keep the entire comment body under 15 lines
 
-Then delegate to:
+Then load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-comment issue <issue-number>
@@ -238,7 +238,7 @@ If the user picks "Cancel":
    - Finding counts by severity (e.g., "2 Critical, 1 Important, 3 Suggestions")
    - Keep the entire comment body to 5 lines or fewer
 
-   Then delegate to:
+   Then load and execute the following subcommand in the current conversation:
 
    ```
    /mach12:gh-comment issue <issue-number>

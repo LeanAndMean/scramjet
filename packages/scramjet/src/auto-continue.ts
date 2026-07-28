@@ -50,6 +50,7 @@ import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import { loadAutonomyConfig, resolveEdgeBehavior, validateConfig } from "./autonomy-settings.js";
 import { COMMAND_STATUS_PROBE_TYPE } from "./command-status.js";
 import { parseSlashCommand, type ValidatedNextStep, validateNextSteps } from "./commands/validator.js";
+import { DELEGATE_TOOL_NAME } from "./delegate.js";
 import {
 	COMMAND_EXIT_TYPE,
 	logCancellationResume,
@@ -262,7 +263,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	function topLevelCommandCheck(name: string): string | null {
 		const def = state.registry.get(name);
 		if (!def) return `${name} is not registered`;
-		if (def.delegateOnly) return `${name} is delegate-only (invoke via delegate, not top-level dispatch)`;
+		if (def.delegateOnly) {
+			return `${name} is delegate-only (load it via ${DELEGATE_TOOL_NAME}, then execute the returned instructions in the current conversation; do not use top-level dispatch)`;
+		}
 		return null;
 	}
 

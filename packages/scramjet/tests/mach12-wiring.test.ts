@@ -3,11 +3,25 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseCommandFile } from "../src/commands/loader.js";
+import { DELEGATE_TOOL_NAME } from "../src/delegate.js";
 import type { NextStepPolicy } from "../src/types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
 const SET_NAME = "mach12";
+const SUBCOMMAND_CALLERS = [
+	["issue-create", 3],
+	["issue-plan", 5],
+	["issue-review", 5],
+	["issue-implement", 3],
+	["pr-create", 1],
+	["pr-review", 1],
+	["pr-review-assessment", 5],
+	["pr-review-fix", 2],
+	["pr-pre-merge", 2],
+	["pr-merge", 1],
+	["push", 1],
+] as const;
 
 interface WiringRow {
 	basename: string;
@@ -169,6 +183,28 @@ describe("mach12 wiring — bundled command set", () => {
 			expect(content).not.toContain("When Scramjet asks");
 			expect(content).toContain("After delivering your answer");
 			expect(content).toContain("summarize the work you performed in `summary`");
+		},
+	);
+
+	it("wires exactly the expected callers to the selected same-context subcommand tool", () => {
+		const actual: string[] = [];
+		for (const { basename } of WIRING) {
+			const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
+			const content = readFileSync(filePath, "utf-8");
+			const result = parseCommandFile(filePath, content, SET_NAME);
+			expect(result.ok).toBe(true);
+			if (!result.ok) continue;
+			if (result.def.allowedTools?.includes(DELEGATE_TOOL_NAME)) actual.push(basename);
+		}
+		expect(actual).toEqual(SUBCOMMAND_CALLERS.map(([basename]) => basename));
+	});
+
+	it.each(SUBCOMMAND_CALLERS)(
+		"$0 describes every real subcommand call as same-context load and execution",
+		(basename, expectedCallSites) => {
+			const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+			expect(content).not.toMatch(/\bdelegat(?:e|ing) to\b/i);
+			expect(content.match(/load and execut(?:e|ing)/gi)).toHaveLength(expectedCallSites);
 		},
 	);
 

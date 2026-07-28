@@ -48,7 +48,7 @@ No creator, provenance marker, issue linkage, or custom metadata participates in
 
 ## Step 3: Read contribution guidelines
 
-Delegate to:
+Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:find-contribution-guidelines
@@ -254,7 +254,7 @@ Fix each diagnosed failure locally. For common categories:
 
 After applying fixes, verify locally by running the relevant check command before pushing.
 
-Delegate to push the fixes:
+Load and execute the push subcommand in the current conversation:
 
 ```
 /mach12:push CI fix: <brief description of what was fixed> for PR #<pr-number>

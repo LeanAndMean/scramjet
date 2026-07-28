@@ -100,7 +100,7 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 			"Load a registered delegate-only subcommand's instructions into this conversation for you, the current agent, to execute immediately yourself in the same conversation. Do not use for separate-agent work, ordinary top-level commands, completion routing, or future suggestions. The `args` string is substituted into $ARGUMENTS, $@, and $1-$N within the body (plus bash-style slicing), mirroring Pi's slash-command argument expansion. Cycle detection rejects repeating the active command or a previously loaded subcommand during this turn.",
 		promptSnippet: "Load subcommand instructions for the current agent to execute now in the same conversation.",
 		promptGuidelines: [
-			"Use `delegate` only to load delegate-only subcommands that you will execute now yourself; use `subagent` for separate-agent work and status/suggestion tools for future top-level routing.",
+			`Use \`${DELEGATE_TOOL_NAME}\` only to load delegate-only subcommands that you will execute now yourself; use \`subagent\` for separate-agent work and status/suggestion tools for future top-level routing.`,
 		],
 		parameters: Type.Object({
 			command: Type.String({
@@ -112,11 +112,12 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 			}),
 		}),
 		renderCall(args, theme) {
-			const command = typeof args?.command === "string" && args.command.length > 0 ? `/${args.command}` : "delegate";
+			const command =
+				typeof args?.command === "string" && args.command.length > 0 ? `/${args.command}` : DELEGATE_TOOL_NAME;
 			const compactArgs = renderedArgs(args?.args);
 			const invocation = compactArgs ? `${command} ${compactArgs}` : command;
 			return new Text(
-				theme.fg("toolTitle", theme.bold("delegate")) +
+				theme.fg("toolTitle", theme.bold(DELEGATE_TOOL_NAME)) +
 					theme.fg("toolOutput", ` ${invocation}`) +
 					theme.fg("dim", ` (${keyText("app.tools.expand")} to toggle details)`),
 				0,

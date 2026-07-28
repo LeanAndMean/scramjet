@@ -108,7 +108,7 @@ Format the comment as a well-structured markdown document that can serve as inpu
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
 
-Post the prepared body by delegating to:
+Load and execute the following subcommand in the current conversation to post the prepared body:
 
 ```
 /mach12:gh-comment pr <pr-number>

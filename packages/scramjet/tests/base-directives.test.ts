@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { registerBaseDirectives } from "../src/base-directives.js";
+import { DELEGATE_TOOL_NAME } from "../src/delegate.js";
 import { recordingPi } from "./helpers.js";
 
 // One stable anchor per directive area adopted from the captured Claude Code
@@ -104,6 +105,13 @@ describe("registerBaseDirectives", () => {
 		expect(existsSync(readmePath!)).toBe(true);
 		expect(existsSync(visionPath!)).toBe(true);
 		expect(existsSync(authoringPath!)).toBe(true);
+	});
+
+	it("names the selected tool as a source of active command instructions", async () => {
+		const { list } = captureHandler();
+		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
+
+		expect(result.systemPromptSection.text).toContain(`or the \`${DELEGATE_TOOL_NAME}\` tool`);
 	});
 
 	it("embeds the logging guide path that resolves to an existing file", async () => {
