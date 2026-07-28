@@ -711,7 +711,7 @@ export class SessionManager {
 	private persist: boolean;
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
-	private serializedEntries = new WeakMap<object, string>();
+	private pendingSerializedEntries = new WeakMap<object, string>();
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
@@ -811,11 +811,8 @@ export class SessionManager {
 	}
 
 	private _serializeEntry(entry: FileEntry): string {
-		const cached = this.serializedEntries.get(entry);
-		if (cached !== undefined) return cached;
 		const serialized = JSON.stringify(entry);
 		if (serialized === undefined) throw new TypeError("Session entry is not JSON-serializable");
-		this.serializedEntries.set(entry, serialized);
 		return serialized;
 	}
 
@@ -845,39 +842,41 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
-	_persist(entry: SessionEntry): void {
+	_persist(entry: SessionEntry, serializedEntry = this._serializeEntry(entry)): void {
 		if (!this.persist || !this.sessionFile) return;
 
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
-			// Mark as not flushed so when assistant arrives, all entries get written
 			this.flushed = false;
+			this.pendingSerializedEntries.set(entry, serializedEntry);
 			return;
 		}
 
 		if (!this.flushed) {
-			for (const fileEntry of this.fileEntries) {
-				appendFileSync(this.sessionFile, `${this._serializeEntry(fileEntry)}\n`);
-			}
+			const content = `${this.fileEntries
+				.map((fileEntry) => this.pendingSerializedEntries.get(fileEntry) ?? this._serializeEntry(fileEntry))
+				.join("\n")}\n`;
+			writeFileSync(this.sessionFile, content);
 			this.flushed = true;
+			this.pendingSerializedEntries = new WeakMap();
 		} else {
-			appendFileSync(this.sessionFile, `${this._serializeEntry(entry)}\n`);
+			appendFileSync(this.sessionFile, `${serializedEntry}\n`);
 		}
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
-		this._serializeEntry(entry);
+		const serializedEntry = this._serializeEntry(entry);
 		const previousLeafId = this.leafId;
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
 		try {
-			this._persist(entry);
+			this._persist(entry, serializedEntry);
 		} catch (error) {
 			this.fileEntries.pop();
 			this.byId.delete(entry.id);
 			this.leafId = previousLeafId;
-			this.serializedEntries.delete(entry);
+			this.pendingSerializedEntries.delete(entry);
 			throw error;
 		}
 	}
@@ -950,14 +949,14 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
-	appendCustomEntry(customType: string, data?: unknown): string {
+	/** Append a custom entry (for extensions), then advance leaf. Returns entry id. */
+	appendCustomEntry(customType: string, data?: unknown, parentId: string | null = this.leafId): string {
 		const entry: CustomEntry = {
 			type: "custom",
 			customType,
 			data,
 			id: generateId(this.byId),
-			parentId: this.leafId,
+			parentId,
 			timestamp: new Date().toISOString(),
 		};
 		this._appendEntry(entry);

@@ -285,7 +285,19 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	const rebuild = async (_event: unknown, ctx: ExtensionContext) => {
 		state.clearLifecycleTimers?.();
-		const result = replayHistory(ctx.sessionManager.getBranch());
+		const branch = ctx.sessionManager.getBranch();
+		const branchIds = new Set(branch.map((entry) => entry.id));
+		const replayEntries = ctx.sessionManager
+			.getEntries()
+			.filter(
+				(entry) =>
+					branchIds.has(entry.id) ||
+					(entry.type === "custom" &&
+						entry.customType === COMMAND_START_TYPE &&
+						entry.parentId !== null &&
+						branchIds.has(entry.parentId)),
+			);
+		const result = replayHistory(replayEntries);
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
 		state.lifecycleGeneration++;

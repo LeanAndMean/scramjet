@@ -50,7 +50,7 @@ function recordingPi() {
 }
 
 function ctxWithEntries(entries: SessionEntry[]): any {
-	return { sessionManager: { getBranch: () => entries } };
+	return { sessionManager: { getBranch: () => entries, getEntries: () => entries } };
 }
 
 function customEntry(customType: string, data: unknown): SessionEntry {
@@ -1065,6 +1065,30 @@ describe("registerHistory — replay on session events", () => {
 		await emit("session_tree", {}, ctx);
 		expect(state.sidebarLog.map((e) => e.command)).toEqual(["only"]);
 		expect(activeCommandName(state.lifecycle)).toBe("only");
+	});
+
+	it("replays an attached command start when later sibling metadata owns the branch leaf", async () => {
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const message = {
+			type: "message",
+			id: "message",
+			parentId: null,
+			timestamp: "0",
+			message: { role: "user", content: "expanded", timestamp: 0 },
+		} as SessionEntry;
+		const start = { ...cmdStart("attached"), parentId: message.id };
+		const later = { ...customEntry("other:metadata", {}), parentId: message.id };
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [message, later],
+				getEntries: () => [message, start, later],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBe("attached");
 	});
 
 	it("applies the latest enabled toggle from the branch", async () => {

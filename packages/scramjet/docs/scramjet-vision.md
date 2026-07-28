@@ -759,9 +759,12 @@ state immediately, then attaches the durable `scramjet:command-start` to its
 concrete expanded user message. When both persist successfully, the message is
 followed immediately by the start, whose `parentId` equals the message entry ID.
 Failed model/authentication or `before_agent_start` preflight leaves neither
-artifact. If attached-start serialization or storage fails after the message
-commits, the message remains without exact-restoration metadata and
-`AgentSession` emits a `session_entry_persistence` diagnostic. Delegated entries (`depth > 0`, currently
+artifact. Before the first assistant response triggers the initial file flush,
+attached-start failure retains the message only in the in-memory session tree.
+After the session is flushed, attached-start storage failure can leave a durable
+message-only partial commit. In either case, the message lacks exact-restoration
+metadata and `AgentSession` emits a `session_entry_persistence` diagnostic.
+Delegated entries (`depth > 0`, currently
 `origin: "agent"`) remain immediate journal appends, visible in the log, and
 do not replace the active top-level command. This is enough for forward compat (so when a UI lands,
 no data has been thrown away) and is load-bearing for any future

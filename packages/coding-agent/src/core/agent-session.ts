@@ -659,13 +659,13 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				const messageEntryId = this.sessionManager.appendMessage(event.message);
 				if (event.message.role === "user") {
 					const sessionEntries = this._inputSessionEntries.get(event.message);
 					this._inputSessionEntries.delete(event.message);
 					for (const entry of sessionEntries ?? []) {
 						try {
-							this.sessionManager.appendCustomEntry(entry.customType, entry.data);
+							this.sessionManager.appendCustomEntry(entry.customType, entry.data, messageEntryId);
 						} catch (err) {
 							this._extensionRunner.emitError({
 								extensionPath: `session-entry:${entry.customType}`,

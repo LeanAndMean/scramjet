@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@leanandmean/agent";
@@ -10,6 +10,7 @@ import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
+import { restoreScramjetCommandInvocation } from "../src/core/scramjet-command-parser.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
@@ -76,7 +77,7 @@ async function createFixture(persist = false) {
 		text: `<expanded>${text}</expanded>`,
 		sessionEntries: [{ customType: "scramjet:command-start", data: { invocationText: text } }],
 	});
-	return { session, sessionManager, agent, providerMessages, runner };
+	return { session, sessionManager, agent, providerMessages, runner, authStorage };
 }
 
 function customEntries(sessionManager: SessionManager) {
@@ -102,6 +103,25 @@ describe("input session entries", () => {
 			content: [{ type: "text", text: "<expanded>/one exact text</expanded>" }],
 		});
 		expect(providerMessages[0][0]).not.toHaveProperty("sessionEntries");
+	});
+
+	it("parents every transformed metadata entry directly to its user message", async () => {
+		const { session, sessionManager, runner } = await createFixture();
+		runner.emitInput = async (text: string) => ({
+			action: "transform",
+			text: `<expanded>${text}</expanded>`,
+			sessionEntries: [
+				{ customType: "other:metadata", data: {} },
+				{ customType: "scramjet:command-start", data: { invocationText: text } },
+			],
+		});
+
+		await session.prompt("/direct parents");
+
+		const entries = sessionManager.getEntries();
+		const userMessage = entries.find((entry) => entry.type === "message" && entry.message.role === "user");
+		expect(customEntries(sessionManager)).toHaveLength(2);
+		expect(customEntries(sessionManager).map((entry) => entry.parentId)).toEqual([userMessage?.id, userMessage?.id]);
 	});
 
 	it("binds transformed metadata to queued steer and follow-up messages through prompt", async () => {
@@ -206,6 +226,78 @@ describe("input session entries", () => {
 		expect(laterMessage?.parentId).not.toBe(invalidMessage?.id);
 	});
 
+	it("replaces a partial initial-flush prefix on retry", () => {
+		const dir = mkdtempSync(join(tmpdir(), "initial-flush-retry-"));
+		const sessionManager = SessionManager.create(dir, dir);
+		sessionManager.appendMessage({ role: "user", content: "one", timestamp: 1 });
+		const sessionFile = sessionManager.getSessionFile()!;
+		const persist = (sessionManager as any)._persist.bind(sessionManager);
+		vi.spyOn(sessionManager as any, "_persist").mockImplementationOnce(() => {
+			writeFileSync(sessionFile, `${JSON.stringify(sessionManager.getHeader())}\n`);
+			throw new Error("partial initial write");
+		});
+
+		expect(() => sessionManager.appendMessage(assistantText("failed"))).toThrow("partial initial write");
+		expect(readFileSync(sessionFile, "utf8").trim().split("\n")).toHaveLength(1);
+
+		(sessionManager as any)._persist.mockImplementation(persist);
+		sessionManager.appendMessage(assistantText("retry"));
+		const lines = readFileSync(sessionFile, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(lines).toHaveLength(3);
+		expect(new Set(lines.map((entry) => entry.id)).size).toBe(3);
+		expect(lines.map((entry) => entry.message?.content).filter(Boolean)).toEqual([
+			"one",
+			assistantText("retry").content,
+		]);
+		expect(lines[2].parentId).toBe(lines[1].id);
+	});
+
+	it("flushes the serialized insertion snapshot rather than later entry mutations", () => {
+		const dir = mkdtempSync(join(tmpdir(), "initial-flush-snapshot-"));
+		const sessionManager = SessionManager.create(dir, dir);
+		const userMessage = { role: "user" as const, content: "original", timestamp: 1 };
+		sessionManager.appendMessage(userMessage);
+		userMessage.content = "mutated";
+		sessionManager.appendMessage(assistantText("flush"));
+
+		const lines = readFileSync(sessionManager.getSessionFile()!, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line));
+		expect(lines[1].message.content).toBe("original");
+	});
+
+	it("restores exact invocation after reopening the persisted session", async () => {
+		const { session, sessionManager, runner } = await createFixture(true);
+		runner.emitInput = async (text: string) => ({
+			action: "transform",
+			text: '<scramjet-command name="mach12:issue-plan">\n# Command\n</scramjet-command>',
+			sessionEntries: [
+				{
+					customType: "scramjet:command-start",
+					data: {
+						command: "mach12:issue-plan",
+						origin: "user",
+						depth: 0,
+						timestamp: 1,
+						invocationText: text,
+					},
+				},
+			],
+		});
+		await session.prompt("/mach12:issue-plan  one exact text", { source: "interactive" });
+
+		const reopened = SessionManager.open(sessionManager.getSessionFile()!);
+		const entries = reopened.getEntries();
+		const userMessage = entries.find((entry) => entry.type === "message" && entry.message.role === "user");
+		expect(userMessage?.type).toBe("message");
+		if (!userMessage || userMessage.type !== "message") throw new Error("Missing persisted user message");
+		expect(restoreScramjetCommandInvocation(userMessage, entries)).toBe("/mach12:issue-plan  one exact text");
+	});
+
 	it("writes no attached entry when preflight fails before a user message is emitted", async () => {
 		const { session, sessionManager, runner } = await createFixture();
 		runner.emitBeforeAgentStart = async () => {
@@ -217,5 +309,13 @@ describe("input session entries", () => {
 		expect(
 			sessionManager.getEntries().filter((entry) => entry.type === "message" && entry.message.role === "user"),
 		).toEqual([]);
+	});
+
+	it("writes no artifacts when model authentication preflight fails", async () => {
+		const { session, sessionManager, authStorage } = await createFixture();
+		authStorage.removeRuntimeApiKey("openai");
+
+		await expect(session.prompt("/no credentials")).rejects.toThrow(/API key/i);
+		expect(sessionManager.getEntries()).toEqual([]);
 	});
 });
