@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.63.3 — Load all intermediate context files
+
+Removes traversal limits that could omit subdirectory context from deep paths or later reads. Fixes [#409](https://github.com/LeanAndMean/scramjet/issues/409).
+
+### Changed
+
+- Discover `CLAUDE.md` and `AGENTS.md` in every intermediate directory, preserving shallowest-first ordering, deduplication, containment checks, and outside-CWD behavior.
+
+### Tests
+
+- Add regressions for reads deeper than ten levels and context discovery after twenty previously inspected directories.
+
 ## 0.63.2 — Surface npm install on the root README
 
 Adds a prominent `## Install` section to the root `README.md` so the npm install path is the first setup content a visitor sees. Fixes [#410](https://github.com/LeanAndMean/scramjet/issues/410).
