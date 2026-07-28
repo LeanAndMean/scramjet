@@ -37,10 +37,10 @@ function assistantText(text: string): AssistantMessage {
 	};
 }
 
-async function createFixture() {
+async function createFixture(persist = false) {
 	const dir = mkdtempSync(join(tmpdir(), "input-session-entries-"));
 	const settingsManager = SettingsManager.inMemory();
-	const sessionManager = SessionManager.inMemory(dir);
+	const sessionManager = persist ? SessionManager.create(dir, dir) : SessionManager.inMemory(dir);
 	const authStorage = AuthStorage.inMemory();
 	authStorage.setRuntimeApiKey("openai", "fake");
 	const modelRegistry = ModelRegistry.create(authStorage, join(dir, "models.json"));
@@ -133,22 +133,77 @@ describe("input session entries", () => {
 		const { session, sessionManager, runner } = await createFixture();
 		const errors: unknown[] = [];
 		runner.onError((error: unknown) => errors.push(error));
-		vi.spyOn(sessionManager, "appendCustomEntry").mockImplementationOnce(() => {
-			throw new Error("disk full");
+		const persist = (sessionManager as any)._persist.bind(sessionManager);
+		vi.spyOn(sessionManager as any, "_persist").mockImplementation((entry: { type: string }) => {
+			if (entry.type === "custom") throw new Error("disk full");
+			return persist(entry);
 		});
 
 		await session.prompt("/partially persisted");
 
-		expect(sessionManager.getEntries()).toContainEqual(
-			expect.objectContaining({ type: "message", message: expect.objectContaining({ role: "user" }) }),
-		);
+		const entries = sessionManager.getEntries();
+		const userMessage = entries.find((entry) => entry.type === "message" && entry.message.role === "user");
+		expect(userMessage).toBeDefined();
 		expect(customEntries(sessionManager)).toEqual([]);
+		const assistantMessage = entries.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+		expect(assistantMessage?.parentId).toBe(userMessage?.id);
 		expect(errors).toContainEqual({
 			extensionPath: "session-entry:scramjet:command-start",
 			event: "session_entry_persistence",
 			error: "Failed to persist attached input metadata after its user message; exact input restoration may be unavailable: disk full",
 			stack: expect.any(String),
 		});
+	});
+
+	it.each([
+		["before the initial flush", false],
+		["after the initial flush", true],
+	])("rejects invalid attached metadata %s without corrupting later appends", async (_name, flushFirst) => {
+		const { session, sessionManager, runner } = await createFixture(true);
+		const errors: unknown[] = [];
+		runner.onError((error: unknown) => errors.push(error));
+		if (flushFirst) await session.prompt("/valid first");
+
+		const cyclic: Record<string, unknown> = {};
+		cyclic.self = cyclic;
+		runner.emitInput = async () => ({
+			action: "transform",
+			text: "<expanded>/invalid</expanded>",
+			sessionEntries: [{ customType: "invalid", data: cyclic }],
+		});
+		await session.prompt("/invalid");
+
+		const invalidMessage = sessionManager
+			.getEntries()
+			.find(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "user" &&
+					Array.isArray(entry.message.content) &&
+					entry.message.content[0]?.type === "text" &&
+					entry.message.content[0].text === "<expanded>/invalid</expanded>",
+			);
+		expect(invalidMessage).toBeDefined();
+		expect(customEntries(sessionManager).some((entry) => entry.customType === "invalid")).toBe(false);
+		expect(errors).toContainEqual(
+			expect.objectContaining({
+				extensionPath: "session-entry:invalid",
+				event: "session_entry_persistence",
+			}),
+		);
+
+		runner.emitInput = async () => ({ action: "transform", text: "<expanded>/valid later</expanded>" });
+		await session.prompt("/valid later");
+		const entries = sessionManager.getEntries();
+		const laterMessage = entries.find(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				Array.isArray(entry.message.content) &&
+				entry.message.content[0]?.type === "text" &&
+				entry.message.content[0].text === "<expanded>/valid later</expanded>",
+		);
+		expect(laterMessage?.parentId).not.toBe(invalidMessage?.id);
 	});
 
 	it("writes no attached entry when preflight fails before a user message is emitted", async () => {

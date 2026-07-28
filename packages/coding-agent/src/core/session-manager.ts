@@ -711,6 +711,7 @@ export class SessionManager {
 	private persist: boolean;
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
+	private serializedEntries = new WeakMap<object, string>();
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
@@ -809,9 +810,18 @@ export class SessionManager {
 		}
 	}
 
+	private _serializeEntry(entry: FileEntry): string {
+		const cached = this.serializedEntries.get(entry);
+		if (cached !== undefined) return cached;
+		const serialized = JSON.stringify(entry);
+		if (serialized === undefined) throw new TypeError("Session entry is not JSON-serializable");
+		this.serializedEntries.set(entry, serialized);
+		return serialized;
+	}
+
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const content = `${this.fileEntries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+		const content = `${this.fileEntries.map((entry) => this._serializeEntry(entry)).join("\n")}\n`;
 		writeFileSync(this.sessionFile, content);
 	}
 
@@ -846,20 +856,30 @@ export class SessionManager {
 		}
 
 		if (!this.flushed) {
-			for (const e of this.fileEntries) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(e)}\n`);
+			for (const fileEntry of this.fileEntries) {
+				appendFileSync(this.sessionFile, `${this._serializeEntry(fileEntry)}\n`);
 			}
 			this.flushed = true;
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			appendFileSync(this.sessionFile, `${this._serializeEntry(entry)}\n`);
 		}
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
+		this._serializeEntry(entry);
+		const previousLeafId = this.leafId;
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		this._persist(entry);
+		try {
+			this._persist(entry);
+		} catch (error) {
+			this.fileEntries.pop();
+			this.byId.delete(entry.id);
+			this.leafId = previousLeafId;
+			this.serializedEntries.delete(entry);
+			throw error;
+		}
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.

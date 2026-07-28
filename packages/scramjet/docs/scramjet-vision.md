@@ -756,10 +756,12 @@ the sidebar log entries (command name, origin marker, delegation depth,
 timestamp) are journaled and rebuilt on `session_start` / `session_tree`.
 For a depth-0 invocation, the input handler updates live lifecycle/sidebar
 state immediately, then attaches the durable `scramjet:command-start` to its
-concrete expanded user message. The message persists first and the start
-immediately afterward, with the start's `parentId` equal to the message entry
-ID. Failed model/authentication or `before_agent_start` preflight therefore
-leaves no orphan durable start. Delegated entries (`depth > 0`, currently
+concrete expanded user message. When both persist successfully, the message is
+followed immediately by the start, whose `parentId` equals the message entry ID.
+Failed model/authentication or `before_agent_start` preflight leaves neither
+artifact. If attached-start serialization or storage fails after the message
+commits, the message remains without exact-restoration metadata and
+`AgentSession` emits a `session_entry_persistence` diagnostic. Delegated entries (`depth > 0`, currently
 `origin: "agent"`) remain immediate journal appends, visible in the log, and
 do not replace the active top-level command. This is enough for forward compat (so when a UI lands,
 no data has been thrown away) and is load-bearing for any future

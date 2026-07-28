@@ -106,11 +106,11 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 	return next.length > SIDEBAR_MAX ? next.slice(-SIDEBAR_MAX) : next;
 }
 
-// Single chokepoint for "a command was invoked." Pushes a sidebar entry and
-// persists it to the journal so resume can replay it. Depth-0 entries are
-// top-level command starts and update the lifecycle; depth > 0 entries are
-// delegated subroutine invocations and must not replace the active top-level
-// command whose next-step policy controls the turn.
+// Persists immediately journaled invocations and applies their live state.
+// Depth > 0 entries are delegated subroutine invocations and must not replace
+// the active top-level command whose next-step policy controls the turn.
+// Depth-0 input applies the same live state through applyCommandInvocation and
+// attaches its durable entry to the concrete user message.
 
 export function recordCommandInvocation(
 	pi: ExtensionAPI,
