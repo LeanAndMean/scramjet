@@ -64,21 +64,41 @@ function exactInvocation(data: unknown, commandName: string): string | null {
 	return slashToken === `/${commandName}` ? record.invocationText : null;
 }
 
+export type ScramjetCommandStartIndex = ReadonlyMap<string, CustomEntry>;
+
+export function indexScramjetCommandStarts(entries: readonly SessionEntry[]): ScramjetCommandStartIndex {
+	const index = new Map<string, CustomEntry>();
+	for (const entry of entries) {
+		if (
+			entry.type === "custom" &&
+			entry.customType === "scramjet:command-start" &&
+			entry.parentId !== null &&
+			!index.has(entry.parentId)
+		) {
+			index.set(entry.parentId, entry);
+		}
+	}
+	return index;
+}
+
 export function restoreScramjetCommandInvocation(
 	selectedEntry: SessionMessageEntry,
-	entries: readonly SessionEntry[],
+	entries: readonly SessionEntry[] | ScramjetCommandStartIndex,
 ): string {
 	const text = extractMessageText(selectedEntry);
 	const parsed = parseScramjetCommandBlock(text);
 	if (!parsed || !/^[^\s/]+$/.test(parsed.name)) return text;
 
-	const commandStart = entries.find(
-		(entry): entry is CustomEntry =>
-			entry.type === "custom" &&
-			// Mirrors scramjet's COMMAND_START_TYPE (see exactInvocation drift note).
-			entry.customType === "scramjet:command-start" &&
-			entry.parentId === selectedEntry.id,
-	);
+	const commandStart =
+		"get" in entries
+			? entries.get(selectedEntry.id)
+			: entries.find(
+					(entry): entry is CustomEntry =>
+						entry.type === "custom" &&
+						// Mirrors scramjet's COMMAND_START_TYPE (see exactInvocation drift note).
+						entry.customType === "scramjet:command-start" &&
+						entry.parentId === selectedEntry.id,
+				);
 	if (commandStart) {
 		const invocation = exactInvocation(commandStart.data, parsed.name);
 		if (invocation !== null) return invocation;

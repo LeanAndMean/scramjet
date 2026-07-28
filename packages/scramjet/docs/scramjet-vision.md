@@ -756,8 +756,10 @@ the sidebar log entries (command name, origin marker, delegation depth,
 timestamp) are journaled and rebuilt on `session_start` / `session_tree`.
 For a depth-0 invocation, the input handler updates live lifecycle/sidebar
 state immediately, then attaches the durable `scramjet:command-start` to its
-concrete expanded user message. When both persist successfully, the message is
-followed immediately by the start, whose `parentId` equals the message entry ID.
+concrete expanded user message. When both persist successfully, the start's
+`parentId` equals the message entry ID. It is normally Scramjet's first metadata
+sibling, but transformed metadata is persisted in handler order and each item is
+a direct child of the source message, so a later sibling may own the branch leaf.
 Failed model/authentication or `before_agent_start` preflight leaves neither
 artifact. Before the first assistant response triggers the initial file flush,
 attached-start failure retains the message only in the in-memory session tree.

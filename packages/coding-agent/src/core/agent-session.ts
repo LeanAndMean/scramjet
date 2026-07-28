@@ -83,7 +83,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
-import { restoreScramjetCommandInvocation } from "./scramjet-command-parser.js";
+import { indexScramjetCommandStarts, restoreScramjetCommandInvocation } from "./scramjet-command-parser.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -3210,13 +3210,14 @@ export class AgentSession {
 	 */
 	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
 		const entries = this.sessionManager.getEntries();
+		const commandStarts = indexScramjetCommandStarts(entries);
 		const result: Array<{ entryId: string; text: string }> = [];
 
 		for (const entry of entries) {
 			if (entry.type !== "message") continue;
 			if (entry.message.role !== "user") continue;
 
-			const text = restoreScramjetCommandInvocation(entry, entries);
+			const text = restoreScramjetCommandInvocation(entry, commandStarts);
 			if (text) {
 				result.push({ entryId: entry.id, text });
 			}

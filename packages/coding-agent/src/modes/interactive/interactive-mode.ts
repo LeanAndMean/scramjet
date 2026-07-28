@@ -68,7 +68,11 @@ import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScop
 import { DefaultPackageManager } from "../../core/package-manager.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.js";
 import { describeRuntimeError, type ResourceDiagnostic } from "../../core/resource-loader.js";
-import { parseScramjetCommandBlock, restoreScramjetCommandInvocation } from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: scramjet-command restoration (issues 82, 414)
+import {
+	indexScramjetCommandStarts,
+	parseScramjetCommandBlock,
+	restoreScramjetCommandInvocation,
+} from "../../core/scramjet-command-parser.js"; // SCRAMJET-DIVERGENCE: scramjet-command restoration (issues 82, 414)
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.js";
 import { type SessionContext, SessionManager, type SessionMessageEntry } from "../../core/session-manager.js";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
@@ -3311,6 +3315,7 @@ export class InteractiveMode {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		const entries = options.populateHistory ? this.sessionManager.getEntries() : [];
+		const commandStarts = indexScramjetCommandStarts(entries);
 		const entriesByMessage = new Map<AgentMessage, SessionMessageEntry>(
 			entries
 				.filter((entry): entry is SessionMessageEntry => entry.type === "message")
@@ -3399,7 +3404,7 @@ export class InteractiveMode {
 				const entry = entriesByMessage.get(message);
 				this.addMessageToChat(message, {
 					...options,
-					historyText: entry ? restoreScramjetCommandInvocation(entry, entries) : undefined,
+					historyText: entry ? restoreScramjetCommandInvocation(entry, commandStarts) : undefined,
 				});
 			}
 		}

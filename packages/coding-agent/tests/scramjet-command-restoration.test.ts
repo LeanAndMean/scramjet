@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@leanandmean/agent";
 import { describe, expect, it } from "vitest";
-import { restoreScramjetCommandInvocation } from "../src/core/scramjet-command-parser.js";
+import { indexScramjetCommandStarts, restoreScramjetCommandInvocation } from "../src/core/scramjet-command-parser.js";
 import type { CustomEntry, SessionEntry, SessionMessageEntry } from "../src/core/session-manager.js";
 
 function expanded(name = "mach12:issue-plan", context?: string, trailing?: string): string {
@@ -54,6 +54,15 @@ describe("restoreScramjetCommandInvocation", () => {
 				}),
 			]),
 		).toBe(invocationText);
+	});
+
+	it("restores from a bulk index while preserving first-match semantics", () => {
+		const selected = messageEntry("selected", expanded("mach12:issue-plan", "55"));
+		const malformed = commandStart(selected.id, null);
+		const valid = { ...commandStart(selected.id, validCommandStartData), id: "later-valid" };
+		const index = indexScramjetCommandStarts([selected, malformed, valid]);
+
+		expect(restoreScramjetCommandInvocation(selected, index)).toBe("/mach12:issue-plan 55");
 	});
 
 	it("isolates identical expanded messages on sibling branches", () => {

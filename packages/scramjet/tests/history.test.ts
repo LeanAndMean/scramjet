@@ -1076,9 +1076,23 @@ describe("registerHistory — replay on session events", () => {
 			id: "message",
 			parentId: null,
 			timestamp: "0",
-			message: { role: "user", content: "expanded", timestamp: 0 },
+			message: {
+				role: "user",
+				content: '<scramjet-command name="attached">\n# Command\n</scramjet-command>',
+				timestamp: 0,
+			},
 		} as SessionEntry;
-		const start = { ...cmdStart("attached"), parentId: message.id };
+		const start = {
+			...cmdStart("attached"),
+			parentId: message.id,
+			data: {
+				command: "attached",
+				origin: "user",
+				depth: 0,
+				timestamp: 0,
+				invocationText: "/attached exact",
+			},
+		};
 		const later = { ...customEntry("other:metadata", {}), parentId: message.id };
 		const ctx = {
 			sessionManager: {
@@ -1089,6 +1103,66 @@ describe("registerHistory — replay on session events", () => {
 
 		await emit("session_start", {}, ctx);
 		expect(activeCommandName(state.lifecycle)).toBe("attached");
+	});
+
+	it("does not rescue an off-branch legacy command-start parented on an on-branch user message", async () => {
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const message = {
+			type: "message",
+			id: "message",
+			parentId: null,
+			timestamp: "0",
+			message: {
+				role: "user",
+				content: '<scramjet-command name="current">\n# Command\n</scramjet-command>',
+				timestamp: 0,
+			},
+		} as SessionEntry;
+		const legacyStart = { ...cmdStart("stale-queued"), parentId: message.id };
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [message],
+				getEntries: () => [message, legacyStart],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
+	});
+
+	it("does not rescue malformed modern attached metadata", async () => {
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const message = {
+			type: "message",
+			id: "message",
+			parentId: null,
+			timestamp: "0",
+			message: {
+				role: "user",
+				content: '<scramjet-command name="attached">\n# Command\n</scramjet-command>',
+				timestamp: 0,
+			},
+		} as SessionEntry;
+		const malformedStart = {
+			...cmdStart("attached"),
+			parentId: message.id,
+			data: { command: "attached", origin: "user", depth: 0, invocationText: "/attached exact" },
+		};
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [message],
+				getEntries: () => [message, malformedStart],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
 	});
 
 	it("does not rescue an off-branch legacy command-start parented on an assistant (F1)", async () => {

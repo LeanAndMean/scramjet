@@ -271,15 +271,35 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	return { sidebarLog, enabled, lifecycle };
 }
 
-// An off-branch command-start is rescued into replay only when its parent is a
-// user-role message on the current branch. New-layout starts are parented on
-// their expanded user message (exactly one start child), so this reunites a start
-// with its message when a later sibling entry owns the branch leaf. Legacy
-// sessions parented starts on the prior leaf (an assistant); requiring a
-// user-message parent structurally excludes those, so a sibling branch's legacy
-// start cannot fold the wrong active command into replay. (F1, issue 414)
-function isUserMessageEntry(entry: SessionEntry | undefined): boolean {
-	return entry !== undefined && entry.type === "message" && entry.message.role === "user";
+function attachedCommandStartMatches(entry: SessionEntry, parent: SessionEntry | undefined): boolean {
+	if (entry.type !== "custom" || parent?.type !== "message" || parent.message.role !== "user") return false;
+	const data = entry.data as Partial<CommandStartData> | undefined;
+	if (
+		data?.depth !== 0 ||
+		typeof data.command !== "string" ||
+		!(["user", "agent", "forced"] as unknown[]).includes(data.origin) ||
+		typeof data.timestamp !== "number" ||
+		typeof data.invocationText !== "string"
+	) {
+		return false;
+	}
+
+	const tokenEnd = data.invocationText.search(/\s/);
+	const slashToken = tokenEnd === -1 ? data.invocationText : data.invocationText.slice(0, tokenEnd);
+	if (slashToken !== `/${data.command}`) return false;
+
+	const content = parent.message.content;
+	const text =
+		typeof content === "string"
+			? content
+			: content
+					.filter(
+						(part): part is { type: "text"; text: string } =>
+							part.type === "text" && typeof part.text === "string",
+					)
+					.map((part) => part.text)
+					.join("");
+	return text.startsWith(`<scramjet-command name="${data.command}">\n`);
 }
 
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
@@ -296,7 +316,7 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 					entry.customType === COMMAND_START_TYPE &&
 					entry.parentId !== null &&
 					branchIds.has(entry.parentId) &&
-					isUserMessageEntry(byId.get(entry.parentId))),
+					attachedCommandStartMatches(entry, byId.get(entry.parentId))),
 		);
 		const result = replayHistory(replayEntries);
 		state.sidebarLog = result.sidebarLog;
