@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
+import { DELEGATE_TOOL_NAME } from "./delegate.js";
 import type { ScramjetState } from "./types.js";
 
 // Advisory-only in the MVP per CLAUDE.md design rationale: log out-of-scope
@@ -15,7 +16,7 @@ export function registerToolCallAdvisor(pi: ExtensionAPI, state: ScramjetState) 
 		if (state.delegateStack.length === 0) return;
 		const top = state.delegateStack[state.delegateStack.length - 1];
 		if (top.effectiveAllowedTools === undefined) return;
-		if (event.toolName === "delegate") return;
+		if (event.toolName === DELEGATE_TOOL_NAME) return;
 		if (top.effectiveAllowedTools.includes(event.toolName)) return;
 		state.logger.warn(
 			"scope",

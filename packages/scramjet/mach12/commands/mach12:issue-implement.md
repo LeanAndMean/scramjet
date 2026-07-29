@@ -99,7 +99,7 @@ After the branch is confirmed (whether by checkout, silent match, or user confir
 
 ### Detect sub-issues
 
-After the branch is confirmed and the working tree is clean, detect any sub-issues so they can be assigned alongside the parent. Delegate to:
+After the branch is confirmed and the working tree is clean, detect any sub-issues so they can be assigned alongside the parent. Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-sub-issues <issue-number>
@@ -109,7 +109,7 @@ The subroutine returns the list of sub-issue numbers (possibly empty) and which 
 
 ### Assign the issue and sub-issues
 
-Delegate to:
+Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-assign <issue-number> [<sub-issue-number> ...]
@@ -119,7 +119,7 @@ Pass the parent issue number followed by every sub-issue number from the previou
 
 ## Step 3: Gather Context
 
-Read the issue and locate the implementation plan. Delegate to:
+Read the issue and locate the implementation plan. Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-issue-read <issue-number> --marker mach12-plan
@@ -158,7 +158,7 @@ Each stage should be implemented in a **fresh session** to maximize available co
 
 ## Step 5: Commit and document
 
-After implementation is complete, commit, push, and post a progress comment on the issue (or PR, if one already exists for this branch) by delegating to:
+After implementation is complete, commit, push, and post a progress comment on the issue (or PR, if one already exists for this branch) by loading and executing the following subcommand in the current conversation:
 
 ```
 /mach12:push

@@ -393,6 +393,7 @@ export function registerCommandStatusTool(pi: ExtensionAPI, state: ScramjetState
 				content: [{ type: "text", text }],
 				details,
 				terminate: true,
+				terminationMode: "any",
 			};
 		},
 	});

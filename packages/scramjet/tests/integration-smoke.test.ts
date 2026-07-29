@@ -46,7 +46,11 @@ function loadCommand(basename: string): CommandDef {
 }
 
 function seedRegistry(defs: CommandDef[]): ScramjetState {
-	return freshState({ registry: new Map(defs.map((d) => [d.name, d])) });
+	const caller: CommandDef = { name: "test:caller", filePath: "/fake/test:caller.md", body: "" };
+	return freshState({
+		registry: new Map([caller, ...defs].map((d) => [d.name, d])),
+		lifecycle: lifecycleFor("dormant", caller.name),
+	});
 }
 
 describe("integration smoke — delegate against real mach12 subroutines", () => {

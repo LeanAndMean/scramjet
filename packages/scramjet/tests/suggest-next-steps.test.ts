@@ -242,6 +242,8 @@ describe("suggest_scramjet_next_steps", () => {
 			);
 
 			expect(result.details.error).toBe("validation");
+			expect(result.content[0].text).toContain("active caller during command work");
+			expect(result.content[0].text).not.toContain("load it via delegate");
 			expect(state.pendingSuggestion).toBeNull();
 		});
 

@@ -36,6 +36,9 @@ export type StreamFn = (
  */
 export type ToolExecutionMode = "sequential" | "parallel";
 
+// SCRAMJET-DIVERGENCE: accepted terminal command reports can end mixed tool batches (#413 follow-up).
+export type ToolResultTerminationMode = "all" | "any";
+
 /**
  * Controls how many queued user messages are injected when the agent loop reaches a queue drain point.
  *
@@ -66,6 +69,7 @@ export interface BeforeToolCallResult {
  * - `details`: if provided, replaces the tool result details value in full
  * - `isError`: if provided, replaces the tool result error flag
  * - `terminate`: if provided, replaces the early-termination hint
+ * - `terminationMode`: if provided, replaces how that hint applies to the batch
  *
  * Omitted fields keep the original executed tool result values.
  * There is no deep merge for `content` or `details`.
@@ -74,11 +78,13 @@ export interface AfterToolCallResult {
 	content?: (TextContent | ImageContent)[];
 	details?: unknown;
 	isError?: boolean;
-	/**
-	 * Hint that the agent should stop after the current tool batch.
-	 * Early termination only happens when every finalized tool result in the batch sets this to true.
-	 */
+	/** Hint that the agent should stop after the current tool batch. */
 	terminate?: boolean;
+	/**
+	 * Controls how a true termination hint applies to the batch.
+	 * `"all"` (the default) requires every result to terminate; `"any"` makes this result sufficient.
+	 */
+	terminationMode?: ToolResultTerminationMode;
 }
 
 /** Context passed to `beforeToolBatch`. */
@@ -290,6 +296,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * - `details` replaces the full details payload
 	 * - `isError` replaces the error flag
 	 * - `terminate` replaces the early-termination hint
+	 * - `terminationMode` replaces how that hint applies to the batch
 	 *
 	 * Any omitted fields keep their original values. No deep merge is performed.
 	 * The hook receives the agent abort signal and is responsible for honoring it.
@@ -368,11 +375,13 @@ export interface AgentToolResult<T> {
 	content: (TextContent | ImageContent)[];
 	/** Arbitrary structured details for logs or UI rendering. */
 	details: T;
-	/**
-	 * Hint that the agent should stop after the current tool batch.
-	 * Early termination only happens when every finalized tool result in the batch sets this to true.
-	 */
+	/** Hint that the agent should stop after the current tool batch. */
 	terminate?: boolean;
+	/**
+	 * Controls how a true termination hint applies to the batch.
+	 * `"all"` (the default) requires every result to terminate; `"any"` makes this result sufficient.
+	 */
+	terminationMode?: ToolResultTerminationMode;
 }
 
 /** Callback used by tools to stream partial execution updates. */

@@ -49,7 +49,7 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue
 
-Delegate to:
+Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-issue-read <issue-number>
@@ -63,7 +63,7 @@ The subroutine returns the issue title, body, and the full comments stream. Pars
 
 ## Step 3: Read contribution guidelines
 
-Before exploring the code, delegate to:
+Before exploring the code, load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:find-contribution-guidelines
@@ -277,7 +277,7 @@ After the user approves the plan:
      - **Omission condition:** Skip the Decision Log section entirely if Step 5 produced no questions AND Step 6 had no meaningful differentiation between approaches AND Step 7 produced no questions.
    - A note that this comment will guide staged implementation.
 
-   Then delegate to:
+   Then load and execute the following subcommand in the current conversation:
 
    ```
    /mach12:gh-comment issue <issue-number>
@@ -291,7 +291,7 @@ After the user approves the plan:
    - Example: `feature/issue-55-fix-analytics-url`.
    - Push the branch to remote with `-u` flag.
 
-3. **Detect sub-issues** for the assignment step below. Delegate to:
+3. **Detect sub-issues** for the assignment step below. Load and execute the following subcommand in the current conversation:
 
    ```
    /mach12:gh-sub-issues <issue-number>
@@ -299,7 +299,7 @@ After the user approves the plan:
 
    The subroutine returns the list of sub-issue numbers (possibly empty) and which strategy produced them.
 
-4. **Assign the issue and any sub-issues** to the current user. Delegate to:
+4. **Assign the issue and any sub-issues** to the current user. Load and execute the following subcommand in the current conversation:
 
    ```
    /mach12:gh-assign <issue-number> [<sub-issue-number> ...]

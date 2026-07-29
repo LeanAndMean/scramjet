@@ -50,7 +50,7 @@ Before drafting, gather enough context to write a useful issue:
 - If desired behavior, reproduction, user impact, scope, or constraints are unclear after context gathering, ask a small set of concrete clarifying questions before creating the issue. Do not guess implementation details to fill gaps. Record each Q&A pair — user answers become entries in User's Request, preserving the user's own words and decisions as first-class evidence.
 - If the user supplied a fully specified request with clear current/desired behavior and acceptance criteria, avoid ceremonial exploration; verify only the context needed to avoid a misleading issue.
 
-Look up the project's contribution guidelines so the issue is shaped to match repo conventions. Delegate to:
+Look up the project's contribution guidelines so the issue is shaped to match repo conventions. Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:find-contribution-guidelines
@@ -151,7 +151,7 @@ Handle results based on similarity:
   - **Create anyway**: Create the new issue despite the potential duplicate.
   - **Skip**: Do not create an issue.
 
-  If the user picks "Link to existing", prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
+  If the user picks "Link to existing", prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then load and execute the following subcommand in the current conversation:
 
   ```
   /mach12:gh-comment issue <existing-issue-number>
@@ -176,7 +176,7 @@ Handle results based on similarity:
 
   If the user picks "Create and mention selected matches", ask which listed issue or issues to mention. Add references only to the matches the user explicitly selected, present the revised body, and return to Step 3 for explicit approval. After approval, continue to Step 5; do not post comments to the selected issues.
 
-  If the user picks "Comment on one existing issue instead", ask the user to select exactly one of the listed issues. Only after the user explicitly selects the target, prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then delegate to:
+  If the user picks "Comment on one existing issue instead", ask the user to select exactly one of the listed issues. Only after the user explicitly selects the target, prepare a comment body of the form: `Related context: <summary of the new finding or context that prompted this issue>.` Then load and execute the following subcommand in the current conversation:
 
   ```
   /mach12:gh-comment issue <chosen-issue-number>

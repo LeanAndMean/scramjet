@@ -866,6 +866,25 @@ describe("registerHistory — input event", () => {
 			expect(derivedPhase(state.lifecycle)).toBe("waiting");
 		});
 
+		it("keeps a parked command waiting on an RPC non-slash reply", async () => {
+			const state = waitingState();
+			const { pi, appended, emit } = recordingPi();
+			registerHistory(pi, state);
+
+			await emit("input", { text: "approve", source: "rpc" });
+
+			expect(derivedPhase(state.lifecycle)).toBe("waiting");
+			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
+			expect(
+				appended.filter(
+					(entry) =>
+						entry.customType === USER_INPUT_PARKED_TYPE &&
+						(entry.data as { commandName?: unknown; parked?: unknown }).commandName === "mach12:pr-create" &&
+						(entry.data as { parked?: unknown }).parked === false,
+				),
+			).toEqual([]);
+		});
+
 		it("treats a registered slash command while waiting as a normal command start", async () => {
 			const state = waitingState();
 			const { pi, appended, emit } = recordingPi();

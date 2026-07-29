@@ -262,7 +262,9 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 	function topLevelCommandCheck(name: string): string | null {
 		const def = state.registry.get(name);
 		if (!def) return `${name} is not registered`;
-		if (def.delegateOnly) return `${name} is delegate-only (invoke via delegate, not top-level dispatch)`;
+		if (def.delegateOnly) {
+			return `${name} is delegate-only; delegate-only subcommands must be loaded by an active caller during command work and cannot be dispatched as a completed next step`;
+		}
 		return null;
 	}
 

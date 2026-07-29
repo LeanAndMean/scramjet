@@ -117,7 +117,7 @@ export function registerSuggestNextStepsTool(pi: ExtensionAPI, state: ScramjetSt
 					return `unknown command "${name}"${available ? ` — available: ${available}` : ""}`;
 				}
 				if (def.delegateOnly) {
-					return `${name} is delegate-only (invoke via delegate, not top-level dispatch)`;
+					return `${name} is delegate-only; delegate-only subcommands must be loaded by an active caller during command work and cannot be suggested for top-level dispatch`;
 				}
 				return null;
 			}

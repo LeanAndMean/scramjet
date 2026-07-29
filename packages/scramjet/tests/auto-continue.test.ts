@@ -1302,7 +1302,9 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 
 			expect(ctxBag.dispatched).toHaveLength(1);
 			expect(ctxBag.dispatched[0].input).toBe("/b:ok");
-			expect(ctxBag.notifications.some((n: any) => n.message.includes("delegate-only"))).toBe(true);
+			const warning = ctxBag.notifications.find((n: any) => n.message.includes("delegate-only"));
+			expect(warning?.message).toContain("active caller during command work");
+			expect(warning?.message).not.toContain("load it via delegate");
 		});
 
 		it("user selection before countdown overrides the recommendation", async () => {

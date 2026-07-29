@@ -1818,6 +1818,8 @@ pi.registerTool({
       // Optional: stop after this tool batch when every finalized tool result
       // in the batch also returns terminate: true.
       terminate: true,
+      // Set terminationMode: "any" only when this result must stop the batch
+      // regardless of non-terminating siblings.
     };
   },
 
@@ -1829,7 +1831,7 @@ pi.registerTool({
 
 **Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
 
-**Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
+**Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. With `terminationMode` omitted (or set to `"all"`), this only takes effect when every finalized tool result in that batch is terminating. Set `terminationMode: "any"` on a terminating result only when that one result must suppress the follow-up regardless of non-terminating siblings. All sibling calls still finalize and their result artifacts are emitted before the loop stops; this mode does not cancel in-flight tools. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example using the default all-results behavior.
 
 ```typescript
 // Correct: throw to signal an error

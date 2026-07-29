@@ -104,7 +104,7 @@ Gather context from the PR, linked issues, and commits:
 gh pr view <pr-number> --json title,body,closingIssuesReferences,commits
 ```
 
-For each linked issue in `closingIssuesReferences`, delegate to:
+For each linked issue in `closingIssuesReferences`, load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-issue-read <issue-number> --marker mach12-plan

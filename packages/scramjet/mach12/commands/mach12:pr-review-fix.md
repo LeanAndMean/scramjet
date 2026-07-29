@@ -65,9 +65,9 @@ Extract the PR number. Parse `--review-comment` and `--assessment-comment` flags
 gh api repos/:owner/:repo/issues/comments/<review-comment-id>
 ```
 
-Extract the `body` field from the JSON response. This is the review comment content. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments.
+Extract the `body` field from the JSON response. This is the review comment content. Then load and execute in the current conversation `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments.
 
-**If `--review-comment` was NOT provided (fallback):** Delegate to:
+**If `--review-comment` was NOT provided (fallback):** Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-pr-read <pr-number> --marker mach12-review
@@ -132,7 +132,7 @@ Fix only the findings listed above. Do not fix other findings in the review comm
 
 ## Step 5: Commit, document, and choose the next step
 
-Once the fixes are complete, commit, push, and post a progress comment on the PR by delegating to:
+Once the fixes are complete, commit, push, and post a progress comment on the PR by loading and executing the following subcommand in the current conversation:
 
 ```
 /mach12:push

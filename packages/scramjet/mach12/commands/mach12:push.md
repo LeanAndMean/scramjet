@@ -100,7 +100,7 @@ Do not include next-step suggestions in the comment body. The caller's `next:` b
 
 When referring to numbered items (findings, suggestions, stages), use plain words like "finding 3" or "stage 2" -- not `#<number>` notation, which GitHub auto-links to issues/PRs.
 
-Then delegate to the appropriate posting subroutine:
+Then load and execute the appropriate posting subcommand in the current conversation:
 
 - **Issue target:**
 

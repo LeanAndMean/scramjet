@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DELEGATE_TOOL_NAME } from "../src/delegate.js";
 import { createLogger } from "../src/logger.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
 import { freshState, logMessages, recordingPi } from "./helpers.js";
@@ -85,14 +86,14 @@ describe("registerToolCallAdvisor — advisory warnings", () => {
 		expect(message).not.toContain("outer");
 	});
 
-	it("exempts the delegate tool itself from advisory warnings", async () => {
+	it("exempts the selected subcommand tool itself from advisory warnings", async () => {
 		const { pi, handlers } = recordingPi();
 		const state = freshRecordingState(pi, {
 			delegateStack: [{ commandName: "mach12:push", depth: 0, effectiveAllowedTools: ["Read"] }],
 		});
 		registerToolCallAdvisor(pi, state);
 		const handler = handlers.get("tool_call")![0] as any;
-		await handler({ type: "tool_call", toolCallId: "x", toolName: "delegate", input: {} });
+		await handler({ type: "tool_call", toolCallId: "x", toolName: DELEGATE_TOOL_NAME, input: {} });
 		expect(logMessages(pi)).toEqual([]);
 	});
 

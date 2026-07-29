@@ -63,7 +63,10 @@ for a completion signal. That principle existed because pre-MVP
 cannot encode anything richer than prose. The MVP buildout (issue 23)
 completed the cutover: declared `next:` policies and the `delegate` tool
 are now the mechanism, the plugin compat layer was removed in Stage 8,
-and CLAUDE.md has been brought into line with the new principle.
+and CLAUDE.md has been brought into line with the new principle. Here,
+`delegate` remains the provider-visible same-context subcommand tool after issue
+413's neutral, cross-provider evaluation through the real builtin RPC runtime;
+its name does not imply separate-agent execution.
 
 The Mach 12-era `scramjet` **deliberately breaks the prose-only
 constraint.** Once
@@ -84,8 +87,10 @@ wins) is preserved; the *mechanism* (LLM reads prose) is replaced.
   machine.
 - **Commands are owned by their authors.** A command set is a directory of
   files. Adding, editing, and deleting commands is a local operation.
-- **Composability is a first-class primitive.** Commands can call other
-  commands as subroutines (delegation) without prose duplication.
+- **Composability is a first-class primitive.** Commands can load
+  delegate-only subcommands through `delegate`; the current agent executes the
+  returned instructions immediately in the same conversation without prose
+  duplication.
 - **Chaining is the user's choice between commands.** When more than one
   next step is possible, *someone* has to decide which to take. By default
   that someone is the user. `/autopilot on` lets the agent decide instead.
@@ -534,16 +539,18 @@ modes are the *chaining* primitive (what runs after this command).
 
 ##### Dispatch mechanism
 
-**`delegate` is a tool that returns the substituted command body as
-tool-result content.** The agent calls `delegate({ command, args })`;
-the harness looks the command up in the registry, substitutes
-`$ARGUMENTS` (and `$1`, `$@`, etc. per Pi convention) inside the
-delegated command's body, pushes a frame onto a per-turn call stack, and
-returns the substituted body as text in the tool result. The agent
-reads the result and follows its instructions inside the same
-conversation context. No subprocess, no prompt swap, no separate
-context window — just one tool round-trip that lands the delegated
-command's prose in the agent's input as actionable instruction.
+**`delegate` is the provider-visible tool that loads a delegate-only
+subcommand's substituted body as tool-result content for the current agent to
+execute immediately.** The agent calls `delegate({ command, args })`; the
+harness resolves both the active caller and requested target from the live
+registry, substitutes `$ARGUMENTS` (and `$1`, `$@`, etc. per Pi convention)
+inside the subcommand's body, pushes a frame onto a per-turn call stack, and
+returns the substituted body as text in the tool result. The current agent
+reads the result and follows its instructions inside the same conversation
+context. No subprocess, no prompt swap, no separate context window, and no
+separate agent — use `subagent` for that. Slash dispatch,
+`report_scramjet_command_status`, and `suggest_scramjet_next_steps` instead
+route future top-level work.
 
 Two consequences fall out of this choice:
 
@@ -582,18 +589,26 @@ execute it.)
 
 ##### Semantics
 
+- **Caller and phase eligibility:** a call requires an active command that
+  still exists in the live registry and no terminal status report pending
+  dispatch. Running, probing, waiting, and dormant commands may load a
+  subcommand. Idle and report-pending calls are rejected before stack,
+  history, journal, or lifecycle mutation.
+- **Target eligibility:** only a live registered command declaring
+  `delegate-only: true` may be loaded. Ordinary top-level commands use slash
+  dispatch or next-step routing instead. A delegate-only command may itself be
+  the active caller and load a distinct delegate-only target.
 - **Tool access** is declared per-command (in YAML frontmatter,
   `allowed-tools:`). Each delegated frame's effective tool set is the
   intersection of the callee's declared `allowed-tools` and the active
   top-level command's `allowed-tools` — regardless of stack depth or
   sibling delegations. No escalation is possible.
-- **Nested delegation** is allowed. A delegated command can itself
-  delegate to another. Each call pushes a frame onto the call stack;
-  cycle detection rejects A → B → A within the same turn. MVP frames are
-  latched until the next agent turn (no true push/pop return signal), so
-  repeated calls to the same delegated command in one turn are cycles;
-  sequential sibling delegations increment depth monotonically but do
-  not inherit prior siblings' scope narrowing.
+- **Nested delegation** is allowed. Cycle history includes the active caller,
+  every latched frame, and the requested target. Loading the active caller,
+  taking a nested back-edge, or repeating an earlier sibling is rejected. MVP
+  frames are latched until the next agent turn (no true push/pop return
+  signal); distinct sequential siblings remain valid, increment depth
+  monotonically, and do not inherit prior siblings' scope narrowing.
 - **History appearance:** delegated commands are shown in the sidebar
   **indented under the caller**. Top-level (chained) commands are at the
   outer indent level. This visually distinguishes "command finished, the
@@ -1068,11 +1083,17 @@ edges, and stays out of the way.
   following whichever report path was used, the harness validates the
   agent's pick against the active command's policy and dispatches.
 - **Delegation dispatch mechanism.** Resolved: same-context tool-result
-  delegation (see §4 *Dispatch mechanism*). The `delegate` tool returns
-  the substituted command body as text in the tool result; the agent
-  reads it and follows its instructions in the same conversation
-  context. Subprocess-based dispatch was considered (and prior
-  assessments recommended it) but is superseded.
+  delegation (see §4 *Dispatch mechanism*). Issue 413's neutral 44-trial,
+  cross-provider evaluation through the real builtin RPC runtime retained
+  `delegate`: it achieved 10/10 correct central first routes versus 9/10 for
+  exact `get_scramjet_subcommand`, while both names completed every central
+  path and correctly routed every specialist and freetext-parking case. The
+  candidate therefore failed the predeclared improvement rule. Freetext trials
+  ended at durable waiting and did not test an RPC reply, resume, or post-reply
+  completion. `delegate` loads only delegate-only subcommands for the current
+  agent to execute immediately in the same conversation; it is not
+  separate-agent dispatch or future top-level routing. Subprocess-based dispatch
+  was considered (and prior assessments recommended it) but is superseded.
 - **Output visibility of delegated commands.** Resolved by separating
   transcript semantics from presentation: the delegated body materializes
   in the transcript as a model-visible, persisted tool result, while the

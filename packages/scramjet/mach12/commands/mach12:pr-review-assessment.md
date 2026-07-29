@@ -50,9 +50,9 @@ Extract the PR number and the `--review-comment` ID if present. If the input is 
 gh api repos/:owner/:repo/issues/comments/<review-comment-id>
 ```
 
-Extract the `body` field from the JSON response. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) to fetch the PR context separately.
+Extract the `body` field from the JSON response. Then load and execute in the current conversation `/mach12:gh-pr-read <pr-number>` (no marker) to fetch the PR context separately.
 
-**If `--review-comment` was NOT provided:** Delegate to:
+**If `--review-comment` was NOT provided:** Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-pr-read <pr-number> --marker mach12-review
@@ -101,7 +101,7 @@ Prepare the assessment body. It must include:
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
 
-Post the body immediately -- do not ask the user for approval first. Delegate to:
+Post the body immediately -- do not ask the user for approval first. Load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-comment pr <pr-number>
@@ -148,7 +148,7 @@ For each deferred item, check for existing issues before creating a new one:
    - **No results**: proceed to create the issue.
    - **Clear duplicate**: if an existing **open** issue's title is nearly identical, skip creation and post a comment on the existing issue linking the new finding. If the near-identical match is a closed issue, treat it as an ambiguous match instead (a previously-closed issue should not block creation).
 
-     Prepare a comment body of the form: `Related finding from PR <pr-number> review: <summary of the deferred finding>.` Then delegate to:
+     Prepare a comment body of the form: `Related finding from PR <pr-number> review: <summary of the deferred finding>.` Then load and execute the following subcommand in the current conversation:
 
      ```
      /mach12:gh-comment issue <existing-issue-number>
@@ -228,7 +228,7 @@ After displaying the summary block (Options 1 and 3 only, and only when at least
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
 
-Then delegate to:
+Then load and execute the following subcommand in the current conversation:
 
 ```
 /mach12:gh-comment pr <pr-number>

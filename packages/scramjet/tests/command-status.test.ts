@@ -107,6 +107,7 @@ describe("registerCommandStatusTool — gate", () => {
 		const result = await execute({ status: "completed", summary: "done" });
 
 		expect(result.terminate).toBe(true);
+		expect(result.terminationMode).toBe("any");
 		expect(state.lifecycle.lastReport?.status).toBe("completed");
 		expect(state.lifecycle.probeArmed).toBe(false);
 		expect(isProbeDue(state.lifecycle)).toBe(false);
@@ -141,6 +142,7 @@ describe("registerCommandStatusTool — gate", () => {
 		const result = await execute({ status: "continuing", summary: "more work" });
 
 		expect(result.terminate).toBeUndefined();
+		expect(result.terminationMode).toBeUndefined();
 		expect(result.details.error).toBe("out-of-phase");
 		expect(state.lifecycle.probeArmed).toBe(true);
 	});
@@ -272,6 +274,7 @@ describe("registerCommandStatusTool — gate", () => {
 
 		const second = await execute({ status: "completed", summary: "done again" });
 		expect(second.terminate).toBeUndefined();
+		expect(second.terminationMode).toBeUndefined();
 		expect(second.details.error).toBe("out-of-phase");
 		expect(state.lifecycle.lastReport!.summary).toBe("done");
 		// Neither the accepted first nor the rejected second produces a journal entry (deferred to agent_end).
