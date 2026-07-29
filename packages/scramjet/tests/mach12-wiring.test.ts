@@ -323,6 +323,52 @@ describe("mach12 plan-comment artifact contract", () => {
 	});
 });
 
+describe("mach12 issue creation — context provenance", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const body = issueCreate.slice(issueCreate.indexOf("### Body"), issueCreate.indexOf("### Adaptive layouts"));
+	const contextContract = body.slice(body.indexOf("**Context**"), body.indexOf("**Investigation**"));
+	const adaptiveLayouts = issueCreate.slice(
+		issueCreate.indexOf("### Adaptive layouts"),
+		issueCreate.indexOf("### Drafting notes"),
+	);
+	const finalSelfCheck = issueCreate.slice(
+		issueCreate.indexOf("**Final issue-quality self-check before presenting the draft**"),
+		issueCreate.indexOf("## Step 3: Review"),
+	);
+
+	it("places attributed Context between the user's request and verified investigation", () => {
+		expect(body.indexOf("**User's Request**")).toBeLessThan(body.indexOf("**Context**"));
+		expect(body.indexOf("**Context**")).toBeLessThan(body.indexOf("**Investigation**"));
+		expect(body).toContain("situational background or provenance");
+		expect(body).toContain("Retain source attribution");
+		expect(body).toContain("omit this section");
+	});
+
+	it("keeps Context distinct from neighboring authority tiers", () => {
+		expect(contextContract).toMatch(/must not[^.]*restate Summary/i);
+		expect(contextContract).toMatch(/must not[^.]*paraphrase[^.]*User's Request/i);
+		expect(contextContract).toMatch(/must not[^.]*verified current-state observations[^.]*Investigation/i);
+		expect(contextContract).toMatch(/must not[^.]*reasoning or conclusions[^.]*Analysis/i);
+		expect(body).toMatch(/User's Request \+ Context \+ Investigation \+ Analysis/);
+	});
+
+	it("applies Context conditionally without normalizing structured artifacts", () => {
+		expect(adaptiveLayouts).toMatch(/Fully specified requests[^\n]*Context/);
+		expect(adaptiveLayouts).toContain("independent of whether investigation occurred");
+		expect(adaptiveLayouts).toMatch(
+			/Structured artifacts[\s\S]*do not (?:add|inject|synthesize)[^\n]*Context heading/i,
+		);
+	});
+
+	it("checks Context integrity without inventing background", () => {
+		expect(finalSelfCheck).toContain("meaningful, attributed, and non-duplicative");
+		expect(finalSelfCheck).toMatch(/requirements[^\n]*User's Request/i);
+		expect(finalSelfCheck).toMatch(/verified observations[^\n]*Investigation/i);
+		expect(finalSelfCheck).toMatch(/conclusions[^\n]*Analysis/i);
+		expect(finalSelfCheck).toMatch(/omit[^\n]*Context[^\n]*rather than invent/i);
+	});
+});
+
 describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
 	const ambiguousMatches = issueCreate.slice(
