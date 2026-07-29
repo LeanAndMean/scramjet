@@ -73,10 +73,7 @@ Scramjet loads context files at startup. Add an `AGENTS.md` file to tell it how 
 - Keep responses concise.
 ```
 
-Scramjet loads:
-
-- `~/.scramjet/agent/AGENTS.md` for global instructions
-- `AGENTS.md` or `CLAUDE.md` from parent directories and the current directory
+Scramjet loads `CLAUDE.md` and `AGENTS.md` from the global agent directory, parent directories, and the current directory. Within each directory, `CLAUDE.md` loads first. If both files there decode to exactly equal text, only `CLAUDE.md` is loaded; equal text in different directories remains independently loaded.
 
 Restart scramjet, or run `/reload`, after changing context files.
 

@@ -92,13 +92,13 @@ See [Sessions](sessions.md) and [Compaction](compaction.md) for details.
 
 ## Context Files
 
-Scramjet loads `AGENTS.md` or `CLAUDE.md` at startup from:
+Scramjet loads `CLAUDE.md` and `AGENTS.md` at startup from:
 
-- `~/.scramjet/agent/AGENTS.md` for global instructions
+- `~/.scramjet/agent/` for global instructions
 - parent directories, walking up from the current working directory
 - the current directory
 
-Use context files for project conventions, commands, safety rules, and preferences. Disable loading with `--no-context-files` or `-nc`.
+Files load broadest-to-most-specific, with `CLAUDE.md` before `AGENTS.md` in each directory. When both names in one directory decode to exactly equal text, only `CLAUDE.md` is loaded; equality suppression never crosses directory boundaries. Use context files for project conventions, commands, safety rules, and preferences. Disable loading with `--no-context-files` or `-nc`.
 
 ### System Prompt Files
 

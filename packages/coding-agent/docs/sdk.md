@@ -365,7 +365,7 @@ const { session } = await createAgentSession({
   - `.scramjet/skills/`
   - `.agents/skills/` in `cwd` and ancestor directories (up to git repo root, or filesystem root when not in a repo)
 - Project prompts (`.scramjet/prompts/`)
-- Context files (`AGENTS.md` walking up from cwd)
+- Context files (`CLAUDE.md` and `AGENTS.md` walking up from cwd)
 - Session directory naming
 
 `agentDir` is used by `DefaultResourceLoader` for:
@@ -374,7 +374,7 @@ const { session } = await createAgentSession({
   - `skills/` under `agentDir` (for example `~/.scramjet/agent/skills/`)
   - `~/.agents/skills/`
 - Global prompts (`prompts/`)
-- Global context file (`AGENTS.md`)
+- Global context files (`CLAUDE.md` and `AGENTS.md`)
 - Settings (`settings.json`)
 - Custom models (`models.json`)
 - Credentials (`auth.json`)
@@ -656,6 +656,8 @@ const { session } = await createAgentSession({ resourceLoader: loader });
 > See [examples/sdk/04-skills.ts](../examples/sdk/04-skills.ts)
 
 ### Context Files
+
+Default discovery loads context broadest-to-most-specific and orders `CLAUDE.md` before `AGENTS.md` within each directory. When both same-directory files decode to exactly equal text, only `CLAUDE.md` is retained; equality suppression never crosses directory boundaries.
 
 ```typescript
 import { createAgentSession, DefaultResourceLoader } from "@leanandmean/coding-agent";

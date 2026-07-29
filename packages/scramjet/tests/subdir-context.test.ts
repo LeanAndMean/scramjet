@@ -115,7 +115,7 @@ describe("discoverContextFilePaths", () => {
 		expect(result[0].filename).toBe("AGENTS.md");
 	});
 
-	it("finds both CLAUDE.md and AGENTS.md in same directory", async () => {
+	it("finds both CLAUDE.md and AGENTS.md in same directory when contents differ", async () => {
 		const subDir = join(tmpDir, "sub");
 		await mkdir(subDir);
 		await writeFile(join(subDir, "CLAUDE.md"), "claude");
@@ -126,6 +126,42 @@ describe("discoverContextFilePaths", () => {
 		expect(result).toHaveLength(2);
 		expect(result[0].filename).toBe("CLAUDE.md");
 		expect(result[1].filename).toBe("AGENTS.md");
+	});
+
+	it("retains only CLAUDE.md when same-directory contents are equal", async () => {
+		const subDir = join(tmpDir, "sub");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "shared");
+		await writeFile(join(subDir, "AGENTS.md"), "shared");
+
+		const result = await discoverContextFilePaths([subDir], new Set(), tmpDir);
+		expect(result.map((file) => file.filename)).toEqual(["CLAUDE.md"]);
+	});
+
+	it("does not suppress equal contents across directories", async () => {
+		const parentDir = join(tmpDir, "parent");
+		const childDir = join(parentDir, "child");
+		await mkdir(childDir, { recursive: true });
+		await writeFile(join(parentDir, "CLAUDE.md"), "shared");
+		await writeFile(join(parentDir, "AGENTS.md"), "shared");
+		await writeFile(join(childDir, "CLAUDE.md"), "shared");
+		await writeFile(join(childDir, "AGENTS.md"), "shared");
+
+		const result = await discoverContextFilePaths([parentDir, childDir], new Set(), tmpDir);
+		expect(result.map((file) => file.displayPath)).toEqual([
+			join("parent", "CLAUDE.md"),
+			join("parent", "child", "CLAUDE.md"),
+		]);
+	});
+
+	it("treats a trailing newline difference as distinct content", async () => {
+		const subDir = join(tmpDir, "sub");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "shared\n");
+		await writeFile(join(subDir, "AGENTS.md"), "shared");
+
+		const result = await discoverContextFilePaths([subDir], new Set(), tmpDir);
+		expect(result.map((file) => file.filename)).toEqual(["CLAUDE.md", "AGENTS.md"]);
 	});
 
 	it("skips already-loaded directories", async () => {
@@ -185,7 +221,7 @@ describe("discoverContextFilePaths", () => {
 		await chmod(join(subDir, "AGENTS.md"), 0o644);
 
 		const result2 = await discoverContextFilePaths([subDir], loaded, tmpDir);
-		expect(result2).toHaveLength(2);
+		expect(result2.map((file) => file.filename)).toEqual(["CLAUDE.md"]);
 		expect(loaded.size).toBe(1);
 	});
 
@@ -587,7 +623,7 @@ describe("registerSubdirContext — message_end handler", () => {
 		expect(result.message.content[1]).toEqual(makeReadToolCall("tc_1", "pkg/file.ts"));
 	});
 
-	it("injects both CLAUDE.md and AGENTS.md when both exist", async () => {
+	it("injects both CLAUDE.md and AGENTS.md when both exist with different contents", async () => {
 		const subDir = join(tmpDir, "pkg");
 		await mkdir(subDir);
 		await writeFile(join(subDir, "CLAUDE.md"), "claude");
@@ -605,6 +641,89 @@ describe("registerSubdirContext — message_end handler", () => {
 		expect(result.message.content[0].arguments.path).toBe(join("pkg", "CLAUDE.md"));
 		expect(result.message.content[1].arguments.path).toBe(join("pkg", "AGENTS.md"));
 		expect(result.message.content[2]).toEqual(makeReadToolCall("tc_1", "pkg/file.ts"));
+	});
+
+	it("injects only the ordinary CLAUDE.md read when same-directory contents are equal", async () => {
+		const subDir = join(tmpDir, "pkg");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "shared");
+		await writeFile(join(subDir, "AGENTS.md"), "shared");
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const triggeringRead = makeReadToolCall("tc_1", "pkg/file.ts");
+		const message = makeAssistant([triggeringRead]);
+		const handler = handlers.get("message_end")![0];
+		const result = (await handler({ type: "message_end", message }, makeCtx(tmpDir))) as any;
+
+		expect(result.message.content).toHaveLength(2);
+		expect(result.message.content[0]).toMatchObject({
+			type: "toolCall",
+			name: "read",
+			arguments: { path: join("pkg", "CLAUDE.md") },
+		});
+		expect(result.message.content[1]).toEqual(triggeringRead);
+	});
+
+	it("retains one equal-content context read per intermediate directory", async () => {
+		const parentDir = join(tmpDir, "pkg");
+		const childDir = join(parentDir, "nested");
+		await mkdir(childDir, { recursive: true });
+		for (const dir of [parentDir, childDir]) {
+			await writeFile(join(dir, "CLAUDE.md"), "shared");
+			await writeFile(join(dir, "AGENTS.md"), "shared");
+		}
+
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		registerSubdirContext(pi, state);
+
+		const triggeringRead = makeReadToolCall("tc_1", "pkg/nested/file.ts");
+		const message = makeAssistant([triggeringRead]);
+		const handler = handlers.get("message_end")![0];
+		const result = (await handler({ type: "message_end", message }, makeCtx(tmpDir))) as any;
+
+		expect(result.message.content.map((block: ToolCall) => block.arguments.path)).toEqual([
+			join("pkg", "CLAUDE.md"),
+			join("pkg", "nested", "CLAUDE.md"),
+			"pkg/nested/file.ts",
+		]);
+	});
+
+	it("retains both ordinary reads and warns when equality comparison fails", async () => {
+		const subDir = join(tmpDir, "pkg");
+		await mkdir(subDir);
+		await writeFile(join(subDir, "CLAUDE.md"), "shared");
+		await mkdir(join(subDir, "AGENTS.md"));
+
+		const warnings: Array<{ category: string; message: string; data?: Record<string, unknown> }> = [];
+		const { pi, handlers } = recordingPi();
+		const state = freshState();
+		state.logger = {
+			...state.logger,
+			warn: (category: string, message: string, data?: Record<string, unknown>) => {
+				warnings.push({ category, message, data });
+			},
+		};
+		registerSubdirContext(pi, state);
+
+		const triggeringRead = makeReadToolCall("tc_1", "pkg/file.ts");
+		const message = makeAssistant([triggeringRead]);
+		const handler = handlers.get("message_end")![0];
+		const result = (await handler({ type: "message_end", message }, makeCtx(tmpDir))) as any;
+
+		expect(result.message.content.map((block: ToolCall) => block.arguments.path)).toEqual([
+			join("pkg", "CLAUDE.md"),
+			join("pkg", "AGENTS.md"),
+			"pkg/file.ts",
+		]);
+		expect(warnings).toContainEqual({
+			category: "subdir-context",
+			message: expect.stringContaining("comparison read failed"),
+			data: { path: join(subDir, "AGENTS.md") },
+		});
 	});
 
 	it("returns undefined when no context files exist", async () => {

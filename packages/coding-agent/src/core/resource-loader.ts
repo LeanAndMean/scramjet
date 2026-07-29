@@ -108,22 +108,29 @@ function resolvePromptInput(input: string | undefined, description: string): str
 	return input;
 }
 
-function loadContextFileFromDir(dir: string): { path: string; content: string } | null {
-	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
-	for (const filename of candidates) {
+type ContextFile = { path: string; content: string };
+
+function loadFirstReadableContextFile(dir: string, filenames: string[]): ContextFile | null {
+	for (const filename of filenames) {
 		const filePath = join(dir, filename);
 		if (existsSync(filePath)) {
 			try {
-				return {
-					path: filePath,
-					content: readFileSync(filePath, "utf-8"),
-				};
+				return { path: filePath, content: readFileSync(filePath, "utf-8") };
 			} catch (error) {
 				console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
 			}
 		}
 	}
 	return null;
+}
+
+// SCRAMJET-DIVERGENCE: load distinct CLAUDE and AGENTS context per directory, preferring CLAUDE.
+function loadContextFilesFromDir(dir: string): ContextFile[] {
+	const claude = loadFirstReadableContextFile(dir, ["CLAUDE.md", "CLAUDE.MD"]);
+	const agents = loadFirstReadableContextFile(dir, ["AGENTS.md", "AGENTS.MD"]);
+	if (!claude) return agents ? [agents] : [];
+	if (!agents || claude.content === agents.content) return [claude];
+	return [claude, agents];
 }
 
 export function loadProjectContextFiles(options: {
@@ -136,10 +143,10 @@ export function loadProjectContextFiles(options: {
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
 
-	const globalContext = loadContextFileFromDir(resolvedAgentDir);
-	if (globalContext) {
-		contextFiles.push(globalContext);
-		seenPaths.add(globalContext.path);
+	const globalContextFiles = loadContextFilesFromDir(resolvedAgentDir);
+	for (const contextFile of globalContextFiles) {
+		contextFiles.push(contextFile);
+		seenPaths.add(contextFile.path);
 	}
 
 	const ancestorContextFiles: Array<{ path: string; content: string }> = [];
@@ -148,11 +155,9 @@ export function loadProjectContextFiles(options: {
 	const root = resolve("/");
 
 	while (true) {
-		const contextFile = loadContextFileFromDir(currentDir);
-		if (contextFile && !seenPaths.has(contextFile.path)) {
-			ancestorContextFiles.unshift(contextFile);
-			seenPaths.add(contextFile.path);
-		}
+		const contextFilesForDir = loadContextFilesFromDir(currentDir).filter((file) => !seenPaths.has(file.path));
+		ancestorContextFiles.unshift(...contextFilesForDir);
+		for (const contextFile of contextFilesForDir) seenPaths.add(contextFile.path);
 
 		if (currentDir === root) break;
 
