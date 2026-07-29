@@ -79,6 +79,7 @@ const WIRING: WiringRow[] = [
 	},
 	// Subroutines (delegate-only).
 	{ basename: "push", expected: null, delegateOnly: true },
+	{ basename: "plan-comment-contract", expected: null, delegateOnly: true },
 	{ basename: "find-contribution-guidelines", expected: null, delegateOnly: true },
 	{ basename: "gh-issue-read", expected: null, delegateOnly: true },
 	{ basename: "gh-pr-read", expected: null, delegateOnly: true },
@@ -206,6 +207,119 @@ describe("mach12 wiring — bundled command set", () => {
 		]) {
 			expect(content).toContain(agent);
 		}
+	});
+});
+
+describe("mach12 plan-comment artifact contract", () => {
+	const contractPath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:plan-comment-contract.md`);
+	const contract = readFileSync(contractPath, "utf-8");
+	const issuePlan = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-plan.md`), "utf-8");
+	const issueReview = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-review.md`), "utf-8");
+	const ghComment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-comment.md`), "utf-8");
+
+	it("loads one mode through the delegated same-context contract", () => {
+		expect(contract.match(/\$ARGUMENTS/g)).toHaveLength(1);
+		expect(contract).toContain("<caller-context>\n$ARGUMENTS\n</caller-context>");
+		expect(contract).toContain("does not execute an independent formatter");
+		expect(contract).toContain("Resume the caller-owned drafting or revision work");
+		expect(contract).toContain("Do not call tools, dispatch subagents, ask the user questions, post to GitHub");
+		expect(contract).toMatch(/choose\s+an\s+architecture, classify review findings/);
+	});
+
+	it("preserves implementation-critical contracts and revision attribution", () => {
+		for (const phrase of [
+			"invariants and trust-boundary validation",
+			"interfaces and data shapes",
+			"ownership and correlation rules",
+			"event and mutation ordering",
+			"persistence and failure semantics",
+			"rollback, atomicity, and retry boundaries",
+			"expensive call-site inventories",
+			"production-realistic test seams",
+			"cross-package build ordering and executable or generated-artifact provenance",
+			"generated-output drift recovery steps",
+			"stage dependencies and ordering constraints",
+			"manual checks, with an explicit statement of whether each blocks stage completion",
+		]) {
+			expect(contract).toContain(phrase);
+		}
+		expect(contract).toContain("retain the concrete contract rather than reducing it");
+		expect(contract).toContain("standalone replacement, never a patch or delta");
+		expect(contract).toContain("[user-decided]");
+		expect(contract).toContain("[agent-proposed]");
+	});
+
+	it("compresses ceremony and requires an evidence-backed final self-check", () => {
+		expect(contract).toContain("Remove material that does not help a fresh implementation session");
+		for (const phrase of [
+			"raw exploration, journal, or probe transcripts",
+			"complete rejected blueprints",
+			"repeated Solution Assessments",
+			"generic repository guidance",
+			"duplicated requirements or test matrices",
+			"speculative LOC estimates",
+			"release-preparation work",
+			"qualitative compression, not a numeric byte limit",
+		]) {
+			expect(contract).toContain(phrase);
+		}
+		for (const defect of [
+			"missing implementation-critical contracts",
+			"contradictions",
+			"duplicated substantive requirements",
+			"incorrect or lost decision attribution",
+		]) {
+			expect(contract).toContain(defect);
+		}
+		expect(contract).toContain("do not emit a marker-bearing candidate");
+	});
+
+	it("orders drafting, validation, approval, unchanged handoff, and posting", () => {
+		const expectInOrder = (content: string, patterns: RegExp[]) => {
+			let offset = 0;
+			for (const pattern of patterns) {
+				const match = content.slice(offset).search(pattern);
+				expect(match, pattern.source).toBeGreaterThan(-1);
+				offset += match + 1;
+			}
+		};
+
+		expectInOrder(issuePlan, [
+			/\/mach12:plan-comment-contract\s+initial/,
+			/Draft the exact,\s+complete post-ready body/,
+			/Display the exact,\s+complete marker-bearing body/,
+			/After the user approves the plan/,
+			/Pass the exact approved body unchanged/,
+			/\/mach12:gh-comment\s+issue\s+<issue-number>/,
+		]);
+		expectInOrder(issueReview, [
+			/\/mach12:plan-comment-contract\s+revision/,
+			/Produce the exact,\s+complete standalone replacement/,
+			/Assess the finalized candidate/,
+			/Only after the Critical\/Important delta gate passes/,
+			/After the gate passes, ask the user how to proceed/,
+			/When the user picks "Post revised plan"/,
+			/pass the exact approved body unchanged/,
+			/\/mach12:gh-comment\s+issue\s+<issue-number>/,
+		]);
+	});
+
+	it("blocks revised-plan publication on unresolved significant deltas", () => {
+		expect(issueReview).toContain("treat the candidate as invalid");
+		expect(issueReview).toContain("do not offer **Post revised plan**");
+		expect(issueReview).toContain("Repeat this gate until no Critical or Important delta remains");
+		expect(issueReview).toContain("Suggestions stay visible but are optional and do not block publication");
+	});
+
+	it("posts the prepared comment body unchanged through collision-safe stdin", () => {
+		expect(ghComment).toContain("Treat the body the caller prepared as immutable");
+		expect(ghComment).toContain("does not occur as a standalone line anywhere in the prepared body");
+		expect(ghComment).toContain("If it is not newline-terminated or its final-newline state cannot be verified");
+		expect(ghComment).toContain("return an error without posting");
+		expect(ghComment).toContain("--body-file -");
+		expect(ghComment).toContain("<<'MACH12_COMMENT_BODY'");
+		expect(ghComment).toContain("Insert the verified body exactly");
+		expect(ghComment).not.toContain('--body "$(cat');
 	});
 });
 

@@ -184,9 +184,17 @@ If the user picks "Create revised plan", enter the revision loop:
    - The existing plan's `## Pitfalls and Gotchas` section (if present). Instruct the architect to preserve existing pitfalls unless the revision makes them irrelevant, and to add any new pitfalls discovered during review.
    - If this is a subsequent revision iteration, include the prior revised plan and the delta assessment that prompted re-revision.
 
-   Instruct the architect to produce a complete revised implementation plan that addresses the Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally.
+   Instruct the architect to propose a complete revised implementation plan that addresses the Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally. Treat the proposal as architect evidence, not yet as the post-ready artifact.
 
-2. **Delta assessment.** After the architect returns, perform a lightweight delta assessment (not a full 6-lens re-exploration). For each finding from the original review (referencing stable F/S identifiers) and each N-prefixed item from prior iteration deltas, classify into one of three categories:
+2. **Load and apply the plan-comment contract.** After the architect returns and immediately before producing the final revised artifact, delegate once in this turn to:
+
+   ```
+   /mach12:plan-comment-contract revision
+   ```
+
+   This loads the canonical artifact policy into the current model context; it does not run an independent formatter. Apply it to the prior plan, classified findings and deltas, architect proposal and exploration evidence, test strategy, project constraints, pitfalls, and decisions. Produce the exact, complete standalone replacement beginning with `<!-- mach12-plan -->`, and run the contract's final self-check. Resolve supported defects before presentation; surface genuinely missing or contradictory evidence instead of presenting an incomplete marker-bearing body.
+
+3. **Delta assessment.** Assess the finalized candidate, not the architect's raw proposal. Perform a lightweight delta assessment (not a full 6-lens re-exploration). For each finding from the original review (referencing stable F/S identifiers) and each N-prefixed item from prior iteration deltas, classify into one of three categories:
    - **Addressed**: The revised plan resolves this finding. State how in one sentence.
    - **Remaining**: The revised plan does not resolve this finding, or only partially addresses it. State what is still missing.
    - **New issue**: The revised plan introduces a concern not present in the original review. Label with N-prefixed identifiers continuing from the highest prior N-number (e.g., if prior delta had N1–N3, new issues start at N4) and classify severity (Critical/Important/Suggestion) using the same criteria as Step 6.
@@ -195,19 +203,21 @@ If the user picks "Create revised plan", enter the revision loop:
 
    Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan or any prior iteration's delta — not a restatement of an existing finding under a different framing.
 
-3. **Presentation.** Present to the user:
-   1. The revised plan.
-   2. The delta assessment (Addressed / Remaining / New).
+   If any finding is **Remaining** at Critical or Important severity, or any **New issue** is Critical or Important, treat the candidate as invalid. Do not display its marker-bearing body and do not offer **Post revised plan**. Present the delta assessment without the candidate, explain that correction and reassessment are required, and offer only **Revise again** or **Discuss findings**. On **Revise again**, return to the architect dispatch in the next revision turn with the invalid candidate and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and reassessing a corrected replacement. Repeat this gate until no Critical or Important delta remains. Suggestions stay visible but are optional and do not block publication.
+
+4. **Presentation.** Only after the Critical/Important delta gate passes, keep the assessment outside the post-ready body and present to the user:
+   1. The exact, complete marker-bearing body that will be posted.
+   2. The separate delta assessment (Addressed / Remaining / New).
    3. A summary line: "X of Y findings addressed, Z remaining, W new issues" — where Y counts original F/S findings plus N-prefixed items carried from prior iterations.
 
-4. **Sub-options.** Ask the user how to proceed:
-   - **Post revised plan**: Accept this revision and post it.
-   - **Revise again**: Return to the architect dispatch step with the current revised plan and this delta assessment as additional context. Unbounded — user controls when to stop.
+5. **Sub-options.** After the gate passes, ask the user how to proceed:
+   - **Post revised plan**: Accept this complete body and post it unchanged.
+   - **Revise again**: In the next revision turn, return to the architect dispatch with the current complete plan and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and presenting a new complete replacement.
    - **Discuss findings**: Same behavior as the main "Discuss findings" option — walk through specific findings or new issues, then return to these three options.
 
-   Only one comment is posted — the final accepted revision. Intermediate revisions are not posted.
+   Only one comment is posted — the final accepted revision. Intermediate revisions are not posted, and revisions are never presented as deltas alone.
 
-5. **Post.** When the user picks "Post revised plan", post the final revision as a comment. Include `<!-- mach12-plan -->` as the very first line of the comment body. Then delegate to:
+6. **Post.** When the user picks "Post revised plan", pass the exact approved body unchanged to the existing comment subroutine; do not regenerate, summarize, or reformat it after approval. Then delegate to:
 
    ```
    /mach12:gh-comment issue <issue-number>

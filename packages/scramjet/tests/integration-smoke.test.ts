@@ -29,6 +29,7 @@ const SET_NAME = "mach12";
 // `mach12-wiring.test.ts` count assertion before reaching this test.
 const SUBROUTINES = [
 	"push",
+	"plan-comment-contract",
 	"find-contribution-guidelines",
 	"gh-issue-read",
 	"gh-pr-read",

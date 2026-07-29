@@ -151,7 +151,7 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus seven subroutine commands and nine specialized agents covering code exploration, architecture, review, testing, and more.
+Plus eight subroutine commands and eleven specialized agents covering code exploration, architecture, review, testing, and more.
 
 ## Bundled command-set installation
 
