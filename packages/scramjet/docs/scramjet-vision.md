@@ -64,8 +64,9 @@ cannot encode anything richer than prose. The MVP buildout (issue 23)
 completed the cutover: declared `next:` policies and the `delegate` tool
 are now the mechanism, the plugin compat layer was removed in Stage 8,
 and CLAUDE.md has been brought into line with the new principle. Here,
-`delegate` is the provider-visible same-context subcommand tool selected by
-behavior evaluation; its name does not imply separate-agent execution.
+`delegate` remains the provider-visible same-context subcommand tool after issue
+413's neutral, cross-provider evaluation through the real builtin RPC runtime;
+its name does not imply separate-agent execution.
 
 The Mach 12-era `scramjet` **deliberately breaks the prose-only
 constraint.** Once
@@ -1057,12 +1058,17 @@ edges, and stays out of the way.
   following whichever report path was used, the harness validates the
   agent's pick against the active command's policy and dispatches.
 - **Delegation dispatch mechanism.** Resolved: same-context tool-result
-  delegation (see §4 *Dispatch mechanism*). Behavior evaluation retained
-  `delegate` as the provider-visible identifier. It loads only delegate-only
-  subcommands for the current agent to execute immediately in the same
-  conversation; it is not separate-agent dispatch or future top-level routing.
-  Subprocess-based dispatch was considered (and prior assessments recommended
-  it) but is superseded.
+  delegation (see §4 *Dispatch mechanism*). Issue 413's neutral 44-trial,
+  cross-provider evaluation through the real builtin RPC runtime retained
+  `delegate`: it achieved 10/10 correct central first routes versus 9/10 for
+  exact `get_scramjet_subcommand`, while both names completed every central
+  path and correctly routed every specialist and freetext-parking case. The
+  candidate therefore failed the predeclared improvement rule. Freetext trials
+  ended at durable waiting and did not test an RPC reply, resume, or post-reply
+  completion. `delegate` loads only delegate-only subcommands for the current
+  agent to execute immediately in the same conversation; it is not
+  separate-agent dispatch or future top-level routing. Subprocess-based dispatch
+  was considered (and prior assessments recommended it) but is superseded.
 - **Output visibility of delegated commands.** Resolved by separating
   transcript semantics from presentation: the delegated body materializes
   in the transcript as a model-visible, persisted tool result, while the

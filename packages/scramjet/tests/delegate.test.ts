@@ -413,6 +413,30 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(result.details.error).toBeUndefined();
 	});
 
+	it("allows a delegate-only active caller to load a different live delegate-only target", async () => {
+		const caller = def("caller", "caller-body", ["Read", "Bash"]);
+		const target = def("target", "target-body", ["Bash"]);
+		const state = freshState({
+			registry: new Map([
+				[caller.name, caller],
+				[target.name, target],
+			]),
+			lifecycle: lifecycleFor("dormant", caller.name),
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+
+		const result = await tools[0].execute("call", { command: target.name, args: "" }, undefined, undefined, {
+			cwd: "/",
+		});
+
+		expect(result.details.error).toBeUndefined();
+		expect(result.content[0].text).toBe('<scramjet-command name="target">\ntarget-body\n</scramjet-command>');
+		expect(state.delegateStack).toEqual([{ commandName: "target", depth: 1, effectiveAllowedTools: ["Bash"] }]);
+		expect(state.sidebarLog).toHaveLength(1);
+		expect(pi.appended).toHaveLength(1);
+	});
+
 	it("returns the substituted body and pushes a frame for a valid call", async () => {
 		const { state, execute } = setupWithRegistry([def("mach12:push", "Run with: $ARGUMENTS")]);
 		const result = await execute({ command: "mach12:push", args: "ship it" });
@@ -574,6 +598,42 @@ describe("registerDelegateTool — execute paths", () => {
 		expect(state.delegateStack).toEqual([]);
 		expect(state.sidebarLog).toEqual([]);
 		expect(pi.appended).toEqual([]);
+	});
+
+	it("rejects a root-inclusive back-edge before mutating delegated state", async () => {
+		const caller = def("caller", "caller-body", ["Read"]);
+		const child = def("child", "child-body", ["Read", "Bash"]);
+		const state = freshState({
+			registry: new Map([
+				[caller.name, caller],
+				[child.name, child],
+			]),
+			lifecycle: lifecycleFor("dormant", caller.name),
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+		const tool = tools[0];
+		await tool.execute("call-1", { command: child.name, args: "" }, undefined, undefined, { cwd: "/" });
+		const before = {
+			stack: structuredClone(state.delegateStack),
+			sidebar: structuredClone(state.sidebarLog),
+			journal: structuredClone(pi.appended),
+			lifecycle: structuredClone(state.lifecycle),
+			generation: state.lifecycleGeneration,
+		};
+
+		const result = await tool.execute("call-2", { command: caller.name, args: "" }, undefined, undefined, {
+			cwd: "/",
+		});
+
+		expect(result.details.error).toBe("cycle");
+		expect(result.details.chain).toBe("caller -> child -> caller");
+		expect(state.delegateStack).toEqual(before.stack);
+		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["Read"]);
+		expect(state.sidebarLog).toEqual(before.sidebar);
+		expect(pi.appended).toEqual(before.journal);
+		expect(state.lifecycle).toEqual(before.lifecycle);
+		expect(state.lifecycleGeneration).toBe(before.generation);
 	});
 
 	it("rejects a cycle and does not push a second frame for the same name", async () => {
