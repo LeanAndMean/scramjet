@@ -180,6 +180,29 @@ function fakeCtx({
 	return bag;
 }
 
+async function emitAcceptedInput(
+	bag: ReturnType<typeof recordingPi>,
+	payload: { text: string; source: "interactive" | "extension" | "rpc" },
+	ctx?: unknown,
+): Promise<void> {
+	const sessionEntries: { customType: string; data: unknown }[] = [];
+	const acceptanceCallbacks: Array<() => void> = [];
+	for (const handler of bag.handlers.get("input") ?? []) {
+		const result = (await handler(payload, ctx)) as
+			| {
+					action?: string;
+					sessionEntries?: { customType: string; data: unknown }[];
+					onAccepted?: () => void;
+			  }
+			| undefined;
+		if (result?.action === "handled") return;
+		sessionEntries.push(...(result?.sessionEntries ?? []));
+		if (result?.onAccepted) acceptanceCallbacks.push(result.onAccepted);
+	}
+	for (const callback of acceptanceCallbacks) callback();
+	for (const entry of sessionEntries) bag.pi.appendEntry(entry.customType, entry.data);
+}
+
 function bootstrap(
 	state: ScramjetState,
 	{
@@ -1953,7 +1976,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			state.registry = registryWith(defWithPolicy("c:cmd", undefined));
 			registerHistory(bag.pi, state);
 
-			await bag.emit("input", { text: "/c:cmd", source: "interactive" }, ctxBag.ctx);
+			await emitAcceptedInput(bag, { text: "/c:cmd", source: "interactive" }, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(10000);
 			await flushMicrotasks();
 
@@ -2165,7 +2188,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			// real input pipeline does, so history can label it.
 			ctxBag.ctx.dispatchUserInput = vi.fn(async (input: string, options?: unknown) => {
 				ctxBag.dispatched.push({ input, options, session: "current" });
-				await bag.emit("input", { text: input, source: "extension" }, ctxBag.ctx);
+				await emitAcceptedInput(bag, { text: input, source: "extension" }, ctxBag.ctx);
 			});
 
 			await simulateTwoTurns(bag, ctxBag, report, { status: "completed", summary: "done" });
@@ -4248,15 +4271,7 @@ describe("issue 352 — actual-journal replay characterization", () => {
 	}
 
 	async function start(bag: ReturnType<typeof recordingPi>, def: CommandDef) {
-		const sessionEntries: { customType: string; data: unknown }[] = [];
-		for (const handler of bag.handlers.get("input") ?? []) {
-			const result = (await handler({ text: `/${def.name}`, source: "interactive" })) as
-				| { action?: string; sessionEntries?: { customType: string; data: unknown }[] }
-				| undefined;
-			if (result?.action === "handled") return;
-			sessionEntries.push(...(result?.sessionEntries ?? []));
-		}
-		for (const entry of sessionEntries) bag.pi.appendEntry(entry.customType, entry.data);
+		await emitAcceptedInput(bag, { text: `/${def.name}`, source: "interactive" });
 	}
 
 	it("consumed parked reply replays dormant, not waiting", async () => {

@@ -443,23 +443,17 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			}
 			return;
 		}
-		let origin: SidebarEntry["origin"];
-		if (state.pendingForcedDispatch === name) {
-			origin = "forced";
-			state.pendingForcedDispatch = null;
-		} else {
-			origin = event.source === "interactive" ? "user" : "agent";
-		}
-		// Compute the transform before recording the start — applyCommandInvocation
-		// mutates lifecycle state, so we must not leave it inconsistent if
-		// expansion fails.
+		const forcedDispatch = state.pendingForcedDispatch === name;
+		const origin: SidebarEntry["origin"] = forcedDispatch
+			? "forced"
+			: event.source === "interactive"
+				? "user"
+				: "agent";
 		const def = state.registry.get(name);
 		if (!def) return;
 		const argsString = extractArgs(event.text);
 		const wrapped = buildCommandExpansion(name, def, argsString);
 
-		const supersededCancellation = state.lifecycle.cancellationResumeEligible;
-		const supersededCommand = activeCommandName(state.lifecycle);
 		const entry: CommandStartData = {
 			command: name,
 			origin,
@@ -467,14 +461,25 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			timestamp: Date.now(),
 			invocationText: event.text,
 		};
-		applyCommandInvocation(state, entry);
-		if (supersededCancellation) {
-			logCancellationResume(state, "eligibility invalidated", supersededCommand, event.source, "command-start");
-		}
 		return {
 			action: "transform" as const,
 			text: wrapped,
 			sessionEntries: [{ customType: COMMAND_START_TYPE, data: entry }],
+			onAccepted: () => {
+				const supersededCancellation = state.lifecycle.cancellationResumeEligible;
+				const supersededCommand = activeCommandName(state.lifecycle);
+				if (forcedDispatch) state.pendingForcedDispatch = null;
+				applyCommandInvocation(state, entry);
+				if (supersededCancellation) {
+					logCancellationResume(
+						state,
+						"eligibility invalidated",
+						supersededCommand,
+						event.source,
+						"command-start",
+					);
+				}
+			},
 		};
 	});
 }

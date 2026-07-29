@@ -828,7 +828,13 @@ export interface InputSessionEntry {
 /** Result from input event handler */
 export type InputEventResult =
 	| { action: "continue" }
-	| { action: "transform"; text: string; images?: ImageContent[]; sessionEntries?: InputSessionEntry[] }
+	| {
+			action: "transform";
+			text: string;
+			images?: ImageContent[];
+			sessionEntries?: InputSessionEntry[];
+			onAccepted?: () => void;
+	  }
 	| { action: "handled" };
 
 // ============================================================================

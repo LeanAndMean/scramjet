@@ -1230,6 +1230,7 @@ export class AgentSession {
 		const preflightResult = options?.preflightResult;
 		let messages: AgentMessage[] | undefined;
 		let inputSessionEntries: InputSessionEntry[] | undefined;
+		let acceptInput: (() => void) | undefined;
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
@@ -1260,6 +1261,7 @@ export class AgentSession {
 					currentText = inputResult.text;
 					currentImages = inputResult.images ?? currentImages;
 					inputSessionEntries = inputResult.sessionEntries;
+					acceptInput = inputResult.onAccepted;
 				}
 			}
 
@@ -1283,6 +1285,7 @@ export class AgentSession {
 				} else {
 					await this._queueSteer(expandedText, currentImages, inputSessionEntries);
 				}
+				acceptInput?.();
 				preflightResult?.(true);
 				return;
 			}
@@ -1380,6 +1383,7 @@ export class AgentSession {
 			return;
 		}
 
+		acceptInput?.();
 		preflightResult?.(true);
 		this._runRetryCount = 0;
 		await this.agent.prompt(messages);

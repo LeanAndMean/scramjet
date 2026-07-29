@@ -349,6 +349,7 @@ describe("replayHistory — issue 352 exit/identity characterization", () => {
 		registerHistory(pi, state);
 
 		const start = (await emit("input", { text: "/a:cmd", source: "interactive" })) as any;
+		start.onAccepted?.();
 		await emit("input", { text: "/typo-or-removed", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBeNull();
 
@@ -647,10 +648,11 @@ describe("registerHistory — input event", () => {
 		const { pi, appended, emit } = recordingPi();
 		registerHistory(pi, state);
 		const result = await emit("input", event);
+		if (result?.action === "transform") result.onAccepted?.();
 		return { state, appended, result };
 	}
 
-	it("captures the exact invocation in message-bound metadata while updating live state", async () => {
+	it("captures the exact invocation in message-bound metadata and updates live state when accepted", async () => {
 		const invocationText = '/mach12:issue-create  repeated\t"quoted value"\nsecond line  ';
 		const { state, appended, result } = await fire({ text: invocationText, source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBe("mach12:issue-create");
@@ -673,6 +675,18 @@ describe("registerHistory — input event", () => {
 				},
 			],
 		});
+	});
+
+	it("does not update live state before the transformed input is accepted", async () => {
+		const state = freshState({ registry: registryOf(["mach12:issue-create"]) });
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+
+		const result = await emit("input", { text: "/mach12:issue-create 23", source: "interactive" });
+
+		expect(result).toMatchObject({ action: "transform" });
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
 	});
 
 	it("captures no-context and independent same-name submissions separately", async () => {
@@ -794,6 +808,7 @@ describe("registerHistory — input event", () => {
 		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
 		const result = (await emit("input", { text: "/mach10:push", source: "extension" })) as any;
+		result.onAccepted?.();
 
 		expect(state.sidebarLog[0].origin).toBe("forced");
 		expect(result.sessionEntries[0].data.origin).toBe("forced");
@@ -856,6 +871,7 @@ describe("registerHistory — input event", () => {
 			const { pi, appended, emit } = recordingPi();
 			registerHistory(pi, state);
 			const result = (await emit("input", { text: "/mach12:pr-create", source: "interactive" })) as any;
+			result.onAccepted?.();
 			expect(derivedPhase(state.lifecycle)).toBe("running");
 			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
 			expect(appended).toHaveLength(0);
@@ -912,7 +928,8 @@ describe("registerHistory — input event", () => {
 				(pi as any).getCommands = () => [{ name: "help" }];
 				registerHistory(pi, state);
 
-				await emit("input", event);
+				const result = await emit("input", event);
+				if (result?.action === "transform") result.onAccepted?.();
 
 				expect(derivedPhase(state.lifecycle)).toBe(phase);
 				expect(state.lifecycle.cancellationResumeEligible).toBe(eligible);
@@ -1035,7 +1052,8 @@ describe("registerHistory — input event", () => {
 		});
 		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
-		await emit("input", { text: "/mach10:other", source: "extension" });
+		const result = await emit("input", { text: "/mach10:other", source: "extension" });
+		if (result?.action === "transform") result.onAccepted?.();
 
 		// Different command — labeled per source, flag preserved for the
 		// still-pending forced dispatch.

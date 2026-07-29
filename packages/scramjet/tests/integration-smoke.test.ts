@@ -314,15 +314,22 @@ describe("integration smoke — end-to-end chain under /autopilot on (S21)", () 
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
 			const sessionEntries: { customType: string; data: unknown }[] = [];
+			const acceptanceCallbacks: Array<() => void> = [];
 			for (const h of handlers.get(event) ?? []) {
 				const result = (await h(payload, ctx)) as
-					| { action?: string; sessionEntries?: { customType: string; data: unknown }[] }
+					| {
+							action?: string;
+							sessionEntries?: { customType: string; data: unknown }[];
+							onAccepted?: () => void;
+					  }
 					| undefined;
 				if (event === "input") {
 					if (result?.action === "handled") return;
 					sessionEntries.push(...(result?.sessionEntries ?? []));
+					if (result?.onAccepted) acceptanceCallbacks.push(result.onAccepted);
 				}
 			}
+			for (const callback of acceptanceCallbacks) callback();
 			for (const entry of sessionEntries) pi.appendEntry(entry.customType, entry.data);
 		}
 		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };
@@ -480,15 +487,22 @@ describe("integration smoke — lifecycle event sequences", () => {
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
 			const sessionEntries: { customType: string; data: unknown }[] = [];
+			const acceptanceCallbacks: Array<() => void> = [];
 			for (const h of handlers.get(event) ?? []) {
 				const result = (await h(payload, ctx)) as
-					| { action?: string; sessionEntries?: { customType: string; data: unknown }[] }
+					| {
+							action?: string;
+							sessionEntries?: { customType: string; data: unknown }[];
+							onAccepted?: () => void;
+					  }
 					| undefined;
 				if (event === "input") {
 					if (result?.action === "handled") return;
 					sessionEntries.push(...(result?.sessionEntries ?? []));
+					if (result?.onAccepted) acceptanceCallbacks.push(result.onAccepted);
 				}
 			}
+			for (const callback of acceptanceCallbacks) callback();
 			for (const entry of sessionEntries) pi.appendEntry(entry.customType, entry.data);
 		}
 		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };

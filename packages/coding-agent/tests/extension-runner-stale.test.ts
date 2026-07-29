@@ -157,13 +157,15 @@ describe("ExtensionRunner stale short-circuit", () => {
 		}
 	});
 
-	it("accumulates session entries across chained input transforms", async () => {
+	it("accumulates session entries and acceptance callbacks across chained input transforms", async () => {
+		const accepted: string[] = [];
 		const first = makeExtension("ext1", "input", [
 			() =>
 				({
 					action: "transform",
 					text: "first",
 					sessionEntries: [{ customType: "first", data: { order: 1 } }],
+					onAccepted: () => accepted.push("first"),
 				}) as any,
 		]);
 		const second = makeExtension("ext2", "input", [
@@ -176,7 +178,8 @@ describe("ExtensionRunner stale short-circuit", () => {
 		]);
 		const { runner } = makeRunner([first, second]);
 
-		await expect(runner.emitInput("original", undefined, "interactive")).resolves.toEqual({
+		const result = await runner.emitInput("original", undefined, "interactive");
+		expect(result).toMatchObject({
 			action: "transform",
 			text: "second",
 			images: undefined,
@@ -185,21 +188,29 @@ describe("ExtensionRunner stale short-circuit", () => {
 				{ customType: "second", data: { order: 2 } },
 			],
 		});
+		expect(accepted).toEqual([]);
+		if (result.action === "transform") result.onAccepted?.();
+		expect(accepted).toEqual(["first"]);
 	});
 
-	it("discards accumulated session entries when a later input handler handles the input", async () => {
+	it("discards accumulated session entries and acceptance callbacks when a later handler handles the input", async () => {
+		let accepted = false;
 		const first = makeExtension("ext1", "input", [
 			() =>
 				({
 					action: "transform",
 					text: "first",
 					sessionEntries: [{ customType: "discarded" }],
+					onAccepted: () => {
+						accepted = true;
+					},
 				}) as any,
 		]);
 		const second = makeExtension("ext2", "input", [() => ({ action: "handled" }) as any]);
 		const { runner } = makeRunner([first, second]);
 
 		await expect(runner.emitInput("original", undefined, "interactive")).resolves.toEqual({ action: "handled" });
+		expect(accepted).toBe(false);
 	});
 
 	it("R6: mid-chain invalidation in emitInput returns the partial transform and entries", async () => {

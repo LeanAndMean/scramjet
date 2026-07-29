@@ -1206,12 +1206,30 @@ export class ExtensionRunner {
 		let currentText = text;
 		let currentImages = images;
 		const sessionEntries: InputSessionEntry[] = [];
+		const acceptanceCallbacks: Array<() => void> = [];
+		const transformResult = (): InputEventResult => {
+			const result: Extract<InputEventResult, { action: "transform" }> = {
+				action: "transform",
+				text: currentText,
+				images: currentImages,
+				sessionEntries,
+			};
+			if (acceptanceCallbacks.length > 0) {
+				result.onAccepted = () => {
+					for (const callback of acceptanceCallbacks) callback();
+				};
+			}
+			return result;
+		};
 
 		for (const ext of this.extensions) {
 			for (const handler of ext.handlers.get("input") ?? []) {
 				if (this.skipStale("input")) {
-					return currentText !== text || currentImages !== images || sessionEntries.length > 0
-						? { action: "transform", text: currentText, images: currentImages, sessionEntries }
+					return currentText !== text ||
+						currentImages !== images ||
+						sessionEntries.length > 0 ||
+						acceptanceCallbacks.length > 0
+						? transformResult()
 						: { action: "continue" };
 				}
 				try {
@@ -1222,6 +1240,7 @@ export class ExtensionRunner {
 						currentText = result.text;
 						currentImages = result.images ?? currentImages;
 						sessionEntries.push(...(result.sessionEntries ?? []));
+						if (result.onAccepted) acceptanceCallbacks.push(result.onAccepted);
 					}
 				} catch (err) {
 					this.emitError({
@@ -1233,8 +1252,11 @@ export class ExtensionRunner {
 				}
 			}
 		}
-		return currentText !== text || currentImages !== images || sessionEntries.length > 0
-			? { action: "transform", text: currentText, images: currentImages, sessionEntries }
+		return currentText !== text ||
+			currentImages !== images ||
+			sessionEntries.length > 0 ||
+			acceptanceCallbacks.length > 0
+			? transformResult()
 			: { action: "continue" };
 	}
 }

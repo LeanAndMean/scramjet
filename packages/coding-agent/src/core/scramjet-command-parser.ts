@@ -99,7 +99,11 @@ export function restoreScramjetCommandInvocation(
 						entry.customType === "scramjet:command-start" &&
 						entry.parentId === selectedEntry.id,
 				);
-	if (commandStart) {
+	if (
+		commandStart?.type === "custom" &&
+		commandStart.customType === "scramjet:command-start" &&
+		commandStart.parentId === selectedEntry.id
+	) {
 		const invocation = exactInvocation(commandStart.data, parsed.name);
 		if (invocation !== null) return invocation;
 	}

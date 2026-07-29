@@ -94,7 +94,7 @@ describe("input handler — expansion transform", () => {
 	it("returns transform with wrapped body for a registered command", async () => {
 		const d = def("mach12:push", "# Push\n\n<caller-context>\n$ARGUMENTS\n</caller-context>");
 		const { result } = await fireInput(registryOf([d]), "/mach12:push stage 1");
-		expect(result).toEqual({
+		expect(result).toMatchObject({
 			action: "transform",
 			text: '<scramjet-command name="mach12:push">\n# Push\n\n<caller-context>\nstage 1\n</caller-context>\n</scramjet-command>',
 			sessionEntries: [
@@ -124,10 +124,11 @@ describe("input handler — expansion transform", () => {
 		expect(result).toBeUndefined();
 	});
 
-	it("records command start before returning transform", async () => {
+	it("records command start when the transform is accepted", async () => {
 		const d = def("mach12:push", "body");
 		const { state, result } = await fireInput(registryOf([d]), "/mach12:push args");
 		expect(result).toHaveProperty("action", "transform");
+		(result as { onAccepted?: () => void }).onAccepted?.();
 		expect(state.lifecycle.activeCommand).toBe("mach12:push");
 	});
 });

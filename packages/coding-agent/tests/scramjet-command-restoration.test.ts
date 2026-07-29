@@ -65,6 +65,17 @@ describe("restoreScramjetCommandInvocation", () => {
 		expect(restoreScramjetCommandInvocation(selected, index)).toBe("/mach12:issue-plan 55");
 	});
 
+	it.each([
+		["wrong entry type", { ...commandStart("selected", validCommandStartData), type: "other" }],
+		["wrong custom type", { ...commandStart("selected", validCommandStartData), customType: "other" }],
+		["wrong parent", commandStart("other", validCommandStartData)],
+	])("rejects indexed metadata with %s", (_label, entry) => {
+		const selected = messageEntry("selected", expanded("mach12:issue-plan", "55"));
+		const index = new Map([[selected.id, entry as CustomEntry]]);
+
+		expect(restoreScramjetCommandInvocation(selected, index)).toBe("/mach12:issue-plan 55");
+	});
+
 	it("isolates identical expanded messages on sibling branches", () => {
 		const first = messageEntry("first", expanded(), "root");
 		const second = messageEntry("second", expanded(), "root");
