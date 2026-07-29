@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.66.0 — Preserve implementation detail in plan comments
+
+Keeps implementation-critical contracts intact when Mach 12 drafts or revises durable implementation plans. Fixes [#418](https://github.com/LeanAndMean/scramjet/issues/418).
+
+### Changed
+
+- Add a shared delegate-only plan-comment contract for complete, standalone, post-ready implementation plans.
+- Apply the contract to initial planning and revised-plan review, including significant-delta gates and unchanged approved-body posting.
+- Make GitHub comment transport preserve prepared body bytes through collision-safe standard input.
+- Update Mach 12 command inventory and workflow documentation.
+
+### Tests
+
+- Add command-wiring and semantic regressions for artifact preservation, revision validation, approval ordering, and immutable comment transport.
+
 ## 0.65.0 — Use full GPT-5.6 Codex context
 
 Uses the 1,050,000-token capacity of GPT-5.6 Sol, Terra, and Luna through `openai-codex` as their default operational context. Fixes [#416](https://github.com/LeanAndMean/scramjet/issues/416).
