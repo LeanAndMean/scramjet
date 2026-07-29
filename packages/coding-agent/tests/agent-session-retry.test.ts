@@ -241,9 +241,7 @@ describe("AgentSession context window budget", () => {
 		expect(exact.events).not.toContainEqual(
 			expect.objectContaining({ type: "compaction_start", reason: "threshold" }),
 		);
-		expect(above.events).toContainEqual(
-			expect.objectContaining({ type: "compaction_start", reason: "threshold" }),
-		);
+		expect(above.events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "threshold" }));
 	});
 
 	it("compacts provider overflow errors instead of auto-retrying them", async () => {

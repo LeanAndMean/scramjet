@@ -202,7 +202,7 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 
 `contextWindowBudget`, when supplied, must be a positive finite integer no greater than the final `contextWindow`. Omit it to use the advertised capacity as the operational budget. Custom models and per-model overrides set capacity and budget independently; after all overrides are merged, an invalid budget/capacity relationship is rejected with the provider, model, and both values. The existing `contextWindow` validation remains unchanged and rejects values `<= 0`.
 
-GPT-5.6 Sol, Terra, and Luna through `openai-codex` advertise OpenAI's documented 1,050,000-token model capacity while retaining the Codex client catalog's 272,000-token operational budget. This budget is provider policy, not a claim that the backend has a 272,000-token hard limit.
+GPT-5.6 Sol, Terra, and Luna through `openai-codex` use OpenAI's documented 1,050,000-token model capacity as their default operational budget. Set `contextWindowBudget` in a per-model override when an account requires a lower operational limit.
 
 Current behavior:
 - `/model` and `--list-models` list entries by model `id`.
