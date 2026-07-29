@@ -430,7 +430,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 
 ### The answer/probe protocol
 
-1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. Once the answer is delivered, the agent may report a terminal status (`completed`/`blocked`/`incomplete`) inline in the same turn; the report terminates the turn and Scramjet dispatches from it directly, skipping the probe.
+1. **Answer turn:** The agent does the command's work and delivers the user-facing answer. Once the answer is delivered, the agent may report a terminal status (`completed`/`blocked`/`incomplete`) inline in the same turn; the report terminates the turn and Scramjet dispatches from it directly, skipping the probe. An accepted terminal report unconditionally suppresses another provider turn after every sibling call in the same tool batch has finalized, even when those sibling results are non-terminating.
 2. **Probe turn (fallback):** If the work turn ends without a report, Scramjet sends a hidden message asking the agent to choose one route:
    - Call `report_scramjet_command_status` with a status and stop the probe turn.
    - Call `get_scramjet_user_input` if structured input is needed before continuing. For **confirm/select**, the tool blocks until the user responds and returns the answer in the same turn — continue command work immediately. The probe is re-armed without consuming the `continuing` budget, so Scramjet will send another probe after the resumed work ends. For **freetext**, the tool terminates the turn and parks the command; the user replies in the standard editor, and the command resumes on a new turn.

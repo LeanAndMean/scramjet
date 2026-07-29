@@ -182,7 +182,7 @@ export function registerDelegateTool(pi: ExtensionAPI, state: ScramjetState) {
 			if (!def.delegateOnly) {
 				return reject(
 					"not_subcommand",
-					`ERROR: '${params.command}' is an ordinary top-level command, not a delegate-only subcommand. Use slash dispatch, status routing, or a next-step suggestion instead.`,
+					`ERROR: '${params.command}' is an ordinary top-level command, not a delegate-only subcommand. Use slash dispatch or the active caller's terminal status routing instead.`,
 				);
 			}
 			if (params.command === activeCommand || detectCycle(state.delegateStack, params.command)) {

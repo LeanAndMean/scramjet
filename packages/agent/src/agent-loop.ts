@@ -535,8 +535,14 @@ type FinalizedToolCallOutcome = {
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
 
+// SCRAMJET-DIVERGENCE: an explicit `any` mode lets a terminal status report end a mixed batch (#413 follow-up).
 function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
-	return finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true);
+	return (
+		finalizedCalls.some(
+			(finalized) => finalized.result.terminate === true && finalized.result.terminationMode === "any",
+		) ||
+		(finalizedCalls.length > 0 && finalizedCalls.every((finalized) => finalized.result.terminate === true))
+	);
 }
 
 function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall): AgentToolCall {
@@ -690,6 +696,7 @@ async function finalizeExecutedToolCall(
 					content: afterResult.content ?? result.content,
 					details: afterResult.details ?? result.details,
 					terminate: afterResult.terminate ?? result.terminate,
+					terminationMode: afterResult.terminationMode ?? result.terminationMode,
 				};
 				isError = afterResult.isError ?? isError;
 			}

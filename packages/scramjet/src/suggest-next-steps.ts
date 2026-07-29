@@ -13,7 +13,6 @@ import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { Type } from "typebox";
 import { NEXT_STEP_SCHEMA } from "./command-status.js";
 import { validateNextSteps } from "./commands/validator.js";
-import { DELEGATE_TOOL_NAME } from "./delegate.js";
 import { activeCommandName, derivePhaseLabel as lp } from "./lifecycle.js";
 import type { CommandStatusNextStep, ScramjetState } from "./types.js";
 
@@ -118,7 +117,7 @@ export function registerSuggestNextStepsTool(pi: ExtensionAPI, state: ScramjetSt
 					return `unknown command "${name}"${available ? ` — available: ${available}` : ""}`;
 				}
 				if (def.delegateOnly) {
-					return `${name} is delegate-only (load it via ${DELEGATE_TOOL_NAME}, then execute the returned instructions in the current conversation; do not use top-level dispatch)`;
+					return `${name} is delegate-only; delegate-only subcommands must be loaded by an active caller during command work and cannot be suggested for top-level dispatch`;
 				}
 				return null;
 			}

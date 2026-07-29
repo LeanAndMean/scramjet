@@ -395,6 +395,53 @@ describe("registerDelegateTool — execute paths", () => {
 		}
 	});
 
+	it("preserves populated delegated state when terminal status is pending", async () => {
+		const caller = def("caller", "caller", undefined, false);
+		const first = def("first", "first", ["Read"]);
+		const second = def("second", "second");
+		const state = freshState({
+			registry: new Map([
+				[caller.name, caller],
+				[first.name, first],
+				[second.name, second],
+			]),
+			lifecycle: lifecycleFor("dormant", caller.name),
+		});
+		const { pi, tools } = recordingPi();
+		registerDelegateTool(pi, state);
+		const tool = tools[0];
+		await tool.execute("call-1", { command: first.name, args: "" }, undefined, undefined, { cwd: "/" });
+		state.lifecycle = lifecycleFor("reported", caller.name);
+		const before = {
+			stack: structuredClone(state.delegateStack),
+			sidebar: structuredClone(state.sidebarLog),
+			journal: structuredClone(pi.appended),
+			lifecycle: structuredClone(state.lifecycle),
+			generation: state.lifecycleGeneration,
+		};
+
+		const result = await tool.execute("call-2", { command: second.name, args: "" }, undefined, undefined, {
+			cwd: "/",
+		});
+
+		expect(result.details.error).toBe("report_pending");
+		expect(state.delegateStack).toEqual(before.stack);
+		expect(state.sidebarLog).toEqual(before.sidebar);
+		expect(pi.appended).toEqual(before.journal);
+		expect(state.lifecycle).toEqual(before.lifecycle);
+		expect(state.lifecycleGeneration).toBe(before.generation);
+	});
+
+	it("routes ordinary top-level targets without recommending the idle suggestion tool", async () => {
+		const { execute } = setupWithRegistry([def("top", "body", undefined, false)]);
+		const result = await execute({ command: "top", args: "" });
+
+		expect(result.details.error).toBe("not_subcommand");
+		expect(result.content[0].text).toContain("slash dispatch");
+		expect(result.content[0].text).toContain("terminal status routing");
+		expect(result.content[0].text).not.toContain("next-step suggestion");
+	});
+
 	it.each(["running", "probing", "waiting", "dormant"] as const)("allows calls while %s", async (phase) => {
 		const caller = def("caller", "caller", undefined, false);
 		const target = def("target", "target");
