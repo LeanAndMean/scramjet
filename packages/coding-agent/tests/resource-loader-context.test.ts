@@ -1,10 +1,22 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadProjectContextFiles } from "../src/core/resource-loader.js";
 
 const tempDirs: string[] = [];
+
+function hasCaseSensitiveFilenames(): boolean {
+	const dir = mkdtempSync(join(tmpdir(), "resource-loader-case-check-"));
+	try {
+		writeFileSync(join(dir, "probe.MD"), "");
+		return !existsSync(join(dir, "probe.md"));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+const hasCaseSensitiveFilesystem = hasCaseSensitiveFilenames();
 
 function tempDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "resource-loader-context-"));
@@ -86,7 +98,7 @@ describe("loadProjectContextFiles", () => {
 		]);
 	});
 
-	it("applies the same policy to uppercase-extension aliases", () => {
+	it.runIf(hasCaseSensitiveFilesystem)("applies the same policy to uppercase-extension aliases", () => {
 		const root = tempDir();
 		const cwd = join(root, "project");
 		const agentDir = join(root, "agent");
@@ -99,7 +111,7 @@ describe("loadProjectContextFiles", () => {
 		]);
 	});
 
-	it("warns and falls back to a readable uppercase-extension alias", () => {
+	it.runIf(hasCaseSensitiveFilesystem)("warns and falls back to a readable uppercase-extension alias", () => {
 		const root = tempDir();
 		const cwd = join(root, "project");
 		const agentDir = join(root, "agent");
