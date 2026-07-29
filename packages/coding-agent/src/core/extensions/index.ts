@@ -86,6 +86,7 @@ export type {
 	// Events - Input
 	InputEvent,
 	InputEventResult,
+	InputSessionEntry,
 	InputSource,
 	// Harness-tool invocation (#244)
 	InvokeHarnessToolHandler,

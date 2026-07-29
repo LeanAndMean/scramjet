@@ -313,7 +313,24 @@ describe("integration smoke — end-to-end chain under /autopilot on (S21)", () 
 			},
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+			const sessionEntries: { customType: string; data: unknown }[] = [];
+			const acceptanceCallbacks: Array<() => void> = [];
+			for (const h of handlers.get(event) ?? []) {
+				const result = (await h(payload, ctx)) as
+					| {
+							action?: string;
+							sessionEntries?: { customType: string; data: unknown }[];
+							onAccepted?: () => void;
+					  }
+					| undefined;
+				if (event === "input") {
+					if (result?.action === "handled") return;
+					sessionEntries.push(...(result?.sessionEntries ?? []));
+					if (result?.onAccepted) acceptanceCallbacks.push(result.onAccepted);
+				}
+			}
+			for (const callback of acceptanceCallbacks) callback();
+			for (const entry of sessionEntries) pi.appendEntry(entry.customType, entry.data);
 		}
 		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };
 	}
@@ -469,7 +486,24 @@ describe("integration smoke — lifecycle event sequences", () => {
 			},
 		};
 		async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-			for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+			const sessionEntries: { customType: string; data: unknown }[] = [];
+			const acceptanceCallbacks: Array<() => void> = [];
+			for (const h of handlers.get(event) ?? []) {
+				const result = (await h(payload, ctx)) as
+					| {
+							action?: string;
+							sessionEntries?: { customType: string; data: unknown }[];
+							onAccepted?: () => void;
+					  }
+					| undefined;
+				if (event === "input") {
+					if (result?.action === "handled") return;
+					sessionEntries.push(...(result?.sessionEntries ?? []));
+					if (result?.onAccepted) acceptanceCallbacks.push(result.onAccepted);
+				}
+			}
+			for (const callback of acceptanceCallbacks) callback();
+			for (const entry of sessionEntries) pi.appendEntry(entry.customType, entry.data);
 		}
 		return { pi, handlers, tools, commands, appended, probes, dispatched, emit };
 	}
@@ -574,8 +608,10 @@ describe("integration smoke — lifecycle event sequences", () => {
 		expect(derivedPhase(state.lifecycle)).toBe("dormant");
 		expect(selectorCalls).toBe(1);
 
+		const replayEntries = bag.appended.map((entry) => ({ type: "custom", customType: entry.type, data: entry.data }));
 		ctx.sessionManager = {
-			getBranch: () => bag.appended.map((entry) => ({ type: "custom", customType: entry.type, data: entry.data })),
+			getBranch: () => replayEntries,
+			getEntries: () => replayEntries,
 		};
 		await bag.emit("session_start", {}, ctx);
 		expect(derivedPhase(state.lifecycle)).toBe("dormant");
@@ -704,7 +740,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 		// Reset state to simulate a fresh session
 		state.lifecycle = lifecycleFor("idle");
 		state.sidebarLog = [];
-		await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries } });
+		await bag.emit("session_start", {}, { sessionManager: { getBranch: () => entries, getEntries: () => entries } });
 
 		// After replay, waiting phase should be reconstructed
 		expect(derivedPhase(state.lifecycle)).toBe("waiting");

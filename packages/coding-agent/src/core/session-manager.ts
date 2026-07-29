@@ -711,6 +711,7 @@ export class SessionManager {
 	private persist: boolean;
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
+	private pendingSerializedEntries = new WeakMap<object, string>();
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
@@ -809,9 +810,15 @@ export class SessionManager {
 		}
 	}
 
+	private _serializeEntry(entry: FileEntry): string {
+		const serialized = JSON.stringify(entry);
+		if (serialized === undefined) throw new TypeError("Session entry is not JSON-serializable");
+		return serialized;
+	}
+
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const content = `${this.fileEntries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+		const content = `${this.fileEntries.map((entry) => this._serializeEntry(entry)).join("\n")}\n`;
 		writeFileSync(this.sessionFile, content);
 	}
 
@@ -835,31 +842,43 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
-	_persist(entry: SessionEntry): void {
+	_persist(entry: SessionEntry, serializedEntry: string): void {
 		if (!this.persist || !this.sessionFile) return;
 
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
-			// Mark as not flushed so when assistant arrives, all entries get written
 			this.flushed = false;
+			this.pendingSerializedEntries.set(entry, serializedEntry);
 			return;
 		}
 
 		if (!this.flushed) {
-			for (const e of this.fileEntries) {
-				appendFileSync(this.sessionFile, `${JSON.stringify(e)}\n`);
-			}
+			const content = `${this.fileEntries
+				.map((fileEntry) => this.pendingSerializedEntries.get(fileEntry) ?? this._serializeEntry(fileEntry))
+				.join("\n")}\n`;
+			writeFileSync(this.sessionFile, content);
 			this.flushed = true;
+			this.pendingSerializedEntries = new WeakMap();
 		} else {
-			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+			appendFileSync(this.sessionFile, `${serializedEntry}\n`);
 		}
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
+		const serializedEntry = this._serializeEntry(entry);
+		const previousLeafId = this.leafId;
 		this.fileEntries.push(entry);
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		this._persist(entry);
+		try {
+			this._persist(entry, serializedEntry);
+		} catch (error) {
+			this.fileEntries.pop();
+			this.byId.delete(entry.id);
+			this.leafId = previousLeafId;
+			this.pendingSerializedEntries.delete(entry);
+			throw error;
+		}
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -930,14 +949,19 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
-	appendCustomEntry(customType: string, data?: unknown): string {
+	/**
+	 * Append a custom entry (for extensions). Parents the entry on `parentId`
+	 * (defaults to the current leaf) and then unconditionally advances the leaf to
+	 * the new entry — so passing a `parentId` other than the current leaf moves the
+	 * leaf sideways rather than extending the current chain. Returns entry id.
+	 */
+	appendCustomEntry(customType: string, data?: unknown, parentId: string | null = this.leafId): string {
 		const entry: CustomEntry = {
 			type: "custom",
 			customType,
 			data,
 			id: generateId(this.byId),
-			parentId: this.leafId,
+			parentId,
 			timestamp: new Date().toISOString(),
 		};
 		this._appendEntry(entry);

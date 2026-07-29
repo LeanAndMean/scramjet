@@ -340,6 +340,50 @@ describe("AgentSessionRuntime — atomic fork/clone (Stage 4)", () => {
 		});
 	}
 
+	it("restores exact Scramjet invocation text for tree navigation and fork selection", async () => {
+		const fx = await buildFixture({ initialInMemory: true });
+		const session = fx.runtime.session;
+		const manager = session.sessionManager;
+		const expanded = '<scramjet-command name="mach12:issue-plan">\n# Command\n</scramjet-command>';
+		const entryId = manager.appendMessage(userMessage(expanded));
+		const invocationText = "/mach12:issue-plan  first  exact";
+		manager.appendCustomEntry("scramjet:command-start", {
+			command: "mach12:issue-plan",
+			origin: "user",
+			depth: 0,
+			timestamp: 1,
+			invocationText,
+		});
+		manager.appendMessage(assistantText("response"));
+		manager.appendMessage(userMessage("later message"));
+
+		expect(session.getUserMessagesForForking()).toContainEqual({ entryId, text: invocationText });
+		await expect(session.navigateTree(entryId)).resolves.toMatchObject({
+			editorText: invocationText,
+			cancelled: false,
+		});
+	});
+
+	it("restores exact Scramjet invocation text before replacing the source runtime", async () => {
+		const fx = await buildFixture({ initialInMemory: true });
+		const sourceManager = fx.runtime.session.sessionManager;
+		const entryId = sourceManager.appendMessage(
+			userMessage('<scramjet-command name="mach12:issue-plan">\n# Command\n</scramjet-command>'),
+		);
+		const invocationText = '/mach12:issue-plan\t 414  "quoted value"';
+		sourceManager.appendCustomEntry("scramjet:command-start", {
+			command: "mach12:issue-plan",
+			origin: "user",
+			depth: 0,
+			timestamp: 1,
+			invocationText,
+		});
+
+		const result = await fx.runtime.fork(entryId, { position: "before" });
+
+		expect(result.selectedText).toBe(invocationText);
+	});
+
 	it("a successful in-memory fork/clone preserves ordering and never mutates the source manager", async () => {
 		const fx = await buildFixture({ initialInMemory: true });
 		const sourceManager = fx.runtime.session.sessionManager;

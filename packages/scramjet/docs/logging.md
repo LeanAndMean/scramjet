@@ -117,6 +117,24 @@ jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.leve
 jq 'select(.type == "custom" and .customType == "scramjet:log") | .data | "\(.timestamp / 1000 | strftime("%H:%M:%S")) [\(.level)/\(.category)] \(.message)"' -r session.jsonl
 ```
 
+## Command-start artifacts and invocation restoration
+
+When both entries persist successfully, a top-level Scramjet invocation is represented by an expanded user-message entry and a directly correlated `scramjet:command-start` custom entry. The start entry's `parentId` is the user-message entry's `id`; this direct edge, rather than physical JSONL order or nearest ancestry, identifies the invocation that produced the expanded message. The start is normally the first attached sibling emitted by Scramjet, but input handlers may contribute additional metadata siblings in handler order, and every sibling remains a direct child of the source message.
+
+The depth-0 payload extends the sidebar fields with optional `invocationText`:
+
+```jsonc
+{ "type": "custom", "customType": "scramjet:command-start", "parentId": "<source-message-id>",
+  "data": { "command": "mach12:issue-plan", "origin": "user", "depth": 0,
+            "timestamp": 1785261600000, "invocationText": "/mach12:issue-plan 414" } }
+```
+
+`invocationText` preserves the exact post-editor-trim slash text for editing, retrying, fork/tree navigation, and resumed Up-arrow history. Restoration accepts it only when the correlated payload and expanded wrapper validate as the same top-level command. Legacy starts without `invocationText` reconstruct compact slash syntax semantically from the wrapper. Malformed or mismatched correlated metadata is not searched around or replaced from another branch.
+
+The input handler applies the live lifecycle/sidebar start before the model turn, but carries the durable depth-0 entry as input metadata bound to the concrete user message. On `message_end`, `AgentSession` inserts the message and then inserts transformed metadata in handler order, with each metadata entry parented directly to that message; another handler's later sibling may therefore own the selected branch leaf. Failed model/authentication or `before_agent_start` preflight leaves neither artifact. Before the first assistant response triggers the initial file flush, attached-start failure retains the source message only in the in-memory session tree. After the session is flushed, attached-start storage failure can leave a durable message-only partial commit. In either case, the message lacks exact-restoration metadata and `AgentSession` emits a `session_entry_persistence` diagnostic. Delegated depth-positive starts remain immediate journal appends and omit `invocationText`.
+
+The duplicate `invocationText` metadata field is replay-inert: replay projects only the sidebar fields, and Scramjet excludes this duplicate field from sidebar state, structured logs, and model/provider context. The slash-command arguments themselves remain provider-visible inside the expanded command envelope sent as the user message. `invocationText` remains present in the local session journal and can therefore appear in session exports or raw RPC entry data. Treat slash-command arguments and their local metadata copy with the same privacy care as other user-message text.
+
 ## Command-status artifacts
 
 Every **accepted** `report_scramjet_command_status` call is journaled as a `scramjet:command-status` custom entry (issue 278) — including `continuing`. The payload carries the reporting command, the status, and the incremental `summary`:
@@ -140,7 +158,7 @@ jq -c 'select(.type == "custom" and .customType == "scramjet:command-status" and
 
 ### Branch-aware invocation aggregation (from a selected leaf)
 
-The direct search above is the common path; this ancestry walk is only needed to reconstruct a single invocation's summaries in order across a forked session. Session files are trees: physical JSONL order is not branch order, and forks share a common prefix. To reconstruct one invocation's incremental summaries in order, walk `parentId` ancestry from a selected leaf entry id up to the **nearest depth-0 `scramjet:command-start`** (the invocation boundary), collecting the command-status reports on that path. Delegates (depth-1 command-starts) are *not* boundaries, so a delegated subroutine's turns stay inside the parent invocation; same-name invocations stay separate because each has its own depth-0 start; and fork-only reports on other branches never appear because they are not ancestors of the selected leaf.
+The direct search above is the common path; this branch walk is only needed to reconstruct a single invocation's summaries in order across a forked session. Session files are trees: physical JSONL order is not branch order, and forks share a common prefix. To reconstruct one invocation's incremental summaries, walk `parentId` ancestry from a selected leaf entry id to the nearest lifecycle boundary. That boundary is either a depth-0 legacy start in ancestry or an ancestral source user message with a validated modern depth-0 start attached as a direct sibling. The validation requires a complete modern payload (`depth`, `origin`, numeric `timestamp`, and `invocationText`) whose command, slash token, and expanded wrapper name agree. Collect command-status reports between the leaf and that boundary. Delegates (depth-1 command-starts) are *not* boundaries, so a delegated subroutine's turns stay inside the parent invocation; same-name invocations stay separate because each has its own depth-0 start; and fork-only reports on other branches never appear because they are not ancestors of the selected leaf.
 
 ```sh
 LEAF=<entry-id-on-the-branch-you-care-about>
@@ -148,9 +166,32 @@ jq -n --arg leaf "$LEAF" '
   def anc($byId; $id):
     if ($id == null) or ($byId[$id] == null) then []
     else [$byId[$id]] + anc($byId; $byId[$id].parentId) end;
-  (reduce inputs as $e ({}; .[$e.id] = $e)) as $byId
+  def message_text:
+    if (.message.content | type) == "string" then .message.content
+    elif (.message.content | type) == "array" then
+      [.message.content[] | select(.type == "text" and (.text | type) == "string") | .text] | join("")
+    else "" end;
+  def valid_attached($start; $parent):
+    ($start.data.command // null) as $command
+    | ($command | type) == "string"
+      and $start.data.depth == 0
+      and (["user", "agent", "forced"] | index($start.data.origin)) != null
+      and (($start.data.timestamp | type) == "number")
+      and (($start.data.invocationText | type) == "string")
+      and ((try ($start.data.invocationText | capture("^(?<token>\\S+)").token) catch "") == ("/" + $command))
+      and ((try ($parent | message_text | capture("^<scramjet-command name=\\\"(?<name>[^\\\"]+)\\\">\\n").name) catch "") == $command);
+  [inputs] as $entries
+  | (reduce $entries[] as $e ({}; .[$e.id] = $e)) as $byId
+  | (reduce $entries[] as $e ({};
+      if $e.type == "custom" and $e.customType == "scramjet:command-start" and $e.parentId != null
+      then .[$e.parentId] = ((.[$e.parentId] // []) + [$e]) else . end)) as $startsByParent
   | anc($byId; $leaf) as $path
-  | ($path | map(.customType == "scramjet:command-start" and (.data.depth == 0)) | index(true)) as $k
+  | ($path
+      | map(. as $entry
+          | (.customType == "scramjet:command-start" and .data.depth == 0)
+            or (.type == "message" and .message.role == "user"
+                and any($startsByParent[$entry.id][]?; valid_attached(.; $entry))))
+      | index(true)) as $k
   | (if $k == null then [] else $path[0:($k + 1)] end)
   | map(select(.customType == "scramjet:command-status" and (.data.summary // "") != ""))
   | reverse

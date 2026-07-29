@@ -42,13 +42,15 @@ function recordingPi() {
 		},
 	};
 	async function emit(event: string, payload: unknown = {}, ctx: unknown = {}) {
-		for (const h of handlers.get(event) ?? []) await h(payload, ctx);
+		let result: unknown;
+		for (const h of handlers.get(event) ?? []) result = await h(payload, ctx);
+		return result;
 	}
 	return { pi, handlers, appended, emit };
 }
 
 function ctxWithEntries(entries: SessionEntry[]): any {
-	return { sessionManager: { getBranch: () => entries } };
+	return { sessionManager: { getBranch: () => entries, getEntries: () => entries } };
 }
 
 function customEntry(customType: string, data: unknown): SessionEntry {
@@ -164,6 +166,20 @@ describe("replayHistory", () => {
 		expect(activeCommandName(result.lifecycle)).toBe("c");
 		expect(derivedPhase(result.lifecycle)).toBe("dormant");
 		expect(result.lifecycle.activeCommand).toBe("c");
+	});
+
+	it("projects invocation metadata out of replayed sidebar entries", () => {
+		const result = replayHistory([
+			customEntry(COMMAND_START_TYPE, {
+				command: "a",
+				origin: "user",
+				depth: 0,
+				timestamp: 1,
+				invocationText: "/a  exact text",
+			}),
+		]);
+		expect(result.sidebarLog).toEqual([{ command: "a", origin: "user", depth: 0, timestamp: 1 }]);
+		expect(result.sidebarLog[0]).not.toHaveProperty("invocationText");
 	});
 
 	it("only updates activeTopLevelCommand from depth-0 entries (nested delegates don't overwrite the top level)", () => {
@@ -332,17 +348,15 @@ describe("replayHistory — issue 352 exit/identity characterization", () => {
 		(pi as any).getCommands = () => [{ name: "autopilot" }, { name: "clear" }];
 		registerHistory(pi, state);
 
-		// Real command start (journals a depth-0 command-start), then a true
-		// unknown-slash exit (clears the active command live, journals the exit).
-		await emit("input", { text: "/a:cmd", source: "interactive" });
+		const start = (await emit("input", { text: "/a:cmd", source: "interactive" })) as any;
+		start.onAccepted?.();
 		await emit("input", { text: "/typo-or-removed", source: "interactive" });
 		expect(activeCommandName(state.lifecycle)).toBeNull();
 
-		// The emitted branch is the command-start followed by the durable exit.
-		expect(appended.map((a) => a.customType)).toEqual([COMMAND_START_TYPE, COMMAND_EXIT_TYPE]);
+		const persisted = [...start.sessionEntries, ...appended];
+		expect(persisted.map((a) => a.customType)).toEqual([COMMAND_START_TYPE, COMMAND_EXIT_TYPE]);
 
-		// Replaying the branch reconstructs idle: the exit supersedes the start.
-		const replayed = replayHistory(toBranch(appended));
+		const replayed = replayHistory(toBranch(persisted));
 		expect(activeCommandName(replayed.lifecycle)).toBeNull();
 		expect(derivedPhase(replayed.lifecycle)).toBe("idle");
 	});
@@ -579,6 +593,7 @@ describe("recordCommandInvocation", () => {
 		expect(state.sidebarLog[0]).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
 		expect(appended[0].customType).toBe(COMMAND_START_TYPE);
 		expect(appended[0].data as SidebarEntry).toMatchObject({ command: "delegate", origin: "agent", depth: 1 });
+		expect(appended[0].data).not.toHaveProperty("invocationText");
 	});
 
 	it("starts a depth-0 command in the running phase and clears any prior status (issue 84)", () => {
@@ -632,27 +647,59 @@ describe("registerHistory — input event", () => {
 		const state = freshState({ registry: registryOf(["mach10:push", "mach12:issue-create"]) });
 		const { pi, appended, emit } = recordingPi();
 		registerHistory(pi, state);
-		await emit("input", event);
-		return { state, appended };
+		const result = await emit("input", event);
+		if (result?.action === "transform") result.onAccepted?.();
+		return { state, appended, result };
 	}
 
-	it("records a sidebar entry and appendEntry call when a registered slash command is invoked interactively", async () => {
-		const { state, appended } = await fire({ text: "/mach10:push", source: "interactive" });
-		expect(activeCommandName(state.lifecycle)).toBe("mach10:push");
-		expect(state.sidebarLog).toHaveLength(1);
-		expect(state.sidebarLog[0].command).toBe("mach10:push");
-		expect(state.sidebarLog[0].origin).toBe("user");
-		expect(state.sidebarLog[0].depth).toBe(0);
-		expect(appended).toHaveLength(1);
-		expect(appended[0].customType).toBe(COMMAND_START_TYPE);
-		expect((appended[0].data as SidebarEntry).command).toBe("mach10:push");
-		expect((appended[0].data as SidebarEntry).origin).toBe("user");
+	it("captures the exact invocation in message-bound metadata and updates live state when accepted", async () => {
+		const invocationText = '/mach12:issue-create  repeated\t"quoted value"\nsecond line  ';
+		const { state, appended, result } = await fire({ text: invocationText, source: "interactive" });
+		expect(activeCommandName(state.lifecycle)).toBe("mach12:issue-create");
+		expect(state.sidebarLog).toEqual([
+			expect.objectContaining({ command: "mach12:issue-create", origin: "user", depth: 0 }),
+		]);
+		expect(state.sidebarLog[0]).not.toHaveProperty("invocationText");
+		expect(appended).toHaveLength(0);
+		expect(result).toMatchObject({
+			action: "transform",
+			sessionEntries: [
+				{
+					customType: COMMAND_START_TYPE,
+					data: expect.objectContaining({
+						command: "mach12:issue-create",
+						origin: "user",
+						depth: 0,
+						invocationText,
+					}),
+				},
+			],
+		});
+	});
+
+	it("does not update live state before the transformed input is accepted", async () => {
+		const state = freshState({ registry: registryOf(["mach12:issue-create"]) });
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+
+		const result = await emit("input", { text: "/mach12:issue-create 23", source: "interactive" });
+
+		expect(result).toMatchObject({ action: "transform" });
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
+	});
+
+	it("captures no-context and independent same-name submissions separately", async () => {
+		const first = await fire({ text: "/mach10:push", source: "interactive" });
+		const second = await fire({ text: "/mach10:push\tsecond", source: "interactive" });
+		expect((first.result as any).sessionEntries[0].data.invocationText).toBe("/mach10:push");
+		expect((second.result as any).sessionEntries[0].data.invocationText).toBe("/mach10:push\tsecond");
 	});
 
 	it("marks extension-source invocations as 'agent' origin", async () => {
-		const { state, appended } = await fire({ text: "/mach12:issue-create 23", source: "extension" });
+		const { state, result } = await fire({ text: "/mach12:issue-create 23", source: "extension" });
 		expect(state.sidebarLog[0].origin).toBe("agent");
-		expect((appended[0].data as SidebarEntry).origin).toBe("agent");
+		expect((result as any).sessionEntries[0].data.origin).toBe("agent");
 	});
 
 	it("ignores non-slash input and unregistered slash commands", async () => {
@@ -758,12 +805,13 @@ describe("registerHistory — input event", () => {
 			registry: registryOf(["mach10:push"]),
 			pendingForcedDispatch: "mach10:push",
 		});
-		const { pi, appended, emit } = recordingPi();
+		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
-		await emit("input", { text: "/mach10:push", source: "extension" });
+		const result = (await emit("input", { text: "/mach10:push", source: "extension" })) as any;
+		result.onAccepted?.();
 
 		expect(state.sidebarLog[0].origin).toBe("forced");
-		expect((appended[0].data as SidebarEntry).origin).toBe("forced");
+		expect(result.sessionEntries[0].data.origin).toBe("forced");
 		expect(state.pendingForcedDispatch).toBeNull();
 	});
 
@@ -822,11 +870,12 @@ describe("registerHistory — input event", () => {
 			const state = waitingState();
 			const { pi, appended, emit } = recordingPi();
 			registerHistory(pi, state);
-			await emit("input", { text: "/mach12:pr-create", source: "interactive" });
-			// recordCommandStart fires: phase running, active set, journaled.
+			const result = (await emit("input", { text: "/mach12:pr-create", source: "interactive" })) as any;
+			result.onAccepted?.();
 			expect(derivedPhase(state.lifecycle)).toBe("running");
 			expect(activeCommandName(state.lifecycle)).toBe("mach12:pr-create");
-			expect(appended).toHaveLength(1);
+			expect(appended).toHaveLength(0);
+			expect(result.sessionEntries).toHaveLength(1);
 		});
 
 		it("drops the waiting phase to idle when an unknown slash exits the workflow (F25)", async () => {
@@ -879,7 +928,8 @@ describe("registerHistory — input event", () => {
 				(pi as any).getCommands = () => [{ name: "help" }];
 				registerHistory(pi, state);
 
-				await emit("input", event);
+				const result = await emit("input", event);
+				if (result?.action === "transform") result.onAccepted?.();
 
 				expect(derivedPhase(state.lifecycle)).toBe(phase);
 				expect(state.lifecycle.cancellationResumeEligible).toBe(eligible);
@@ -1002,7 +1052,8 @@ describe("registerHistory — input event", () => {
 		});
 		const { pi, emit } = recordingPi();
 		registerHistory(pi, state);
-		await emit("input", { text: "/mach10:other", source: "extension" });
+		const result = await emit("input", { text: "/mach10:other", source: "extension" });
+		if (result?.action === "transform") result.onAccepted?.();
 
 		// Different command — labeled per source, flag preserved for the
 		// still-pending forced dispatch.
@@ -1032,6 +1083,132 @@ describe("registerHistory — replay on session events", () => {
 		await emit("session_tree", {}, ctx);
 		expect(state.sidebarLog.map((e) => e.command)).toEqual(["only"]);
 		expect(activeCommandName(state.lifecycle)).toBe("only");
+	});
+
+	it("replays an attached command start when later sibling metadata owns the branch leaf", async () => {
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const message = {
+			type: "message",
+			id: "message",
+			parentId: null,
+			timestamp: "0",
+			message: {
+				role: "user",
+				content: '<scramjet-command name="attached">\n# Command\n</scramjet-command>',
+				timestamp: 0,
+			},
+		} as SessionEntry;
+		const start = {
+			...cmdStart("attached"),
+			parentId: message.id,
+			data: {
+				command: "attached",
+				origin: "user",
+				depth: 0,
+				timestamp: 0,
+				invocationText: "/attached exact",
+			},
+		};
+		const later = { ...customEntry("other:metadata", {}), parentId: message.id };
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [message, later],
+				getEntries: () => [message, start, later],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBe("attached");
+	});
+
+	it("does not rescue an off-branch legacy command-start parented on an on-branch user message", async () => {
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const message = {
+			type: "message",
+			id: "message",
+			parentId: null,
+			timestamp: "0",
+			message: {
+				role: "user",
+				content: '<scramjet-command name="current">\n# Command\n</scramjet-command>',
+				timestamp: 0,
+			},
+		} as SessionEntry;
+		const legacyStart = { ...cmdStart("stale-queued"), parentId: message.id };
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [message],
+				getEntries: () => [message, legacyStart],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
+	});
+
+	it("does not rescue malformed modern attached metadata", async () => {
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const message = {
+			type: "message",
+			id: "message",
+			parentId: null,
+			timestamp: "0",
+			message: {
+				role: "user",
+				content: '<scramjet-command name="attached">\n# Command\n</scramjet-command>',
+				timestamp: 0,
+			},
+		} as SessionEntry;
+		const malformedStart = {
+			...cmdStart("attached"),
+			parentId: message.id,
+			data: { command: "attached", origin: "user", depth: 0, invocationText: "/attached exact" },
+		};
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [message],
+				getEntries: () => [message, malformedStart],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
+	});
+
+	it("does not rescue an off-branch legacy command-start parented on an assistant (F1)", async () => {
+		// Legacy sessions parented command-starts on the prior leaf (an assistant),
+		// not on their user message. A sibling branch's legacy start whose parent
+		// (a shared assistant ancestor) is on-branch must NOT fold its command into
+		// activeTopLevelCommand — only user-message-parented starts are rescued.
+		const state = freshState();
+		const { pi, emit } = recordingPi();
+		registerHistory(pi, state);
+		const assistant = {
+			type: "message",
+			id: "assistant",
+			parentId: null,
+			timestamp: "0",
+			message: { role: "assistant", content: "prior turn", timestamp: 0 },
+		} as SessionEntry;
+		const offBranchStart = { ...cmdStart("legacy-sibling"), parentId: assistant.id };
+		const ctx = {
+			sessionManager: {
+				getBranch: () => [assistant],
+				getEntries: () => [assistant, offBranchStart],
+			},
+		};
+
+		await emit("session_start", {}, ctx);
+		expect(activeCommandName(state.lifecycle)).toBeNull();
+		expect(state.sidebarLog).toEqual([]);
 	});
 
 	it("applies the latest enabled toggle from the branch", async () => {

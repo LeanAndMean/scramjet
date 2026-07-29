@@ -75,6 +75,10 @@ export interface EnabledToggleData {
 	enabled: boolean;
 }
 
+export interface CommandStartData extends SidebarEntry {
+	invocationText?: string;
+}
+
 // Returns the qualified command name if `text` starts with a registered slash command.
 export function parseSlashCommand(text: string, registry: CommandRegistry): string | null {
 	const name = extractSlashName(text);
@@ -102,11 +106,12 @@ export function appendSidebarEntry(log: SidebarEntry[], entry: SidebarEntry): Si
 	return next.length > SIDEBAR_MAX ? next.slice(-SIDEBAR_MAX) : next;
 }
 
-// Single chokepoint for "a command was invoked." Pushes a sidebar entry and
-// persists it to the journal so resume can replay it. Depth-0 entries are
-// top-level command starts and update the lifecycle; depth > 0 entries are
-// delegated subroutine invocations and must not replace the active top-level
-// command whose next-step policy controls the turn.
+// Journals a delegated subroutine invocation and applies its live state. The
+// only live caller is the delegate tool (depth > 0): a delegated entry must not
+// replace the active top-level command whose next-step policy controls the turn.
+// The depth-0 input path does not flow through here — the input handler calls
+// applyCommandInvocation directly and attaches the durable command-start to its
+// concrete user message.
 
 export function recordCommandInvocation(
 	pi: ExtensionAPI,
@@ -115,37 +120,30 @@ export function recordCommandInvocation(
 	origin: SidebarEntry["origin"],
 	depth: number,
 ): void {
-	const entry: SidebarEntry = {
-		command: name,
-		origin,
-		depth,
-		timestamp: Date.now(),
-	};
+	const entry: SidebarEntry = { command: name, origin, depth, timestamp: Date.now() };
 	pi.appendEntry(COMMAND_START_TYPE, entry);
-	if (depth === 0) {
+	applyCommandInvocation(state, entry);
+}
+
+function applyCommandInvocation(state: ScramjetState, data: SidebarEntry): void {
+	const entry: SidebarEntry = {
+		command: data.command,
+		origin: data.origin,
+		depth: data.depth,
+		timestamp: data.timestamp,
+	};
+	if (entry.depth === 0) {
 		state.clearLifecycleTimers?.();
-		const result = startCommand(state, name);
+		const result = startCommand(state, entry.command);
 		if (!result.ok) {
 			state.logger.warn("lifecycle", `lifecycle startCommand failed: ${result.reason}`, {
 				event: "command-start",
-				command: name,
+				command: entry.command,
 			});
 			return;
 		}
 	}
 	state.sidebarLog = appendSidebarEntry(state.sidebarLog, entry);
-}
-
-// Depth-0 convenience wrapper for typed/extension-dispatched slash commands.
-// Pi input dispatch makes auto-continued Scramjet commands flow through the
-// same input-event handler as user-typed commands.
-export function recordCommandStart(
-	pi: ExtensionAPI,
-	state: ScramjetState,
-	name: string,
-	origin: SidebarEntry["origin"],
-): void {
-	recordCommandInvocation(pi, state, name, origin, 0);
 }
 
 // Journal entry for a command-status report (issue 88, issue 278). Records which
@@ -161,9 +159,9 @@ export interface CommandStatusData {
 	summary: string;
 }
 
-// Journals the agent's report_scramjet_command_status report. Mirrors
-// recordCommandStart's shape (a thin appendEntry wrapper) but mutates no state:
-// the live lifecycle facts are owned by command-status.ts / auto-continue.ts; this only
+// Journals the agent's report_scramjet_command_status report. A thin appendEntry
+// wrapper that mutates no state: the live lifecycle facts are owned by
+// command-status.ts / auto-continue.ts; this only
 // persists the report so resume can rebuild the resting lifecycle facts. Terminal
 // statuses are journaled — that is what lets a command
 // which waits, is answered, then completes without offering a next step reconstruct
@@ -209,13 +207,19 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	for (const entry of entries) {
 		if (entry.type !== "custom") continue;
 		if (entry.customType === COMMAND_START_TYPE) {
-			const data = entry.data as SidebarEntry | undefined;
+			const data = entry.data as CommandStartData | undefined;
 			// Defend against corrupt or partially-written journal entries: a
 			// missing/non-string command would erase activeTopLevelCommand and
 			// silently break all subsequent next-step policy lookups. The TS cast
 			// above otherwise hides this from the compiler. (F10)
 			if (!data || typeof data.command !== "string" || data.command.trim() === "") continue;
-			sidebarLog = appendSidebarEntry(sidebarLog, data);
+			const sidebarEntry: SidebarEntry = {
+				command: data.command,
+				origin: data.origin,
+				depth: data.depth,
+				timestamp: data.timestamp,
+			};
+			sidebarLog = appendSidebarEntry(sidebarLog, sidebarEntry);
 			if (data.depth === 0) {
 				activeTopLevelCommand = data.command;
 				parkedForInput = false;
@@ -267,10 +271,54 @@ export function replayHistory(entries: readonly SessionEntry[]): ReplayResult {
 	return { sidebarLog, enabled, lifecycle };
 }
 
+function attachedCommandStartMatches(entry: SessionEntry, parent: SessionEntry | undefined): boolean {
+	if (entry.type !== "custom" || parent?.type !== "message" || parent.message.role !== "user") return false;
+	const data = entry.data as Partial<CommandStartData> | undefined;
+	if (
+		data?.depth !== 0 ||
+		typeof data.command !== "string" ||
+		!(["user", "agent", "forced"] as unknown[]).includes(data.origin) ||
+		typeof data.timestamp !== "number" ||
+		typeof data.invocationText !== "string"
+	) {
+		return false;
+	}
+
+	const tokenEnd = data.invocationText.search(/\s/);
+	const slashToken = tokenEnd === -1 ? data.invocationText : data.invocationText.slice(0, tokenEnd);
+	if (slashToken !== `/${data.command}`) return false;
+
+	const content = parent.message.content;
+	const text =
+		typeof content === "string"
+			? content
+			: content
+					.filter(
+						(part): part is { type: "text"; text: string } =>
+							part.type === "text" && typeof part.text === "string",
+					)
+					.map((part) => part.text)
+					.join("");
+	return text.startsWith(`<scramjet-command name="${data.command}">\n`);
+}
+
 export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 	const rebuild = async (_event: unknown, ctx: ExtensionContext) => {
 		state.clearLifecycleTimers?.();
-		const result = replayHistory(ctx.sessionManager.getBranch());
+		const branch = ctx.sessionManager.getBranch();
+		const branchIds = new Set(branch.map((entry) => entry.id));
+		const allEntries = ctx.sessionManager.getEntries();
+		const byId = new Map(allEntries.map((entry) => [entry.id, entry]));
+		const replayEntries = allEntries.filter(
+			(entry) =>
+				branchIds.has(entry.id) ||
+				(entry.type === "custom" &&
+					entry.customType === COMMAND_START_TYPE &&
+					entry.parentId !== null &&
+					branchIds.has(entry.parentId) &&
+					attachedCommandStartMatches(entry, byId.get(entry.parentId))),
+		);
+		const result = replayHistory(replayEntries);
 		state.sidebarLog = result.sidebarLog;
 		state.lifecycle = result.lifecycle;
 		state.lifecycleGeneration++;
@@ -395,27 +443,43 @@ export function registerHistory(pi: ExtensionAPI, state: ScramjetState): void {
 			}
 			return;
 		}
-		let origin: SidebarEntry["origin"];
-		if (state.pendingForcedDispatch === name) {
-			origin = "forced";
-			state.pendingForcedDispatch = null;
-		} else {
-			origin = event.source === "interactive" ? "user" : "agent";
-		}
-		// Compute the transform before recording the start — recordCommandStart
-		// mutates lifecycle state, so we must not leave it inconsistent if
-		// expansion fails.
+		const forcedDispatch = state.pendingForcedDispatch === name;
+		const origin: SidebarEntry["origin"] = forcedDispatch
+			? "forced"
+			: event.source === "interactive"
+				? "user"
+				: "agent";
 		const def = state.registry.get(name);
 		if (!def) return;
 		const argsString = extractArgs(event.text);
 		const wrapped = buildCommandExpansion(name, def, argsString);
 
-		const supersededCancellation = state.lifecycle.cancellationResumeEligible;
-		const supersededCommand = activeCommandName(state.lifecycle);
-		recordCommandStart(pi, state, name, origin);
-		if (supersededCancellation) {
-			logCancellationResume(state, "eligibility invalidated", supersededCommand, event.source, "command-start");
-		}
-		return { action: "transform" as const, text: wrapped };
+		const entry: CommandStartData = {
+			command: name,
+			origin,
+			depth: 0,
+			timestamp: Date.now(),
+			invocationText: event.text,
+		};
+		return {
+			action: "transform" as const,
+			text: wrapped,
+			sessionEntries: [{ customType: COMMAND_START_TYPE, data: entry }],
+			onAccepted: () => {
+				const supersededCancellation = state.lifecycle.cancellationResumeEligible;
+				const supersededCommand = activeCommandName(state.lifecycle);
+				if (forcedDispatch) state.pendingForcedDispatch = null;
+				applyCommandInvocation(state, entry);
+				if (supersededCancellation) {
+					logCancellationResume(
+						state,
+						"eligibility invalidated",
+						supersededCommand,
+						event.source,
+						"command-start",
+					);
+				}
+			},
+		};
 	});
 }

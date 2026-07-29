@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@leanandmean/agent";
 import type { AssistantMessage } from "@leanandmean/ai";
 import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -65,6 +66,8 @@ function createInteractiveHarness(): {
 	committedChatContainer: Container;
 	chatContainer: Container;
 	setSessionMessages: (messages: unknown[]) => void;
+	setSessionEntries: (entries: unknown[]) => void;
+	history: string[];
 	emit: (event: unknown) => Promise<void>;
 } {
 	const terminal = new HeadlessTerminal(30, 5);
@@ -76,6 +79,8 @@ function createInteractiveHarness(): {
 	const pendingMessagesContainer = new Container();
 	const footer = new Text("footer", 0, 0);
 	let sessionMessages: unknown[] = [];
+	let sessionEntries: unknown[] = [];
+	const history: string[] = [];
 	headerContainer.addChild(builtInHeader);
 	ui.addChild(headerContainer);
 	ui.addChild(committedChatContainer);
@@ -95,7 +100,7 @@ function createInteractiveHarness(): {
 		pendingMessagesContainer,
 		mutableChatComponents: new Set(),
 		footer,
-		editor: { borderColor: "" },
+		editor: { borderColor: "", addToHistory: (text: string) => history.push(text) },
 		statusContainer: new Container(),
 		runtimeHost: {
 			session: {
@@ -125,7 +130,7 @@ function createInteractiveHarness(): {
 				sessionManager: {
 					getCwd: () => process.cwd(),
 					buildSessionContext: () => ({ messages: sessionMessages }),
-					getEntries: () => [],
+					getEntries: () => sessionEntries,
 				},
 				autoCompactionEnabled: true,
 				steeringMode: "one-at-a-time",
@@ -156,6 +161,10 @@ function createInteractiveHarness(): {
 		setSessionMessages: (messages) => {
 			sessionMessages = messages;
 		},
+		setSessionEntries: (entries) => {
+			sessionEntries = entries;
+		},
+		history,
 		emit: (event) => eventTarget.handleEvent(event),
 	};
 }
@@ -170,6 +179,79 @@ describe("interactive assistant history", () => {
 		onThemeChange(() => {});
 		resetCapabilitiesCache();
 		vi.useRealTimers();
+	});
+
+	it("restores resumed Scramjet history by message identity", () => {
+		const { mode, setSessionMessages, setSessionEntries, history } = createInteractiveHarness();
+		const expanded = '<scramjet-command name="mach12:issue-plan">\n# Command\n</scramjet-command>';
+		const first = { role: "user", content: expanded, timestamp: 1 } as AgentMessage;
+		const duplicate = { role: "user", content: expanded, timestamp: 2 } as AgentMessage;
+		setSessionMessages([first, duplicate]);
+		setSessionEntries([
+			{ type: "message", id: "first", parentId: null, timestamp: "2026-01-01", message: first },
+			{
+				type: "custom",
+				id: "first-start",
+				parentId: "first",
+				timestamp: "2026-01-01",
+				customType: "scramjet:command-start",
+				data: {
+					command: "mach12:issue-plan",
+					origin: "user",
+					depth: 0,
+					timestamp: 1,
+					invocationText: "/mach12:issue-plan first  exact",
+				},
+			},
+			{ type: "message", id: "second", parentId: null, timestamp: "2026-01-01", message: duplicate },
+			{
+				type: "custom",
+				id: "second-start",
+				parentId: "second",
+				timestamp: "2026-01-01",
+				customType: "scramjet:command-start",
+				data: {
+					command: "mach12:issue-plan",
+					origin: "user",
+					depth: 0,
+					timestamp: 2,
+					invocationText: "/mach12:issue-plan second\t exact",
+				},
+			},
+		]);
+
+		(mode.renderInitialMessages as () => void).call(mode);
+
+		expect(history).toEqual(["/mach12:issue-plan first  exact", "/mach12:issue-plan second\t exact"]);
+	});
+
+	it("does not correlate equal-but-distinct synthetic history messages", () => {
+		const { mode, setSessionMessages, setSessionEntries, history } = createInteractiveHarness();
+		const expanded = '<scramjet-command name="mach12:issue-plan">\n# Command\n</scramjet-command>';
+		const persisted = { role: "user", content: expanded, timestamp: 1 } as AgentMessage;
+		const synthetic = { ...persisted } as AgentMessage;
+		setSessionMessages([persisted, synthetic]);
+		setSessionEntries([
+			{ type: "message", id: "persisted", parentId: null, timestamp: "2026-01-01", message: persisted },
+			{
+				type: "custom",
+				id: "persisted-start",
+				parentId: "persisted",
+				timestamp: "2026-01-01",
+				customType: "scramjet:command-start",
+				data: {
+					command: "mach12:issue-plan",
+					origin: "user",
+					depth: 0,
+					timestamp: 1,
+					invocationText: "/mach12:issue-plan persisted exact",
+				},
+			},
+		]);
+
+		(mode.renderInitialMessages as () => void).call(mode);
+
+		expect(history).toEqual(["/mach12:issue-plan persisted exact", "/mach12:issue-plan"]);
 	});
 
 	it("rebuilds retained headers while replacing live footers routinely", async () => {

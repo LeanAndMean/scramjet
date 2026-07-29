@@ -56,6 +56,7 @@ import {
 	type ExtensionErrorListener,
 	ExtensionRunner,
 	type ExtensionUIContext,
+	type InputSessionEntry,
 	type InputSource,
 	type InvokeHarnessToolOptions,
 	type MessageEndEvent,
@@ -82,6 +83,7 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
+import { indexScramjetCommandStarts, restoreScramjetCommandInvocation } from "./scramjet-command-parser.js";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.js";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -292,6 +294,7 @@ export class AgentSession {
 	private _followUpMessages: string[] = [];
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
+	private readonly _inputSessionEntries = new WeakMap<AgentMessage, InputSessionEntry[]>();
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -656,7 +659,30 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				const messageEntryId = this.sessionManager.appendMessage(event.message);
+				if (event.message.role === "user") {
+					const sessionEntries = this._inputSessionEntries.get(event.message);
+					this._inputSessionEntries.delete(event.message);
+					// This try/catch observes only failures thrown synchronously by
+					// appendCustomEntry. On the buffered first-turn path (before any
+					// assistant message) _persist stores the entry in memory with no I/O,
+					// so only metadata *serialization* failures surface here; the deferred
+					// disk write happens later in the unguarded appendMessage(assistant)
+					// flush, whose throw is swallowed by the _agentEventQueue.catch on the
+					// event-handler chain and degrades exact restoration silently.
+					for (const entry of sessionEntries ?? []) {
+						try {
+							this.sessionManager.appendCustomEntry(entry.customType, entry.data, messageEntryId);
+						} catch (err) {
+							this._extensionRunner.emitError({
+								extensionPath: `session-entry:${entry.customType}`,
+								event: "session_entry_persistence",
+								error: `Failed to persist attached input metadata after its user message; exact input restoration may be unavailable: ${err instanceof Error ? err.message : String(err)}`,
+								stack: err instanceof Error ? err.stack : undefined,
+							});
+						}
+					}
+				}
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -1203,6 +1229,8 @@ export class AgentSession {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		const preflightResult = options?.preflightResult;
 		let messages: AgentMessage[] | undefined;
+		let inputSessionEntries: InputSessionEntry[] | undefined;
+		let acceptInput: (() => void) | undefined;
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
@@ -1232,6 +1260,8 @@ export class AgentSession {
 				if (inputResult.action === "transform") {
 					currentText = inputResult.text;
 					currentImages = inputResult.images ?? currentImages;
+					inputSessionEntries = inputResult.sessionEntries;
+					acceptInput = inputResult.onAccepted;
 				}
 			}
 
@@ -1251,10 +1281,11 @@ export class AgentSession {
 					);
 				}
 				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
+					await this._queueFollowUp(expandedText, currentImages, inputSessionEntries);
 				} else {
-					await this._queueSteer(expandedText, currentImages);
+					await this._queueSteer(expandedText, currentImages, inputSessionEntries);
 				}
+				acceptInput?.();
 				preflightResult?.(true);
 				return;
 			}
@@ -1293,11 +1324,15 @@ export class AgentSession {
 			if (currentImages) {
 				userContent.push(...currentImages);
 			}
-			messages.push({
+			const userMessage: AgentMessage = {
 				role: "user",
 				content: userContent,
 				timestamp: Date.now(),
-			});
+			};
+			messages.push(userMessage);
+			if (inputSessionEntries?.length) {
+				this._inputSessionEntries.set(userMessage, inputSessionEntries);
+			}
 
 			// Inject any pending "nextTurn" messages as context alongside the user message
 			for (const msg of this._pendingNextTurnMessages) {
@@ -1348,6 +1383,7 @@ export class AgentSession {
 			return;
 		}
 
+		acceptInput?.();
 		preflightResult?.(true);
 		this._runRetryCount = 0;
 		await this.agent.prompt(messages);
@@ -1458,35 +1494,51 @@ export class AgentSession {
 	/**
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueSteer(
+		text: string,
+		images?: ImageContent[],
+		sessionEntries?: InputSessionEntry[],
+	): Promise<void> {
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
+		const message: AgentMessage = {
 			role: "user",
 			content,
 			timestamp: Date.now(),
-		});
+		};
+		if (sessionEntries?.length) {
+			this._inputSessionEntries.set(message, sessionEntries);
+		}
+		this.agent.steer(message);
 	}
 
 	/**
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+	private async _queueFollowUp(
+		text: string,
+		images?: ImageContent[],
+		sessionEntries?: InputSessionEntry[],
+	): Promise<void> {
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({
+		const message: AgentMessage = {
 			role: "user",
 			content,
 			timestamp: Date.now(),
-		});
+		};
+		if (sessionEntries?.length) {
+			this._inputSessionEntries.set(message, sessionEntries);
+		}
+		this.agent.followUp(message);
 	}
 
 	/**
@@ -3090,7 +3142,7 @@ export class AgentSession {
 			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
 				// User message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
-				editorText = this._extractUserMessageText(targetEntry.message.content);
+				editorText = restoreScramjetCommandInvocation(targetEntry, this.sessionManager.getEntries());
 			} else if (targetEntry.type === "custom_message") {
 				// Custom message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
@@ -3162,30 +3214,20 @@ export class AgentSession {
 	 */
 	getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
 		const entries = this.sessionManager.getEntries();
+		const commandStarts = indexScramjetCommandStarts(entries);
 		const result: Array<{ entryId: string; text: string }> = [];
 
 		for (const entry of entries) {
 			if (entry.type !== "message") continue;
 			if (entry.message.role !== "user") continue;
 
-			const text = this._extractUserMessageText(entry.message.content);
+			const text = restoreScramjetCommandInvocation(entry, commandStarts);
 			if (text) {
 				result.push({ entryId: entry.id, text });
 			}
 		}
 
 		return result;
-	}
-
-	private _extractUserMessageText(content: string | Array<{ type: string; text?: string }>): string {
-		if (typeof content === "string") return content;
-		if (Array.isArray(content)) {
-			return content
-				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
-				.join("");
-		}
-		return "";
 	}
 
 	/**
