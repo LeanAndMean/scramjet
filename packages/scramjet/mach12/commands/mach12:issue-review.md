@@ -203,12 +203,14 @@ If the user picks "Create revised plan", enter the revision loop:
 
    Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan or any prior iteration's delta — not a restatement of an existing finding under a different framing.
 
-4. **Presentation.** Keep the assessment outside the post-ready body. Present to the user:
+   If any finding is **Remaining** at Critical or Important severity, or any **New issue** is Critical or Important, treat the candidate as invalid. Do not display its marker-bearing body and do not offer **Post revised plan**. Present the delta assessment without the candidate, explain that correction and reassessment are required, and offer only **Revise again** or **Discuss findings**. On **Revise again**, return to the architect dispatch in the next revision turn with the invalid candidate and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and reassessing a corrected replacement. Repeat this gate until no Critical or Important delta remains. Suggestions stay visible but are optional and do not block publication.
+
+4. **Presentation.** Only after the Critical/Important delta gate passes, keep the assessment outside the post-ready body and present to the user:
    1. The exact, complete marker-bearing body that will be posted.
    2. The separate delta assessment (Addressed / Remaining / New).
    3. A summary line: "X of Y findings addressed, Z remaining, W new issues" — where Y counts original F/S findings plus N-prefixed items carried from prior iterations.
 
-5. **Sub-options.** Ask the user how to proceed:
+5. **Sub-options.** After the gate passes, ask the user how to proceed:
    - **Post revised plan**: Accept this complete body and post it unchanged.
    - **Revise again**: In the next revision turn, return to the architect dispatch with the current complete plan and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and presenting a new complete replacement.
    - **Discuss findings**: Same behavior as the main "Discuss findings" option — walk through specific findings or new issues, then return to these three options.

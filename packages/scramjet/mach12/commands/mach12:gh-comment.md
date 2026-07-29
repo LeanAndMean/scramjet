@@ -14,7 +14,7 @@ You are posting a comment on either a GitHub issue or pull request. The comment 
 $ARGUMENTS
 </caller-context>
 
-This subroutine is `gh`-specific. A future forge-agnostic command set would substitute an equivalent `glab-comment` (or similar); the body-shaping rules and URL capture stay the same.
+This subroutine is `gh`-specific. A future forge-agnostic command set would substitute an equivalent `glab-comment` (or similar); the immutable body transport and URL capture stay the same.
 
 ## Step 1: Parse input
 
@@ -26,18 +26,19 @@ If either is absent or the kind is not exactly `issue` or `pr`, return an error 
 
 ## Step 2: Post the comment
 
-Use the body the caller prepared. Use a HEREDOC to preserve formatting and avoid shell quoting issues. Pick the `gh` subcommand by kind:
+Treat the body the caller prepared as immutable. Do not rewrite, normalize, summarize, or otherwise edit it before posting.
+
+A HEREDOC contributes the newline immediately before its delimiter. Before posting, verify that the prepared body is already newline-terminated, so that newline is part of the approved body rather than a transport mutation. If it is not newline-terminated or its final-newline state cannot be verified, return an error without posting so the caller can prepare and, when applicable, reapprove a preservable body.
+
+Choose a HEREDOC delimiter only after confirming that it does not occur as a standalone line anywhere in the prepared body. If it collides, choose and check a different delimiter. Use a quoted delimiter and pass the body through standard input with `--body-file -`:
 
 ```
-gh <kind> comment <number> --body "$(cat <<'EOF'
+gh <kind> comment <number> --body-file - <<'MACH12_COMMENT_BODY'
 <prepared body>
-EOF
-)"
+MACH12_COMMENT_BODY
 ```
 
-(With `<kind>` substituted as `issue` or `pr` based on the parsed input -- e.g., `gh issue comment 55 --body "..."` or `gh pr comment 108 --body "..."`.)
-
-When referring to numbered items (findings, suggestions, stages) in the body, use plain words like "finding 3" or "stage 2" -- not `#<number>` notation, which GitHub auto-links to issues/PRs.
+Substitute `<kind>` as `issue` or `pr` based on the parsed input. Insert the verified body exactly between the delimiter lines; do not apply any body-shaping guidance after preparation.
 
 If the post fails, surface the full error to the caller. The caller decides whether to retry or surface the failure to the user.
 
