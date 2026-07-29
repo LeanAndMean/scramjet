@@ -79,6 +79,7 @@ const WIRING: WiringRow[] = [
 	},
 	// Subroutines (delegate-only).
 	{ basename: "push", expected: null, delegateOnly: true },
+	{ basename: "plan-comment-contract", expected: null, delegateOnly: true },
 	{ basename: "find-contribution-guidelines", expected: null, delegateOnly: true },
 	{ basename: "gh-issue-read", expected: null, delegateOnly: true },
 	{ basename: "gh-pr-read", expected: null, delegateOnly: true },
@@ -205,6 +206,86 @@ describe("mach12 wiring — bundled command set", () => {
 			"mach12:feature-completeness-checker",
 		]) {
 			expect(content).toContain(agent);
+		}
+	});
+});
+
+describe("mach12 plan-comment artifact contract", () => {
+	const contractPath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:plan-comment-contract.md`);
+	const contract = readFileSync(contractPath, "utf-8");
+	const issuePlan = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-plan.md`), "utf-8");
+	const issueReview = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-review.md`), "utf-8");
+
+	it("loads one mode through the delegated same-context contract", () => {
+		expect(contract.match(/\$ARGUMENTS/g)).toHaveLength(1);
+		expect(contract).toContain("<caller-context>\n$ARGUMENTS\n</caller-context>");
+		expect(contract).toContain("does not execute an independent formatter");
+		expect(contract).toContain("Resume the caller-owned drafting or revision work");
+		expect(contract).toContain("Do not call tools, dispatch subagents, ask the user questions, post to GitHub");
+		expect(contract).toContain("choose an\narchitecture, classify review findings");
+	});
+
+	it("preserves implementation-critical contracts and revision attribution", () => {
+		for (const phrase of [
+			"invariants and trust-boundary validation",
+			"interfaces and data shapes",
+			"ownership and correlation rules",
+			"event and mutation ordering",
+			"persistence and failure semantics",
+			"rollback, atomicity, and retry boundaries",
+			"expensive call-site inventories",
+			"production-realistic test seams",
+			"cross-package build ordering and executable or generated-artifact provenance",
+			"generated-output drift recovery steps",
+			"stage dependencies and ordering constraints",
+			"manual checks, with an explicit statement of whether each blocks stage completion",
+		]) {
+			expect(contract).toContain(phrase);
+		}
+		expect(contract).toContain("standalone replacement, never a patch or delta");
+		expect(contract).toContain("[user-decided]");
+		expect(contract).toContain("[agent-proposed]");
+	});
+
+	it("compresses ceremony and requires an evidence-backed final self-check", () => {
+		for (const phrase of [
+			"raw exploration, journal, or probe transcripts",
+			"complete rejected blueprints",
+			"repeated Solution Assessments",
+			"generic repository guidance",
+			"duplicated requirements or test matrices",
+			"speculative LOC estimates",
+			"release-preparation work",
+			"qualitative compression, not a numeric byte limit",
+		]) {
+			expect(contract).toContain(phrase);
+		}
+		for (const defect of [
+			"missing implementation-critical contracts",
+			"contradictions",
+			"duplicated substantive requirements",
+			"incorrect or lost decision attribution",
+		]) {
+			expect(contract).toContain(defect);
+		}
+		expect(contract).toContain("do not emit a marker-bearing candidate");
+	});
+
+	it("loads the correct mode before drafting and keeps approval byte-transparent", () => {
+		const initialCall = issuePlan.indexOf("/mach12:plan-comment-contract initial");
+		const initialDraft = issuePlan.indexOf("Draft the exact, complete post-ready body");
+		expect(initialCall).toBeGreaterThan(-1);
+		expect(initialCall).toBeLessThan(initialDraft);
+
+		const revisionCall = issueReview.indexOf("/mach12:plan-comment-contract revision");
+		const revisionDraft = issueReview.indexOf("Produce the exact, complete standalone replacement");
+		expect(revisionCall).toBeGreaterThan(-1);
+		expect(revisionCall).toBeLessThan(revisionDraft);
+
+		for (const caller of [issuePlan, issueReview]) {
+			expect(caller).toContain("exact, complete marker-bearing body");
+			expect(caller).toContain("exact approved body unchanged");
+			expect(caller).toContain("do not regenerate, summarize, or reformat it after approval");
 		}
 	});
 });

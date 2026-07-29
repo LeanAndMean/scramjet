@@ -957,8 +957,8 @@ every step Mach 10 has eventually grown.
 | Command                  | Mode    | Candidates / target                                 | Delegates                          |
 |--------------------------|---------|-----------------------------------------------------|------------------------------------|
 | `issue-create`           | `open`  | `issue-plan`                                        | `find-contribution-guidelines`     |
-| `issue-plan`             | `open`  | `issue-review`, `issue-implement`                   | —                                  |
-| `issue-review`           | `open`  | `issue-review`, `issue-implement`                   | —                                  |
+| `issue-plan`             | `open`  | `issue-review`, `issue-implement`                   | `plan-comment-contract`            |
+| `issue-review`           | `open`  | `issue-review`, `issue-implement`                   | `plan-comment-contract`            |
 | `issue-implement`        | `open`  | `pr-create`                                         | `push`                             |
 | `pr-create`              | `open`  | `pr-review`                                         | —                                  |
 | `pr-review`              | `forced`| `pr-review-assessment`                              | —                                  |
@@ -1006,6 +1006,7 @@ methods were refined — most visibly in the `gh` interaction prose. Mach
 - `/mach12:find-contribution-guidelines` — used by `issue-create` and
   `pr-pre-merge`.
 - `/mach12:push` — used by `issue-implement` and `pr-review-fix`.
+- `/mach12:plan-comment-contract` — used by `issue-plan` and the revised-plan path in `issue-review` to load one shared artifact policy into the caller's existing model context. It preserves implementation-critical contracts, removes duplicated ceremony, and leaves drafting, approval, and posting with the caller; it is not an isolated formatter.
 - A family of `gh`-interaction primitives (issue write, issue comment,
   PR write, PR comment, etc.) used by the higher-level commands.
 

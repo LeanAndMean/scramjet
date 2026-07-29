@@ -222,62 +222,31 @@ The subagent returns a test strategy with per-test cost/benefit assessments, cov
 
 When skipping the subagent, state the test approach inline in the plan (e.g., "Update wiring test; no behavioral tests needed -- prose-only change"). This satisfies the test coverage planning requirement in Step 9 without a full dispatch.
 
-## Step 9: Draft the plan
+## Step 9: Load the plan-comment contract and draft the plan
 
-Using the architecture selected in Step 6 as the structural foundation, draft a **staged implementation plan** with:
-- Clear stages (numbered, with descriptive names)
-- What each stage accomplishes
-- Which files will be created or modified
-- Dependencies between stages
-- Testing approach for each stage
+Immediately before drafting the durable artifact, delegate once in this turn to:
 
-### Planning requirements
+```
+/mach12:plan-comment-contract initial
+```
 
-Before finalizing the plan, verify it satisfies the following:
+This loads the canonical artifact policy into the current model context; it does not run an independent formatter. Do not pass candidate Markdown through the delegation arguments.
 
-**Project-layer coverage:** Cross-check the plan against the project layers discovered during codebase exploration and any layers specified in the project planning requirements recorded in Step 3. Every affected layer should be addressed by at least one stage. If a discovered layer is not affected by this change, it may be omitted -- but if a layer is affected and no stage addresses it, add the missing work to the appropriate stage or create a new one.
-
-**Test coverage planning:** If Step 8 produced a test strategy, incorporate its per-stage test directives into the relevant stages. If Step 8 took the lightweight path, use its inline note. Each stage that introduces or modifies behavior must specify what tests to add or modify and what behaviors to cover. If the project has no testable runtime code (e.g., plugin definitions, documentation, configuration), note this and skip test planning.
-
-**Pitfalls consolidation:** Review findings from Step 4's "Constraints and edge cases" lens and Step 6's architecture analysis (including each lens's "What evidence would make this approach inappropriate" statement). Consolidate concrete pitfalls into a `## Pitfalls and Gotchas` section in the plan. Each item should be a specific, actionable warning — things that could go wrong, subtle constraints, non-obvious dependencies, or easy-to-miss edge cases that the implementation session needs to be aware of. Do not include boilerplate warnings or generic risk statements.
-
-**Release-preparation exclusion:** Do not include version bumps, changelog entries, or release-preparation as implementation stages — these are owned by `mach12:pr-pre-merge`. Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
-
-**Each stage must be scoped to what can be implemented within a single session.** A stage that is too large should be split. Consider:
-- The amount of codebase exploration needed
-- The number of files to create or modify
-- The complexity of the logic involved
-- The testing surface area
+Apply the contract to the selected architecture, codebase and architect evidence, test strategy, project planning requirements, and user decisions from the preceding steps. Draft the exact, complete post-ready body beginning with `<!-- mach12-plan -->`, then run the contract's final self-check. Resolve defects supported by the available evidence before presentation; if evidence is genuinely missing or contradictory, gather it or ask the user rather than presenting an incomplete marker-bearing body.
 
 ## Step 10: Post plan and create branch
 
-Present the plan to the user and ask:
+Display the exact, complete marker-bearing body that will be posted, then ask:
 
-- **Approve**: post the plan and create the feature branch
-- **Request changes**: suggest changes to the plan before posting
+- **Approve**: post that body unchanged and create the feature branch
+- **Request changes**: suggest changes before posting
 - **Cancel**: abort without posting the plan or creating a branch
 
-If the user requests changes, discuss their feedback, revise the plan, and present it for approval again. If the user cancels, stop and confirm that the plan was not posted and no branch was created.
+If the user requests changes, discuss the feedback. In the next drafting turn, load `/mach12:plan-comment-contract initial` once, revise and self-check the complete body, and display the entire replacement for approval again. Never present only a delta. If the user cancels, stop and confirm that the plan was not posted and no branch was created.
 
 After the user approves the plan:
 
-1. **Post the plan as a reply comment on the issue.** Format the body so it serves as input to future sessions. Include:
-   - `<!-- mach12-plan -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
-   - The full implementation plan.
-   - The staged breakdown.
-   - A `## Pitfalls and Gotchas` section after the staged breakdown: concrete warnings discovered during exploration and architecture design — things that could go wrong, subtle constraints, non-obvious dependencies, easy-to-miss edge cases. Bullet list format; each item actionable and specific to this implementation.
-   - A `## Decision Log` section appended after the pitfalls section. This section captures the reasoning behind key decisions made during planning:
-     - **Attribution convention:** Prefix every Decision Log entry with a source tag so downstream sessions (especially `mach12:issue-review`) can distinguish settled user intent from planner judgment:
-       - `[user-decided]` -- the user explicitly directed, chose, or required this, via a Step 5/6/7 answer, a discussion directive, or a selector choice. Tag an entry `[user-decided]` only when the user genuinely steered the decision -- not when they merely confirmed a planner default. Where a confirmed-default exchange is a Step 5/7 question, the omit clauses below drop it; where it is the Step 6 selected approach (always logged), tag it `[agent-proposed]`. Either way, a merely-confirmed default must never be tagged `[user-decided]`.
-       - `[agent-proposed]` -- the planning agent reached this on its own analysis; subject to normal review challenge.
-       - Tag **both** Selected and Rejected lines. A rejected alternative is `[user-decided]` when a user directive is the reason it was rejected (e.g., the user chose the competing option), otherwise `[agent-proposed]`. Use the tag literals exactly -- `mach12:issue-review` keys on the literal `[user-decided]`.
-     - **Scope Questions (Step 5):** For each scope/requirements question asked and answered, include the source tag, the question, and a synthesized answer. Only include exchanges where the answer changed or constrained the plan. Omit exchanges where the user confirmed a default or said "whatever you think is best."
-     - **Architecture Choice (Step 6):** The selected approach with its source tag, the rationale for choosing it, and the alternatives considered -- each with its own source tag and a brief reason for rejection.
-     - **Architecture Questions (Step 7):** For each architecture question asked and answered, include the source tag, the question, and a synthesized answer. Only include exchanges where the answer changed or constrained the plan.
-     - **Omission condition:** Skip the Decision Log section entirely if Step 5 produced no questions AND Step 6 had no meaningful differentiation between approaches AND Step 7 produced no questions.
-   - A note that this comment will guide staged implementation.
-
-   Then delegate to:
+1. **Post the approved plan as a reply comment on the issue.** Pass the exact approved body unchanged to the existing comment subroutine; do not regenerate, summarize, or reformat it after approval. Then delegate to:
 
    ```
    /mach12:gh-comment issue <issue-number>
