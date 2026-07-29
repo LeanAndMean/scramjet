@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.65.0 — Use full GPT-5.6 Codex context
+
+Uses the 1,050,000-token capacity of GPT-5.6 Sol, Terra, and Luna through `openai-codex` as their default operational context. Fixes [#416](https://github.com/LeanAndMean/scramjet/issues/416).
+
+### Changed
+
+- `@leanandmean/ai`: remove the lower default operational budget from generated GPT-5.6 Codex models while preserving explicit per-model overrides.
+- Update model documentation and the upstream divergence record for the full default context.
+- Bump `@leanandmean/ai` to `0.74.1-scramjet.11`, `@leanandmean/agent` to `0.74.1-scramjet.14`, and `@leanandmean/coding-agent` to `0.74.1-scramjet.27` to publish a consistent dependency chain.
+
+### Tests
+
+- Add generated-catalog, model-listing, footer, compaction-boundary, and override-validation regressions.
+
 ## 0.64.0 — Restore exact Scramjet slash invocations
 
 Preserves the exact submitted slash invocation so compact commands can be restored across session navigation and editor history. Fixes [#414](https://github.com/LeanAndMean/scramjet/issues/414).

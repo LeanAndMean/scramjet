@@ -8208,7 +8208,6 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.6-sol": {
@@ -8227,7 +8226,6 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.6-terra": {
@@ -8246,7 +8244,6 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 	},

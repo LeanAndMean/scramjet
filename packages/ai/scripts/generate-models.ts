@@ -1696,9 +1696,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			// SCRAMJET-DIVERGENCE: Report documented capacity while retaining Codex's operational budget.
 			contextWindow: GPT_5_6_CONTEXT,
-			contextWindowBudget: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1711,7 +1709,6 @@ async function generateModels() {
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
 			contextWindow: GPT_5_6_CONTEXT,
-			contextWindowBudget: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1724,7 +1721,6 @@ async function generateModels() {
 			input: ["text", "image"],
 			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 },
 			contextWindow: GPT_5_6_CONTEXT,
-			contextWindowBudget: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{

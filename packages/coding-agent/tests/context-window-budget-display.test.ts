@@ -1,4 +1,4 @@
-import type { Model } from "@leanandmean/ai";
+import { getModel, type Model } from "@leanandmean/ai";
 import { describe, expect, it } from "vitest";
 import { formatModelContext } from "../src/cli/list-models.js";
 import { formatContextUsage } from "../src/modes/interactive/components/footer.js";
@@ -7,6 +7,16 @@ const model = (contextWindow: number, contextWindowBudget?: number) =>
 	({ contextWindow, contextWindowBudget }) as Model<"openai-responses">;
 
 describe("context window budget display", () => {
+	it("shows generated GPT-5.6 Codex context without a split budget", () => {
+		const codex = getModel("openai-codex", "gpt-5.6-sol");
+
+		expect(formatModelContext(codex)).toBe("1.1M");
+		expect(formatContextUsage(525_000, 50, codex.contextWindow, codex.contextWindow, true)).toEqual({
+			display: "525k/1.1M (50.0%, auto)",
+			severity: "normal",
+		});
+	});
+
 	it("labels split capacity and operational budget in model listings", () => {
 		expect(formatModelContext(model(1_050_000, 272_000))).toBe("1.1M capacity (272K budget)");
 	});

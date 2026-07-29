@@ -148,7 +148,11 @@ describe("models.json context window budgets", () => {
 		expect(raisedBudget.getError()).toContain("openai-codex/gpt-5.6-sol");
 
 		const loweredCapacity = loadConfig({
-			providers: { "openai-codex": { modelOverrides: { "gpt-5.6-sol": { contextWindow: 271999 } } } },
+			providers: {
+				"openai-codex": {
+					modelOverrides: { "gpt-5.6-sol": { contextWindow: 271999, contextWindowBudget: 272000 } },
+				},
+			},
 		});
 		expect(loweredCapacity.getError()).toContain("openai-codex/gpt-5.6-sol");
 	});

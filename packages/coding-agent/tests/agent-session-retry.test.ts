@@ -89,6 +89,7 @@ async function createFixture(
 		baseDelayMs?: number;
 		customTools?: ToolDefinition[];
 		model?: Model<"openai-chat">;
+		reserveTokens?: number;
 	},
 ): Promise<Fixture> {
 	const dir = mkdtempSync(join(tmpdir(), "retry-test-"));
@@ -97,6 +98,7 @@ async function createFixture(
 
 	const settingsManager = SettingsManager.inMemory({
 		retry: { maxRetries: options?.maxRetries ?? 3, baseDelayMs: options?.baseDelayMs ?? 1 },
+		compaction: { reserveTokens: options?.reserveTokens ?? 16_384 },
 	});
 	const sessionManager = SessionManager.inMemory(cwd);
 	const authStorage = AuthStorage.inMemory();
@@ -213,6 +215,33 @@ describe("AgentSession context window budget", () => {
 		await session.prompt("hello");
 
 		expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "threshold" }));
+	});
+
+	it("uses the fallback capacity for the proactive compaction boundary", async () => {
+		const reserveTokens = 128_000;
+		const threshold = testModel.contextWindow - reserveTokens;
+		const exact = await createFixture(
+			() => ({
+				...assistantText("ok"),
+				usage: { input: threshold, output: 0, cacheRead: 0, cacheWrite: 0 },
+			}),
+			{ reserveTokens },
+		);
+		const above = await createFixture(
+			() => ({
+				...assistantText("ok"),
+				usage: { input: threshold + 1, output: 0, cacheRead: 0, cacheWrite: 0 },
+			}),
+			{ reserveTokens },
+		);
+
+		await exact.session.prompt("hello");
+		await above.session.prompt("hello");
+
+		expect(exact.events).not.toContainEqual(
+			expect.objectContaining({ type: "compaction_start", reason: "threshold" }),
+		);
+		expect(above.events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "threshold" }));
 	});
 
 	it("compacts provider overflow errors instead of auto-retrying them", async () => {
