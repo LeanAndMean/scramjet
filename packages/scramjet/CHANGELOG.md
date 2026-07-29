@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.64.0 — Restore exact Scramjet slash invocations
+
+Preserves the exact submitted slash invocation so compact commands can be restored across session navigation and editor history. Fixes [#414](https://github.com/LeanAndMean/scramjet/issues/414).
+
+### Changed
+
+- `@leanandmean/coding-agent`: carry message-bound session metadata through persistence and restore validated Scramjet invocations across fork, retry, tree navigation, selectors, RPC, and resumed editor history.
+- Scramjet: attach exact invocation metadata to accepted top-level command messages while keeping it out of lifecycle state, sidebar state, structured logs, and provider context.
+- Bump `@leanandmean/coding-agent` to `0.74.1-scramjet.26` and repoint the Scramjet dependency.
+
+### Tests
+
+- Add persistence, restoration, runtime-replacement, editor-history, lifecycle replay, malformed-metadata, and cross-package drift regressions.
+
 ## 0.63.3 — Load all intermediate context files
 
 Removes traversal limits that could omit subdirectory context from deep paths or later reads. Fixes [#409](https://github.com/LeanAndMean/scramjet/issues/409).
