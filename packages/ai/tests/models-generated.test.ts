@@ -272,15 +272,15 @@ describe("generated catalog - GPT-5.6 Codex variants", () => {
 		expect(luna.cost.cacheWrite).toBe(0);
 	});
 
-	it("all expose documented capacity with the Codex operational budget", () => {
+	it("all use documented capacity as the operational budget", () => {
 		const sol = getModel("openai-codex", "gpt-5.6-sol");
 		const terra = getModel("openai-codex", "gpt-5.6-terra");
 		const luna = getModel("openai-codex", "gpt-5.6-luna");
 		for (const model of [sol, terra, luna]) {
 			expect(model.contextWindow).toBe(1_050_000);
-			expect(model.contextWindowBudget).toBe(272_000);
+			expect(model.contextWindowBudget).toBeUndefined();
+			expect(getContextWindowBudget(model)).toBe(1_050_000);
 			expect(model.maxTokens).toBe(128_000);
-			expect(getContextWindowBudget(model)).toBe(272_000);
 		}
 	});
 
