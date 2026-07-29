@@ -267,12 +267,12 @@ Use `--offline` or `PI_OFFLINE=1` to disable all startup network operations, inc
 
 ## Context Files
 
-Scramjet loads `AGENTS.md` (or `CLAUDE.md`) at startup from:
-- `~/.scramjet/agent/AGENTS.md` (global)
+Scramjet loads `CLAUDE.md` and `AGENTS.md` at startup from:
+- `~/.scramjet/agent/` (global)
 - Parent directories (walking up from cwd)
 - Current directory
 
-Use for project instructions, conventions, common commands. All matching files are concatenated.
+Use them for project instructions, conventions, and common commands. Files load broadest-to-most-specific, with `CLAUDE.md` before `AGENTS.md` in each directory. When both names in one directory decode to exactly equal text, only `CLAUDE.md` is loaded; identical text in different directories remains independently loaded.
 
 Disable context file loading with `--no-context-files` (or `-nc`).
 
