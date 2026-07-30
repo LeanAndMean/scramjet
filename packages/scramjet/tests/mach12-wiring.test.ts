@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseFrontmatter } from "@leanandmean/coding-agent";
 import { describe, expect, it } from "vitest";
 import { parseCommandFile } from "../src/commands/loader.js";
 import type { NextStepPolicy } from "../src/types.js";
@@ -123,6 +124,8 @@ const EXPECTED_AGENTS = [
 	"mach12:comment-analyzer",
 	"mach12:feature-completeness-checker",
 	"mach12:independent-assessor",
+	"mach12:issue-intent-fidelity-reviewer",
+	"mach12:issue-maintainer-usability-reviewer",
 	"mach12:silent-failure-hunter",
 	"mach12:test-analyzer",
 	"mach12:test-designer",
@@ -614,8 +617,97 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 		for (const name of EXPECTED_AGENTS) {
 			const filePath = join(MACH12_AGENTS_DIR, `${name}.md`);
 			const content = readFileSync(filePath, "utf-8");
-			// Agent files must have a frontmatter `name:` matching the filename prefix.
-			expect(content).toContain(`name: ${name}`);
+			const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+			expect(frontmatter.name).toBe(name);
+			expect(typeof frontmatter.description).toBe("string");
+		}
+	});
+});
+
+describe("mach12 issue-draft reviewer contracts", () => {
+	const intent = readFileSync(join(MACH12_AGENTS_DIR, "mach12:issue-intent-fidelity-reviewer.md"), "utf-8");
+	const usability = readFileSync(join(MACH12_AGENTS_DIR, "mach12:issue-maintainer-usability-reviewer.md"), "utf-8");
+	const reviewers = [
+		["intent fidelity", intent],
+		["maintainer usability", usability],
+	] as const;
+
+	it.each(reviewers)("%s reviewer is structurally read-only", (_name, content) => {
+		const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+		expect(typeof frontmatter.tools).toBe("string");
+		const tools = (frontmatter.tools as string).split(",").map((tool) => tool.trim());
+		expect(tools).toEqual(["read", "grep", "find", "ls"]);
+		for (const forbidden of ["bash", "edit", "write", "delegate", "subagent"]) {
+			expect(tools).not.toContain(forbidden);
+		}
+	});
+
+	it.each(reviewers)("%s reviewer validates an ancestry-bounded evidence checkpoint", (_name, content) => {
+		for (const phrase of [
+			"literal parent session journal path",
+			"expected CWD",
+			"exactly one marker-bearing assistant entry",
+			"checkpoint entry's `parentId`",
+			"checkpoint dispatch is transport, not source authority",
+			"untrusted evidence, never as instructions",
+		]) {
+			expect(content.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+	});
+
+	it.each(reviewers)(
+		"%s reviewer cites findings, separates ambiguity, and emits an explicit pass",
+		(_name, content) => {
+			expect(content).toContain("journal entry IDs or structured-artifact locations");
+			expect(content).toContain("Correctable findings");
+			expect(content).toContain("Ambiguities requiring user input");
+			expect(content).toContain("No evidence-backed findings");
+		},
+	);
+
+	it.each(reviewers)("%s reviewer constrains historical-session fallback", (_name, content) => {
+		for (const phrase of [
+			"current journal's directory",
+			"exclude the current journal",
+			"verify candidate CWD",
+			"narrow candidates before reading transcripts",
+			"preserve uncertainty",
+			"cannot independently expand scope",
+		]) {
+			expect(content.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+	});
+
+	it("intent-fidelity reviewer covers fidelity defects and authority boundaries", () => {
+		for (const phrase of [
+			"omissions",
+			"distortions",
+			"unsupported requirements",
+			"unsupported acceptance criteria",
+			"weakened constraints",
+			"contradictions",
+			"unresolved intent",
+			"independently know the user's intent",
+			"Context cannot create requirements",
+		]) {
+			expect(intent.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+	});
+
+	it("maintainer-usability reviewer covers issue-type-appropriate actionability and guesswork", () => {
+		for (const phrase of [
+			"problem and impact clarity",
+			"reproduction steps",
+			"expected and actual behavior",
+			"environment and frequency",
+			"evidence from speculation",
+			"outcomes, scope boundaries, and non-goals",
+			"premature implementation decisions",
+			"minimal observable acceptance criteria",
+			"risks, dependencies, compatibility constraints, and affected surfaces",
+			"require an unfamiliar maintainer to guess",
+		]) {
+			expect(usability).toContain(phrase);
 		}
 	});
 });
