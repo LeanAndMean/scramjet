@@ -442,3 +442,66 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(routing).toContain("If publication is partial or uncertain");
 	});
 });
+
+describe("mach12 executable validation integration", () => {
+	const prCreate = readFileSync(join(COMMANDS_DIR, "mach12:pr-create.md"), "utf-8");
+	const prReviewFix = readFileSync(join(COMMANDS_DIR, "mach12:pr-review-fix.md"), "utf-8");
+
+	it("offers ordinary review first and recommends it over opt-in executable validation after PR creation", () => {
+		const reporting = section(prCreate, "## Step 5:");
+		expectInOrder(reporting, "/mach12:pr-review <pr-number>", "/mach12:pr-validation <pr-number>");
+		expect(reporting).toContain("slower, opt-in executable-behavior path");
+		expect(reporting).toContain("Set `recommended_next_step` to `0`, ordinary PR review");
+	});
+
+	it("preserves validation-origin proofs through an ordered red-to-green production repair", () => {
+		const implementation = section(prReviewFix, "## Step 4:", "## Step 5:");
+		for (const clause of [
+			"exact retained node IDs and proof constraints for the selected findings from both comments",
+			"behavioral contracts, assertions, paths, and node IDs",
+			"weakening assertions",
+			"skipping or converting tests to expected failures",
+			"accepting snapshots",
+			"renaming or relocating paths or node IDs",
+			"duplicating proof tests",
+			"Leave proofs for unselected findings unchanged",
+			"Change production code, not retained proof tests",
+			"Do not require proofs for unselected findings to become green in this session",
+		]) {
+			expect(implementation).toContain(clause);
+		}
+		expectInOrder(
+			implementation,
+			"Run every retained node associated with the selected findings before editing production code",
+			"confirm its recorded red state",
+			"Change production code, not retained proof tests",
+			"Rerun the same selected retained nodes after the production edits",
+			"confirm they are green",
+			"broader focused suites",
+		);
+		expect(implementation).toContain("Ordinary static-review fixes retain their existing behavior");
+	});
+
+	it("keeps staged fixes on the fix command and exposes all final verification routes", () => {
+		const reporting = section(prReviewFix, "## Step 5:");
+		const intermediate = section(
+			reporting,
+			"1. **Continue staged fixing first.**",
+			"2. **After the final planned fix stage",
+		);
+		expect(intermediate).toContain("`message`: `/mach12:pr-review-fix`");
+		expect(intermediate).not.toContain("`message`: `/mach12:pr-validation");
+		expect(intermediate).not.toContain("`message`: `/mach12:pr-pre-merge");
+
+		const finalRoutes = section(reporting, "2. **After the final planned fix stage");
+		expectInOrder(
+			finalRoutes,
+			"`message`: `/mach12:pr-review <pr-number>`",
+			"`message`: `/mach12:pr-validation <pr-number>`",
+			"`message`: `/mach12:pr-pre-merge <pr-number>`",
+		);
+		expect(finalRoutes).toContain("recommend `mach12:pr-validation` (index 1) for validation-origin repairs");
+		expect(finalRoutes).toContain("recommend `mach12:pr-review` (index 0)");
+		expect(finalRoutes).toContain("recommend `mach12:pr-pre-merge` (index 2)");
+	});
+});

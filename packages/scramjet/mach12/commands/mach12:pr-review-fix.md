@@ -24,6 +24,10 @@ next:
         Pick after the final planned fix stage when the fixes were
         substantive enough to warrant a full re-review (new code paths,
         structural changes, multi-file refactor).
+    - name: mach12:pr-validation
+      hint: |
+        Pick after the final planned fix stage when executable validation
+        should challenge the repaired behavior again.
     - name: mach12:pr-pre-merge
       hint: |
         Pick after the final planned fix stage when confidence is high
@@ -107,6 +111,18 @@ Let the user select which issues to fix. If there are 4 or fewer findings, list 
 
 Walk through the implementation using a structured 7-phase development plan. Treat the phases as due-diligence discipline, not mandatory token burn: if the review and assessment comments already identify the affected files, required behavior, and fix approach clearly, verify that context is still fresh and mark broad exploration/design as satisfied. If the selected findings are ambiguous, stale, or cross-cutting, do targeted exploration before coding.
 
+### Validation-origin proof contract
+
+When the exact review and assessment comments establish that selected findings came from `/mach12:pr-validation`:
+
+1. Extract the exact retained node IDs and proof constraints for the selected findings from both comments.
+2. Run every retained node associated with the selected findings before editing production code and confirm its recorded red state. If a node is missing, stale, or does not reproduce the recorded failure, stop and report the mismatch rather than adapting the proof.
+3. Preserve the selected proofs' behavioral contracts, assertions, paths, and node IDs. Prohibit weakening assertions, skipping or converting tests to expected failures, accepting snapshots, renaming or relocating paths or node IDs, and duplicating proof tests. Leave proofs for unselected findings unchanged.
+4. Change production code, not retained proof tests, to address the selected findings.
+5. Rerun the same selected retained nodes after the production edits and confirm they are green before running broader focused suites and delegating to `/mach12:push`. Do not require proofs for unselected findings to become green in this session.
+
+Ordinary static-review fixes retain their existing behavior when the exact comments do not establish a validation-origin proof contract.
+
 1. **Discovery** -- restate the goal: fix the selected findings only; do not fix other findings in the review.
 2. **Codebase exploration** -- read every file referenced by the selected findings; trace the relevant code paths. When more context is needed, dispatch focused `mach12:code-explorer` tasks for the selected findings only.
 3. **Clarifying questions** -- if any finding is ambiguous about desired behavior, scope, risk, or what the fix should look like, ask the user before implementing. Do not ask ceremonial questions when the review/assessment already resolves the ambiguity.
@@ -146,8 +162,9 @@ After delivering your answer, call `report_scramjet_command_status`: summarize t
 
 1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, include an entry with `message`: `/mach12:pr-review-fix` followed by the same PR/comment arguments plus the next stage label, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned fix stage remains.
    - Example: `message`: `/mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`, `reason`: `Stage 2 is the next planned fix stage.`
-2. **After the final planned fix stage, include both verification-path candidates** so the user can see all options:
-   - Always include an entry with `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a full re-review is warranted.
-   - Always include an entry with `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation that the PR is ready for the merge checklist.
-   - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-review` (index 0) when the fixes were substantive enough that another full review may find issues; recommend `mach12:pr-pre-merge` (index 1) when the fixes were narrow and confidence is high.
+2. **After the final planned fix stage, include all three verification-path candidates** so the user can see all options:
+   - Include an entry with `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a full code-tracing re-review is warranted.
+   - Include an entry with `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when the slower executable-behavior path is warranted.
+   - Include an entry with `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation that the PR is ready for the merge checklist.
+   - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-validation` (index 1) for validation-origin repairs, recommend `mach12:pr-review` (index 0) when other substantive fixes warrant another full review, or recommend `mach12:pr-pre-merge` (index 2) when fixes were narrow and confidence is high.
    - Leave `next_steps` empty if the appropriate next action is unclear. If fixing hit a blocker or did not complete, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.

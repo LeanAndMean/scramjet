@@ -403,6 +403,15 @@ In the current implementation, tool-scoping is advisory only. The harness logs w
 
 **Implication for authors:** Declare `allowed-tools` accurately even though enforcement is soft. The declarations document intent, enable auditing, and will become hard constraints in the future.
 
+### Subagent tool allowlists
+
+Command frontmatter `allowed-tools` and subagent frontmatter `tools:` have different enforcement semantics:
+
+- A command's `allowed-tools` remains advisory in the current harness. Out-of-scope calls produce warnings but are not blocked.
+- A subagent definition's `tools:` list is passed to the child process as its actual tool allowlist. Tools omitted there are unavailable to that child.
+- Read-only agents must omit every mutation-capable tool, including `bash`, `edit`, and `write`. Omitting only `edit` and `write` is insufficient because shell commands can still mutate the shared working tree.
+- A writable parent command may own sequential repository mutation while read-only subagents return analysis, fixture guidance, or other non-mutating recommendations.
+
 ### Don't
 
 - Don't omit `delegate` from `allowed-tools` if the command body instructs delegation.

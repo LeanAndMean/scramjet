@@ -29,7 +29,7 @@ scramjet
 
 `scramjet` is a standalone CLI that uses Pi as its runtime. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged.
 
-Scramjet ships with two command sets: the product-owned **Scramjet** operational set and **Mach 12**, a starting point with ten top-level commands for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
+Scramjet ships with two command sets: the product-owned **Scramjet** operational set and **Mach 12**, a starting point with twelve top-level commands for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
 Try it:
 
@@ -147,6 +147,8 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:pr-create` | Create a pull request |
 | `mach12:pr-review` | Review a PR |
 | `mach12:pr-review-assessment` | Detailed multi-lens PR assessment |
+| `mach12:pr-validation` | Challenge a PR through independently validated executable tests |
+| `mach12:pr-validation-assessment` | Reassess executable findings and route validated outcomes |
 | `mach12:pr-review-fix` | Fix issues flagged in review |
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
