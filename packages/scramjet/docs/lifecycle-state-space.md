@@ -160,6 +160,8 @@ Replay reconstructs only stable resting states from journal entries:
 
 Transient facts are never reconstructed: `probeArmed = false`, `probeInFlight = false`, `lastReport = null`, `continueCount = 0`. Cancellation eligibility is the narrow durable exception because it is reconstructed from dedicated true/false outcomes.
 
+Before every agent run, the `before_agent_start` dormant-notice handler evaluates these live facts. A generic dormant command contributes one transient system-prompt section naming the command and requiring `continuing` before unfinished work resumes, while allowing a direct terminal report for already-finished work. The section is not persisted or replayed and does not mutate lifecycle facts; ordinary input and provider-run start therefore leave generic dormancy inert until the status tool accepts a report.
+
 ## Module ownership map
 
 - `lifecycle.ts`: defines `LifecycleState` (fact interface), invariant checks, query helpers, and mutation helpers with generation bumping and logging.

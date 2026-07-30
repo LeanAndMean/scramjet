@@ -530,6 +530,8 @@ describe("buildDormantCommandNotice", () => {
 	it("distinguishes cancellation-resumable dormancy", () => {
 		const notice = buildDormantCommandNotice("test:cmd", true);
 		expect(notice).toContain("next interactive non-slash user reply will resume");
+		expect(notice).toContain("without first reporting `continuing`");
+		expect(notice).not.toContain("Before resuming work");
 		expect(notice).not.toContain("do NOT auto-resume");
 	});
 
@@ -538,9 +540,10 @@ describe("buildDormantCommandNotice", () => {
 		expect(notice).toContain("do NOT auto-resume");
 	});
 
-	it("explains that continuing is the resume path", () => {
+	it("requires continuing before resumed work", () => {
 		const notice = buildDormantCommandNotice("test:cmd");
-		expect(notice).toContain("continuing");
+		expect(notice).toContain("Before resuming work");
+		expect(notice).toContain('status: "continuing"');
 	});
 
 	it("explains both paths are accepted from dormant", () => {

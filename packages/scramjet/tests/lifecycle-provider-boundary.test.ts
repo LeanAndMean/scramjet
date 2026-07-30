@@ -19,7 +19,7 @@ import {
 } from "@leanandmean/coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerAutoContinue } from "../src/auto-continue.js";
-import { registerDormantCommandNotice } from "../src/command-status.js";
+import { registerCommandStatusTool, registerDormantCommandNotice } from "../src/command-status.js";
 import { COMMAND_START_TYPE, registerHistory } from "../src/history.js";
 import { activeCommandName, beginProbe, startCommand } from "../src/lifecycle.js";
 import type { CommandDef, ScramjetState } from "../src/types.js";
@@ -75,6 +75,7 @@ function cmdDef(name: string): CommandDef {
 interface StreamCapture {
 	systemPrompt: Context["systemPrompt"];
 	messages: Context["messages"];
+	tools: Context["tools"];
 }
 
 interface Fixture {
@@ -98,7 +99,9 @@ interface Fixture {
 // Its probe machinery would otherwise drive an async probe turn on every command-start
 // work turn (via sendMessage(triggerTurn)), which is nondeterministic and irrelevant to
 // the resume/fork/navigate reconstructions (delivered by history + the dormant notice).
-async function makeFixture(opts: { autoContinue?: boolean } = {}): Promise<Fixture> {
+async function makeFixture(
+	opts: { autoContinue?: boolean; stopReasons?: AssistantMessage["stopReason"][] } = {},
+): Promise<Fixture> {
 	const root = mkdtempSync(join(tmpdir(), "scramjet-provider-boundary-"));
 	const cwd = join(root, "cwd");
 	const agentDir = join(root, "agent");
@@ -133,6 +136,7 @@ async function makeFixture(opts: { autoContinue?: boolean } = {}): Promise<Fixtu
 			// section), then auto-continue (compaction stabilization) where exercised.
 			registerHistory(pi, state);
 			registerDormantCommandNotice(pi, state);
+			registerCommandStatusTool(pi, state);
 			const inputPi = new Proxy(pi, {
 				get(target, property, receiver) {
 					if (property !== "registerTool") return Reflect.get(target, property, receiver);
@@ -170,11 +174,24 @@ async function makeFixture(opts: { autoContinue?: boolean } = {}): Promise<Fixtu
 		const agent = new Agent({
 			initialState: { systemPrompt: "", model: testModel, tools: [] },
 			streamFn: (_model, context) => {
-				captures.push({ systemPrompt: context.systemPrompt, messages: [...context.messages] });
-				const message = assistantText("ok");
+				captures.push({
+					systemPrompt: context.systemPrompt,
+					messages: [...context.messages],
+					tools: context.tools,
+				});
+				const stopReason = opts.stopReasons?.shift() ?? "stop";
+				const message = {
+					...assistantText("ok"),
+					stopReason,
+					...(stopReason === "aborted" || stopReason === "error" ? { errorMessage: "test abort" } : {}),
+				};
 				const stream = createAssistantMessageEventStream();
 				stream.push({ type: "start", partial: message });
-				stream.push({ type: "done", reason: "stop", message });
+				if (stopReason === "aborted" || stopReason === "error") {
+					stream.push({ type: "error", reason: stopReason, error: message });
+				} else {
+					stream.push({ type: "done", reason: stopReason, message });
+				}
 				return stream;
 			},
 			getApiKey: async () => "fake",
@@ -283,6 +300,29 @@ describe("lifecycle provider boundary (issue 352 Stage 2)", () => {
 	afterEach(async () => {
 		await fx?.runtime.dispose().catch(() => {});
 		fx = undefined;
+	});
+
+	it("aborted command rebuild delivers the dormant resume protocol to resumed work", async () => {
+		fx = await makeFixture({ autoContinue: true, stopReasons: ["aborted"] });
+		await fx.startCommand("a:cmd");
+		expect(derivedPhase(fx.state().lifecycle)).toBe("dormant");
+
+		const sessionPath = fx.runtime.session.sessionFile;
+		if (!sessionPath) throw new Error("expected a persisted session file");
+		await fx.runtime.switchSession(sessionPath);
+		expect(derivedPhase(fx.state().lifecycle)).toBe("dormant");
+		expect(activeCommandName(fx.state().lifecycle)).toBe("a:cmd");
+
+		const generation = fx.state().lifecycleGeneration;
+		const before = fx.captures.length;
+		await fx.runtime.session.prompt("continue the interrupted work", { source: "interactive" });
+		const capture = fx.captures[before];
+		expectDormantNotice(capture, "a:cmd");
+		expect(capture.tools?.map((tool) => tool.name)).toContain("report_scramjet_command_status");
+		expect(systemPromptText(capture)).toContain("Before resuming work");
+		expect(derivedPhase(fx.state().lifecycle)).toBe("dormant");
+		expect(fx.state().lifecycle.probeArmed).toBe(false);
+		expect(fx.state().lifecycleGeneration).toBe(generation);
 	});
 
 	it("resume (switchSession) delivers the reconstructed dormant fact to the next provider request", async () => {
