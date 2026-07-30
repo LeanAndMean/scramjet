@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.67.1 — Preserve context provenance in created issues
+
+Adds a conditional, source-attributed Context section to Mach 12 issue drafts while keeping background distinct from user requirements, verified evidence, and analysis. Fixes [#423](https://github.com/LeanAndMean/scramjet/issues/423).
+
+### Changed
+
+- Teach `mach12:issue-create` to preserve meaningful situational provenance without normalizing structured artifacts or deriving requirements from context alone.
+- Strengthen the final issue-quality check around Context attribution and authority boundaries.
+
+### Tests
+
+- Add semantic command-contract coverage for Context ordering, conditionality, attribution, authority boundaries, and adaptive layouts.
+
 ## 0.67.0 — Load coexisting context files
 
 Loads distinct `CLAUDE.md` and `AGENTS.md` instructions from the same directory while avoiding duplicate same-directory content. Fixes [#421](https://github.com/LeanAndMean/scramjet/issues/421).

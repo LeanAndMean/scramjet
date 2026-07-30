@@ -327,6 +327,10 @@ describe("mach12 issue creation — context provenance", () => {
 	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
 	const body = issueCreate.slice(issueCreate.indexOf("### Body"), issueCreate.indexOf("### Adaptive layouts"));
 	const contextContract = body.slice(body.indexOf("**Context**"), body.indexOf("**Investigation**"));
+	const acceptanceCriteriaContract = body.slice(
+		body.indexOf("**Acceptance Criteria**"),
+		body.indexOf("**Open Questions**"),
+	);
 	const adaptiveLayouts = issueCreate.slice(
 		issueCreate.indexOf("### Adaptive layouts"),
 		issueCreate.indexOf("### Drafting notes"),
@@ -340,7 +344,8 @@ describe("mach12 issue creation — context provenance", () => {
 		expect(body.indexOf("**User's Request**")).toBeLessThan(body.indexOf("**Context**"));
 		expect(body.indexOf("**Context**")).toBeLessThan(body.indexOf("**Investigation**"));
 		expect(body).toContain("situational background or provenance");
-		expect(body).toContain("Retain source attribution");
+		expect(contextContract).toContain("Identify the source");
+		expect(contextContract).toMatch(/attribution[^.]*provenance[^.]*does not make[^.]*verified evidence/i);
 		expect(body).toContain("omit this section");
 	});
 
@@ -350,6 +355,15 @@ describe("mach12 issue creation — context provenance", () => {
 		expect(contextContract).toMatch(/must not[^.]*verified current-state observations[^.]*Investigation/i);
 		expect(contextContract).toMatch(/must not[^.]*reasoning or conclusions[^.]*Analysis/i);
 		expect(body).toMatch(/User's Request \+ Context \+ Investigation \+ Analysis/);
+	});
+
+	it("does not derive requirements or acceptance criteria from Context alone", () => {
+		expect(acceptanceCriteriaContract).toMatch(
+			/Context alone must not generate requirements or acceptance criteria/i,
+		);
+		expect(acceptanceCriteriaContract).toMatch(
+			/Open Questions unless the user confirms them or investigation\/analysis supports them/i,
+		);
 	});
 
 	it("applies Context conditionally without normalizing structured artifacts", () => {
