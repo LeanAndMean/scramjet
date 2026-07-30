@@ -130,7 +130,7 @@ export function buildDormantCommandNotice(commandName: string, cancellationResum
 			? "The next interactive non-slash user reply will resume it because structured input was cancelled.\n"
 			: "Ordinary user replies do NOT auto-resume a dormant command.\n") +
 		"You have two options:\n" +
-		'- To resume work, call `report_scramjet_command_status` with `status: "continuing"`.\n' +
+		'- Before resuming work, first call `report_scramjet_command_status` with `status: "continuing"`.\n' +
 		"- If the work is already done, report a terminal status directly " +
 		'(`status: "completed"`, `"blocked"`, or `"incomplete"`).\n' +
 		"Both paths are accepted from dormant state."

@@ -538,9 +538,10 @@ describe("buildDormantCommandNotice", () => {
 		expect(notice).toContain("do NOT auto-resume");
 	});
 
-	it("explains that continuing is the resume path", () => {
+	it("requires continuing before resumed work", () => {
 		const notice = buildDormantCommandNotice("test:cmd");
-		expect(notice).toContain("continuing");
+		expect(notice).toContain("Before resuming work");
+		expect(notice).toContain('status: "continuing"');
 	});
 
 	it("explains both paths are accepted from dormant", () => {
