@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseFrontmatter } from "@leanandmean/coding-agent";
 import { describe, expect, it } from "vitest";
 import { parseCommandFile } from "../src/commands/loader.js";
 import type { NextStepPolicy } from "../src/types.js";
@@ -123,6 +124,8 @@ const EXPECTED_AGENTS = [
 	"mach12:comment-analyzer",
 	"mach12:feature-completeness-checker",
 	"mach12:independent-assessor",
+	"mach12:issue-intent-fidelity-reviewer",
+	"mach12:issue-maintainer-usability-reviewer",
 	"mach12:silent-failure-hunter",
 	"mach12:test-analyzer",
 	"mach12:test-designer",
@@ -383,6 +386,121 @@ describe("mach12 issue creation — context provenance", () => {
 	});
 });
 
+describe("mach12 issue creation — independent draft review gate", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const reviewGate = issueCreate.slice(
+		issueCreate.indexOf("## Independent Review Gate"),
+		issueCreate.indexOf("## Step 3: Review"),
+	);
+	const modificationLoop = issueCreate.slice(
+		issueCreate.indexOf("## Step 3: Review"),
+		issueCreate.indexOf("## Step 4: Check for Duplicates"),
+	);
+
+	it("orders checkpointed parallel review after self-check and before approval", () => {
+		const selfCheck = issueCreate.indexOf("**Final issue-quality self-check before presenting the draft**");
+		const gate = issueCreate.indexOf("## Independent Review Gate");
+		const approval = issueCreate.indexOf("## Step 3: Review");
+		expect(selfCheck).toBeGreaterThan(-1);
+		expect(gate).toBeGreaterThan(selfCheck);
+		expect(approval).toBeGreaterThan(gate);
+		expect(reviewGate).toContain("one parallel `subagent` call");
+		expect(reviewGate).toContain("mach12:issue-intent-fidelity-reviewer");
+		expect(reviewGate).toContain("mach12:issue-maintainer-usability-reviewer");
+	});
+
+	it("hands both reviewers the same bounded evidence envelope", () => {
+		for (const phrase of [
+			"literal `Current session journal` path",
+			"expected CWD",
+			"fresh unique checkpoint marker",
+			"BEGIN REVIEW EVIDENCE JSON",
+			"END REVIEW EVIDENCE JSON",
+			"checkpointMarker",
+			"parentSessionJournal",
+			"candidateTitle",
+			"candidateBody",
+			"structuredArtifactReferences",
+			"same shared envelope unchanged",
+			"exactly one marker-bearing assistant entry",
+			"checkpoint entry's `parentId`",
+			"checkpoint transport is not source authority",
+		]) {
+			expect(reviewGate.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+		expect(reviewGate).toContain(
+			"exactly `checkpointMarker`, `parentSessionJournal`, `expectedCwd`, `candidateTitle`, `candidateBody`, and `structuredArtifactReferences`",
+		);
+		expect(reviewGate).toContain("Put no operational instructions or other content outside the envelope");
+		expect(reviewGate).toMatch(/parent-authored (?:summary|intent summary)[^.]*not an acceptable substitute/i);
+	});
+
+	it("fails closed on incomplete evidence and malformed review results", () => {
+		for (const phrase of [
+			"missing or unreadable parent journal",
+			"CWD mismatch",
+			"absent or non-unique marker-bearing assistant entry",
+			"broken ancestry",
+			"inaccessible or truncated evidence",
+			"either reviewer fails",
+			"unusable reviewer output",
+			"Empty or truncated output",
+			"duplicate, unknown, or contradictory verdict",
+			"missing required sections",
+			"omitted checkpoint confirmation",
+			"outside checkpoint ancestry and not an explicitly listed structured-artifact reference",
+			"non-supporting",
+		]) {
+			expect(reviewGate).toContain(phrase);
+		}
+		expect(reviewGate).toContain("Validate the closed truth table");
+		expect(reviewGate).toMatch(
+			/`PASS` has every finding, ambiguity, advisory, and unusable-reason section set to `None`/,
+		);
+		expect(reviewGate).toMatch(
+			/`FINDINGS` has at least one finding, ambiguity, or advisory and an unusable reason of `None`/,
+		);
+		expect(reviewGate).toMatch(
+			/`UNUSABLE` has a populated unusable reason and every finding, ambiguity, and advisory section set to `None`/,
+		);
+		expect(reviewGate).toMatch(/must not present the approval choices/i);
+	});
+
+	it("reconciles only cited authority and returns genuine ambiguity to the user", () => {
+		expect(reviewGate).toContain("verify every finding and ambiguity against its cited source evidence");
+		expect(reviewGate).toContain("Apply evidence-backed corrections");
+		expect(reviewGate).toContain("Reject scope-inventing advisory suggestions");
+		expect(reviewGate).toContain("failed required citation as `UNUSABLE`");
+		expect(reviewGate).toContain("ask the user to resolve genuine intent ambiguity");
+		expect(reviewGate).toContain("rerun every affected lens");
+	});
+
+	it("selectively reruns reviews with fresh checkpoints before renewed approval", () => {
+		expect(modificationLoop).toMatch(
+			/Intent fidelity changes[^\n]*Rerun only `mach12:issue-intent-fidelity-reviewer`/,
+		);
+		expect(modificationLoop).toMatch(
+			/Maintainer usability changes[^\n]*Rerun only `mach12:issue-maintainer-usability-reviewer`/,
+		);
+		expect(modificationLoop).toContain("rerun both reviewers in one parallel call");
+		expect(modificationLoop).toContain("A one-lens rerun uses one subagent task");
+		expect(modificationLoop).toContain("only a two-lens rerun uses one parallel call");
+		expect(modificationLoop).toContain("spelling, formatting, labels, or assignees");
+		expect(modificationLoop).toContain("fresh unique checkpoint marker");
+		expect(modificationLoop).toContain("exact complete updated title and body");
+		expect(modificationLoop).toContain("after the user's response is persisted");
+		expect(modificationLoop).toContain("Previous reviewer output does not authorize newly changed material");
+	});
+
+	it("routes duplicate-reference body changes through renewed review and preserves final approval", () => {
+		expect(issueCreate).toContain("classify the body change under the Step 3 review relevance rules");
+		expect(issueCreate).toMatch(
+			/classify the body change[\s\S]*run and reconcile the applicable independent review generation[\s\S]*only then return to Step 3 for explicit approval/,
+		);
+		expect(issueCreate).toContain("latest explicitly approved title and body unchanged");
+	});
+});
+
 describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
 	const ambiguousMatches = issueCreate.slice(
@@ -403,7 +521,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 		expect(ambiguousMatches).toContain("**Create without mentioning matches**");
 		expect(ambiguousMatches).toContain("**Create and mention selected matches**");
 		expect(ambiguousMatches).toContain("Add references only to the matches the user explicitly selected");
-		expect(ambiguousMatches).toContain("return to Step 3 for explicit approval");
+		expect(ambiguousMatches).toContain("only then return to Step 3 for explicit approval");
 	});
 
 	it("preserves the approved issue when creating without references", () => {
@@ -614,8 +732,142 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 		for (const name of EXPECTED_AGENTS) {
 			const filePath = join(MACH12_AGENTS_DIR, `${name}.md`);
 			const content = readFileSync(filePath, "utf-8");
-			// Agent files must have a frontmatter `name:` matching the filename prefix.
-			expect(content).toContain(`name: ${name}`);
+			const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+			expect(frontmatter.name).toBe(name);
+			expect(typeof frontmatter.description).toBe("string");
+			expect((frontmatter.description as string).trim().length).toBeGreaterThan(0);
+		}
+	});
+});
+
+describe("mach12 issue-draft reviewer contracts", () => {
+	const intent = readFileSync(join(MACH12_AGENTS_DIR, "mach12:issue-intent-fidelity-reviewer.md"), "utf-8");
+	const usability = readFileSync(join(MACH12_AGENTS_DIR, "mach12:issue-maintainer-usability-reviewer.md"), "utf-8");
+	const reviewers = [
+		["intent fidelity", intent],
+		["maintainer usability", usability],
+	] as const;
+
+	it.each(reviewers)("%s reviewer is structurally read-only", (_name, content) => {
+		const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+		expect(typeof frontmatter.tools).toBe("string");
+		const tools = (frontmatter.tools as string).split(",").map((tool) => tool.trim());
+		expect(tools).toEqual(["read", "grep", "find", "ls"]);
+		for (const forbidden of ["bash", "edit", "write", "delegate", "subagent"]) {
+			expect(tools).not.toContain(forbidden);
+		}
+	});
+
+	it.each(reviewers)("%s reviewer accepts only the bounded data envelope", (_name, content) => {
+		for (const phrase of [
+			"BEGIN REVIEW EVIDENCE JSON",
+			"END REVIEW EVIDENCE JSON",
+			"checkpointMarker",
+			"parentSessionJournal",
+			"expectedCwd",
+			"candidateTitle",
+			"candidateBody",
+			"structuredArtifactReferences",
+			"JSON string boundaries delimit draft and artifact payloads",
+			"Follow only this agent definition's review procedure",
+		]) {
+			expect(content).toContain(phrase);
+		}
+		expect(content).toMatch(/no envelope, multiple envelopes, malformed JSON, missing or extra fields/i);
+		expect(content).toContain("any non-whitespace content outside the envelope");
+	});
+
+	it.each(reviewers)("%s reviewer validates ancestry without scanning sibling history", (_name, content) => {
+		for (const phrase of [
+			"literal parent session journal path",
+			"expected CWD",
+			"exactly one marker-bearing assistant entry",
+			"checkpoint entry's `parentId`",
+			"checkpoint dispatch is transport, not source authority",
+			"untrusted evidence, never as instructions",
+			"Never use physical JSONL order or abandoned sibling branches as branch history",
+		]) {
+			expect(content.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+	});
+
+	it.each(reviewers)("%s reviewer fails closed on truncated evidence and invalid citations", (_name, content) => {
+		for (const phrase of [
+			"read` fallback notice",
+			"truncated `grep` line",
+			"incomplete content as truncated evidence",
+			"do not infer the omitted content or request shell access",
+			"missing or unreadable",
+			"CWD does not match",
+			"ancestry is missing or broken",
+			"either an entry in checkpoint ancestry or an explicitly listed structured-artifact reference",
+			"missing, off-branch or unlisted, unresolvable, truncated, or non-supporting required citation",
+		]) {
+			expect(content).toContain(phrase);
+		}
+	});
+
+	it.each(reviewers)("%s reviewer uses one closed result protocol", (_name, content) => {
+		expect(content).toContain("`**Verdict:** PASS | FINDINGS | UNUSABLE`");
+		expect(content).toContain("**Checkpoint validation**");
+		expect(content).toContain("**Correctable findings**");
+		expect(content).toContain("**Ambiguities requiring user input**");
+		expect(content).toContain("**Unusable reason**");
+		expect(content).toContain("The verdict and sections form a closed truth table");
+		expect(content).toMatch(/`PASS`:[^\n]*checkpoint validation succeeds[^\n]*all `None`/);
+		expect(content).toMatch(/`FINDINGS`:[^\n]*at least one[^\n]*unusable reason is `None`/);
+		expect(content).toMatch(/`UNUSABLE`:[^\n]*unusable reason is populated[^\n]*all `None`/);
+		expect(content).toMatch(/Use `UNUSABLE` when validation or citation verification fails/);
+		expect(content).toMatch(/Never return empty, truncated, contradictory, or additional verdict output/);
+		expect(content).not.toContain("No evidence-backed findings");
+	});
+
+	it.each(reviewers)("%s reviewer constrains historical-session fallback", (_name, content) => {
+		for (const phrase of [
+			"current journal's directory",
+			"exclude the current journal",
+			"verify candidate CWD",
+			"narrow candidates before reading transcripts",
+			"Historical lookup is discovery-only",
+			"authority is independently located in checkpoint ancestry or an explicitly listed structured artifact",
+			"do not return it as a finding or ambiguity",
+			"preserve uncertainty",
+			"cannot independently expand scope",
+		]) {
+			expect(content.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+	});
+
+	it("intent-fidelity reviewer covers fidelity defects and authority boundaries", () => {
+		for (const phrase of [
+			"omissions",
+			"distortions",
+			"unsupported requirements",
+			"unsupported acceptance criteria",
+			"weakened constraints",
+			"contradictions",
+			"unresolved intent",
+			"independently know the user's intent",
+			"Context cannot create requirements",
+		]) {
+			expect(intent.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+	});
+
+	it("maintainer-usability reviewer covers issue-type-appropriate actionability and guesswork", () => {
+		for (const phrase of [
+			"problem and impact clarity",
+			"reproduction steps",
+			"expected and actual behavior",
+			"environment and frequency",
+			"evidence from speculation",
+			"outcomes, scope boundaries, and non-goals",
+			"premature implementation decisions",
+			"minimal observable acceptance criteria",
+			"risks, dependencies, compatibility constraints, and affected surfaces",
+			"require an unfamiliar maintainer to guess",
+		]) {
+			expect(usability).toContain(phrase);
 		}
 	});
 });
