@@ -2235,7 +2235,7 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			const result = (await report({
 				status: "completed",
 				summary: "done after resume",
-				next_steps: [{ message: "/b:target", reason: "continue" }],
+				next_steps: [{ message: "/b:target", fresh_session: false, reason: "continue" }],
 				recommended_next_step: 0,
 			})) as any;
 			expect(result.terminate).toBe(true);

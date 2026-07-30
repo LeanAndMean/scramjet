@@ -19,7 +19,7 @@ import {
 } from "@leanandmean/coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerAutoContinue } from "../src/auto-continue.js";
-import { registerDormantCommandNotice } from "../src/command-status.js";
+import { registerCommandStatusTool, registerDormantCommandNotice } from "../src/command-status.js";
 import { COMMAND_START_TYPE, registerHistory } from "../src/history.js";
 import { activeCommandName, beginProbe, startCommand } from "../src/lifecycle.js";
 import type { CommandDef, ScramjetState } from "../src/types.js";
@@ -75,6 +75,7 @@ function cmdDef(name: string): CommandDef {
 interface StreamCapture {
 	systemPrompt: Context["systemPrompt"];
 	messages: Context["messages"];
+	tools: Context["tools"];
 }
 
 interface Fixture {
@@ -135,6 +136,7 @@ async function makeFixture(
 			// section), then auto-continue (compaction stabilization) where exercised.
 			registerHistory(pi, state);
 			registerDormantCommandNotice(pi, state);
+			registerCommandStatusTool(pi, state);
 			const inputPi = new Proxy(pi, {
 				get(target, property, receiver) {
 					if (property !== "registerTool") return Reflect.get(target, property, receiver);
@@ -172,12 +174,24 @@ async function makeFixture(
 		const agent = new Agent({
 			initialState: { systemPrompt: "", model: testModel, tools: [] },
 			streamFn: (_model, context) => {
-				captures.push({ systemPrompt: context.systemPrompt, messages: [...context.messages] });
+				captures.push({
+					systemPrompt: context.systemPrompt,
+					messages: [...context.messages],
+					tools: context.tools,
+				});
 				const stopReason = opts.stopReasons?.shift() ?? "stop";
-				const message = { ...assistantText("ok"), stopReason };
+				const message = {
+					...assistantText("ok"),
+					stopReason,
+					...(stopReason === "aborted" || stopReason === "error" ? { errorMessage: "test abort" } : {}),
+				};
 				const stream = createAssistantMessageEventStream();
 				stream.push({ type: "start", partial: message });
-				stream.push({ type: "done", reason: stopReason, message });
+				if (stopReason === "aborted" || stopReason === "error") {
+					stream.push({ type: "error", reason: stopReason, error: message });
+				} else {
+					stream.push({ type: "done", reason: stopReason, message });
+				}
 				return stream;
 			},
 			getApiKey: async () => "fake",
@@ -304,6 +318,7 @@ describe("lifecycle provider boundary (issue 352 Stage 2)", () => {
 		await fx.runtime.session.prompt("continue the interrupted work", { source: "interactive" });
 		const capture = fx.captures[before];
 		expectDormantNotice(capture, "a:cmd");
+		expect(capture.tools?.map((tool) => tool.name)).toContain("report_scramjet_command_status");
 		expect(systemPromptText(capture)).toContain("Before resuming work");
 		expect(derivedPhase(fx.state().lifecycle)).toBe("dormant");
 		expect(fx.state().lifecycle.probeArmed).toBe(false);

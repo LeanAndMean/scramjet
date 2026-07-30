@@ -530,6 +530,8 @@ describe("buildDormantCommandNotice", () => {
 	it("distinguishes cancellation-resumable dormancy", () => {
 		const notice = buildDormantCommandNotice("test:cmd", true);
 		expect(notice).toContain("next interactive non-slash user reply will resume");
+		expect(notice).toContain("without first reporting `continuing`");
+		expect(notice).not.toContain("Before resuming work");
 		expect(notice).not.toContain("do NOT auto-resume");
 	});
 
