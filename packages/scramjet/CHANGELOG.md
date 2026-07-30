@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.68.0 — Independently review issue drafts
+
+Adds independent intent-fidelity and maintainer-usability review before Mach 12 issue drafts can proceed to approval. Fixes [#426](https://github.com/LeanAndMean/scramjet/issues/426).
+
+### Changed
+
+- Add two read-only issue-draft reviewers that inspect ancestry-bounded source evidence.
+- Gate issue approval on validated, reconciled review results and rerun affected lenses after material changes.
+- Document the expanded bundled-agent inventory and issue-creation review behavior.
+
+### Tests
+
+- Add semantic command-contract coverage for review handoffs, evidence boundaries, result validation, reconciliation, and reruns.
+
 ## 0.67.2 — Clarify dormant command recovery
 
 Requires an explicit continuing report before unfinished dormant command work resumes, while preserving direct terminal reports for work that is already complete. Fixes [#422](https://github.com/LeanAndMean/scramjet/issues/422).
