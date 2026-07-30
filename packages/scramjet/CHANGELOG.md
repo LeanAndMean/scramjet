@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.69.0 — Add executable PR validation
+
+Adds an opt-in Mach 12 workflow that challenges pull requests with independently designed executable tests and reassesses retained proofs before routing to repair or pre-merge. Fixes [#408](https://github.com/LeanAndMean/scramjet/issues/408).
+
+### Changed
+
+- Add PR validation and validation-assessment commands with proof-preserving handoffs.
+- Integrate executable validation into PR creation and review-repair routing.
+- Document read-only subagent allowlists and the expanded Mach 12 workflow.
+
+### Tests
+
+- Add command-contract coverage for validation evidence, mutation boundaries, assessment handoffs, and workflow wiring.
+
 ## 0.68.0 — Independently review issue drafts
 
 Adds independent intent-fidelity and maintainer-usability review before Mach 12 issue drafts can proceed to approval. Fixes [#426](https://github.com/LeanAndMean/scramjet/issues/426).
