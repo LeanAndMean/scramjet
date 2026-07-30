@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, constants, realpath } from "node:fs/promises";
+import { access, constants, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { AgentMessage } from "@leanandmean/agent";
@@ -108,7 +108,7 @@ export async function discoverContextFilePaths(
 		if (loadedPaths.has(realDir)) continue;
 		loadedPaths.add(realDir);
 
-		let anyAccessible = false;
+		const discoveredInDir: DiscoveredPath[] = [];
 		let allFailuresTransient = true;
 		for (const candidate of CANDIDATES) {
 			const filePath = resolve(dir, candidate);
@@ -116,8 +116,7 @@ export async function discoverContextFilePaths(
 				await access(filePath, constants.R_OK);
 				const rel = relative(normalizedCwd, filePath);
 				const displayPath = isOutsideRelativePath(rel) ? filePath : rel;
-				results.push({ dir, dirRealpath: realDir, filename: candidate, displayPath });
-				anyAccessible = true;
+				discoveredInDir.push({ dir, dirRealpath: realDir, filename: candidate, displayPath });
 			} catch (err: unknown) {
 				if (isNodeError(err) && err.code === "ENOENT") {
 					allFailuresTransient = false;
@@ -129,7 +128,27 @@ export async function discoverContextFilePaths(
 			}
 		}
 
-		if (!anyAccessible && allFailuresTransient) {
+		if (discoveredInDir.length === 2) {
+			const contents = await Promise.allSettled(
+				discoveredInDir.map((file) => readFile(resolve(file.dir, file.filename), "utf8")),
+			);
+			if (contents.every((result) => result.status === "fulfilled")) {
+				if (contents[0].value === contents[1].value) discoveredInDir.pop();
+			} else if (logger) {
+				for (let i = 0; i < contents.length; i++) {
+					const result = contents[i];
+					if (result.status === "rejected") {
+						const err = result.reason;
+						logger.warn("subdir-context", `comparison read failed: ${isNodeError(err) ? err.code : err}`, {
+							path: resolve(discoveredInDir[i].dir, discoveredInDir[i].filename),
+						});
+					}
+				}
+			}
+		}
+
+		results.push(...discoveredInDir);
+		if (discoveredInDir.length === 0 && allFailuresTransient) {
 			loadedPaths.delete(realDir);
 		}
 	}

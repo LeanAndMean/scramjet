@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.67.1 — Preserve context provenance in created issues
+
+Adds a conditional, source-attributed Context section to Mach 12 issue drafts while keeping background distinct from user requirements, verified evidence, and analysis. Fixes [#423](https://github.com/LeanAndMean/scramjet/issues/423).
+
+### Changed
+
+- Teach `mach12:issue-create` to preserve meaningful situational provenance without normalizing structured artifacts or deriving requirements from context alone.
+- Strengthen the final issue-quality check around Context attribution and authority boundaries.
+
+### Tests
+
+- Add semantic command-contract coverage for Context ordering, conditionality, attribution, authority boundaries, and adaptive layouts.
+
+## 0.67.0 — Load coexisting context files
+
+Loads distinct `CLAUDE.md` and `AGENTS.md` instructions from the same directory while avoiding duplicate same-directory content. Fixes [#421](https://github.com/LeanAndMean/scramjet/issues/421).
+
+### Changed
+
+- `@leanandmean/coding-agent`: load both context-file names in deterministic CLAUDE-first order, suppressing AGENTS only when its decoded text exactly equals the same-directory CLAUDE file.
+- Scramjet: apply the same ordering and equality rules to dynamically discovered subdirectory context, retaining both files when comparison fails.
+- Document context-file ordering, same-directory deduplication, and the coding-agent upstream divergence.
+- Bump `@leanandmean/coding-agent` to `0.74.1-scramjet.28` and repoint the Scramjet dependency.
+
+### Tests
+
+- Add startup and subdirectory regressions for distinct files, exact duplicates, cross-directory equality, ordering, uppercase-extension fallbacks, and comparison failures.
+
 ## 0.66.0 — Preserve implementation detail in plan comments
 
 Keeps implementation-critical contracts intact when Mach 12 drafts or revises durable implementation plans. Fixes [#418](https://github.com/LeanAndMean/scramjet/issues/418).
