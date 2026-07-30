@@ -440,9 +440,11 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 - **`blocked`**: The command cannot proceed (error, missing dependency, authorization issue).
 - **`incomplete`**: None of the above — stopped without clean completion, question, or blocker.
 
-### Dormant terminal reports
+### Dormant command recovery
 
-A dormant command (one that started but has no active probe or parked input) can report a terminal status (`completed`, `blocked`, or `incomplete`) directly, without first calling `continuing` to re-enter the probe cycle. This enables a command whose work was already done (e.g., the agent resolved the task outside the probe flow) to complete cleanly and surface its declared next step. The report flows through the same dispatch paths as probe-origin reports (`routeCompleted` for `completed`, `routeNonCompleted` for `blocked`/`incomplete`).
+A generic dormant command remains associated but does not resume when the user submits ordinary prose or when a model run starts. Before each agent run, `before_agent_start` evaluates the current lifecycle and contributes one transient `scramjet:dormant-command` system-prompt section when the command is dormant. The section is provider-visible throughout that run but is not appended to message or session history, so replay remains governed only by durable lifecycle artifacts.
+
+The agent must report `continuing` before resuming unfinished dormant work; acceptance arms the existing fallback probe. If the work is already finished, the agent can instead report a terminal status (`completed`, `blocked`, or `incomplete`) directly from dormant. Direct completion follows the same journal and next-step selector/dispatch paths as probe-origin completion. The guidance itself never changes lifecycle facts, arms a probe, or proves that work resumed.
 
 ### Instructing the agent in command prose
 

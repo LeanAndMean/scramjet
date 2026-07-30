@@ -124,15 +124,23 @@ const _statusWireMatchesInterface = (status: WireStatus): CommandStatusPayload["
 const _statusInterfaceMatchesWire = (status: CommandStatusPayload["status"]): WireStatus => status;
 
 export function buildDormantCommandNotice(commandName: string, cancellationResumeEligible = false): string {
+	const terminalGuidance =
+		"If the work is already done, report a terminal status directly " +
+		'(`status: "completed"`, `"blocked"`, or `"incomplete"`).';
+	if (cancellationResumeEligible) {
+		return (
+			`The command \`${commandName}\` is dormant — it started but is not currently active.\n` +
+			"The next interactive non-slash user reply will resume it because structured input was cancelled. " +
+			"Continue the command work after that reply without first reporting `continuing`.\n" +
+			terminalGuidance
+		);
+	}
 	return (
 		`The command \`${commandName}\` is dormant — it started but is not currently active.\n` +
-		(cancellationResumeEligible
-			? "The next interactive non-slash user reply will resume it because structured input was cancelled.\n"
-			: "Ordinary user replies do NOT auto-resume a dormant command.\n") +
+		"Ordinary user replies do NOT auto-resume a dormant command.\n" +
 		"You have two options:\n" +
-		'- To resume work, call `report_scramjet_command_status` with `status: "continuing"`.\n' +
-		"- If the work is already done, report a terminal status directly " +
-		'(`status: "completed"`, `"blocked"`, or `"incomplete"`).\n' +
+		'- Before resuming work, first call `report_scramjet_command_status` with `status: "continuing"`.\n' +
+		`- ${terminalGuidance}\n` +
 		"Both paths are accepted from dormant state."
 	);
 }
