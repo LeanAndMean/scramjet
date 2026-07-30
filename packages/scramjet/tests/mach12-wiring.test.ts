@@ -428,6 +428,9 @@ describe("mach12 issue creation — independent draft review gate", () => {
 		]) {
 			expect(reviewGate.toLowerCase()).toContain(phrase.toLowerCase());
 		}
+		expect(reviewGate).toContain(
+			"exactly `checkpointMarker`, `parentSessionJournal`, `expectedCwd`, `candidateTitle`, `candidateBody`, and `structuredArtifactReferences`",
+		);
 		expect(reviewGate).toContain("Put no operational instructions or other content outside the envelope");
 		expect(reviewGate).toMatch(/parent-authored (?:summary|intent summary)[^.]*not an acceptable substitute/i);
 	});
@@ -450,6 +453,16 @@ describe("mach12 issue creation — independent draft review gate", () => {
 		]) {
 			expect(reviewGate).toContain(phrase);
 		}
+		expect(reviewGate).toContain("Validate the closed truth table");
+		expect(reviewGate).toMatch(
+			/`PASS` has every finding, ambiguity, advisory, and unusable-reason section set to `None`/,
+		);
+		expect(reviewGate).toMatch(
+			/`FINDINGS` has at least one finding, ambiguity, or advisory and an unusable reason of `None`/,
+		);
+		expect(reviewGate).toMatch(
+			/`UNUSABLE` has a populated unusable reason and every finding, ambiguity, and advisory section set to `None`/,
+		);
 		expect(reviewGate).toMatch(/must not present the approval choices/i);
 	});
 
@@ -800,8 +813,10 @@ describe("mach12 issue-draft reviewer contracts", () => {
 		expect(content).toContain("**Correctable findings**");
 		expect(content).toContain("**Ambiguities requiring user input**");
 		expect(content).toContain("**Unusable reason**");
-		expect(content).toMatch(/Use `PASS` only when checkpoint validation succeeds/);
-		expect(content).toMatch(/Use `FINDINGS` only when validation succeeds/);
+		expect(content).toContain("The verdict and sections form a closed truth table");
+		expect(content).toMatch(/`PASS`:[^\n]*checkpoint validation succeeds[^\n]*all `None`/);
+		expect(content).toMatch(/`FINDINGS`:[^\n]*at least one[^\n]*unusable reason is `None`/);
+		expect(content).toMatch(/`UNUSABLE`:[^\n]*unusable reason is populated[^\n]*all `None`/);
 		expect(content).toMatch(/Use `UNUSABLE` when validation or citation verification fails/);
 		expect(content).toMatch(/Never return empty, truncated, contradictory, or additional verdict output/);
 		expect(content).not.toContain("No evidence-backed findings");
@@ -813,6 +828,9 @@ describe("mach12 issue-draft reviewer contracts", () => {
 			"exclude the current journal",
 			"verify candidate CWD",
 			"narrow candidates before reading transcripts",
+			"Historical lookup is discovery-only",
+			"authority is independently located in checkpoint ancestry or an explicitly listed structured artifact",
+			"do not return it as a finding or ambiguity",
 			"preserve uncertainty",
 			"cannot independently expand scope",
 		]) {

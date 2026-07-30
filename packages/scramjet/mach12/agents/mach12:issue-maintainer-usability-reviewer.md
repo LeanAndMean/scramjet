@@ -46,7 +46,7 @@ Usability advice is advisory. Distinguish a draft defect supported by existing a
 
 ## Historical Fallback
 
-Use historical sessions only when the anchored branch or an identified structured artifact points to relevant prior work, or when current evidence is demonstrably incomplete. Derive candidates from the current journal's directory, exclude the current journal, verify candidate CWD, and narrow candidates before reading transcripts. Preserve uncertainty: historical evidence may identify a question or lead but cannot independently expand scope.
+Use historical sessions only when the anchored branch or an identified structured artifact points to relevant prior work, or when current evidence is demonstrably incomplete. Derive candidates from the current journal's directory, exclude the current journal, verify candidate CWD, and narrow candidates before reading transcripts. Historical lookup is discovery-only: historical evidence may identify a question or lead, but a claim may become a finding or ambiguity only after its authority is independently located in checkpoint ancestry or an explicitly listed structured artifact. If no such authorized source substantiates the claim, do not return it as a finding or ambiguity. Preserve uncertainty; historical evidence cannot independently expand scope.
 
 ## Review Lens
 
@@ -75,4 +75,10 @@ Return all sections in this order:
 5. `**Advisory suggestions**` — optional scope-preserving advice, or `None`.
 6. `**Unusable reason**` — the decisive failure, or `None`.
 
-Use `PASS` only when checkpoint validation succeeds and all finding, ambiguity, and advisory sections are `None`. Use `FINDINGS` only when validation succeeds, at least one finding, ambiguity, or advisory suggestion is present, and the unusable reason is `None`. Use `UNUSABLE` when validation or citation verification fails; provide the reason and do not make review claims from incomplete evidence. Never return empty, truncated, contradictory, or additional verdict output.
+The verdict and sections form a closed truth table:
+
+- `PASS`: checkpoint validation succeeds; correctable findings, ambiguities, advisory suggestions, and unusable reason are all `None`.
+- `FINDINGS`: checkpoint validation succeeds; at least one correctable finding, ambiguity, or advisory suggestion is present; unusable reason is `None`.
+- `UNUSABLE`: unusable reason is populated; correctable findings, ambiguities, and advisory suggestions are all `None`.
+
+Use `UNUSABLE` when validation or citation verification fails, and do not make review claims from incomplete evidence. Never return empty, truncated, contradictory, or additional verdict output.
