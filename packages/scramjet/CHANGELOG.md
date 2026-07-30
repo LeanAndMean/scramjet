@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.67.2 — Clarify dormant command recovery
+
+Requires an explicit continuing report before unfinished dormant command work resumes, while preserving direct terminal reports for work that is already complete. Fixes [#422](https://github.com/LeanAndMean/scramjet/issues/422).
+
+### Changed
+
+- Add transient provider guidance that distinguishes resuming unfinished dormant work from completing already-finished work.
+- Document the dormant recovery and lifecycle replay contract.
+
+### Tests
+
+- Add provider-boundary and auto-continuation regressions for dormant reconstruction, inert ordinary input, resumed execution, completion journaling, and next-step selection.
+
 ## 0.67.1 — Preserve context provenance in created issues
 
 Adds a conditional, source-attributed Context section to Mach 12 issue drafts while keeping background distinct from user requirements, verified evidence, and analysis. Fixes [#423](https://github.com/LeanAndMean/scramjet/issues/423).
