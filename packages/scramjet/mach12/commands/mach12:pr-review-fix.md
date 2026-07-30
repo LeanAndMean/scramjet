@@ -1,6 +1,6 @@
 ---
 description: Fix specific issues identified in a PR review
-argument-hint: "<pr-number> [--review-comment <id>] [--assessment-comment <id>] [--review-sha256 <digest>] [--assessment-sha256 <digest>] [--cleanup-findings <ids>] [findings] [context]"
+argument-hint: "<pr-number> [--review-comment <id>] [--assessment-comment <id>] [--review-sha256 <digest>] [--assessment-sha256 <digest>] [--cleanup-findings <ids>] [--staged-later <id>]... [findings] [context]"
 allowed-tools:
   - bash
   - read
@@ -50,6 +50,7 @@ The user's input typically contains:
 - **`--assessment-comment <id>`** flag with a numeric comment ID (optional)
 - **`--review-sha256 <digest>`** and **`--assessment-sha256 <digest>`** bindings (required together for validation-origin artifacts)
 - **`--cleanup-findings <ids>`** for authenticated targeted removal of declined retained proofs instead of production repair (optional)
+- Repeatable **`--staged-later <id>`** flags, one F/S identifier per occurrence, for surviving proofs preserved unchanged for a named later repair stage (optional; validation-origin production repair only)
 - **Finding identifiers to fix** -- space-separated F/S identifiers (e.g., `F1 F2 S3`) or bare numbers as fallback (optional)
 - Additional context or constraints (optional)
 
@@ -59,7 +60,7 @@ Example inputs:
 - `108 --review-comment 1234567890 --assessment-comment 1234567891 F1 F2 S3`
 - `108 --review-comment 1234567890 F1 S2 focus on error handling`
 
-Extract the PR number. Parse the comment ID, digest, and cleanup flags if present. Each digest must be lowercase 64-hex; cleanup IDs use the same F/S identifier syntax as repair findings. If finding identifiers are provided (F/S prefixed or bare numbers), note them. If the input is ambiguous, ask the user to clarify.
+Extract the PR number. Parse the comment ID, digest, cleanup, and staged-later flags if present. Each digest must be lowercase 64-hex; cleanup IDs and each repeatable `--staged-later <id>` value use the same F/S identifier syntax as repair findings. A staged-later flag consumes exactly one following identifier, so the next flag or unflagged finding starts a deterministic new argument group. Require trailing context to name the later repair stage when `--staged-later` is present. Reject overlap among selected, cleanup, and staged-later IDs; reject combining `--cleanup-findings` with production repair IDs. If finding identifiers are provided (F/S prefixed or bare numbers), note them. If the input is ambiguous, ask the user to clarify.
 
 ## Step 2: Gather PR and review context
 
@@ -128,7 +129,7 @@ When the authenticated exact review and assessment comments establish that selec
 5. Change production code, not retained proof tests, to address the selected findings.
 6. Rerun the same selected retained nodes after the production edits and confirm they are green before running broader focused suites and delegating to `/mach12:push`. Do not require proofs for unselected findings to become green in this session.
 
-For `--cleanup-findings`, perform authentication and red-state reproduction exactly as above, then remove only those findings' authenticated proof hunks with targeted edits. Do not edit production code. Verify each named node is gone, unrelated tests and selected-for-later proofs are unchanged, and no red proof lacking an explicit later-fix disposition remains. Commit/push the targeted cleanup through `/mach12:push`, then route to pre-merge.
+For `--cleanup-findings`, perform authentication and red-state reproduction exactly as above, then remove only those findings' authenticated proof hunks with targeted edits. Do not edit production code. Verify each named node is gone, unrelated tests and selected-for-later proofs are unchanged, and no red proof lacking an explicit later-fix disposition remains. Commit/push the targeted cleanup through `/mach12:push`, then use the cleanup-only completion branch below.
 
 Ordinary static-review fixes retain their existing behavior when the exact comments do not establish a validation-origin proof contract.
 
@@ -167,7 +168,10 @@ Pass a brief summary of the findings addressed as the arguments so the commit me
 
 Each fix session should be **fresh** to maximize available context.
 
-After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and choose selector-visible `next_steps` entries using this order:
+After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then report according to the operation:
+
+- **Successful `--cleanup-findings` run:** set `status: "completed"` and emit exactly one `next_steps` entry with `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, and `reason`: "Authenticated declined-proof cleanup is complete; proceed to the merge checklist." Set `recommended_next_step` to `0`. Do not offer review or validation after cleanup.
+- **Production-repair run:** set `status: "completed"` and choose selector-visible `next_steps` entries using this order:
 
 1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, include an entry with `message`: `/mach12:pr-review-fix` followed by the same PR/comment arguments plus the next stage label, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned fix stage remains.
    - Example: `message`: `/mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 --review-sha256 <review-digest> --assessment-sha256 <assessment-digest> Stage 2`, `reason`: `Stage 2 is the next planned fix stage.`
@@ -177,4 +181,6 @@ After delivering your answer, call `report_scramjet_command_status`: summarize t
    - Include an entry with `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when the slower executable-behavior path is warranted.
    - Include an entry with `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation that the PR is ready for the merge checklist.
    - Set `recommended_next_step` to indicate your preference: recommend `mach12:pr-validation` (index 1) for validation-origin repairs, recommend `mach12:pr-review` (index 0) when other substantive fixes warrant another full review, or recommend `mach12:pr-pre-merge` (index 2) when fixes were narrow and confidence is high.
-   - Leave `next_steps` empty if the appropriate next action is unclear. If fixing hit a blocker or did not complete, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
+   - Leave `next_steps` empty if the appropriate next action is unclear.
+
+If fixing or cleanup hit a blocker or did not complete, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.

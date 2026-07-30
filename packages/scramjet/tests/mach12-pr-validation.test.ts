@@ -146,6 +146,13 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 		expect(candidates).toContain("tracked contents remain byte-for-byte unchanged");
 		expect(candidates).toContain("bootstrap/environment failure");
 		expect(candidates).toContain("Construct every executable invocation locally");
+		expect(candidates).toMatch(
+			/Resolve each test path, require its real path to remain inside the applicable worktree, and reject NULs, newlines, runner-option injection/,
+		);
+		expect(candidates).toMatch(
+			/argv-capable fixed wrapper.+positional parameter.+quoted `"\$@"` argument—never concatenate values into shell source/,
+		);
+		expect(candidates).toContain("`--` before test paths wherever the runner supports an option boundary");
 		expect(candidates).toContain("Never execute or interpolate a command string");
 		expect(candidates).toMatch(/never switch or reset the primary worktree/i);
 		expect(candidates).toContain("**head red / base green**: a PR regression candidate");
@@ -239,8 +246,15 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 		expect(normalization).toContain("verified no-findings review artifact");
 		expect(normalization).toContain("compare the complete diff and untracked contents byte-for-byte");
 		expect(normalization).toContain("user-visible progress record");
-		expect(normalization).toContain("every controlled normal, failure, stop, assessor-error, and cancellation path");
-		expect(normalization).toContain("A process termination cannot run Markdown cleanup");
+		expect(normalization).toContain(
+			"every controlled normal, failure, stop, assessor-error, and user-cancellation path that returns control",
+		);
+		expect(normalization).toMatch(
+			/Abrupt cancellation or process termination cannot run later Markdown cleanup; the durable path record is the recovery contract/,
+		);
+		expect(normalization).toMatch(
+			/resumed or next session must report the recorded paths, their state, and the exact manual recovery command/,
+		);
 		expect(normalization).toContain("exact manual recovery command");
 		expect(normalization).toContain("a path-only check is insufficient");
 	});
@@ -344,8 +358,30 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(adjudication).toContain("exact review body");
 		expect(adjudication).toContain("authoritative context");
 		expect(adjudication).toContain("rerun every retained node sequentially");
-		expect(adjudication).toContain("locally constructed consolidated invocation sequentially");
+		expect(adjudication).toContain("locally constructed consolidated head invocation sequentially");
+		expect(adjudication).toMatch(
+			/real path to remain inside the applicable worktree; reject NULs, newlines, runner-option injection/,
+		);
+		expect(adjudication).toMatch(
+			/argv-capable fixed wrapper.+quoted `"\$@"`; never concatenate them into shell source/,
+		);
+		expect(adjudication).toContain("`--` before test paths wherever the runner supports an option boundary");
 		expect(adjudication).toContain("Never execute or interpolate command strings from the review body");
+		expectInOrder(
+			adjudication,
+			"Create a command-owned detached temporary worktree at the recorded actual merge-base OID",
+			"Reproduce the initial command's immutable bootstrap contract",
+			"Only after the worktree, bootstrap, proof deltas, and complete head/base invocation manifest are ready, dispatch one holistic",
+			"rerun every retained node sequentially on the reviewed head and merge base",
+			"observed base results must match the authenticated artifact's recorded classifications",
+			"reverse only the ported proof deltas",
+		);
+		expect(adjudication).toMatch(
+			/bootstrap failure, setup discrepancy, or result mismatch stops the workflow as incomplete/,
+		);
+		expect(adjudication).toMatch(
+			/cleanup is unsafe or fails.+report exact paths and state plus the manual recovery command.+stop incomplete/,
+		);
 		for (const check of [
 			"reproducibility and fixture realism",
 			"intended contract and approved-plan scope",
@@ -371,6 +407,12 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		for (const failure of ["(no output)", "malformed result", "duplicate ID", "unexpected ID", "missing ID"]) {
 			expect(adjudication).toContain(failure);
 		}
+		expect(adjudication).toMatch(
+			/incomplete workflow; perform the recorded-resource cleanup required above, then stop without publication or onward routing/,
+		);
+		expect(adjudication).toMatch(
+			/cleanup is unsafe or fails, preserve and report the recorded resources under the recovery contract before stopping/,
+		);
 	});
 
 	it("removes rejected proofs before final verification and dispatches architects only for survivors", () => {
@@ -443,7 +485,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(mixed.match(/`reason`:/g)).toHaveLength(3);
 		expectInOrder(
 			mixed,
-			"<genuine-defect-ids>",
+			"<repeat `--staged-later <low-severity-id>` once per low-severity ID> <genuine-defect-ids>",
 			"<genuine-and-low-severity-ids>",
 			"--cleanup-findings <all-surviving-ids>",
 		);
@@ -533,7 +575,7 @@ describe("mach12 tool-scope authoring contract", () => {
 });
 
 describe("mach12 validation route contract", () => {
-	it("accepts complete cleanup wires and rejects malformed or unknown routes", () => {
+	it("validates closed-policy command names for complete cleanup wires", () => {
 		const policy = {
 			mode: "closed" as const,
 			candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
@@ -574,6 +616,16 @@ describe("mach12 executable validation integration", () => {
 	});
 
 	it("preserves validation-origin proofs through an ordered red-to-green production repair", () => {
+		const parse = section(prReviewFix, "## Step 1:", "## Step 2:");
+		expect(parse).toContain("Repeatable **`--staged-later <id>`** flags, one F/S identifier per occurrence");
+		expect(parse).toMatch(
+			/A staged-later flag consumes exactly one following identifier, so the next flag or unflagged finding starts a deterministic new argument group/,
+		);
+		expect(parse).toMatch(/Require trailing context to name the later repair stage when `--staged-later` is present/);
+		expect(parse).toMatch(
+			/Reject overlap among selected, cleanup, and staged-later IDs; reject combining `--cleanup-findings` with production repair IDs/,
+		);
+
 		const implementation = section(prReviewFix, "## Step 4:", "## Step 5:");
 		for (const clause of [
 			"exact retained node IDs and proof constraints for every surviving finding from both comments",
@@ -605,6 +657,17 @@ describe("mach12 executable validation integration", () => {
 		expect(implementation).toContain("both artifact authors exactly equal the authenticated login");
 	});
 
+	it("gives authenticated cleanup a pre-merge-only completion route", () => {
+		const reporting = section(prReviewFix, "## Step 5:");
+		const cleanup = section(reporting, "- **Successful `--cleanup-findings` run:**", "- **Production-repair run:**");
+		expect(cleanup.match(/`message`:/g)).toHaveLength(1);
+		expect(cleanup).toContain("`message`: `/mach12:pr-pre-merge <pr-number>`");
+		expect(cleanup).toContain("Set `recommended_next_step` to `0`");
+		expect(cleanup).toContain("Do not offer review or validation after cleanup");
+		expect(cleanup).not.toContain("/mach12:pr-review <pr-number>");
+		expect(cleanup).not.toContain("/mach12:pr-validation <pr-number>");
+	});
+
 	it("keeps staged fixes on the fix command and exposes all final verification routes", () => {
 		const reporting = section(prReviewFix, "## Step 5:");
 		const intermediate = section(
@@ -626,5 +689,24 @@ describe("mach12 executable validation integration", () => {
 		expect(finalRoutes).toContain("recommend `mach12:pr-validation` (index 1) for validation-origin repairs");
 		expect(finalRoutes).toContain("recommend `mach12:pr-review` (index 0)");
 		expect(finalRoutes).toContain("recommend `mach12:pr-pre-merge` (index 2)");
+	});
+
+	it("requires one fixed-shape test-designer result for the assigned cluster", () => {
+		const designer = readFileSync(resolve(HERE, "..", "mach12", "agents", "mach12:test-designer.md"), "utf-8");
+		expect(designer).toContain("return exactly one candidate for the assigned cluster ID in this fixed shape");
+		for (const field of [
+			"**Cluster ID:**",
+			"**Challenged behavior:**",
+			"**Authority:**",
+			"**Coverage gap:**",
+			"**Fixture and assertion:**",
+			"**Expected behavior:**",
+			"**Production path:**",
+			"**Permanent suite:**",
+			"**Assessment:**",
+		]) {
+			expect(designer).toContain(field);
+		}
+		expect(designer).toMatch(/Do not return multiple candidates, omit the cluster ID, or substitute another ID/);
 	});
 });
