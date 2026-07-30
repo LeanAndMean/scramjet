@@ -45,7 +45,7 @@ allowed-tools:
   - bash
   - read
   - grep
-  - glob
+  - find
   - edit
   - write
   - subagent
@@ -72,7 +72,7 @@ allowed-tools:
   - bash
   - read
   - grep
-  - glob
+  - find
   - subagent
   - delegate
 next:
@@ -194,7 +194,7 @@ allowed-tools:
   - bash
   - read
   - grep
-  - glob
+  - find
 ---
 ```
 
@@ -387,7 +387,7 @@ The `allowed-tools` field in frontmatter declares which tools a command may use.
 When command A (with `allowed-tools: [bash, read, edit, delegate]`) delegates to command B (with `allowed-tools: [bash, read]`):
 
 - **Effective scope for B** = intersection of A's tools and B's tools = `[bash, read]`
-- Tools outside the intersection trigger an advisory warning on use.
+- While a delegation frame is active, tools outside the intersection trigger an advisory warning on use. A top-level command before any delegation has no scope-warning frame.
 
 If a command declares no `allowed-tools` (unrestricted), it inherits the caller's scope unchanged during delegation.
 
@@ -399,7 +399,7 @@ If a command declares no `allowed-tools` (unrestricted), it inherits the caller'
 
 ### Advisory enforcement (MVP)
 
-In the current implementation, tool-scoping is advisory only. The harness logs warnings when out-of-scope tools are called but does **not** block them. Hard enforcement (tool call rejection) is deferred to a post-MVP milestone.
+In the current implementation, tool-scoping is advisory only. The harness logs warnings for out-of-scope calls only while a delegated frame is active; top-level command calls before delegation are not warned. Calls are never blocked. Hard enforcement (tool call rejection) is deferred to a post-MVP milestone.
 
 **Implication for authors:** Declare `allowed-tools` accurately even though enforcement is soft. The declarations document intent, enable auditing, and will become hard constraints in the future.
 
@@ -408,8 +408,8 @@ In the current implementation, tool-scoping is advisory only. The harness logs w
 Command frontmatter `allowed-tools` and subagent frontmatter `tools:` have different enforcement semantics:
 
 - A command's `allowed-tools` remains advisory in the current harness. Out-of-scope calls produce warnings but are not blocked.
-- A subagent definition's `tools:` list is passed to the child process as its actual tool allowlist. Tools omitted there are unavailable to that child.
-- Read-only agents must omit every mutation-capable tool, including `bash`, `edit`, and `write`. Omitting only `edit` and `write` is insufficient because shell commands can still mutate the shared working tree.
+- A subagent definition's non-empty `tools:` list is passed to the child process as its actual tool allowlist. An absent or empty list leaves the child unrestricted; it does not mean that every tool is unavailable.
+- Read-only agents must declare an explicit non-empty allowlist that omits every mutation-capable tool, including `bash`, `edit`, and `write`. Omitting only `edit` and `write` is insufficient because shell commands can still mutate the shared working tree.
 - A writable parent command may own sequential repository mutation while read-only subagents return analysis, fixture guidance, or other non-mutating recommendations.
 
 ### Don't

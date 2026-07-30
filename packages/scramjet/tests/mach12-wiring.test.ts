@@ -241,7 +241,7 @@ describe("mach12 wiring — bundled command set", () => {
 				"bash",
 				"read",
 				"grep",
-				"glob",
+				"find",
 				"edit",
 				"write",
 				"subagent",

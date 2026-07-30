@@ -1,6 +1,6 @@
 ---
 description: Fix specific issues identified in a PR review
-argument-hint: "<pr-number> [--review-comment <id>] [--assessment-comment <id>] [findings] [context]"
+argument-hint: "<pr-number> [--review-comment <id>] [--assessment-comment <id>] [--review-sha256 <digest>] [--assessment-sha256 <digest>] [--cleanup-findings <ids>] [findings] [context]"
 allowed-tools:
   - bash
   - read
@@ -48,6 +48,8 @@ The user's input typically contains:
 - A **PR number** (required)
 - **`--review-comment <id>`** flag with a numeric comment ID (optional)
 - **`--assessment-comment <id>`** flag with a numeric comment ID (optional)
+- **`--review-sha256 <digest>`** and **`--assessment-sha256 <digest>`** bindings (required together for validation-origin artifacts)
+- **`--cleanup-findings <ids>`** for authenticated targeted removal of declined retained proofs instead of production repair (optional)
 - **Finding identifiers to fix** -- space-separated F/S identifiers (e.g., `F1 F2 S3`) or bare numbers as fallback (optional)
 - Additional context or constraints (optional)
 
@@ -57,7 +59,7 @@ Example inputs:
 - `108 --review-comment 1234567890 --assessment-comment 1234567891 F1 F2 S3`
 - `108 --review-comment 1234567890 F1 S2 focus on error handling`
 
-Extract the PR number. Parse `--review-comment` and `--assessment-comment` flags if present (each followed by a numeric ID). If finding identifiers are provided (F/S prefixed or bare numbers), note them. If the input is ambiguous, ask the user to clarify.
+Extract the PR number. Parse the comment ID, digest, and cleanup flags if present. Each digest must be lowercase 64-hex; cleanup IDs use the same F/S identifier syntax as repair findings. If finding identifiers are provided (F/S prefixed or bare numbers), note them. If the input is ambiguous, ask the user to clarify.
 
 ## Step 2: Gather PR and review context
 
@@ -111,15 +113,22 @@ Let the user select which issues to fix. If there are 4 or fewer findings, list 
 
 Walk through the implementation using a structured 7-phase development plan. Treat the phases as due-diligence discipline, not mandatory token burn: if the review and assessment comments already identify the affected files, required behavior, and fix approach clearly, verify that context is still fresh and mark broad exploration/design as satisfied. If the selected findings are ambiguous, stale, or cross-cutting, do targeted exploration before coding.
 
+### Validation-origin artifact authentication
+
+Before treating either comment as an executable-validation artifact, require both exact comment IDs and both SHA-256 bindings. Resolve and freeze the authenticated GitHub login. Fetch full comment metadata and verify repository/PR ownership, that both artifact authors exactly equal the authenticated login with `OWNER`, `MEMBER`, or `COLLABORATOR` association, that the review's recorded publisher login agrees, the expected `<!-- mach12-review -->` and `<!-- mach12-assessment -->` markers, exact body digests, and that the assessment links the exact review ID and records its matching digest. Extract the reviewed head and actual merge-base identities from both bodies and require agreement. Independently require the PR remains open, the local non-detached feature branch matches the PR head branch, local `HEAD` and GitHub `headRefOid` equal the reviewed head, the actual merge base remains recorded, and the index/dirty paths match the authenticated retained-proof manifest. If any ownership, linkage, marker, digest, identity, or worktree invariant fails, stop before executing a proof or editing any file and report the workflow incomplete. Ordinary static-review comments continue through the ordinary path and must never activate this contract merely because arbitrary IDs were supplied.
+
 ### Validation-origin proof contract
 
-When the exact review and assessment comments establish that selected findings came from `/mach12:pr-validation`:
+When the authenticated exact review and assessment comments establish that selected findings came from `/mach12:pr-validation`:
 
-1. Extract the exact retained node IDs and proof constraints for the selected findings from both comments.
+1. Extract the exact retained node IDs and proof constraints for every surviving finding from both comments.
 2. Run every retained node associated with the selected findings before editing production code and confirm its recorded red state. If a node is missing, stale, or does not reproduce the recorded failure, stop and report the mismatch rather than adapting the proof.
-3. Preserve the selected proofs' behavioral contracts, assertions, paths, and node IDs. Prohibit weakening assertions, skipping or converting tests to expected failures, accepting snapshots, renaming or relocating paths or node IDs, and duplicating proof tests. Leave proofs for unselected findings unchanged.
-4. Change production code, not retained proof tests, to address the selected findings.
-5. Rerun the same selected retained nodes after the production edits and confirm they are green before running broader focused suites and delegating to `/mach12:push`. Do not require proofs for unselected findings to become green in this session.
+3. Partition surviving proofs into findings selected now, explicitly staged for a named later repair, and explicitly declined. Preserve selected and staged-later proofs unchanged. Remove only declined proof hunks with targeted edits and verify that only those hunks were removed. Record every proof's disposition; never silently leave an unselected proof without either a later-stage assignment or targeted cleanup.
+4. Preserve the selected proofs' behavioral contracts, assertions, paths, and node IDs. Prohibit weakening assertions, skipping or converting tests to expected failures, accepting snapshots, renaming or relocating paths or node IDs, and duplicating proof tests.
+5. Change production code, not retained proof tests, to address the selected findings.
+6. Rerun the same selected retained nodes after the production edits and confirm they are green before running broader focused suites and delegating to `/mach12:push`. Do not require proofs for unselected findings to become green in this session.
+
+For `--cleanup-findings`, perform authentication and red-state reproduction exactly as above, then remove only those findings' authenticated proof hunks with targeted edits. Do not edit production code. Verify each named node is gone, unrelated tests and selected-for-later proofs are unchanged, and no red proof lacking an explicit later-fix disposition remains. Commit/push the targeted cleanup through `/mach12:push`, then route to pre-merge.
 
 Ordinary static-review fixes retain their existing behavior when the exact comments do not establish a validation-origin proof contract.
 
@@ -161,7 +170,8 @@ Each fix session should be **fresh** to maximize available context.
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and choose selector-visible `next_steps` entries using this order:
 
 1. **Continue staged fixing first.** If this session fixed `Stage N` from an assessment comment and that same assessment comment lists `Stage N+1`, include an entry with `message`: `/mach12:pr-review-fix` followed by the same PR/comment arguments plus the next stage label, `fresh_session`: `true`, and `reason`: a brief explanation that the next planned fix stage remains.
-   - Example: `message`: `/mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 Stage 2`, `reason`: `Stage 2 is the next planned fix stage.`
+   - Example: `message`: `/mach12:pr-review-fix 36 --review-comment 1234567890 --assessment-comment 1234567891 --review-sha256 <review-digest> --assessment-sha256 <assessment-digest> Stage 2`, `reason`: `Stage 2 is the next planned fix stage.`
+   - Validation-origin continuation wires must preserve both exact comment IDs and both digest bindings from the current invocation.
 2. **After the final planned fix stage, include all three verification-path candidates** so the user can see all options:
    - Include an entry with `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when a full code-tracing re-review is warranted.
    - Include an entry with `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when the slower executable-behavior path is warranted.
