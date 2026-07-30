@@ -2207,22 +2207,16 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 	});
 
 	describe("resume mid-probe self-heals (F5)", () => {
-		it("dormant command completes after resume and dispatches normally", async () => {
-			const def = defWithPolicy("a:cmd", { mode: "forced", target: "b:target" });
+		it("aborted command rebuild completes from dormant and exposes its next step", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:target" }] });
 			const target = defWithPolicy("b:target", undefined);
-			// State as captured mid-probe: the answer turn ended, the probe fired,
-			// and the run was interrupted before the status tool was called.
-			const state = runningState(def, {
-				enabled: true,
-				registry: registryWith(target),
-				lifecycle: lifecycleFor("probing", def.name),
-			});
+			const state = runningState(def, { enabled: false, registry: registryWith(target) });
 			const { bag, ctxBag, report } = bootstrap(state);
 			registerHistory(bag.pi, state);
 
-			// Resume: the branch replays only the journaled command-start entry — the
-			// probe phase is deliberately never journaled, so rebuild must self-heal
-			// the phase rather than restore "probing".
+			await bag.emit("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, ctxBag.ctx);
+			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+
 			const entries = [
 				{
 					type: "custom" as const,
@@ -2235,10 +2229,9 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 				{},
 				{ sessionManager: { getBranch: () => entries, getEntries: () => entries } },
 			);
-			// Rebuild reconstructs to dormant (command-start present, no terminal status).
 			expect(derivedPhase(state.lifecycle)).toBe("dormant");
+			expect(state.lifecycle.probeArmed).toBe(false);
 
-			// A dormant terminal report is now accepted directly.
 			const result = (await report({
 				status: "completed",
 				summary: "done after resume",
@@ -2247,14 +2240,18 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			})) as any;
 			expect(result.terminate).toBe(true);
 			expect(result.details.error).toBeUndefined();
-			expect(state.lifecycle.lastReport).toMatchObject({ status: "completed" });
 
-			// agent_end routes the completed report normally (forced policy dispatches).
 			bag.pi.isStreaming = false;
 			await bag.emit("agent_end", {}, ctxBag.ctx);
 			await vi.advanceTimersByTimeAsync(0);
-			expect(ctxBag.dispatched).toHaveLength(1);
-			expect(ctxBag.dispatched[0].input).toBe("/b:target");
+
+			expect(bag.pi.appended).toContainEqual({
+				customType: COMMAND_STATUS_TYPE,
+				data: { commandName: "a:cmd", status: "completed", summary: "done after resume" },
+			});
+			expect(ctxBag.dispatched).toEqual([]);
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/b:target");
 		});
 
 		it("dormant-origin completed report with closed policy filters invalid next_steps", async () => {
