@@ -386,6 +386,93 @@ describe("mach12 issue creation — context provenance", () => {
 	});
 });
 
+describe("mach12 issue creation — independent draft review gate", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const reviewGate = issueCreate.slice(
+		issueCreate.indexOf("## Independent Review Gate"),
+		issueCreate.indexOf("## Step 3: Review"),
+	);
+	const modificationLoop = issueCreate.slice(
+		issueCreate.indexOf("## Step 3: Review"),
+		issueCreate.indexOf("## Step 4: Check for Duplicates"),
+	);
+
+	it("orders checkpointed parallel review after self-check and before approval", () => {
+		const selfCheck = issueCreate.indexOf("**Final issue-quality self-check before presenting the draft**");
+		const gate = issueCreate.indexOf("## Independent Review Gate");
+		const approval = issueCreate.indexOf("## Step 3: Review");
+		expect(selfCheck).toBeGreaterThan(-1);
+		expect(gate).toBeGreaterThan(selfCheck);
+		expect(approval).toBeGreaterThan(gate);
+		expect(reviewGate).toContain("one parallel `subagent` call");
+		expect(reviewGate).toContain("mach12:issue-intent-fidelity-reviewer");
+		expect(reviewGate).toContain("mach12:issue-maintainer-usability-reviewer");
+	});
+
+	it("hands both reviewers an objective branch checkpoint and exact review subject", () => {
+		for (const phrase of [
+			"literal `Current session journal` path",
+			"expected CWD",
+			"fresh unique checkpoint marker",
+			"exact complete candidate title and body",
+			"explicitly relevant structured-artifact references",
+			"exactly one marker-bearing assistant entry",
+			"checkpoint entry's `parentId`",
+			"checkpoint transport is not source authority",
+		]) {
+			expect(reviewGate.toLowerCase()).toContain(phrase.toLowerCase());
+		}
+		expect(reviewGate).toMatch(/parent-authored (?:summary|intent summary)[^.]*not an acceptable substitute/i);
+	});
+
+	it("fails closed when independent evidence or either review is unusable", () => {
+		for (const phrase of [
+			"missing or unreadable parent journal",
+			"CWD mismatch",
+			"absent or non-unique marker-bearing assistant entry",
+			"broken ancestry",
+			"either reviewer fails",
+			"unusable reviewer output",
+		]) {
+			expect(reviewGate).toContain(phrase);
+		}
+		expect(reviewGate).toMatch(/must not present the approval choices/i);
+	});
+
+	it("reconciles only cited authority and returns genuine ambiguity to the user", () => {
+		expect(reviewGate).toContain("verify every finding against its cited source evidence");
+		expect(reviewGate).toContain("Apply evidence-backed corrections");
+		expect(reviewGate).toContain("Reject unsupported or scope-inventing suggestions");
+		expect(reviewGate).toContain("ask the user to resolve genuine intent ambiguity");
+		expect(reviewGate).toContain("rerun every affected lens");
+	});
+
+	it("selectively reruns reviews with fresh checkpoints before renewed approval", () => {
+		expect(modificationLoop).toMatch(
+			/Intent fidelity changes[^\n]*Rerun only `mach12:issue-intent-fidelity-reviewer`/,
+		);
+		expect(modificationLoop).toMatch(
+			/Maintainer usability changes[^\n]*Rerun only `mach12:issue-maintainer-usability-reviewer`/,
+		);
+		expect(modificationLoop).toContain("rerun both reviewers in one parallel call");
+		expect(modificationLoop).toContain("A one-lens rerun uses one subagent task");
+		expect(modificationLoop).toContain("only a two-lens rerun uses one parallel call");
+		expect(modificationLoop).toContain("spelling, formatting, labels, or assignees");
+		expect(modificationLoop).toContain("fresh unique checkpoint marker");
+		expect(modificationLoop).toContain("exact complete updated title and body");
+		expect(modificationLoop).toContain("after the user's response is persisted");
+		expect(modificationLoop).toContain("Previous reviewer output does not authorize newly changed material");
+	});
+
+	it("routes duplicate-reference body changes through renewed review and preserves final approval", () => {
+		expect(issueCreate).toContain("classify the body change under the Step 3 review relevance rules");
+		expect(issueCreate).toMatch(
+			/classify the body change[\s\S]*run and reconcile the applicable independent review generation[\s\S]*only then return to Step 3 for explicit approval/,
+		);
+		expect(issueCreate).toContain("latest explicitly approved title and body unchanged");
+	});
+});
+
 describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
 	const ambiguousMatches = issueCreate.slice(
@@ -406,7 +493,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 		expect(ambiguousMatches).toContain("**Create without mentioning matches**");
 		expect(ambiguousMatches).toContain("**Create and mention selected matches**");
 		expect(ambiguousMatches).toContain("Add references only to the matches the user explicitly selected");
-		expect(ambiguousMatches).toContain("return to Step 3 for explicit approval");
+		expect(ambiguousMatches).toContain("only then return to Step 3 for explicit approval");
 	});
 
 	it("preserves the approved issue when creating without references", () => {
