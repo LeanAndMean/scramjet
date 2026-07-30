@@ -51,6 +51,17 @@ const WIRING: WiringRow[] = [
 		expected: { mode: "forced", target: "mach12:pr-review-assessment" },
 	},
 	{
+		basename: "pr-validation",
+		expected: { mode: "forced", target: "mach12:pr-validation-assessment" },
+	},
+	{
+		basename: "pr-validation-assessment",
+		expected: {
+			mode: "closed",
+			candidates: [{ name: "mach12:pr-review-fix" }, { name: "mach12:pr-pre-merge" }],
+		},
+	},
+	{
 		basename: "pr-review-assessment",
 		expected: {
 			mode: "closed",
@@ -208,6 +219,28 @@ describe("mach12 wiring — bundled command set", () => {
 			expect(content).toContain(agent);
 		}
 	});
+
+	it.each(["pr-validation", "pr-validation-assessment"])(
+		"%s declares the repository and subagent capabilities needed by executable validation",
+		(basename) => {
+			const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
+			const content = readFileSync(filePath, "utf-8");
+			const result = parseCommandFile(filePath, content, SET_NAME);
+
+			expect(result.ok).toBe(true);
+			if (!result.ok) return;
+			expect(result.def.allowedTools).toEqual([
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"edit",
+				"write",
+				"subagent",
+				"delegate",
+			]);
+		},
+	);
 });
 
 describe("mach12 plan-comment artifact contract", () => {
@@ -617,5 +650,16 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 			// Agent files must have a frontmatter `name:` matching the filename prefix.
 			expect(content).toContain(`name: ${name}`);
 		}
+	});
+
+	it("keeps mach12:test-designer structurally read-only", () => {
+		const content = readFileSync(join(MACH12_AGENTS_DIR, "mach12:test-designer.md"), "utf-8");
+		const tools = content
+			.match(/^tools:\s*(.+)$/m)?.[1]
+			.split(",")
+			.map((tool) => tool.trim());
+
+		expect(tools).toEqual(["read", "grep", "find", "ls"]);
+		expect(content).toContain("never create, edit, remove, format, or execute tests");
 	});
 });
