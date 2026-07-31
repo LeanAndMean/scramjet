@@ -151,7 +151,7 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus eight subroutine commands and thirteen specialized agents covering code exploration, architecture, review, testing, and more. The issue-creation workflow includes focused intent-fidelity and maintainer-usability reviewers that independently check complete drafts before approval.
+Plus eight subroutine commands and twelve specialized agents covering code exploration, architecture, review, testing, and more. The issue-creation workflow identifies the motivating problem, gives one sessionless issue architect a bounded evidence packet, and reviews the returned complete draft against live context before approval.
 
 ## Bundled command-set installation
 
