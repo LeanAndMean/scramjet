@@ -77,7 +77,7 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 
 		const context = section(command, "## Step 3:", "## Step 4:");
 		for (const source of [
-			"title, body, base and head identities, files, commits, and complete comments",
+			"title, body, base and head identities, files, commits, and all top-level PR conversation comments",
 			"linked issue",
 			"<!-- mach12-plan -->",
 			"later amendments, decisions, and review-fix progress",
@@ -88,7 +88,7 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 			expect(context).toContain(source);
 		}
 		expect(context).toContain("untrusted evidence");
-		expect(context).toContain("delegate for the full comment stream");
+		expect(context).toContain("delegate for those comments");
 		expect(context).toContain("/mach12:gh-pr-read <pr-number>");
 		expect(context).toContain("For each issue, delegate");
 		expect(context).toContain("/mach12:gh-issue-read <issue-number>");
@@ -327,7 +327,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(handoff).toContain("gh api repos/:owner/:repo/issues/comments/<review-comment-id>");
 		expect(handoff).toMatch(/do not use heuristic marker discovery/i);
 		for (const source of [
-			"PR title, body, base and head identities, files, commits, and complete comments",
+			"PR title, body, base and head identities, files, commits, and all top-level PR conversation comments",
 			"linked issue",
 			"<!-- mach12-plan -->",
 			"complete merge-base-to-head diff",
@@ -363,7 +363,9 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 	it("handles authenticated zero-findings artifacts without constructing proof resources", () => {
 		const adjudication = section(command, "## Step 4:", "## Step 5:");
 		expect(adjudication).toContain("`none — zero retained findings`");
-		expect(adjudication).toContain("no retained node, proof patch, ownership group, dirty path, or surviving finding disposition");
+		expect(adjudication).toContain(
+			"no retained node, proof patch, ownership group, dirty path, or surviving finding disposition",
+		);
 		expectInOrder(
 			adjudication,
 			"Verify the artifact integrity",
@@ -603,7 +605,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 });
 
 describe("mach12 authoritative GitHub history helpers", () => {
-	it.each(["gh-pr-read", "gh-issue-read"])("%s paginates and verifies the complete comment stream", (basename) => {
+	it.each(["gh-pr-read", "gh-issue-read"])("%s paginates and verifies its comment stream", (basename) => {
 		const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
 		for (const clause of [
 			"gh api graphql --paginate",
@@ -664,6 +666,16 @@ describe("mach12 validation route contract", () => {
 describe("mach12 executable validation integration", () => {
 	const prCreate = readFileSync(join(COMMANDS_DIR, "mach12:pr-create.md"), "utf-8");
 	const prReviewFix = readFileSync(join(COMMANDS_DIR, "mach12:pr-review-fix.md"), "utf-8");
+	const testDesigner = readFileSync(resolve(HERE, "..", "mach12", "agents", "mach12:test-designer.md"), "utf-8");
+
+	it("makes the PR-validation designer result exclusive of the general output format", () => {
+		const specialized = section(testDesigner, "For a PR-validation brief", "## Core Responsibilities");
+		expect(specialized).toContain("return exactly one candidate");
+		expect(specialized).toContain("and no other output, then stop");
+
+		const general = section(testDesigner, "## Output Format", "## Quality Principles");
+		expect(general).toContain("only for briefs other than PR validation");
+	});
 
 	it("offers ordinary review first and recommends it over opt-in executable validation after PR creation", () => {
 		const reporting = section(prCreate, "## Step 5:");
@@ -673,7 +685,11 @@ describe("mach12 executable validation integration", () => {
 	});
 
 	it("authenticates staged validation repairs through an exact predecessor chain", () => {
-		const authentication = section(prReviewFix, "### Validation-origin artifact authentication", "### Validation-origin proof contract");
+		const authentication = section(
+			prReviewFix,
+			"### Validation-origin artifact authentication",
+			"### Validation-origin proof contract",
+		);
 		expect(authentication).toContain("For the first repair session");
 		expect(authentication).toContain("Do not accept `--predecessor-head`");
 		expect(authentication).toContain("For a staged continuation, require `--predecessor-head`");
@@ -686,8 +702,20 @@ describe("mach12 executable validation integration", () => {
 		expect(reporting).toContain("`--predecessor-head <pushed-head>`");
 		expect(reporting).toContain("exact verified pushed head as `--predecessor-head`");
 		expect(reporting).toContain("next stage's selected canonical IDs");
-		expect(reporting).toContain("explicit exhaustive ownership-group-safe partition of the predecessor's remaining staged IDs");
+		expect(reporting).toContain(
+			"explicit exhaustive ownership-group-safe partition of the predecessor's remaining staged IDs",
+		);
 		expect(reporting).toContain("Previously selected IDs are authenticated by the predecessor chain");
+
+		const example = section(reporting, "   - Example after Stage 1", "   - Validation-origin continuation wires");
+		expect(example).toContain("--review-comment 1234567890");
+		expect(example).toContain("--assessment-comment 1234567891");
+		expect(example).toContain(`--review-sha256 ${"a".repeat(64)}`);
+		expect(example).toContain(`--assessment-sha256 ${"b".repeat(64)}`);
+		expect(example).toContain(`--predecessor-head ${"c".repeat(40)}`);
+		expect(example).toContain("--staged-later S4 --staged-later S5 F2 F3 Stage 2");
+		expect(example).not.toMatch(/(?:^|\s)F1(?:\s|$)/);
+
 		expect(reporting).toContain("structured provenance payload");
 		expect(reporting).toContain("preserve every supplied provenance field verbatim");
 	});
@@ -701,8 +729,12 @@ describe("mach12 executable validation integration", () => {
 		expect(parse).toContain("`^(F|S)[1-9][0-9]*$`");
 		expect(parse).toContain("prohibit bare numbers");
 		expect(parse).toContain("pairwise disjoint");
-		expect(parse).toContain("reject combining any `--cleanup-finding` with production repair IDs or with `--staged-later`");
-		expect(parse).toContain("For a first validation-origin repair, require their union to exhaust every surviving proof ID");
+		expect(parse).toContain(
+			"reject combining any `--cleanup-finding` with production repair IDs or with `--staged-later`",
+		);
+		expect(parse).toContain(
+			"For a first validation-origin repair, require their union to exhaust every surviving proof ID",
+		);
 		expect(parse).toContain(
 			"For a staged continuation, require selected and staged-later IDs to exhaust exactly the predecessor chain's remaining staged IDs",
 		);
@@ -736,7 +768,9 @@ describe("mach12 executable validation integration", () => {
 		expect(implementation).toContain("require both exact comment IDs and both SHA-256 bindings");
 		expect(implementation).toContain("--cleanup-finding");
 		expect(implementation).toContain("For a first repair, partition every surviving proof");
-		expect(implementation).toContain("partition only the remaining staged proofs recorded at the supplied predecessor head");
+		expect(implementation).toContain(
+			"partition only the remaining staged proofs recorded at the supplied predecessor head",
+		);
 		expect(implementation).toContain("previously selected proofs remain authenticated chain history");
 		expect(implementation).toContain("require cleanup IDs to exhaust every surviving proof");
 		expect(implementation).toContain("no surviving red proof remains");
@@ -745,7 +779,11 @@ describe("mach12 executable validation integration", () => {
 
 	it("gives authenticated cleanup a pre-merge-only completion route", () => {
 		const reporting = section(prReviewFix, "## Step 5:");
-		const cleanup = section(reporting, "- **Successful terminal `--cleanup-finding` run:**", "- **Production-repair run:**");
+		const cleanup = section(
+			reporting,
+			"- **Successful terminal `--cleanup-finding` run:**",
+			"- **Production-repair run:**",
+		);
 		expect(cleanup.match(/`message`:/g)).toHaveLength(1);
 		expect(cleanup).toContain("`message`: `/mach12:pr-pre-merge <pr-number>`");
 		expect(cleanup).toContain("Set `recommended_next_step` to `0`");

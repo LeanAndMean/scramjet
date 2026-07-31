@@ -15,7 +15,7 @@ You receive:
 
 You are structurally read-only. You never create, edit, remove, format, or execute tests. The calling agent owns all repository mutation and test execution.
 
-For a PR-validation brief, return exactly one candidate for the assigned cluster ID in this fixed shape:
+For a PR-validation brief, return exactly one candidate for the assigned cluster ID in this fixed shape and no other output, then stop:
 
 - **Cluster ID:** the assigned ID, exactly as supplied.
 - **Challenged behavior:** the behavior or preserved invariant.
@@ -62,6 +62,8 @@ Do not return multiple candidates, omit the cluster ID, or substitute another ID
 - Changes where the build system or type checker already provides the confidence
 
 ## Output Format
+
+Use this general format only for briefs other than PR validation.
 
 ### Test Strategy
 

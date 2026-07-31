@@ -50,7 +50,7 @@ Record the repository owner/name, authenticated GitHub login, PR head OID, base 
 
 Gather all authoritative context before designer fan-out:
 
-1. Read the PR title, body, base and head identities, files, commits, and complete comments. Use direct `gh` queries for metadata, then delegate for the full comment stream:
+1. Read the PR title, body, base and head identities, files, commits, and all top-level PR conversation comments. Use direct `gh` queries for metadata, then delegate for those comments:
 
    ```
    /mach12:gh-pr-read <pr-number>

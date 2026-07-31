@@ -1,5 +1,5 @@
 ---
-description: Read a GitHub pull request's title, body, and all comments; optionally locate an HTML-marker comment
+description: Read a GitHub pull request's title, body, and all top-level PR conversation comments; optionally locate an HTML-marker comment
 argument-hint: "<pr-number> [--marker <html-marker>]"
 delegate-only: true
 allowed-tools:
@@ -24,7 +24,7 @@ Extract:
 
 If no PR number is present, return an error to the caller and stop.
 
-## Step 2: Read the PR and complete comment stream
+## Step 2: Read the PR and all top-level PR conversation comments
 
 Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the PR through `gh api graphql --paginate` with explicit variables for owner, name, PR number, and `$endCursor`. Request `title`, `body`, and:
 
@@ -48,5 +48,5 @@ If the marker is not found, return that fact alongside the PR content. The calle
 
 Return:
 - The PR title and body.
-- The complete accumulated comments array (parsed JSON), its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
+- The complete accumulated array of top-level PR conversation comments (parsed JSON), its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
 - If `--marker` was requested: the matched comment body and its numeric comment ID (parsed from the comment URL -- the number after `issuecomment-`). If the marker was not found, indicate that.
