@@ -258,7 +258,7 @@ Editor border colors indicating thinking level (visual hierarchy from subtle to 
 
 | Token | Purpose |
 |-------|---------|
-| `spellcheckError` | Misspelled words in the editor |
+| `spellcheckError` | Misspelled-word foreground in the editor; the underline is applied independently |
 
 ### HTML Export (optional)
 
@@ -293,6 +293,7 @@ When a color token is set to `""`, scramjet emits `\x1b[39m` (reset foreground) 
 
 - The theme cannot guarantee contrast for empty-string tokens, because the terminal's actual foreground/background is unknown at theme time.
 - Tokens like `text`, `userMessageText`, `customMessageText`, and `toolOutput` use `""` in the built-in themes to inherit the terminal's default foreground.
+- The built-in `pi-light` theme also sets `spellcheckError` to `""`, preserving the terminal foreground for readable misspelled text while the editor applies the spell-check underline independently.
 - If your terminal's default foreground creates poor contrast against themed element backgrounds, you can override these tokens with explicit colors in a custom theme.
 
 ### 256-Color Palette
@@ -324,7 +325,7 @@ This is by design — setting the terminal background via escape sequences (OSC 
 
 ### Light Theme Contrast
 
-The built-in light theme guarantees WCAG AA contrast (4.5:1) for all explicit text-bearing foreground colors against their actual rendering surfaces (element backgrounds and white canvas). Element backgrounds (`userMessageBg`, `toolPendingBg`, etc.) maintain at least 1.30:1 contrast against white for visual separation. These guarantees hold in both truecolor and 256-color rendering modes.
+The built-in light theme guarantees WCAG AA contrast (4.5:1) for explicit text-bearing foreground colors against their actual rendering surfaces (element backgrounds and white canvas). Terminal-default foregrounds, including `spellcheckError`, depend on the terminal profile and cannot carry a static theme contrast guarantee. Element backgrounds (`userMessageBg`, `toolPendingBg`, etc.) maintain at least 1.30:1 contrast against white for visual separation. These guarantees hold in both truecolor and 256-color rendering modes.
 
 ## Tips
 

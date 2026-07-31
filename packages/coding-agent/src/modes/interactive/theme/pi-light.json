@@ -75,7 +75,7 @@
 		"thinkingXhigh": "#6b006b",
 
 		"bashMode": "green",
-		"spellcheckError": "red"
+		"spellcheckError": ""
 	},
 	"export": {
 		"pageBg": "#f8f8f8",

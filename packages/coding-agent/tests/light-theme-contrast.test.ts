@@ -125,7 +125,6 @@ const CANVAS_TEXT_TOKENS = [
 	"syntaxOperator",
 	"syntaxPunctuation",
 	"bashMode",
-	"spellcheckError",
 ] as const;
 
 // Foreground tokens that render inside tool execution boxes.
@@ -206,7 +205,13 @@ const ALL_ELEMENT_BACKGROUNDS = [
 ] as const;
 
 // Tokens that are empty-string (terminal defaults) — verified but not contrast-tested
-const TERMINAL_DEFAULT_TOKENS = ["text", "userMessageText", "customMessageText", "toolTitle"] as const;
+const TERMINAL_DEFAULT_TOKENS = [
+	"text",
+	"userMessageText",
+	"customMessageText",
+	"toolTitle",
+	"spellcheckError",
+] as const;
 
 // ============================================================================
 // Tests
