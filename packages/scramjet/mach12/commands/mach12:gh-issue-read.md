@@ -24,15 +24,19 @@ Extract:
 
 If no issue number is present, return an error to the caller and stop.
 
-## Step 2: Read the issue and comments
+## Step 2: Read the issue and complete comment stream
 
-Read the title, body, and all comments in one call:
+Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the issue through `gh api graphql --paginate` with explicit variables for owner, name, issue number, and `$endCursor`. Request `title`, `body`, and:
 
+```graphql
+comments(first: 100, after: $endCursor) {
+  totalCount
+  nodes { databaseId body author { login } authorAssociation createdAt url }
+  pageInfo { hasNextPage endCursor }
+}
 ```
-gh issue view <issue-number> --json title,body,comments
-```
 
-If the call fails (issue not found, authentication error, network), surface the full error to the caller and stop. The caller decides whether the workflow can proceed without the issue.
+The query must declare `$endCursor: String` and pass `pageInfo.hasNextPage` plus `pageInfo.endCursor` so `--paginate` follows every page. Accumulate comment nodes in chronological page order. Verify the accumulated node count exactly equals `totalCount`; reject duplicate database IDs. If pagination stops early, a page is malformed, the count differs, or any command fails, surface the full error and report that authoritative history is incomplete; do not return a partial array as complete. The caller decides whether the workflow can proceed without the issue.
 
 ## Step 3: Locate the marker comment (if requested)
 
@@ -44,5 +48,5 @@ If the marker is not found, return that fact alongside the issue content -- the 
 
 Return:
 - The issue title and body.
-- The full comments array (parsed JSON).
+- The complete accumulated comments array (parsed JSON), its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
 - If `--marker` was requested: the matched comment body and its numeric comment ID (parsed from the comment URL -- the number after `issuecomment-`). If the marker was not found, indicate that.

@@ -14,6 +14,10 @@ next:
       hint: |
         Pick when the PR is ready for an automated review pass before
         merge consideration. The common path after PR creation.
+    - name: mach12:pr-validation
+      hint: |
+        Pick for an opt-in executable-behavior pass when the PR changes
+        high-risk lifecycle, concurrency, persistence, or protocol behavior.
 ---
 
 # Create Pull Request
@@ -106,9 +110,9 @@ If creation fails, report the full error. For an existing PR on the branch, repo
 
 After successful creation, report the PR number, URL, and whether the approved body links one issue or is unlinked.
 
-After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`. Report `status: "incomplete"` if the user cancelled. Reserve `status: "completed"` for a successfully created PR and include this selector-visible next step:
+After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`. Report `status: "incomplete"` if the user cancelled. Reserve `status: "completed"` for a successfully created PR and include these selector-visible next steps in order:
 
-- `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`
-- `reason`: the PR was created with its complete approved body and is ready for automated review
+1. `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`; `reason`: the PR was created with its complete approved body and is ready for the recommended automated review.
+2. `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`; `reason`: use the slower, opt-in executable-behavior path when the PR's behavioral risk warrants test-driven regression hunting.
 
-Set `recommended_next_step` to `0` when included. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
+Set `recommended_next_step` to `0`, ordinary PR review. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

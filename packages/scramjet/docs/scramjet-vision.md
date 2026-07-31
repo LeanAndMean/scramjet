@@ -929,7 +929,7 @@ across whatever model Pi is configured to use.
 
 ### Initial command list
 
-The MVP set is a clean rewrite of the corresponding Mach 10 commands:
+The original MVP set was a clean rewrite of the corresponding Mach 10 commands. The current set retains that historical lifecycle and adds an opt-in executable-validation pair alongside ordinary static PR review:
 
 - `/mach12:issue-create`
 - `/mach12:issue-plan`
@@ -938,6 +938,8 @@ The MVP set is a clean rewrite of the corresponding Mach 10 commands:
 - `/mach12:pr-create`
 - `/mach12:pr-review`
 - `/mach12:pr-review-assessment`
+- `/mach12:pr-validation`
+- `/mach12:pr-validation-assessment`
 - `/mach12:pr-review-fix`
 - `/mach12:pr-pre-merge`
 - `/mach12:pr-merge`
@@ -960,16 +962,20 @@ every step Mach 10 has eventually grown.
 | `issue-plan`             | `open`  | `issue-review`, `issue-implement`                   | `plan-comment-contract`            |
 | `issue-review`           | `open`  | `issue-review`, `issue-implement`                   | `plan-comment-contract`            |
 | `issue-implement`        | `open`  | `pr-create`                                         | `push`                             |
-| `pr-create`              | `open`  | `pr-review`                                         | —                                  |
+| `pr-create`              | `open`  | `pr-review`, `pr-validation`                        | —                                  |
 | `pr-review`              | `forced`| `pr-review-assessment`                              | —                                  |
 | `pr-review-assessment`   | `closed`| `pr-review-fix`, `pr-pre-merge`                     | —                                  |
-| `pr-review-fix`          | `open`  | `pr-review-fix`, `pr-review`, `pr-pre-merge`        | `push`                             |
+| `pr-validation`          | `forced`| `pr-validation-assessment`                          | —                                  |
+| `pr-validation-assessment` | `closed` | `pr-review-fix`, `pr-pre-merge`                  | —                                  |
+| `pr-review-fix`          | `open`  | `pr-review-fix`, `pr-review`, `pr-validation`, `pr-pre-merge` | `push`                  |
 | `pr-pre-merge`           | `open`  | `pr-merge`, `pr-review-fix`                         | `find-contribution-guidelines`     |
 | `pr-merge`               | n/a     | (terminus — no `next`)                              | —                                  |
 | `push`                   | n/a     | (delegation target — no top-level `next`)           | (gh comment subroutines)           |
 
 Notes:
 
+- **`pr-validation` → `forced` → `pr-validation-assessment` → `closed [fix, pre-merge]`.**
+  This is the slower, opt-in executable-behavior path. Read-only test designers propose hypotheses, the parent command owns sequential test mutation, and a fresh assessment session revalidates retained red proofs before fixes.
 - **`pr-review` → `forced` → `pr-review-assessment` → `closed [fix, pre-merge]`.**
   The previous draft tried to express the fix-vs-pre-merge branch directly
   on `pr-review`, which `forced` cannot do. The fix is the composability
