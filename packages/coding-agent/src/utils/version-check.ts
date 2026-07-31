@@ -14,8 +14,10 @@ interface ParsedVersion {
 }
 
 function parsePackageVersion(version: string): ParsedVersion | undefined {
-	const match = version.trim().match(/^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/);
-	if (!match) {
+	const match = version
+		.trim()
+		.match(/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+	if (!match || match[4]?.split(".").some((identifier) => /^0\d+$/.test(identifier))) {
 		return undefined;
 	}
 	return {
@@ -39,15 +41,30 @@ function comparePackageVersions(leftVersion: string, rightVersion: string): numb
 	if (left.prerelease === right.prerelease) return 0;
 	if (!left.prerelease) return 1;
 	if (!right.prerelease) return -1;
-	return left.prerelease.localeCompare(right.prerelease);
+	const leftIdentifiers = left.prerelease.split(".");
+	const rightIdentifiers = right.prerelease.split(".");
+	for (let index = 0; index < Math.max(leftIdentifiers.length, rightIdentifiers.length); index++) {
+		const leftIdentifier = leftIdentifiers[index];
+		const rightIdentifier = rightIdentifiers[index];
+		if (leftIdentifier === undefined) return -1;
+		if (rightIdentifier === undefined) return 1;
+		if (leftIdentifier === rightIdentifier) continue;
+		const leftNumeric = /^\d+$/.test(leftIdentifier);
+		const rightNumeric = /^\d+$/.test(rightIdentifier);
+		if (leftNumeric && rightNumeric) {
+			if (leftIdentifier.length !== rightIdentifier.length) return leftIdentifier.length - rightIdentifier.length;
+			return leftIdentifier.localeCompare(rightIdentifier);
+		}
+		if (leftNumeric) return -1;
+		if (rightNumeric) return 1;
+		return leftIdentifier.localeCompare(rightIdentifier);
+	}
+	return 0;
 }
 
+// SCRAMJET-DIVERGENCE: malformed package versions fail closed for passive update notifications (#432).
 export function isNewerPackageVersion(candidateVersion: string, currentVersion: string): boolean {
-	const comparison = comparePackageVersions(candidateVersion, currentVersion);
-	if (comparison !== undefined) {
-		return comparison > 0;
-	}
-	return candidateVersion.trim() !== currentVersion.trim();
+	return (comparePackageVersions(candidateVersion, currentVersion) ?? 0) > 0;
 }
 
 export async function getLatestRelease(

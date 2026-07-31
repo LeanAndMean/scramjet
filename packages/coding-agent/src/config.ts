@@ -235,6 +235,7 @@ function isSelfUpdatePathWritable(): boolean {
 	}
 }
 
+// SCRAMJET-DIVERGENCE: managed-install ownership is exposed independently of update writability (#432).
 function isManagedByGlobalPackageManager(method: InstallMethod, packageName: string, npmCommand?: string[]): boolean {
 	const packageDir = normalizeExistingPathForComparison(getPackageDir());
 	return (
@@ -247,6 +248,10 @@ function isManagedByGlobalPackageManager(method: InstallMethod, packageName: str
 			);
 		})
 	);
+}
+
+export function isManagedPackageInstallation(packageName: string, npmCommand?: string[]): boolean {
+	return isManagedByGlobalPackageManager(detectInstallMethod(), packageName, npmCommand);
 }
 
 export function getSelfUpdateCommand(

@@ -1,7 +1,8 @@
 // Core session management
 
 // Config paths
-export { getAgentDir, VERSION } from "./config.js";
+export { getAgentDir, isManagedPackageInstallation, VERSION } from "./config.js";
+export { isNewerPackageVersion } from "./utils/version-check.js";
 export {
 	AgentSession,
 	type AgentSessionConfig,
