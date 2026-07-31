@@ -4,6 +4,7 @@
 
 ### Added
 
+- Expose detached startup version checks and package-manager installation ownership for product update notifications. ([#434](https://github.com/LeanAndMean/scramjet/pull/434))
 - Append-only finalized transcript history with a bounded live canvas prevents routine response completion, tool finalization, height resize, and overlay updates from replaying or jumping terminal scrollback. ([#396](https://github.com/LeanAndMean/scramjet/pull/396))
 
 ### Changed
