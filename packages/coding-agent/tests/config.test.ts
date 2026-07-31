@@ -52,7 +52,7 @@ describe("PACKAGE_NAME", () => {
 	});
 });
 
-describe("isManagedPackageInstallation", () => {
+describe("isCurrentInstallationManaged", () => {
 	it("recognizes a package inside a global package root without checking writability", async () => {
 		const fixture = mkdtempSync(join(tmpdir(), "scramjet-managed-install-"));
 		const root = join(fixture, "lib", "node_modules");
@@ -71,9 +71,9 @@ describe("isManagedPackageInstallation", () => {
 			}),
 		}));
 
-		const { isManagedPackageInstallation } = await import("../src/config.js");
+		const { isCurrentInstallationManaged } = await import("../src/config.js");
 
-		expect(isManagedPackageInstallation("@leanandmean/scramjet")).toBe(true);
+		expect(isCurrentInstallationManaged()).toBe(true);
 	});
 
 	it("rejects a package symlink that resolves outside the global package root", async () => {
@@ -91,9 +91,9 @@ describe("isManagedPackageInstallation", () => {
 			spawnSync: vi.fn(() => ({ status: 0, stdout: `${root}\n`, stderr: "" })),
 		}));
 
-		const { isManagedPackageInstallation } = await import("../src/config.js");
+		const { isCurrentInstallationManaged } = await import("../src/config.js");
 
-		expect(isManagedPackageInstallation("@leanandmean/scramjet")).toBe(false);
+		expect(isCurrentInstallationManaged()).toBe(false);
 	});
 });
 

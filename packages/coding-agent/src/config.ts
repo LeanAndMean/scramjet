@@ -164,7 +164,7 @@ function readCommandOutput(
 	return undefined;
 }
 
-function getGlobalPackageRoots(method: InstallMethod, _packageName: string, npmCommand?: string[]): string[] {
+function getGlobalPackageRoots(method: InstallMethod, npmCommand?: string[]): string[] {
 	switch (method) {
 		case "npm": {
 			const configured = !!npmCommand?.length;
@@ -236,11 +236,11 @@ function isSelfUpdatePathWritable(): boolean {
 }
 
 // SCRAMJET-DIVERGENCE: managed-install ownership is exposed independently of update writability (#432).
-function isManagedByGlobalPackageManager(method: InstallMethod, packageName: string, npmCommand?: string[]): boolean {
+function isManagedByGlobalPackageManager(method: InstallMethod, npmCommand?: string[]): boolean {
 	const packageDir = normalizeExistingPathForComparison(getPackageDir());
 	return (
 		!!packageDir &&
-		getGlobalPackageRoots(method, packageName, npmCommand).some((root) => {
+		getGlobalPackageRoots(method, npmCommand).some((root) => {
 			const normalizedRoot = normalizeExistingPathForComparison(root);
 			return (
 				!!normalizedRoot &&
@@ -250,8 +250,8 @@ function isManagedByGlobalPackageManager(method: InstallMethod, packageName: str
 	);
 }
 
-export function isManagedPackageInstallation(packageName: string, npmCommand?: string[]): boolean {
-	return isManagedByGlobalPackageManager(detectInstallMethod(), packageName, npmCommand);
+export function isCurrentInstallationManaged(npmCommand?: string[]): boolean {
+	return isManagedByGlobalPackageManager(detectInstallMethod(), npmCommand);
 }
 
 export function getSelfUpdateCommand(
@@ -261,7 +261,7 @@ export function getSelfUpdateCommand(
 ): SelfUpdateCommand | undefined {
 	const method = detectInstallMethod();
 	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
-	if (!command || !isManagedByGlobalPackageManager(method, packageName, npmCommand) || !isSelfUpdatePathWritable()) {
+	if (!command || !isManagedByGlobalPackageManager(method, npmCommand) || !isSelfUpdatePathWritable()) {
 		return undefined;
 	}
 	return command;
@@ -279,7 +279,7 @@ export function getSelfUpdateUnavailableInstruction(
 	}
 	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
 	if (command) {
-		if (isManagedByGlobalPackageManager(method, packageName, npmCommand) && !isSelfUpdatePathWritable()) {
+		if (isManagedByGlobalPackageManager(method, npmCommand) && !isSelfUpdatePathWritable()) {
 			return `This installation is managed by a global ${method} install, but the install path is not writable. Update it yourself with: ${command.display}`;
 		}
 		return `This installation is not managed by a global ${method} install. Update it with the package manager, wrapper, or source checkout that provides it.`;

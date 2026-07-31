@@ -176,7 +176,10 @@ describe("integration smoke — startup update notifier wired into the extension
 		const { pi, emit } = recordingPi();
 		pi.exec = vi.fn(async () => ({ stdout: JSON.stringify("999.0.0"), stderr: "", code: 0, killed: false }));
 		const notify = vi.fn();
-		initScramjet(pi);
+		initScramjet(pi, {
+			installedVersion: () => "0.0.0",
+			isManagedInstallation: () => false,
+		});
 
 		await emit(
 			"session_start",

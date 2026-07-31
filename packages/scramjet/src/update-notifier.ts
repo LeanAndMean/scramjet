@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
-import { type ExtensionAPI, isManagedPackageInstallation, isNewerPackageVersion } from "@leanandmean/coding-agent";
+import { type ExtensionAPI, isCurrentInstallationManaged, isNewerPackageVersion } from "@leanandmean/coding-agent";
 import { packageRoot } from "./docs-registry.js";
 
 const PACKAGE_NAME = "@leanandmean/scramjet";
 const LOOKUP_ARGS = ["view", PACKAGE_NAME, "version", "--json"];
 export const UPDATE_CHECK_TIMEOUT_MS = 5000;
 
-interface UpdateNotifierDependencies {
+export interface UpdateNotifierDependencies {
 	installedVersion: () => string;
 	isManagedInstallation: () => boolean;
 }
@@ -24,8 +24,13 @@ function installedVersion(): string {
 
 const defaultDependencies: UpdateNotifierDependencies = {
 	installedVersion,
-	isManagedInstallation: () => isManagedPackageInstallation(PACKAGE_NAME),
+	isManagedInstallation: isCurrentInstallationManaged,
 };
+
+function isTruthyEnvFlag(value: string | undefined): boolean {
+	if (!value) return false;
+	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
 
 export function registerUpdateNotifier(
 	pi: ExtensionAPI,
@@ -34,7 +39,13 @@ export function registerUpdateNotifier(
 	let started = false;
 
 	pi.on("session_start", (_event, ctx) => {
-		if (!ctx.hasUI || started || process.env.SCRAMJET_OFFLINE || process.env.PI_OFFLINE) return;
+		if (
+			!ctx.hasUI ||
+			started ||
+			isTruthyEnvFlag(process.env.SCRAMJET_OFFLINE) ||
+			isTruthyEnvFlag(process.env.PI_OFFLINE)
+		)
+			return;
 		started = true;
 
 		void (async () => {

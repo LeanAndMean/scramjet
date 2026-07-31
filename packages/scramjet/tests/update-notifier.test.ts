@@ -90,12 +90,35 @@ describe("registerUpdateNotifier", () => {
 		expect(rejected.notify).not.toHaveBeenCalled();
 	});
 
-	it.each(["SCRAMJET_OFFLINE", "PI_OFFLINE"])("does not spawn when %s is set", async (name) => {
-		process.env[name] = "1";
+	it.each([
+		["SCRAMJET_OFFLINE", "1"],
+		["SCRAMJET_OFFLINE", "true"],
+		["SCRAMJET_OFFLINE", "YES"],
+		["PI_OFFLINE", "1"],
+		["PI_OFFLINE", "TRUE"],
+		["PI_OFFLINE", "yes"],
+	])("does not spawn when %s=%s", async (name, value) => {
+		process.env[name] = value;
 		const { bag, notify, ctx } = setup();
 		await bag.emit("session_start", {}, ctx);
 		expect(bag.pi.exec).not.toHaveBeenCalled();
 		expect(notify).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["SCRAMJET_OFFLINE", "0"],
+		["SCRAMJET_OFFLINE", "false"],
+		["SCRAMJET_OFFLINE", "no"],
+		["PI_OFFLINE", "0"],
+		["PI_OFFLINE", "FALSE"],
+		["PI_OFFLINE", "NO"],
+	])("checks for updates when %s=%s", async (name, value) => {
+		process.env[name] = value;
+		const { bag, notify, ctx } = setup();
+		await bag.emit("session_start", {}, ctx);
+		await flush();
+		expect(bag.pi.exec).toHaveBeenCalledOnce();
+		expect(notify).toHaveBeenCalledOnce();
 	});
 
 	it("does not consume eligibility in headless mode", async () => {

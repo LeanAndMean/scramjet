@@ -7,9 +7,9 @@ export interface LatestRelease {
 }
 
 interface ParsedVersion {
-	major: number;
-	minor: number;
-	patch: number;
+	major: string;
+	minor: string;
+	patch: string;
 	prerelease?: string;
 }
 
@@ -23,9 +23,9 @@ function parsePackageVersion(version: string): ParsedVersion | undefined {
 		return undefined;
 	}
 	return {
-		major: Number.parseInt(match[1], 10),
-		minor: Number.parseInt(match[2], 10),
-		patch: Number.parseInt(match[3], 10),
+		major: match[1],
+		minor: match[2],
+		patch: match[3],
 		prerelease: match[4],
 	};
 }
@@ -37,9 +37,13 @@ function comparePackageVersions(leftVersion: string, rightVersion: string): numb
 		return undefined;
 	}
 
-	if (left.major !== right.major) return left.major - right.major;
-	if (left.minor !== right.minor) return left.minor - right.minor;
-	if (left.patch !== right.patch) return left.patch - right.patch;
+	for (const component of ["major", "minor", "patch"] as const) {
+		if (left[component] === right[component]) continue;
+		if (left[component].length !== right[component].length) {
+			return left[component].length - right[component].length;
+		}
+		return left[component].localeCompare(right[component]);
+	}
 	if (left.prerelease === right.prerelease) return 0;
 	if (!left.prerelease) return 1;
 	if (!right.prerelease) return -1;

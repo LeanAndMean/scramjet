@@ -30,7 +30,7 @@ import { registerSuggestNextStepsTool } from "./suggest-next-steps.js";
 import { registerTerminalIndicators } from "./terminal-indicators.js";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
 import type { ScramjetState } from "./types.js";
-import { registerUpdateNotifier } from "./update-notifier.js";
+import { registerUpdateNotifier, type UpdateNotifierDependencies } from "./update-notifier.js";
 import { registerUserInputTool } from "./user-input.js";
 
 export interface RuntimeVersions {
@@ -76,7 +76,7 @@ export function runtimeVersions(): RuntimeVersions {
 	};
 }
 
-export function initScramjet(pi: ExtensionAPI) {
+export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: UpdateNotifierDependencies) {
 	const logger = createLogger(pi);
 	const state: ScramjetState = {
 		enabled: false,
@@ -122,7 +122,7 @@ export function initScramjet(pi: ExtensionAPI) {
 	registerNextStepRecord(pi);
 	registerHistory(pi, state);
 	registerPrIndicator(pi);
-	registerUpdateNotifier(pi);
+	registerUpdateNotifier(pi, updateNotifierDependencies);
 	registerBaseDirectives(pi);
 	registerAgentCatalog(pi, state);
 	registerCommandCatalog(pi, state);

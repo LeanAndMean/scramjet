@@ -14,6 +14,9 @@ describe("isNewerPackageVersion", () => {
 		["1.2.3", "1.2.3", false],
 		["1.2.2", "1.2.3", false],
 		["1.2.3+build.2", "1.2.3+build.1", false],
+		["9007199254740993.0.0", "9007199254740992.0.0", true],
+		["1.9007199254740993.0", "1.9007199254740992.0", true],
+		["1.0.9007199254740993", "1.0.9007199254740992", true],
 	])("compares %s against %s", (candidate, current, expected) => {
 		expect(isNewerPackageVersion(candidate, current)).toBe(expected);
 	});
