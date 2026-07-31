@@ -29,6 +29,8 @@ scramjet
 
 `scramjet` is a standalone CLI that uses Pi as its runtime. All Pi flags (`--help`, `--print`, `--resume`, etc.) work unchanged.
 
+At startup, Scramjet may show a notice when npm reports a newer release. Package-manager installations can update with `scramjet update`; source installations should pull the latest source and reinstall from that checkout. Offline and failed checks remain silent.
+
 Scramjet ships with two command sets: the product-owned **Scramjet** operational set and **Mach 12**, a starting point with twelve top-level commands for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
 Try it:

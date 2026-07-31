@@ -16,7 +16,9 @@ interface ParsedVersion {
 function parsePackageVersion(version: string): ParsedVersion | undefined {
 	const match = version
 		.trim()
-		.match(/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+		.match(
+			/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+		);
 	if (!match || match[4]?.split(".").some((identifier) => /^0\d+$/.test(identifier))) {
 		return undefined;
 	}

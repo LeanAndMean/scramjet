@@ -2,7 +2,6 @@
 
 // Config paths
 export { getAgentDir, isManagedPackageInstallation, VERSION } from "./config.js";
-export { isNewerPackageVersion } from "./utils/version-check.js";
 export {
 	AgentSession,
 	type AgentSessionConfig,
@@ -357,3 +356,4 @@ export { copyToClipboard } from "./utils/clipboard.js";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";
 // Shell utilities
 export { getShellConfig } from "./utils/shell.js";
+export { isNewerPackageVersion } from "./utils/version-check.js";

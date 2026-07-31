@@ -167,13 +167,32 @@ describe("integration smoke — advisory warning against real subroutine scope",
 	});
 });
 
-// Proves index.ts actually wires registerBaseDirectives into the extension —
-// the unit suite (base-directives.test.ts) covers the injector in isolation,
-// but only the real default export catches a dropped registerBaseDirectives call in the factory.
-// Loading the whole factory exercises the live registration order; emitting
-// before_agent_start confirms the directives are returned as a cache-aware
-// section (the identity anchor is unique to the base directives, so its presence
-// proves the injector ran).
+describe("integration smoke — startup update notifier wired into the extension factory", () => {
+	afterEach(() => vi.unstubAllEnvs());
+
+	it("notifies when npm reports a newer Scramjet release", async () => {
+		vi.stubEnv("SCRAMJET_OFFLINE", "");
+		vi.stubEnv("PI_OFFLINE", "");
+		const { pi, emit } = recordingPi();
+		pi.exec = vi.fn(async () => ({ stdout: JSON.stringify("999.0.0"), stderr: "", code: 0, killed: false }));
+		const notify = vi.fn();
+		initScramjet(pi);
+
+		await emit(
+			"session_start",
+			{},
+			{
+				hasUI: true,
+				sessionManager: { getBranch: () => [], getEntries: () => [] },
+				ui: { notify, setStatus() {}, setTitleProvider() {} },
+			},
+		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("Scramjet 999.0.0 is available"), "info");
+	});
+});
+
 describe("integration smoke — runtime provenance wired into the extension factory", () => {
 	it("returns unknown for unreadable, malformed, or structurally invalid package metadata", () => {
 		const dir = mkdtempSync(join(tmpdir(), "scramjet-runtime-version-"));
@@ -225,6 +244,13 @@ describe("integration smoke — runtime provenance wired into the extension fact
 	});
 });
 
+// Proves index.ts actually wires registerBaseDirectives into the extension —
+// the unit suite (base-directives.test.ts) covers the injector in isolation,
+// but only the real default export catches a dropped registerBaseDirectives call in the factory.
+// Loading the whole factory exercises the live registration order; emitting
+// before_agent_start confirms the directives are returned as a cache-aware
+// section (the identity anchor is unique to the base directives, so its presence
+// proves the injector ran).
 describe("integration smoke — base directives wired into the extension factory", () => {
 	it("scramjet() registers the injector so before_agent_start contributes the directives section", async () => {
 		const { pi, handlers } = recordingPi();
