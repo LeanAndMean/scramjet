@@ -598,6 +598,30 @@ describe("mach12 issue creation — duplicate search and publication safety", ()
 		expect(creation).not.toContain('--body "<approved-body>"');
 		expect(creation).toContain("must not mutate or expand backticks, `$()`, variables, quotes, or backslashes");
 	});
+
+	it("fails closed across issue staging, creation, identity validation, and metadata", () => {
+		const titleWrite = creation.indexOf('cat >"$issue_transport_dir/title"');
+		const bodyWrite = creation.indexOf('cat >"$issue_transport_dir/body"');
+		const guardedCreate = creation.indexOf("if ! created_issue_output=$(gh issue create");
+		const identityValidation = creation.indexOf('gh issue view "$created_issue_url" --json number,url');
+		const metadata = creation.indexOf(
+			"Apply each user-requested or repository-standard label and assignee operation",
+		);
+		expect(creation.slice(titleWrite, bodyWrite)).toContain("Could not stage the approved issue title");
+		expect(creation.slice(bodyWrite, guardedCreate)).toContain("Could not stage the approved issue body");
+		expect(guardedCreate).toBeGreaterThan(bodyWrite);
+		expect(creation).toContain("GitHub issue creation failed; no metadata was applied");
+		expect(identityValidation).toBeGreaterThan(guardedCreate);
+		expect(metadata).toBeGreaterThan(identityValidation);
+		expect(creation).toContain("positive integer `number` and a non-empty `url`");
+		expect(creation).toMatch(/identity validation fails[^.]*do not retry creation[^.]*non-completed status/i);
+		expect(creation).toContain("requiring the command to succeed and return exactly one non-empty login");
+		expect(creation).toMatch(/resolution fails[^.]*confirmed issue number and URL[^.]*non-completed status/i);
+		expect(creation).toMatch(
+			/metadata operation fails[^.]*confirmed issue number and URL[^.]*exact label or assignee operation/i,
+		);
+		expect(creation).toMatch(/do not retry issue creation or claim complete success[^.]*non-completed status/i);
+	});
 });
 
 describe("mach12 standard PR linkage", () => {

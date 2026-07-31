@@ -210,21 +210,37 @@ For a clear duplicate's **Link to existing** choice, prepare the same `Related c
 
 Create the issue from the latest explicitly approved title and body unchanged. Never interpolate either value into a shell command. Verify that the approved title is one line and that the approved body is newline-terminated; if either invariant cannot be verified, stop so a preservable draft can be reapproved.
 
-Create a temporary directory and choose separate HEREDOC delimiters only after confirming that neither delimiter occurs as a standalone line in its value. Write each value through a quoted HEREDOC, then pass the title through quoted command substitution and the body by filename:
+Create a temporary directory and choose separate HEREDOC delimiters only after confirming that neither delimiter occurs as a standalone line in its value. Guard each quoted-HEREDOC write separately and stop with an actionable error if either write fails. Then create the issue while capturing stdout:
 
 ```sh
-issue_transport_dir=$(mktemp -d) || exit 1
+issue_transport_dir=$(mktemp -d) || {
+  printf '%s\n' 'Could not create issue transport directory; issue creation stopped.' >&2
+  exit 1
+}
 trap 'rm -rf "$issue_transport_dir"' EXIT
-cat >"$issue_transport_dir/title" <<'MACH12_ISSUE_TITLE'
+cat >"$issue_transport_dir/title" <<'MACH12_ISSUE_TITLE' || {
+  printf '%s\n' 'Could not stage the approved issue title; issue creation stopped.' >&2
+  exit 1
+}
 <approved title>
 MACH12_ISSUE_TITLE
-cat >"$issue_transport_dir/body" <<'MACH12_ISSUE_BODY'
+cat >"$issue_transport_dir/body" <<'MACH12_ISSUE_BODY' || {
+  printf '%s\n' 'Could not stage the approved issue body; issue creation stopped.' >&2
+  exit 1
+}
 <approved body>
 MACH12_ISSUE_BODY
-gh issue create --title "$(<"$issue_transport_dir/title")" --body-file "$issue_transport_dir/body"
+if ! created_issue_output=$(gh issue create --title "$(<"$issue_transport_dir/title")" --body-file "$issue_transport_dir/body"); then
+  printf '%s\n' 'GitHub issue creation failed; no metadata was applied.' >&2
+  exit 1
+fi
 ```
 
-The newline before each delimiter must already be part of the approved value; the quoted HEREDOCs must not mutate or expand backticks, `$()`, variables, quotes, or backslashes. Use plain words such as "finding 3" rather than `#3` for numbered artifact items. Apply user-requested or repository-standard labels and assignees after creation. Resolve `assign me` with `gh api user --jq .login`.
+The newline before each delimiter must already be part of the approved value; the quoted HEREDOCs must not mutate or expand backticks, `$()`, variables, quotes, or backslashes. Use plain words such as "finding 3" rather than `#3` for numbered artifact items.
+
+Before applying metadata or confirming success, require `created_issue_output` to contain exactly one non-empty line, treat that line only as a candidate URL, and resolve it with `gh issue view "$created_issue_url" --json number,url`. Require valid JSON containing a positive integer `number` and a non-empty `url`, then capture both values. If output or identity validation fails after `gh issue create` succeeds, report the candidate URL when available, explain that creation may have succeeded but its identity could not be confirmed, do not retry creation, and report a non-completed status.
+
+Resolve `assign me` with `gh api user --jq .login`, requiring the command to succeed and return exactly one non-empty login. If resolution fails, report the confirmed issue number and URL plus the failed `assign me` resolution; do not apply unresolved assignee metadata, retry issue creation, or claim complete success, and report a non-completed status. Apply each user-requested or repository-standard label and assignee operation only after identity validation, guard every operation, and record its exact failure. If any metadata operation fails, report the confirmed issue number and URL plus the exact label or assignee operation that failed; do not retry issue creation or claim complete success, and report a non-completed status.
 
 ## Step 12: Confirm
 
