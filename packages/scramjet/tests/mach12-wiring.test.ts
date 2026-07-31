@@ -426,6 +426,12 @@ describe("mach12 issue creation — problem capture and architect orchestration"
 		expect(packet).toContain("do not omit, rename, or add fields");
 		expect(packet).toContain("Put no producer-authored instructions");
 		expect(packet).toContain("Pass only the complete JSON object as its task");
+		expect(packet).toContain("`problem_anchor` and `issue_classification` must each be a non-empty string");
+		expect(packet).toContain("Reject the packet and stop before dispatch if either is empty");
+		expect(issueArchitect).toContain("`problem_anchor` and `issue_classification` must each be a non-empty string");
+		expect(issueArchitect).toContain("Reject an empty problem anchor or issue classification");
+		expect(packet).toContain("when evidence is genuinely inapplicable");
+		expect(issueArchitect).toContain("genuinely inapplicable evidence only in the other fields");
 	});
 
 	it("reviews the complete architect result against live authority and fails closed", () => {
@@ -552,6 +558,21 @@ describe("mach12 issue creation — duplicate search and publication safety", ()
 		expect(duplicateCheck).toContain("require its top-level value to be an array");
 		expect(duplicateCheck).toMatch(/execution fails or parsing or shape validation fails[^.]*stop before Step 11/i);
 		expect(duplicateCheck).toContain("parsed array has length zero");
+	});
+
+	it("transports the duplicate query without shell interpolation", () => {
+		const queryWrite = duplicateCheck.indexOf('cat >"$duplicate_search_dir/query"');
+		const guardedSearch = duplicateCheck.indexOf("if ! duplicate_json=$(gh issue list");
+		expect(queryWrite).toBeGreaterThan(-1);
+		expect(guardedSearch).toBeGreaterThan(queryWrite);
+		expect(duplicateCheck).toContain("Never interpolate the query into shell source");
+		expect(duplicateCheck).toContain("does not occur as a standalone line in the query");
+		expect(duplicateCheck).toContain("duplicate_search_dir=$(mktemp -d) || {");
+		expect(duplicateCheck).toContain("Could not create duplicate-search transport directory");
+		expect(duplicateCheck).toContain("<<'MACH12_DUPLICATE_QUERY' || {");
+		expect(duplicateCheck).toContain("Could not write duplicate-search query");
+		expect(duplicateCheck).toContain('--search "$(<"$duplicate_search_dir/query")"');
+		expect(duplicateCheck).not.toContain('--search "<keywords>"');
 	});
 
 	it("transports the approved title and body without shell interpolation", () => {
