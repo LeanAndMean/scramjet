@@ -193,7 +193,7 @@ Before applying the classification branches, derive disposition units from owner
 
 **When a mixed-classification ownership group exists:** emit two entries in this order:
 
-1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-id> --assessment-comment <assessment-id> --review-sha256 <review-digest> --assessment-sha256 <assessment-digest> <all IDs in every merge-blocking ownership group> <combined root-cause, final-node, ownership-group, and proof-preservation context>`; `fresh_session`: `true`; `reason`: "Fix each inseparable mixed-classification ownership group in one pass."
+1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-id> --assessment-comment <assessment-id> --review-sha256 <review-digest> --assessment-sha256 <assessment-digest> <repeat `--staged-later <id>` once per ID in every optional-only ownership group> <all IDs in every merge-blocking ownership group> <combined root-cause, final-node, ownership-group, proof-preservation, and named optional-stage context>`; `fresh_session`: `true`; `reason`: "Fix each inseparable mixed-classification ownership group in one pass while preserving every optional-only group for the named later stage."
 2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-id> --assessment-comment <assessment-id> --review-sha256 <review-digest> --assessment-sha256 <assessment-digest> <repeat `--cleanup-finding <surviving-id>` once per surviving ID>`; `fresh_session`: `true`; `reason`: "Decline repairs and remove every surviving ownership group through authenticated targeted cleanup before pre-merge."
 
 Set `recommended_next_step` to `0`, the ownership-group-safe fix.

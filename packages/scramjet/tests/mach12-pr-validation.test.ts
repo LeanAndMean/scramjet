@@ -517,6 +517,10 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 			"**When final classifications include both `genuine defect` and `low-severity completion defect` and no ownership group crosses classifications:**",
 		);
 		expect(mixedGroups.match(/`message`:/g)).toHaveLength(2);
+		expect(mixedGroups).toContain(
+			"<repeat `--staged-later <id>` once per ID in every optional-only ownership group>",
+		);
+		expect(mixedGroups).toContain("named optional-stage context");
 		expect(routing).toContain("the whole group merge-blocking for routing");
 		expect(routing).toContain("cannot use a genuine-only/stage-the-optional split");
 
@@ -682,7 +686,8 @@ describe("mach12 executable validation integration", () => {
 		expect(reporting).toContain("`--predecessor-head <pushed-head>`");
 		expect(reporting).toContain("exact verified pushed head as `--predecessor-head`");
 		expect(reporting).toContain("next stage's selected canonical IDs");
-		expect(reporting).toContain("explicit exhaustive ownership-group-safe partition");
+		expect(reporting).toContain("explicit exhaustive ownership-group-safe partition of the predecessor's remaining staged IDs");
+		expect(reporting).toContain("Previously selected IDs are authenticated by the predecessor chain");
 		expect(reporting).toContain("structured provenance payload");
 		expect(reporting).toContain("preserve every supplied provenance field verbatim");
 	});
@@ -696,7 +701,11 @@ describe("mach12 executable validation integration", () => {
 		expect(parse).toContain("`^(F|S)[1-9][0-9]*$`");
 		expect(parse).toContain("prohibit bare numbers");
 		expect(parse).toContain("pairwise disjoint");
-		expect(parse).toContain("exhaustive over every surviving proof ID");
+		expect(parse).toContain("reject combining any `--cleanup-finding` with production repair IDs or with `--staged-later`");
+		expect(parse).toContain("For a first validation-origin repair, require their union to exhaust every surviving proof ID");
+		expect(parse).toContain(
+			"For a staged continuation, require selected and staged-later IDs to exhaust exactly the predecessor chain's remaining staged IDs",
+		);
 
 		const implementation = section(prReviewFix, "## Step 4:", "## Step 5:");
 		for (const clause of [
@@ -707,7 +716,7 @@ describe("mach12 executable validation integration", () => {
 			"accepting snapshots",
 			"renaming or relocating paths or node IDs",
 			"duplicating proof tests",
-			"Partition surviving proofs into findings selected now, explicitly staged for a named later repair, and explicitly declined",
+			"Partition the applicable disposition domain—every surviving proof for a first repair, or only the predecessor's remaining staged proofs for a continuation",
 			"Preserve selected and staged-later proof patches unchanged",
 			"Change production code, not retained proof tests",
 			"Do not require proofs for unselected findings to become green in this session",
@@ -726,12 +735,17 @@ describe("mach12 executable validation integration", () => {
 		expect(implementation).toContain("Ordinary static-review fixes retain their existing behavior");
 		expect(implementation).toContain("require both exact comment IDs and both SHA-256 bindings");
 		expect(implementation).toContain("--cleanup-finding");
+		expect(implementation).toContain("For a first repair, partition every surviving proof");
+		expect(implementation).toContain("partition only the remaining staged proofs recorded at the supplied predecessor head");
+		expect(implementation).toContain("previously selected proofs remain authenticated chain history");
+		expect(implementation).toContain("require cleanup IDs to exhaust every surviving proof");
+		expect(implementation).toContain("no surviving red proof remains");
 		expect(implementation).toContain("both artifact authors exactly equal the authenticated login");
 	});
 
 	it("gives authenticated cleanup a pre-merge-only completion route", () => {
 		const reporting = section(prReviewFix, "## Step 5:");
-		const cleanup = section(reporting, "- **Successful `--cleanup-finding` run:**", "- **Production-repair run:**");
+		const cleanup = section(reporting, "- **Successful terminal `--cleanup-finding` run:**", "- **Production-repair run:**");
 		expect(cleanup.match(/`message`:/g)).toHaveLength(1);
 		expect(cleanup).toContain("`message`: `/mach12:pr-pre-merge <pr-number>`");
 		expect(cleanup).toContain("Set `recommended_next_step` to `0`");
@@ -766,10 +780,22 @@ describe("mach12 executable validation integration", () => {
 	it("preserves staged repair provenance verbatim through the push subroutine", () => {
 		const push = readFileSync(join(COMMANDS_DIR, "mach12:push.md"), "utf-8");
 		expect(push).toContain("structured validation-origin provenance payload");
+		expectInOrder(
+			push,
+			"validate it before staging, committing, or pushing",
+			"Run `git status`",
+			"## Step 2: Commit",
+			"## Step 3: Push",
+		);
+		expect(push).toContain("stop before any repository or remote mutation");
 		expect(push).toContain("preserve every field and value verbatim");
 		expect(push).toContain("append the exact pushed `HEAD` as the predecessor head");
 		expect(push).toContain("Do not summarize, reorder, omit, or rewrite these fields");
 		expect(push).toContain("stop before posting the progress comment");
+		expect(push).toContain("return an incomplete result to the caller with the exact pushed `HEAD`");
+		expect(push).toContain("The top-level caller reports the workflow status");
+		expect(push).toContain("without recommitting or repushing");
+		expect(push).toContain("Never retry a commit or push as publication recovery");
 	});
 
 	it("requires one fixed-shape test-designer result for the assigned cluster", () => {

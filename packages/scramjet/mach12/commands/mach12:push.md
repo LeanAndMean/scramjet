@@ -22,6 +22,8 @@ This command is delegate-only. The next step belongs to the caller's `next:` dec
 
 ## Step 1: Determine what to commit
 
+When the caller supplies a structured validation-origin provenance payload, validate it before staging, committing, or pushing. Require review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests; require every field to be unambiguous and internally complete. If validation fails, stop before any repository or remote mutation and report the missing or malformed fields.
+
 Run `git status` and `git diff --staged` to understand the current state.
 
 Staging rules:
@@ -117,6 +119,8 @@ Then delegate to the appropriate posting subroutine:
   ```
 
 The subroutine handles the post and URL capture; the body content you prepared above is what gets posted.
+
+If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment carrying the already-validated provenance payload without recommitting or repushing. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
 
 ## Step 5: Confirm
 
