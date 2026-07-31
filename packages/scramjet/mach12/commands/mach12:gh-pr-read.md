@@ -1,5 +1,5 @@
 ---
-description: Read a GitHub pull request's title, body, and all comments; optionally locate an HTML-marker comment
+description: Read a GitHub pull request's title, body, and all top-level PR conversation comments; optionally locate an HTML-marker comment
 argument-hint: "<pr-number> [--marker <html-marker>]"
 delegate-only: true
 allowed-tools:
@@ -24,15 +24,19 @@ Extract:
 
 If no PR number is present, return an error to the caller and stop.
 
-## Step 2: Read the PR and comments
+## Step 2: Read the PR and all top-level PR conversation comments
 
-Read the PR title, body, and all comments in one call:
+Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the PR through `gh api graphql --paginate` with explicit variables for owner, name, PR number, and `$endCursor`. Request `title`, `body`, and:
 
+```graphql
+comments(first: 100, after: $endCursor) {
+  totalCount
+  nodes { databaseId body author { login } authorAssociation createdAt url }
+  pageInfo { hasNextPage endCursor }
+}
 ```
-gh pr view <pr-number> --json title,body,comments
-```
 
-If the call fails (PR not found, authentication error, network), surface the full error to the caller and stop.
+The query must declare `$endCursor: String` and pass `pageInfo.hasNextPage` plus `pageInfo.endCursor` so `--paginate` follows every page. Accumulate comment nodes in chronological page order. Verify the accumulated node count exactly equals `totalCount`; reject duplicate database IDs. If pagination stops early, a page is malformed, the count differs, or any command fails, surface the full error and report that authoritative history is incomplete; do not return a partial array as complete.
 
 ## Step 3: Locate the marker comment (if requested)
 
@@ -44,5 +48,5 @@ If the marker is not found, return that fact alongside the PR content. The calle
 
 Return:
 - The PR title and body.
-- The full comments array (parsed JSON).
+- The complete accumulated array of top-level PR conversation comments (parsed JSON), its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
 - If `--marker` was requested: the matched comment body and its numeric comment ID (parsed from the comment URL -- the number after `issuecomment-`). If the marker was not found, indicate that.
