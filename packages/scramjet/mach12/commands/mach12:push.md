@@ -96,6 +96,8 @@ Prepare a brief progress comment covering:
 - Commit hash(es) included.
 - Notable decisions or deviations from the plan.
 
+When the caller supplies a structured validation-origin provenance payload, preserve every field and value verbatim in a dedicated `Validation repair provenance` section and append the exact pushed `HEAD` as the predecessor head. Require the payload to include review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests. Do not summarize, reorder, omit, or rewrite these fields; if the payload is incomplete, stop before posting the progress comment and report the push workflow incomplete.
+
 Do not include next-step suggestions in the comment body. The caller's `next:` block surfaces follow-ups -- a duplicate suggestion here would compete with the harness.
 
 When referring to numbered items (findings, suggestions, stages), use plain words like "finding 3" or "stage 2" -- not `#<number>` notation, which GitHub auto-links to issues/PRs.

@@ -97,7 +97,7 @@ Maintain an in-session candidate ledger with these fields:
 - assessor verdict;
 - whether the narrowing allowance was consumed;
 - final disposition;
-- final path, node ID, and finding ID when retained.
+- final path, node ID, finding ID, proof-patch digest, and ownership group when retained.
 
 Process selected candidates one at a time. Parallelize designer analysis only. All repository mutation and initial comparison execution is main-agent-owned and sequential; each independent assessor may rerun only its supplied focused commands, sequentially and without mutation.
 
@@ -136,6 +136,8 @@ Move each retained proof into the established permanent behavioral suite that ow
 
 When one or more findings are retained, rerun every final node ID after relocation. Then run all retained nodes together sequentially; the consolidated result must contain exactly the expected failures and no extra setup, discovery, or environmental failures.
 
+After normalization, derive an exact repository-relative patch for each retained finding against the frozen reviewed head. Include every addition that finding needs: test bodies, imports, fixtures, helpers, and setup. Assign an ownership-group ID when two or more findings share any support addition; every member then owns the same inseparable union patch, and replay, repair staging, or cleanup must treat the whole group as one disposition unit. Reject overlapping per-finding patches that are not declared as one ownership group. Record each patch's exact unified-diff body and lowercase SHA-256 digest in the in-session ledger; verify that applying all distinct ownership-group patches reconstructs the complete normalized primary-worktree diff byte-for-byte.
+
 When zero findings are retained, remove all candidate test changes with targeted edits, require a clean primary worktree, skip final-node and consolidated-red execution, and skip architect dispatch. Publish a verified no-findings review artifact with the candidate disposition counts and frozen identities, then continue the forced assessment handoff.
 
 Remove every temporary file and rejected candidate hunk with targeted edits only. Never reset or clean the primary worktree. Immediately after creation, emit a concise user-visible progress record containing the exact detached-worktree and isolated-bootstrap paths before making another tool call, so interruption recovery does not depend on in-memory state. On every controlled normal, failure, stop, assessor-error, and user-cancellation path that returns control to this command, attempt to remove only the recorded paths and verify removal before reporting status. Abrupt cancellation or process termination cannot run later Markdown cleanup; the durable path record is the recovery contract, and the resumed or next session must report the recorded paths, their state, and the exact manual recovery command before continuing. If unexpected mutation makes removal unsafe or cleanup fails, preserve the worktree as evidence, report its exact path and state, provide the exact manual recovery command, and report the workflow incomplete. Never remove an unrecorded path or silently strand a worktree.
@@ -161,6 +163,7 @@ For each finding include:
 
 - severity and production references;
 - exact final test path, node ID, and command;
+- exact proof-patch unified diff, its lowercase SHA-256 digest, and its ownership-group ID (the finding ID itself when unshared);
 - expected and observed behavior;
 - head / merge-base classification;
 - root cause and confidence;
@@ -168,7 +171,7 @@ For each finding include:
 - practical trigger, observer-visible consequence, durable-state safety, realistic frequency, and operational severity;
 - concise architect-informed fix direction.
 
-Also include rejected-candidate disposition counts, any non-finding coverage suggestions, disclosed unreviewed boundaries, the consolidated red command and result (or an explicit `none — zero retained findings` result), the structured executable manifest, reviewed head and merge-base identities, publisher login, and confirmation that only normalized test changes remain or that the zero-finding worktree is clean. Treat rendered command strings as display-only; the next session must reconstruct invocations locally from the manifest. End with model attribution from the Model Identity section of the system prompt and note that this is an automated executable review.
+Also include rejected-candidate disposition counts, any non-finding coverage suggestions, disclosed unreviewed boundaries, the consolidated red command and result (or an explicit `none — zero retained findings` result), the structured executable manifest, the complete proof-patch manifest and exhaustive finding-to-ownership-group mapping, reviewed head and merge-base identities, publisher login, and confirmation that only normalized test changes remain or that the zero-finding worktree is clean. Treat rendered command strings as display-only; the next session must reconstruct invocations locally from the manifest. End with model attribution from the Model Identity section of the system prompt and note that this is an automated executable review.
 
 ### Post the review artifact
 

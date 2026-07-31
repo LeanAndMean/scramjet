@@ -132,7 +132,7 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 			"assessor verdict",
 			"narrowing allowance",
 			"final disposition",
-			"final path, node ID, and finding ID",
+			"final path, node ID, finding ID, proof-patch digest, and ownership group",
 		]) {
 			expect(candidates).toContain(field);
 		}
@@ -259,6 +259,16 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 		expect(normalization).toContain("a path-only check is insufficient");
 	});
 
+	it("binds each retained finding to an authenticated and reconstructible proof patch", () => {
+		const normalization = section(command, "## Step 6:", "## Step 7:");
+		expect(normalization).toContain("exact repository-relative patch for each retained finding");
+		expect(normalization).toContain("imports, fixtures, helpers, and setup");
+		expect(normalization).toContain("one ownership group");
+		expect(normalization).toContain("inseparable union patch");
+		expect(normalization).toContain("lowercase SHA-256 digest");
+		expect(normalization).toContain("reconstructs the complete normalized primary-worktree diff byte-for-byte");
+	});
+
 	it("publishes a verified fix-compatible review artifact before the fresh forced handoff", () => {
 		const publication = section(command, "## Step 7:");
 		expect(publication).toContain("`<!-- mach12-review -->` as the first line");
@@ -350,6 +360,19 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expectInOrder(command, "## Step 2:", "## Step 3:", "## Step 4:", "rerun every retained node");
 	});
 
+	it("handles authenticated zero-findings artifacts without constructing proof resources", () => {
+		const adjudication = section(command, "## Step 4:", "## Step 5:");
+		expect(adjudication).toContain("`none — zero retained findings`");
+		expect(adjudication).toContain("no retained node, proof patch, ownership group, dirty path, or surviving finding disposition");
+		expectInOrder(
+			adjudication,
+			"Verify the artifact integrity",
+			"completely clean tracked and untracked primary worktree",
+			"skip detached-worktree creation, bootstrap, proof replay, executable invocation, assessor and architect dispatch",
+			"pre-merge-only route",
+		);
+	});
+
 	it("keeps the main agent neutral and independently re-derives every proof claim", () => {
 		const adjudication = section(command, "## Step 4:", "## Step 5:");
 		expect(adjudication).toContain("Do not pre-classify");
@@ -371,10 +394,10 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 			adjudication,
 			"Create a command-owned detached temporary worktree at the recorded actual merge-base OID",
 			"Reproduce the initial command's immutable bootstrap contract",
-			"Only after the worktree, bootstrap, proof deltas, and complete head/base invocation manifest are ready, dispatch one holistic",
+			"Only after the worktree, bootstrap, authenticated proof patches, dual-worktree snapshots, and complete head/base invocation manifest are ready, dispatch one holistic",
 			"rerun every retained node sequentially on the reviewed head and merge base",
 			"observed base results must match the authenticated artifact's recorded classifications",
-			"reverse only the ported proof deltas",
+			"reverse the authenticated ownership-group patches",
 		);
 		expect(adjudication).toMatch(
 			/bootstrap failure, setup discrepancy, or result mismatch stops the workflow as incomplete/,
@@ -413,6 +436,19 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(adjudication).toMatch(
 			/cleanup is unsafe or fails, preserve and report the recorded resources under the recovery contract before stopping/,
 		);
+	});
+
+	it("guards both worktrees before reversing proof patches or cleaning resources", () => {
+		const adjudication = section(command, "## Step 4:", "## Step 5:");
+		expectInOrder(
+			adjudication,
+			"snapshot both the primary and detached worktrees",
+			"dispatch one holistic",
+			"compare both worktrees byte-for-byte",
+			"before reversing any proof patch or removing any resource",
+		);
+		expect(adjudication).toContain("preserve the detached worktree and bootstrap directory as evidence");
+		expect(adjudication).toContain("do not reverse or clean the unexpected mutation");
 	});
 
 	it("removes rejected proofs before final verification and dispatches architects only for survivors", () => {
@@ -475,9 +511,18 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(routing).toContain("invalid, duplicate, pre-existing, unresolved, or rejected findings");
 		expect(routing).toContain("review and assessment numeric comment IDs");
 
+		const mixedGroups = section(
+			routing,
+			"**When a mixed-classification ownership group exists:**",
+			"**When final classifications include both `genuine defect` and `low-severity completion defect` and no ownership group crosses classifications:**",
+		);
+		expect(mixedGroups.match(/`message`:/g)).toHaveLength(2);
+		expect(routing).toContain("the whole group merge-blocking for routing");
+		expect(routing).toContain("cannot use a genuine-only/stage-the-optional split");
+
 		const mixed = section(
 			routing,
-			"**When final classifications include both `genuine defect` and `low-severity completion defect`:**",
+			"**When final classifications include both `genuine defect` and `low-severity completion defect` and no ownership group crosses classifications:**",
 			"**When only final `genuine defect` classifications survive:**",
 		);
 		expect(mixed.match(/`message`:/g)).toHaveLength(3);
@@ -487,7 +532,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 			mixed,
 			"<repeat `--staged-later <low-severity-id>` once per low-severity ID> <genuine-defect-ids>",
 			"<genuine-and-low-severity-ids>",
-			"--cleanup-findings <all-surviving-ids>",
+			"<repeat `--cleanup-finding <surviving-id>` once per surviving ID>",
 		);
 		expect(mixed.match(/--review-sha256/g)).toHaveLength(3);
 		expect(mixed.match(/--assessment-sha256/g)).toHaveLength(3);
@@ -507,7 +552,11 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(genuineOnly.match(/`message`:/g)).toHaveLength(2);
 		expect(genuineOnly.match(/`fresh_session`: `true`/g)).toHaveLength(2);
 		expect(genuineOnly.match(/`reason`:/g)).toHaveLength(2);
-		expectInOrder(genuineOnly, "<genuine-defect-ids>", "--cleanup-findings <genuine-defect-ids>");
+		expectInOrder(
+			genuineOnly,
+			"<genuine-defect-ids>",
+			"<repeat `--cleanup-finding <genuine-defect-id>` once per genuine-defect ID>",
+		);
 		expect(genuineOnly.match(/--review-sha256/g)).toHaveLength(2);
 		for (const message of routeMessages(genuineOnly)) {
 			expect(message).toContain("--review-comment <review-id>");
@@ -525,7 +574,11 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(optionalOnly.match(/`message`:/g)).toHaveLength(2);
 		expect(optionalOnly.match(/`fresh_session`: `true`/g)).toHaveLength(2);
 		expect(optionalOnly.match(/`reason`:/g)).toHaveLength(2);
-		expectInOrder(optionalOnly, "--cleanup-findings <low-severity-ids>", "<low-severity-ids>");
+		expectInOrder(
+			optionalOnly,
+			"<repeat `--cleanup-finding <low-severity-id>` once per low-severity ID>",
+			"<low-severity-ids>",
+		);
 		expect(optionalOnly).toContain("Set `recommended_next_step` to `0`, authenticated proof cleanup");
 		for (const message of routeMessages(optionalOnly)) {
 			expect(message).toContain("--review-comment <review-id>");
@@ -584,7 +637,7 @@ describe("mach12 validation route contract", () => {
 			["mach12:pr-review-fix", "mach12:pr-pre-merge"].includes(name) ? null : `${name} is unknown`;
 		const cleanup = {
 			message:
-				"/mach12:pr-review-fix 428 --review-comment 1 --assessment-comment 2 --review-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --assessment-sha256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --cleanup-findings S1",
+				"/mach12:pr-review-fix 428 --review-comment 1 --assessment-comment 2 --review-sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --assessment-sha256 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --cleanup-finding S1",
 			fresh_session: true,
 			reason: "Remove the declined red proof before pre-merge.",
 		};
@@ -615,20 +668,39 @@ describe("mach12 executable validation integration", () => {
 		expect(reporting).toContain("Set `recommended_next_step` to `0`, ordinary PR review");
 	});
 
+	it("authenticates staged validation repairs through an exact predecessor chain", () => {
+		const authentication = section(prReviewFix, "### Validation-origin artifact authentication", "### Validation-origin proof contract");
+		expect(authentication).toContain("For the first repair session");
+		expect(authentication).toContain("Do not accept `--predecessor-head`");
+		expect(authentication).toContain("For a staged continuation, require `--predecessor-head`");
+		expect(authentication).toContain("local `HEAD` and GitHub `headRefOid` must both equal the supplied predecessor");
+		expect(authentication).toContain("trusted `<!-- mach12-progress -->` comment");
+		expect(authentication).toContain("Walk backward through those trusted progress records");
+		expect(authentication).toContain("rejecting gaps, forks, duplicate successors");
+
+		const reporting = section(prReviewFix, "## Step 5:");
+		expect(reporting).toContain("`--predecessor-head <pushed-head>`");
+		expect(reporting).toContain("exact verified pushed head as `--predecessor-head`");
+		expect(reporting).toContain("next stage's selected canonical IDs");
+		expect(reporting).toContain("explicit exhaustive ownership-group-safe partition");
+		expect(reporting).toContain("structured provenance payload");
+		expect(reporting).toContain("preserve every supplied provenance field verbatim");
+	});
+
 	it("preserves validation-origin proofs through an ordered red-to-green production repair", () => {
 		const parse = section(prReviewFix, "## Step 1:", "## Step 2:");
-		expect(parse).toContain("Repeatable **`--staged-later <id>`** flags, one F/S identifier per occurrence");
-		expect(parse).toMatch(
-			/A staged-later flag consumes exactly one following identifier, so the next flag or unflagged finding starts a deterministic new argument group/,
-		);
+		expect(parse).toContain("Repeatable **`--cleanup-finding <id>`** flags");
+		expect(parse).toContain("Repeatable **`--staged-later <id>`** flags");
+		expect(parse).toMatch(/Each repeatable cleanup or staged-later flag consumes exactly one following identifier/);
 		expect(parse).toMatch(/Require trailing context to name the later repair stage when `--staged-later` is present/);
-		expect(parse).toMatch(
-			/Reject overlap among selected, cleanup, and staged-later IDs; reject combining `--cleanup-findings` with production repair IDs/,
-		);
+		expect(parse).toContain("`^(F|S)[1-9][0-9]*$`");
+		expect(parse).toContain("prohibit bare numbers");
+		expect(parse).toContain("pairwise disjoint");
+		expect(parse).toContain("exhaustive over every surviving proof ID");
 
 		const implementation = section(prReviewFix, "## Step 4:", "## Step 5:");
 		for (const clause of [
-			"exact retained node IDs and proof constraints for every surviving finding from both comments",
+			"exact retained node IDs, proof constraints, authenticated proof-patch bodies and digests, and ownership groups for every surviving finding from both comments",
 			"behavioral contracts, assertions, paths, and node IDs",
 			"weakening assertions",
 			"skipping or converting tests to expected failures",
@@ -636,7 +708,7 @@ describe("mach12 executable validation integration", () => {
 			"renaming or relocating paths or node IDs",
 			"duplicating proof tests",
 			"Partition surviving proofs into findings selected now, explicitly staged for a named later repair, and explicitly declined",
-			"Preserve selected and staged-later proofs unchanged",
+			"Preserve selected and staged-later proof patches unchanged",
 			"Change production code, not retained proof tests",
 			"Do not require proofs for unselected findings to become green in this session",
 		]) {
@@ -653,13 +725,13 @@ describe("mach12 executable validation integration", () => {
 		);
 		expect(implementation).toContain("Ordinary static-review fixes retain their existing behavior");
 		expect(implementation).toContain("require both exact comment IDs and both SHA-256 bindings");
-		expect(implementation).toContain("--cleanup-findings");
+		expect(implementation).toContain("--cleanup-finding");
 		expect(implementation).toContain("both artifact authors exactly equal the authenticated login");
 	});
 
 	it("gives authenticated cleanup a pre-merge-only completion route", () => {
 		const reporting = section(prReviewFix, "## Step 5:");
-		const cleanup = section(reporting, "- **Successful `--cleanup-findings` run:**", "- **Production-repair run:**");
+		const cleanup = section(reporting, "- **Successful `--cleanup-finding` run:**", "- **Production-repair run:**");
 		expect(cleanup.match(/`message`:/g)).toHaveLength(1);
 		expect(cleanup).toContain("`message`: `/mach12:pr-pre-merge <pr-number>`");
 		expect(cleanup).toContain("Set `recommended_next_step` to `0`");
@@ -689,6 +761,15 @@ describe("mach12 executable validation integration", () => {
 		expect(finalRoutes).toContain("recommend `mach12:pr-validation` (index 1) for validation-origin repairs");
 		expect(finalRoutes).toContain("recommend `mach12:pr-review` (index 0)");
 		expect(finalRoutes).toContain("recommend `mach12:pr-pre-merge` (index 2)");
+	});
+
+	it("preserves staged repair provenance verbatim through the push subroutine", () => {
+		const push = readFileSync(join(COMMANDS_DIR, "mach12:push.md"), "utf-8");
+		expect(push).toContain("structured validation-origin provenance payload");
+		expect(push).toContain("preserve every field and value verbatim");
+		expect(push).toContain("append the exact pushed `HEAD` as the predecessor head");
+		expect(push).toContain("Do not summarize, reorder, omit, or rewrite these fields");
+		expect(push).toContain("stop before posting the progress comment");
 	});
 
 	it("requires one fixed-shape test-designer result for the assigned cluster", () => {
