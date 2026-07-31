@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.70.0 — Architect issue drafts from anchored problems
+
+Reworks Mach 12 issue creation to anchor the motivating problem before gathering evidence and to produce complete drafts through one sessionless issue architect. Fixes [#430](https://github.com/LeanAndMean/scramjet/issues/430).
+
+### Changed
+
+- Replace the two session-reading issue reviewers with one read-only, sessionless issue architect.
+- Keep issue authority review with the main agent while deferring implementation scope and architecture to issue planning.
+- Fail closed across architect output validation, duplicate search, publication transport, identity validation, and metadata application.
+
+### Tests
+
+- Update command-contract coverage for problem anchoring, architect packet boundaries, authority review, duplicate handling, and publication safety.
+
 ## 0.69.0 — Add executable PR validation
 
 Adds an opt-in Mach 12 workflow that challenges pull requests with independently designed executable tests and reassesses retained proofs before routing to repair or pre-merge. Fixes [#408](https://github.com/LeanAndMean/scramjet/issues/408).
