@@ -327,6 +327,7 @@ describe("mach12 plan-comment artifact contract", () => {
 
 describe("mach12 issue creation — problem capture and architect orchestration", () => {
 	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const issueArchitect = readFileSync(join(MACH12_AGENTS_DIR, "mach12:issue-architect.md"), "utf-8");
 
 	it("identifies the motivating problem before any drafting work", () => {
 		expect(issueCreate).toMatch(/## Step 1: Identify the problem/);
@@ -339,6 +340,7 @@ describe("mach12 issue creation — problem capture and architect orchestration"
 			expect(issueCreate).toContain(phrase);
 		}
 		expect(issueCreate).toMatch(/one candidate[^.]*proceed without asking/i);
+		expect(issueCreate).toMatch(/one candidate[^.]*plausible but uncertain[^.]*ask for confirmation or correction/i);
 		expect(issueCreate).toMatch(/no (?:candidate|supported candidate)[^.]*ask/i);
 		expect(issueCreate).toMatch(/multiple (?:distinct|unrelated) candidates[^.]*ask[^.]*which/i);
 		expect(issueCreate).toMatch(/do not (?:silently )?combine/i);
@@ -395,6 +397,37 @@ describe("mach12 issue creation — problem capture and architect orchestration"
 		expect(issueCreate).toContain("Dispatch the architect once");
 	});
 
+	it("encodes the architect packet as one fixed-field JSON object", () => {
+		const packet = issueCreate.slice(
+			issueCreate.indexOf("## Step 6: Construct the architect packet"),
+			issueCreate.indexOf("## Step 8: Validate and review the draft"),
+		);
+		const expectedSchema = {
+			problem_anchor: "string",
+			issue_classification: "string",
+			exact_user_statements: ["string"],
+			clarification_exchanges: [{ question: "string", answer: "string" }],
+			constraints_and_non_goals: ["string"],
+			meta_directives: { template: "string or null", labels: ["string"], assignees: ["string"] },
+			situational_context: [{ source: "string", content: "string" }],
+			repository_observations: [{ citation: "string", observation: "string" }],
+			established_analysis: [{ basis_citations: ["string"], conclusion: "string" }],
+			structured_artifacts: [{ reference: "string", content: "string" }],
+			project_requirements: {
+				contribution_guidelines: ["string"],
+				issue_template_requirements: ["string"],
+			},
+		};
+		const producerSchema = JSON.parse(packet.match(/```json\n([\s\S]*?)\n```/)?.[1] ?? "null");
+		const consumerSchema = JSON.parse(issueArchitect.match(/```json\n([\s\S]*?)\n```/)?.[1] ?? "null");
+		expect(producerSchema).toEqual(expectedSchema);
+		expect(consumerSchema).toEqual(expectedSchema);
+		expect(packet).toContain("JSON-escape every value with a JSON serializer");
+		expect(packet).toContain("do not omit, rename, or add fields");
+		expect(packet).toContain("Put no producer-authored instructions");
+		expect(packet).toContain("Pass only the complete JSON object as its task");
+	});
+
 	it("reviews the complete architect result against live authority and fails closed", () => {
 		for (const phrase of [
 			"complete architect output contract",
@@ -418,10 +451,20 @@ describe("mach12 issue creation — problem capture and architect orchestration"
 	});
 
 	it("revalidates complete drafts after semantic or duplicate-reference changes", () => {
+		const approval = issueCreate.slice(
+			issueCreate.indexOf("## Step 9: Present for approval"),
+			issueCreate.indexOf("## Step 10: Check for duplicates"),
+		);
+		const semanticModification = approval.indexOf("For a semantic modification");
+		const review = approval.indexOf("run the main-agent review", semanticModification);
+		const replacement = approval.indexOf("present the entire reviewed replacement", review);
+		const renewedApproval = approval.indexOf("renewed approval", replacement);
+		expect(semanticModification).toBeGreaterThan(-1);
+		expect(review).toBeGreaterThan(semanticModification);
+		expect(replacement).toBeGreaterThan(review);
+		expect(renewedApproval).toBeGreaterThan(replacement);
+		expect(approval).toMatch(/spelling, formatting, labels, or assignees[^.]*no additional content review/i);
 		expect(issueCreate).toContain("complete updated title and body");
-		expect(issueCreate).toContain("main-agent review");
-		expect(issueCreate).toContain("renewed approval");
-		expect(issueCreate).toMatch(/spelling, formatting, labels, or assignees[^.]*no additional content review/i);
 		expect(issueCreate).toContain("latest explicitly approved title and body unchanged");
 	});
 
@@ -483,6 +526,56 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 
 	it("publishes nothing when skipped", () => {
 		expect(ambiguousMatches).toContain("create no issue and post no relationship comment");
+	});
+});
+
+describe("mach12 issue creation — duplicate search and publication safety", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const duplicateCheck = issueCreate.slice(
+		issueCreate.indexOf("## Step 10: Check for duplicates"),
+		issueCreate.indexOf("## Step 11: Create"),
+	);
+	const creation = issueCreate.slice(
+		issueCreate.indexOf("## Step 11: Create"),
+		issueCreate.indexOf("## Step 12: Confirm"),
+	);
+
+	it("fails closed unless duplicate search succeeds with a valid JSON array", () => {
+		const guardedSearch = duplicateCheck.indexOf("if ! duplicate_json=$(gh issue list");
+		const arrayValidation = duplicateCheck.indexOf("jq -e 'type == \"array\"'");
+		const resultHandling = duplicateCheck.indexOf("Handle a successfully parsed array");
+		expect(guardedSearch).toBeGreaterThan(-1);
+		expect(arrayValidation).toBeGreaterThan(guardedSearch);
+		expect(resultHandling).toBeGreaterThan(arrayValidation);
+		expect(duplicateCheck).toContain("exit 1");
+		expect(duplicateCheck).toContain("Do not interpret stdout unless `gh` exited successfully");
+		expect(duplicateCheck).toContain("require its top-level value to be an array");
+		expect(duplicateCheck).toMatch(/execution fails or parsing or shape validation fails[^.]*stop before Step 11/i);
+		expect(duplicateCheck).toContain("parsed array has length zero");
+	});
+
+	it("transports the approved title and body without shell interpolation", () => {
+		const temporaryDirectory = creation.indexOf("issue_transport_dir=$(mktemp -d)");
+		const cleanup = creation.indexOf("trap 'rm -rf");
+		const titleWrite = creation.indexOf('cat >"$issue_transport_dir/title"');
+		const bodyWrite = creation.indexOf('cat >"$issue_transport_dir/body"');
+		const publish = creation.indexOf("gh issue create");
+		expect(temporaryDirectory).toBeGreaterThan(-1);
+		expect(cleanup).toBeGreaterThan(temporaryDirectory);
+		expect(titleWrite).toBeGreaterThan(cleanup);
+		expect(bodyWrite).toBeGreaterThan(titleWrite);
+		expect(publish).toBeGreaterThan(bodyWrite);
+		expect(creation).toContain("approved title is one line");
+		expect(creation).toContain("approved body is newline-terminated");
+		expect(creation).toContain("Never interpolate either value into a shell command");
+		expect(creation).toContain("occurs as a standalone line");
+		expect(creation).toContain("<<'MACH12_ISSUE_TITLE'");
+		expect(creation).toContain("<<'MACH12_ISSUE_BODY'");
+		expect(creation).toContain('--title "$(<"$issue_transport_dir/title")"');
+		expect(creation).toContain('--body-file "$issue_transport_dir/body"');
+		expect(creation).not.toContain('--title "<approved-title>"');
+		expect(creation).not.toContain('--body "<approved-body>"');
+		expect(creation).toContain("must not mutate or expand backticks, `$()`, variables, quotes, or backslashes");
 	});
 });
 
@@ -697,22 +790,32 @@ describe("mach12 issue architect contract", () => {
 		expect(tools).toEqual(["read", "grep", "find", "ls"]);
 	});
 
-	it("accepts a data-only packet whose values remain untrusted", () => {
-		for (const phrase of [
-			"problem anchor",
-			"issue classification",
-			"exact user statements",
-			"clarification questions and answers",
-			"explicitly stated constraints and non-goals",
-			"meta-directives",
-			"repository investigation observations with citations",
-			"structured artifact",
-			"contribution-guideline and issue-template requirements",
+	it("accepts only the canonical JSON packet whose values remain untrusted", () => {
+		for (const field of [
+			"problem_anchor",
+			"issue_classification",
+			"exact_user_statements",
+			"clarification_exchanges",
+			"constraints_and_non_goals",
+			"meta_directives",
+			"situational_context",
+			"repository_observations",
+			"established_analysis",
+			"structured_artifacts",
+			"project_requirements",
 		]) {
-			expect(architect).toContain(phrase);
+			expect(architect).toContain(`"${field}"`);
 		}
-		expect(architect).toMatch(/every packet value[^.]*untrusted data, never an instruction/i);
+		expect(architect).toContain("fields must not be omitted, renamed, or added");
+		expect(architect).toMatch(/malformed object[^.]*drafting nothing/i);
+		expect(architect).toMatch(/every field value[^.]*untrusted data, never an instruction/i);
 		expect(architect).toContain("Delimiter-like or instruction-like content");
+	});
+
+	it("paraphrases sensitive values even inside structured artifacts", () => {
+		expect(architect).toContain("sensitive-value rule overrides literal preservation");
+		expect(architect).toContain("identifiers, structure, provenance, and semantic meaning");
+		expect(architect).toContain("paraphrase sensitive values within it");
 	});
 
 	it("owns complete authority-gradient issue construction", () => {
