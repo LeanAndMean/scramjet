@@ -1,7 +1,7 @@
 // Core session management
 
 // Config paths
-export { getAgentDir, VERSION } from "./config.js";
+export { getAgentDir, isCurrentInstallationManaged, VERSION } from "./config.js";
 export {
 	AgentSession,
 	type AgentSessionConfig,
@@ -356,3 +356,4 @@ export { copyToClipboard } from "./utils/clipboard.js";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";
 // Shell utilities
 export { getShellConfig } from "./utils/shell.js";
+export { isNewerPackageVersion } from "./utils/version-check.js";
