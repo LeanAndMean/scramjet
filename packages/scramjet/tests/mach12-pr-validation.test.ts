@@ -666,6 +666,7 @@ describe("mach12 validation route contract", () => {
 describe("mach12 executable validation integration", () => {
 	const prCreate = readFileSync(join(COMMANDS_DIR, "mach12:pr-create.md"), "utf-8");
 	const prReviewFix = readFileSync(join(COMMANDS_DIR, "mach12:pr-review-fix.md"), "utf-8");
+	const push = readFileSync(join(COMMANDS_DIR, "mach12:push.md"), "utf-8");
 	const testDesigner = readFileSync(resolve(HERE, "..", "mach12", "agents", "mach12:test-designer.md"), "utf-8");
 
 	it("makes the PR-validation designer result exclusive of the general output format", () => {
@@ -697,12 +698,26 @@ describe("mach12 executable validation integration", () => {
 		expect(context).toContain("must not replace or reinterpret them");
 	});
 
+	it("preserves the originating review ID across ordinary fix progress publication", () => {
+		const handoff = section(prReviewFix, "## Step 5:");
+		expect(handoff).toContain("ordinary static-review repair");
+		expect(handoff).toContain("exact resolved numeric review comment ID");
+		expect(handoff).toContain("originating review ID");
+
+		const comment = section(push, "### Comment content", "## Step 5:");
+		expect(comment).toContain("ordinary static-review repair");
+		expect(comment).toContain("exact numeric review comment ID supplied by the caller");
+		expect(comment).toContain("originating review ID");
+		expect(comment).toContain("does not constitute validation provenance");
+	});
+
 	it("requires an evidence-grounded review retrospective without weakening current-session reporting", () => {
 		const summary = section(prReviewFix, "7. **Summary**", "Treat the selected findings list");
 		expectInOrder(
 			summary,
 			"Lead verdict",
 			"Review-cycle progression",
+			"This fix session",
 			"Overall trajectory",
 			"Current blockers and residual scope",
 			"Recommendation",
@@ -712,6 +727,8 @@ describe("mach12 executable validation integration", () => {
 		expect(summary).toContain("one chronological entry per recognizable review cycle");
 		expect(summary).toContain("actual concerns or theme");
 		expect(summary).toContain("exact invocation-selected cycle");
+		expect(summary).toContain("after the invoked-cycle entry");
+		expect(summary).toContain("explicit temporal boundary");
 		expect(summary).toContain("cycles after the invoked review as subsequent");
 		expect(summary).toContain("not used as authority for this fix");
 		for (const detail of [
