@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.71.0 — Notify users about available updates
+
+Adds a detached startup check that quietly detects newer Scramjet releases and presents installation-appropriate update guidance. Fixes [#432](https://github.com/LeanAndMean/scramjet/issues/432).
+
+### Added
+
+- Show an update notice when npm reports a newer Scramjet release.
+- Tailor update instructions for package-manager and source installations while keeping offline, headless, malformed, and failed checks silent.
+
+### Tests
+
+- Add focused coverage for version checks, installation ownership, update notices, and startup integration.
+
 ## 0.70.0 — Architect issue drafts from anchored problems
 
 Reworks Mach 12 issue creation to anchor the motivating problem before gathering evidence and to produce complete drafts through one sessionless issue architect. Fixes [#430](https://github.com/LeanAndMean/scramjet/issues/430).

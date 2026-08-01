@@ -47,17 +47,17 @@ export async function execCommand(
 		let stdout = "";
 		let stderr = "";
 		let killed = false;
+		let settled = false;
 		let timeoutId: NodeJS.Timeout | undefined;
+		let killTimeoutId: NodeJS.Timeout | undefined;
 
+		// SCRAMJET-DIVERGENCE: timeout escalation tracks settlement rather than signal delivery (#432).
 		const killProcess = () => {
 			if (!killed) {
 				killed = true;
 				proc.kill("SIGTERM");
-				// Force kill after 5 seconds if SIGTERM doesn't work
-				setTimeout(() => {
-					if (!proc.killed) {
-						proc.kill("SIGKILL");
-					}
+				killTimeoutId = setTimeout(() => {
+					if (!settled) proc.kill("SIGKILL");
 				}, 5000);
 			}
 		};
@@ -88,20 +88,16 @@ export async function execCommand(
 
 		// Wait for process termination without hanging on inherited stdio handles
 		// held open by detached descendants.
+		const finish = (code: number) => {
+			settled = true;
+			if (timeoutId) clearTimeout(timeoutId);
+			if (killTimeoutId) clearTimeout(killTimeoutId);
+			if (options?.signal) options.signal.removeEventListener("abort", killProcess);
+			resolve({ stdout, stderr, code, killed });
+		};
+
 		waitForChildProcess(proc)
-			.then((code) => {
-				if (timeoutId) clearTimeout(timeoutId);
-				if (options?.signal) {
-					options.signal.removeEventListener("abort", killProcess);
-				}
-				resolve({ stdout, stderr, code: code ?? 0, killed });
-			})
-			.catch((_err) => {
-				if (timeoutId) clearTimeout(timeoutId);
-				if (options?.signal) {
-					options.signal.removeEventListener("abort", killProcess);
-				}
-				resolve({ stdout, stderr, code: 1, killed });
-			});
+			.then((code) => finish(code ?? 0))
+			.catch(() => finish(1));
 	});
 }
