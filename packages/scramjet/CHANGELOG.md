@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.71.2 — Simplify issue drafting
+
+Moves complete issue drafting and validation into the issue-creation command and retires the redundant issue-architect delegation. Fixes [#436](https://github.com/LeanAndMean/scramjet/issues/436).
+
+### Changed
+
+- Draft, validate, and review complete issue candidates directly in `mach12:issue-create`.
+- Remove the redundant `mach12:issue-architect` agent from bundled installs and safely retire managed copies during upgrades.
+- Update bundled-agent documentation and command-contract coverage for the eleven-agent inventory.
+
 ## 0.71.1 — Preserve readable spell-check text on light terminals
 
 Fixes misspelled text readability in the built-in light theme while retaining its visual spelling indicator. Fixes [#433](https://github.com/LeanAndMean/scramjet/issues/433).
