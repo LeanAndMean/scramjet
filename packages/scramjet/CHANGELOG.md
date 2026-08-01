@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.72.0 — Summarize PR review cycles
+
+Adds evidence-conservative review-cycle context to PR fix summaries while preserving the selected review artifacts as the sole authority. Fixes [#438](https://github.com/LeanAndMean/scramjet/issues/438).
+
+### Changed
+
+- Summarize recognizable prior, current, and subsequent review cycles in `mach12:pr-review-fix` results.
+- Associate assessments and progress artifacts only through explicit review provenance and keep finding identifiers scoped to their originating review.
+
+### Tests
+
+- Add command-contract coverage for artifact association, finding scope, ordered summaries, and current-artifact authority.
+
 ## 0.71.2 — Simplify issue drafting
 
 Moves complete issue drafting and validation into the issue-creation command and retires the redundant issue-architect delegation. Fixes [#436](https://github.com/LeanAndMean/scramjet/issues/436).
