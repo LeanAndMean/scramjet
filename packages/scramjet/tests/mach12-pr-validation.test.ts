@@ -697,24 +697,40 @@ describe("mach12 executable validation integration", () => {
 		expect(context).toContain("must not replace or reinterpret them");
 	});
 
-	it("requires an ordered review-progression summary without weakening current-session reporting", () => {
+	it("requires an evidence-grounded review retrospective without weakening current-session reporting", () => {
 		const summary = section(prReviewFix, "7. **Summary**", "Treat the selected findings list");
-		expectInOrder(summary, "Previous review cycles", "Current invoked review cycle", "This fix session");
-		expect(summary).toContain("concise chronological entry per recognizable non-selected cycle");
-		expect(summary).toContain("label cycles after the current invoked review as subsequent cycles");
+		expectInOrder(
+			summary,
+			"Lead verdict",
+			"Review-cycle progression",
+			"Overall trajectory",
+			"Current blockers and residual scope",
+			"Recommendation",
+		);
+		expect(summary).toContain("refresh the PR's commit history and current checks");
+		expect(summary).toMatch(/converging, stalled, regressing, or blocked/);
+		expect(summary).toContain("one chronological entry per recognizable review cycle");
+		expect(summary).toContain("actual concerns or theme");
+		expect(summary).toContain("exact invocation-selected cycle");
+		expect(summary).toContain("cycles after the invoked review as subsequent");
 		expect(summary).toContain("not used as authority for this fix");
-		expect(summary).toContain("no other review cycle is recognizable");
 		for (const detail of [
 			"selected findings",
 			"completed changes",
 			"key decisions",
-			"tests and results",
-			"files modified",
-			"commit/push and progress-comment outcome",
+			"tests",
+			"commit/push",
+			"progress-comment outcome",
 			"remaining staged work",
 		]) {
 			expect(summary).toContain(detail);
 		}
+		expect(summary).toContain("cross-cycle synthesis, not a list of completed actions");
+		expect(summary).toContain("findings are becoming narrower or deeper");
+		expect(summary).toContain("behavioral defect from a mechanical gate");
+		expect(summary).toContain("Never report a bare F/S identifier or classification");
+		expect(summary).toContain("Immediately restate the finding's one-line description");
+		expect(summary).toContain("state when the verified record cannot support a conclusion");
 		expect(summary).toContain("cannot expand the bounded finding scope");
 		expect(summary).toContain("weaken validation-origin authentication");
 	});

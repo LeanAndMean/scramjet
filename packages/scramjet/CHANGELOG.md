@@ -7,7 +7,7 @@ Adds evidence-conservative review-cycle context to PR fix summaries while preser
 ### Changed
 
 - Summarize recognizable prior, current, and subsequent review cycles in `mach12:pr-review-fix` results.
-- Associate assessments and progress artifacts only through explicit review provenance and keep finding identifiers scoped to their originating review.
+- Associate assessments and progress artifacts only through explicit review provenance, then synthesize cycle progression, convergence, blockers, residual risk, and the recommended next step without reducing findings to bare identifiers.
 
 ### Tests
 
