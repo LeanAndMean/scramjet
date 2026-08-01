@@ -97,6 +97,8 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 		const dest = join(xdgHome, "scramjet", "mach12");
 		expect(existsSync(dest)).toBe(true);
 		expect(existsSync(join(dest, "commands", "mach12:issue-create.md"))).toBe(true);
+		expect(existsSync(join(dest, "agents", "mach12:issue-architect.md"))).toBe(false);
+		expect(existsSync(join(dest, "agents", "mach12:code-explorer.md"))).toBe(true);
 		expect(result.stdout).toContain("Seeded Mach 12 command set");
 
 		// Manifest exists with current version and entries for every bundled file
@@ -104,6 +106,8 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 		expect(manifest.version).toBe(PKG_VERSION);
 		expect(Object.keys(manifest.files).length).toBeGreaterThan(0);
 		expect(manifest.files["commands/mach12:issue-create.md"]).toBeDefined();
+		expect(manifest.files["agents/mach12:issue-architect.md"]).toBeUndefined();
+		expect(manifest.files["agents/mach12:code-explorer.md"]).toBeDefined();
 		// Verify hash correctness
 		const srcFile = join(REPO_ROOT, "mach12", "commands", "mach12:issue-create.md");
 		expect(manifest.files["commands/mach12:issue-create.md"]).toBe(sha256(srcFile));
@@ -192,6 +196,49 @@ describe("scripts/postinstall.js — Mach 12 seeding", () => {
 		expect(existsSync(editedRemoved)).toBe(true);
 		expect(readFileSync(editedRemoved, "utf-8")).toBe("user edited old command");
 		expect(result.stderr).toContain("removed from bundle but edited");
+	});
+
+	it("removes an unedited retired issue architect during managed upgrade", () => {
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		const dest = join(xdgHome, "scramjet", "mach12");
+		const retiredPath = "agents/mach12:issue-architect.md";
+		const retiredFile = join(dest, retiredPath);
+		mkdirSync(dirname(retiredFile), { recursive: true });
+		writeFileSync(retiredFile, "old bundled architect");
+		const manifest = readManifest(dest);
+		manifest.version = "0.0.0-old";
+		manifest.files[retiredPath] = sha256(retiredFile);
+		writeManifest(dest, manifest);
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(existsSync(retiredFile)).toBe(false);
+		expect(result.stderr).not.toContain(retiredPath);
+		expect(readManifest(dest).files[retiredPath]).toBeUndefined();
+	});
+
+	it("preserves an edited retired issue architect without retaining manifest ownership", () => {
+		runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+		const dest = join(xdgHome, "scramjet", "mach12");
+		const retiredPath = "agents/mach12:issue-architect.md";
+		const retiredFile = join(dest, retiredPath);
+		mkdirSync(dirname(retiredFile), { recursive: true });
+		writeFileSync(retiredFile, "old bundled architect");
+		const manifest = readManifest(dest);
+		manifest.version = "0.0.0-old";
+		manifest.files[retiredPath] = sha256(retiredFile);
+		writeManifest(dest, manifest);
+		const editedContent = Buffer.from("user-edited architect\nwith exact bytes\0");
+		writeFileSync(retiredFile, editedContent);
+
+		const result = runScript(REAL_SCRIPT, { XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+
+		expect(result.status).toBe(0);
+		expect(readFileSync(retiredFile)).toEqual(editedContent);
+		expect(result.stderr).toContain("removed from bundle but edited");
+		expect(result.stderr).toContain(retiredPath);
+		expect(readManifest(dest).files[retiredPath]).toBeUndefined();
 	});
 
 	it("missing-on-disk bundled file is reseeded during upgrade", () => {
