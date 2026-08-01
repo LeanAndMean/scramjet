@@ -35,6 +35,8 @@ Use evidence in this order:
 3. The immediate session context and recent conversation that led to this invocation, including an encountered bug, requested capability, deferred finding, confusing workflow, or unresolved concern.
 4. Relevant recent repository observations already established in the active session.
 
+Preserve user intent, experienced symptoms, constraints and non-goals, clarification answers, and other session-only problem evidence as attributed evidence. Identify objectively checkable factual premises separately, and verify only those whose falsity would materially change the problem identity, actual behavior, impact, proposed outcome, or acceptance criteria. Treat implementation preferences as preferences or explicit constraints, not as contradictions that must be resolved during issue creation.
+
 Do not search historical sessions merely because the command has no descriptive argument. Use the general prior-session fallback only when current evidence points to relevant earlier work and the missing detail matters.
 
 Classify the evidence as one clear candidate problem, multiple distinct candidate problems, or no supported candidate:
@@ -77,15 +79,19 @@ Read any templates and select the one supported by the issue classification and 
 
 ## Step 4: Explore current behavior
 
-For a bug, vague problem, refactor, code-linked feature, error report, or current-behavior complaint, inspect the minimum repository context needed to describe the anchored problem accurately. Use `read`, `grep`, and `glob`; dispatch `mach12:code-explorer` only when the relevant behavior or affected surfaces are non-trivial.
+For a bug, vague problem, refactor, code-linked feature, error report, or current-behavior complaint, reuse relevant current-session observations first. Then verify only material factual premises using the minimum authoritative evidence needed to describe the anchored problem accurately. Use `read`, `grep`, and `glob`; dispatch `mach12:code-explorer` only when the relevant behavior or affected surfaces are non-trivial.
 
 Maintain a cited evidence log while exploring. Each entry records a file and line, command output, or reproduced behavior plus the direct observation. Keep observations separate from analysis. Do not let implementation details replace or broaden the problem anchor.
 
-For a fully specified request or structured artifact, avoid ceremonial exploration. Verify only facts needed to prevent a misleading issue.
+When direct evidence materially conflicts with a premise, communicate the attributed premise, the direct conflicting observation and citation, and the consequence for accurate issue framing before drafting. Do not silently substitute the agent's interpretation. Lack of corroboration is not a contradiction, and failure to reproduce an attributed user experience in one environment does not disprove it.
+
+For a fully specified request or structured artifact, avoid ceremonial exploration. Verify only facts needed to prevent a misleading issue. Stop repository inspection once the problem can be recorded accurately. Leave deep code exploration, solution analysis, architecture selection, and staged-scope decisions to `/mach12:issue-plan`.
 
 ## Step 5: Clarify the problem
 
-Ask only for missing information needed to describe the anchored problem adequately. Clarification may cover:
+Ask only for missing information needed to describe the anchored problem adequately. Ask the user to confirm or correct the problem anchor only when an unresolved material contradiction prevents an accurate record. Non-material uncertainty may remain represented without ceremonial clarification, and an accurately described disputed user experience may remain attributed without being promoted to verified fact. Implementation preferences are not contradiction blockers and must not block issue creation.
+
+Clarification may cover:
 
 - what is broken, absent, confusing, or unsafe;
 - who or what is affected;
@@ -137,7 +143,9 @@ Empty, partial, malformed, truncated, multi-draft, or incorrectly shaped output 
 After validation, separately compare the complete title and body with the problem anchor and live authoritative context. Verify that:
 
 - the complete draft remains about the anchored problem and describes the problem or unmet need adequately;
-- exact user statements, clarifications, constraints, and non-goals retain their authority and meaning;
+- user intent, experienced symptoms, constraints, and non-goals retain their authority and meaning;
+- any reconciled disposition of a material contradiction retains its authority and meaning;
+- contradicted or unverified premises are not presented as established facts;
 - unrelated session concerns were not folded into the issue;
 - contextual or repository evidence did not become an unsupported requirement;
 - every factual analysis conclusion traces to cited Investigation evidence;

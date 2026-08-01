@@ -367,6 +367,8 @@ describe("mach12 plan-comment artifact contract", () => {
 
 describe("mach12 issue creation — problem capture and direct drafting", () => {
 	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const section = (start: string, end: string) =>
+		issueCreate.slice(issueCreate.indexOf(start), issueCreate.indexOf(end));
 
 	it("identifies the motivating problem before any drafting work", () => {
 		expect(issueCreate).toMatch(/## Step 1: Identify the problem/);
@@ -383,6 +385,46 @@ describe("mach12 issue creation — problem capture and direct drafting", () => 
 		expect(issueCreate).toMatch(/no (?:candidate|supported candidate)[^.]*ask/i);
 		expect(issueCreate).toMatch(/multiple (?:distinct|unrelated) candidates[^.]*ask[^.]*which/i);
 		expect(issueCreate).toMatch(/do not (?:silently )?combine/i);
+	});
+
+	it("distinguishes material factual premises from attributed user evidence", () => {
+		const identification = section("## Step 1: Identify the problem", "## Step 2: Classify the anchored problem");
+		for (const phrase of [
+			"objectively checkable factual premises",
+			"experienced symptoms",
+			"constraints and non-goals",
+			"implementation preferences",
+		]) {
+			expect(identification).toContain(phrase);
+		}
+		expect(identification).toMatch(/falsity[^.]*materially change[^.]*problem/i);
+		expect(identification).toMatch(/user intent[^.]*attributed evidence/i);
+		expect(identification).toMatch(/implementation preferences[^.]*not[^.]*contradiction/i);
+	});
+
+	it("bounds verification and communicates material contradictions before drafting", () => {
+		const exploration = section("## Step 4: Explore current behavior", "## Step 5: Clarify the problem");
+		for (const phrase of [
+			"current-session observations",
+			"minimum authoritative evidence",
+			"attributed premise",
+			"direct conflicting observation and citation",
+			"consequence for accurate issue framing",
+		]) {
+			expect(exploration).toContain(phrase);
+		}
+		expect(exploration).toMatch(/verify only[^.]*material[^.]*premises/i);
+		expect(exploration).toMatch(/do not silently (?:replace|substitute)/i);
+		expect(exploration).toMatch(/stop (?:repository )?inspection once[^.]*recorded accurately/i);
+		expect(exploration).toMatch(/deep code[^.]*solution[^.]*architecture[^.]*staged[^.]*\/mach12:issue-plan/i);
+	});
+
+	it("gates clarification only on unresolved material contradictions", () => {
+		const clarification = section("## Step 5: Clarify the problem", "## Step 6: Draft the complete issue");
+		expect(clarification).toMatch(/confirm or correct[^.]*only when[^.]*unresolved material contradiction/i);
+		expect(clarification).toMatch(/non-material uncertainty[^.]*remain[^.]*without[^.]*clarification/i);
+		expect(clarification).toMatch(/disputed (?:user )?experience[^.]*remain[^.]*attributed/i);
+		expect(clarification).toMatch(/implementation (?:preferences|choices)[^.]*not[^.]*block/i);
 	});
 
 	it("keeps clarification focused on describing the problem rather than planning the solution", () => {
@@ -470,6 +512,13 @@ describe("mach12 issue creation — problem capture and direct drafting", () => 
 		expect(issueCreate).toContain("complete title and body with the problem anchor and live authoritative context");
 		expect(issueCreate).toContain("repeat complete validation and review");
 		expect(issueCreate).toContain("ask only problem-description questions and redraft");
+
+		const finalReview = section("## Step 8: Review the complete draft", "## Step 9: Present for approval");
+		expect(finalReview).toMatch(/contradicted or unverified premises[^.]*not[^.]*established facts/i);
+		expect(finalReview).toMatch(
+			/user intent, experienced symptoms, constraints, and non-goals[^.]*authority and meaning/i,
+		);
+		expect(finalReview).toMatch(/reconciled disposition[^.]*authority and meaning/i);
 	});
 
 	it("contains no architect orchestration or packet fallback contract", () => {
