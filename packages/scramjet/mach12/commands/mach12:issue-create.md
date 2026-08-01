@@ -156,7 +156,7 @@ If sensitive content was paraphrased, state that briefly. Present the complete r
 - **Modify**: edit the title, body, labels, or assignees.
 - **Cancel**: create nothing.
 
-For a semantic modification, apply the requested change, run the complete-draft review against the complete updated title and body, and present the entire reviewed replacement for renewed approval. Ask a follow-up only when the changed draft no longer describes the problem adequately. Spelling, formatting, labels, or assignees that do not change body semantics require no additional content review.
+For a semantic modification, apply the requested change, run complete validation followed by complete review against the complete updated title and body, and present the entire reviewed replacement for renewed approval. Ask a follow-up only when the changed draft no longer describes the problem adequately. Spelling, formatting, labels, or assignees that do not change body semantics require no additional content review.
 
 ## Step 10: Check for duplicates
 
@@ -195,7 +195,7 @@ Handle a successfully parsed array by similarity:
 For ambiguous matches, offer:
 
 - **Create without mentioning matches**: Create the approved title and body unchanged. Do not add links, mentions, or notes derived from the duplicate search, and do not post comments to any matched issue.
-- **Create and mention selected matches**: Ask which issues to mention. Add references only to the matches the user explicitly selected, run the complete-draft review against the complete updated title and body, and present that entire replacement using Step 9's approval choices. After renewed approval, continue directly to Step 11; do not repeat Step 10 or the duplicate search.
+- **Create and mention selected matches**: Ask which issues to mention. Add references only to the matches the user explicitly selected, run complete validation followed by complete review against the complete updated title and body, and present that entire replacement using Step 9's approval choices. After renewed approval, continue directly to Step 11; do not repeat Step 10 or the duplicate search.
 - **Comment on one existing issue instead**: ask the user to select exactly one of the listed issues. Only after the user explicitly selects the target, prepare `Related context: <summary of the new finding or context>.`, delegate to `/mach12:gh-comment issue <chosen-issue-number>`, post the prepared comment only to that issue, and skip creation.
 - **Skip**: create no issue and post no relationship comment.
 

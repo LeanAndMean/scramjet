@@ -491,15 +491,26 @@ describe("mach12 issue creation — problem capture and direct drafting", () => 
 			issueCreate.indexOf("## Step 10: Check for duplicates"),
 		);
 		const semanticModification = approval.indexOf("For a semantic modification");
-		const review = approval.indexOf("run the complete-draft review", semanticModification);
-		const replacement = approval.indexOf("present the entire reviewed replacement", review);
+		const semanticValidation = approval.indexOf("run complete validation", semanticModification);
+		const semanticReview = approval.indexOf("followed by complete review", semanticValidation);
+		const replacement = approval.indexOf("present the entire reviewed replacement", semanticReview);
 		const renewedApproval = approval.indexOf("renewed approval", replacement);
 		expect(semanticModification).toBeGreaterThan(-1);
-		expect(review).toBeGreaterThan(semanticModification);
-		expect(replacement).toBeGreaterThan(review);
+		expect(semanticValidation).toBeGreaterThan(semanticModification);
+		expect(semanticReview).toBeGreaterThan(semanticValidation);
+		expect(replacement).toBeGreaterThan(semanticReview);
 		expect(renewedApproval).toBeGreaterThan(replacement);
 		expect(approval).toMatch(/spelling, formatting, labels, or assignees[^.]*no additional content review/i);
-		expect(issueCreate).toContain("complete updated title and body");
+
+		const duplicateReferences = issueCreate.slice(
+			issueCreate.indexOf("- **Create and mention selected matches**"),
+			issueCreate.indexOf("- **Comment on one existing issue instead**"),
+		);
+		const duplicateValidation = duplicateReferences.indexOf("run complete validation");
+		const duplicateReview = duplicateReferences.indexOf("followed by complete review", duplicateValidation);
+		expect(duplicateValidation).toBeGreaterThan(-1);
+		expect(duplicateReview).toBeGreaterThan(duplicateValidation);
+		expect(duplicateReferences).toContain("complete updated title and body");
 		expect(issueCreate).toContain("latest explicitly approved title and body unchanged");
 	});
 
