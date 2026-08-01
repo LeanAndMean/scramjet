@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve terminal-configured foreground color for misspelled text in the built-in `pi-light` theme while retaining the spell-check underline. ([#435](https://github.com/LeanAndMean/scramjet/pull/435))
+
 ### Added
 
 - Expose detached startup version checks and package-manager installation ownership for product update notifications. ([#434](https://github.com/LeanAndMean/scramjet/pull/434))
