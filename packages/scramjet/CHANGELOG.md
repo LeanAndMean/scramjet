@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.71.1 — Preserve readable spell-check text on light terminals
+
+Fixes misspelled text readability in the built-in light theme while retaining its visual spelling indicator. Fixes [#433](https://github.com/LeanAndMean/scramjet/issues/433).
+
+### Fixed
+
+- Preserve the terminal’s configured foreground for misspelled text in `pi-light` while keeping the curly underline.
+- Document and test the terminal-default foreground contract in truecolor and 256-color modes.
+
 ## 0.71.0 — Notify users about available updates
 
 Adds a detached startup check that quietly detects newer Scramjet releases and presents installation-appropriate update guidance. Fixes [#432](https://github.com/LeanAndMean/scramjet/issues/432).
