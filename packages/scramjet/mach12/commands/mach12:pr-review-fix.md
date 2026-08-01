@@ -157,7 +157,7 @@ Ordinary static-review fixes retain their existing behavior when the exact comme
    - **Never re-dispatch to restate.** Act on the findings you already hold. Do not spawn a subagent to re-report, restate, or re-confirm a finding you already received -- you carry the finding; a fresh subagent does not.
    Fix only quality-review findings that matter for the selected findings' scope.
 7. **Summary** -- after Step 5 completes, deliver the final user-facing answer in these three sections, in order:
-   - **Previous review cycles** -- give one concise chronological entry per recognizable cycle before the current invoked review, including only explicitly associated assessment and progress outcomes. If no prior review cycle is recognizable, say so briefly.
+   - **Previous review cycles** -- give one concise chronological entry per recognizable non-selected cycle, including only explicitly associated assessment and progress outcomes. Preserve chronological order, and label cycles after the current invoked review as subsequent cycles that were not used as authority for this fix. If no other review cycle is recognizable, say so briefly.
    - **Current invoked review cycle** -- identify the exact invocation-selected review and optional assessment, plus any explicitly linked pre-session staged progress. Keep F/S identifiers scoped to their originating review comment where ambiguity is possible.
    - **This fix session** -- report the selected findings, completed changes, key decisions, tests and results, files modified, commit/push and progress-comment outcome, and remaining staged work.
 

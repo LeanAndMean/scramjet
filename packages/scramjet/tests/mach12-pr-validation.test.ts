@@ -700,8 +700,10 @@ describe("mach12 executable validation integration", () => {
 	it("requires an ordered review-progression summary without weakening current-session reporting", () => {
 		const summary = section(prReviewFix, "7. **Summary**", "Treat the selected findings list");
 		expectInOrder(summary, "Previous review cycles", "Current invoked review cycle", "This fix session");
-		expect(summary).toContain("concise chronological entry");
-		expect(summary).toContain("no prior review cycle is recognizable");
+		expect(summary).toContain("concise chronological entry per recognizable non-selected cycle");
+		expect(summary).toContain("label cycles after the current invoked review as subsequent cycles");
+		expect(summary).toContain("not used as authority for this fix");
+		expect(summary).toContain("no other review cycle is recognizable");
 		for (const detail of [
 			"selected findings",
 			"completed changes",
