@@ -684,6 +684,39 @@ describe("mach12 executable validation integration", () => {
 		expect(reporting).toContain("Set `recommended_next_step` to `0`, ordinary PR review");
 	});
 
+	it("keeps review-cycle history evidence-conservative and current artifacts authoritative", () => {
+		const context = section(prReviewFix, "## Step 2:", "## Step 3:");
+		expect(context).toContain("complete verified chronological top-level PR comment stream");
+		expect(context).toContain("review comment's numeric ID");
+		expect(context).toContain("explicitly references that review comment ID or URL");
+		expect(context).toContain("existing validation provenance");
+		expect(context).toMatch(/chronology, authorship, matching prose, or reused F\/S identifiers/i);
+		expect(context).toContain("leave it unassociated");
+		expect(context).toContain("F/S identifiers are scoped to their originating review comment");
+		expect(context).toContain("exact invocation-selected review and optional assessment");
+		expect(context).toContain("must not replace or reinterpret them");
+	});
+
+	it("requires an ordered review-progression summary without weakening current-session reporting", () => {
+		const summary = section(prReviewFix, "7. **Summary**", "Treat the selected findings list");
+		expectInOrder(summary, "Previous review cycles", "Current invoked review cycle", "This fix session");
+		expect(summary).toContain("concise chronological entry");
+		expect(summary).toContain("no prior review cycle is recognizable");
+		for (const detail of [
+			"selected findings",
+			"completed changes",
+			"key decisions",
+			"tests and results",
+			"files modified",
+			"commit/push and progress-comment outcome",
+			"remaining staged work",
+		]) {
+			expect(summary).toContain(detail);
+		}
+		expect(summary).toContain("cannot expand the bounded finding scope");
+		expect(summary).toContain("weaken validation-origin authentication");
+	});
+
 	it("authenticates staged validation repairs through an exact predecessor chain", () => {
 		const authentication = section(
 			prReviewFix,

@@ -93,7 +93,13 @@ gh api repos/:owner/:repo/issues/comments/<assessment-comment-id>
 
 **If not provided:** This is optional context. Do not attempt to locate the assessment heuristically -- proceed without it.
 
-Save the review comment content for use in Step 4.
+Save the review comment content for use in Step 4. Also retain the complete verified chronological top-level PR comment stream returned by `gh-pr-read` for the final retrospective.
+
+### Classify review cycles for final reporting
+
+Identify recognizable review comments, assessments, and `<!-- mach12-progress -->` artifacts in that stream. Define each review cycle by its review comment's numeric ID. Associate an assessment or progress artifact with a cycle only when it explicitly references that review comment ID or URL, or carries the existing validation provenance linking it to that review. Chronology, authorship, matching prose, or reused F/S identifiers alone are insufficient; when association is ambiguous, leave it unassociated. F/S identifiers are scoped to their originating review comment and must retain that scope when ambiguity is possible.
+
+The exact invocation-selected review and optional assessment remain the authoritative current invoked cycle. Historical classification is informational only and must not replace or reinterpret them, alter finding selection, or weaken any existing trust check.
 
 ## Step 3: Identify issues to fix
 
@@ -150,7 +156,12 @@ Ordinary static-review fixes retain their existing behavior when the exact comme
    - **Single pass.** Run the brief(s) once, consolidate the findings, and act on them directly. Do not loop: re-review is warranted only when a fix you made was non-trivial and substantively reworked code a reviewer flagged -- and then only the one brief covering that area, dispatched once more and **counted against the three-subagent per-stage cap** (keep the initial batch small when a re-review is plausible so you reserve headroom). A reviewer returning findings is not itself a reason to re-review.
    - **Never re-dispatch to restate.** Act on the findings you already hold. Do not spawn a subagent to re-report, restate, or re-confirm a finding you already received -- you carry the finding; a fresh subagent does not.
    Fix only quality-review findings that matter for the selected findings' scope.
-7. **Summary** -- list what was fixed, key decisions, files modified.
+7. **Summary** -- after Step 5 completes, deliver the final user-facing answer in these three sections, in order:
+   - **Previous review cycles** -- give one concise chronological entry per recognizable cycle before the current invoked review, including only explicitly associated assessment and progress outcomes. If no prior review cycle is recognizable, say so briefly.
+   - **Current invoked review cycle** -- identify the exact invocation-selected review and optional assessment, plus any explicitly linked pre-session staged progress. Keep F/S identifiers scoped to their originating review comment where ambiguity is possible.
+   - **This fix session** -- report the selected findings, completed changes, key decisions, tests and results, files modified, commit/push and progress-comment outcome, and remaining staged work.
+
+Historical context cannot expand the bounded finding scope, select or reinterpret current artifacts, or weaken validation-origin authentication.
 
 Treat the selected findings list as the bounded scope:
 - **Findings to fix:** the resolved finding identifiers and their one-line descriptions from Step 3.
