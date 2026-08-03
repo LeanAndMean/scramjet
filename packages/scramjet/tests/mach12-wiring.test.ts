@@ -609,7 +609,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 		expect(ambiguousMatches).toContain('`get_scramjet_user_input` with `type: "select"`');
 		expect(ambiguousMatches).toContain("include all four choices");
 		expect(ambiguousMatches).toContain(
-			"Recommend the choice best supported by the matches and the user's stated intent",
+			"Recommend the choice best supported by the readable matches and the user's stated intent",
 		);
 		expect(ambiguousMatches).toContain("no choice is globally preferred");
 	});
@@ -617,7 +617,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	it("offers both create outcomes", () => {
 		expect(ambiguousMatches).toContain("**Create without mentioning matches**");
 		expect(ambiguousMatches).toContain("**Create and mention selected matches**");
-		expect(ambiguousMatches).toContain("Add references only to the matches the user explicitly selected");
+		expect(ambiguousMatches).toContain("Add references only to the readable matches the user explicitly selected");
 		expect(ambiguousMatches).toContain("present that entire replacement using Step 9's approval choices");
 		expect(ambiguousMatches).toContain("After renewed approval, continue directly to Step 11");
 		expect(ambiguousMatches).toContain("do not repeat Step 10 or the duplicate search");
@@ -630,7 +630,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	});
 
 	it("comments on exactly one selected match and skips creation", () => {
-		expect(ambiguousMatches).toContain("ask the user to select exactly one of the listed issues");
+		expect(ambiguousMatches).toContain("ask the user to select exactly one successfully read issue");
 		expect(ambiguousMatches).toContain("Only after the user explicitly selects the target");
 		expect(ambiguousMatches).toMatch(/post the prepared comment only to that issue/i);
 		expect(ambiguousMatches).toContain("skip creation");
