@@ -1,6 +1,6 @@
 {
   "name": "@leanandmean/coding-agent",
-  "version": "0.74.1-scramjet.30",
+  "version": "0.74.1-scramjet.31",
   "publishConfig": {
     "access": "public"
   },
@@ -33,7 +33,7 @@
     "test": "vitest --run --passWithNoTests"
   },
   "dependencies": {
-    "@leanandmean/agent": "0.74.1-scramjet.14",
+    "@leanandmean/agent": "0.74.1-scramjet.15",
     "@leanandmean/ai": "0.74.1-scramjet.11",
     "@leanandmean/tui": "0.74.1-scramjet.9",
     "@silvia-odwyer/photon-node": "^0.3.4",
