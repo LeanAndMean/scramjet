@@ -810,7 +810,9 @@ describe("mach12 GitHub reference authoring contracts", () => {
 	)("%s distinguishes intentional GitHub relationships from local identifiers", (_name, content) => {
 		expect(content).toMatch(/same-repository issue or pull-request (?:references|relationships) use\s+`#N`/);
 		expect(content).toContain("`owner/repo#N`");
-		expect(content).toMatch(/artifact-local(?: identifiers| findings, suggestions, and stages)? use stable labels or plain words/i);
+		expect(content).toMatch(
+			/artifact-local(?: identifiers| findings, suggestions, and stages)? use stable labels or plain words/i,
+		);
 		expect(content).toMatch(/(?:never|rather than)\s+bare `#N`/);
 	});
 
