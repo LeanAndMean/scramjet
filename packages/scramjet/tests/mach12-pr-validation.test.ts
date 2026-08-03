@@ -688,6 +688,16 @@ describe("mach12 executable validation integration", () => {
 	it("keeps review-cycle history evidence-conservative and current artifacts authoritative", () => {
 		const context = section(prReviewFix, "## Step 2:", "## Step 3:");
 		expect(context).toContain("complete verified chronological top-level PR comment stream");
+		expect(context).toContain("match exactly one recognized review");
+		expect(context).toContain("before selecting findings or publishing the ID as provenance");
+		expect(context).toContain("literal `<!-- mach12-review -->` marker");
+		expect(context).toContain(
+			"structured review format with Critical/Important/Suggestions sections and model attribution",
+		);
+		expect(context).toContain("literal `<!-- mach12-assessment -->` marker");
+		expect(context).toContain("literal `<!-- mach12-progress -->` marker");
+		expect(context).toContain("Recognition determines retrospective inventory only");
+		expect(context).toContain("does not authenticate an artifact or associate it with a cycle");
 		expect(context).toContain("review comment's numeric ID");
 		expect(context).toContain("explicitly references that review comment ID or URL");
 		expect(context).toContain("existing validation provenance");

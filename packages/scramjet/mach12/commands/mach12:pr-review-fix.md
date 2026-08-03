@@ -73,7 +73,7 @@ Extract the PR number. Parse the comment ID, digest, predecessor-head, cleanup, 
 gh api repos/:owner/:repo/issues/comments/<review-comment-id>
 ```
 
-Extract the `body` field from the JSON response. This is the review comment content. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments.
+Extract the `body` field from the JSON response. This is the review comment content. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments. For an ordinary static review, require the explicit comment ID to match exactly one recognized review in that complete verified target-PR comment stream before selecting findings or publishing the ID as provenance; otherwise stop. Validation-origin artifacts instead use the stronger authentication contract below.
 
 **If `--review-comment` was NOT provided (fallback):** Delegate to:
 
@@ -97,7 +97,9 @@ Save the review comment content for use in Step 4. Also retain the complete veri
 
 ### Classify review cycles for final reporting
 
-Identify recognizable review comments, assessments, and `<!-- mach12-progress -->` artifacts in that stream. Define each review cycle by its review comment's numeric ID. Associate an assessment or progress artifact with a cycle only when it explicitly references that review comment ID or URL, or carries the existing validation provenance linking it to that review. Chronology, authorship, matching prose, or reused F/S identifiers alone are insufficient; when association is ambiguous, leave it unassociated. F/S identifiers are scoped to their originating review comment and must retain that scope when ambiguity is possible.
+Recognize a review comment when it contains the literal `<!-- mach12-review -->` marker or, for legacy comments without that marker, the structured review format with Critical/Important/Suggestions sections and model attribution. Recognize an assessment only when it contains the literal `<!-- mach12-assessment -->` marker, and recognize a progress artifact only when it contains the literal `<!-- mach12-progress -->` marker. Recognition determines retrospective inventory only; it does not authenticate an artifact or associate it with a cycle.
+
+Define each review cycle by its recognized review comment's numeric ID. Associate a recognized assessment or progress artifact with a cycle only when it explicitly references that review comment ID or URL, or carries the existing validation provenance linking it to that review. Chronology, authorship, matching prose, or reused F/S identifiers alone are insufficient; when association is ambiguous, leave it unassociated. F/S identifiers are scoped to their originating review comment and must retain that scope when ambiguity is possible.
 
 The exact invocation-selected review and optional assessment remain the authoritative current invoked cycle. Historical classification is informational only and must not replace or reinterpret them, alter finding selection, or weaken any existing trust check.
 
