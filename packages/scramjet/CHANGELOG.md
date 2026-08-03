@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.71.3 — Challenge unsupported issue premises
+
+Requires issue creation to verify material factual premises, surface evidence-backed contradictions before drafting, and preserve attributed user evidence without expanding into solution planning. Fixes [#440](https://github.com/LeanAndMean/scramjet/issues/440).
+
+### Changed
+
+- Verify only objectively checkable premises whose falsity would materially alter the issue.
+- Ask users to reconcile direct evidence conflicts before drafting without treating implementation preferences as blockers.
+- Keep repository inspection bounded to accurate problem capture while preserving session-only evidence.
+
+### Tests
+
+- Add semantic command-contract coverage for premise classification, contradiction handling, clarification, and final-draft evidence preservation.
+
 ## 0.71.2 — Simplify issue drafting
 
 Moves complete issue drafting and validation into the issue-creation command and retires the redundant issue-architect delegation. Fixes [#436](https://github.com/LeanAndMean/scramjet/issues/436).
