@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.76.1 — Clarify architecture option comparisons
+
+Makes architecture choices easier to compare without sacrificing decision-relevant detail. Fixes [#456](https://github.com/LeanAndMean/scramjet/issues/456).
+
+### Changed
+
+- Present architecture options in a compact table separating each approach from its comparative trade-offs and debt delta.
+- Define debt deltas against the current implementation while preserving material retained and common debt outside the table.
+
+### Tests
+
+- Add semantic contract coverage for the compact architecture-option presentation and debt notation.
+
 ## 0.76.0 — Make pre-merge suggestions context-aware
 
 Recommends merging after a successful pre-merge checklist while preserving optional verification routes. Fixes [#455](https://github.com/LeanAndMean/scramjet/issues/455).
