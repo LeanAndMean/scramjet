@@ -155,6 +155,8 @@ If the user provided context, include it in each brief so architecture designs a
 
 Each lens should produce a full implementation blueprint: files to create or modify, component responsibilities, data flow, and a phased build sequence.
 
+Each lens must also assess the technical debt the option it proposes introduces, retains, reduces, or avoids. An evidence-based “none identified” is valid; do not invent debt. Keep this assessment concise and separate from broader risks and trade-offs: technical debt means likely future maintenance, migration, coupling, testing, or operational cost.
+
 After all results return, review the approaches and form your own recommendation based on the issue's scope, the codebase's conventions, and the user's clarified requirements.
 
 Each lens must state:
@@ -162,8 +164,9 @@ Each lens must state:
 - What problem it optimizes for.
 - What it deliberately does not build.
 - What evidence would make this approach inappropriate.
+- The technical debt the option it proposes introduces, retains, reduces, or avoids.
 
-Present to the user: brief summary of each approach, trade-offs comparison, **your recommendation with reasoning**, and concrete implementation differences.
+Present to the user: brief summary of each approach, trade-offs comparison, **your recommendation with reasoning**, concrete implementation differences, and a concise cross-option technical-debt summary. The debt summary must identify material differences, debt common to all options, and whether every current option has unsatisfactory debt implications.
 
 The recommendation must answer only what the selected lens did not already cover:
 - Which lens and ladder rung did you select, citing the lens's lower-rung rationale rather than restating it?
@@ -173,7 +176,14 @@ The recommendation must answer only what the selected lens did not already cover
 
 Do not default to the middle option without explaining why both the smaller and more structural options are worse for this issue.
 
-**Ask the user which approach they prefer.**
+After presenting the complete comparison and recommendation, ask the user to choose either:
+
+- **Accept one approach**; or
+- **Reject all current approaches and request revision**, optionally supplying constraints.
+
+If the user rejects all current approaches, incorporate their feedback, refine or rerun the relevant architecture analysis as needed, and present the complete updated option comparison and recommendation again. Do not require all three lenses to rerun when targeted refinement is sufficient, but always present a complete coherent replacement rather than a delta.
+
+**Do not proceed to Step 7 or any later planning work until the user explicitly accepts an approach.**
 
 ## Step 7: Ask architecture questions
 

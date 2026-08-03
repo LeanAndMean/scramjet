@@ -252,6 +252,46 @@ describe("mach12 wiring — bundled command set", () => {
 	);
 });
 
+describe("mach12 issue planning — architecture choice contract", () => {
+	const issuePlan = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-plan.md`), "utf-8");
+	const step6Start = issuePlan.indexOf("## Step 6:");
+	const step6End = issuePlan.indexOf("## Step 7:");
+	const step6 = issuePlan.slice(step6Start, step6End);
+
+	it("presents technical-debt differences and requires an accepted approach before proceeding", () => {
+		expect(step6Start).toBeGreaterThan(-1);
+		expect(step6End).toBeGreaterThan(step6Start);
+		for (const disposition of ["introduces", "retains", "reduces", "avoids"]) {
+			expect(step6).toContain(disposition);
+		}
+		expect(step6).toMatch(/none identified/i);
+		expect(step6).toMatch(/future (?:maintenance|cost)/i);
+		for (const cost of ["maintenance", "migration", "coupling", "testing", "operational"]) {
+			expect(step6).toContain(cost);
+		}
+
+		for (const existingRequirement of [
+			"brief summary of each approach",
+			"trade-offs comparison",
+			"recommendation with reasoning",
+			"concrete implementation differences",
+		]) {
+			expect(step6).toContain(existingRequirement);
+		}
+
+		const synthesis = step6.search(/cross-option technical-debt (?:summary|synthesis)/i);
+		const choice = step6.search(/ask the user (?:to choose|which approach)/i);
+		expect(synthesis).toBeGreaterThan(-1);
+		expect(choice).toBeGreaterThan(synthesis);
+		expect(step6).toMatch(/material differences/i);
+		expect(step6).toMatch(/common to all options/i);
+		expect(step6).toMatch(/every current option[^.]*unsatisfactory/i);
+		expect(step6).toMatch(/reject all current (?:approaches|options)[^.]*request revision/i);
+		expect(step6).toMatch(/complete updated (?:option )?comparison/i);
+		expect(step6).toMatch(/do not proceed to Step 7[^.]*until[^.]*accepts an approach/i);
+	});
+});
+
 describe("mach12 plan-comment artifact contract", () => {
 	const contractPath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:plan-comment-contract.md`);
 	const contract = readFileSync(contractPath, "utf-8");
