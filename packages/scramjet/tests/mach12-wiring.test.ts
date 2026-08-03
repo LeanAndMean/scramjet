@@ -810,7 +810,17 @@ describe("mach12 GitHub reference authoring contracts", () => {
 	)("%s distinguishes intentional GitHub relationships from local identifiers", (_name, content) => {
 		expect(content).toMatch(/same-repository issue or pull-request (?:references|relationships) use\s+`#N`/);
 		expect(content).toContain("`owner/repo#N`");
+		expect(content).toMatch(/artifact-local(?: identifiers| findings, suggestions, and stages)? use stable labels or plain words/i);
 		expect(content).toMatch(/(?:never|rather than)\s+bare `#N`/);
+	});
+
+	it("applies the issue-review reference policy before decision-comment preparation", () => {
+		const issueReview = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-review.md`), "utf-8");
+		const policy = issueReview.indexOf("In every decision comment authored here");
+		const preparation = issueReview.indexOf('If the user picks "Proceed as-is"');
+		expect(policy).toBeGreaterThan(-1);
+		expect(preparation).toBeGreaterThan(-1);
+		expect(policy).toBeLessThan(preparation);
 	});
 
 	it("links deferred-finding relationships without turning finding labels into links", () => {
