@@ -66,7 +66,7 @@ Remove material that does not help a fresh implementation session execute the se
 
 - raw exploration, journal, or probe transcripts;
 - complete rejected blueprints;
-- repeated Solution Assessments;
+- repeated solution-selection or ladder analysis already captured by the selected design and rationale;
 - generic repository guidance already supplied by project instructions;
 - duplicated requirements or test matrices;
 - speculative LOC estimates and non-contractual helper details;
