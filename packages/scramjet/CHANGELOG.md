@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.72.1 — Route pre-merge conflicts through guarded resolution
+
+Allows the pre-merge checklist to carry initial conflict evidence into its existing user-authorized remediation flow instead of stopping before checkout. Fixes [#442](https://github.com/LeanAndMean/scramjet/issues/442).
+
+### Fixed
+
+- Route conflicting or dirty PR readiness through checkout and the required Merge/Cancel choice.
+- Preserve guarded conflict resolution and require a conflict-free final readiness check before completion.
+
+### Tests
+
+- Add command-contract coverage for conflict routing, authorization ordering, resolution paths, and terminal status semantics.
+
 ## 0.72.0 — Summarize PR review cycles
 
 Adds evidence-conservative review-cycle context to PR fix summaries while preserving the selected review artifacts as the sole authority. Fixes [#438](https://github.com/LeanAndMean/scramjet/issues/438).
