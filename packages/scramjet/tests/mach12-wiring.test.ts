@@ -296,7 +296,7 @@ describe("mach12 plan-comment artifact contract", () => {
 		for (const phrase of [
 			"raw exploration, journal, or probe transcripts",
 			"complete rejected blueprints",
-			"repeated Solution Assessments",
+			"repeated solution-selection or ladder analysis",
 			"generic repository guidance",
 			"duplicated requirements or test matrices",
 			"speculative LOC estimates",
