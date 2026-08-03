@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.76.0 — Make pre-merge suggestions context-aware
+
+Recommends merging after a successful pre-merge checklist while preserving optional verification routes. Fixes [#455](https://github.com/LeanAndMean/scramjet/issues/455).
+
+### Changed
+
+- Recommend merging when the final checklist proves the pull request is ready.
+- Offer static review and executable validation as optional follow-up routes.
+- Omit next-step suggestions from blocked or incomplete outcomes.
+
+### Tests
+
+- Add focused command-contract coverage for completed and non-completed pre-merge routing.
+
 ## 0.75.0 — Cycle effort in blocking selectors
 
 Adds immediate configured effort control to next-step and structured-input selectors. Fixes [#447](https://github.com/LeanAndMean/scramjet/issues/447).
