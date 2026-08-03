@@ -97,6 +97,9 @@ Prepare a brief progress comment covering:
 - Summary of changes in this batch.
 - Commit hash(es) included.
 - Notable decisions or deviations from the plan.
+- For an ordinary static-review repair, the exact numeric review comment ID supplied by the caller, labeled as the originating review ID.
+
+Preserve an ordinary originating review ID exactly as supplied; it associates the progress artifact with that review cycle but does not constitute validation provenance.
 
 When the caller supplies a structured validation-origin provenance payload, preserve every field and value verbatim in a dedicated `Validation repair provenance` section and append the exact pushed `HEAD` as the predecessor head. Require the payload to include review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests. Do not summarize, reorder, omit, or rewrite these fields; if the payload is incomplete, stop before posting the progress comment and report the push workflow incomplete.
 
@@ -120,7 +123,7 @@ Then delegate to the appropriate posting subroutine:
 
 The subroutine handles the post and URL capture; the body content you prepared above is what gets posted.
 
-If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment carrying the already-validated provenance payload without recommitting or repushing. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
+If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment without recommitting or repushing. For an ordinary repair, preserve the exact originating review ID supplied by the caller. For a validation-origin repair, preserve the already-validated structured provenance payload verbatim. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
 
 ## Step 5: Confirm
 

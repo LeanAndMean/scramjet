@@ -666,6 +666,7 @@ describe("mach12 validation route contract", () => {
 describe("mach12 executable validation integration", () => {
 	const prCreate = readFileSync(join(COMMANDS_DIR, "mach12:pr-create.md"), "utf-8");
 	const prReviewFix = readFileSync(join(COMMANDS_DIR, "mach12:pr-review-fix.md"), "utf-8");
+	const push = readFileSync(join(COMMANDS_DIR, "mach12:push.md"), "utf-8");
 	const testDesigner = readFileSync(resolve(HERE, "..", "mach12", "agents", "mach12:test-designer.md"), "utf-8");
 
 	it("makes the PR-validation designer result exclusive of the general output format", () => {
@@ -682,6 +683,99 @@ describe("mach12 executable validation integration", () => {
 		expectInOrder(reporting, "/mach12:pr-review <pr-number>", "/mach12:pr-validation <pr-number>");
 		expect(reporting).toContain("slower, opt-in executable-behavior path");
 		expect(reporting).toContain("Set `recommended_next_step` to `0`, ordinary PR review");
+	});
+
+	it("keeps review-cycle history evidence-conservative and current artifacts authoritative", () => {
+		const context = section(prReviewFix, "## Step 2:", "## Step 3:");
+		expect(context).toContain("complete verified chronological top-level PR comment stream");
+		expect(context).toContain("match exactly one recognized review");
+		expect(context).toContain("before selecting findings or publishing the ID as provenance");
+		expect(context).toContain("literal `<!-- mach12-review -->` marker");
+		expect(context).toContain(
+			"structured review format with Critical/Important/Suggestions sections and model attribution",
+		);
+		expect(context).toContain("literal `<!-- mach12-assessment -->` marker");
+		expect(context).toContain("literal `<!-- mach12-progress -->` marker");
+		expect(context).toContain("Recognition determines retrospective inventory only");
+		expect(context).toContain("does not authenticate an artifact or associate it with a cycle");
+		expect(context).toContain("review comment's numeric ID");
+		expect(context).toContain("explicitly references that review comment ID or URL");
+		expect(context).toContain("existing validation provenance");
+		expect(context).toMatch(/chronology, authorship, matching prose, or reused F\/S identifiers/i);
+		expect(context).toContain("leave it unassociated");
+		expect(context).toContain("F/S identifiers are scoped to their originating review comment");
+		expect(context).toContain("exact invocation-selected review and optional assessment");
+		expect(context).toContain("must not replace or reinterpret them");
+	});
+
+	it("preserves the originating review ID across ordinary fix progress publication", () => {
+		const handoff = section(prReviewFix, "## Step 5:");
+		expect(handoff).toContain("ordinary static-review repair");
+		expect(handoff).toContain("exact resolved numeric review comment ID");
+		expect(handoff).toContain("originating review ID");
+
+		const comment = section(push, "### Comment content", "## Step 5:");
+		expect(comment).toContain("ordinary static-review repair");
+		expect(comment).toContain("exact numeric review comment ID supplied by the caller");
+		expect(comment).toContain("originating review ID");
+		expect(comment).toContain("does not constitute validation provenance");
+
+		expect(comment).toContain(
+			"For an ordinary repair, preserve the exact originating review ID supplied by the caller",
+		);
+		expect(comment).toContain(
+			"For a validation-origin repair, preserve the already-validated structured provenance payload verbatim",
+		);
+	});
+
+	it("requires an evidence-grounded review retrospective without weakening current-session reporting", () => {
+		const summary = section(prReviewFix, "7. **Summary**", "Treat the selected findings list");
+		expectInOrder(
+			summary,
+			"Lead verdict",
+			"Review-cycle progression",
+			"This fix session",
+			"Overall trajectory",
+			"Current blockers and residual scope",
+			"Recommendation",
+		);
+		expect(summary).toContain("refresh the PR's head OID, commit history, and checks");
+		expect(summary).toContain("refreshed `headRefOid` to equal the verified pushed `HEAD`");
+		expect(summary).toMatch(
+			/head mismatch or unavailable, pending, cancelled, or failed checks as unresolved evidence/i,
+		);
+		expect(summary).toContain("cannot support a readiness claim");
+		expect(summary).toMatch(/converging, stalled, regressing, or blocked/);
+		expect(summary).toContain("one chronological entry per recognizable review cycle");
+		expect(summary).toContain("complete the full progression before the next section");
+		expect(summary).toContain("actual concerns or theme");
+		expect(summary).toContain("exact invocation-selected cycle");
+		expect(summary).toContain("after the complete review-cycle progression");
+		expect(summary).toContain("explicit temporal boundary");
+		expect(summary).toContain("cycles after the invoked review as subsequent");
+		expect(summary).toContain("not used as authority for this fix");
+		expect(summary).toContain("no other review cycle was recognized");
+		expect(summary).toContain("substantively analyze the invoked cycle");
+		for (const detail of [
+			"selected findings",
+			"completed changes",
+			"files modified",
+			"key decisions",
+			"tests and results",
+			"commit/push outcome",
+			"progress-comment outcome",
+			"remaining staged work",
+		]) {
+			expect(summary).toContain(detail);
+		}
+		expect(summary).toContain("cross-cycle synthesis, not a list of completed actions");
+		expect(summary).toContain("findings are becoming narrower or deeper");
+		expect(summary).toContain("behavioral defect from a mechanical gate");
+		expect(summary).toContain("Never report a bare F/S identifier or classification");
+		expect(summary).toContain("Immediately restate the finding's one-line description");
+		expect(summary).toContain("state when the verified record cannot support a conclusion");
+		expect(summary).toContain("cannot expand the bounded finding scope");
+		expect(summary).toContain("weaken validation-origin authentication");
 	});
 
 	it("authenticates staged validation repairs through an exact predecessor chain", () => {
