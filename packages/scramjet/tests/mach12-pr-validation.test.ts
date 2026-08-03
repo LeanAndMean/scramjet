@@ -719,6 +719,13 @@ describe("mach12 executable validation integration", () => {
 		expect(comment).toContain("exact numeric review comment ID supplied by the caller");
 		expect(comment).toContain("originating review ID");
 		expect(comment).toContain("does not constitute validation provenance");
+
+		expect(comment).toContain(
+			"For an ordinary repair, preserve the exact originating review ID supplied by the caller",
+		);
+		expect(comment).toContain(
+			"For a validation-origin repair, preserve the already-validated structured provenance payload verbatim",
+		);
 	});
 
 	it("requires an evidence-grounded review retrospective without weakening current-session reporting", () => {
@@ -732,21 +739,30 @@ describe("mach12 executable validation integration", () => {
 			"Current blockers and residual scope",
 			"Recommendation",
 		);
-		expect(summary).toContain("refresh the PR's commit history and current checks");
+		expect(summary).toContain("refresh the PR's head OID, commit history, and checks");
+		expect(summary).toContain("refreshed `headRefOid` to equal the verified pushed `HEAD`");
+		expect(summary).toMatch(
+			/head mismatch or unavailable, pending, cancelled, or failed checks as unresolved evidence/i,
+		);
+		expect(summary).toContain("cannot support a readiness claim");
 		expect(summary).toMatch(/converging, stalled, regressing, or blocked/);
 		expect(summary).toContain("one chronological entry per recognizable review cycle");
+		expect(summary).toContain("complete the full progression before the next section");
 		expect(summary).toContain("actual concerns or theme");
 		expect(summary).toContain("exact invocation-selected cycle");
-		expect(summary).toContain("after the invoked-cycle entry");
+		expect(summary).toContain("after the complete review-cycle progression");
 		expect(summary).toContain("explicit temporal boundary");
 		expect(summary).toContain("cycles after the invoked review as subsequent");
 		expect(summary).toContain("not used as authority for this fix");
+		expect(summary).toContain("no other review cycle was recognized");
+		expect(summary).toContain("substantively analyze the invoked cycle");
 		for (const detail of [
 			"selected findings",
 			"completed changes",
+			"files modified",
 			"key decisions",
-			"tests",
-			"commit/push",
+			"tests and results",
+			"commit/push outcome",
 			"progress-comment outcome",
 			"remaining staged work",
 		]) {

@@ -123,7 +123,7 @@ Then delegate to the appropriate posting subroutine:
 
 The subroutine handles the post and URL capture; the body content you prepared above is what gets posted.
 
-If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment carrying the already-validated provenance payload without recommitting or repushing. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
+If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment without recommitting or repushing. For an ordinary repair, preserve the exact originating review ID supplied by the caller. For a validation-origin repair, preserve the already-validated structured provenance payload verbatim. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
 
 ## Step 5: Confirm
 
