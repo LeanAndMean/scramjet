@@ -290,7 +290,11 @@ describe("mach12 issue planning — architecture choice contract", () => {
 		expect(step6).toMatch(/use `None identified`[^;]*; never invent debt/i);
 		expect(step6).toMatch(/omit retained debt[^.]*immaterial or common/i);
 		expect(step6).toMatch(/materially differentiating retained liability[^.]*in words/i);
-		expect(step6).toMatch(/outside the compact table[^.]*detailed trade-offs[^.]*implementation differences/i);
+		expect(step6).toMatch(/common material retained debt outside the compact table/i);
+		expect(step6).toMatch(
+			/always present[^.]*detailed trade-offs[^.]*implementation differences[^.]*recommendation with reasoning[^.]*common material debt/i,
+		);
+		expect(step6).toMatch(/place those details outside the compact table[^.]*table cells verbose/i);
 		expect(step6).toMatch(/detailed blueprint rationale outside the table/i);
 
 		const perOptionDebt = step6.search(/each lens must also assess the technical debt/i);
