@@ -279,6 +279,20 @@ describe("mach12 issue planning — architecture choice contract", () => {
 			expect(step6).toContain(existingRequirement);
 		}
 
+		expect(step6).toMatch(/three options[^.]*narrow Markdown table/i);
+		for (const column of ["Option", "Key difference / trade-off", "Debt delta"]) {
+			expect(step6).toContain(`**${column}**`);
+		}
+		expect(step6).toMatch(/against the current implementation[^:]*:\s*`\+` means debt introduced/i);
+		expect(step6).toMatch(/`-` means existing debt reduced or removed/i);
+		expect(step6).toMatch(/signs indicate direction, not whether an option is good or bad/i);
+		expect(step6).toMatch(/option does not need to contain both/i);
+		expect(step6).toMatch(/use `None identified`[^;]*; never invent debt/i);
+		expect(step6).toMatch(/omit retained debt[^.]*immaterial or common/i);
+		expect(step6).toMatch(/materially differentiating retained liability[^.]*in words/i);
+		expect(step6).toMatch(/outside the compact table[^.]*detailed trade-offs[^.]*implementation differences/i);
+		expect(step6).toMatch(/detailed blueprint rationale outside the table/i);
+
 		const perOptionDebt = step6.search(/each lens must also assess the technical debt/i);
 		const synthesis = step6.search(/cross-option technical-debt (?:summary|synthesis)/i);
 		const choice = step6.search(/ask the user (?:to choose|which approach)/i);

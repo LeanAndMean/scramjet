@@ -166,7 +166,9 @@ Each lens must state:
 - What evidence would make this approach inappropriate.
 - The technical debt the option it proposes introduces, retains, reduces, or avoids.
 
-Present to the user: brief summary of each approach, trade-offs comparison, **your recommendation with reasoning**, concrete implementation differences, and a concise cross-option technical-debt summary. The debt summary must identify material differences, debt common to all options, and whether every current option has unsatisfactory debt implications.
+Present the three options in a narrow Markdown table with these concise, parallel columns: **Option**, **Key difference / trade-off**, and **Debt delta**. Define debt deltas against the current implementation: `+` means debt introduced, while `-` means existing debt reduced or removed. These signs indicate direction, not whether an option is good or bad, and an option does not need to contain both. Use `None identified` when the evidence supports no material delta; never invent debt to make rows symmetrical. Omit retained debt that is immaterial or common to the options, but state a materially differentiating retained liability explicitly in words rather than adding another symbol.
+
+Outside the compact table, present the detailed trade-offs, concrete implementation differences, **your recommendation with reasoning**, common material debt, and whether every current option has unsatisfactory debt implications whenever including them would make table cells verbose. Keep detailed blueprint rationale outside the table as needed. The complete presentation must still include a brief summary of each approach, a trade-offs comparison, and a concise cross-option technical-debt summary identifying material differences and debt common to all options.
 
 The recommendation must answer only what the selected lens did not already cover:
 - Which lens and ladder rung did you select, citing the lens's lower-rung rationale rather than restating it?
