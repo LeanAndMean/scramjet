@@ -52,8 +52,12 @@ Determine the changed files and PR context before launching reviewers:
 
 ```
 git diff --name-only origin/main...HEAD
-gh pr view <pr-number> --json title,body,comments,files
+gh pr view <pr-number> --json title,body,createdAt,updatedAt,comments,files
 ```
+
+Identify linked issues from the PR body and conversation. Before briefing reviewers, delegate to `/mach12:gh-issue-read <issue-number>` for each linked issue so its current body, complete discussion, and timestamps are available alongside plans and prior reviews in the PR comments.
+
+Treat the PR description, comments, linked issues, plans, and prior reviews as point-in-time evidence. Use their timestamps and relevant intervening changes to identify material historical claims, then verify potentially stale claims against the checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance. Preserve still-supported historical intent and decisions; neither age, status, nor recent activity proves current validity or invalidity.
 
 Use the changed files, PR description, linked issues, requested review aspects, and user context to select review lenses. Default to `all` when no aspects were specified.
 
@@ -80,6 +84,7 @@ Dispatch all selected review tasks in a single parallel `subagent` call. Give ea
 - PR number, title, body, changed files, and any relevant PR comments.
 - The specific lens it is responsible for.
 - The user context from Step 1, if provided: `> **User context:** <context>`
+- Relevant artifact timestamps, identified freshness caveats, and which claims were checked against current authority.
 - For the completeness lens, the linked issue number(s) and instruction to read the issue body, comments, acceptance criteria, and latest implementation plan.
 - For all lenses: if a version bump or changelog entry is present in the diff but was not introduced by a pre-merge commit, flag it as premature.
 

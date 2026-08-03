@@ -26,7 +26,7 @@ If no PR number is present, return an error to the caller and stop.
 
 ## Step 2: Read the PR and all top-level PR conversation comments
 
-Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the PR through `gh api graphql --paginate` with explicit variables for owner, name, PR number, and `$endCursor`. Request `title`, `body`, and:
+Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the PR through `gh api graphql --paginate` with explicit variables for owner, name, PR number, and `$endCursor`. Request parent `title`, `body`, `createdAt`, `updatedAt`, and:
 
 ```graphql
 comments(first: 100, after: $endCursor) {
@@ -47,6 +47,8 @@ If the marker is not found, return that fact alongside the PR content. The calle
 ## Step 4: Return
 
 Return:
-- The PR title and body.
-- The complete accumulated array of top-level PR conversation comments (parsed JSON), its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
+- The PR title, body, `createdAt`, and `updatedAt`.
+- The complete accumulated array of top-level PR conversation comments (parsed JSON), including each comment's `createdAt`, its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
 - If `--marker` was requested: the matched comment body and its numeric comment ID (parsed from the comment URL -- the number after `issuecomment-`). If the marker was not found, indicate that.
+
+Treat the returned PR and comments as point-in-time evidence. Callers should consider the timestamps and relevant intervening changes, verify potentially stale material claims against current authoritative context, preserve still-supported historical intent and decisions, and never treat age alone as proof of invalidity.

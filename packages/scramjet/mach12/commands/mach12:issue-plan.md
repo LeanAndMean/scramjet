@@ -55,7 +55,7 @@ Delegate to:
 /mach12:gh-issue-read <issue-number>
 ```
 
-The subroutine returns the issue title, body, and the full comments stream. Parse and understand:
+The subroutine returns the issue title, body, parent `createdAt` and `updatedAt`, and the full comments stream with comment creation timestamps. Parse and understand:
 - The problem statement
 - Any constraints or requirements mentioned
 - Prior discussion or decisions in the comments
@@ -87,6 +87,8 @@ For parallel execution, dispatch all exploration tasks in a single batch rather 
 If the user provided context, include it in each exploration brief to guide focus. If project planning requirements were identified in Step 3, include them so exploration covers the relevant project layers and testing infrastructure.
 
 Each exploration should return a list of 5-10 key files. After exploration completes, read all identified files to build deep understanding.
+
+Use the issue and comment timestamps to identify potentially stale factual premises that materially affect the plan, including claimed behavior, file locations, architecture, APIs, constraints, and gaps. Verify those claims against current repository authority before relying on them. Surface material drift and plan from current evidence without discarding historical requirements or decisions that remain supported; age alone does not make them invalid.
 
 Present a comprehensive summary of findings and patterns discovered.
 

@@ -619,6 +619,57 @@ describe("mach12 authoritative GitHub history helpers", () => {
 			expect(command).toContain(clause);
 		}
 	});
+
+	it.each(["gh-pr-read", "gh-issue-read"])(
+		"%s exposes parent and comment timestamps with freshness guidance",
+		(basename) => {
+			const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
+			const request = section(command, "Request parent", "The query must declare");
+			const result = section(command, "## Step 4: Return");
+
+			expect(request).toContain("`title`, `body`, `createdAt`, `updatedAt`");
+			expect(request).toContain("authorAssociation createdAt url");
+			expect(result).toContain("`createdAt`, and `updatedAt`");
+			expect(result).toContain("each comment's `createdAt`");
+			expect(result).toContain("point-in-time evidence");
+			expect(result).toContain("verify potentially stale material claims against current authoritative context");
+			expect(result).toContain("never treat age alone as proof of invalidity");
+		},
+	);
+
+	it("requires planning and review to reassess stale claims against task-specific authority", () => {
+		const issuePlan = readFileSync(join(COMMANDS_DIR, "mach12:issue-plan.md"), "utf-8");
+		const prReview = readFileSync(join(COMMANDS_DIR, "mach12:pr-review.md"), "utf-8");
+
+		expect(issuePlan).toContain("parent `createdAt` and `updatedAt`");
+		expect(issuePlan).toContain("Verify those claims against current repository authority");
+		expect(prReview).toContain("--json title,body,createdAt,updatedAt,comments,files");
+		expectInOrder(
+			prReview,
+			"Identify linked issues from the PR body and conversation",
+			"Before briefing reviewers",
+			"/mach12:gh-issue-read <issue-number>",
+		);
+		expect(prReview).toContain(
+			"checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance",
+		);
+		expect(prReview).toContain("Relevant artifact timestamps, identified freshness caveats");
+	});
+
+	it("reads timestamped plausible duplicate candidates before confident issue classification", () => {
+		const issueCreate = readFileSync(join(COMMANDS_DIR, "mach12:issue-create.md"), "utf-8");
+		const duplicateCheck = section(issueCreate, "## Step 10:", "## Step 11:");
+
+		expect(duplicateCheck).toContain("--json number,title,state,url,createdAt,updatedAt");
+		const plausibleMatches = section(duplicateCheck, "- **Plausible matches**", "After those checks:");
+		expect(plausibleMatches).toContain(
+			"Before confidently classifying any candidate as a duplicate or recommending linkage",
+		);
+		expect(plausibleMatches).toContain("/mach12:gh-issue-read <candidate-number>");
+		expect(plausibleMatches).toContain("If the read fails");
+		expect(plausibleMatches).toContain("do not confidently classify or recommend linking that candidate");
+		expect(plausibleMatches).toContain("old age is insufficient proof that it is obsolete");
+	});
 });
 
 describe("mach12 tool-scope authoring contract", () => {
