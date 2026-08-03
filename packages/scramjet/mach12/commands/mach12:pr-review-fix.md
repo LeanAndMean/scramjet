@@ -73,7 +73,7 @@ Extract the PR number. Parse the comment ID, digest, predecessor-head, cleanup, 
 gh api repos/:owner/:repo/issues/comments/<review-comment-id>
 ```
 
-Extract the `body` field from the JSON response. This is the review comment content. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments.
+Extract the `body` field from the JSON response. This is the review comment content. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments. For an ordinary static review, require the explicit comment ID to match exactly one recognized review in that complete verified target-PR comment stream before selecting findings or publishing the ID as provenance; otherwise stop. Validation-origin artifacts instead use the stronger authentication contract below.
 
 **If `--review-comment` was NOT provided (fallback):** Delegate to:
 
@@ -93,7 +93,15 @@ gh api repos/:owner/:repo/issues/comments/<assessment-comment-id>
 
 **If not provided:** This is optional context. Do not attempt to locate the assessment heuristically -- proceed without it.
 
-Save the review comment content for use in Step 4.
+Save the review comment content for use in Step 4. Also retain the complete verified chronological top-level PR comment stream returned by `gh-pr-read` for the final retrospective.
+
+### Classify review cycles for final reporting
+
+Recognize a review comment when it contains the literal `<!-- mach12-review -->` marker or, for legacy comments without that marker, the structured review format with Critical/Important/Suggestions sections and model attribution. Recognize an assessment only when it contains the literal `<!-- mach12-assessment -->` marker, and recognize a progress artifact only when it contains the literal `<!-- mach12-progress -->` marker. Recognition determines retrospective inventory only; it does not authenticate an artifact or associate it with a cycle.
+
+Define each review cycle by its recognized review comment's numeric ID. Associate a recognized assessment or progress artifact with a cycle only when it explicitly references that review comment ID or URL, or carries the existing validation provenance linking it to that review. Chronology, authorship, matching prose, or reused F/S identifiers alone are insufficient; when association is ambiguous, leave it unassociated. F/S identifiers are scoped to their originating review comment and must retain that scope when ambiguity is possible.
+
+The exact invocation-selected review and optional assessment remain the authoritative current invoked cycle. Historical classification is informational only and must not replace or reinterpret them, alter finding selection, or weaken any existing trust check.
 
 ## Step 3: Identify issues to fix
 
@@ -150,7 +158,17 @@ Ordinary static-review fixes retain their existing behavior when the exact comme
    - **Single pass.** Run the brief(s) once, consolidate the findings, and act on them directly. Do not loop: re-review is warranted only when a fix you made was non-trivial and substantively reworked code a reviewer flagged -- and then only the one brief covering that area, dispatched once more and **counted against the three-subagent per-stage cap** (keep the initial batch small when a re-review is plausible so you reserve headroom). A reviewer returning findings is not itself a reason to re-review.
    - **Never re-dispatch to restate.** Act on the findings you already hold. Do not spawn a subagent to re-report, restate, or re-confirm a finding you already received -- you carry the finding; a fresh subagent does not.
    Fix only quality-review findings that matter for the selected findings' scope.
-7. **Summary** -- list what was fixed, key decisions, files modified.
+7. **Summary** -- after Step 5 completes, refresh the PR's head OID, commit history, and checks. Require the refreshed `headRefOid` to equal the verified pushed `HEAD` before treating commits or checks as evidence for that push. Treat a head mismatch or unavailable, pending, cancelled, or failed checks as unresolved evidence that cannot support a readiness claim. Then deliver a concise review retrospective in these sections, in order:
+   - **Lead verdict** -- state whether the PR is converging, stalled, regressing, or blocked and give the principal reason. Do not open with an artifact inventory.
+   - **Review-cycle progression** -- give one chronological entry per recognizable review cycle and complete the full progression before the next section. Summarize the actual concerns or theme, severity/counts when established, assessment disposition, explicitly associated fix outcome, and verification evidence. Mark the exact invocation-selected cycle. Label cycles after the invoked review as subsequent and not used as authority for this fix. If no other cycle is recognizable, explicitly state that no other review cycle was recognized and also substantively analyze the invoked cycle.
+   - **This fix session** -- after the complete review-cycle progression, separately summarize this session's selected findings, completed changes, files modified, key decisions, tests and results, commit/push outcome, progress-comment outcome, and remaining staged work. Preserve this explicit temporal boundary rather than folding current work into the invoked review cycle.
+   - **Overall trajectory** -- compare the cycles and explain what changed between them: whether findings are becoming narrower or deeper, concerns recur, earlier fixes remain effective, regressions appeared, and the evidence shows convergence or continued instability. This must be cross-cycle synthesis, not a list of completed actions.
+   - **Current blockers and residual scope** -- explain unresolved or deferred findings, failing or pending checks, remaining staged work, and residual risk. Distinguish a behavioral defect from a mechanical gate when the evidence supports that distinction.
+   - **Recommendation** -- name the best next step and justify it from the trajectory, current evidence, and remaining risk.
+
+Never report a bare F/S identifier or classification such as "F2 was genuine." Immediately restate the finding's one-line description whenever naming its identifier, including for historical, selected, fixed, deferred, and remaining findings. Keep identifiers scoped to their originating review comment when ambiguity is possible. Do not infer recurrence, resolution, regression, or artifact association from chronology, authorship, similar prose, or reused identifiers; state when the verified record cannot support a conclusion.
+
+Historical context cannot expand the bounded finding scope, select or reinterpret current artifacts, or weaken validation-origin authentication.
 
 Treat the selected findings list as the bounded scope:
 - **Findings to fix:** the resolved finding identifiers and their one-line descriptions from Step 3.
@@ -171,7 +189,7 @@ Once the fixes are complete, capture the exact pre-commit head, then commit, pus
 /mach12:push
 ```
 
-Pass a brief summary of the findings addressed as the arguments so the commit message and PR progress comment speak specifically to the fixes. For validation-origin repair, also pass a structured provenance payload containing the review and assessment IDs/digests, exact pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests. Instruct `/mach12:push` to append the pushed predecessor head after commit and preserve every supplied provenance field verbatim in the progress comment. Fetch the posted numeric comment and verify its trusted author/association, marker, exact fields, and current GitHub head before offering a staged continuation. If verification fails, report incomplete and do not emit a continuation wire.
+Pass a brief summary of the findings addressed as the arguments so the commit message and PR progress comment speak specifically to the fixes. For an ordinary static-review repair, also pass the exact resolved numeric review comment ID and instruct `/mach12:push` to preserve it as the originating review ID in the progress comment. For validation-origin repair, instead pass a structured provenance payload containing the review and assessment IDs/digests, exact pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests. Instruct `/mach12:push` to append the pushed predecessor head after commit and preserve every supplied provenance field verbatim in the progress comment. Fetch the posted numeric comment and verify its trusted author/association, marker, exact fields, and current GitHub head before offering a staged continuation. If verification fails, report incomplete and do not emit a continuation wire.
 
 Each fix session should be **fresh** to maximize available context.
 
