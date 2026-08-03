@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.72.2 — Remove mandatory solution assessment output
+
+Retires the fixed Solution Assessment artifact while preserving evidence-based, minimum-sufficient solution selection. Fixes [#443](https://github.com/LeanAndMean/scramjet/issues/443).
+
+### Changed
+
+- Replace the mandatory assessment block with format-neutral guidance for selecting the smallest sufficient solution.
+- Align plan-comment compression guidance with the revised solution-selection contract.
+
+### Tests
+
+- Update focused command-contract coverage for the revised plan-comment guidance.
+
 ## 0.72.1 — Route pre-merge conflicts through guarded resolution
 
 Allows the pre-merge checklist to carry initial conflict evidence into its existing user-authorized remediation flow instead of stopping before checkout. Fixes [#442](https://github.com/LeanAndMean/scramjet/issues/442).
