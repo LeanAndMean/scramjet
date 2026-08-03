@@ -279,9 +279,11 @@ describe("mach12 issue planning — architecture choice contract", () => {
 			expect(step6).toContain(existingRequirement);
 		}
 
+		const perOptionDebt = step6.search(/each lens must also assess the technical debt/i);
 		const synthesis = step6.search(/cross-option technical-debt (?:summary|synthesis)/i);
 		const choice = step6.search(/ask the user (?:to choose|which approach)/i);
-		expect(synthesis).toBeGreaterThan(-1);
+		expect(perOptionDebt).toBeGreaterThan(-1);
+		expect(synthesis).toBeGreaterThan(perOptionDebt);
 		expect(choice).toBeGreaterThan(synthesis);
 		expect(step6).toMatch(/material differences/i);
 		expect(step6).toMatch(/common to all options/i);
