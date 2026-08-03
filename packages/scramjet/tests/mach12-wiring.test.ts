@@ -399,6 +399,10 @@ describe("mach12 issue creation — problem capture and direct drafting", () => 
 		}
 		expect(identification).toMatch(/falsity[^.]*materially change[^.]*problem/i);
 		expect(identification).toMatch(/user intent[^.]*attributed evidence/i);
+		expect(identification).toMatch(
+			/(?=[^.]*attributed evidence)(?=[^.]*objectively checkable factual premises)[^.]*\./i,
+		);
+		expect(identification).toMatch(/(?=[^.]*preserve the attribution)(?=[^.]*separately verifying)[^.]*\./i);
 		expect(identification).toMatch(/implementation preferences[^.]*not[^.]*contradiction/i);
 	});
 
@@ -414,14 +418,27 @@ describe("mach12 issue creation — problem capture and direct drafting", () => 
 			expect(exploration).toContain(phrase);
 		}
 		expect(exploration).toMatch(/verify only[^.]*material[^.]*premises/i);
+		expect(exploration).toMatch(/(?=[^.]*confirm or correct)(?=[^.]*premise)(?=[^.]*before drafting)[^.]*\./i);
+		expect(exploration).toMatch(/lack of corroboration is not a contradiction/i);
+		expect(exploration).toMatch(/failure to reproduce[^.]*in one environment[^.]*does not disprove/i);
 		expect(exploration).toMatch(/do not silently (?:replace|substitute)/i);
 		expect(exploration).toMatch(/stop (?:repository )?inspection once[^.]*recorded accurately/i);
-		expect(exploration).toMatch(/deep code[^.]*solution[^.]*architecture[^.]*staged[^.]*\/mach12:issue-plan/i);
+		for (const phrase of [
+			"deep code exploration",
+			"solution analysis",
+			"architecture selection",
+			"staged-scope decisions",
+			"/mach12:issue-plan",
+		]) {
+			expect(exploration).toContain(phrase);
+		}
 	});
 
-	it("gates clarification only on unresolved material contradictions", () => {
+	it("requires confirmation or correction for material contradictions while preserving non-blocking cases", () => {
 		const clarification = section("## Step 5: Clarify the problem", "## Step 6: Draft the complete issue");
-		expect(clarification).toMatch(/confirm or correct[^.]*only when[^.]*unresolved material contradiction/i);
+		expect(clarification).toMatch(
+			/(?=[^.]*materially contradicts)(?=[^.]*confirm or correct)(?=[^.]*before drafting)[^.]*\./i,
+		);
 		expect(clarification).toMatch(/non-material uncertainty[^.]*remain[^.]*without[^.]*clarification/i);
 		expect(clarification).toMatch(/disputed (?:user )?experience[^.]*remain[^.]*attributed/i);
 		expect(clarification).toMatch(/implementation (?:preferences|choices)[^.]*not[^.]*block/i);

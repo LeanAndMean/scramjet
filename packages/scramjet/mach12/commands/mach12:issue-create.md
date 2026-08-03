@@ -35,7 +35,7 @@ Use evidence in this order:
 3. The immediate session context and recent conversation that led to this invocation, including an encountered bug, requested capability, deferred finding, confusing workflow, or unresolved concern.
 4. Relevant recent repository observations already established in the active session.
 
-Preserve user intent, experienced symptoms, constraints and non-goals, clarification answers, and other session-only problem evidence as attributed evidence. Identify objectively checkable factual premises separately, and verify only those whose falsity would materially change the problem identity, actual behavior, impact, proposed outcome, or acceptance criteria. Treat implementation preferences as preferences or explicit constraints, not as contradictions that must be resolved during issue creation.
+Preserve user intent, experienced symptoms, constraints and non-goals, clarification answers, and other session-only problem evidence as attributed evidence, including when that evidence also contains objectively checkable factual premises. Preserve the attribution while separately verifying only any checkable premise whose falsity would materially change the problem identity, actual behavior, impact, proposed outcome, or acceptance criteria. Treat implementation preferences as preferences or explicit constraints, not as contradictions that must be resolved during issue creation.
 
 Do not search historical sessions merely because the command has no descriptive argument. Use the general prior-session fallback only when current evidence points to relevant earlier work and the missing detail matters.
 
@@ -83,13 +83,13 @@ For a bug, vague problem, refactor, code-linked feature, error report, or curren
 
 Maintain a cited evidence log while exploring. Each entry records a file and line, command output, or reproduced behavior plus the direct observation. Keep observations separate from analysis. Do not let implementation details replace or broaden the problem anchor.
 
-When direct evidence materially conflicts with a premise, communicate the attributed premise, the direct conflicting observation and citation, and the consequence for accurate issue framing before drafting. Do not silently substitute the agent's interpretation. Lack of corroboration is not a contradiction, and failure to reproduce an attributed user experience in one environment does not disprove it.
+When direct evidence materially conflicts with a premise, communicate the attributed premise, the direct conflicting observation and citation, and the consequence for accurate issue framing, then ask the user to confirm or correct the premise before drafting. Do not silently substitute the agent's interpretation. Lack of corroboration is not a contradiction, and failure to reproduce an attributed user experience in one environment does not disprove it.
 
 For a fully specified request or structured artifact, avoid ceremonial exploration. Verify only facts needed to prevent a misleading issue. Stop repository inspection once the problem can be recorded accurately. Leave deep code exploration, solution analysis, architecture selection, and staged-scope decisions to `/mach12:issue-plan`.
 
 ## Step 5: Clarify the problem
 
-Ask only for missing information needed to describe the anchored problem adequately. Ask the user to confirm or correct the problem anchor only when an unresolved material contradiction prevents an accurate record. Non-material uncertainty may remain represented without ceremonial clarification, and an accurately described disputed user experience may remain attributed without being promoted to verified fact. Implementation preferences are not contradiction blockers and must not block issue creation.
+Ask only for missing information needed to describe the anchored problem adequately. Whenever direct evidence materially contradicts a premise, ask the user to confirm or correct the problem anchor before drafting. Non-material uncertainty may remain represented without ceremonial clarification, and an accurately described disputed user experience may remain attributed without being promoted to verified fact. Implementation preferences are not contradiction blockers and must not block issue creation.
 
 Clarification may cover:
 
