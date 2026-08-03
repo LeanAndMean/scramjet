@@ -280,9 +280,16 @@ describe("mach12 issue planning — architecture choice contract", () => {
 		}
 
 		expect(step6).toMatch(/three options[^.]*narrow Markdown table/i);
-		for (const column of ["Option", "Key difference / trade-off", "Debt delta"]) {
-			expect(step6).toContain(`**${column}**`);
-		}
+		expect(step6).toMatch(
+			/columns, in order: \*\*Option\*\*, \*\*Approach\*\*, \*\*Key difference \/ trade-off\*\*, and \*\*Debt delta\*\*/i,
+		);
+		expect(step6).toMatch(/use \*\*Option\*\* only for the short lens or option name/i);
+		expect(step6).toMatch(
+			/in \*\*Approach\*\*[^.]*what the architecture builds[^.]*how it works[^.]*requirement or problem it solves/i,
+		);
+		expect(step6).toMatch(
+			/reserve \*\*Key difference \/ trade-off\*\*[^.]*comparative benefits, costs, and sacrifices[^.]*other options/i,
+		);
 		expect(step6).toMatch(/against the current implementation[^:]*:\s*`\+` means debt introduced/i);
 		expect(step6).toMatch(/`-` means existing debt reduced or removed/i);
 		expect(step6).toMatch(/signs indicate direction, not whether an option is good or bad/i);
