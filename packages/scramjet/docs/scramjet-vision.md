@@ -968,7 +968,7 @@ every step Mach 10 has eventually grown.
 | `pr-validation`          | `forced`| `pr-validation-assessment`                          | —                                  |
 | `pr-validation-assessment` | `closed` | `pr-review-fix`, `pr-pre-merge`                  | —                                  |
 | `pr-review-fix`          | `open`  | `pr-review-fix`, `pr-review`, `pr-validation`, `pr-pre-merge` | `push`                  |
-| `pr-pre-merge`           | `open`  | `pr-merge`, `pr-review-fix`                         | `find-contribution-guidelines`     |
+| `pr-pre-merge`           | `open`  | `pr-merge`, `pr-review`, `pr-validation`            | `find-contribution-guidelines`     |
 | `pr-merge`               | n/a     | (terminus — no `next`)                              | —                                  |
 | `push`                   | n/a     | (delegation target — no top-level `next`)           | (gh comment subroutines)           |
 
@@ -993,10 +993,11 @@ Notes:
 - **`issue-review` → `open`** because the agent can determine whether
   critical findings remain (recommend re-review) or the plan is approved
   (recommend implement). The user can still override either pick.
-- **`pr-pre-merge` → `open`** because the agent can determine
-  merge-readiness from checklist results; the "hold" case maps to
-  omitting `next_steps` (no candidate recommended), which under `open`
-  policy ends the chain without dispatch.
+- **`pr-pre-merge` → `open`** because completion means the checklist's
+  final readiness reread proved the PR is merge-ready. Merge is the
+  recommended continuation; static review and executable validation remain
+  optional verification routes. Blocked or incomplete outcomes omit
+  `next_steps`, ending the chain without dispatch.
 - **`pr-merge` has no `next`** because merge is the natural terminus of
   the default Mach 12 lifecycle. If a user has a post-merge process
   (e.g. `release:announce`), they should add an explicit `next` policy in

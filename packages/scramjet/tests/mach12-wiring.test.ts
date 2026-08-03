@@ -88,7 +88,11 @@ const WIRING: WiringRow[] = [
 		basename: "pr-pre-merge",
 		expected: {
 			mode: "open",
-			candidates: [{ name: "mach12:pr-merge" }, { name: "mach12:pr-review-fix" }],
+			candidates: [
+				{ name: "mach12:pr-merge" },
+				{ name: "mach12:pr-review" },
+				{ name: "mach12:pr-validation" },
+			],
 		},
 	},
 	{
@@ -1012,6 +1016,18 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(finalSection).toContain("conflict-free");
 		expect(finalSection).toContain("conflict remediation was declined or remains unresolved");
 		expect(finalSection).not.toContain("or confirmed conflicts");
+	});
+
+	it("pre-merge completed reporting offers only merge and optional verification routes", () => {
+		const finalSection = preMerge.slice(preMerge.indexOf("## Step 10:"));
+		expect(finalSection).toContain("exactly three entries");
+		expect(finalSection).toContain("`/mach12:pr-merge <pr-number>`");
+		expect(finalSection).toContain("`/mach12:pr-review <pr-number>`");
+		expect(finalSection).toContain("`/mach12:pr-validation <pr-number>`");
+		expect(finalSection).toContain("`recommended_next_step` to `0`");
+		expect(finalSection).toContain("Do not include `mach12:pr-review-fix`");
+		expect(finalSection).toContain("omit `next_steps` and `recommended_next_step`");
+		expect(finalSection).not.toContain("`/mach12:pr-review-fix <pr-number>`");
 	});
 });
 
