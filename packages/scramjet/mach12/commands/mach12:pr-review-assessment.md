@@ -92,6 +92,8 @@ The brief should instruct the assessor to:
 
 ## Step 4: Post assessment comment
 
+For every publishable body authored in this command—including assessment comments, deferred-finding issue bodies, duplicate comments, overlap notes, patched assessment bodies, and disposition comments—format intentional GitHub relationships so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact review-comment URLs and numeric provenance fields when their stronger format is required. Apply this policy before posting or PATCHing a body.
+
 Prepare the assessment body. It must include:
 - `<!-- mach12-assessment -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
 - A reference to the review comment it is assessing (link to the specific comment URL recorded in Step 2).
@@ -99,7 +101,7 @@ Prepare the assessment body. It must include:
 - The staged implementation plan at the end.
 - Model attribution at the bottom -- use the model attribution from the Model Identity section of your system prompt (e.g., "Assessed by <model name>").
 
-Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
+Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings; reserve linkable reference syntax for intentional GitHub relationships.
 
 Post the body immediately -- do not ask the user for approval first. Delegate to:
 
@@ -148,7 +150,7 @@ For each deferred item, check for existing issues before creating a new one:
    - **No results**: proceed to create the issue.
    - **Clear duplicate**: if an existing **open** issue's title is nearly identical, skip creation and post a comment on the existing issue linking the new finding. If the near-identical match is a closed issue, treat it as an ambiguous match instead (a previously-closed issue should not block creation).
 
-     Prepare a comment body of the form: `Related finding from PR <pr-number> review: <summary of the deferred finding>.` Then delegate to:
+     Prepare a comment body of the form: `Related finding from PR #<pr-number> review: <F/S identifier and summary of the deferred finding>.` The originating same-repository PR must be linkable while the finding retains its F/S identifier. Then delegate to:
 
      ```
      /mach12:gh-comment issue <existing-issue-number>
@@ -160,8 +162,8 @@ For each deferred item, check for existing issues before creating a new one:
 
 3. If no duplicate was found (or the match was ambiguous), create the issue with `gh issue create`:
    - A title summarizing the issue.
-   - A body referencing the PR and the specific finding.
-   - If ambiguous matches exist, append: "Potentially related: <list of matched issue numbers and titles>".
+   - A body referencing the originating same-repository PR as `#<pr-number>` and the specific finding by its F/S identifier.
+   - If ambiguous matches exist, append: "Potentially related: <list of matched issues as `#<issue-number>` with titles>" for same-repository matches; qualify cross-repository references or use already verified canonical URLs.
    - Any relevant labels.
 
 After processing, display a summary block in CLI output listing each item and the action taken:
@@ -226,7 +228,7 @@ After displaying the summary block (Options 1 and 3 only, and only when at least
 - One line per deferred item showing its disposition (Created as issue / Created as issue with overlap note / Skipped as duplicate / Skipped (not selected) / Reclassified as genuine).
 - Keep the entire comment body under 20 lines.
 
-Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
+Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) for artifact-local findings; format any intentional issue or PR relationships under Step 4’s linkable-reference policy.
 
 Then delegate to:
 

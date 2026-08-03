@@ -113,7 +113,7 @@ Prepare the review comment body. It must include:
 
 Format the comment as a well-structured markdown document that can serve as input to a future `/mach12:pr-review-fix` session.
 
-Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings. Do not use bare `#<number>` notation, which GitHub auto-links to issues/PRs.
+Format intentional GitHub relationships in the review body so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact comment URLs and numeric provenance fields when their stronger format is required.
 
 Post the prepared body by delegating to:
 

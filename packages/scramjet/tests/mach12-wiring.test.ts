@@ -792,6 +792,45 @@ describe("mach12 standard PR linkage", () => {
 	});
 });
 
+describe("mach12 GitHub reference authoring contracts", () => {
+	const commands = (names: string[]) =>
+		names.map((name) => [name, readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${name}.md`), "utf-8")] as const);
+
+	it.each(
+		commands([
+			"plan-comment-contract",
+			"issue-create",
+			"issue-plan",
+			"issue-review",
+			"pr-create",
+			"pr-review",
+			"pr-review-assessment",
+			"push",
+		]),
+	)("%s distinguishes intentional GitHub relationships from local identifiers", (_name, content) => {
+		expect(content).toMatch(/same-repository issue or pull-request (?:references|relationships) use\s+`#N`/);
+		expect(content).toContain("`owner/repo#N`");
+		expect(content).toMatch(/(?:never|rather than)\s+bare `#N`/);
+	});
+
+	it("links deferred-finding relationships without turning finding labels into links", () => {
+		const assessment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-assessment.md`), "utf-8");
+		expect(assessment).toContain("Related finding from PR #<pr-number> review");
+		expect(assessment).toContain("originating same-repository PR as `#<pr-number>`");
+		expect(assessment).toContain("matched issues as `#<issue-number>`");
+		expect(assessment).toContain("finding retains its F/S identifier");
+	});
+
+	it("preserves the single optional PR closer and policy-free comment transport", () => {
+		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
+		const ghComment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-comment.md`), "utf-8");
+		expect(prCreate).toContain("exactly one optional standalone `Fixes #N` line");
+		expect(prCreate).toContain("Ordinary references must not add closing keywords");
+		expect(ghComment).not.toContain("owner/repo#N");
+		expect(ghComment).not.toContain("Artifact-local identifiers");
+	});
+});
+
 describe("mach12 ordinary PR readiness", () => {
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
 	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
