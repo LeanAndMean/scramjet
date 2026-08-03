@@ -42,7 +42,7 @@ Read ordinary GitHub readiness before changing the branch:
 gh pr view <pr-number> --json state,isDraft,reviewDecision,mergeable,mergeStateStatus
 ```
 
-Require the PR to be open, non-draft, and free of requested changes or required review. Confirm there are no merge conflicts, and read required checks with `gh pr checks <pr-number> --required`. A behind branch continues to Step 5, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
+Require the PR to be open, non-draft, and free of requested changes or required review, and read required checks with `gh pr checks <pr-number> --required`. If GitHub reports `CONFLICTING` or `DIRTY`, retain that conflict evidence and continue through checkout to Step 5 for guarded remediation rather than blocking immediately. This route does not bypass Step 5's Merge/Cancel choice and does not authorize an automatic merge. A behind branch continues to Step 5, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness.
 
@@ -291,5 +291,5 @@ After delivering your answer, call `report_scramjet_command_status` and summariz
   - `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, with a reason explaining when merging is appropriate.
   - `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, with a reason explaining when a fix pass is warranted.
 - Recommend `mach12:pr-merge` (index 0) when no issues remain; recommend `mach12:pr-review-fix` (index 1) when code changes are warranted.
-- Report `status: "blocked"` when a determinate condition requires user or repository action: a non-open PR, draft state, requested changes, required review, failing or pending required checks, a behind branch, or confirmed conflicts.
+- Report `status: "blocked"` when a determinate condition requires user or repository action: a non-open PR, draft state, requested changes, required review, failing or pending required checks, a behind branch, or conflict remediation was declined or remains unresolved.
 - Report `status: "incomplete"` when readiness remains indeterminate after one reread or an execution failure prevents a trustworthy completed/blocked determination. Leave `next_steps` empty for non-completed statuses. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

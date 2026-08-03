@@ -816,6 +816,21 @@ describe("mach12 ordinary PR readiness", () => {
 		const readiness = readinessSection(preMerge);
 		expect(readiness).toContain("A behind branch continues to Step 5");
 		expect(readiness).toContain("pending or failing checks continue to Step 9");
+		expect(readiness).toContain("`CONFLICTING` or `DIRTY`");
+		expect(readiness).toContain("continue through checkout to Step 5");
+		expect(readiness).toContain("does not authorize an automatic merge");
+	});
+
+	it("pre-merge keeps conflict remediation behind user confirmation", () => {
+		const freshness = preMerge.slice(preMerge.indexOf("## Step 5:"), preMerge.indexOf("## Step 6:"));
+		const mergeChoice = freshness.indexOf("**Merge**");
+		const cancelChoice = freshness.indexOf("**Cancel**");
+		const mergeCommand = freshness.indexOf("git merge origin/<default-branch>");
+		expect(mergeChoice).toBeGreaterThan(-1);
+		expect(cancelChoice).toBeGreaterThan(mergeChoice);
+		expect(mergeCommand).toBeGreaterThan(cancelChoice);
+		expect(freshness).toContain("resolve them using codebase context");
+		expect(freshness).toContain("genuinely ambiguous");
 	});
 
 	it("merge requires ordinary GitHub readiness", () => {
@@ -896,10 +911,14 @@ describe("mach12 ordinary PR readiness", () => {
 	});
 
 	it("pre-merge defines terminal status predicates and requires final readiness", () => {
-		expect(preMerge).toContain('Report `status: "completed"` only');
-		expect(preMerge).toContain('Report `status: "blocked"`');
-		expect(preMerge).toContain('Report `status: "incomplete"`');
-		expect(preMerge).toContain("final authoritative readiness reread");
+		const finalSection = preMerge.slice(preMerge.indexOf("## Step 10:"));
+		expect(finalSection).toContain('Report `status: "completed"` only');
+		expect(finalSection).toContain('Report `status: "blocked"`');
+		expect(finalSection).toContain('Report `status: "incomplete"`');
+		expect(finalSection).toContain("final authoritative readiness reread");
+		expect(finalSection).toContain("conflict-free");
+		expect(finalSection).toContain("conflict remediation was declined or remains unresolved");
+		expect(finalSection).not.toContain("or confirmed conflicts");
 	});
 });
 
