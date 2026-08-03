@@ -157,6 +157,8 @@ After retained root causes are settled, group compatible findings by subsystem. 
 
 ### Prepare the review artifact
 
+Before hashing or posting, format intentional GitHub relationships in the complete review body so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, cluster IDs, node IDs, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact verified comment URLs and numeric provenance fields when their stronger format is required.
+
 Prepare a fix-compatible review body with `<!-- mach12-review -->` as the first line. Assign stable F IDs to merge-blocking defects and stable S IDs only to independently validated low-severity completion defects. Do not assign finding IDs to rejected candidates.
 
 For each finding include:

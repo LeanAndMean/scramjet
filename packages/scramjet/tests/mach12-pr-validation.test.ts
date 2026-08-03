@@ -272,6 +272,19 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 	it("publishes a verified fix-compatible review artifact before the fresh forced handoff", () => {
 		const publication = section(command, "## Step 7:");
 		expect(publication).toContain("`<!-- mach12-review -->` as the first line");
+		expect(publication).toContain("same-repository issue or pull-request references use `#N`");
+		expect(publication).toContain("cross-repository references use `owner/repo#N`");
+		expect(publication).toContain("Artifact-local identifiers use stable labels or plain words");
+		expect(publication).toContain("cluster IDs, node IDs");
+		expect(publication).toContain("never bare `#N`");
+		expect(publication).toContain("Preserve exact verified comment URLs and numeric provenance fields");
+		expectInOrder(
+			publication,
+			"Before hashing or posting, format intentional GitHub relationships",
+			"Prepare a fix-compatible review body",
+			"Compute and record the SHA-256 digest",
+			"/mach12:gh-comment pr <pr-number>",
+		);
 		for (const field of [
 			"severity and production references",
 			"final test path, node ID, and command",
@@ -479,6 +492,19 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 	it("publishes and verifies a proof-preserving assessment artifact", () => {
 		const artifact = section(command, "## Step 6:", "## Step 7:");
 		expect(artifact).toContain("`<!-- mach12-assessment -->` as the first line");
+		expect(artifact).toContain("same-repository issue or pull-request references use `#N`");
+		expect(artifact).toContain("cross-repository references use `owner/repo#N`");
+		expect(artifact).toContain("Artifact-local identifiers use stable labels or plain words");
+		expect(artifact).toContain("cluster IDs, node IDs");
+		expect(artifact).toContain("never bare `#N`");
+		expect(artifact).toContain("Preserve the exact verified review-comment URL and numeric provenance fields");
+		expectInOrder(
+			artifact,
+			"Before hashing or posting, format intentional GitHub relationships",
+			"Prepare the comment body",
+			"Compute and record SHA-256",
+			"/mach12:gh-comment pr <pr-number>",
+		);
 		expect(artifact).toContain("exact review comment URL");
 		expect(artifact).toContain("exact review-body SHA-256");
 		expect(artifact).toContain("Compute and record SHA-256 over the exact complete assessment body");

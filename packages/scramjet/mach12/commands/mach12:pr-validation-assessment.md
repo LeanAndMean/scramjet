@@ -152,6 +152,8 @@ After architect dispatch, verify the frozen heads and empty index and compare th
 
 ### Prepare the artifact
 
+Before hashing or posting, format intentional GitHub relationships in the complete assessment body so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, cluster IDs, node IDs, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve the exact verified review-comment URL and numeric provenance fields when their stronger format is required.
+
 Prepare the comment body with `<!-- mach12-assessment -->` as the first line and link the exact review comment URL and numeric ID. Include the exact review-body SHA-256, reviewed head OID, and actual merge-base OID so the repair session can authenticate the pair.
 
 For every retained F/S item include:

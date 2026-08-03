@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.73.0 — Link intentional GitHub artifact references
+
+Makes intentional GitHub relationships discoverable while keeping artifact-local identifiers unlinked. Fixes [#450](https://github.com/LeanAndMean/scramjet/issues/450).
+
+### Changed
+
+- Link same-repository and cross-repository issue and pull-request references across Mach 12 artifact-authoring workflows.
+- Preserve single-issue closure semantics, immutable comment references, and validation provenance formats.
+
+### Tests
+
+- Add contract coverage for reference formatting in general and executable-validation artifact workflows.
+
 ## 0.72.3 — Reassess stale workflow artifacts
 
 Makes artifact-driven workflows account for evidence freshness before relying on material historical claims. Fixes [#446](https://github.com/LeanAndMean/scramjet/issues/446).
