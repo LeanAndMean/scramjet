@@ -26,7 +26,7 @@ If no issue number is present, return an error to the caller and stop.
 
 ## Step 2: Read the issue and complete comment stream
 
-Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the issue through `gh api graphql --paginate` with explicit variables for owner, name, issue number, and `$endCursor`. Request `title`, `body`, and:
+Resolve the canonical `owner/name` with `gh repo view --json nameWithOwner`. Query the issue through `gh api graphql --paginate` with explicit variables for owner, name, issue number, and `$endCursor`. Request parent `title`, `body`, `createdAt`, `updatedAt`, and:
 
 ```graphql
 comments(first: 100, after: $endCursor) {
@@ -47,6 +47,8 @@ If the marker is not found, return that fact alongside the issue content -- the 
 ## Step 4: Return
 
 Return:
-- The issue title and body.
-- The complete accumulated comments array (parsed JSON), its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
+- The issue title, body, `createdAt`, and `updatedAt`.
+- The complete accumulated comments array (parsed JSON), including each comment's `createdAt`, its verified `totalCount`, and confirmation that pagination reached `hasNextPage: false`.
 - If `--marker` was requested: the matched comment body and its numeric comment ID (parsed from the comment URL -- the number after `issuecomment-`). If the marker was not found, indicate that.
+
+Treat the returned issue and comments as point-in-time evidence. Callers should consider the timestamps and relevant intervening changes, verify potentially stale material claims against current authoritative context, preserve still-supported historical intent and decisions, and never treat age alone as proof of invalidity.

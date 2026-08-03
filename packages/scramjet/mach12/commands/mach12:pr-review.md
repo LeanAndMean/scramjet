@@ -52,8 +52,14 @@ Determine the changed files and PR context before launching reviewers:
 
 ```
 git diff --name-only origin/main...HEAD
-gh pr view <pr-number> --json title,body,comments,files
+gh pr view <pr-number> --json title,body,createdAt,updatedAt,comments,files
 ```
+
+Identify linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
+
+Before briefing reviewers, delegate to `/mach12:gh-issue-read <issue-number>` for each linked issue so its current body, complete discussion, and timestamps are available alongside plans and prior reviews in the PR comments. If any linked issue cannot be read completely, surface the failed issue and error, stop before reviewer dispatch, and report the review blocked or incomplete; do not silently continue with reduced authoritative context.
+
+Treat the PR description, comments, linked issues, plans, and prior reviews as point-in-time evidence. Use their timestamps and relevant intervening changes to identify material historical claims, then verify potentially stale claims against the checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance. Preserve still-supported historical intent and decisions; neither age, status, nor recent activity proves current validity or invalidity.
 
 Use the changed files, PR description, linked issues, requested review aspects, and user context to select review lenses. Default to `all` when no aspects were specified.
 
@@ -71,7 +77,7 @@ Use the bundled Mach 12 review agents as the primary lenses:
   - Are new dependencies, files, abstractions, config, or extension points justified?
   - Are tests proportionate to the behavior risk?
   Simplification findings usually belong in Suggestions; promote to Important only when extra complexity creates real maintenance or behavioral risk.
-- **completeness**: `mach12:feature-completeness-checker` -- include when the PR has a linked issue (look for `Fixes #N`, `Closes #N`, `Resolves #N`, `Part of #N`, `Issue #N`, or a bare `#N` in the PR description), or the user requested `completeness` / `all`.
+- **completeness**: `mach12:feature-completeness-checker` -- include when the PR has a linked issue identified under the relationship and contextual-relevance rules above, or the user requested `completeness` / `all`.
 
 Also include supplementary domain-relevant agents from any installed source when the PR content calls for them, such as a skill reviewer for skill definitions or a plugin validator for plugin code. Only include supplementary lenses when relevant.
 
@@ -80,6 +86,7 @@ Dispatch all selected review tasks in a single parallel `subagent` call. Give ea
 - PR number, title, body, changed files, and any relevant PR comments.
 - The specific lens it is responsible for.
 - The user context from Step 1, if provided: `> **User context:** <context>`
+- Relevant artifact timestamps, identified freshness caveats, and which claims were checked against current authority.
 - For the completeness lens, the linked issue number(s) and instruction to read the issue body, comments, acceptance criteria, and latest implementation plan.
 - For all lenses: if a version bump or changelog entry is present in the diff but was not introduced by a pre-merge commit, flag it as premature.
 
