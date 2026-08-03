@@ -24,14 +24,23 @@ function keyIdentity(key: string): string {
 	return [...modifiers, normalizedBase].join("+");
 }
 
+function keysOverlap(left: string, right: string): boolean {
+	const identities = new Set([keyIdentity(left), keyIdentity(right)]);
+	if (identities.size === 1) return true;
+	if (identities.has("escape") && identities.has("ctrl+[")) return true;
+	return identities.has("enter") && (identities.has("ctrl+m") || identities.has("ctrl+j"));
+}
+
 export function createSelectorEffortControl({
 	model,
 	thinking,
 	keybindings,
 	protectedActions,
 }: SelectorEffortOptions): SelectorEffortControl {
-	const conflictingKeys = new Set(protectedActions.flatMap((action) => keybindings.getKeys(action)).map(keyIdentity));
-	const usableKeys = keybindings.getKeys("app.thinking.cycle").filter((key) => !conflictingKeys.has(keyIdentity(key)));
+	const protectedKeys = protectedActions.flatMap((action) => keybindings.getKeys(action));
+	const usableKeys = keybindings
+		.getKeys("app.thinking.cycle")
+		.filter((key) => !protectedKeys.some((protectedKey) => keysOverlap(key, protectedKey)));
 
 	return {
 		handleInput(data: string): boolean {

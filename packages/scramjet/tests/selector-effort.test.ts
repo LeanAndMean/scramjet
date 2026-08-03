@@ -137,10 +137,13 @@ describe("createSelectorEffortControl", () => {
 	});
 
 	it.each([
-		["return", "enter"],
-		["esc", "escape"],
-		["ctrl+shift+p", "shift+ctrl+p"],
-	] as const)("filters matcher-equivalent %s/%s conflicts from the hint", (effort, protectedKey) => {
+		["return", "enter", ENTER],
+		["esc", "escape", "\x1b"],
+		["ctrl+shift+p", "shift+ctrl+p", undefined],
+		["ctrl+[", "escape", "\x1b"],
+		["ctrl+m", "enter", ENTER],
+		["ctrl+j", "enter", "\n"],
+	] as const)("filters matcher-equivalent %s/%s conflicts from the hint", (effort, protectedKey, input) => {
 		const state = thinking();
 		const control = createSelectorEffortControl({
 			model: model(true),
@@ -150,6 +153,10 @@ describe("createSelectorEffortControl", () => {
 		});
 
 		expect(control.render(80)).toBe("effort: high");
+		if (input !== undefined) {
+			expect(control.handleInput(input)).toBe(false);
+			expect(state.setThinkingLevel).not.toHaveBeenCalled();
+		}
 	});
 
 	it("omits the shortcut when unbound", () => {
