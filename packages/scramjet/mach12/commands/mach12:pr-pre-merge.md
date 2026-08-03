@@ -13,9 +13,11 @@ next:
   mode: open
   candidates:
     - name: mach12:pr-merge
-      hint: Checklist passed cleanly and the PR is ready to merge
-    - name: mach12:pr-review-fix
-      hint: Checklist surfaced issues that warrant code changes
+      hint: Normal continuation when the checklist proves the PR is merge-ready
+    - name: mach12:pr-review
+      hint: Optional additional static review before merging
+    - name: mach12:pr-validation
+      hint: Optional executable validation before merging
 ---
 
 # Pre-Merge Checklist
@@ -287,9 +289,10 @@ Report any items that need follow-up (test failures, manual conflict resolution,
 
 After delivering your answer, call `report_scramjet_command_status` and summarize the work you performed in `summary`:
 
-- Report `status: "completed"` only when every required checklist action succeeded and the final authoritative readiness reread is determinate and ready. Include both declared candidates in `next_steps`:
-  - `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, with a reason explaining when merging is appropriate.
-  - `message`: `/mach12:pr-review-fix <pr-number>`, `fresh_session`: `true`, with a reason explaining when a fix pass is warranted.
-- Recommend `mach12:pr-merge` (index 0) when no issues remain; recommend `mach12:pr-review-fix` (index 1) when code changes are warranted.
+- Report `status: "completed"` only when every required checklist action succeeded and the final authoritative readiness reread is determinate and ready. Include exactly three entries in `next_steps`, in this order:
+  - `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, with a non-empty reason explaining that the PR is merge-ready.
+  - `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`, with a non-empty reason explaining that additional static review is optional.
+  - `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`, with a non-empty reason explaining that executable validation is optional.
+- Set `recommended_next_step` to `0`. Do not include `mach12:pr-review-fix` in the completed reporting contract.
 - Report `status: "blocked"` when a determinate condition requires user or repository action: a non-open PR, draft state, requested changes, required review, failing or pending required checks, a behind branch, or conflict remediation was declined or remains unresolved.
-- Report `status: "incomplete"` when readiness remains indeterminate after one reread or an execution failure prevents a trustworthy completed/blocked determination. Leave `next_steps` empty for non-completed statuses. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
+- Report `status: "incomplete"` when readiness remains indeterminate after one reread or an execution failure prevents a trustworthy completed/blocked determination. For blocked or incomplete results, omit `next_steps` and `recommended_next_step`. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
