@@ -272,6 +272,19 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 	it("publishes a verified fix-compatible review artifact before the fresh forced handoff", () => {
 		const publication = section(command, "## Step 7:");
 		expect(publication).toContain("`<!-- mach12-review -->` as the first line");
+		expect(publication).toContain("same-repository issue or pull-request references use `#N`");
+		expect(publication).toContain("cross-repository references use `owner/repo#N`");
+		expect(publication).toContain("Artifact-local identifiers use stable labels or plain words");
+		expect(publication).toContain("cluster IDs, node IDs");
+		expect(publication).toContain("never bare `#N`");
+		expect(publication).toContain("Preserve exact verified comment URLs and numeric provenance fields");
+		expectInOrder(
+			publication,
+			"Before hashing or posting, format intentional GitHub relationships",
+			"Prepare a fix-compatible review body",
+			"Compute and record the SHA-256 digest",
+			"/mach12:gh-comment pr <pr-number>",
+		);
 		for (const field of [
 			"severity and production references",
 			"final test path, node ID, and command",
@@ -479,6 +492,19 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 	it("publishes and verifies a proof-preserving assessment artifact", () => {
 		const artifact = section(command, "## Step 6:", "## Step 7:");
 		expect(artifact).toContain("`<!-- mach12-assessment -->` as the first line");
+		expect(artifact).toContain("same-repository issue or pull-request references use `#N`");
+		expect(artifact).toContain("cross-repository references use `owner/repo#N`");
+		expect(artifact).toContain("Artifact-local identifiers use stable labels or plain words");
+		expect(artifact).toContain("cluster IDs, node IDs");
+		expect(artifact).toContain("never bare `#N`");
+		expect(artifact).toContain("Preserve the exact verified review-comment URL and numeric provenance fields");
+		expectInOrder(
+			artifact,
+			"Before hashing or posting, format intentional GitHub relationships",
+			"Prepare the comment body",
+			"Compute and record SHA-256",
+			"/mach12:gh-comment pr <pr-number>",
+		);
 		expect(artifact).toContain("exact review comment URL");
 		expect(artifact).toContain("exact review-body SHA-256");
 		expect(artifact).toContain("Compute and record SHA-256 over the exact complete assessment body");
@@ -618,6 +644,74 @@ describe("mach12 authoritative GitHub history helpers", () => {
 		]) {
 			expect(command).toContain(clause);
 		}
+	});
+
+	it.each(["gh-pr-read", "gh-issue-read"])(
+		"%s exposes parent and comment timestamps with freshness guidance",
+		(basename) => {
+			const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
+			const request = section(command, "Request parent", "The query must declare");
+			const result = section(command, "## Step 4: Return");
+
+			expect(request).toContain("`title`, `body`, `createdAt`, `updatedAt`");
+			expect(request).toContain("authorAssociation createdAt url");
+			expect(result).toContain("`createdAt`, and `updatedAt`");
+			expect(result).toContain("each comment's `createdAt`");
+			expect(result).toContain("point-in-time evidence");
+			expect(result).toContain("verify potentially stale material claims against current authoritative context");
+			expect(result).toContain("never treat age alone as proof of invalidity");
+		},
+	);
+
+	it("requires planning and review to reassess stale claims against task-specific authority", () => {
+		const issuePlan = readFileSync(join(COMMANDS_DIR, "mach12:issue-plan.md"), "utf-8");
+		const prReview = readFileSync(join(COMMANDS_DIR, "mach12:pr-review.md"), "utf-8");
+
+		expect(issuePlan).toContain("parent `createdAt` and `updatedAt`");
+		expect(issuePlan).toContain("Verify those claims against current repository authority");
+		expect(prReview).toContain("--json title,body,createdAt,updatedAt,comments,files");
+		expectInOrder(
+			prReview,
+			"Identify linked issues from explicit relationship forms",
+			"contextually relevant bare `#<number>` references in the PR body",
+			"references found only in the conversation as candidates",
+			"Deduplicate issue numbers",
+			"Before briefing reviewers",
+			"/mach12:gh-issue-read <issue-number>",
+		);
+		expect(prReview).toContain("If any linked issue cannot be read completely");
+		expect(prReview).toContain("stop before reviewer dispatch");
+		expect(prReview).toContain("report the review blocked or incomplete");
+		expect(prReview).toContain("linked issue identified under the relationship and contextual-relevance rules above");
+		expect(prReview).toContain(
+			"checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance",
+		);
+		expect(prReview).toContain("Relevant artifact timestamps, identified freshness caveats");
+	});
+
+	it("reads timestamped plausible duplicate candidates before confident issue classification", () => {
+		const issueCreate = readFileSync(join(COMMANDS_DIR, "mach12:issue-create.md"), "utf-8");
+		const duplicateCheck = section(issueCreate, "## Step 10:", "## Step 11:");
+
+		expect(duplicateCheck).toContain("--json number,title,state,url,createdAt,updatedAt");
+		const plausibleMatches = section(duplicateCheck, "- **Plausible matches**", "After those checks:");
+		expect(plausibleMatches).toContain(
+			"Before confidently classifying any candidate as a duplicate or recommending linkage",
+		);
+		expect(plausibleMatches).toContain("/mach12:gh-issue-read <candidate-number>");
+		expect(plausibleMatches).toContain("Track which candidates were read completely");
+		expect(plausibleMatches).toContain("If a read fails");
+		expect(plausibleMatches).toContain(
+			"exclude that unread candidate from duplicate classification and every mention, comment, or linkage target",
+		);
+		expect(plausibleMatches).toContain("old age is insufficient proof that it is obsolete");
+
+		const choices = section(duplicateCheck, "After those checks:");
+		expect(choices).toContain("Only a successfully read candidate can be a clear duplicate");
+		expect(choices).toContain(
+			"If every candidate is unread, offer only retry, create without mentioning matches, or skip",
+		);
+		expect(choices).toContain("unread candidates must not be offered");
 	});
 });
 

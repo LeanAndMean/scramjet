@@ -69,6 +69,10 @@ When prior-session lookup is appropriate:
 Retrieval guide (query patterns, CWD verification, safe shell workflows):
 ${loggingGuidePath}
 
+# Historical artifacts
+
+Issues, PRs, comments, plans, reviews, and other historical artifacts capture context at a point in time. When a decision depends on a material claim from an artifact, consider available creation and update times and relevant changes since it was written. Verify potentially stale claims against current authoritative context before relying on them, while preserving historical intent and decisions that current evidence still supports. Age is a reason to reassess, never proof that an artifact is obsolete or invalid.
+
 # Command framing
 
 Commands injected by the Scramjet harness are wrapped in \`<scramjet-command name="...">\` tags.

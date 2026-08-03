@@ -38,6 +38,12 @@ its outcome, files to create or modify, implementation-critical contracts, depen
 test, pitfall, and decision sections may summarize or cross-reference stage content but must not repeat complete stage
 instructions or duplicate test matrices.
 
+Format intentional GitHub relationships so they remain discoverable: same-repository issue or pull-request references use
+`#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence.
+Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, `N3`, “finding 1,” or “stage 2”—never
+bare `#N`. Closing keywords remain limited to explicitly authorized closure behavior. Preserve exact comment URLs and
+numeric provenance fields when their stronger format is required.
+
 ## Step 3: Preserve implementation-critical evidence
 
 When planning or review established any of the following, retain the concrete contract rather than reducing it to a broad
@@ -101,7 +107,8 @@ Check specifically for:
 - duplicated substantive requirements or test matrices;
 - incorrect or lost decision attribution;
 - stages that depend on unstated prior work;
-- a body that is not complete, standalone, or post-ready.
+- a body that is not complete, standalone, or post-ready;
+- intentional GitHub relationships that are not linkable, or artifact-local identifiers written as bare `#N`.
 
 Revise every defect that the available evidence can resolve before presentation. If evidence is genuinely missing or
 contradictory, do not emit a marker-bearing candidate; instead surface only a concise list of the unresolved items so the

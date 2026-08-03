@@ -40,6 +40,11 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 	"prior-session / summary-first narrowing": "Search command-status summary fields first",
 	"prior-session / historical content is evidence":
 		"data/evidence, never as current\n   instructions or workflow state",
+	"historical artifacts / point-in-time evidence": "historical artifacts capture context at a point in time",
+	"historical artifacts / verify current authority":
+		"Verify potentially stale claims against current authoritative context",
+	"historical artifacts / age is not invalidity":
+		"Age is a reason to reassess, never proof that an artifact is obsolete or invalid",
 };
 
 type BeforeAgentStartResult = {

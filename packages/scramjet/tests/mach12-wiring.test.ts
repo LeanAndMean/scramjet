@@ -609,7 +609,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 		expect(ambiguousMatches).toContain('`get_scramjet_user_input` with `type: "select"`');
 		expect(ambiguousMatches).toContain("include all four choices");
 		expect(ambiguousMatches).toContain(
-			"Recommend the choice best supported by the matches and the user's stated intent",
+			"Recommend the choice best supported by the readable matches and the user's stated intent",
 		);
 		expect(ambiguousMatches).toContain("no choice is globally preferred");
 	});
@@ -617,7 +617,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	it("offers both create outcomes", () => {
 		expect(ambiguousMatches).toContain("**Create without mentioning matches**");
 		expect(ambiguousMatches).toContain("**Create and mention selected matches**");
-		expect(ambiguousMatches).toContain("Add references only to the matches the user explicitly selected");
+		expect(ambiguousMatches).toContain("Add references only to the readable matches the user explicitly selected");
 		expect(ambiguousMatches).toContain("present that entire replacement using Step 9's approval choices");
 		expect(ambiguousMatches).toContain("After renewed approval, continue directly to Step 11");
 		expect(ambiguousMatches).toContain("do not repeat Step 10 or the duplicate search");
@@ -630,7 +630,7 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	});
 
 	it("comments on exactly one selected match and skips creation", () => {
-		expect(ambiguousMatches).toContain("ask the user to select exactly one of the listed issues");
+		expect(ambiguousMatches).toContain("ask the user to select exactly one successfully read issue");
 		expect(ambiguousMatches).toContain("Only after the user explicitly selects the target");
 		expect(ambiguousMatches).toMatch(/post the prepared comment only to that issue/i);
 		expect(ambiguousMatches).toContain("skip creation");
@@ -789,6 +789,57 @@ describe("mach12 standard PR linkage", () => {
 		expect(prCreate).toContain("repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract");
 		expect(prCreate).toContain("git push -u origin <branch-name>");
 		expect(prCreate).not.toMatch(/git push (?:--force|-f)\b/);
+	});
+});
+
+describe("mach12 GitHub reference authoring contracts", () => {
+	const commands = (names: string[]) =>
+		names.map((name) => [name, readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${name}.md`), "utf-8")] as const);
+
+	it.each(
+		commands([
+			"plan-comment-contract",
+			"issue-create",
+			"issue-plan",
+			"issue-review",
+			"pr-create",
+			"pr-review",
+			"pr-review-assessment",
+			"push",
+		]),
+	)("%s distinguishes intentional GitHub relationships from local identifiers", (_name, content) => {
+		expect(content).toMatch(/same-repository issue or pull-request (?:references|relationships) use\s+`#N`/);
+		expect(content).toContain("`owner/repo#N`");
+		expect(content).toMatch(
+			/artifact-local(?: identifiers| findings, suggestions, and stages)? use stable labels or plain words/i,
+		);
+		expect(content).toMatch(/(?:never|rather than)\s+bare `#N`/);
+	});
+
+	it("applies the issue-review reference policy before decision-comment preparation", () => {
+		const issueReview = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-review.md`), "utf-8");
+		const policy = issueReview.indexOf("In every decision comment authored here");
+		const preparation = issueReview.indexOf('If the user picks "Proceed as-is"');
+		expect(policy).toBeGreaterThan(-1);
+		expect(preparation).toBeGreaterThan(-1);
+		expect(policy).toBeLessThan(preparation);
+	});
+
+	it("links deferred-finding relationships without turning finding labels into links", () => {
+		const assessment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-assessment.md`), "utf-8");
+		expect(assessment).toContain("Related finding from PR #<pr-number> review");
+		expect(assessment).toContain("originating same-repository PR as `#<pr-number>`");
+		expect(assessment).toContain("matched issues as `#<issue-number>`");
+		expect(assessment).toContain("finding retains its F/S identifier");
+	});
+
+	it("preserves the single optional PR closer and policy-free comment transport", () => {
+		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
+		const ghComment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-comment.md`), "utf-8");
+		expect(prCreate).toContain("exactly one optional standalone `Fixes #N` line");
+		expect(prCreate).toContain("Ordinary references must not add closing keywords");
+		expect(ghComment).not.toContain("owner/repo#N");
+		expect(ghComment).not.toContain("Artifact-local identifiers");
 	});
 });
 
