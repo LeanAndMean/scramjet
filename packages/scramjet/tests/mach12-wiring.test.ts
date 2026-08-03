@@ -88,7 +88,7 @@ const WIRING: WiringRow[] = [
 		basename: "pr-pre-merge",
 		expected: {
 			mode: "open",
-			candidates: [{ name: "mach12:pr-merge" }, { name: "mach12:pr-review-fix" }],
+			candidates: [{ name: "mach12:pr-merge" }, { name: "mach12:pr-review" }, { name: "mach12:pr-validation" }],
 		},
 	},
 	{
@@ -1037,6 +1037,33 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(finalSection).toContain("conflict-free");
 		expect(finalSection).toContain("conflict remediation was declined or remains unresolved");
 		expect(finalSection).not.toContain("or confirmed conflicts");
+	});
+
+	it("pre-merge completed reporting offers only merge and optional verification routes", () => {
+		const finalSection = preMerge.slice(preMerge.indexOf("## Step 10:"));
+		const mergeEntry = finalSection.slice(
+			finalSection.indexOf("`/mach12:pr-merge <pr-number>`"),
+			finalSection.indexOf("`/mach12:pr-review <pr-number>`"),
+		);
+		const reviewEntry = finalSection.slice(
+			finalSection.indexOf("`/mach12:pr-review <pr-number>`"),
+			finalSection.indexOf("`/mach12:pr-validation <pr-number>`"),
+		);
+		const validationEntry = finalSection.slice(
+			finalSection.indexOf("`/mach12:pr-validation <pr-number>`"),
+			finalSection.indexOf("- Set `recommended_next_step`"),
+		);
+		expect(finalSection).toContain("exactly three entries");
+		expect(mergeEntry).toContain("`fresh_session`: `true`");
+		expect(mergeEntry).toContain("non-empty reason explaining that the PR is merge-ready");
+		expect(reviewEntry).toContain("`fresh_session`: `true`");
+		expect(reviewEntry).toContain("non-empty reason explaining that additional static review is optional");
+		expect(validationEntry).toContain("`fresh_session`: `true`");
+		expect(validationEntry).toContain("non-empty reason explaining that executable validation is optional");
+		expect(finalSection).toContain("`recommended_next_step` to `0`");
+		expect(finalSection).toContain("Do not include `mach12:pr-review-fix`");
+		expect(finalSection).toContain("omit `next_steps` and `recommended_next_step`");
+		expect(finalSection).not.toContain("`/mach12:pr-review-fix <pr-number>`");
 	});
 });
 

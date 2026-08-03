@@ -460,6 +460,7 @@ export function registerAutoContinue(pi: ExtensionAPI, state: ScramjetState) {
 			signal: controller.signal,
 			models,
 			initialModel,
+			thinking: pi,
 		})
 			.then(async (selection) => {
 				if (

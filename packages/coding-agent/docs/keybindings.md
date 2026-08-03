@@ -114,6 +114,8 @@ Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1
 | `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
 
+`app.thinking.cycle` also works while Scramjet next-step and structured confirm/select dialogs are open. Those dialogs display the usable configured shortcut, apply effort changes immediately, and retain them when cancelled. Dialog navigation, confirmation, cancellation, and next-step model arrows take precedence if bindings conflict; freetext and headless interactions are unchanged.
+
 ### Display and Message Queue
 
 | Keybinding id | Default | Description |

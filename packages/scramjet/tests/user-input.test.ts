@@ -1,4 +1,6 @@
+import type { Api, Model } from "@leanandmean/ai";
 import { initTheme, ToolExecutionComponent } from "@leanandmean/coding-agent";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	COMMAND_START_TYPE,
@@ -11,6 +13,44 @@ import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";
 import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
 
 initTheme(undefined, false);
+
+const ENTER = "\r";
+const ESCAPE = "\x1b";
+const ARROW_UP = "\x1b[A";
+const ARROW_DOWN = "\x1b[B";
+const EFFORT = "\x1be";
+
+function reasoningModel(): Model<Api> {
+	return {
+		provider: "test",
+		id: "reasoning-model",
+		name: "Reasoning Model",
+		api: "anthropic-messages",
+		baseUrl: "",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+	};
+}
+
+function makeKeybindings(effort: string | string[] | undefined = "alt+e") {
+	return new KeybindingsManager(
+		{ ...TUI_KEYBINDINGS, "app.thinking.cycle": { defaultKeys: "shift+tab" } },
+		{ "app.thinking.cycle": effort },
+	);
+}
+
+let previousKeybindings: KeybindingsManager;
+
+beforeEach(() => {
+	previousKeybindings = getKeybindings();
+});
+
+afterEach(() => {
+	setKeybindings(previousKeybindings);
+});
 
 type UserInputParams = {
 	type: "confirm" | "select" | "freetext";
@@ -39,10 +79,13 @@ function mockUICtx(customResult: unknown = null, inputResult: string | undefined
 	};
 }
 
-function mockUICtxWithFactory() {
+function mockUICtxWithFactory(effort: string | string[] | undefined = "alt+e") {
 	let capturedFactory: any = null;
+	const keybindings = makeKeybindings(effort);
+	setKeybindings(keybindings);
 	return {
 		ctx: {
+			model: reasoningModel(),
 			ui: {
 				custom: (factory: any) => {
 					return new Promise((resolve) => {
@@ -51,7 +94,7 @@ function mockUICtxWithFactory() {
 							fg: (_color: string, text: string) => text,
 							bold: (text: string) => text,
 						};
-						capturedFactory = factory(tui, theme, {}, resolve);
+						capturedFactory = factory(tui, theme, keybindings, resolve);
 					});
 				},
 				input: (_title: string, _placeholder?: string) => Promise.resolve(undefined),
@@ -664,6 +707,114 @@ describe("registerUserInputTool — select interaction", () => {
 
 		factory.handleInput("\r");
 		await promise;
+	});
+});
+
+describe("registerUserInputTool — structured input effort", () => {
+	const cases = [
+		{
+			name: "confirm",
+			params: { type: "confirm", message: "Proceed?" } as UserInputParams,
+			success: { confirmed: true },
+		},
+		{
+			name: "select",
+			params: {
+				type: "select",
+				message: "Pick one",
+				options: [
+					{ value: "a", label: "A" },
+					{ value: "b", label: "B" },
+				],
+			} as UserInputParams,
+			success: { selected: "a" },
+		},
+	] as const;
+
+	it.each(cases)(
+		"cycles effort while $name remains pending and retains it on success",
+		async ({ params, success }) => {
+			const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+			const { ctx, getFactory } = mockUICtxWithFactory();
+			let settled = false;
+			const promise = execute(params, ctx).finally(() => {
+				settled = true;
+			});
+			await Promise.resolve();
+
+			const factory = getFactory();
+			factory.handleInput(EFFORT);
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			expect(pi.thinkingLevelCalls).toEqual(["off"]);
+			expect(factory.render(80).join("\n")).toContain("effort: off • alt+e cycle");
+
+			factory.handleInput(ENTER);
+			const result = await promise;
+			expect(JSON.parse(result.content[0].text)).toEqual(success);
+			expect(pi.thinkingLevel).toBe("off");
+		},
+	);
+
+	it.each(cases)("retains effort when $name is cancelled", async ({ params }) => {
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const { ctx, getFactory } = mockUICtxWithFactory();
+		const promise = execute(params, ctx);
+		await Promise.resolve();
+
+		getFactory().handleInput(EFFORT);
+		getFactory().handleInput(ESCAPE);
+		const result = await promise;
+
+		expect(pi.thinkingLevelCalls).toEqual(["off"]);
+		expect(pi.thinkingLevel).toBe("off");
+		expect(JSON.parse(result.content[0].text)).toEqual({ cancelled: true });
+		expect(result.terminate).toBe(true);
+	});
+
+	it.each([
+		["confirm Enter", "enter", ENTER, { type: "confirm", message: "Proceed?" }, { confirmed: true }],
+		["confirm Escape", "escape", ESCAPE, { type: "confirm", message: "Proceed?" }, { cancelled: true }],
+		[
+			"select Up",
+			"up",
+			ARROW_UP,
+			{
+				type: "select",
+				message: "Pick",
+				options: [
+					{ value: "a", label: "A" },
+					{ value: "b", label: "B" },
+				],
+			},
+			{ selected: "b" },
+		],
+		[
+			"select Down",
+			"down",
+			ARROW_DOWN,
+			{
+				type: "select",
+				message: "Pick",
+				options: [
+					{ value: "a", label: "A" },
+					{ value: "b", label: "B" },
+				],
+			},
+			{ selected: "b" },
+		],
+	] as const)("protects %s from a conflicting effort binding", async (_name, binding, input, params, expected) => {
+		const { execute, pi } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
+		const { ctx, getFactory } = mockUICtxWithFactory(binding);
+		const promise = execute(params as UserInputParams, ctx);
+		await Promise.resolve();
+
+		getFactory().handleInput(input);
+		if (binding === "up" || binding === "down") getFactory().handleInput(ENTER);
+		const result = await promise;
+
+		expect(pi.thinkingLevelCalls).toEqual([]);
+		expect(JSON.parse(result.content[0].text)).toEqual(expected);
 	});
 });
 

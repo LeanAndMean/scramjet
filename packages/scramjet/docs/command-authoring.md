@@ -507,7 +507,7 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. Freetext renders its `message` in the tool call row, then parks the command immediately so the user can reply through the standard editor.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. While either dialog is open, `app.thinking.cycle` changes the session effort immediately; the widget shows the effective effort and any usable configured shortcut. Selector-owned navigation, confirmation, and cancellation controls take precedence when bindings conflict, and an effort change survives Escape. Freetext renders its `message` in the tool call row, then parks the command immediately so the user can reply through the standard editor; it does not use the effort-enabled selector.
 
 ### When to use it
 
@@ -598,7 +598,7 @@ When a command completes with `next_steps`, the user sees a selector with:
 
 The `recommended_next_step` entry is highlighted as the default selection. If `/autopilot on` and the policy allows automatic dispatch, the recommended entry fires without user interaction.
 
-When multiple models are available, the selector also shows a model line below the options. The user can cycle models with left/right arrows before committing a selection; the chosen model is committed via `pi.setModel` before dispatch. This is transparent to command authors — it does not affect `next_steps` declarations or dispatch semantics.
+When multiple models are available, the selector also shows a model line below the options. The user can cycle models with left/right arrows before committing a selection; the chosen model is committed via `pi.setModel` before dispatch. The configured `app.thinking.cycle` action changes effort immediately against the currently committed model and the selector shows its effective value and usable shortcut. Effort changes survive Escape, while model choice remains tentative and may clamp effort when committed. Selector-owned controls take precedence on binding conflicts. These controls are transparent to command authors — they do not affect command, result, lifecycle, record, or journal schemas.
 
 ### Implications for authors
 
