@@ -97,6 +97,9 @@ export function recordingPi(): RecordingPi {
 		harnessToolCalls: [] as { name: string; args: unknown; options?: unknown }[],
 		setModelCalls: [] as { model: unknown; result: boolean }[],
 		setModelResult: true as boolean | Error,
+		thinkingLevel: "high" as ThinkingLevel,
+		thinkingLevelCalls: [] as ThinkingLevel[],
+		timeline: [] as string[],
 		isStreaming: false,
 		registerTool(tool: any) {
 			tools.push(tool);
@@ -113,7 +116,12 @@ export function recordingPi(): RecordingPi {
 			return pi.setModelResult;
 		},
 		getThinkingLevel(): ThinkingLevel {
-			return "high";
+			return pi.thinkingLevel;
+		},
+		setThinkingLevel(level: ThinkingLevel) {
+			pi.thinkingLevel = level;
+			pi.thinkingLevelCalls.push(level);
+			pi.timeline.push("effort-set");
 		},
 		registerCommand(name: string, spec: unknown) {
 			commands.push({ name, spec });

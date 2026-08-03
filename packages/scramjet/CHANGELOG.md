@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.75.0 — Cycle effort in blocking selectors
+
+Adds immediate configured effort control to next-step and structured-input selectors. Fixes [#447](https://github.com/LeanAndMean/scramjet/issues/447).
+
+### Changed
+
+- Cycle the effective thinking effort from next-step and structured confirm/select dialogs using the configured shortcut.
+- Preserve selector navigation precedence, effort changes across cancellation, tentative model selection, and model-specific effort clamping.
+- Refresh the active effort before each intra-run provider call unless an explicit turn update overrides it.
+
+### Tests
+
+- Add focused coverage for effort cycling, configured and conflicting bindings, narrow rendering, cancellation, model selection, and intra-run routing.
+
 ## 0.74.0 — Surface technical debt in architecture choices
 
 Makes technical-debt implications explicit when selecting an issue-plan architecture. Fixes [#452](https://github.com/LeanAndMean/scramjet/issues/452).

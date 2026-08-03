@@ -1,3 +1,4 @@
+import type { Model } from "@leanandmean/ai";
 import {
 	type AgentToolResult,
 	type ExtensionAPI,
@@ -17,9 +18,12 @@ import {
 	resumeAfterProbeInput,
 } from "./lifecycle.js";
 import { MultiLineSelectList } from "./multi-line-select.js";
+import { createSelectorEffortControl } from "./selector-effort.js";
 import type { ScramjetState } from "./types.js";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
+
+const LIST_ACTIONS = ["tui.select.up", "tui.select.down", "tui.select.confirm", "tui.select.cancel"] as const;
 
 const NON_TUI_ERROR =
 	"get_scramjet_user_input requires a TUI environment. " +
@@ -156,10 +160,16 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 			try {
 				switch (params.type) {
 					case "confirm":
-						result = await handleConfirm(ctx as ExtensionContext);
+						result = await handleConfirm(ctx as ExtensionContext, ctx.model, pi);
 						break;
 					case "select":
-						result = await handleSelect(params.options ?? [], params.recommended, ctx as ExtensionContext);
+						result = await handleSelect(
+							params.options ?? [],
+							params.recommended,
+							ctx as ExtensionContext,
+							ctx.model,
+							pi,
+						);
 						break;
 					default:
 						return {
@@ -246,8 +256,12 @@ function staleResult(expectedCommand: string | null, expectedGeneration: number,
 	};
 }
 
-async function handleConfirm(ctx: ExtensionContext) {
-	const result = await ctx.ui.custom<"yes" | "no" | null>((tui, theme, _keybindings, done) => {
+async function handleConfirm(
+	ctx: ExtensionContext,
+	model: Model<any> | undefined,
+	thinking: Pick<ExtensionAPI, "getThinkingLevel" | "setThinkingLevel">,
+) {
+	const result = await ctx.ui.custom<"yes" | "no" | null>((tui, theme, keybindings, done) => {
 		const items = [
 			{ value: "yes", label: "Yes" },
 			{ value: "no", label: "No" },
@@ -259,16 +273,21 @@ async function handleConfirm(ctx: ExtensionContext) {
 		});
 		selectList.onSelect = (item) => done(item.value as "yes" | "no");
 		selectList.onCancel = () => done(null);
+		const effort = createSelectorEffortControl({ model, thinking, keybindings, protectedActions: LIST_ACTIONS });
 
 		return {
 			render(width: number) {
-				return [...selectList.render(width), theme.fg("dim", "enter select \u2022 esc cancel")];
+				return [
+					...selectList.render(width),
+					effort.render(width, (text) => theme.fg("dim", text)),
+					theme.fg("dim", "enter select \u2022 esc cancel"),
+				];
 			},
 			invalidate() {
 				selectList.invalidate();
 			},
 			handleInput(data: string) {
-				selectList.handleInput(data);
+				if (!effort.handleInput(data)) selectList.handleInput(data);
 				tui.requestRender();
 			},
 			dispose() {},
@@ -289,14 +308,20 @@ async function handleConfirm(ctx: ExtensionContext) {
 	};
 }
 
-async function handleSelect(options: UserInputOption[], recommended: number | undefined, ctx: ExtensionContext) {
+async function handleSelect(
+	options: UserInputOption[],
+	recommended: number | undefined,
+	ctx: ExtensionContext,
+	model: Model<any> | undefined,
+	thinking: Pick<ExtensionAPI, "getThinkingLevel" | "setThinkingLevel">,
+) {
 	const items = options.map((opt) => ({
 		value: opt.value,
 		label: opt.label,
 		description: opt.description,
 	}));
 
-	const selectedValue = await ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+	const selectedValue = await ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
 		const selectList = new MultiLineSelectList(
 			items,
 			Math.min(items.length, 8),
@@ -312,11 +337,13 @@ async function handleSelect(options: UserInputOption[], recommended: number | un
 
 		selectList.onSelect = (item) => done(item.value);
 		selectList.onCancel = () => done(null);
+		const effort = createSelectorEffortControl({ model, thinking, keybindings, protectedActions: LIST_ACTIONS });
 
 		return {
 			render(width: number) {
 				return [
 					...selectList.render(width),
+					effort.render(width, (text) => theme.fg("dim", text)),
 					theme.fg("dim", "\u2191\u2193 navigate \u2022 enter select \u2022 esc cancel"),
 				];
 			},
@@ -324,7 +351,7 @@ async function handleSelect(options: UserInputOption[], recommended: number | un
 				selectList.invalidate();
 			},
 			handleInput(data: string) {
-				selectList.handleInput(data);
+				if (!effort.handleInput(data)) selectList.handleInput(data);
 				tui.requestRender();
 			},
 			dispose() {},

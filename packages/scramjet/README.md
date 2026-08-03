@@ -63,6 +63,7 @@ Scramjet supports both patterns:
        Reviews the plan before implementation.
     1: /mach12:issue-implement 55 2
        The plan is straightforward enough to continue.
+  effort: high • shift+tab cycle
   ←→ model • ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
 
   [fresh session starts, runs issue-review]
@@ -71,6 +72,7 @@ Scramjet supports both patterns:
   Select next step
   > 0: /mach12:issue-implement 55 1 [recommended]
        Stage 1 is ready to build.
+  effort: high • shift+tab cycle
   ←→ model • ↑↓ navigate • enter select • esc cancel • auto-selects recommendation in 3s
 
   [continues through the entire methodology...]
@@ -95,6 +97,7 @@ Scramjet is an autopilot, not a conveyor belt. At any transition:
 
 - **Escape** dismisses the selector — you're back in normal Pi
 - **Left/right arrows** cycle the model for the next command; **up/down + Enter** choose the option — any interaction cancels the countdown
+- **The configured effort shortcut** (Shift+Tab by default) changes effort immediately in next-step and structured confirm/select dialogs, and the displayed hint follows your configuration. Effort survives Escape; tentative next-step model choices do not and may clamp effort when committed.
 - **Run a different command** — Scramjet doesn't interfere
 - **Close the terminal** — no workflow state to corrupt
 

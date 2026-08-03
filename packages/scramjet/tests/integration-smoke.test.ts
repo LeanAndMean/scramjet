@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getKeybindings } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAutoContinue } from "../src/auto-continue.js";
 import { registerAutopilotCommand } from "../src/autopilot-command.js";
@@ -495,6 +496,13 @@ describe("integration smoke — lifecycle event sequences", () => {
 		const dispatched: { input: string; options?: any }[] = [];
 		const pi: any = {
 			isStreaming: false,
+			thinkingLevel: "high",
+			getThinkingLevel() {
+				return pi.thinkingLevel;
+			},
+			setThinkingLevel(level: string) {
+				pi.thinkingLevel = level;
+			},
 			on(event: string, handler: any) {
 				const list = handlers.get(event) ?? [];
 				list.push(handler);
@@ -616,7 +624,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 						fg: (_color: string, text: string) => text,
 						bold: (text: string) => text,
 					},
-					{},
+					getKeybindings(),
 					() => {},
 				);
 				selectorText = component.render(120).join("\n");
