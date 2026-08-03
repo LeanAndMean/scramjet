@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.74.0 — Cycle effort in blocking selectors
+## 0.75.0 — Cycle effort in blocking selectors
 
 Adds immediate configured effort control to next-step and structured-input selectors. Fixes [#447](https://github.com/LeanAndMean/scramjet/issues/447).
 
@@ -13,6 +13,19 @@ Adds immediate configured effort control to next-step and structured-input selec
 ### Tests
 
 - Add focused coverage for effort cycling, configured and conflicting bindings, narrow rendering, cancellation, model selection, and intra-run routing.
+
+## 0.74.0 — Surface technical debt in architecture choices
+
+Makes technical-debt implications explicit when selecting an issue-plan architecture. Fixes [#452](https://github.com/LeanAndMean/scramjet/issues/452).
+
+### Changed
+
+- Assess technical debt separately for each architecture option and summarize differences and common debt across options.
+- Let users reject all current approaches and require explicit acceptance before planning continues.
+
+### Tests
+
+- Add semantic contract coverage for debt assessment, option revision, and explicit architecture acceptance.
 
 ## 0.73.0 — Link intentional GitHub artifact references
 
