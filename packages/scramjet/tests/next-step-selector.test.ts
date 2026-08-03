@@ -1,22 +1,25 @@
 import type { Api, Model } from "@leanandmean/ai";
-import { describe, expect, it, vi } from "vitest";
+import "@leanandmean/coding-agent";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@leanandmean/tui";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ValidatedNextStep } from "../src/commands/validator.js";
-import { selectNextStep } from "../src/next-step-selector.js";
+import { selectNextStep as selectNextStepImpl } from "../src/next-step-selector.js";
 
 const ENTER = "\r";
 const ESCAPE = "\x1b";
 const ARROW_DOWN = "\x1b[B";
 const ARROW_LEFT = "\x1b[D";
 const ARROW_RIGHT = "\x1b[C";
+const EFFORT = "\x1b[Z";
 
-function makeModel(provider: string, id: string, name?: string): Model<Api> {
+function makeModel(provider: string, id: string, name?: string, reasoning = false): Model<Api> {
 	return {
 		provider,
 		id,
 		name: name ?? `${provider}/${id}`,
 		api: "anthropic-messages" as Api,
 		baseUrl: "",
-		reasoning: false,
+		reasoning,
 		input: ["text"],
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: 200000,
@@ -39,11 +42,29 @@ function makeStep(index: number, message: string, opts?: Partial<ValidatedNextSt
 interface ComponentBag {
 	components: any[];
 	renderCalls: number;
+	thinkingLevel: string;
+	setThinkingLevelCalls: string[];
 }
 
-function fakeCtx(): { ctx: any; bag: ComponentBag } {
-	const bag: ComponentBag = { components: [], renderCalls: 0 };
+function makeKeybindings(effort: string | string[] | undefined = "shift+tab") {
+	return new KeybindingsManager(
+		{ ...TUI_KEYBINDINGS, "app.thinking.cycle": { defaultKeys: "shift+tab" } },
+		{ "app.thinking.cycle": effort },
+	);
+}
+
+function fakeCtx(effortBinding?: string | string[]): { ctx: any; bag: ComponentBag } {
+	const bag: ComponentBag = { components: [], renderCalls: 0, thinkingLevel: "high", setThinkingLevelCalls: [] };
+	const keybindings = makeKeybindings(effortBinding);
+	setKeybindings(keybindings);
 	const ctx = {
+		thinking: {
+			getThinkingLevel: () => bag.thinkingLevel,
+			setThinkingLevel: (level: string) => {
+				bag.setThinkingLevelCalls.push(level);
+				bag.thinkingLevel = level;
+			},
+		},
 		hasUI: true,
 		ui: {
 			custom<T>(factory: (tui: any, theme: any, keybindings: any, done: (result: T) => void) => any) {
@@ -59,7 +80,7 @@ function fakeCtx(): { ctx: any; bag: ComponentBag } {
 					component = factory(
 						{ requestRender: () => bag.renderCalls++ },
 						{ fg: (_name: string, text: string) => text, bold: (text: string) => text },
-						{},
+						keybindings,
 						done,
 					);
 					bag.components.push(component);
@@ -70,18 +91,85 @@ function fakeCtx(): { ctx: any; bag: ComponentBag } {
 	return { ctx, bag };
 }
 
+function selectNextStep(ctx: any, options: any) {
+	return selectNextStepImpl(ctx, { ...options, thinking: ctx.thinking });
+}
+
+let previousKeybindings: KeybindingsManager;
+
+beforeEach(() => {
+	previousKeybindings = getKeybindings();
+});
+
+afterEach(() => {
+	setKeybindings(previousKeybindings);
+});
+
 async function flush() {
 	await Promise.resolve();
 	await Promise.resolve();
 	await Promise.resolve();
 }
 
-const modelA = makeModel("anthropic", "claude-sonnet-4-20250514", "Claude Sonnet 4");
+const modelA = makeModel("anthropic", "claude-sonnet-4-20250514", "Claude Sonnet 4", true);
 const modelB = makeModel("openai", "gpt-4o", "GPT-4o");
 const modelC = makeModel("anthropic", "claude-opus-4-20250514", "Claude Opus 4");
 
 describe("selectNextStep — model cycling", () => {
 	describe("without model cycling", () => {
+		it("cycles effort immediately, updates rendering, cancels countdown, and retains effort on Escape", async () => {
+			vi.useFakeTimers();
+			try {
+				const { ctx, bag } = fakeCtx("alt+e");
+				const step = makeStep(0, "/test:cmd");
+				const p = selectNextStep(ctx, {
+					options: [step],
+					recommended: step,
+					autoSelect: step,
+					countdownSeconds: 3,
+					models: [modelA],
+					initialModel: modelA,
+				});
+
+				bag.components[0].handleInput("\x1be");
+				expect(bag.thinkingLevel).toBe("off");
+				expect(bag.components[0].render(80).join("\n")).toContain("effort: off • alt+e cycle");
+				expect(bag.components[0].render(80).join("\n")).not.toContain("auto-selects");
+
+				await vi.advanceTimersByTimeAsync(4000);
+				bag.components[0].handleInput(ESCAPE);
+				expect(await p).toBeNull();
+				expect(bag.thinkingLevel).toBe("off");
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it.each([
+			["confirm", ENTER],
+			["cancel", ESCAPE],
+			["down", ARROW_DOWN],
+		] as const)("protects %s when its binding conflicts with effort", async (action, input) => {
+			const { ctx, bag } = fakeCtx(action === "confirm" ? "enter" : action === "cancel" ? "escape" : "down");
+			const first = makeStep(0, "/test:first");
+			const second = makeStep(1, "/test:second");
+			const p = selectNextStep(ctx, {
+				options: [first, second],
+				recommended: first,
+				models: [modelA],
+				initialModel: modelA,
+			});
+
+			bag.components[0].handleInput(input);
+			expect(bag.setThinkingLevelCalls).toEqual([]);
+			if (action === "down") bag.components[0].handleInput(ENTER);
+
+			const result = await p;
+			expect(action === "cancel" ? result : result?.step).toBe(
+				action === "cancel" ? null : action === "down" ? second : first,
+			);
+		});
+
 		it("returns step with model: null when no models provided", async () => {
 			const { ctx, bag } = fakeCtx();
 			const step = makeStep(0, "/test:cmd");
@@ -139,6 +227,62 @@ describe("selectNextStep — model cycling", () => {
 	});
 
 	describe("with model cycling", () => {
+		it("cycles effort against the committed model while model preview stays tentative", async () => {
+			const { ctx, bag } = fakeCtx();
+			const step = makeStep(0, "/test:cmd");
+			const p = selectNextStep(ctx, {
+				options: [step],
+				recommended: step,
+				models: [modelA, modelB],
+				initialModel: modelA,
+			});
+
+			bag.components[0].handleInput(ARROW_RIGHT);
+			bag.components[0].handleInput(EFFORT);
+			expect(bag.thinkingLevel).toBe("off");
+			expect(bag.components[0].render(80).join("\n")).toContain("model: GPT-4o");
+			bag.components[0].handleInput(ENTER);
+
+			const result = await p;
+			expect(result).toEqual({ step, model: modelB });
+			expect(bag.thinkingLevel).toBe("off");
+		});
+
+		it("discards model preview on Escape but retains immediate effort", async () => {
+			const { ctx, bag } = fakeCtx();
+			const step = makeStep(0, "/test:cmd");
+			const p = selectNextStep(ctx, {
+				options: [step],
+				recommended: step,
+				models: [modelA, modelB],
+				initialModel: modelA,
+			});
+
+			bag.components[0].handleInput(ARROW_RIGHT);
+			bag.components[0].handleInput(EFFORT);
+			bag.components[0].handleInput(ESCAPE);
+
+			expect(await p).toBeNull();
+			expect(bag.thinkingLevel).toBe("off");
+		});
+
+		it("protects model arrows when their bindings conflict with effort", async () => {
+			const { ctx, bag } = fakeCtx("right");
+			const step = makeStep(0, "/test:cmd");
+			const p = selectNextStep(ctx, {
+				options: [step],
+				recommended: step,
+				models: [modelA, modelB],
+				initialModel: modelA,
+			});
+
+			bag.components[0].handleInput(ARROW_RIGHT);
+			expect(bag.setThinkingLevelCalls).toEqual([]);
+			expect(bag.components[0].render(80).join("\n")).toContain("model: GPT-4o");
+			bag.components[0].handleInput(ENTER);
+			expect((await p)?.model).toBe(modelB);
+		});
+
 		it("renders model line and footer with ←→ hint", () => {
 			const { ctx, bag } = fakeCtx();
 			const step = makeStep(0, "/test:cmd");

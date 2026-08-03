@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import "@leanandmean/coding-agent";
+import { getKeybindings, KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForNotify, extractStopReason, NOTIFY_MAX, registerAutoContinue } from "../src/auto-continue.js";
 import { resetCache } from "../src/autonomy-settings.js";
@@ -20,6 +22,16 @@ import { buildProbeMessage } from "../src/next-step.js";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
 import { derivedPhase, freshState, lifecycleFor, logMessages as logMessagesAll, recordingPi } from "./helpers.js";
+
+let previousKeybindings: KeybindingsManager;
+
+beforeEach(() => {
+	previousKeybindings = getKeybindings();
+});
+
+afterEach(() => {
+	setKeybindings(previousKeybindings);
+});
 
 type StatusParams = {
 	status: CommandStatusPayload["status"];
@@ -96,6 +108,11 @@ function fakeCtx({
 	scopedModels?: any[];
 	hasConfiguredAuth?: (model: any) => boolean;
 } = {}): CtxBag {
+	const keybindings = new KeybindingsManager({
+		...TUI_KEYBINDINGS,
+		"app.thinking.cycle": { defaultKeys: "shift+tab" },
+	});
+	setKeybindings(keybindings);
 	const bag: CtxBag = {
 		ctx: null,
 		dispatched: [],
@@ -151,7 +168,7 @@ function fakeCtx({
 					component = factory(
 						{ requestRender: () => bag.customRenderCalls++ },
 						{ fg: (_name: string, text: string) => text, bold: (text: string) => text },
-						{},
+						keybindings,
 						done,
 					);
 					bag.customComponents.push(component);
@@ -3177,9 +3194,10 @@ describe("edge-level autonomy settings integration", () => {
 
 describe("model selection at next-step dispatch", () => {
 	const ARROW_RIGHT = "\x1b[C";
+	const EFFORT = "\x1b[Z";
 
-	const modelA = { provider: "anthropic", id: "claude-opus-4", name: "Claude Opus 4" };
-	const modelB = { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" };
+	const modelA = { provider: "anthropic", id: "claude-opus-4", name: "Claude Opus 4", reasoning: true };
+	const modelB = { provider: "openai", id: "gpt-5.5", name: "GPT-5.5", reasoning: false };
 	const modelC = { provider: "anthropic", id: "claude-sonnet-4", name: "Claude Sonnet 4" };
 
 	beforeEach(() => vi.useFakeTimers());
@@ -3229,6 +3247,42 @@ describe("model selection at next-step dispatch", () => {
 		expect(bag.pi.setModelCalls).toHaveLength(1);
 		expect(bag.pi.setModelCalls[0].model).toBe(modelB);
 		expect(ctxBag.dispatched).toEqual([{ input: "/b:ok", options: { deliverAs: "followUp" }, session: "current" }]);
+	});
+
+	it("applies effort before model clamp, record, and exactly-once dispatch", async () => {
+		const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+		const state = runningState(def, { enabled: false });
+		const { bag, ctxBag, report } = modelBootstrap(state);
+		bag.pi.setModel = vi.fn(async (model: unknown) => {
+			bag.pi.setModelCalls.push({ model, result: true });
+			bag.pi.thinkingLevel = "off";
+			bag.pi.timeline.push("model-clamped");
+			return true;
+		});
+		bag.pi.invokeHarnessTool = vi.fn(async (name: string, args: unknown, options?: unknown) => {
+			bag.pi.harnessToolCalls.push({ name, args, options });
+			bag.pi.timeline.push("record");
+		});
+		const dispatch = ctxBag.ctx.dispatchUserInput;
+		ctxBag.ctx.dispatchUserInput = vi.fn(async (input: string, options?: unknown) => {
+			bag.pi.timeline.push("dispatch");
+			await dispatch(input, options);
+		});
+
+		await simulateTwoTurns(bag, ctxBag, report, {
+			status: "completed",
+			summary: "done",
+			next_steps: [{ message: "/b:ok", reason: "next" }],
+			recommended_next_step: 0,
+		});
+
+		ctxBag.customComponents[0].handleInput(EFFORT);
+		ctxBag.customComponents[0].handleInput(ARROW_RIGHT);
+		ctxBag.customComponents[0].handleInput("\r");
+		await flushMicrotasks();
+
+		expect(bag.pi.timeline).toEqual(["effort-set", "model-clamped", "record", "dispatch"]);
+		expect(ctxBag.dispatched).toHaveLength(1);
 	});
 
 	it("cycling to a different model calls pi.setModel before newSession (fresh session)", async () => {

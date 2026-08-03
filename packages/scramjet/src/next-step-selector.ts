@@ -1,8 +1,9 @@
 import { type Api, type Model, modelsAreEqual } from "@leanandmean/ai";
-import type { ExtensionContext } from "@leanandmean/coding-agent";
-import { getKeybindings } from "@leanandmean/tui";
+import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
+import type { Keybinding } from "@leanandmean/tui";
 import type { ValidatedNextStep } from "./commands/validator.js";
 import { MultiLineSelectList } from "./multi-line-select.js";
+import { createSelectorEffortControl } from "./selector-effort.js";
 
 export interface ScramjetSelectorOption {
 	index: number;
@@ -18,6 +19,8 @@ export interface ScramjetSelectorOptions<TOption extends ScramjetSelectorOption>
 	autoSelect?: TOption;
 	countdownSeconds?: number;
 	signal?: AbortSignal;
+	model?: Model<any>;
+	thinking: Pick<ExtensionAPI, "getThinkingLevel" | "setThinkingLevel">;
 }
 
 export interface NextStepSelection {
@@ -34,7 +37,11 @@ export interface NextStepSelectorOptions {
 	signal?: AbortSignal;
 	models?: Model<Api>[];
 	initialModel?: Model<any>;
+	thinking: Pick<ExtensionAPI, "getThinkingLevel" | "setThinkingLevel">;
 }
+
+const LIST_ACTIONS = ["tui.select.up", "tui.select.down", "tui.select.confirm", "tui.select.cancel"] as const;
+const MODEL_ACTIONS: readonly Keybinding[] = [...LIST_ACTIONS, "tui.editor.cursorLeft", "tui.editor.cursorRight"];
 
 function cleanDisplay(text: string): string {
 	return text
@@ -60,6 +67,8 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 		autoSelect,
 		countdownSeconds = 0,
 		signal,
+		model,
+		thinking,
 	}: ScramjetSelectorOptions<TOption>,
 ): Promise<TOption | null> {
 	if (signal?.aborted) return null;
@@ -77,7 +86,7 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 
 	const recommendedIndex = recommended ? options.findIndex((option) => option.index === recommended.index) : -1;
 	const selectedValue = await Promise.race([
-		ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+		ctx.ui.custom<string | null>((tui, theme, keybindings, done) => {
 			let remaining = countdownSeconds;
 			let timer: ReturnType<typeof setInterval> | null = null;
 			let finished = false;
@@ -95,6 +104,7 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 
 			if (recommendedIndex >= 0) selectList.setSelectedIndex(recommendedIndex);
 
+			const effort = createSelectorEffortControl({ model, thinking, keybindings, protectedActions: LIST_ACTIONS });
 			const abort = () => finish(null);
 
 			function clearTimer() {
@@ -139,7 +149,12 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 					const footer = timer
 						? `↑↓ navigate • enter select • esc cancel • auto-selects recommendation in ${remaining}s`
 						: "↑↓ navigate • enter select • esc cancel";
-					return [theme.fg("accent", theme.bold(title)), ...selectList.render(width), theme.fg("dim", footer)];
+					return [
+						theme.fg("accent", theme.bold(title)),
+						...selectList.render(width),
+						effort.render(width, (text) => theme.fg("dim", text)),
+						theme.fg("dim", footer),
+					];
 				},
 				invalidate() {
 					selectList.invalidate();
@@ -147,7 +162,7 @@ export async function selectScramjetChoice<TOption extends ScramjetSelectorOptio
 				handleInput(data: string) {
 					try {
 						clearTimer();
-						selectList.handleInput(data);
+						if (!effort.handleInput(data)) selectList.handleInput(data);
 						tui.requestRender();
 					} catch (err) {
 						fail(err);
@@ -180,6 +195,7 @@ export function selectNextStep(
 		signal,
 		models,
 		initialModel,
+		thinking,
 	}: NextStepSelectorOptions,
 ): Promise<NextStepSelection | null> {
 	const enableModelCycling = models && models.length > 1 && initialModel;
@@ -194,6 +210,8 @@ export function selectNextStep(
 			autoSelect,
 			countdownSeconds,
 			signal,
+			model: initialModel,
+			thinking,
 		});
 		// Avoid extra microtask tick from async — tests depend on promise depth.
 		return p.then((step) => (step ? { step, model: null } : null));
@@ -219,7 +237,7 @@ export function selectNextStep(
 	const recommendedIndex = recommended ? options.findIndex((o) => o.index === recommended.index) : -1;
 
 	const selectedValue = Promise.race([
-		ctx.ui.custom<{ value: string; modelIndex: number } | null>((tui, theme, _keybindings, done) => {
+		ctx.ui.custom<{ value: string; modelIndex: number } | null>((tui, theme, keybindings, done) => {
 			let remaining = countdownSeconds;
 			let timer: ReturnType<typeof setInterval> | null = null;
 			let finished = false;
@@ -238,6 +256,12 @@ export function selectNextStep(
 
 			if (recommendedIndex >= 0) selectList.setSelectedIndex(recommendedIndex);
 
+			const effort = createSelectorEffortControl({
+				model: initialModel,
+				thinking,
+				keybindings,
+				protectedActions: MODEL_ACTIONS,
+			});
 			const abort = () => finish(null);
 
 			function clearTimer() {
@@ -300,6 +324,7 @@ export function selectNextStep(
 						theme.fg("accent", theme.bold(title)),
 						...selectList.render(width),
 						modelLine,
+						effort.render(width, (text) => theme.fg("dim", text)),
 						theme.fg("dim", footer),
 					];
 				},
@@ -309,19 +334,18 @@ export function selectNextStep(
 				handleInput(data: string) {
 					try {
 						clearTimer();
-						const kb = getKeybindings();
-						if (kb.matches(data, "tui.editor.cursorLeft")) {
+						if (keybindings.matches(data, "tui.editor.cursorLeft")) {
 							const minIdx = initialIndex === -1 ? -1 : 0;
 							modelIndex = modelIndex <= minIdx ? modelList.length - 1 : modelIndex - 1;
 							tui.requestRender();
-						} else if (kb.matches(data, "tui.editor.cursorRight")) {
+						} else if (keybindings.matches(data, "tui.editor.cursorRight")) {
 							const maxIdx = modelList.length - 1;
 							modelIndex = modelIndex >= maxIdx ? (initialIndex === -1 ? -1 : 0) : modelIndex + 1;
 							tui.requestRender();
-						} else {
+						} else if (!effort.handleInput(data)) {
 							selectList.handleInput(data);
-							tui.requestRender();
 						}
+						tui.requestRender();
 					} catch (err) {
 						fail(err);
 						finish(null);
