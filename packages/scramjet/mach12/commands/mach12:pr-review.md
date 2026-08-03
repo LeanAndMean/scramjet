@@ -55,7 +55,9 @@ git diff --name-only origin/main...HEAD
 gh pr view <pr-number> --json title,body,createdAt,updatedAt,comments,files
 ```
 
-Identify linked issues from the PR body and conversation. Before briefing reviewers, delegate to `/mach12:gh-issue-read <issue-number>` for each linked issue so its current body, complete discussion, and timestamps are available alongside plans and prior reviews in the PR comments.
+Identify linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
+
+Before briefing reviewers, delegate to `/mach12:gh-issue-read <issue-number>` for each linked issue so its current body, complete discussion, and timestamps are available alongside plans and prior reviews in the PR comments. If any linked issue cannot be read completely, surface the failed issue and error, stop before reviewer dispatch, and report the review blocked or incomplete; do not silently continue with reduced authoritative context.
 
 Treat the PR description, comments, linked issues, plans, and prior reviews as point-in-time evidence. Use their timestamps and relevant intervening changes to identify material historical claims, then verify potentially stale claims against the checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance. Preserve still-supported historical intent and decisions; neither age, status, nor recent activity proves current validity or invalidity.
 
@@ -75,7 +77,7 @@ Use the bundled Mach 12 review agents as the primary lenses:
   - Are new dependencies, files, abstractions, config, or extension points justified?
   - Are tests proportionate to the behavior risk?
   Simplification findings usually belong in Suggestions; promote to Important only when extra complexity creates real maintenance or behavioral risk.
-- **completeness**: `mach12:feature-completeness-checker` -- include when the PR has a linked issue (look for `Fixes #N`, `Closes #N`, `Resolves #N`, `Part of #N`, `Issue #N`, or a bare `#N` in the PR description), or the user requested `completeness` / `all`.
+- **completeness**: `mach12:feature-completeness-checker` -- include when the PR has a linked issue identified under the relationship and contextual-relevance rules above, or the user requested `completeness` / `all`.
 
 Also include supplementary domain-relevant agents from any installed source when the PR content calls for them, such as a skill reviewer for skill definitions or a plugin validator for plugin code. Only include supplementary lenses when relevant.
 

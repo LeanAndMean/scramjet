@@ -646,10 +646,17 @@ describe("mach12 authoritative GitHub history helpers", () => {
 		expect(prReview).toContain("--json title,body,createdAt,updatedAt,comments,files");
 		expectInOrder(
 			prReview,
-			"Identify linked issues from the PR body and conversation",
+			"Identify linked issues from explicit relationship forms",
+			"contextually relevant bare `#<number>` references in the PR body",
+			"references found only in the conversation as candidates",
+			"Deduplicate issue numbers",
 			"Before briefing reviewers",
 			"/mach12:gh-issue-read <issue-number>",
 		);
+		expect(prReview).toContain("If any linked issue cannot be read completely");
+		expect(prReview).toContain("stop before reviewer dispatch");
+		expect(prReview).toContain("report the review blocked or incomplete");
+		expect(prReview).toContain("linked issue identified under the relationship and contextual-relevance rules above");
 		expect(prReview).toContain(
 			"checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance",
 		);
@@ -666,9 +673,19 @@ describe("mach12 authoritative GitHub history helpers", () => {
 			"Before confidently classifying any candidate as a duplicate or recommending linkage",
 		);
 		expect(plausibleMatches).toContain("/mach12:gh-issue-read <candidate-number>");
-		expect(plausibleMatches).toContain("If the read fails");
-		expect(plausibleMatches).toContain("do not confidently classify or recommend linking that candidate");
+		expect(plausibleMatches).toContain("Track which candidates were read completely");
+		expect(plausibleMatches).toContain("If a read fails");
+		expect(plausibleMatches).toContain(
+			"exclude that unread candidate from duplicate classification and every mention, comment, or linkage target",
+		);
 		expect(plausibleMatches).toContain("old age is insufficient proof that it is obsolete");
+
+		const choices = section(duplicateCheck, "After those checks:");
+		expect(choices).toContain("Only a successfully read candidate can be a clear duplicate");
+		expect(choices).toContain(
+			"If every candidate is unread, offer only retry, create without mentioning matches, or skip",
+		);
+		expect(choices).toContain("unread candidates must not be offered");
 	});
 });
 
