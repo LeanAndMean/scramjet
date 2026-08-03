@@ -32,6 +32,13 @@ const secondModel: Model<"openai-chat"> = {
 	name: "Second Model",
 };
 
+const reasoningModel: Model<"openai-chat"> = {
+	...testModel,
+	id: "reasoning-model",
+	name: "Reasoning Model",
+	reasoning: true,
+};
+
 function makeAssistantMessage(content: AssistantMessage["content"], stopReason: "toolUse" | "stop"): AssistantMessage {
 	return {
 		role: "assistant",
@@ -49,15 +56,16 @@ function makeTextAssistantMessage(text: string): AssistantMessage {
 	return makeAssistantMessage([{ type: "text", text }], "stop");
 }
 
-type StreamCall = { model: Model<any>; toolCallIds: string[] };
+type StreamCall = { model: Model<any>; reasoning: string | undefined; toolCallIds: string[] };
 
-/** Mock stream function that records each call's model and the tool-call ids visible in its context. */
+/** Mock stream function that records each call's model, reasoning, and visible tool-call ids. */
 function createRecordingStreamFn(messages: AssistantMessage[], order?: string[]) {
 	const calls: StreamCall[] = [];
 	let callIndex = 0;
-	const fn = ((model: Model<any>, context: { messages: any[] }) => {
+	const fn = ((model: Model<any>, context: { messages: any[] }, options: { reasoning?: string }) => {
 		calls.push({
 			model,
+			reasoning: options.reasoning,
 			toolCallIds: context.messages.flatMap((m) =>
 				Array.isArray(m.content)
 					? m.content.filter((c: any) => c?.type === "toolCall").map((c: any) => c.id as string)
@@ -214,6 +222,56 @@ describe("Agent.runHarnessTool", () => {
 		expect(calls).toHaveLength(2);
 		expect(calls[0]!.model.id).toBe(testModel.id);
 		expect(calls[1]!.model.id).toBe(secondModel.id);
+	});
+
+	it("refreshes effort for the next intra-run provider request", async () => {
+		const { fn, calls } = createRecordingStreamFn([
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "real-1", name: "read", arguments: { path: "a.ts" } }],
+				"toolUse",
+			),
+			makeTextAssistantMessage("done"),
+		]);
+
+		let agentRef!: Agent;
+		const readTool = makeReadTool(async () => {
+			agentRef.state.thinkingLevel = "off";
+			return { content: [{ type: "text", text: "ok" }], details: undefined };
+		});
+		const agent = new Agent({
+			initialState: { model: reasoningModel, thinkingLevel: "high", tools: [readTool] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+		});
+		agentRef = agent;
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls.map((call) => call.reasoning)).toEqual(["high", undefined]);
+	});
+
+	it("preserves an explicit prepareNextTurn effort update", async () => {
+		const { fn, calls } = createRecordingStreamFn([
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "real-1", name: "read", arguments: { path: "a.ts" } }],
+				"toolUse",
+			),
+			makeTextAssistantMessage("done"),
+		]);
+		const readTool = makeReadTool(async () => ({
+			content: [{ type: "text", text: "ok" }],
+			details: undefined,
+		}));
+		const agent = new Agent({
+			initialState: { model: reasoningModel, thinkingLevel: "low", tools: [readTool] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+			prepareNextTurn: async () => ({ thinkingLevel: "high" }),
+		});
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls.map((call) => call.reasoning)).toEqual(["low", "high"]);
 	});
 
 	it("flushes a harness tool queued during the run's final turn", async () => {
