@@ -160,15 +160,16 @@ If the confirmation is cancelled, Escape pauses the command before any issue mut
 For each item that requires a new issue:
 
 1. Preserve its existing title, body, originating `#<pr-number>` reference, F/S identifier, potentially-related references, and other relevant labels.
-2. Run `gh issue create` without coupling publication to the deferred-review label. Capture its output and require exactly one non-empty candidate URL. Do not pass `--label` to `gh issue create`.
-3. Resolve the candidate using:
+2. Run `gh issue create` without coupling publication to the deferred-review label. Do not pass `--label` to `gh issue create`. If the command fails, surface the error, apply no metadata, do not retry automatically, and return a non-completed command status.
+3. If `gh issue create` succeeds, capture its output and require exactly one non-empty candidate URL. Zero or multiple non-empty output lines are ambiguous: report that creation may have succeeded, apply no metadata, do not retry creation, and return a non-completed command status.
+4. Resolve the single candidate using:
 
    ```sh
    gh issue view "$created_issue_url" --json number,url
    ```
 
    Require a positive integer number and a non-empty canonical URL before applying metadata or recording a confirmed creation. If identity validation fails, do not label or retry creation; report that creation may have succeeded and return a non-completed command status.
-4. When the batch label is usable, guard this independent operation after identity validation:
+5. When the batch label is usable, guard this independent operation after identity validation:
 
    ```sh
    gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"
@@ -251,7 +252,7 @@ Present each deferred finding one at a time (in F/S identifier order) and ask:
 
 After all items are processed:
 
-1. **Issue creation**: For items marked "Create issue", first complete duplicate classification and resolve the shared batch label decision described in Option 1. All selected items share that one result; do not resolve or prompt per finding. Only after the decision succeeds or is explicitly declined may issue creation, duplicate comments, or other mutations begin.
+1. **Issue creation**: For items marked "Create issue", first complete duplicate classification and resolve the shared batch label decision described in Option 1. All selected items share that one result; do not resolve or prompt per finding. Issue creation, duplicate comments, and other mutations may begin after the exact label is found or created, the user explicitly declines creation, label lookup fails or is malformed, or label creation fails. Cancellation is the sole unresolved state and pauses all mutation until a resumed user turn.
 
 2. **Reclassified items**: If any items were marked as genuine, then follow the assessment-comment update procedure described in Option 2 (retrieve, update classifications from "Deferred" to "Genuine", update the staged implementation plan, and PATCH) -- apply all reclassified items in a single PATCH call.
 

@@ -915,10 +915,13 @@ describe("mach12 deferred-review issue labels", () => {
 	const deferredSection = assessment.slice(assessment.indexOf("## Step 6:"), assessment.indexOf("## Step 7:"));
 
 	it("discovers the exact label once per issue-creation batch and authorizes creation once", () => {
+		const lookupCommand = "gh api --paginate --slurp 'repos/{owner}/{repo}/labels?per_page=100'";
+		const createCommand = 'gh label create "PR review deferral"';
 		expect(assessment).toContain("get_scramjet_user_input");
 		expect(deferredSection).toContain("one issue-creation batch");
 		expect(deferredSection).toContain("immediately before the first item that will actually create an issue");
-		expect(deferredSection).toContain("gh api --paginate --slurp 'repos/{owner}/{repo}/labels?per_page=100'");
+		expect(deferredSection.split(lookupCommand)).toHaveLength(2);
+		expect(deferredSection.split(createCommand)).toHaveLength(2);
 		expect(deferredSection).toContain("array of page arrays");
 		expect(deferredSection).toContain("exact, case-sensitive equality");
 		expect(deferredSection).toContain('type: "confirm"');
@@ -944,18 +947,31 @@ describe("mach12 deferred-review issue labels", () => {
 		);
 	});
 
-	it("keeps label failures and structured-input cancellation from causing silent issue mutation", () => {
-		for (const outcome of ["failed or malformed lookup", "explicit No", "label creation fails"]) {
+	it("allows mutation after every resolved label decision and pauses only on cancellation", () => {
+		for (const outcome of [
+			"exact label is found or created",
+			"explicitly declines creation",
+			"label lookup fails or is malformed",
+			"label creation fails",
+		]) {
 			expect(deferredSection).toContain(outcome);
 		}
 		expect(deferredSection).toContain("continue creating issues without the label");
 		expect(deferredSection).toContain("one batch-level guidance note");
+		expect(deferredSection).toContain("Cancellation is the sole unresolved state");
 		expect(deferredSection).toContain("Escape pauses the command before any issue mutation");
 		expect(deferredSection).toContain("do not repeat the label prompt");
 		expect(deferredSection).toContain("only an explicit resumed authorization may create the label");
-		expect(deferredSection).toContain("Only after the decision succeeds or is explicitly declined");
-		expect(deferredSection).toContain("report that creation may have succeeded");
 		expect(deferredSection).toContain("retain the confirmed issue");
+	});
+
+	it("distinguishes definite and ambiguous issue-creation failures", () => {
+		expect(deferredSection).toMatch(
+			/If the command fails, surface the error, apply no metadata, do not retry automatically, and return a non-completed command status\./,
+		);
+		expect(deferredSection).toMatch(
+			/Zero or multiple non-empty output lines are ambiguous: report that creation may have succeeded, apply no metadata, do not retry creation, and return a non-completed command status\./,
+		);
 	});
 });
 
