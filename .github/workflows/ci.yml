@@ -47,20 +47,40 @@ jobs:
           fi
 
       - name: npm pack round-trip smoke
-        # Pack every publishable package, verify Scramjet tarball contents,
-        # install the local tarballs, and run the installed binary.
+        # Prove both npm layout classes: explicitly pre-populated runtime packages
+        # and an ordinary product-only install whose dependencies npm resolves.
         run: |
           set -euo pipefail
           PACK_DIR=$(mktemp -d)
-          PREFIX=$(mktemp -d)
+          PREPOPULATED_PREFIX=$(mktemp -d)
+          PRODUCT_ONLY_PREFIX=$(mktemp -d)
+          TARBALL_CONTENTS=$(mktemp)
+          CODING_AGENT_CONTENTS=$(mktemp)
+          FAKE_BIN=$(mktemp -d)
+          LOCAL_REGISTRY=$(mktemp -d)
+          UPDATE_OUTPUT=$(mktemp)
+          UPDATE_ERROR=$(mktemp)
+          REGISTRY_PID=
+          cleanup() {
+            if test -n "$REGISTRY_PID"; then
+              kill "$REGISTRY_PID" 2>/dev/null || true
+              wait "$REGISTRY_PID" 2>/dev/null || true
+            fi
+            rm -rf "$PACK_DIR" "$PREPOPULATED_PREFIX" "$PRODUCT_ONLY_PREFIX" "$TARBALL_CONTENTS" \
+              "$CODING_AGENT_CONTENTS" "$FAKE_BIN" "$LOCAL_REGISTRY" "$UPDATE_OUTPUT" "$UPDATE_ERROR"
+          }
+          trap cleanup EXIT
+
           npm pack -w packages/tui --pack-destination "$PACK_DIR"
           npm pack -w packages/ai --pack-destination "$PACK_DIR"
           npm pack -w packages/agent --pack-destination "$PACK_DIR"
           npm pack -w packages/coding-agent --pack-destination "$PACK_DIR"
           npm pack -w packages/scramjet --pack-destination "$PACK_DIR"
           SCRAMJET_TARBALL=$(ls "$PACK_DIR"/leanandmean-scramjet-*.tgz | head -n1)
+          CODING_AGENT_TARBALL=$(ls "$PACK_DIR"/leanandmean-coding-agent-*.tgz | head -n1)
           test -n "$SCRAMJET_TARBALL" || { echo "no Scramjet tarball produced" >&2; exit 1; }
-          TARBALL_CONTENTS=$(mktemp)
+          test -n "$CODING_AGENT_TARBALL" || { echo "no coding-agent tarball produced" >&2; exit 1; }
+
           tar -tzf "$SCRAMJET_TARBALL" > "$TARBALL_CONTENTS"
           grep -qxF 'package/assets/scramjet-logo.png' "$TARBALL_CONTENTS"
           grep -qF 'package/dist/index.js' "$TARBALL_CONTENTS"
@@ -70,21 +90,127 @@ jobs:
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/set.yaml' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/commands/scramjet:troubleshoot.md' "$TARBALL_CONTENTS"
-          XDG_DATA_HOME="$PREFIX/data" npm install --prefix "$PREFIX" -g \
+
+          tar -tzf "$CODING_AGENT_TARBALL" > "$CODING_AGENT_CONTENTS"
+          grep -qxF 'package/dist/early-dispatch.js' "$CODING_AGENT_CONTENTS"
+          grep -qxF 'package/dist/early-dispatch.d.ts' "$CODING_AGENT_CONTENTS"
+          grep -qxF 'package/dist/npm-self-update-transaction.js' "$CODING_AGENT_CONTENTS"
+          grep -qxF 'package/dist/npm-self-update-transaction.d.ts' "$CODING_AGENT_CONTENTS"
+
+          cat > "$LOCAL_REGISTRY/server.mjs" <<'EOF'
+          import { execFileSync } from "node:child_process";
+          import { createServer } from "node:http";
+          import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+          import { basename, join } from "node:path";
+
+          const [packDir, portFile] = process.argv.slice(2);
+          const packages = new Map();
+          for (const file of readdirSync(packDir).filter((name) => name.endsWith(".tgz"))) {
+            const archive = join(packDir, file);
+            const manifest = JSON.parse(execFileSync("tar", ["-xOf", archive, "package/package.json"], { encoding: "utf8" }));
+            if (manifest.name.startsWith("@leanandmean/")) packages.set(manifest.name, { archive, file, manifest });
+          }
+          const server = createServer((request, response) => {
+            const pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
+            if (pathname.startsWith("/tarballs/")) {
+              const entry = [...packages.values()].find(({ file }) => `/tarballs/${file}` === pathname);
+              if (entry) {
+                const body = readFileSync(entry.archive);
+                response.writeHead(200, { "content-length": body.length, "content-type": "application/octet-stream" });
+                response.end(body);
+                return;
+              }
+            }
+            const entry = packages.get(pathname.slice(1));
+            if (entry) {
+              const { manifest } = entry;
+              const body = JSON.stringify({
+                name: manifest.name,
+                "dist-tags": { latest: manifest.version },
+                versions: {
+                  [manifest.version]: {
+                    ...manifest,
+                    dist: { tarball: `http://127.0.0.1:${server.address().port}/tarballs/${entry.file}` },
+                  },
+                },
+              });
+              response.writeHead(200, { "content-length": Buffer.byteLength(body), "content-type": "application/json" });
+              response.end(body);
+              return;
+            }
+            response.writeHead(404).end();
+          });
+          server.listen(0, "127.0.0.1", () => writeFileSync(portFile, String(server.address().port)));
+          EOF
+          node "$LOCAL_REGISTRY/server.mjs" "$PACK_DIR" "$LOCAL_REGISTRY/port" &
+          REGISTRY_PID=$!
+          for _ in $(seq 1 100); do
+            test -s "$LOCAL_REGISTRY/port" && break
+            sleep 0.05
+          done
+          test -s "$LOCAL_REGISTRY/port"
+          printf '@leanandmean:registry=http://127.0.0.1:%s/\n' "$(cat "$LOCAL_REGISTRY/port")" \
+            > "$LOCAL_REGISTRY/npmrc"
+
+          XDG_DATA_HOME="$PREPOPULATED_PREFIX/data" npm install --prefix "$PREPOPULATED_PREFIX" -g \
             "$PACK_DIR"/leanandmean-tui-*.tgz \
             "$PACK_DIR"/leanandmean-ai-*.tgz \
             "$PACK_DIR"/leanandmean-agent-*.tgz \
-            "$PACK_DIR"/leanandmean-coding-agent-*.tgz \
-            "$SCRAMJET_TARBALL"
-          test -f "$PREFIX/data/scramjet/mach12/commands/mach12:issue-create.md"
-          test -f "$PREFIX/data/scramjet/scramjet/commands/scramjet:troubleshoot.md"
-          test -f "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
-          test -f "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
-          XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --help >/dev/null
+            "$CODING_AGENT_TARBALL"
+          XDG_DATA_HOME="$PREPOPULATED_PREFIX/data" npm install --userconfig "$LOCAL_REGISTRY/npmrc" \
+            --prefix "$PREPOPULATED_PREFIX" -g "$SCRAMJET_TARBALL"
+          test -f "$PREPOPULATED_PREFIX/data/scramjet/mach12/commands/mach12:issue-create.md"
+          test -f "$PREPOPULATED_PREFIX/data/scramjet/scramjet/commands/scramjet:troubleshoot.md"
+          test -f "$PREPOPULATED_PREFIX/data/scramjet/mach12/.seed-manifest.json"
+          test -f "$PREPOPULATED_PREFIX/data/scramjet/scramjet/.seed-manifest.json"
+          XDG_DATA_HOME="$PREPOPULATED_PREFIX/data" "$PREPOPULATED_PREFIX/bin/scramjet" --help >/dev/null
+          printf '%s\n' 'import("@leanandmean/coding-agent/early-dispatch")' \
+            > "$PREPOPULATED_PREFIX/lib/node_modules/@leanandmean/scramjet/.ci-early-import.mjs"
+          node "$PREPOPULATED_PREFIX/lib/node_modules/@leanandmean/scramjet/.ci-early-import.mjs"
+          rm "$PREPOPULATED_PREFIX/lib/node_modules/@leanandmean/scramjet/.ci-early-import.mjs"
           printf '%s\n' '{"id":"commands","type":"get_commands"}' \
-            | SCRAMJET_OFFLINE=1 XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --mode rpc --no-session \
+            | SCRAMJET_OFFLINE=1 XDG_DATA_HOME="$PREPOPULATED_PREFIX/data" \
+              "$PREPOPULATED_PREFIX/bin/scramjet" --mode rpc --no-session \
             | jq -e 'select(.id == "commands") | any(.data.commands[]; .name == "scramjet:troubleshoot")'
-          rm -rf "$PACK_DIR" "$PREFIX" "$TARBALL_CONTENTS"
+
+          XDG_DATA_HOME="$PRODUCT_ONLY_PREFIX/data" npm install --userconfig "$LOCAL_REGISTRY/npmrc" \
+            --prefix "$PRODUCT_ONLY_PREFIX" -g "$SCRAMJET_TARBALL"
+          XDG_DATA_HOME="$PRODUCT_ONLY_PREFIX/data" "$PRODUCT_ONLY_PREFIX/bin/scramjet" --help >/dev/null
+          test -d "$PRODUCT_ONLY_PREFIX/lib/node_modules/@leanandmean/scramjet/node_modules/@leanandmean/coding-agent"
+
+          cat > "$FAKE_BIN/npm" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1-}" == "root" && "${2-}" == "-g" ]]; then
+            printf '%s\n' "$CI_PREFIX/lib/node_modules"
+            exit 0
+          fi
+          test ! -e "$CI_PRODUCT_ROOT"
+          rm -f "$CI_LAUNCHER"
+          mkdir -p "$CI_PRODUCT_ROOT"
+          printf '%s\n' '{"name":"partial-replacement"}' > "$CI_PRODUCT_ROOT/package.json"
+          printf '%s\n' entered > "$CI_UPDATE_MARKER"
+          exit 42
+          EOF
+          chmod +x "$FAKE_BIN/npm"
+          CI_PRODUCT_ROOT="$PRODUCT_ONLY_PREFIX/lib/node_modules/@leanandmean/scramjet"
+          CI_UPDATE_MARKER="$PRODUCT_ONLY_PREFIX/destructive-update-entered"
+          set +e
+          PATH="$FAKE_BIN:$PATH" CI_PREFIX="$PRODUCT_ONLY_PREFIX" CI_PRODUCT_ROOT="$CI_PRODUCT_ROOT" \
+            CI_LAUNCHER="$PRODUCT_ONLY_PREFIX/bin/scramjet" CI_UPDATE_MARKER="$CI_UPDATE_MARKER" \
+            SCRAMJET_OFFLINE=1 XDG_DATA_HOME="$PRODUCT_ONLY_PREFIX/data" \
+            "$PRODUCT_ONLY_PREFIX/bin/scramjet" update --self --force >"$UPDATE_OUTPUT" 2>"$UPDATE_ERROR"
+          UPDATE_STATUS=$?
+          set -e
+          test "$UPDATE_STATUS" -ne 0
+          test -f "$CI_UPDATE_MARKER"
+          grep -qF 'The previous launcher and package runtime were restored and verified.' "$UPDATE_ERROR"
+          XDG_DATA_HOME="$PRODUCT_ONLY_PREFIX/data" "$PRODUCT_ONLY_PREFIX/bin/scramjet" --help >/dev/null
+          for artifact in \
+            "$(dirname "$CI_PRODUCT_ROOT")"/.scramjet.scramjet-* \
+            "$PRODUCT_ONLY_PREFIX/bin"/.scramjet-launcher-*; do
+            test ! -e "$artifact" && test ! -L "$artifact"
+          done
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary

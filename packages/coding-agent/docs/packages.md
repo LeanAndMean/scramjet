@@ -7,6 +7,7 @@ Scramjet packages bundle extensions, skills, prompt templates, and themes so you
 ## Table of Contents
 
 - [Install and Manage](#install-and-manage)
+- [Failure-Safe npm Self-Updates](#failure-safe-npm-self-updates)
 - [Package Sources](#package-sources)
 - [Creating a Scramjet Package](#creating-a-scramjet-package)
 - [Package Structure](#package-structure)
@@ -44,6 +45,34 @@ To try a package without installing it, use `--extension` or `-e`. This installs
 scramjet -e npm:@foo/bar
 scramjet -e git:github.com/user/repo
 ```
+
+## Failure-Safe npm Self-Updates
+
+Scramjet uses a verified package-tree transaction only when it can positively qualify all of these conditions:
+
+- npm manages the current global installation on Linux, macOS, or WSL;
+- the installed and target package names are the same;
+- the product is a real directory at npm's exact global scoped-package path;
+- the executing coding-agent runtime is contained in that product tree;
+- `package.json`, `bin.scramjet`, and the canonical `scramjet` launcher symlink have the expected identity and containment;
+- the product, launcher, backup, quarantine, and temporary-launcher locations support the required same-filesystem operations.
+
+Immediately before mutation, Scramjet revalidates those facts and requires unique transaction paths. It renames the complete product tree to a sibling backup, runs the existing npm command with inherited standard I/O, structurally validates the replacement, and starts the absolute canonical launcher with a fixed timeout. A timed-out probe receives `SIGTERM`, then `SIGKILL` after a bounded grace period if necessary; Scramjet waits for the child to close before moving or cleaning package trees.
+
+A successful npm exit is not enough to commit. The replacement must retain the expected package name, declared `bin.scramjet`, launcher symlink text and target, product containment, and a successful fresh launcher probe. Only then is the backup eligible for cleanup and `Updated scramjet` printed.
+
+If npm returns a failure or replacement verification fails, Scramjet quarantines partial canonical state, restores the previous package by rename, atomically restores the launcher through a temporary sibling symlink, and repeats structural and fresh-process verification. The command remains unsuccessful even when restoration succeeds. Output then distinguishes these states:
+
+- **Verified commit:** prints `Updated scramjet` and exits successfully.
+- **Verified commit with incomplete cleanup:** remains successful, confirms the updated launcher/package runtime, and reports each retained artifact and cleanup error.
+- **Verified restoration:** exits unsuccessfully, identifies the failed phase, confirms only that the previous launcher/package runtime was restored and verified, and warns that postinstall-managed command data may have changed.
+- **Unverified restoration:** exits unsuccessfully, reports restoration failures and exact retained paths, makes no availability claim, and advises inspection before repair rather than blindly repeating the update.
+
+Cleanup is availability-first. If removing a backup or quarantine fails—including `EBUSY`, `EACCES`, `EPERM`, `ENOTEMPTY`, `EIO`, identity substitution, or a partially removed network-filesystem artifact—the verified canonical installation remains untouched. Inspect the reported path and resolve the underlying filesystem condition before removing it. An open file on network storage is one possible cause; Scramjet neither attributes contention to a process without evidence nor scans or terminates processes.
+
+The recovery guarantee does not cover pnpm, Yarn, Bun, native Windows, package-name migration, linked/source installations, configured npm wrappers, or npm layouts whose fresh-launch runtime cannot be proven to fit inside the product tree. Those paths retain their existing package-manager behavior and output without rollback claims. Parent-process termination, `SIGKILL`, or host failure during evacuation is also outside scope.
+
+The transaction restores only the canonical launcher and package runtime. Scramjet's npm postinstall manages command-set data outside the package tree, so files under `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/` may have changed after an otherwise rolled-back update.
 
 ## Package Sources
 
