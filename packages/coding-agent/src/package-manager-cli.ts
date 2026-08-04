@@ -12,6 +12,7 @@ import {
 } from "./config.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
+import type { NpmSelfUpdateOutcome } from "./npm-self-update-transaction.js";
 import { shouldUseWindowsShell } from "./utils/child-process.js";
 import { getLatestRelease, isNewerPackageVersion } from "./utils/version-check.js";
 
@@ -312,8 +313,12 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	return { packageName: PACKAGE_NAME, shouldRun: false };
 }
 
-async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
+async function runSelfUpdate(command: SelfUpdateCommand): Promise<NpmSelfUpdateOutcome | undefined> {
 	console.log(chalk.dim(`Updating ${APP_NAME} with ${command.display}...`));
+	if (command.npmRecovery) {
+		const { runNpmSelfUpdateTransaction } = await import("./npm-self-update-transaction.js");
+		return runNpmSelfUpdateTransaction(command, command.npmRecovery);
+	}
 	for (const step of command.steps ?? [command]) {
 		await new Promise<void>((resolve, reject) => {
 			// Windows package managers are commonly .cmd shims. Use the shell so Node can execute them.
@@ -334,6 +339,18 @@ async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
 				}
 			});
 		});
+	}
+	return undefined;
+}
+
+function reportRetainedArtifacts(outcome: NpmSelfUpdateOutcome): void {
+	for (const path of outcome.retainedPaths) {
+		console.error(chalk.yellow(`Warning: update artifact retained at ${path}`));
+	}
+	if ("cleanupFailures" in outcome) {
+		for (const cleanupFailure of outcome.cleanupFailures) {
+			console.error(chalk.yellow(`Warning: ${cleanupFailure.error.message}`));
+		}
 	}
 }
 
@@ -501,7 +518,22 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 						return true;
 					}
 					try {
-						await runSelfUpdate(selfUpdateCommand);
+						const outcome = await runSelfUpdate(selfUpdateCommand);
+						if (outcome) {
+							reportRetainedArtifacts(outcome);
+							if (outcome.status === "restored" || outcome.status === "restoration-unverified") {
+								console.error(chalk.red(`Error: ${outcome.updateFailure.error.message}`));
+								if (outcome.status === "restored") {
+									console.error("The previous launcher and package runtime were restored and verified.");
+								} else {
+									for (const restorationFailure of outcome.restorationFailures) {
+										console.error(chalk.red(`Restoration error: ${restorationFailure.error.message}`));
+									}
+								}
+								process.exitCode = 1;
+								return true;
+							}
+						}
 					} catch (error: unknown) {
 						const message = error instanceof Error ? error.message : "Unknown package command error";
 						console.error(chalk.red(`Error: ${message}`));
