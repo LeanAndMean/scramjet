@@ -151,9 +151,9 @@ Resolve `PR review deferral` lazily, immediately before the first item that will
    ```
 
 2. Validate that its JSON result is an array of page arrays and that every flattened entry is an object with a string `name` before interpreting it. Compare names to `PR review deferral` with exact, case-sensitive equality.
-3. A failed lookup, invalid page structure, or invalid flattened entry makes availability unknown; it does not prove absence. Do not prompt or create the label, and continue creating issues without the label.
+3. A failed lookup, invalid page structure, or invalid flattened entry makes availability unknown; it does not prove absence. Do not prompt or create the label, and continue creating issues without the label. Identify the failed label lookup and include concise error context in the CLI summary.
 4. If the validated lookup proves the exact label absent, call `get_scramjet_user_input` once for the batch with `type: "confirm"`. Explain that approval creates repository metadata named `PR review deferral`.
-5. On approval, guard `gh label create "PR review deferral"`. Make at most one label-creation attempt for the batch. Description and color are optional and remain unspecified. On explicit No or when label creation fails, continue creating issues without the label and do not prompt again.
+5. On approval, guard `gh label create "PR review deferral"`. Make at most one label-creation attempt for the batch. Description and color are optional and remain unspecified. On explicit No, continue creating issues without the label and do not prompt again. If label creation fails, identify the failed label creation and include concise error context in the CLI summary, then continue creating issues without the label and do not prompt again.
 
 If the confirmation is cancelled, Escape pauses the command before any issue mutation; it is not an implicit No. Never create issues silently after cancellation without a resumed user turn. If the user resumes, do not repeat the label prompt: only an explicit resumed authorization may create the label; otherwise continue the current issue flow without the label.
 

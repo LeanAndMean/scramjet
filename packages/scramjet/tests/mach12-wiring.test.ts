@@ -927,7 +927,7 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection).toContain("invalid flattened entry makes availability unknown");
 		expect(deferredSection).toContain("Do not prompt or create the label");
 		expect(deferredSection).toContain("exact, case-sensitive equality");
-		expect(deferredSection).toContain('type: "confirm"');
+		expect(deferredSection.split('type: "confirm"')).toHaveLength(2);
 		expect(deferredSection).toContain("at most one label-creation attempt");
 		expect(deferredSection).toContain("Option 3 reuses this same batch decision");
 		expect(deferredSection).toContain("resolve the label decision in the **Shared issue-creation batch contract**");
@@ -950,6 +950,10 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection.indexOf('gh issue view "$created_issue_url" --json number,url')).toBeLessThan(
 			deferredSection.indexOf('gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"'),
 		);
+		expect(deferredSection).toContain("Require a positive integer number and a non-empty canonical URL");
+		expect(deferredSection).toMatch(
+			/If identity validation fails, do not label or retry creation; report that creation may have succeeded and return a non-completed command status\./,
+		);
 	});
 
 	it("allows mutation after every resolved label decision and pauses only on cancellation", () => {
@@ -968,6 +972,12 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection).toContain("do not repeat the label prompt");
 		expect(deferredSection).toContain("only an explicit resumed authorization may create the label");
 		expect(deferredSection).toContain("retain the confirmed issue");
+		expect(deferredSection).toContain(
+			"Identify the failed label lookup and include concise error context in the CLI summary",
+		);
+		expect(deferredSection).toContain(
+			"If label creation fails, identify the failed label creation and include concise error context in the CLI summary",
+		);
 	});
 
 	it("distinguishes definite and ambiguous issue-creation failures", () => {
