@@ -910,6 +910,55 @@ describe("mach12 GitHub reference authoring contracts", () => {
 	});
 });
 
+describe("mach12 deferred-review issue labels", () => {
+	const assessment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-assessment.md`), "utf-8");
+	const deferredSection = assessment.slice(assessment.indexOf("## Step 6:"), assessment.indexOf("## Step 7:"));
+
+	it("discovers the exact label once per issue-creation batch and authorizes creation once", () => {
+		expect(assessment).toContain("get_scramjet_user_input");
+		expect(deferredSection).toContain("one issue-creation batch");
+		expect(deferredSection).toContain("immediately before the first item that will actually create an issue");
+		expect(deferredSection).toContain("gh api --paginate --slurp 'repos/{owner}/{repo}/labels?per_page=100'");
+		expect(deferredSection).toContain("array of page arrays");
+		expect(deferredSection).toContain("exact, case-sensitive equality");
+		expect(deferredSection).toContain('type: "confirm"');
+		expect(deferredSection).toContain("at most one label-creation attempt");
+		expect(deferredSection).toContain("Option 3 reuses this same batch decision");
+	});
+
+	it("labels only newly created issues after canonical identity validation", () => {
+		expect(deferredSection).toContain("Never inspect, create, or apply the label to a clear duplicate");
+		expect(deferredSection).toContain("collect the intended disposition without mutating issues yet");
+		expect(deferredSection).toContain("If every item is a clear duplicate, skip label resolution");
+		expect(deferredSection).toContain("Do not pass `--label` to `gh issue create`");
+		expect(deferredSection).toContain(
+			"other relevant labels through separate guarded `gh issue edit --add-label` operations",
+		);
+		expect(deferredSection).toContain('gh issue view "$created_issue_url" --json number,url');
+		expect(deferredSection).toContain('gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"');
+		expect(deferredSection.indexOf("gh issue create")).toBeLessThan(
+			deferredSection.indexOf('gh issue view "$created_issue_url" --json number,url'),
+		);
+		expect(deferredSection.indexOf('gh issue view "$created_issue_url" --json number,url')).toBeLessThan(
+			deferredSection.indexOf('gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"'),
+		);
+	});
+
+	it("keeps label failures and structured-input cancellation from causing silent issue mutation", () => {
+		for (const outcome of ["failed or malformed lookup", "explicit No", "label creation fails"]) {
+			expect(deferredSection).toContain(outcome);
+		}
+		expect(deferredSection).toContain("continue creating issues without the label");
+		expect(deferredSection).toContain("one batch-level guidance note");
+		expect(deferredSection).toContain("Escape pauses the command before any issue mutation");
+		expect(deferredSection).toContain("do not repeat the label prompt");
+		expect(deferredSection).toContain("only an explicit resumed authorization may create the label");
+		expect(deferredSection).toContain("Only after the decision succeeds or is explicitly declined");
+		expect(deferredSection).toContain("report that creation may have succeeded");
+		expect(deferredSection).toContain("retain the confirmed issue");
+	});
+});
+
 describe("mach12 ordinary PR readiness", () => {
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
 	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");

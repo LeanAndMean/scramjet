@@ -8,6 +8,7 @@ allowed-tools:
   - glob
   - subagent
   - delegate
+  - get_scramjet_user_input
 next:
   mode: closed
   candidates:
@@ -135,6 +136,48 @@ If any findings were classified as **deferred**, ask the user how to handle them
 - **Decide per finding**: choose what to do with each deferred finding individually.
 - **Skip deferred items**: do not create issues or reclassify any deferred findings.
 
+### Shared issue-creation batch contract
+
+Treat all findings under **Create issues for all**, or all findings selected as **Create issue** under **Decide per finding**, as one issue-creation batch. Reclassified and skipped findings do not participate. Option 3 reuses this same batch decision rather than restarting label handling for each finding.
+
+Run duplicate detection for every participating item before resolving label availability, and collect the intended disposition without mutating issues yet. A clear open duplicate keeps the existing relationship-comment flow after the batch decision. Never inspect, create, or apply the label to a clear duplicate. An ambiguous match remains eligible for creation and labelling with its existing overlap note. If every item is a clear duplicate, skip label resolution and post the collected relationship comments.
+
+Resolve `PR review deferral` lazily, immediately before the first item that will actually create an issue. Resolve it only once for the batch:
+
+1. Guard this exhaustive paginated lookup:
+
+   ```sh
+   gh api --paginate --slurp 'repos/{owner}/{repo}/labels?per_page=100'
+   ```
+
+2. Validate that its JSON result is an array of page arrays before flattening or interpreting it. Compare names to `PR review deferral` with exact, case-sensitive equality.
+3. A failed or malformed lookup makes availability unknown; it does not prove absence. Do not prompt or create the label, and continue creating issues without the label.
+4. If the validated lookup proves the exact label absent, call `get_scramjet_user_input` once for the batch with `type: "confirm"`. Explain that approval creates repository metadata named `PR review deferral`.
+5. On approval, guard `gh label create "PR review deferral"`. Make at most one label-creation attempt for the batch. Description and color are optional and remain unspecified. On explicit No or when label creation fails, continue creating issues without the label and do not prompt again.
+
+If the confirmation is cancelled, Escape pauses the command before any issue mutation; it is not an implicit No. Never create issues silently after cancellation without a resumed user turn. If the user resumes, do not repeat the label prompt: only an explicit resumed authorization may create the label; otherwise continue the current issue flow without the label.
+
+For each item that requires a new issue:
+
+1. Preserve its existing title, body, originating `#<pr-number>` reference, F/S identifier, potentially-related references, and other relevant labels.
+2. Run `gh issue create` without coupling publication to the deferred-review label. Capture its output and require exactly one non-empty candidate URL. Do not pass `--label` to `gh issue create`.
+3. Resolve the candidate using:
+
+   ```sh
+   gh issue view "$created_issue_url" --json number,url
+   ```
+
+   Require a positive integer number and a non-empty canonical URL before applying metadata or recording a confirmed creation. If identity validation fails, do not label or retry creation; report that creation may have succeeded and return a non-completed command status.
+4. When the batch label is usable, guard this independent operation after identity validation:
+
+   ```sh
+   gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"
+   ```
+
+   Apply any other relevant labels through separate guarded `gh issue edit --add-label` operations after the same identity validation; never couple them to `gh issue create`. If any label application fails, retain the confirmed issue, do not retry creation, continue processing later findings, and report the canonical issue number or URL with the missing label. Continue attempting `PR review deferral` for later confirmed issues because one issue-specific failure does not prove repository-wide unavailability.
+
+When lookup, authorization, or label creation leaves the batch unlabelled, emit at most one batch-level guidance note suggesting that repository guidance may document the preferred label setup. Do not edit guidance automatically. Keep label diagnostics out of the under-20-line PR decision comment, whose existing dispositions remain authoritative.
+
 ### Option 1: Create issues for all
 
 For each deferred item, check for existing issues before creating a new one:
@@ -160,11 +203,11 @@ For each deferred item, check for existing issues before creating a new one:
 
    - **Ambiguous match**: if results are related but not clearly duplicates, still create the issue but add a "Potentially related" note at the end of the issue body listing the matched issue numbers, titles, and states.
 
-3. If no duplicate was found (or the match was ambiguous), create the issue with `gh issue create`:
-   - A title summarizing the issue.
-   - A body referencing the originating same-repository PR as `#<pr-number>` and the specific finding by its F/S identifier.
+3. If no duplicate was found (or the match was ambiguous), create and validate the issue through the shared issue-creation batch contract above:
+   - Use a title summarizing the issue.
+   - Use a body referencing the originating same-repository PR as `#<pr-number>` and the specific finding by its F/S identifier.
    - If ambiguous matches exist, append: "Potentially related: <list of matched issues as `#<issue-number>` with titles>" for same-repository matches; qualify cross-repository references or use already verified canonical URLs.
-   - Any relevant labels.
+   - Preserve any relevant labels, and add `PR review deferral` only through the shared post-validation operation.
 
 After processing, display a summary block in CLI output listing each item and the action taken:
 - **Created**: issue was created (include the new issue number and URL).
@@ -208,9 +251,9 @@ Present each deferred finding one at a time (in F/S identifier order) and ask:
 
 After all items are processed:
 
-1. **Reclassified items**: If any items were marked as genuine, follow the assessment-comment update procedure described in Option 2 (retrieve, update classifications from "Deferred" to "Genuine", update the staged implementation plan, and PATCH) -- apply all reclassified items in a single PATCH call.
+1. **Issue creation**: For items marked "Create issue", first complete duplicate classification and resolve the shared batch label decision described in Option 1. All selected items share that one result; do not resolve or prompt per finding. Only after the decision succeeds or is explicitly declined may issue creation, duplicate comments, or other mutations begin.
 
-2. **Issue creation**: For items marked "Create issue", run the duplicate-detection and issue-creation flow described in Option 1.
+2. **Reclassified items**: If any items were marked as genuine, then follow the assessment-comment update procedure described in Option 2 (retrieve, update classifications from "Deferred" to "Genuine", update the staged implementation plan, and PATCH) -- apply all reclassified items in a single PATCH call.
 
 3. **Summary block**: Display a CLI summary listing each deferred item and the action taken (Reclassified as genuine / Created / Skipped (duplicate) / Created (with overlap note) / Skipped).
 
