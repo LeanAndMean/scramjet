@@ -12,7 +12,7 @@ import {
 } from "./config.js";
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
-import type { NpmSelfUpdateOutcome } from "./npm-self-update-transaction.js";
+import type { NpmSelfUpdateOutcome, NpmTransactionFailure } from "./npm-self-update-transaction.js";
 import { shouldUseWindowsShell } from "./utils/child-process.js";
 import { getLatestRelease, isNewerPackageVersion } from "./utils/version-check.js";
 
@@ -343,14 +343,46 @@ async function runSelfUpdate(command: SelfUpdateCommand): Promise<NpmSelfUpdateO
 	return undefined;
 }
 
+function formatTransactionFailure(failure: NpmTransactionFailure): string {
+	return `${failure.phase}: ${failure.error.message}${failure.path ? ` (${failure.path})` : ""}`;
+}
+
 function reportRetainedArtifacts(outcome: NpmSelfUpdateOutcome): void {
 	for (const path of outcome.retainedPaths) {
 		console.error(chalk.yellow(`Warning: update artifact retained at ${path}`));
 	}
 	if ("cleanupFailures" in outcome) {
 		for (const cleanupFailure of outcome.cleanupFailures) {
-			console.error(chalk.yellow(`Warning: ${cleanupFailure.error.message}`));
+			console.error(chalk.yellow(`Warning: cleanup failed during ${formatTransactionFailure(cleanupFailure)}`));
 		}
+	}
+}
+
+function reportNpmSelfUpdateOutcome(outcome: NpmSelfUpdateOutcome): boolean {
+	switch (outcome.status) {
+		case "committed":
+			return true;
+		case "committed-with-retained-artifacts":
+			console.error("The updated launcher and package runtime were verified, but cleanup was incomplete.");
+			reportRetainedArtifacts(outcome);
+			return true;
+		case "restored":
+			console.error(chalk.red(`Self-update failed during ${formatTransactionFailure(outcome.updateFailure)}`));
+			console.error("The previous launcher and package runtime were restored and verified.");
+			console.error("Postinstall-managed command data may have changed.");
+			reportRetainedArtifacts(outcome);
+			return false;
+		case "restoration-unverified":
+			console.error(chalk.red(`Self-update failed during ${formatTransactionFailure(outcome.updateFailure)}`));
+			for (const restorationFailure of outcome.restorationFailures) {
+				console.error(chalk.red(`Restoration failed during ${formatTransactionFailure(restorationFailure)}`));
+			}
+			reportRetainedArtifacts(outcome);
+			console.error("The previous launcher and package runtime could not be verified.");
+			console.error(
+				"Inspect any retained artifacts before manually repairing the installation; do not repeat the update yet.",
+			);
+			return false;
 	}
 }
 
@@ -519,25 +551,20 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 					}
 					try {
 						const outcome = await runSelfUpdate(selfUpdateCommand);
-						if (outcome) {
-							reportRetainedArtifacts(outcome);
-							if (outcome.status === "restored" || outcome.status === "restoration-unverified") {
-								console.error(chalk.red(`Error: ${outcome.updateFailure.error.message}`));
-								if (outcome.status === "restored") {
-									console.error("The previous launcher and package runtime were restored and verified.");
-								} else {
-									for (const restorationFailure of outcome.restorationFailures) {
-										console.error(chalk.red(`Restoration error: ${restorationFailure.error.message}`));
-									}
-								}
-								process.exitCode = 1;
-								return true;
-							}
+						if (outcome && !reportNpmSelfUpdateOutcome(outcome)) {
+							process.exitCode = 1;
+							return true;
 						}
 					} catch (error: unknown) {
 						const message = error instanceof Error ? error.message : "Unknown package command error";
 						console.error(chalk.red(`Error: ${message}`));
-						printSelfUpdateFallback(selfUpdateCommand);
+						if (selfUpdateCommand.npmRecovery) {
+							console.error(
+								"The recovery transaction did not complete; the launcher and package runtime were not verified.",
+							);
+						} else {
+							printSelfUpdateFallback(selfUpdateCommand);
+						}
 						process.exitCode = 1;
 						return true;
 					}
