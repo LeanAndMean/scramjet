@@ -44,7 +44,7 @@ Requires Node >= 20. See [`CLAUDE.md`](CLAUDE.md) for build commands, local deve
 ## Documentation
 
 - [`packages/scramjet/README.md`](packages/scramjet/README.md) — User-facing docs (install, usage, design philosophy)
-- [`packages/scramjet/docs/scramjet-vision.md`](packages/scramjet/docs/scramjet-vision.md) — Design document and target architecture
+- [`packages/scramjet/docs/scramjet-vision.md`](packages/scramjet/docs/scramjet-vision.md) — Product vision, capabilities, principles, and non-goals
 - [`packages/scramjet/docs/command-authoring.md`](packages/scramjet/docs/command-authoring.md) — Command-set authoring reference
 - [`CLAUDE.md`](CLAUDE.md) — Contributor workflow and repo conventions
 - [`UPSTREAM_DIVERGENCE.md`](UPSTREAM_DIVERGENCE.md) — Pi fork tracking

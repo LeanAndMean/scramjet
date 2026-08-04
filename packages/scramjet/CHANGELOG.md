@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.77.1 — Refocus the product vision
+
+Clarifies Scramjet's durable product direction while moving current technical contracts to focused documentation. Fixes [#466](https://github.com/LeanAndMean/scramjet/issues/466).
+
+### Changed
+
+- Refocus the product vision on intended capabilities, user outcomes, durable principles, and product non-goals.
+- Clarify the authority boundaries between product direction, current behavior, command contracts, lifecycle details, diagnostics, source, and tests.
+- Align repository navigation and runtime documentation guidance with those boundaries.
+
+### Tests
+
+- Update focused base-directive coverage for the revised vision description.
+
 ## 0.77.0 — Tag issues deferred from PR reviews
 
 Adds an optional batch-scoped label to issues created from deferred PR review findings. Fixes [#462](https://github.com/LeanAndMean/scramjet/issues/462).
