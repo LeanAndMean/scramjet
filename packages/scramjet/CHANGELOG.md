@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.77.0 — Tag issues deferred from PR reviews
+
+Adds an optional batch-scoped label to issues created from deferred PR review findings. Fixes [#462](https://github.com/LeanAndMean/scramjet/issues/462).
+
+### Added
+
+- Resolve or optionally create the `PR review deferral` label once per issue-creation batch.
+- Apply the label only after validating each newly created issue, while preserving duplicate handling and issue publication when label operations fail.
+- Pause issue mutation when label-creation confirmation is cancelled.
+
+### Tests
+
+- Add semantic contract coverage for label discovery and authorization, mutation ordering, duplicate exclusion, identity validation, and graceful failure behavior.
+
 ## 0.76.2 — Default fresh-session steering to all
 
 Makes fresh settings-backed sessions deliver all queued steering messages together while preserving explicit choices and the separate follow-up default. Fixes [#460](https://github.com/LeanAndMean/scramjet/issues/460).
