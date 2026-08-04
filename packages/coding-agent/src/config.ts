@@ -1,7 +1,7 @@
 import { spawnSync } from "child_process";
-import { accessSync, constants, existsSync, readFileSync, realpathSync } from "fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "fs";
 import { homedir } from "os";
-import { basename, dirname, join, resolve, sep, win32 } from "path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "path";
 import { fileURLToPath } from "url";
 import { shouldUseWindowsShell } from "./utils/child-process.js";
 
@@ -34,8 +34,30 @@ interface SelfUpdateCommandStep {
 	display: string;
 }
 
+// SCRAMJET-DIVERGENCE: qualified product identity supports failure-safe npm self-updates.
+export interface NpmRecoveryMetadata {
+	readonly packageName: string;
+	readonly productRoot: string;
+	readonly packageRootType: "directory";
+	readonly runtimeRoot: string;
+	readonly manifestPath: string;
+	readonly declaredBinPath: string;
+	readonly binTargetPath: string;
+	readonly launcherPath: string;
+	readonly launcherType: "symbolic-link";
+	readonly launcherLinkText: string;
+	readonly launcherTargetPath: string;
+	readonly productParentPath: string;
+	readonly launcherParentPath: string;
+	readonly productDevice: number;
+	readonly productParentDevice: number;
+	readonly launcherParentDevice: number;
+	readonly layout: "npm-posix-product-tree";
+}
+
 export interface SelfUpdateCommand extends SelfUpdateCommandStep {
 	steps?: SelfUpdateCommandStep[];
+	readonly npmRecovery?: Readonly<NpmRecoveryMetadata>;
 }
 
 function makeSelfUpdateCommand(
@@ -254,6 +276,129 @@ export function isCurrentInstallationManaged(npmCommand?: string[]): boolean {
 	return isManagedByGlobalPackageManager(detectInstallMethod(), npmCommand);
 }
 
+function findRuntimePackageRoot(): string | undefined {
+	let directory = __dirname;
+	while (directory !== dirname(directory)) {
+		const manifestPath = join(directory, "package.json");
+		if (existsSync(manifestPath)) {
+			try {
+				const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { name?: string };
+				if (manifest.name === "@leanandmean/coding-agent") return realpathSync(directory);
+			} catch {
+				return undefined;
+			}
+		}
+		directory = dirname(directory);
+	}
+	return undefined;
+}
+
+function isContainedPath(parent: string, child: string): boolean {
+	const pathFromParent = relative(parent, child);
+	return (
+		pathFromParent !== "" &&
+		pathFromParent !== ".." &&
+		!pathFromParent.startsWith(`..${sep}`) &&
+		!isAbsolute(pathFromParent)
+	);
+}
+
+// SCRAMJET-DIVERGENCE: recovery is opt-in for the Stage 0-proven npm/POSIX product layout.
+function qualifyNpmRecovery(
+	packageName: string,
+	updatePackageName: string,
+	npmCommand?: string[],
+): Readonly<NpmRecoveryMetadata> | undefined {
+	if (
+		(process.platform !== "linux" && process.platform !== "darwin") ||
+		packageName !== updatePackageName ||
+		npmCommand?.length
+	) {
+		return undefined;
+	}
+	const configuredProductRoot = process.env.SCRAMJET_INTERNAL_PRODUCT_ROOT;
+	if (!configuredProductRoot) return undefined;
+
+	try {
+		const packageSegments = packageName.split("/");
+		if (
+			packageSegments.length !== 2 ||
+			!packageSegments[0].startsWith("@") ||
+			packageSegments.some((part) => !part || part === "." || part === "..")
+		) {
+			return undefined;
+		}
+		const productRootStat = lstatSync(configuredProductRoot);
+		if (!productRootStat.isDirectory() || productRootStat.isSymbolicLink()) return undefined;
+		const productRoot = realpathSync(configuredProductRoot);
+		const runtimeRoot = findRuntimePackageRoot();
+		if (!runtimeRoot || !isContainedPath(productRoot, runtimeRoot)) return undefined;
+		const npmRoot = getGlobalPackageRoots("npm").find((root) => {
+			const normalizedRoot = normalizeExistingPathForComparison(root);
+			return normalizedRoot && join(normalizedRoot, ...packageSegments) === productRoot;
+		});
+		if (!npmRoot) return undefined;
+		const normalizedNpmRoot = realpathSync(npmRoot);
+		if (basename(normalizedNpmRoot) !== "node_modules" || basename(dirname(normalizedNpmRoot)) !== "lib") {
+			return undefined;
+		}
+
+		const manifestPath = join(productRoot, "package.json");
+		if (!lstatSync(manifestPath).isFile()) return undefined;
+		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+			name?: string;
+			bin?: Record<string, unknown>;
+		};
+		const declaredBinPath = manifest.bin?.scramjet;
+		if (manifest.name !== packageName || typeof declaredBinPath !== "string") return undefined;
+		const binTargetPath = resolve(productRoot, declaredBinPath);
+		if (!isContainedPath(productRoot, binTargetPath) || !lstatSync(binTargetPath).isFile()) return undefined;
+		if (realpathSync(binTargetPath) !== binTargetPath) return undefined;
+
+		const prefix = dirname(dirname(normalizedNpmRoot));
+		const launcherParentPath = join(prefix, "bin");
+		const launcherPath = join(launcherParentPath, "scramjet");
+		const launcherStat = lstatSync(launcherPath);
+		if (!launcherStat.isSymbolicLink()) return undefined;
+		const launcherLinkText = readlinkSync(launcherPath);
+		const expectedLauncherLinkText = relative(launcherParentPath, binTargetPath);
+		if (launcherLinkText !== expectedLauncherLinkText) return undefined;
+		const launcherTargetPath = realpathSync(launcherPath);
+		if (launcherTargetPath !== binTargetPath) return undefined;
+
+		const productParentPath = dirname(productRoot);
+		accessSync(productRoot, constants.W_OK);
+		accessSync(productParentPath, constants.W_OK);
+		accessSync(launcherParentPath, constants.W_OK);
+		const productDevice = statSync(productRoot).dev;
+		const productParentDevice = statSync(productParentPath).dev;
+		const launcherParentDevice = statSync(launcherParentPath).dev;
+		if (productDevice !== productParentDevice || statSync(binTargetPath).dev !== productDevice) return undefined;
+
+		return Object.freeze({
+			packageName,
+			productRoot,
+			packageRootType: "directory" as const,
+			runtimeRoot,
+			manifestPath,
+			declaredBinPath,
+			binTargetPath,
+			launcherPath,
+			launcherType: "symbolic-link" as const,
+			launcherLinkText,
+			launcherTargetPath,
+			productParentPath,
+			launcherParentPath,
+			productDevice,
+			productParentDevice,
+			launcherParentDevice,
+			layout: "npm-posix-product-tree" as const,
+		});
+	} catch {
+		return undefined;
+	}
+}
+
 export function getSelfUpdateCommand(
 	packageName: string,
 	npmCommand?: string[],
@@ -264,7 +409,8 @@ export function getSelfUpdateCommand(
 	if (!command || !isManagedByGlobalPackageManager(method, npmCommand) || !isSelfUpdatePathWritable()) {
 		return undefined;
 	}
-	return command;
+	const npmRecovery = method === "npm" ? qualifyNpmRecovery(packageName, updatePackageName, npmCommand) : undefined;
+	return npmRecovery ? { ...command, npmRecovery } : command;
 }
 
 export function getSelfUpdateUnavailableInstruction(

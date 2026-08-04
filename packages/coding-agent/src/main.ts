@@ -42,11 +42,11 @@ import {
 import { SessionManager } from "./core/session-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { printTimings, resetTimings, time } from "./core/timings.js";
+import { dispatchEarlyCliCommand, isTruthyEnvFlag } from "./early-dispatch.js";
 import { runMigrations, showDeprecationWarnings } from "./migrations.js";
 import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.js";
 import { ExtensionSelectorComponent } from "./modes/interactive/components/extension-selector.js";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.js";
-import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.js";
 import { isLocalPath } from "./utils/paths.js";
 
 /**
@@ -88,11 +88,6 @@ function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]
 		const prefix = diagnostic.type === "error" ? "Error: " : diagnostic.type === "warning" ? "Warning: " : "";
 		console.error(color(`${prefix}${diagnostic.message}`));
 	}
-}
-
-function isTruthyEnvFlag(value: string | undefined): boolean {
-	if (!value) return false;
-	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
 type AppMode = "interactive" | "print" | "json" | "rpc";
@@ -441,24 +436,8 @@ export interface MainOptions {
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
-	// SCRAMJET-DIVERGENCE: prefer SCRAMJET_OFFLINE, fall back to PI_OFFLINE.
-	const offlineMode =
-		args.includes("--offline") ||
-		isTruthyEnvFlag(process.env.SCRAMJET_OFFLINE) ||
-		isTruthyEnvFlag(process.env.PI_OFFLINE);
-	if (offlineMode) {
-		process.env.SCRAMJET_OFFLINE = "1";
-		process.env.PI_OFFLINE = "1";
-		process.env.PI_SKIP_VERSION_CHECK = "1";
-	}
-
-	if (await handlePackageCommand(args)) {
-		return;
-	}
-
-	if (await handleConfigCommand(args)) {
-		return;
-	}
+	// SCRAMJET-DIVERGENCE: keep direct main() routing identical to the product bootstrap.
+	if (await dispatchEarlyCliCommand(args)) return;
 
 	const parsed = parseArgs(args);
 	if (parsed.diagnostics.length > 0) {

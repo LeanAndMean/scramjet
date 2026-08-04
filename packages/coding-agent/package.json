@@ -17,6 +17,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./early-dispatch": {
+      "types": "./dist/early-dispatch.d.ts",
+      "import": "./dist/early-dispatch.js"
     }
   },
   "files": [
