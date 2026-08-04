@@ -323,8 +323,8 @@ Control how steering messages (from `steer`) are delivered.
 ```
 
 Modes:
-- `"all"`: Deliver all steering messages after the current assistant turn finishes executing its tool calls
-- `"one-at-a-time"`: Deliver one steering message per completed assistant turn (default)
+- `"all"`: Deliver all steering messages after the current assistant turn finishes executing its tool calls (default)
+- `"one-at-a-time"`: Deliver one steering message per completed assistant turn
 
 Response:
 ```json

@@ -624,7 +624,8 @@ export class SettingsManager {
 	}
 
 	getSteeringMode(): "all" | "one-at-a-time" {
-		return this.settings.steeringMode || "one-at-a-time";
+		// SCRAMJET-DIVERGENCE: Fresh settings-backed sessions steer all queued messages by default.
+		return this.settings.steeringMode || "all";
 	}
 
 	setSteeringMode(mode: "all" | "one-at-a-time"): void {
