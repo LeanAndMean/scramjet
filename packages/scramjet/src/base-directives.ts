@@ -43,7 +43,7 @@ Scramjet documentation (read only when the user asks about Scramjet itself — i
 commands, command sets, next-step chaining, delegation, or the /autopilot on/off
 flag):
 - README: ${scramjetReadmePath}
-- Vision / design: ${scramjetVisionPath}
+- Product vision / principles: ${scramjetVisionPath}
 - Command authoring (${DOCS_BY_KEY["command-authoring"].condition}): ${commandAuthoringPath}
 
 If the user wants to report a bug or give feedback, direct them to the Scramjet

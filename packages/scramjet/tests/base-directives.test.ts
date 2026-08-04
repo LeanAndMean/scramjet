@@ -100,7 +100,7 @@ describe("registerBaseDirectives", () => {
 		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
 
 		const readmePath = result.systemPromptSection.text.match(/README: (.+)/)?.[1];
-		const visionPath = result.systemPromptSection.text.match(/Vision \/ design: (.+)/)?.[1];
+		const visionPath = result.systemPromptSection.text.match(/Product vision \/ principles: (.+)/)?.[1];
 		const authoringPath = result.systemPromptSection.text.match(/Command authoring .+?: (.+)/)?.[1];
 
 		expect(readmePath).toMatch(/README\.md$/);
