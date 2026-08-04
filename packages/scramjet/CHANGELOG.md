@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.76.2 — Default fresh-session steering to all
+
+Makes fresh settings-backed sessions deliver all queued steering messages together while preserving explicit choices and the separate follow-up default. Fixes [#460](https://github.com/LeanAndMean/scramjet/issues/460).
+
+### Changed
+
+- Default missing steering preferences to `all` for fresh settings-backed sessions.
+- Keep explicit steering modes and the `one-at-a-time` follow-up default unchanged.
+- Document the steering and follow-up defaults in user-facing settings and RPC guidance.
+
+### Tests
+
+- Add focused settings-manager and normal-session coverage for default and explicit steering modes.
+
 ## 0.76.1 — Clarify architecture option comparisons
 
 Makes architecture choices easier to compare without sacrificing decision-relevant detail. Fixes [#456](https://github.com/LeanAndMean/scramjet/issues/456).

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Default fresh settings-backed sessions to deliver all queued steering messages while preserving explicit steering choices and the one-at-a-time follow-up default. ([#461](https://github.com/LeanAndMean/scramjet/pull/461))
+
 ### Fixed
 
 - Preserve terminal-configured foreground color for misspelled text in the built-in `pi-light` theme while retaining the spell-check underline. ([#435](https://github.com/LeanAndMean/scramjet/pull/435))
