@@ -923,10 +923,15 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection.split(lookupCommand)).toHaveLength(2);
 		expect(deferredSection.split(createCommand)).toHaveLength(2);
 		expect(deferredSection).toContain("array of page arrays");
+		expect(deferredSection).toContain("every flattened entry is an object with a string `name`");
+		expect(deferredSection).toContain("invalid flattened entry makes availability unknown");
+		expect(deferredSection).toContain("Do not prompt or create the label");
 		expect(deferredSection).toContain("exact, case-sensitive equality");
 		expect(deferredSection).toContain('type: "confirm"');
 		expect(deferredSection).toContain("at most one label-creation attempt");
 		expect(deferredSection).toContain("Option 3 reuses this same batch decision");
+		expect(deferredSection).toContain("resolve the label decision in the **Shared issue-creation batch contract**");
+		expect(deferredSection).not.toContain("shared batch label decision described in Option 1");
 	});
 
 	it("labels only newly created issues after canonical identity validation", () => {

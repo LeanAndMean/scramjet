@@ -150,8 +150,8 @@ Resolve `PR review deferral` lazily, immediately before the first item that will
    gh api --paginate --slurp 'repos/{owner}/{repo}/labels?per_page=100'
    ```
 
-2. Validate that its JSON result is an array of page arrays before flattening or interpreting it. Compare names to `PR review deferral` with exact, case-sensitive equality.
-3. A failed or malformed lookup makes availability unknown; it does not prove absence. Do not prompt or create the label, and continue creating issues without the label.
+2. Validate that its JSON result is an array of page arrays and that every flattened entry is an object with a string `name` before interpreting it. Compare names to `PR review deferral` with exact, case-sensitive equality.
+3. A failed lookup, invalid page structure, or invalid flattened entry makes availability unknown; it does not prove absence. Do not prompt or create the label, and continue creating issues without the label.
 4. If the validated lookup proves the exact label absent, call `get_scramjet_user_input` once for the batch with `type: "confirm"`. Explain that approval creates repository metadata named `PR review deferral`.
 5. On approval, guard `gh label create "PR review deferral"`. Make at most one label-creation attempt for the batch. Description and color are optional and remain unspecified. On explicit No or when label creation fails, continue creating issues without the label and do not prompt again.
 
@@ -252,7 +252,7 @@ Present each deferred finding one at a time (in F/S identifier order) and ask:
 
 After all items are processed:
 
-1. **Issue creation**: For items marked "Create issue", first complete duplicate classification and resolve the shared batch label decision described in Option 1. All selected items share that one result; do not resolve or prompt per finding. Issue creation, duplicate comments, and other mutations may begin after the exact label is found or created, the user explicitly declines creation, label lookup fails or is malformed, or label creation fails. Cancellation is the sole unresolved state and pauses all mutation until a resumed user turn.
+1. **Issue creation**: For items marked "Create issue", first complete duplicate classification and resolve the label decision in the **Shared issue-creation batch contract**. All selected items share that one result; do not resolve or prompt per finding. Issue creation, duplicate comments, and other mutations may begin after the exact label is found or created, the user explicitly declines creation, label lookup fails or is malformed, or label creation fails. Cancellation is the sole unresolved state and pauses all mutation until a resumed user turn.
 
 2. **Reclassified items**: If any items were marked as genuine, then follow the assessment-comment update procedure described in Option 2 (retrieve, update classifications from "Deferred" to "Genuine", update the staged implementation plan, and PATCH) -- apply all reclassified items in a single PATCH call.
 
