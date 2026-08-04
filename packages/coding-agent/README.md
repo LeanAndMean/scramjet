@@ -193,7 +193,7 @@ Submit messages while the agent is working:
 
 On Windows Terminal, `Alt+Enter` is fullscreen by default. Remap it in [docs/terminal-setup.md](docs/terminal-setup.md) so scramjet can receive the follow-up shortcut.
 
-Configure delivery in [settings](docs/settings.md): `steeringMode` and `followUpMode` can be `"one-at-a-time"` (default, waits for response) or `"all"` (delivers all queued at once). `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
+Configure delivery in [settings](docs/settings.md): `steeringMode` defaults to `"all"` (delivers all queued at once), while `followUpMode` defaults to `"one-at-a-time"` (waits for a response). Both settings accept either value. `transport` selects provider transport preference (`"sse"`, `"websocket"`, or `"auto"`) for providers that support multiple transports.
 
 ---
 
