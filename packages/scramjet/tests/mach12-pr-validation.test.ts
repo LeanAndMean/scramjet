@@ -412,6 +412,34 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(handoff).not.toContain("complete proof-patch manifest");
 	});
 
+	it("branches zero findings before every retained-proof commit guard", () => {
+		const handoff = section(command, "## Step 2:", "## Step 4:");
+		expectInOrder(
+			handoff,
+			"whether the artifact declares `none — zero retained findings`",
+			"Do not extract, dereference, or validate `V` for that branch",
+			"Only for a retained-proof artifact, extract proof commit `V`",
+			"Before applying any retained-proof `V` guard",
+			"Skip every retained-proof `V` check",
+			"For every retained-proof artifact",
+			"Local `HEAD`, its upstream branch, and a fresh GitHub `headRefOid` all equal `V`",
+		);
+		expect(handoff).toContain("no retained path, node, content identity, or ownership group");
+	});
+
+	it("pins detached-worktree snapshot, mutation recovery, and malformed-output cleanup ordering", () => {
+		const adjudication = section(command, "## Step 4:", "## Step 5:");
+		expectInOrder(
+			adjudication,
+			"Snapshot both worktrees before assessor dispatch",
+			"compare them byte-for-byte afterward",
+			"preserve and report resources on unexpected mutation",
+			"otherwise remove only recorded resources",
+			"A subagent error, `(no output)`, malformed result",
+			"stops incomplete after safe resource cleanup",
+		);
+	});
+
 	it("executes committed nodes and handles base-inapplicable proofs without impossible replay", () => {
 		const adjudication = section(command, "## Step 4:", "## Step 5:");
 		expect(adjudication).toContain("Run every retained node directly at `V`");
@@ -452,7 +480,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(artifact).toMatch(/never blindly retry/i);
 	});
 
-	it("emits complete fresh fix and pre-merge wires", () => {
+	it("emits complete ownership-safe branch-specific fix, cleanup, and no-survivor wires", () => {
 		const routing = section(command, "## Step 7:");
 		const messages = routeMessages(routing);
 		expect(messages.some((message) => message.startsWith("/mach12:pr-review-fix"))).toBe(true);
@@ -464,6 +492,26 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 			expect(message).toContain("--assessment-sha256 <assessment-digest>");
 		}
 		expect(routing).toContain("`fresh_session`: `true`");
+		for (const branch of [
+			"When a mixed-classification ownership group exists",
+			"both `genuine defect` and `low-severity completion defect` and no ownership group crosses classifications",
+			"only final `genuine defect` classifications survive",
+			"only final `low-severity completion defect` classifications survive",
+			"no genuine or low-severity finding survives",
+		])
+			expect(routing).toContain(branch);
+		const mixedGroup = section(
+			routing,
+			"**When a mixed-classification ownership group exists:**",
+			"**When final classifications include both `genuine defect` and `low-severity completion defect`",
+		);
+		expect(mixedGroup.match(/`message`:/g)).toHaveLength(2);
+		expectInOrder(mixedGroup, "--staged-later <id>", "--cleanup-finding <surviving-id>");
+		expect(mixedGroup).not.toContain("/mach12:pr-pre-merge <pr-number>");
+		const noSurvivors = section(routing, "**When no genuine or low-severity finding survives:**");
+		expect(noSurvivors.match(/`message`:/g)).toHaveLength(1);
+		expect(noSurvivors).toContain("`message`: `/mach12:pr-pre-merge <pr-number>`");
+		expect(noSurvivors).not.toContain("/mach12:pr-review-fix <pr-number>");
 	});
 });
 
@@ -927,6 +975,47 @@ describe("mach12 executable validation integration", () => {
 		expect(commit).toContain(
 			"return the frozen implementation parent, proof commit, committed paths, and remote verification",
 		);
+	});
+
+	it("makes validation repair publication atomic before progress publication", () => {
+		const determine = section(push, "## Step 1:", "## Step 2:");
+		expect(determine).toContain("exact bounded-operation patch SHA-256");
+		expect(determine).toContain("match the declared operation and patch SHA-256 byte-for-byte");
+		expect(determine).toContain("no unstaged or untracked residual");
+		const commitAndPush = section(push, "## Step 2:", "## Step 4:");
+		expect(commitAndPush).toContain("exactly one direct successor");
+		expect(commitAndPush).toContain("push exactly once");
+		expect(commitAndPush).toContain("declared predecessor as its sole parent");
+		expect(commitAndPush).toContain("fresh GitHub `headRefOid`");
+		expect(commitAndPush).toContain("clean index and tracked/untracked worktree");
+		expectInOrder(push, "exact bounded-operation patch SHA-256", "## Step 2: Commit", "## Step 3: Push", "## Step 4: Post progress comment");
+	});
+
+	it("terminates assessment cleanup after its one verified push", () => {
+		const determine = section(push, "## Step 1:", "## Step 2:");
+		expectInOrder(
+			determine,
+			"Recognize a distinct assessment-cleanup payload",
+			"create exactly one cleanup commit",
+			"push exactly once",
+			"stop assessment-cleanup mode immediately",
+		);
+		expect(determine).toContain("Do not enter the generic staging, commit, push, or progress-comment steps");
+		expect(determine).toContain("assessment owns publication");
+	});
+
+	it("publishes deterministic proof content identities across handoff artifacts", () => {
+		expect(prReviewFix).toContain("per-path proof content SHA-256 identities");
+		expect(prReviewFix).toContain("exact committed blob bytes at `V`");
+		expect(push).toContain("unchanged proof paths, node IDs, and content identities");
+		const validation = readCommand("pr-validation").content;
+		const assessment = readCommand("pr-validation-assessment").content;
+		expect(validation).toContain("provisional lowercase SHA-256 of its exact normalized worktree bytes");
+		expect(validation).toContain("authoritative proof content identity from the exact committed blob bytes at `V`");
+		expect(validation).toContain("freeze those post-commit identities for publication");
+		expect(validation).toContain("per-path proof content SHA-256");
+		expect(assessment).toContain("Recompute each identity from the exact blob bytes at `V`");
+		expect(assessment).toContain("path/node/per-path proof content SHA-256/finding/group mapping");
 	});
 
 	it("preserves staged repair provenance verbatim through the push subroutine", () => {
