@@ -268,6 +268,7 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 		for (const field of [
 			"repository and PR identity",
 			"head branch",
+			"exact authenticated upstream ref and its remote's canonical repository identity",
 			"frozen implementation parent",
 			"exact proof paths",
 			"path, node, finding, and ownership-group mapping",
@@ -458,6 +459,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(cleanup).toContain("no member of a surviving group");
 		expect(cleanup).toContain("surviving proof paths, nodes, assertions, and content remain unchanged");
 		expect(cleanup).toContain("Delegate exactly one tests-only cleanup commit and push through `/mach12:push`");
+		expect(cleanup).toContain("exact authenticated upstream ref and its remote's canonical repository identity");
 		expect(cleanup).toContain("create no cleanup commit");
 		expect(cleanup).toContain("local `HEAD`, its upstream branch, and a fresh GitHub `headRefOid`");
 		expect(cleanup).toContain("never recommit, repush, force-push, or blindly duplicate a comment");
@@ -469,14 +471,16 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(guards).toContain("`proof commit: none`");
 		expect(guards).toContain("Skip proof execution, detached resources, cleanup, and architect dispatch");
 		const artifact = section(command, "## Step 6:", "## Step 7:");
+		expect(artifact).toContain("For a retained-proof assessment");
 		expect(artifact).toContain("original proof commit `V`");
-		expect(artifact).toContain("current post-assessment head");
-		expect(artifact).toContain(
-			"trusted repository, PR, publisher, `P`, original `V`, and current pushed-head identities",
-		);
-		expect(artifact).toContain("provider normalization changed its body");
-		expect(artifact).toContain("exact body equality remains required for completion");
-		expect(artifact).toContain("preserve the exact pushed head");
+		expect(artifact).toContain("For a zero-finding assessment");
+		expect(artifact).toContain("`proof commit: none`");
+		expect(artifact).toContain("unchanged current head equal to `P`");
+		expect(artifact).toContain("Include no proof path, node, content identity");
+		expect(artifact).toContain("branch-specific provenance");
+		expect(artifact).toContain("zero-finding branch's `proof commit: none`");
+		expect(artifact).toContain("Provider normalization does not relax exact body equality");
+		expect(artifact).toContain("preserve the exact current head");
 		expect(artifact).toMatch(/never blindly retry/i);
 	});
 
@@ -770,6 +774,14 @@ describe("mach12 executable validation integration", () => {
 			"local `HEAD`, its upstream branch, and a fresh GitHub `headRefOid` must equal the supplied predecessor",
 		);
 		expect(authentication).toContain("trusted `<!-- mach12-progress -->` comment");
+		expect(authentication).toContain("exact `prior_head`");
+		expect(authentication).toContain("exact `successor_head`");
+		expect(authentication).toContain(
+			"current `--predecessor-head` to equal the latest trusted record's `successor_head`",
+		);
+		expect(authentication).toContain(
+			"each earlier record's `successor_head` to equal the next record's `prior_head`",
+		);
 		expect(authentication).toContain("Walk backward through those trusted progress records");
 		expect(authentication).toContain("rejecting gaps, forks, duplicate successors");
 
@@ -792,6 +804,7 @@ describe("mach12 executable validation integration", () => {
 		expect(example).not.toMatch(/(?:^|\s)F1(?:\s|$)/);
 
 		expect(reporting).toContain("structured provenance payload");
+		expect(reporting).toContain("exact authenticated upstream ref and its remote's canonical repository identity");
 		expect(reporting).toContain("preserve every supplied provenance field verbatim");
 	});
 
@@ -836,7 +849,7 @@ describe("mach12 executable validation integration", () => {
 			"frozen implementation parent `P`",
 			"original proof commit `V`",
 			"authenticated assessment head",
-			"exact pre-commit predecessor head",
+			"exact `prior_head` for this commit",
 			"selected IDs",
 			"remaining staged IDs",
 			"cleanup IDs",
@@ -845,9 +858,9 @@ describe("mach12 executable validation integration", () => {
 		])
 			expect(determine).toContain(field);
 		expect(determine).toContain(
-			"`V` descends directly from `P` and remains an ancestor of both the assessment head and predecessor",
+			"`V` to descend directly from `P` and remain an ancestor of both the assessment head and `prior_head`",
 		);
-		expect(determine).toContain("assessment-head-to-predecessor segment is merge-free");
+		expect(determine).toContain("assessment-head-to-`prior_head` segment to be merge-free");
 		expect(determine).toContain("clean authenticated committed state");
 		expect(determine).not.toContain("unchanged proof paths/node IDs/digests");
 	});
@@ -952,7 +965,8 @@ describe("mach12 executable validation integration", () => {
 		expect(determine).toContain("distinct initial validation-proof payload");
 		expect(determine).toContain("does not require review or assessment IDs or digests");
 		for (const guard of [
-			"`HEAD` equals the frozen implementation parent",
+			"current branch to be non-detached",
+			"fresh GitHub `headRefOid` to equal the frozen implementation parent",
 			"index is empty",
 			"dirty path set exactly equals the declared proof paths",
 			"tests-only",
@@ -979,6 +993,12 @@ describe("mach12 executable validation integration", () => {
 
 	it("makes validation repair publication atomic before progress publication", () => {
 		const determine = section(push, "## Step 1:", "## Step 2:");
+		expect(determine).toContain("repository and open PR identity");
+		expect(determine).toContain("head branch, exact upstream ref");
+		expect(determine).toContain("upstream remote's canonical repository identity");
+		expect(determine).toContain("canonical owner/repository to equal the authenticated PR repository");
+		expect(determine).toContain("empty index before push-owned staging");
+		expect(determine).not.toContain("were clean before the caller's bounded edits");
 		expect(determine).toContain("exact bounded-operation patch SHA-256");
 		expect(determine).toContain("match the declared operation and patch SHA-256 byte-for-byte");
 		expect(determine).toContain("no unstaged or untracked residual");
@@ -1003,7 +1023,7 @@ describe("mach12 executable validation integration", () => {
 			determine,
 			"Recognize a distinct assessment-cleanup payload",
 			"create exactly one cleanup commit",
-			"push exactly once",
+			"push the authenticated upstream ref explicitly exactly once",
 			"stop assessment-cleanup mode immediately",
 		);
 		expect(determine).toContain("Do not enter the generic staging, commit, push, or progress-comment steps");
@@ -1022,6 +1042,9 @@ describe("mach12 executable validation integration", () => {
 		expect(validation).toContain("per-path proof content SHA-256");
 		expect(assessment).toContain("Recompute each identity from the exact blob bytes at `V`");
 		expect(assessment).toContain("path/node/per-path proof content SHA-256/finding/group mapping");
+		expect(validation).toContain("each proof path belongs to exactly one indivisible ownership group");
+		expect(assessment).toContain("every proof path to belong to exactly one indivisible ownership group");
+		expect(push).toContain("each proof path to belong to exactly one indivisible ownership group");
 	});
 
 	it("preserves staged repair provenance verbatim through the push subroutine", () => {
@@ -1035,7 +1058,7 @@ describe("mach12 executable validation integration", () => {
 		);
 		expect(push).toContain("stop before any repository or remote mutation");
 		expect(push).toContain("preserve every field and value verbatim");
-		expect(push).toContain("append the exact pushed `HEAD` as the successor head");
+		expect(push).toContain("append the exact pushed `HEAD` as `successor_head`");
 		expect(push).toContain("Do not summarize, reorder, omit, or rewrite these fields");
 		expect(push).toContain("stop before posting the progress comment");
 		expect(push).toContain("return an incomplete result to the caller with the exact pushed `HEAD`");
