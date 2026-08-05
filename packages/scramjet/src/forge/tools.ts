@@ -17,7 +17,13 @@ import {
 	resolveCurrentRepository,
 	withForgeMutationQueue,
 } from "./client.js";
-import { type ForgeRangeRequest, isForgeReadDetails, renderForgeDocument, sliceForgeDocument } from "./document.js";
+import {
+	applyExactEdits,
+	type ForgeRangeRequest,
+	isForgeReadDetails,
+	renderForgeDocument,
+	sliceForgeDocument,
+} from "./document.js";
 import { createGithubAdapter } from "./github.js";
 import { createGitlabAdapter } from "./gitlab.js";
 import type {
@@ -25,7 +31,9 @@ import type {
 	ForgeArtifact,
 	ForgeArtifactKind,
 	ForgeCreateInput,
+	ForgeFieldCoverage,
 	ForgeIdentity,
+	ForgeMutationTarget,
 	ForgePrSection,
 	ForgeReadDetails,
 	ForgeRepository,
@@ -93,11 +101,50 @@ export const ADD_PR_COMMENT_SCHEMA = Type.Object(
 	{ additionalProperties: false },
 );
 
+const REPLACEMENT = {
+	oldText: Type.String({
+		minLength: 1,
+		description: "Exact, unique text in the original decoded field",
+	}),
+	newText: Type.String({ description: "Exact replacement text" }),
+};
+
+function editSchema() {
+	return Type.Object(
+		{
+			number: ARTIFACT_NUMBER,
+			target: Type.Union([
+				Type.Object({ kind: Type.Literal("artifact") }, { additionalProperties: false }),
+				Type.Object(
+					{ kind: Type.Literal("comment"), id: Type.String({ minLength: 1, description: "Opaque comment ID" }) },
+					{ additionalProperties: false },
+				),
+			]),
+			edits: Type.Array(
+				Type.Object(
+					{ field: StringEnum(["title", "body"] as const), ...REPLACEMENT },
+					{ additionalProperties: false },
+				),
+				{ minItems: 1 },
+			),
+		},
+		{ additionalProperties: false },
+	);
+}
+
+export const EDIT_ISSUE_SCHEMA = editSchema();
+export const EDIT_PR_SCHEMA = editSchema();
+
 type ReadIssueParams = Static<typeof READ_ISSUE_SCHEMA>;
 type ReadPrParams = Static<typeof READ_PR_SCHEMA>;
 type CreateIssueParams = Static<typeof CREATE_ISSUE_SCHEMA>;
 type CreatePrParams = Static<typeof CREATE_PR_SCHEMA>;
 type AddCommentParams = Static<typeof ADD_ISSUE_COMMENT_SCHEMA>;
+interface EditParams {
+	number: number;
+	target: ForgeMutationTarget;
+	edits: Array<{ field: "title" | "body"; oldText: string; newText: string }>;
+}
 
 type ForgeAdapterFactory = (repository: ForgeRepository, exec: ForgeExec, cwd: string) => ForgeAdapter;
 
@@ -169,13 +216,13 @@ function completeCoverage(total: number, ranges: ForgeReadDetails["core"]["range
 	return false;
 }
 
-function hasCompleteParentEvidence(
+function priorReadDetails(
 	entries: readonly SessionEntry[],
 	toolCallId: string,
 	repository: ForgeRepository,
 	kind: ForgeArtifactKind,
 	number: number,
-): boolean {
+): ForgeReadDetails[] {
 	let compactionIndex = -1;
 	for (let index = 0; index < entries.length; index++) {
 		if (entries[index].type === "compaction") compactionIndex = index;
@@ -183,11 +230,11 @@ function hasCompleteParentEvidence(
 	const currentIndexes = entries
 		.map((entry, index) => (assistantHasToolCall(entry, toolCallId) ? index : -1))
 		.filter((index) => index > compactionIndex);
-	if (currentIndexes.length !== 1) return false;
+	if (currentIndexes.length !== 1) return [];
 	const currentIndex = currentIndexes[0];
 	const readTool = kind === "issue" ? "read_issue" : "read_pr";
 	const readCallIds = new Set<string>();
-	const groups = new Map<string, { total: number; ranges: ForgeReadDetails["core"]["ranges"]; valid: boolean }>();
+	const details: ForgeReadDetails[] = [];
 
 	for (let index = compactionIndex + 1; index < currentIndex; index++) {
 		const entry = entries[index];
@@ -208,21 +255,72 @@ function hasCompleteParentEvidence(
 		) {
 			continue;
 		}
-		const details = message.details;
+		const receipt = message.details;
 		if (
-			!repositoriesEqual(details.repository, repository) ||
-			details.artifact.kind !== kind ||
-			details.artifact.number !== number
+			repositoriesEqual(receipt.repository, repository) &&
+			receipt.artifact.kind === kind &&
+			receipt.artifact.number === number
 		) {
-			continue;
+			details.push(receipt);
 		}
+	}
+	return details;
+}
+
+function hasCompleteParentEvidence(
+	entries: readonly SessionEntry[],
+	toolCallId: string,
+	repository: ForgeRepository,
+	kind: ForgeArtifactKind,
+	number: number,
+): boolean {
+	const groups = new Map<string, { total: number; ranges: ForgeReadDetails["core"]["ranges"]; valid: boolean }>();
+	for (const details of priorReadDetails(entries, toolCallId, repository, kind, number)) {
 		const group = groups.get(details.snapshot) ?? { total: details.core.totalLines, ranges: [], valid: true };
 		if (group.total !== details.core.totalLines) group.valid = false;
 		group.ranges.push(...details.core.ranges);
 		groups.set(details.snapshot, group);
 	}
-
 	return [...groups.values()].some((group) => group.valid && completeCoverage(group.total, group.ranges));
+}
+
+function targetsEqual(left: ForgeMutationTarget, right: ForgeMutationTarget): boolean {
+	if (left.kind === "artifact") return right.kind === "artifact";
+	return right.kind === "comment" && left.id === right.id;
+}
+
+function hasCompleteFieldEvidence(
+	entries: readonly SessionEntry[],
+	toolCallId: string,
+	repository: ForgeRepository,
+	kind: ForgeArtifactKind,
+	number: number,
+	target: ForgeMutationTarget,
+	fields: ReadonlySet<"title" | "body">,
+): boolean {
+	type Coverage = { total: number; ranges: ForgeFieldCoverage["ranges"]; valid: boolean };
+	const snapshots = new Map<string, Map<"title" | "body", Coverage>>();
+	for (const details of priorReadDetails(entries, toolCallId, repository, kind, number)) {
+		const snapshot = snapshots.get(details.snapshot) ?? new Map<"title" | "body", Coverage>();
+		for (const field of details.fields) {
+			if (!fields.has(field.field) || !targetsEqual(field.target, target)) continue;
+			const coverage = snapshot.get(field.field) ?? {
+				total: field.totalCodeUnits,
+				ranges: [],
+				valid: true,
+			};
+			if (coverage.total !== field.totalCodeUnits) coverage.valid = false;
+			coverage.ranges.push(...field.ranges);
+			snapshot.set(field.field, coverage);
+		}
+		snapshots.set(details.snapshot, snapshot);
+	}
+	return [...snapshots.values()].some((snapshot) =>
+		[...fields].every((field) => {
+			const coverage = snapshot.get(field);
+			return coverage?.valid === true && completeCoverage(coverage.total, coverage.ranges);
+		}),
+	);
 }
 
 function assertArtifactIdentity(artifact: ForgeArtifact, kind: ForgeArtifactKind, number: number, url?: string): void {
@@ -340,6 +438,22 @@ async function createArtifact(
 	}
 }
 
+function mutationQueueKey(
+	repository: ForgeRepository,
+	kind: ForgeArtifactKind,
+	number: number,
+	target: ForgeMutationTarget,
+): string {
+	return JSON.stringify([
+		repository.forge,
+		repository.host,
+		repository.projectPath,
+		kind,
+		number,
+		target.kind === "artifact" ? target.kind : [target.kind, target.id],
+	]);
+}
+
 async function addComment(
 	kind: ForgeArtifactKind,
 	params: AddCommentParams,
@@ -358,7 +472,7 @@ async function addComment(
 		);
 	}
 	const adapter = dependencies.createAdapter(repository, exec, cwd);
-	const key = `${repository.forge}:${repository.host}:${repository.projectPath}:${kind}:${params.number}`;
+	const key = mutationQueueKey(repository, kind, params.number, { kind: "artifact" });
 	return withForgeMutationQueue(key, async () => {
 		const parent = await adapter.readArtifact(repository, kind, params.number, [], signal);
 		assertArtifactIdentity(parent, kind, params.number);
@@ -383,6 +497,145 @@ async function addComment(
 				updated,
 				params.body,
 			);
+		} catch (error) {
+			throw ambiguousMutation(operation, error);
+		}
+	});
+}
+
+interface ForgeEditDiff {
+	field: "title" | "body";
+	oldText: string;
+	newText: string;
+}
+
+function editMutationResult(
+	operation: "edit_issue" | "edit_pr",
+	repository: ForgeRepository,
+	identity: ForgeIdentity,
+	target: ForgeMutationTarget,
+	diff: ForgeEditDiff[],
+) {
+	return {
+		content: [
+			{
+				type: "text" as const,
+				text: `Edited and verified ${operation}: ${JSON.stringify({ identity, target, diff })}`,
+			},
+		],
+		details: {
+			schema: "scramjet:forge-mutation@1" as const,
+			operation,
+			repository,
+			identity,
+			target,
+			diff,
+			verified: true as const,
+		},
+	};
+}
+
+async function editArtifact(
+	kind: ForgeArtifactKind,
+	params: EditParams,
+	toolCallId: string,
+	signal: AbortSignal | undefined,
+	cwd: string,
+	entries: readonly SessionEntry[],
+	exec: ForgeExec,
+	dependencies: Required<ForgeToolDependencies>,
+) {
+	const target = params.target;
+	if (target.kind === "comment" && params.edits.some((edit) => edit.field !== "body")) {
+		throw new Error("Comment edits may target only the body field");
+	}
+	const repository = await dependencies.resolveRepository(exec, cwd, signal);
+	const fields = new Set<"title" | "body">(params.edits.map((edit) => edit.field));
+	if (!hasCompleteFieldEvidence(entries, toolCallId, repository, kind, params.number, target, fields)) {
+		const operation = kind === "issue" ? "edit_issue" : "edit_pr";
+		const readTool = kind === "issue" ? "read_issue" : "read_pr";
+		throw new Error(
+			`${operation} requires a complete prior ${readTool} of ${kind} #${params.number} on the active branch after the latest compaction for every edited field (${[...fields].join(", ")}), using all ranges from one unchanged snapshot`,
+		);
+	}
+	const adapter = dependencies.createAdapter(repository, exec, cwd);
+	const key = mutationQueueKey(repository, kind, params.number, target);
+	return withForgeMutationQueue(key, async () => {
+		const original = await adapter.readArtifact(repository, kind, params.number, [], signal);
+		assertArtifactIdentity(original, kind, params.number);
+		const operation = kind === "issue" ? "Issue edit" : "Pull request edit";
+		const toolName = kind === "issue" ? "edit_issue" : "edit_pr";
+
+		if (target.kind === "artifact") {
+			const titleEdits = params.edits
+				.filter((edit) => edit.field === "title")
+				.map(({ oldText, newText }) => ({ oldText, newText }));
+			const bodyEdits = params.edits
+				.filter((edit) => edit.field === "body")
+				.map(({ oldText, newText }) => ({ oldText, newText }));
+			const title = titleEdits.length === 0 ? original.title : applyExactEdits(original.title, titleEdits, "title");
+			const body = bodyEdits.length === 0 ? original.body : applyExactEdits(original.body, bodyEdits, "body");
+			const diff: ForgeEditDiff[] = params.edits.map((edit) => ({ ...edit }));
+
+			let identity: Awaited<ReturnType<ForgeAdapter["updateArtifact"]>>;
+			try {
+				identity = await adapter.updateArtifact(
+					repository,
+					{
+						kind,
+						number: params.number,
+						...(titleEdits.length === 0 ? {} : { title }),
+						...(bodyEdits.length === 0 ? {} : { body }),
+					},
+					signal,
+				);
+				if (identity.kind !== kind || identity.number !== params.number || identity.url !== original.url) {
+					throw new Error("Forge adapter returned the wrong updated artifact identity");
+				}
+			} catch (error) {
+				throw mutationAttemptFailure(operation, error);
+			}
+			try {
+				const updated = await adapter.readArtifact(repository, kind, params.number, [], signal);
+				assertArtifactIdentity(updated, kind, params.number, original.url);
+				if (updated.title !== title || updated.body !== body) {
+					throw new Error("Updated artifact mutable content did not match the requested postimage");
+				}
+				return editMutationResult(toolName, repository, identity, target, diff);
+			} catch (error) {
+				throw ambiguousMutation(operation, error);
+			}
+		}
+
+		const comment = original.comments.find((candidate) => candidate.id === target.id);
+		if (comment === undefined) throw new Error(`Comment ${target.id} was not found in ${kind} #${params.number}`);
+		const body = applyExactEdits(
+			comment.body,
+			params.edits.map(({ oldText, newText }) => ({ oldText, newText })),
+			"comment body",
+		);
+		const diff: ForgeEditDiff[] = params.edits.map((edit) => ({ ...edit }));
+		let identity: Awaited<ReturnType<ForgeAdapter["updateComment"]>>;
+		try {
+			identity = await adapter.updateComment(
+				repository,
+				{ kind, number: params.number, id: target.id, body },
+				signal,
+			);
+			if (identity.id !== target.id || identity.url !== comment.url) {
+				throw new Error("Forge adapter returned the wrong updated comment identity");
+			}
+		} catch (error) {
+			throw mutationAttemptFailure(operation, error);
+		}
+		try {
+			const updated = await adapter.readArtifact(repository, kind, params.number, [], signal);
+			assertArtifactIdentity(updated, kind, params.number, original.url);
+			const updatedComment = updated.comments.find((candidate) => candidate.id === target.id);
+			if (updatedComment === undefined || updatedComment.url !== comment.url || updatedComment.body !== body) {
+				throw new Error("Updated comment mutable content did not match the requested postimage");
+			}
+			return editMutationResult(toolName, repository, identity, target, diff);
 		} catch (error) {
 			throw ambiguousMutation(operation, error);
 		}
@@ -589,6 +842,58 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		parameters: ADD_PR_COMMENT_SCHEMA,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			return addComment(
+				"pr",
+				params,
+				toolCallId,
+				signal,
+				ctx.cwd,
+				ctx.sessionManager.getBranch(),
+				exec,
+				dependencies,
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "edit_issue",
+		label: "edit issue",
+		description:
+			"Edit one previously read issue or top-level issue comment using exact, unique, non-overlapping replacements against the current decoded content.",
+		promptSnippet: "Precisely edit a previously read issue title, body, or one top-level comment",
+		promptGuidelines: [
+			"Before edit_issue, completely read every field being edited with read_issue.",
+			"Each replacement matches the refetched original decoded field exactly, never XML-escaped or normalized text.",
+			"One edit_issue call may target the issue title/body or one comment, never multiple remote objects.",
+		],
+		parameters: EDIT_ISSUE_SCHEMA,
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
+			return editArtifact(
+				"issue",
+				params,
+				toolCallId,
+				signal,
+				ctx.cwd,
+				ctx.sessionManager.getBranch(),
+				exec,
+				dependencies,
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "edit_pr",
+		label: "edit pull request",
+		description:
+			"Edit one previously read pull request or top-level pull request comment using exact, unique, non-overlapping replacements against the current decoded content.",
+		promptSnippet: "Precisely edit a previously read pull request title, body, or one top-level comment",
+		promptGuidelines: [
+			"Before edit_pr, completely read every field being edited with read_pr.",
+			"Each replacement matches the refetched original decoded field exactly, never XML-escaped or normalized text.",
+			"One edit_pr call may target the pull request title/body or one comment, never multiple remote objects.",
+		],
+		parameters: EDIT_PR_SCHEMA,
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
+			return editArtifact(
 				"pr",
 				params,
 				toolCallId,
