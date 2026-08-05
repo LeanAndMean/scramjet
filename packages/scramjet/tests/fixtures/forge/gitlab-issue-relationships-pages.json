@@ -1,0 +1,74 @@
+[
+  {
+    "data": {
+      "project": {
+        "workItems": {
+          "count": 1,
+          "nodes": [
+            {
+              "iid": "7",
+              "widgets": [
+                {
+                  "parent": {
+                    "iid": "3",
+                    "webUrl": "https://gitlab.com/Acme/platform/widget/-/work_items/3",
+                    "state": "OPEN",
+                    "title": "Parent issue"
+                  },
+                  "children": {
+                    "count": 2,
+                    "nodes": [
+                      {
+                        "iid": "8",
+                        "webUrl": "https://gitlab.com/Acme/platform/widget/-/work_items/8",
+                        "state": "CLOSED",
+                        "title": "First child"
+                      }
+                    ],
+                    "pageInfo": { "hasNextPage": true, "endCursor": "child-1" }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "data": {
+      "project": {
+        "workItems": {
+          "count": 1,
+          "nodes": [
+            {
+              "iid": "7",
+              "widgets": [
+                {
+                  "parent": {
+                    "iid": "3",
+                    "webUrl": "https://gitlab.com/Acme/platform/widget/-/work_items/3",
+                    "state": "OPEN",
+                    "title": "Parent issue"
+                  },
+                  "children": {
+                    "count": 2,
+                    "nodes": [
+                      {
+                        "iid": "9",
+                        "webUrl": "https://gitlab.com/Acme/platform/widget/-/work_items/9",
+                        "state": "OPEN",
+                        "title": "Second child"
+                      }
+                    ],
+                    "pageInfo": { "hasNextPage": false, "endCursor": "child-2" }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+]

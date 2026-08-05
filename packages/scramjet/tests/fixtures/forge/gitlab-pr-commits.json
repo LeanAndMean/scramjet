@@ -1,0 +1,16 @@
+[
+  {
+    "id": "abc123",
+    "title": "First commit",
+    "author_name": "Alice",
+    "authored_date": "2026-02-01T00:00:00Z",
+    "web_url": "https://gitlab.com/Acme/platform/widget/-/commit/abc123"
+  },
+  {
+    "id": "def456",
+    "title": "Second commit",
+    "author_name": null,
+    "authored_date": "2026-02-01T01:00:00Z",
+    "web_url": null
+  }
+]

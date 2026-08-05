@@ -1,0 +1,18 @@
+{
+  "id": 701,
+  "iid": 7,
+  "project_id": 9001,
+  "web_url": "https://gitlab.com/Acme/platform/widget/-/work_items/7",
+  "state": "opened",
+  "author": { "username": "alice", "bot": false },
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-04T00:00:00Z",
+  "labels": ["bug", "priority:high"],
+  "assignees": [
+    { "username": "bob", "bot": false },
+    { "username": "helper-bot", "bot": true }
+  ],
+  "title": "Parser <failure>",
+  "description": "first line\nlast line",
+  "user_notes_count": 4
+}

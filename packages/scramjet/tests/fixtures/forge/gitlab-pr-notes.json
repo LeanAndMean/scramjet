@@ -1,0 +1,16 @@
+[
+  {
+    "id": 606,
+    "project_id": 9001,
+    "noteable_id": 1201,
+    "noteable_iid": 12,
+    "noteable_type": "MergeRequest",
+    "system": false,
+    "type": null,
+    "position": null,
+    "author": { "username": "reviewer", "bot": false },
+    "body": "Looks good\nwith details",
+    "created_at": "2026-02-02T00:00:00Z",
+    "updated_at": "2026-02-02T01:00:00Z"
+  }
+]

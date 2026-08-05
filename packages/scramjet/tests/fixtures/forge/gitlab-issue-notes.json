@@ -1,0 +1,72 @@
+[
+  {
+    "id": 101,
+    "project_id": 9001,
+    "noteable_id": 701,
+    "noteable_iid": 7,
+    "noteable_type": "Issue",
+    "system": false,
+    "type": null,
+    "position": null,
+    "author": { "username": "helper-bot", "bot": true },
+    "body": "same body",
+    "created_at": "2026-01-02T00:00:00Z",
+    "updated_at": "2026-01-02T00:30:00Z"
+  },
+  {
+    "id": 202,
+    "project_id": 9001,
+    "noteable_id": 701,
+    "noteable_iid": 7,
+    "noteable_type": "Issue",
+    "system": false,
+    "type": null,
+    "position": null,
+    "author": null,
+    "body": "same body",
+    "created_at": "2026-01-03T00:00:00Z",
+    "updated_at": "2026-01-03T00:00:00Z"
+  },
+  {
+    "id": 303,
+    "project_id": 9001,
+    "noteable_id": 701,
+    "noteable_iid": 7,
+    "noteable_type": "Issue",
+    "system": false,
+    "type": "DiffNote",
+    "position": { "new_path": "src/file.ts", "new_line": 4 },
+    "author": { "username": "reviewer", "bot": false },
+    "body": "inline note",
+    "created_at": "2026-01-03T01:00:00Z",
+    "updated_at": "2026-01-03T01:00:00Z"
+  },
+  {
+    "id": 404,
+    "project_id": 9001,
+    "noteable_id": 701,
+    "noteable_iid": 7,
+    "noteable_type": "Issue",
+    "system": false,
+    "type": "DiscussionNote",
+    "position": null,
+    "author": { "username": "reviewer", "bot": false },
+    "body": "review discussion",
+    "created_at": "2026-01-03T02:00:00Z",
+    "updated_at": "2026-01-03T02:00:00Z"
+  },
+  {
+    "id": 505,
+    "project_id": 9001,
+    "noteable_id": 701,
+    "noteable_iid": 7,
+    "noteable_type": "Issue",
+    "system": true,
+    "type": null,
+    "position": null,
+    "author": { "username": "alice", "bot": false },
+    "body": "changed title",
+    "created_at": "2026-01-03T03:00:00Z",
+    "updated_at": "2026-01-03T03:00:00Z"
+  }
+]
