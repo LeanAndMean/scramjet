@@ -3,17 +3,33 @@ import type {
 	AgentToolResult,
 	ExecResult,
 	ExtensionAPI,
+	SessionEntry,
 	Theme,
 	ToolRenderResultOptions,
 } from "@leanandmean/coding-agent";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@leanandmean/coding-agent";
 import { Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
-import { FORGE_EXEC_TIMEOUT_MS, type ForgeExec, resolveCurrentRepository } from "./client.js";
+import {
+	FORGE_EXEC_TIMEOUT_MS,
+	ForgeCommandError,
+	type ForgeExec,
+	resolveCurrentRepository,
+	withForgeMutationQueue,
+} from "./client.js";
 import { type ForgeRangeRequest, isForgeReadDetails, renderForgeDocument, sliceForgeDocument } from "./document.js";
 import { createGithubAdapter } from "./github.js";
 import { createGitlabAdapter } from "./gitlab.js";
-import type { ForgeAdapter, ForgeArtifactKind, ForgePrSection, ForgeRepository } from "./types.js";
+import type {
+	ForgeAdapter,
+	ForgeArtifact,
+	ForgeArtifactKind,
+	ForgeCreateInput,
+	ForgeIdentity,
+	ForgePrSection,
+	ForgeReadDetails,
+	ForgeRepository,
+} from "./types.js";
 
 const ARTIFACT_NUMBER = Type.Integer({ minimum: 1, description: "Issue or pull request number" });
 const OFFSET = Type.Optional(Type.Integer({ minimum: 1, description: "1-indexed XML line to start reading from" }));
@@ -52,8 +68,36 @@ export const READ_PR_SCHEMA = Type.Object(
 	{ additionalProperties: false },
 );
 
+const TITLE = Type.String({ minLength: 1, description: "Artifact title" });
+const BODY = Type.String({ description: "Exact Markdown body" });
+const COMMENT_BODY = Type.String({ minLength: 1, description: "Exact Markdown comment body" });
+const BRANCH = Type.String({ minLength: 1, description: "Explicit branch name" });
+
+export const CREATE_ISSUE_SCHEMA = Type.Object({ title: TITLE, body: BODY }, { additionalProperties: false });
+export const CREATE_PR_SCHEMA = Type.Object(
+	{
+		title: TITLE,
+		body: BODY,
+		head: BRANCH,
+		base: BRANCH,
+		draft: Type.Optional(Type.Boolean({ description: "Create as a draft pull request" })),
+	},
+	{ additionalProperties: false },
+);
+export const ADD_ISSUE_COMMENT_SCHEMA = Type.Object(
+	{ number: ARTIFACT_NUMBER, body: COMMENT_BODY },
+	{ additionalProperties: false },
+);
+export const ADD_PR_COMMENT_SCHEMA = Type.Object(
+	{ number: ARTIFACT_NUMBER, body: COMMENT_BODY },
+	{ additionalProperties: false },
+);
+
 type ReadIssueParams = Static<typeof READ_ISSUE_SCHEMA>;
 type ReadPrParams = Static<typeof READ_PR_SCHEMA>;
+type CreateIssueParams = Static<typeof CREATE_ISSUE_SCHEMA>;
+type CreatePrParams = Static<typeof CREATE_PR_SCHEMA>;
+type AddCommentParams = Static<typeof ADD_ISSUE_COMMENT_SCHEMA>;
 
 type ForgeAdapterFactory = (repository: ForgeRepository, exec: ForgeExec, cwd: string) => ForgeAdapter;
 
@@ -100,6 +144,249 @@ async function readArtifact(
 		content: [{ type: "text" as const, text: slice.content }],
 		details: slice.details,
 	};
+}
+
+function repositoriesEqual(left: ForgeRepository, right: ForgeRepository): boolean {
+	return left.forge === right.forge && left.host === right.host && left.projectPath === right.projectPath;
+}
+
+function assistantHasToolCall(entry: SessionEntry, toolCallId: string): boolean {
+	return (
+		entry.type === "message" &&
+		entry.message.role === "assistant" &&
+		entry.message.content.some((block) => block.type === "toolCall" && block.id === toolCallId)
+	);
+}
+
+function completeCoverage(total: number, ranges: ForgeReadDetails["core"]["ranges"]): boolean {
+	if (total <= 0) return false;
+	let covered = 0;
+	for (const range of [...ranges].sort((left, right) => left.start - right.start)) {
+		if (range.start > covered) return false;
+		covered = Math.max(covered, range.end);
+		if (covered >= total) return true;
+	}
+	return false;
+}
+
+function hasCompleteParentEvidence(
+	entries: readonly SessionEntry[],
+	toolCallId: string,
+	repository: ForgeRepository,
+	kind: ForgeArtifactKind,
+	number: number,
+): boolean {
+	let compactionIndex = -1;
+	for (let index = 0; index < entries.length; index++) {
+		if (entries[index].type === "compaction") compactionIndex = index;
+	}
+	const currentIndexes = entries
+		.map((entry, index) => (assistantHasToolCall(entry, toolCallId) ? index : -1))
+		.filter((index) => index > compactionIndex);
+	if (currentIndexes.length !== 1) return false;
+	const currentIndex = currentIndexes[0];
+	const readTool = kind === "issue" ? "read_issue" : "read_pr";
+	const readCallIds = new Set<string>();
+	const groups = new Map<string, { total: number; ranges: ForgeReadDetails["core"]["ranges"]; valid: boolean }>();
+
+	for (let index = compactionIndex + 1; index < currentIndex; index++) {
+		const entry = entries[index];
+		if (entry.type !== "message") continue;
+		const message = entry.message;
+		if (message.role === "assistant") {
+			for (const block of message.content) {
+				if (block.type === "toolCall" && block.name === readTool) readCallIds.add(block.id);
+			}
+			continue;
+		}
+		if (
+			message.role !== "toolResult" ||
+			message.isError ||
+			message.toolName !== readTool ||
+			!readCallIds.has(message.toolCallId) ||
+			!isForgeReadDetails(message.details)
+		) {
+			continue;
+		}
+		const details = message.details;
+		if (
+			!repositoriesEqual(details.repository, repository) ||
+			details.artifact.kind !== kind ||
+			details.artifact.number !== number
+		) {
+			continue;
+		}
+		const group = groups.get(details.snapshot) ?? { total: details.core.totalLines, ranges: [], valid: true };
+		if (group.total !== details.core.totalLines) group.valid = false;
+		group.ranges.push(...details.core.ranges);
+		groups.set(details.snapshot, group);
+	}
+
+	return [...groups.values()].some((group) => group.valid && completeCoverage(group.total, group.ranges));
+}
+
+function assertArtifactIdentity(artifact: ForgeArtifact, kind: ForgeArtifactKind, number: number, url?: string): void {
+	if (artifact.kind !== kind || artifact.number !== number || (url !== undefined && artifact.url !== url)) {
+		throw new Error(`Forge adapter returned the wrong artifact for ${kind} #${number}`);
+	}
+}
+
+const GITLAB_DRAFT_PREFIX = /^(?:Draft:|\[Draft\]|\(Draft\))\s*/i;
+
+function validateCreateInput(repository: ForgeRepository, input: ForgeCreateInput): void {
+	if (repository.forge === "gitlab" && input.kind === "pr" && !input.draft && GITLAB_DRAFT_PREFIX.test(input.title)) {
+		throw new Error("GitLab cannot create a non-draft merge request with a draft-prefixed title");
+	}
+}
+
+function expectedCreatedTitle(repository: ForgeRepository, input: ForgeCreateInput): string {
+	if (repository.forge === "gitlab" && input.kind === "pr" && input.draft && !GITLAB_DRAFT_PREFIX.test(input.title)) {
+		return `Draft: ${input.title}`;
+	}
+	return input.title;
+}
+
+function verifyCreatedArtifact(repository: ForgeRepository, input: ForgeCreateInput, artifact: ForgeArtifact): void {
+	if (artifact.title !== expectedCreatedTitle(repository, input) || artifact.body !== input.body) {
+		throw new Error("Created artifact content did not match the requested title and body");
+	}
+	if (
+		input.kind === "pr" &&
+		(artifact.kind !== "pr" ||
+			artifact.readiness.head !== input.head ||
+			artifact.readiness.base !== input.base ||
+			artifact.readiness.draft !== input.draft)
+	) {
+		throw new Error("Created pull request did not match the requested branches and draft state");
+	}
+}
+
+function mutationResult(
+	operation: "create_issue" | "create_pr" | "add_issue_comment" | "add_pr_comment",
+	repository: ForgeRepository,
+	identity: ForgeIdentity,
+	artifact: ForgeArtifact,
+	createdCommentBody?: string,
+) {
+	const slice = sliceForgeDocument(renderForgeDocument(repository, artifact), {});
+	const verified =
+		identity.kind === "comment"
+			? JSON.stringify({ id: identity.id, url: identity.url, body: createdCommentBody })
+			: JSON.stringify(identity);
+	return {
+		content: [{ type: "text" as const, text: `Created and verified ${operation}: ${verified}\n\n${slice.content}` }],
+		details: {
+			schema: "scramjet:forge-mutation@1" as const,
+			operation,
+			repository,
+			identity,
+			verified: true as const,
+		},
+	};
+}
+
+function ambiguousMutation(operation: string, error: unknown): Error {
+	const cause = error instanceof Error ? error : new Error(String(error));
+	return new Error(
+		`${operation} may have succeeded, but its identity or exact content could not be verified. Reread the forge artifact before retrying to avoid a duplicate. ${cause.message}`,
+		{ cause },
+	);
+}
+
+function mutationAttemptFailure(operation: string, error: unknown): Error {
+	if (error instanceof ForgeCommandError && (error.kind === "missing-executable" || error.kind === "failed")) {
+		return error;
+	}
+	return ambiguousMutation(operation, error);
+}
+
+async function createArtifact(
+	kind: ForgeArtifactKind,
+	params: CreateIssueParams | CreatePrParams,
+	signal: AbortSignal | undefined,
+	cwd: string,
+	exec: ForgeExec,
+	dependencies: Required<ForgeToolDependencies>,
+) {
+	const repository = await dependencies.resolveRepository(exec, cwd, signal);
+	const adapter = dependencies.createAdapter(repository, exec, cwd);
+	const input: ForgeCreateInput =
+		kind === "issue"
+			? { kind, title: params.title, body: params.body }
+			: {
+					kind,
+					title: params.title,
+					body: params.body,
+					head: (params as CreatePrParams).head,
+					base: (params as CreatePrParams).base,
+					draft: (params as CreatePrParams).draft ?? false,
+				};
+	validateCreateInput(repository, input);
+	const operation = kind === "issue" ? "Issue creation" : "Pull request creation";
+	let identity: Awaited<ReturnType<ForgeAdapter["createArtifact"]>>;
+	try {
+		identity = await adapter.createArtifact(repository, input, signal);
+		if (identity.kind !== kind) throw new Error("Forge adapter returned the wrong created artifact kind");
+	} catch (error) {
+		throw mutationAttemptFailure(operation, error);
+	}
+	try {
+		const artifact = await adapter.readArtifact(repository, kind, identity.number, [], signal);
+		assertArtifactIdentity(artifact, kind, identity.number, identity.url);
+		verifyCreatedArtifact(repository, input, artifact);
+		return mutationResult(kind === "issue" ? "create_issue" : "create_pr", repository, identity, artifact);
+	} catch (error) {
+		throw ambiguousMutation(operation, error);
+	}
+}
+
+async function addComment(
+	kind: ForgeArtifactKind,
+	params: AddCommentParams,
+	toolCallId: string,
+	signal: AbortSignal | undefined,
+	cwd: string,
+	entries: readonly SessionEntry[],
+	exec: ForgeExec,
+	dependencies: Required<ForgeToolDependencies>,
+) {
+	const repository = await dependencies.resolveRepository(exec, cwd, signal);
+	if (!hasCompleteParentEvidence(entries, toolCallId, repository, kind, params.number)) {
+		const readTool = kind === "issue" ? "read_issue" : "read_pr";
+		throw new Error(
+			`${kind === "issue" ? "add_issue_comment" : "add_pr_comment"} requires a complete prior ${readTool} of ${kind} #${params.number} on the active branch after the latest compaction, using all ranges from one unchanged snapshot`,
+		);
+	}
+	const adapter = dependencies.createAdapter(repository, exec, cwd);
+	const key = `${repository.forge}:${repository.host}:${repository.projectPath}:${kind}:${params.number}`;
+	return withForgeMutationQueue(key, async () => {
+		const parent = await adapter.readArtifact(repository, kind, params.number, [], signal);
+		assertArtifactIdentity(parent, kind, params.number);
+		const operation = kind === "issue" ? "Issue comment creation" : "PR comment creation";
+		let identity: Awaited<ReturnType<ForgeAdapter["addComment"]>>;
+		try {
+			identity = await adapter.addComment(repository, { kind, number: params.number, body: params.body }, signal);
+		} catch (error) {
+			throw mutationAttemptFailure(operation, error);
+		}
+		try {
+			const updated = await adapter.readArtifact(repository, kind, params.number, [], signal);
+			assertArtifactIdentity(updated, kind, params.number);
+			const comment = updated.comments.find((candidate) => candidate.id === identity.id);
+			if (comment === undefined || comment.url !== identity.url || comment.body !== params.body) {
+				throw new Error("Created comment did not match its returned identity and requested body");
+			}
+			return mutationResult(
+				kind === "issue" ? "add_issue_comment" : "add_pr_comment",
+				repository,
+				identity,
+				updated,
+				params.body,
+			);
+		} catch (error) {
+			throw ambiguousMutation(operation, error);
+		}
+	});
 }
 
 interface ForgeRenderContext {
@@ -236,6 +523,82 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 			return renderCall("read_pr", args, theme, context);
 		},
 		renderResult,
+	});
+
+	pi.registerTool({
+		name: "create_issue",
+		label: "create issue",
+		description: "Create and verify an issue in the current repository with an exact title and Markdown body.",
+		promptSnippet: "Create an issue in the current repository",
+		promptGuidelines: ["Use create_issue only after the user has approved the exact issue title and body."],
+		parameters: CREATE_ISSUE_SCHEMA,
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			return createArtifact("issue", params, signal, ctx.cwd, exec, dependencies);
+		},
+	});
+
+	pi.registerTool({
+		name: "create_pr",
+		label: "create pull request",
+		description:
+			"Create and verify a pull request in the current repository with exact content and explicit head/base branches. This never creates, checks out, or pushes branches.",
+		promptSnippet: "Create a pull request from explicit existing branches in the current repository",
+		promptGuidelines: [
+			"Use create_pr only after the user has approved the exact pull request title and body.",
+			"Pass explicit existing head and base branches; create_pr never mutates Git state.",
+		],
+		parameters: CREATE_PR_SCHEMA,
+		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+			return createArtifact("pr", params, signal, ctx.cwd, exec, dependencies);
+		},
+	});
+
+	pi.registerTool({
+		name: "add_issue_comment",
+		label: "add issue comment",
+		description:
+			"Add and verify one top-level issue comment after a complete prior read_issue of the parent conversation.",
+		promptSnippet: "Add a top-level comment to a previously read issue in the current repository",
+		promptGuidelines: [
+			"Before add_issue_comment, completely read the same issue and all top-level comments with read_issue.",
+		],
+		parameters: ADD_ISSUE_COMMENT_SCHEMA,
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
+			return addComment(
+				"issue",
+				params,
+				toolCallId,
+				signal,
+				ctx.cwd,
+				ctx.sessionManager.getBranch(),
+				exec,
+				dependencies,
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "add_pr_comment",
+		label: "add pull request comment",
+		description:
+			"Add and verify one top-level pull request comment after a complete prior read_pr of the parent conversation.",
+		promptSnippet: "Add a top-level comment to a previously read pull request in the current repository",
+		promptGuidelines: [
+			"Before add_pr_comment, completely read the same pull request and all top-level comments with read_pr.",
+		],
+		parameters: ADD_PR_COMMENT_SCHEMA,
+		async execute(toolCallId, params, signal, _onUpdate, ctx) {
+			return addComment(
+				"pr",
+				params,
+				toolCallId,
+				signal,
+				ctx.cwd,
+				ctx.sessionManager.getBranch(),
+				exec,
+				dependencies,
+			);
+		},
 	});
 
 	pi.on("session_start", (_event, ctx) => {

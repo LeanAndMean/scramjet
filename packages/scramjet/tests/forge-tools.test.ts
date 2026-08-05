@@ -13,7 +13,8 @@ import {
 } from "@leanandmean/coding-agent";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { renderForgeDocument } from "../src/forge/document.js";
+import { ForgeCommandError } from "../src/forge/client.js";
+import { renderForgeDocument, sliceForgeDocument } from "../src/forge/document.js";
 import { registerForgeTools } from "../src/forge/tools.js";
 import type { ForgeAdapter, ForgeArtifact, ForgeIssue, ForgePullRequest, ForgeRepository } from "../src/forge/types.js";
 import { recordingPi } from "./helpers.js";
@@ -22,6 +23,12 @@ const githubRepository: ForgeRepository = {
 	forge: "github",
 	host: "github.com",
 	projectPath: "Acme/widget",
+};
+
+const gitlabRepository: ForgeRepository = {
+	forge: "gitlab",
+	host: "gitlab.com",
+	projectPath: "Acme/platform/widget",
 };
 
 function issue(overrides: Partial<ForgeIssue> = {}): ForgeIssue {
@@ -82,28 +89,33 @@ function execResult(overrides: Partial<ExecResult> = {}): ExecResult {
 	return { stdout: "", stderr: "", code: 0, killed: false, ...overrides };
 }
 
-function adapterFor(readArtifact: ForgeAdapter["readArtifact"]): ForgeAdapter {
+function adapterFor(readArtifact: ForgeAdapter["readArtifact"], overrides: Partial<ForgeAdapter> = {}): ForgeAdapter {
 	return {
 		readArtifact,
 		createArtifact: vi.fn(),
 		updateArtifact: vi.fn(),
 		addComment: vi.fn(),
 		updateComment: vi.fn(),
+		...overrides,
 	};
 }
 
-function toolSetup(artifact: ForgeArtifact | (() => ForgeArtifact)) {
+function toolSetup(
+	artifact: ForgeArtifact | (() => ForgeArtifact),
+	overrides: Partial<ForgeAdapter> = {},
+	repository = githubRepository,
+) {
 	const bag = recordingPi();
 	bag.pi.exec = vi.fn(async (command: string, args: string[]) => {
 		if (command === "git" && args.join(" ") === "remote get-url origin") {
-			return execResult({ stdout: "https://github.com/Acme/widget.git\n" });
+			return execResult({ stdout: `https://${repository.host}/${repository.projectPath}.git\n` });
 		}
 		throw new Error(`Unexpected command: ${command} ${args.join(" ")}`);
 	});
 	const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () =>
 		typeof artifact === "function" ? artifact() : artifact,
 	);
-	const adapter = adapterFor(readArtifact);
+	const adapter = adapterFor(readArtifact, overrides);
 	registerForgeTools(bag.pi, { createAdapter: () => adapter });
 	return {
 		bag,
@@ -111,11 +123,63 @@ function toolSetup(artifact: ForgeArtifact | (() => ForgeArtifact)) {
 		readArtifact,
 		issueTool: bag.tools.find((tool) => tool.name === "read_issue"),
 		prTool: bag.tools.find((tool) => tool.name === "read_pr"),
+		createIssueTool: bag.tools.find((tool) => tool.name === "create_issue"),
+		createPrTool: bag.tools.find((tool) => tool.name === "create_pr"),
+		addIssueCommentTool: bag.tools.find((tool) => tool.name === "add_issue_comment"),
+		addPrCommentTool: bag.tools.find((tool) => tool.name === "add_pr_comment"),
 	};
 }
 
-function toolContext() {
-	return { cwd: "/repo" };
+function toolContext(entries: unknown[] = []) {
+	return { cwd: "/repo", sessionManager: { getBranch: () => entries } };
+}
+
+let branchEntryId = 0;
+
+function branchEntry(type: string, value: Record<string, unknown>) {
+	return {
+		type,
+		id: `entry-${++branchEntryId}`,
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00Z",
+		...value,
+	};
+}
+
+function assistantEntry(calls: Array<{ id: string; name: string }>) {
+	return branchEntry("message", {
+		message: {
+			role: "assistant",
+			content: calls.map((call) => ({ type: "toolCall", id: call.id, name: call.name, arguments: {} })),
+		},
+	});
+}
+
+function readResultEntry(toolCallId: string, toolName: "read_issue" | "read_pr", details: unknown) {
+	return branchEntry("message", {
+		message: {
+			role: "toolResult",
+			toolCallId,
+			toolName,
+			content: [{ type: "text", text: "persisted read" }],
+			details,
+			isError: false,
+		},
+	});
+}
+
+function evidenceBranch(
+	details: unknown[],
+	readTool: "read_issue" | "read_pr",
+	currentCalls: Array<{ id: string; name: string }>,
+) {
+	return [
+		...details.flatMap((receipt, index) => [
+			assistantEntry([{ id: `read-${index}`, name: readTool }]),
+			readResultEntry(`read-${index}`, readTool, receipt),
+		]),
+		assistantEntry(currentCalls),
+	];
 }
 
 function theme() {
@@ -128,9 +192,17 @@ function theme() {
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("registerForgeTools read contracts", () => {
-	it("registers exactly two independently named, strict model-callable read tools", () => {
-		const { bag, issueTool, prTool } = toolSetup(issue());
-		expect(bag.tools.map((tool) => tool.name)).toEqual(["read_issue", "read_pr"]);
+	it("registers independently named, strict model-callable forge tools", () => {
+		const { bag, issueTool, prTool, createIssueTool, createPrTool, addIssueCommentTool, addPrCommentTool } =
+			toolSetup(issue());
+		expect(bag.tools.map((tool) => tool.name)).toEqual([
+			"read_issue",
+			"read_pr",
+			"create_issue",
+			"create_pr",
+			"add_issue_comment",
+			"add_pr_comment",
+		]);
 		for (const tool of [issueTool, prTool]) {
 			expect(tool.activation).toBeUndefined();
 			expect(tool.promptSnippet).toEqual(expect.any(String));
@@ -150,6 +222,29 @@ describe("registerForgeTools read contracts", () => {
 		expect(Value.Check(prTool.parameters, { number: 12, include: ["files", "files"] })).toBe(false);
 		expect(Value.Check(prTool.parameters, { number: 12, include: ["reviews"] })).toBe(false);
 		expect(Value.Check(prTool.parameters, { number: 12, snapshot: `${"ABC".repeat(21)}A` })).toBe(false);
+
+		for (const tool of [createIssueTool, createPrTool, addIssueCommentTool, addPrCommentTool]) {
+			expect(tool.activation).toBeUndefined();
+			expect(tool.promptSnippet).toEqual(expect.any(String));
+			expect(tool.parameters.additionalProperties).toBe(false);
+		}
+		expect(Value.Check(createIssueTool.parameters, { title: "Issue", body: "" })).toBe(true);
+		expect(Value.Check(createIssueTool.parameters, { title: "", body: "Body" })).toBe(false);
+		expect(Value.Check(createPrTool.parameters, { title: "PR", body: "Body", head: "feature", base: "main" })).toBe(
+			true,
+		);
+		expect(
+			Value.Check(createPrTool.parameters, {
+				title: "PR",
+				body: "Body",
+				head: "feature",
+				base: "main",
+				draft: true,
+			}),
+		).toBe(true);
+		expect(Value.Check(createPrTool.parameters, { title: "PR", body: "Body", head: "feature" })).toBe(false);
+		expect(Value.Check(addIssueCommentTool.parameters, { number: 7, body: "Comment" })).toBe(true);
+		expect(Value.Check(addPrCommentTool.parameters, { number: 12, body: "", extra: true })).toBe(false);
 	});
 
 	it("fetches and validates the aggregate issue before returning canonical XML with trusted details", async () => {
@@ -373,6 +468,352 @@ describe("registerForgeTools read contracts", () => {
 		);
 		expect(replayFallback.render(120).join("\n")).toContain("persisted text");
 		expect(readArtifact).not.toHaveBeenCalled();
+	});
+});
+
+describe("registerForgeTools creation contracts", () => {
+	function fullReceipt(artifact: ForgeArtifact) {
+		return sliceForgeDocument(renderForgeDocument(githubRepository, artifact), {}).details;
+	}
+
+	function completeReceipts(artifact: ForgeArtifact) {
+		const rendered = renderForgeDocument(githubRepository, artifact);
+		const receipts = [];
+		let offset = 1;
+		while (true) {
+			const slice = sliceForgeDocument(rendered, {
+				offset,
+				...(offset === 1 ? {} : { snapshot: rendered.snapshot }),
+			});
+			receipts.push(slice.details);
+			if (slice.nextOffset === undefined) return receipts;
+			offset = slice.nextOffset;
+		}
+	}
+
+	function addedComment(id: string, body: string) {
+		return {
+			id,
+			url: `https://github.com/Acme/widget/issues/7#issuecomment-${id}`,
+			author: { login: "alice", kind: "user" as const },
+			body,
+			createdAt: "2026-01-04T00:00:00Z",
+			updatedAt: "2026-01-04T00:00:00Z",
+		};
+	}
+
+	it("creates artifacts without read evidence, refetches the returned identity, and verifies explicit PR inputs", async () => {
+		const createdIssue = issue({
+			number: 41,
+			url: "https://github.com/Acme/widget/issues/41",
+			title: "Created issue",
+			body: "Issue body",
+			comments: [],
+		});
+		const createdPr = pullRequest({
+			number: 42,
+			url: "https://github.com/Acme/widget/pull/42",
+			title: "Created PR",
+			body: "PR body",
+			readiness: { ...pullRequest().readiness, draft: true, head: "feature", base: "main" },
+		});
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async (_repository, input) =>
+			input.kind === "issue"
+				? { kind: "issue", number: 41, url: createdIssue.url }
+				: { kind: "pr", number: 42, url: createdPr.url },
+		);
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async (_repository, kind, number) => {
+			if (kind === "issue" && number === 41) return createdIssue;
+			if (kind === "pr" && number === 42) return createdPr;
+			throw new Error(`Unexpected refetch ${kind} #${number}`);
+		});
+		const { createIssueTool, createPrTool } = toolSetup(issue(), { createArtifact, readArtifact });
+
+		const issueResult = await createIssueTool.execute(
+			"create-issue",
+			{ title: "Created issue", body: "Issue body" },
+			undefined,
+			undefined,
+			toolContext(),
+		);
+		const prResult = await createPrTool.execute(
+			"create-pr",
+			{ title: "Created PR", body: "PR body", head: "feature", base: "main", draft: true },
+			undefined,
+			undefined,
+			toolContext(),
+		);
+
+		expect(createArtifact).toHaveBeenNthCalledWith(
+			1,
+			githubRepository,
+			{ kind: "issue", title: "Created issue", body: "Issue body" },
+			undefined,
+		);
+		expect(createArtifact).toHaveBeenNthCalledWith(
+			2,
+			githubRepository,
+			{ kind: "pr", title: "Created PR", body: "PR body", head: "feature", base: "main", draft: true },
+			undefined,
+		);
+		expect(readArtifact.mock.calls.map((call) => call.slice(1, 4))).toEqual([
+			["issue", 41, []],
+			["pr", 42, []],
+		]);
+		expect(issueResult.content[0].text).toContain('<forge-artifact version="1" forge="github"');
+		expect(prResult.content[0].text).toContain('head="feature" base="main"');
+		expect(issueResult.details).toMatchObject({
+			schema: "scramjet:forge-mutation@1",
+			operation: "create_issue",
+			identity: { kind: "issue", number: 41, url: createdIssue.url },
+			verified: true,
+		});
+	});
+
+	it("authorizes comment creation from complete same-snapshot evidence and keeps its receipt visible", async () => {
+		const original = issue({ body: "x".repeat(60_000) });
+		const receipts = completeReceipts(original);
+		expect(receipts.length).toBeGreaterThan(1);
+		let current = original;
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => current);
+		const addComment = vi.fn<ForgeAdapter["addComment"]>(async () => {
+			const comment = addedComment("202", "New comment");
+			current = issue({ ...current, comments: [...current.comments, comment] });
+			return { kind: "comment", id: comment.id, url: comment.url };
+		});
+		const { addIssueCommentTool } = toolSetup(original, { readArtifact, addComment });
+		const branch = evidenceBranch(receipts, "read_issue", [{ id: "add-comment", name: "add_issue_comment" }]);
+
+		const result = await addIssueCommentTool.execute(
+			"add-comment",
+			{ number: 7, body: "New comment" },
+			undefined,
+			undefined,
+			toolContext(branch),
+		);
+
+		expect(readArtifact).toHaveBeenCalledTimes(2);
+		expect(addComment).toHaveBeenCalledWith(
+			githubRepository,
+			{ kind: "issue", number: 7, body: "New comment" },
+			undefined,
+		);
+		expect(result.content[0].text).toContain('"id":"202"');
+		expect(result.content[0].text).toContain('"body":"New comment"');
+		expect(result.content[0].text).not.toContain('<comment id="202"');
+		expect(result.details).toMatchObject({
+			operation: "add_issue_comment",
+			identity: { kind: "comment", id: "202" },
+			verified: true,
+		});
+	});
+
+	it.each([
+		{
+			name: "has no prior read",
+			branch: (_receipt: unknown) => evidenceBranch([], "read_issue", [{ id: "add", name: "add_issue_comment" }]),
+		},
+		{
+			name: "uses a read from the same assistant batch",
+			branch: (receipt: unknown) => [
+				assistantEntry([
+					{ id: "same-batch-read", name: "read_issue" },
+					{ id: "add", name: "add_issue_comment" },
+				]),
+				readResultEntry("same-batch-read", "read_issue", receipt),
+			],
+		},
+		{
+			name: "uses evidence before compaction",
+			branch: (receipt: unknown) => [
+				assistantEntry([{ id: "old-read", name: "read_issue" }]),
+				readResultEntry("old-read", "read_issue", receipt),
+				branchEntry("compaction", { summary: "compact", firstKeptEntryId: "entry-1", tokensBefore: 1 }),
+				assistantEntry([{ id: "add", name: "add_issue_comment" }]),
+			],
+		},
+		{
+			name: "uses evidence for another repository",
+			branch: (receipt: any) =>
+				evidenceBranch(
+					[{ ...receipt, repository: { ...receipt.repository, projectPath: "Other/widget" } }],
+					"read_issue",
+					[{ id: "add", name: "add_issue_comment" }],
+				),
+		},
+	])("rejects comment creation that $name", async ({ branch }) => {
+		const original = issue();
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => original);
+		const addComment = vi.fn<ForgeAdapter["addComment"]>();
+		const { addIssueCommentTool } = toolSetup(original, { readArtifact, addComment });
+
+		await expect(
+			addIssueCommentTool.execute(
+				"add",
+				{ number: 7, body: "New comment" },
+				undefined,
+				undefined,
+				toolContext(branch(fullReceipt(original))),
+			),
+		).rejects.toThrow(/complete prior read_issue/i);
+		expect(readArtifact).not.toHaveBeenCalled();
+		expect(addComment).not.toHaveBeenCalled();
+	});
+
+	it("rejects deterministic GitLab draft-title conflicts before attempting creation", async () => {
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>();
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>();
+		const { createPrTool } = toolSetup(pullRequest(), { createArtifact, readArtifact }, gitlabRepository);
+
+		await expect(
+			createPrTool.execute(
+				"create-pr",
+				{ title: "Draft: Release", body: "Body", head: "feature", base: "main" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toThrow(/cannot create a non-draft merge request/i);
+		expect(createArtifact).not.toHaveBeenCalled();
+		expect(readArtifact).not.toHaveBeenCalled();
+	});
+
+	it("preserves definite CLI failures for artifact and comment creation", async () => {
+		const failure = new ForgeCommandError("failed", { command: "gh", args: ["api"], cwd: "/repo" });
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
+			throw failure;
+		});
+		const createSetup = toolSetup(issue(), { createArtifact });
+		await expect(
+			createSetup.createIssueTool.execute(
+				"create",
+				{ title: "Created issue", body: "Body" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toBe(failure);
+
+		const original = issue();
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => original);
+		const addComment = vi.fn<ForgeAdapter["addComment"]>(async () => {
+			throw failure;
+		});
+		const commentSetup = toolSetup(original, { readArtifact, addComment });
+		const branch = evidenceBranch([fullReceipt(original)], "read_issue", [{ id: "add", name: "add_issue_comment" }]);
+		await expect(
+			commentSetup.addIssueCommentTool.execute(
+				"add",
+				{ number: 7, body: "Comment" },
+				undefined,
+				undefined,
+				toolContext(branch),
+			),
+		).rejects.toBe(failure);
+		expect(addComment).toHaveBeenCalledTimes(1);
+		expect(readArtifact).toHaveBeenCalledTimes(1);
+	});
+
+	it("treats a failed post-identity verification read as ambiguous", async () => {
+		const verificationFailure = new ForgeCommandError("failed", { command: "gh", args: ["api"], cwd: "/repo" });
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => ({
+			kind: "issue",
+			number: 41,
+			url: "https://github.com/Acme/widget/issues/41",
+		}));
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => {
+			throw verificationFailure;
+		});
+		const { createIssueTool } = toolSetup(issue(), { createArtifact, readArtifact });
+
+		await expect(
+			createIssueTool.execute(
+				"create",
+				{ title: "Created issue", body: "Issue body" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toThrow(/may have succeeded.*reread/i);
+		expect(createArtifact).toHaveBeenCalledTimes(1);
+		expect(readArtifact).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports a possibly successful creation when exact post-write verification fails without retrying", async () => {
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => ({
+			kind: "issue",
+			number: 41,
+			url: "https://github.com/Acme/widget/issues/41",
+		}));
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () =>
+			issue({
+				number: 41,
+				url: "https://github.com/Acme/widget/issues/41",
+				title: "Changed during creation",
+				body: "Issue body",
+			}),
+		);
+		const { createIssueTool } = toolSetup(issue(), { createArtifact, readArtifact });
+
+		await expect(
+			createIssueTool.execute(
+				"create",
+				{ title: "Created issue", body: "Issue body" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toThrow(/may have succeeded.*reread/i);
+		expect(createArtifact).toHaveBeenCalledTimes(1);
+		expect(readArtifact).toHaveBeenCalledTimes(1);
+	});
+
+	it("serializes comment creation by parent artifact through verification", async () => {
+		const original = issue();
+		let current = original;
+		let releaseFirst!: () => void;
+		const firstPending = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		let mutation = 0;
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => current);
+		const addComment = vi.fn<ForgeAdapter["addComment"]>(async (_repository, input) => {
+			mutation++;
+			if (mutation === 1) await firstPending;
+			const id = String(201 + mutation);
+			const comment = addedComment(id, input.body);
+			current = issue({ ...current, comments: [...current.comments, comment] });
+			return { kind: "comment", id, url: comment.url };
+		});
+		const { addIssueCommentTool } = toolSetup(original, { readArtifact, addComment });
+		const branch = evidenceBranch([fullReceipt(original)], "read_issue", [
+			{ id: "add-first", name: "add_issue_comment" },
+			{ id: "add-second", name: "add_issue_comment" },
+		]);
+
+		const first = addIssueCommentTool.execute(
+			"add-first",
+			{ number: 7, body: "First" },
+			undefined,
+			undefined,
+			toolContext(branch),
+		);
+		await vi.waitFor(() => expect(addComment).toHaveBeenCalledTimes(1));
+		const second = addIssueCommentTool.execute(
+			"add-second",
+			{ number: 7, body: "Second" },
+			undefined,
+			undefined,
+			toolContext(branch),
+		);
+		await flush();
+		expect(readArtifact).toHaveBeenCalledTimes(1);
+		expect(addComment).toHaveBeenCalledTimes(1);
+
+		releaseFirst();
+		await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+		expect(addComment.mock.calls.map((call) => call[1].body)).toEqual(["First", "Second"]);
+		expect(readArtifact).toHaveBeenCalledTimes(4);
 	});
 });
 
