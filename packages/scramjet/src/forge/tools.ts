@@ -345,11 +345,15 @@ function assertArtifactIdentity(artifact: ForgeArtifact, kind: ForgeArtifactKind
 	}
 }
 
-const GITLAB_DRAFT_PREFIX = /^(?:Draft:|\[Draft\]|\(Draft\))\s*/i;
+const GITLAB_DRAFT_PREFIX = /^(?:Draft:|WIP:|\[(?:Draft|WIP)\]|\((?:Draft|WIP)\))\s*/i;
+
+function gitlabDraftTitle(title: string): boolean {
+	return GITLAB_DRAFT_PREFIX.test(title);
+}
 
 function validateCreateInput(repository: ForgeRepository, input: ForgeCreateInput): void {
 	if (repository.forge !== "gitlab" || input.kind !== "pr") return;
-	const prefixed = GITLAB_DRAFT_PREFIX.test(input.title);
+	const prefixed = gitlabDraftTitle(input.title);
 	if (!input.draft && prefixed) {
 		throw new Error("GitLab cannot create a non-draft merge request with a draft-prefixed title");
 	}
@@ -602,6 +606,15 @@ async function editArtifact(
 			const title = titleEdits.length === 0 ? original.title : applyExactEdits(original.title, titleEdits, "title");
 			const body = bodyEdits.length === 0 ? original.body : applyExactEdits(original.body, bodyEdits, "body");
 			const diff: ForgeEditDiff[] = params.edits.map((edit) => ({ ...edit }));
+			if (
+				repository.forge === "gitlab" &&
+				kind === "pr" &&
+				original.kind === "pr" &&
+				titleEdits.length > 0 &&
+				gitlabDraftTitle(title) !== original.readiness.draft
+			) {
+				throw new Error("GitLab pull request title edits must preserve the existing draft state");
+			}
 
 			let identity: Awaited<ReturnType<ForgeAdapter["updateArtifact"]>>;
 			try {
@@ -626,6 +639,14 @@ async function editArtifact(
 				assertArtifactIdentity(updated, kind, params.number, original.url);
 				if (updated.title !== title || updated.body !== body) {
 					throw new Error("Updated artifact mutable content did not match the requested postimage");
+				}
+				if (
+					repository.forge === "gitlab" &&
+					kind === "pr" &&
+					original.kind === "pr" &&
+					(updated.kind !== "pr" || updated.readiness.draft !== original.readiness.draft)
+				) {
+					throw new Error("Updated GitLab pull request changed draft state");
 				}
 				return editMutationResult(toolName, repository, identity, target, diff, updated);
 			} catch (error) {

@@ -162,8 +162,11 @@ describe("runForgeCommand", () => {
 		expect(message).toContain(String.raw`\u202Espoof\u009B31m`);
 	});
 
-	it("does not classify authentication from echoed mutation content", async () => {
-		const stdin = JSON.stringify({ body: "HTTP 401 Unauthorized" });
+	it.each([
+		["complete", "HTTP 401 Unauthorized"],
+		["partial", "heading\nHTTP 401 Unauthorized\nfooter"],
+	])("does not classify authentication from %s echoed mutation content", async (_name, body) => {
+		const stdin = JSON.stringify({ body });
 		const exec: ForgeExec = async () =>
 			result({ code: 1, stderr: `validation rejected ${JSON.stringify("HTTP 401 Unauthorized")}` });
 		let caught: unknown;
@@ -176,7 +179,6 @@ describe("runForgeCommand", () => {
 		const error = caught as ForgeCommandError;
 		expect(error.authenticationFailure).toBe(false);
 		expect(error.message).not.toContain("auth login");
-		expect(error.message).not.toContain("HTTP 401 Unauthorized");
 	});
 
 	it("reports stdin only by byte count and digest", async () => {

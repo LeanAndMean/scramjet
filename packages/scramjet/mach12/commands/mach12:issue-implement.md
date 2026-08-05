@@ -59,6 +59,8 @@ git branch --show-current
 gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
 ```
 
+Use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Retain this complete read for branch-name derivation, sub-issue detection, and the implementation-plan lookup in Step 3.
+
 ### If on the default branch
 
 1. Check for uncommitted changes with `git status --porcelain`. If the working tree is dirty, stop and tell the user to commit or stash their changes before proceeding.
@@ -75,7 +77,7 @@ gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
    - **Use an existing branch**: specify an existing branch to check out.
 
    If the user picks "Create a new branch":
-     - Read the issue title with `read_issue`; the artifact title is in the initial XML range.
+     - Use the issue title from the retained complete `read_issue` result.
      - Derive a slug: lowercase, replace spaces and special characters with hyphens, truncate to 3-5 words.
      - Create the branch: `git checkout -b feature/issue-<number>-<slug>`
      - Push with upstream tracking: `git push -u origin <branch-name>`
@@ -101,7 +103,7 @@ After the branch is confirmed (whether by checkout, silent match, or user confir
 
 ### Detect sub-issues
 
-After the branch is confirmed and the working tree is clean, use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Collect only relationships whose `relation` is `child`; preserve each child's verified `repository`, canonical `url`, and `source` (`native` or `task-list`) and do not reinterpret unrelated references as sub-issues. Compare each child repository with the root artifact repository, case-insensitively for GitHub, and partition same-repository children from external children. An unsupported or empty relationship section means there are no assignable sub-issues. Retain this complete read for the implementation-plan lookup in Step 3.
+After the branch is confirmed and the working tree is clean, use the retained complete `read_issue` result. Collect only relationships whose `relation` is `child`; preserve each child's verified `repository`, canonical `url`, and `source` (`native` or `task-list`) and do not reinterpret unrelated references as sub-issues. Compare each child repository with the root artifact repository, case-insensitively for GitHub, and partition same-repository children from external children. An unsupported or empty relationship section means there are no assignable sub-issues.
 
 ### Assign the issue and sub-issues
 

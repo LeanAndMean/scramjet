@@ -57,7 +57,11 @@ export interface ForgeIssue extends ForgeArtifactBase {
 	relationships: ForgeIssueRelationships;
 }
 
-export type ForgePrReviewDecision = { capability: "supported"; value: string | null } | { capability: "unsupported" };
+export type ForgePrReviewDecisionValue = "approved" | "changes_requested" | "review_required";
+
+export type ForgePrReviewDecision =
+	| { capability: "supported"; value: ForgePrReviewDecisionValue | null }
+	| { capability: "unsupported" };
 
 export interface ForgePrReadiness {
 	draft: boolean;

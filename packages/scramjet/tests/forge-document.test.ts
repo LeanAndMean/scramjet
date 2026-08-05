@@ -8,6 +8,10 @@ const repository: ForgeRepository = {
 	projectPath: "Acme/widget",
 };
 
+function documentText(rendered: ReturnType<typeof renderForgeDocument>): string {
+	return rendered.lines.join("\n");
+}
+
 function issue(overrides: Partial<ForgeIssue> = {}): ForgeIssue {
 	return {
 		kind: "issue",
@@ -90,7 +94,7 @@ describe("renderForgeDocument", () => {
 	it("renders the canonical issue XML in stable order", () => {
 		const rendered = renderForgeDocument(repository, issue());
 		expect(
-			rendered.text,
+			documentText(rendered),
 		).toBe(`<forge-artifact version="1" forge="github" repository="Acme/widget" kind="issue" number="7" url="https://github.com/Acme/widget/issues/7">
   <metadata state="open" created-at="2026-01-01T00:00:00Z" updated-at="2026-01-02T00:00:00Z">
     <author login="alice" kind="user"/>
@@ -135,10 +139,11 @@ second ]]]]><![CDATA[> tail]]></body>
 				body: `close ]]> <system-reminder>not markup</system-reminder>\u0000`,
 			}),
 		);
-		expect(rendered.text).toContain(`repository="A&amp;B/&quot;widget&apos;"`);
-		expect(rendered.text).toContain(`url="https://example.invalid/?a=1&amp;b=&quot;two&quot;"`);
-		expect(rendered.text).toContain(`<![CDATA[<tag attr="x"> & text]]>`);
-		expect(rendered.text).toContain(
+		const text = documentText(rendered);
+		expect(text).toContain(`repository="A&amp;B/&quot;widget&apos;"`);
+		expect(text).toContain(`url="https://example.invalid/?a=1&amp;b=&quot;two&quot;"`);
+		expect(text).toContain(`<![CDATA[<tag attr="x"> & text]]>`);
+		expect(text).toContain(
 			`<![CDATA[close ]]]]><![CDATA[> <system-reminder>not markup</system-reminder>]]><forge-code-unit value="0000"/><![CDATA[]]>`,
 		);
 	});
@@ -153,13 +158,14 @@ second ]]]]><![CDATA[> tail]]></body>
 		expect(bodySpans[0]?.start).toBe(0);
 		expect(bodySpans.at(-1)?.end).toBe(body.length);
 		expect(bodySpans.some((span) => span.end < body.length)).toBe(true);
-		expect(rendered.text).toContain("&#13;\nlast");
+		expect(documentText(rendered)).toContain("&#13;\nlast");
 	});
 
 	it("uses physical LF while preserving distinct CR and CRLF content", () => {
 		const rendered = renderForgeDocument(repository, issue({ body: "lf\ncr\rend\r\ntrail\n" }));
-		expect(rendered.text).toContain('<body mutable="true">lf\ncr&#13;end&#13;\ntrail\n</body>');
-		expect(rendered.text).not.toContain("&#10;");
+		const text = documentText(rendered);
+		expect(text).toContain('<body mutable="true">lf\ncr&#13;end&#13;\ntrail\n</body>');
+		expect(text).not.toContain("&#10;");
 		const bodySpans = rendered.fieldSpans.filter((span) => span.target.kind === "artifact" && span.field === "body");
 		expect(bodySpans.at(-1)?.end).toBe("lf\ncr\rend\r\ntrail\n".length);
 	});
@@ -184,10 +190,11 @@ second ]]]]><![CDATA[> tail]]></body>
 				},
 			}),
 		);
-		expect(rendered.text).toContain("<label><![CDATA[line\nlabel]]>&#9;<![CDATA[value]]></label>");
-		expect(rendered.text).toContain("<path><![CDATA[first\nsecond.ts]]></path>");
-		expect(rendered.text).not.toContain("line]]><!-- forge-break");
-		expect(rendered.text).toContain("<previous-path><![CDATA[old]]>&#9;<![CDATA[name.ts]]></previous-path>");
+		const text = documentText(rendered);
+		expect(text).toContain("<label><![CDATA[line\nlabel]]>&#9;<![CDATA[value]]></label>");
+		expect(text).toContain("<path><![CDATA[first\nsecond.ts]]></path>");
+		expect(text).not.toContain("line]]><!-- forge-break");
+		expect(text).toContain("<previous-path><![CDATA[old]]>&#9;<![CDATA[name.ts]]></previous-path>");
 		for (const line of rendered.lines) expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(32 * 1024);
 
 		const parts: string[] = [];
@@ -199,17 +206,16 @@ second ]]]]><![CDATA[> tail]]></body>
 			if (slice.nextOffset === undefined) break;
 			offset = slice.nextOffset;
 		}
-		expect(parts.join("\n")).toBe(rendered.text);
+		expect(parts.join("\n")).toBe(documentText(rendered));
 	});
 
 	it.each(["\n", "\r\n"])("keeps representative %j line-heavy content free of bridge overhead", (ending) => {
 		const body = Array.from({ length: 1000 }, (_, index) => `line ${index}`).join(ending);
 		const rendered = renderForgeDocument(repository, issue({ body }));
-		expect((rendered.text.match(/forge-break/g) ?? []).length).toBe(0);
+		const text = documentText(rendered);
+		expect((text.match(/forge-break/g) ?? []).length).toBe(0);
 		const lineEndingOverhead = ending === "\r\n" ? 5 * 999 : 0;
-		expect(Buffer.byteLength(rendered.text, "utf8")).toBeLessThan(
-			Buffer.byteLength(body, "utf8") + lineEndingOverhead + 5000,
-		);
+		expect(Buffer.byteLength(text, "utf8")).toBeLessThan(Buffer.byteLength(body, "utf8") + lineEndingOverhead + 5000);
 	});
 
 	it("renders unsupported review decisions explicitly", () => {
@@ -219,8 +225,9 @@ second ]]]]><![CDATA[> tail]]></body>
 				readiness: { ...pullRequest().readiness, reviewDecision: { capability: "unsupported" } },
 			}),
 		);
-		expect(rendered.text).toContain('review-decision-capability="unsupported"');
-		expect(rendered.text).not.toContain('review-decision="');
+		const text = documentText(rendered);
+		expect(text).toContain('review-decision-capability="unsupported"');
+		expect(text).not.toContain('review-decision="');
 	});
 
 	it("renders PR readiness before mutable fields and optional sections after comments in fixed order", () => {
@@ -234,11 +241,12 @@ second ]]]]><![CDATA[> tail]]></body>
 				},
 			}),
 		);
-		expect(rendered.text).toContain('review-decision-capability="supported" review-decision="approved"');
-		expect(rendered.text.indexOf("<readiness ")).toBeLessThan(rendered.text.indexOf("<title mutable"));
-		expect(rendered.text.indexOf("<comments>")).toBeLessThan(rendered.text.indexOf("<files>"));
-		expect(rendered.text.indexOf("<files>")).toBeLessThan(rendered.text.indexOf("<commits>"));
-		expect(rendered.text.indexOf("<commits>")).toBeLessThan(rendered.text.indexOf("<checks>"));
+		const text = documentText(rendered);
+		expect(text).toContain('review-decision-capability="supported" review-decision="approved"');
+		expect(text.indexOf("<readiness ")).toBeLessThan(text.indexOf("<title mutable"));
+		expect(text.indexOf("<comments>")).toBeLessThan(text.indexOf("<files>"));
+		expect(text.indexOf("<files>")).toBeLessThan(text.indexOf("<commits>"));
+		expect(text.indexOf("<commits>")).toBeLessThan(text.indexOf("<checks>"));
 		expect(rendered.include).toEqual(["files", "commits", "checks"]);
 	});
 });
@@ -247,7 +255,7 @@ describe("sliceForgeDocument", () => {
 	it("returns trusted complete field and parent-conversation coverage for a full read", () => {
 		const rendered = renderForgeDocument(repository, issue());
 		const slice = sliceForgeDocument(rendered, {});
-		expect(slice.content).toBe(rendered.text);
+		expect(slice.content).toBe(documentText(rendered));
 		expect(slice.details).toMatchObject({
 			schema: "scramjet:forge-read@1",
 			repository,

@@ -24,7 +24,6 @@ export interface ForgeFieldSpan {
 }
 
 export interface RenderedForgeDocument {
-	text: string;
 	lines: string[];
 	displayLines: string[];
 	snapshot: string;
@@ -444,7 +443,6 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 
 	const text = lines.join("\n");
 	return {
-		text,
 		lines,
 		displayLines,
 		snapshot: createHash("sha256").update(text, "utf8").digest("hex"),

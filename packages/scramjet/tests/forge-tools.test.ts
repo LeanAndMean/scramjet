@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -13,7 +13,7 @@ import {
 } from "@leanandmean/coding-agent";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { ForgeCommandError } from "../src/forge/client.js";
+import { ForgeCommandError, runForgeCommand } from "../src/forge/client.js";
 import { renderForgeDocument, sliceForgeDocument } from "../src/forge/document.js";
 import { registerForgeTools } from "../src/forge/tools.js";
 import type { ForgeAdapter, ForgeArtifact, ForgeIssue, ForgePullRequest, ForgeRepository } from "../src/forge/types.js";
@@ -207,8 +207,9 @@ function fieldReceipts(
 	artifact: ForgeArtifact,
 	target: { kind: "artifact" } | { kind: "comment"; id: string },
 	field: "title" | "body",
+	repository = githubRepository,
 ) {
-	const rendered = renderForgeDocument(githubRepository, artifact);
+	const rendered = renderForgeDocument(repository, artifact);
 	const lines = [
 		...new Set(
 			rendered.fieldSpans
@@ -489,10 +490,11 @@ describe("registerForgeTools read contracts", () => {
 		expect(readArtifact).toHaveBeenCalledTimes(3);
 	});
 
-	it("persists trusted read details through the real AgentSession tool pipeline", async () => {
+	it("enforces a read-only forge tool set through the real AgentSession pipeline", async () => {
 		const root = mkdtempSync(join(tmpdir(), "scramjet-forge-tool-"));
 		const cwd = join(root, "cwd");
 		const agentDir = join(root, "agent");
+		mkdirSync(cwd);
 		const tools: ToolDefinition[] = [];
 		const adapter = adapterFor(async () => issue());
 		const pi = {
@@ -515,8 +517,21 @@ describe("registerForgeTools read contracts", () => {
 				sessionManager,
 				settingsManager: SettingsManager.inMemory(),
 				customTools: tools,
-				noTools: "builtin",
 			}));
+			expect(session.getActiveToolNames()).toContain("bash");
+			session.setActiveToolsByName(["read_issue", "read_pr"]);
+			expect(session.getActiveToolNames()).toEqual(["read_issue", "read_pr"]);
+			for (const unavailable of [
+				"create_issue",
+				"create_pr",
+				"add_issue_comment",
+				"add_pr_comment",
+				"edit_issue",
+				"edit_pr",
+				"bash",
+			]) {
+				expect(session.getActiveToolNames()).not.toContain(unavailable);
+			}
 			await session.invokeHarnessTool("read_issue", { number: 7 });
 
 			const result = sessionManager
@@ -745,6 +760,39 @@ describe("registerForgeTools creation contracts", () => {
 		expect(addComment).not.toHaveBeenCalled();
 	});
 
+	it("rejects incomplete and mixed-snapshot parent evidence before comment creation", async () => {
+		const original = issue({ body: `${"line\n".repeat(3000)}end` });
+		const receipts = completeReceipts(original);
+		expect(receipts.length).toBeGreaterThan(1);
+		const branches = [
+			evidenceBranch([receipts[0]], "read_issue", [{ id: "add", name: "add_issue_comment" }]),
+			evidenceBranch(
+				receipts.map((receipt, index) => ({
+					...receipt,
+					snapshot: index === 0 ? "a".repeat(64) : "b".repeat(64),
+				})),
+				"read_issue",
+				[{ id: "add", name: "add_issue_comment" }],
+			),
+		];
+		for (const branch of branches) {
+			const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => original);
+			const addComment = vi.fn<ForgeAdapter["addComment"]>();
+			const { addIssueCommentTool } = toolSetup(original, { readArtifact, addComment });
+			await expect(
+				addIssueCommentTool.execute(
+					"add",
+					{ number: 7, body: "New comment" },
+					undefined,
+					undefined,
+					toolContext(branch),
+				),
+			).rejects.toThrow(/complete prior read_issue/i);
+			expect(readArtifact).not.toHaveBeenCalled();
+			expect(addComment).not.toHaveBeenCalled();
+		}
+	});
+
 	it("rejects deterministic GitLab draft-title conflicts before attempting creation", async () => {
 		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>();
 		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>();
@@ -815,6 +863,52 @@ describe("registerForgeTools creation contracts", () => {
 		).rejects.toThrow(/may have succeeded.*reread/i);
 		expect(addComment).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(1);
+	});
+
+	it.each(["timeout", "cancelled", "stdin"] as const)("treats a post-send %s failure as ambiguous", async (kind) => {
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
+			throw new ForgeCommandError(kind, { command: "gh", args: ["api"], cwd: "/repo" });
+		});
+		const { createIssueTool } = toolSetup(issue(), { createArtifact });
+		await expect(
+			createIssueTool.execute(
+				"create",
+				{ title: "Created issue", body: "Body" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toThrow(/may have succeeded.*reread/i);
+		expect(createArtifact).toHaveBeenCalledTimes(1);
+	});
+
+	it("treats a partial mutation-content authentication echo as ambiguous", async () => {
+		const stdin = JSON.stringify({ body: "heading\nHTTP 401 Unauthorized\nfooter" });
+		let failure: unknown;
+		try {
+			await runForgeCommand(async () => execResult({ code: 1, stderr: "HTTP 401 Unauthorized" }), {
+				command: "gh",
+				args: ["api"],
+				cwd: "/repo",
+				stdin,
+			});
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toMatchObject({ authenticationFailure: false });
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
+			throw failure;
+		});
+		const { createIssueTool } = toolSetup(issue(), { createArtifact });
+		await expect(
+			createIssueTool.execute(
+				"create",
+				{ title: "Created issue", body: "Body" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toThrow(/may have succeeded.*reread/i);
 	});
 
 	it.each([
@@ -1115,6 +1209,83 @@ describe("registerForgeTools edit contracts", () => {
 		);
 		expect(result.details).toMatchObject({ operation: "edit_pr", identity: { kind: "pr", number: 12 } });
 		expect(result.content[0].text).toContain("After PR");
+	});
+
+	it.each([
+		["adds Draft", false, "Release", "Draft: Release"],
+		["adds WIP", false, "Release", "WIP: Release"],
+		["removes WIP", true, "WIP: Release", "Release"],
+	] as const)("rejects GitLab pull request title edits that %s draft state", async (_name, draft, title, newTitle) => {
+		const original = pullRequest({
+			url: "https://gitlab.com/Acme/platform/widget/-/merge_requests/12",
+			title,
+			readiness: { ...pullRequest().readiness, draft },
+		});
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => original);
+		const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>();
+		const { editPrTool } = toolSetup(original, { readArtifact, updateArtifact }, gitlabRepository);
+		const branch = evidenceBranch(
+			[fieldReceipts(original, { kind: "artifact" }, "title", gitlabRepository)[0]],
+			"read_pr",
+			[{ id: "edit-pr", name: "edit_pr" }],
+		);
+
+		await expect(
+			editPrTool.execute(
+				"edit-pr",
+				{
+					number: 12,
+					target: { kind: "artifact" },
+					edits: [{ field: "title", oldText: title, newText: newTitle }],
+				},
+				undefined,
+				undefined,
+				toolContext(branch),
+			),
+		).rejects.toThrow(/preserve the existing draft state/i);
+		expect(updateArtifact).not.toHaveBeenCalled();
+	});
+
+	it("treats unexpected GitLab draft-state drift after a title edit as ambiguous", async () => {
+		const original = pullRequest({
+			url: "https://gitlab.com/Acme/platform/widget/-/merge_requests/12",
+			title: "Old release",
+		});
+		const updated = pullRequest({
+			...original,
+			title: "New release",
+			readiness: { ...original.readiness, draft: true },
+		});
+		const readArtifact = vi
+			.fn<ForgeAdapter["readArtifact"]>()
+			.mockResolvedValueOnce(original)
+			.mockResolvedValueOnce(updated);
+		const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>(async () => ({
+			kind: "pr",
+			number: 12,
+			url: original.url,
+		}));
+		const { editPrTool } = toolSetup(original, { readArtifact, updateArtifact }, gitlabRepository);
+		const branch = evidenceBranch(
+			[fieldReceipts(original, { kind: "artifact" }, "title", gitlabRepository)[0]],
+			"read_pr",
+			[{ id: "edit-pr", name: "edit_pr" }],
+		);
+
+		await expect(
+			editPrTool.execute(
+				"edit-pr",
+				{
+					number: 12,
+					target: { kind: "artifact" },
+					edits: [{ field: "title", oldText: "Old", newText: "New" }],
+				},
+				undefined,
+				undefined,
+				toolContext(branch),
+			),
+		).rejects.toThrow(/may have succeeded.*changed draft state/i);
+		expect(updateArtifact).toHaveBeenCalledTimes(1);
 	});
 
 	it("bounds a verified fresh edit postimage without authorizing another mutation", async () => {

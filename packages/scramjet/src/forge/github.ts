@@ -12,6 +12,7 @@ import type {
 	ForgePrCheck,
 	ForgePrCommit,
 	ForgePrFile,
+	ForgePrReviewDecisionValue,
 	ForgePrSection,
 	ForgeRepository,
 } from "./types.js";
@@ -122,7 +123,7 @@ interface CoreArtifact {
 interface PrCore extends CoreArtifact {
 	draft: boolean;
 	mergeable: "mergeable" | "conflicting" | "unknown";
-	reviewDecision: { capability: "supported"; value: string | null };
+	reviewDecision: { capability: "supported"; value: ForgePrReviewDecisionValue | null };
 	head: string;
 	base: string;
 	changedFiles: number;
@@ -156,6 +157,19 @@ function string(value: unknown, label: string): string {
 function nullableString(value: unknown, label: string): string | null {
 	if (value === null) return null;
 	return string(value, label);
+}
+
+function reviewDecision(value: unknown): ForgePrReviewDecisionValue | null {
+	const decision = nullableString(value, "pull request")?.toLowerCase() ?? null;
+	if (
+		decision === null ||
+		decision === "approved" ||
+		decision === "changes_requested" ||
+		decision === "review_required"
+	) {
+		return decision;
+	}
+	return malformed("pull request");
 }
 
 function positiveInteger(value: unknown, label: string): number {
@@ -430,10 +444,7 @@ async function readCore(
 		comments,
 		draft: boolean(value.isDraft, "pull request"),
 		mergeable,
-		reviewDecision: {
-			capability: "supported",
-			value: nullableString(value.reviewDecision, "pull request")?.toLowerCase() ?? null,
-		},
+		reviewDecision: { capability: "supported", value: reviewDecision(value.reviewDecision) },
 		head: string(value.headRefName, "pull request"),
 		base: string(value.baseRefName, "pull request"),
 		changedFiles: nonnegativeInteger(value.changedFiles, "pull request"),

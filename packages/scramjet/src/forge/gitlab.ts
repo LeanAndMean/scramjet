@@ -683,7 +683,7 @@ async function mutate(
 }
 
 function mergeRequestTitle(title: string, draft: boolean): string {
-	const prefixed = /^(?:Draft:|\[Draft\]|\(Draft\))\s*/i.test(title);
+	const prefixed = /^(?:Draft:|WIP:|\[(?:Draft|WIP)\]|\((?:Draft|WIP)\))\s*/i.test(title);
 	if (!draft && prefixed)
 		throw new Error("GitLab cannot create a non-draft merge request with a draft-prefixed title");
 	if (draft && !prefixed)

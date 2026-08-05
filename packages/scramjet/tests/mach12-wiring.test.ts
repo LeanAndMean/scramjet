@@ -1144,6 +1144,26 @@ describe("mach12 deferred-review issue labels", () => {
 	const assessment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-assessment.md`), "utf-8");
 	const deferredSection = assessment.slice(assessment.indexOf("## Step 6:"), assessment.indexOf("## Step 7:"));
 
+	it("requires approval of each exact finalized issue immediately before publication", () => {
+		const publication = deferredSection.slice(
+			deferredSection.indexOf("For each item that requires a new issue:"),
+			deferredSection.indexOf("When lookup, authorization, or label creation"),
+		);
+		const finalize = publication.indexOf("Finalize its exact title and body");
+		const present = publication.indexOf("Show the user that exact final title and complete body");
+		const approve = publication.indexOf('`type: "confirm"`', present);
+		const create = publication.indexOf("Create the issue with `create_issue`", approve);
+		expect(finalize).toBeGreaterThan(-1);
+		expect(present).toBeGreaterThan(finalize);
+		expect(approve).toBeGreaterThan(present);
+		expect(create).toBeGreaterThan(approve);
+		expect(publication).toContain("including every overlap note");
+		expect(publication).toContain("immediately before publication");
+		expect(publication.slice(approve, create)).not.toContain("`gh ");
+		expect(publication).toContain("using the approved title and body unchanged");
+		expect(publication).toContain("batch-level choice to create issues is not exact-content approval");
+	});
+
 	it("discovers the exact label once per issue-creation batch and authorizes creation once", () => {
 		const lookupCommand = "gh api --paginate --slurp 'repos/{owner}/{repo}/labels?per_page=100'";
 		const createCommand = 'gh label create "PR review deferral"';
@@ -1157,7 +1177,7 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection).toContain("invalid flattened entry makes availability unknown");
 		expect(deferredSection).toContain("Do not prompt or create the label");
 		expect(deferredSection).toContain("exact, case-sensitive equality");
-		expect(deferredSection.split('type: "confirm"')).toHaveLength(2);
+		expect(deferredSection.split('type: "confirm"')).toHaveLength(3);
 		expect(deferredSection).toContain("at most one label-creation attempt");
 		expect(deferredSection).toContain("Option 3 reuses this same batch decision");
 		expect(deferredSection).toContain("resolve the label decision in the **Shared issue-creation batch contract**");
@@ -1168,7 +1188,9 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection).toContain("Never inspect, create, or apply the label to a clear duplicate");
 		expect(deferredSection).toContain("collect the intended disposition without mutating issues yet");
 		expect(deferredSection).toContain("If every item is a clear duplicate, skip label resolution");
-		expect(deferredSection).toContain("Create the issue with `create_issue` without coupling publication to labels");
+		expect(deferredSection).toContain(
+			"Create the issue with `create_issue` using the approved title and body unchanged, without coupling publication to labels",
+		);
 		expect(deferredSection).toContain(
 			"other relevant labels through separate guarded `gh issue edit --add-label` operations",
 		);
@@ -1214,11 +1236,37 @@ describe("mach12 deferred-review issue labels", () => {
 	});
 });
 
+describe("mach12 issue implementation context", () => {
+	const issueImplement = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-implement.md`), "utf-8");
+
+	it("completes the issue read before deriving a branch name", () => {
+		const completeInstruction =
+			"continue every returned range with the unchanged snapshot until the complete issue document is visible";
+		const completeRead = issueImplement.indexOf(completeInstruction);
+		const branchDerivation = issueImplement.indexOf(
+			"Use the issue title from the retained complete `read_issue` result",
+		);
+		expect(completeRead).toBeGreaterThan(-1);
+		expect(branchDerivation).toBeGreaterThan(completeRead);
+		expect(issueImplement).not.toContain("artifact title is in the initial XML range");
+		expect(issueImplement).toContain("use the retained complete `read_issue` result");
+	});
+});
+
 describe("mach12 ordinary PR readiness", () => {
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
 	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
 	const readinessSection = (content: string) =>
 		content.slice(content.indexOf("## Step 2:"), content.indexOf("## Step 3:"));
+
+	it.each([
+		["pr-pre-merge", preMerge],
+		["pr-merge", merge],
+	])("%s requires complete same-snapshot conversation continuation", (_name, content) => {
+		expect(readinessSection(content)).toContain(
+			"continuing every returned range with the unchanged snapshot until the full conversation is visible",
+		);
+	});
 
 	it.each([
 		["pr-pre-merge", preMerge],

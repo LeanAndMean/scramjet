@@ -31,7 +31,7 @@ function queryFrom(args: string[]): string {
 	return query.slice("query=".length);
 }
 
-function readExec(overrides: { relationships?: ExecResult; issuePages?: unknown } = {}): ForgeExec {
+function readExec(overrides: { relationships?: ExecResult; issuePages?: unknown; prPages?: unknown } = {}): ForgeExec {
 	return vi.fn<ForgeExec>(async (_command, args) => {
 		if (args[1] === "graphql") {
 			const query = queryFrom(args);
@@ -57,7 +57,9 @@ function readExec(overrides: { relationships?: ExecResult; issuePages?: unknown 
 			if (query.includes("issue(number:")) {
 				return result(overrides.issuePages ?? fixture("github-issue-pages.json"));
 			}
-			if (query.includes("pullRequest(number:")) return result(fixture("github-pr-pages.json"));
+			if (query.includes("pullRequest(number:")) {
+				return result(overrides.prPages ?? fixture("github-pr-pages.json"));
+			}
 		}
 		if (args.includes("repos/Acme/widget/pulls/12/files?per_page=100")) {
 			return result(fixture("github-pr-files-pages.json"));
@@ -294,6 +296,14 @@ describe("createGithubAdapter reads", () => {
 			["api", "--paginate", "--slurp", "repos/Acme/widget/pulls/12/files?per_page=100"],
 			{ cwd: "/repo", stdin: undefined, timeout: 3000, signal: undefined },
 		]);
+	});
+
+	it("rejects unknown pull request review decisions", async () => {
+		const pages = structuredClone(fixture("github-pr-pages.json")) as any[];
+		pages[0].data.repository.pullRequest.reviewDecision = "FUTURE_DECISION";
+		await expect(
+			createGithubAdapter(readExec({ prPages: pages }), "/repo").readArtifact(repository, "pr", 12, []),
+		).rejects.toThrow(/GitHub pull request response was malformed or incomplete/);
 	});
 
 	it("does not fetch or expose unrequested PR facets", async () => {

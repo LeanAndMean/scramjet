@@ -23,8 +23,10 @@ describe("execCommand", () => {
 		});
 	});
 
-	it("reports missing executables as structured spawn errors", async () => {
-		const result = await execCommand("scramjet-command-that-does-not-exist", [], process.cwd());
+	it("reports missing executables with supplied stdin as one structured spawn error", async () => {
+		const result = await execCommand("scramjet-command-that-does-not-exist", [], process.cwd(), {
+			stdin: "mutation body",
+		});
 
 		expect(result).toMatchObject({
 			stdout: "",
@@ -34,6 +36,7 @@ describe("execCommand", () => {
 			spawnError: { code: "ENOENT" },
 		});
 		expect(result.spawnError?.message).toContain("scramjet-command-that-does-not-exist");
+		expect(result.stdinError).toBeUndefined();
 	});
 
 	it("reports stdin errors when the child closes the pipe", async () => {

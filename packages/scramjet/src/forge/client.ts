@@ -168,6 +168,13 @@ function boundedProcessOutput(value: string): string {
 	}`;
 }
 
+function authenticationFailure(output: string, stdin: string | undefined): boolean {
+	return FORGE_AUTH_FAILURE_PATTERNS.some((pattern) => {
+		const match = output.match(pattern)?.[0];
+		return match !== undefined && !stdin?.toLowerCase().includes(match.toLowerCase());
+	});
+}
+
 function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeInvocationDiagnostic {
 	const secrets = redactionValues(invocation.stdin);
 	const stdout = result === undefined ? "" : redactProcessOutput(result.stdout, secrets);
@@ -191,9 +198,7 @@ function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeI
 						exitCode: result.code,
 						stdout: boundedProcessOutput(controlSafeText(stdout)),
 						stderr: boundedProcessOutput(controlSafeText(stderr)),
-						authenticationFailure: FORGE_AUTH_FAILURE_PATTERNS.some((pattern) =>
-							pattern.test(`${stdout}\n${stderr}`),
-						),
+						authenticationFailure: authenticationFailure(`${stdout}\n${stderr}`, invocation.stdin),
 					},
 				}),
 	};

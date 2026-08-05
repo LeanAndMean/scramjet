@@ -21,7 +21,7 @@ Every call resolves the current Git `origin` and supports canonical public `gith
 
 Interactive session startup probes only the CLI selected by the current origin. It warns for a conclusively missing executable or authentication failure. Headless sessions, unsupported repositories, unrelated CLIs, and transient failures remain silent. Unexpected detached probe or notification defects are journaled under the `forge` log category without blocking startup.
 
-The tools invoke the selected CLI without a shell. Mutation JSON is sent through exact UTF-8 stdin; user content is not placed in argv or logs. Process failures retain bounded, control-safe stdout/stderr and exit status for recovery, redact the exact stdin and its JSON string values, and give tool-time authentication failures the same provider-specific login guidance as startup.
+The tools invoke the selected CLI without a shell. Mutation JSON is sent through exact UTF-8 stdin; user content is not placed in argv or logs. Process failures retain bounded, control-safe stdout/stderr and exit status for recovery, redact the exact stdin and its JSON string values, and give tool-time authentication failures the same provider-specific login guidance as startup. Authentication text that also occurs within mutation stdin cannot establish conclusive rejection, even when the CLI echoes only a fragment of that content.
 
 ## Aggregate reads
 
@@ -98,7 +98,7 @@ An artifact target may edit title and body in one call. A comment target accepts
 
 Every `oldText` must be non-empty, exact, unique in its original decoded field, and non-overlapping with sibling replacements. Replacements are all computed against the same refetched original, not incrementally. No whitespace, Unicode, quote, dash, line-ending, XML-escaping, or fuzzy normalization is applied. No-op replacements are rejected.
 
-Each edited field must have complete prior-read coverage. Partial ranges can combine only when their trusted receipts share one canonical snapshot. A successful edit returns the requested deltas plus a bounded verified fresh view of the edited artifact title/body or comment body, including unrelated content preserved by the queue-time refetch. This postimage is mutation evidence only and does not establish a new prior read.
+Each edited field must have complete prior-read coverage. Partial ranges can combine only when their trusted receipts share one canonical snapshot. GitLab pull-request title edits must preserve the existing prefix-derived draft state; draft-state changes remain outside the edit surface. A successful edit returns the requested deltas plus a bounded verified fresh view of the edited artifact title/body or comment body, including unrelated content preserved by the queue-time refetch. This postimage is mutation evidence only and does not establish a new prior read.
 
 ## Evidence and compaction
 
