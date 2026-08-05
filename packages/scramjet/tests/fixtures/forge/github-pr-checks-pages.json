@@ -1,0 +1,51 @@
+[
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "number": 12,
+          "statusCheckRollup": {
+            "contexts": {
+              "totalCount": 2,
+              "nodes": [
+                {
+                  "__typename": "CheckRun",
+                  "id": "CR_kwDOAA",
+                  "name": "test",
+                  "status": "IN_PROGRESS",
+                  "conclusion": null,
+                  "detailsUrl": "https://github.com/Acme/widget/actions/runs/1"
+                }
+              ],
+              "pageInfo": { "hasNextPage": true, "endCursor": "check-1" }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "number": 12,
+          "statusCheckRollup": {
+            "contexts": {
+              "totalCount": 2,
+              "nodes": [
+                {
+                  "__typename": "StatusContext",
+                  "id": "SC_kwDOBB",
+                  "context": "lint",
+                  "state": "SUCCESS",
+                  "targetUrl": null
+                }
+              ],
+              "pageInfo": { "hasNextPage": false, "endCursor": "check-2" }
+            }
+          }
+        }
+      }
+    }
+  }
+]

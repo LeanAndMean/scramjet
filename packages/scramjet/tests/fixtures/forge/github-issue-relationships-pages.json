@@ -1,0 +1,56 @@
+[
+  {
+    "data": {
+      "repository": {
+        "issue": {
+          "number": 7,
+          "parent": {
+            "number": 3,
+            "url": "https://github.com/Acme/widget/issues/3",
+            "state": "OPEN",
+            "title": "Parent issue"
+          },
+          "subIssues": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "number": 8,
+                "url": "https://github.com/Acme/widget/issues/8",
+                "state": "CLOSED",
+                "title": "First child"
+              }
+            ],
+            "pageInfo": { "hasNextPage": true, "endCursor": "child-1" }
+          }
+        }
+      }
+    }
+  },
+  {
+    "data": {
+      "repository": {
+        "issue": {
+          "number": 7,
+          "parent": {
+            "number": 3,
+            "url": "https://github.com/Acme/widget/issues/3",
+            "state": "OPEN",
+            "title": "Parent issue"
+          },
+          "subIssues": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "number": 9,
+                "url": "https://github.com/Acme/widget/issues/9",
+                "state": "OPEN",
+                "title": "Second child"
+              }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "child-2" }
+          }
+        }
+      }
+    }
+  }
+]
