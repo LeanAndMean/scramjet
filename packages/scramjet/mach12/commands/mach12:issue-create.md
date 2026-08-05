@@ -222,7 +222,7 @@ For a clear duplicate's **Link to existing** choice, prepare the same `Related c
 
 ## Step 11: Create
 
-Create the issue from the latest explicitly approved title and body unchanged. Verify that the approved title is one line and that the approved body is newline-terminated; if either invariant cannot be verified, stop so a preservable draft can be reapproved. Pass the title and exact Markdown body directly to `create_issue`; do not stage them in shell arguments or temporary files. Use plain words such as "finding 3" rather than `#3` for numbered artifact items.
+Create the issue from the latest explicitly approved title and body unchanged. Verify that the approved title is one line; if that invariant cannot be verified, stop so a preservable draft can be reapproved. The exact approved body may end with or without a newline. Pass the title and exact Markdown body directly to `create_issue`; do not stage them in shell arguments or temporary files. Use plain words such as "finding 3" rather than `#3` for numbered artifact items.
 
 Proceed to metadata only after `create_issue` returns a verified canonical issue number and URL. If creation fails, surface the complete tool error, apply no metadata, and do not retry creation. When the error says the mutation may have succeeded, preserve that ambiguity, direct the user to reread the issue list before any recovery attempt, and report a non-completed status.
 

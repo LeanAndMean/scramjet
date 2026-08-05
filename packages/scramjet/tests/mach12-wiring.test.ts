@@ -1,4 +1,6 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@leanandmean/coding-agent";
@@ -430,6 +432,63 @@ describe("mach12 wiring — bundled command set", () => {
 		expect(content).toContain("Immediately before posting");
 		expect(content).toContain("in an earlier assistant tool round");
 		expect(content).toContain("continuing every range with the unchanged snapshot");
+	});
+
+	it.each(["issue-plan", "issue-implement"])(
+		"%s assigns only repository-qualified same-repository children",
+		(basename) => {
+			const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+			expect(content).toContain("verified `repository`");
+			expect(content).toContain("case-insensitively for GitHub");
+			expect(content).toContain("same-repository sub-issue numbers");
+			expect(content).toContain("Never pass an external child's bare number");
+			expect(content).toContain("verified canonical URL");
+		},
+	);
+
+	it("derives the complete review diff from the authoritative PR base", () => {
+		const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review.md`), "utf-8");
+		const read = content.indexOf('Use `read_pr` with `include: ["files"]`');
+		const diff = content.indexOf("git diff --name-only");
+		expect(read).toBeGreaterThan(-1);
+		expect(read).toBeLessThan(diff);
+		expect(content).toContain("non-`main` targets such as `release/next`");
+		expect(content).toContain('git check-ref-format --branch "$base_branch"');
+		expect(content).toContain('git fetch origin "refs/heads/$base_branch:refs/remotes/origin/$base_branch"');
+		expect(content).toContain("refs/remotes/origin/$base_branch...HEAD");
+		expect(content).not.toContain("origin/main...HEAD");
+	});
+
+	it("populates a non-main remote-tracking base in a single-branch clone", () => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-pr-base-"));
+		const remote = join(root, "remote.git");
+		const seed = join(root, "seed");
+		const clone = join(root, "clone");
+		const git = (args: string[], cwd = root) => execFileSync("git", args, { cwd, stdio: "ignore" });
+		try {
+			git(["init", "--bare", remote]);
+			git(["init", seed]);
+			git(["config", "user.email", "test@example.com"], seed);
+			git(["config", "user.name", "Test"], seed);
+			writeFileSync(join(seed, "file.txt"), "main\n");
+			git(["add", "file.txt"], seed);
+			git(["commit", "-m", "main"], seed);
+			git(["branch", "-M", "main"], seed);
+			git(["checkout", "-b", "release/next"], seed);
+			writeFileSync(join(seed, "file.txt"), "release\n");
+			git(["commit", "-am", "release"], seed);
+			git(["push", remote, "main", "release/next"], seed);
+			git(["clone", "--single-branch", "--branch", "main", remote, clone]);
+			expect(() => git(["rev-parse", "--verify", "refs/remotes/origin/release/next"], clone)).toThrow();
+
+			const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review.md`), "utf-8");
+			const match = /git fetch origin "([^"]+)"/.exec(content);
+			if (match === null) throw new Error("Missing explicit base fetch refspec");
+			git(["fetch", "origin", match[1].replaceAll("$base_branch", "release/next")], clone);
+			expect(() => git(["rev-parse", "--verify", "refs/remotes/origin/release/next"], clone)).not.toThrow();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it.each(["pr-review-assessment", "pr-review-fix"])(
@@ -942,7 +1001,8 @@ describe("mach12 issue creation — duplicate search and publication safety", ()
 		expect(creation).toContain("create_issue");
 		expect(creation).toContain("latest explicitly approved title and body unchanged");
 		expect(creation).toContain("approved title is one line");
-		expect(creation).toContain("approved body is newline-terminated");
+		expect(creation).toContain("exact approved body may end with or without a newline");
+		expect(creation).not.toContain("approved body is newline-terminated");
 		expect(creation).toContain("exact Markdown body");
 		expect(creation).not.toContain("issue_transport_dir");
 		expect(creation).not.toContain("gh issue create");
@@ -1168,6 +1228,8 @@ describe("mach12 ordinary PR readiness", () => {
 		for (const predicate of ["open", "non-draft", "required review", "conflict", "checks"]) {
 			expect(readiness, `${name}: ${predicate}`).toContain(predicate);
 		}
+		expect(readiness).toContain('review-decision-capability="supported"');
+		expect(readiness).toContain("otherwise report incomplete rather than treating absence as review-clear");
 		expect(readiness).toContain("one brief reread");
 		expect(content.indexOf(name === "pr-merge" ? "gh pr merge" : "gh pr checkout <pr-number>")).toBeGreaterThan(
 			content.indexOf("## Step 3:"),

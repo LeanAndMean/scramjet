@@ -63,7 +63,7 @@ interface GitlabCore {
 interface GitlabPrCore extends GitlabCore {
 	draft: boolean;
 	mergeable: "mergeable" | "conflicting" | "unknown";
-	reviewDecision: string | null;
+	reviewDecision: { capability: "unsupported" };
 	head: string;
 	base: string;
 	changedFiles: number | "pending" | "overflow";
@@ -210,6 +210,32 @@ async function readList(
 	);
 }
 
+function authoritativeTotal(headers: string, label: string): number {
+	const lines = headers.split(/\r?\n/).filter((line) => line.trim() !== "");
+	const statuses = lines.filter((line) => /^HTTP\/\S+\s+\d{3}(?:\s|$)/i.test(line));
+	if (statuses.length !== 1 || !/^HTTP\/\S+\s+2\d{2}(?:\s|$)/i.test(statuses[0])) return malformed(label);
+	const totals = lines.flatMap((line) => {
+		const match = /^x-total:\s*(\d+)\s*$/i.exec(line);
+		return match === null ? [] : [match[1]];
+	});
+	if (totals.length !== 1) return malformed(label);
+	const total = Number(totals[0]);
+	if (!Number.isSafeInteger(total)) return malformed(label);
+	return total;
+}
+
+async function readCountedList(
+	context: GitlabAdapterContext,
+	endpoint: string,
+	label: string,
+	signal?: AbortSignal,
+): Promise<unknown[]> {
+	const items = await readList(context, endpoint, label, signal);
+	const headers = await gitlabCommand(context, ["api", "--include", "--silent", endpoint], signal);
+	if (items.length !== authoritativeTotal(headers, label)) return malformed(label);
+	return items;
+}
+
 function parseActor(value: unknown, label: string): ForgeActor {
 	if (value === null) return { login: null, kind: "deleted" };
 	const actor = record(value, label);
@@ -279,7 +305,7 @@ function parseCore(
 		...common,
 		draft: boolean(value.draft, label),
 		mergeable,
-		reviewDecision: null,
+		reviewDecision: { capability: "unsupported" },
 		head: string(value.source_branch, label),
 		base: string(value.target_branch, label),
 		changedFiles: parseChangedFiles(value.changes_count),
@@ -371,13 +397,24 @@ async function readCore(
 	return { ...core, comments };
 }
 
+function relationshipRepository(url: string, number: number): ForgeRepository {
+	const match = new RegExp(
+		`^https://gitlab\\.com/([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)/-/(?:issues|work_items)/${number}$`,
+	).exec(url);
+	if (match === null) return malformed("relationships");
+	return { forge: "gitlab", host: "gitlab.com", projectPath: match[1] };
+}
+
 function parseRelationship(value: unknown, relation: "parent" | "child"): ForgeIssueRelationship {
 	const item = record(value, "relationships");
+	const number = Number(decimalId(item.iid, "relationships"));
+	const url = string(item.webUrl, "relationships");
 	return {
+		repository: relationshipRepository(url, number),
 		relation,
 		source: "native",
-		number: Number(decimalId(item.iid, "relationships")),
-		url: string(item.webUrl, "relationships"),
+		number,
+		url,
 		state: normalizeState(item.state, "relationships"),
 		title: string(item.title, "relationships"),
 	};
@@ -453,14 +490,18 @@ async function readRelationships(
 			return malformed("relationships");
 		if (page.endCursor !== null) cursors.add(page.endCursor);
 		for (const child of page.children) {
-			if (seen.has(child.url)) return malformed("relationships");
-			seen.add(child.url);
+			const key = `${child.repository.projectPath}:${child.number}`;
+			if (seen.has(key)) return malformed("relationships");
+			seen.add(key);
 			children.push(child);
 		}
 	}
 	if (children.length !== expected) return malformed("relationships");
 	const items = parent === null ? children : [parent, ...children];
-	if (new Set(items.map((item) => `${item.relation}:${item.url}`)).size !== items.length) {
+	if (
+		new Set(items.map((item) => `${item.relation}:${item.repository.projectPath}:${item.number}`)).size !==
+		items.length
+	) {
 		return malformed("relationships");
 	}
 	return { capability: "supported", items };
@@ -538,7 +579,7 @@ async function readCommits(
 	signal?: AbortSignal,
 ): Promise<ForgePrCommit[]> {
 	const commits = (
-		await readList(
+		await readCountedList(
 			context,
 			`projects/${projectId(repository)}/merge_requests/${number}/commits?per_page=100`,
 			"commits",
@@ -573,7 +614,7 @@ async function readChecks(
 	signal?: AbortSignal,
 ): Promise<ForgePrCheck[]> {
 	const checks = (
-		await readList(
+		await readCountedList(
 			context,
 			`projects/${projectId(repository)}/merge_requests/${number}/pipelines?per_page=100`,
 			"checks",
@@ -645,8 +686,9 @@ function mergeRequestTitle(title: string, draft: boolean): string {
 	const prefixed = /^(?:Draft:|\[Draft\]|\(Draft\))\s*/i.test(title);
 	if (!draft && prefixed)
 		throw new Error("GitLab cannot create a non-draft merge request with a draft-prefixed title");
-	if (!draft || prefixed) return title;
-	return `Draft: ${title}`;
+	if (draft && !prefixed)
+		throw new Error("GitLab draft merge requests require the exact approved title to include a draft prefix");
+	return title;
 }
 
 export function createGitlabAdapter(exec: ForgeExec, cwd: string): ForgeAdapter {

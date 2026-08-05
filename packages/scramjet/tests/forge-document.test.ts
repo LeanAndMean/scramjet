@@ -28,6 +28,7 @@ function issue(overrides: Partial<ForgeIssue> = {}): ForgeIssue {
 			capability: "supported",
 			items: [
 				{
+					repository,
 					relation: "child",
 					source: "native",
 					number: 8,
@@ -76,7 +77,7 @@ function pullRequest(overrides: Partial<ForgePullRequest> = {}): ForgePullReques
 		readiness: {
 			draft: false,
 			mergeable: "mergeable",
-			reviewDecision: "approved",
+			reviewDecision: { capability: "supported", value: "approved" },
 			head: "feature",
 			base: "main",
 		},
@@ -103,13 +104,13 @@ describe("renderForgeDocument", () => {
     </assignees>
   </metadata>
   <relationships capability="supported">
-    <issue relation="child" source="native" number="8" state="closed" url="https://github.com/Acme/widget/issues/8">
+    <issue relation="child" source="native" repository="Acme/widget" number="8" state="closed" url="https://github.com/Acme/widget/issues/8">
       <title><![CDATA[Child]]></title>
     </issue>
   </relationships>
   <title mutable="true"><![CDATA[Bug <x>]]></title>
-  <body mutable="true"><![CDATA[first]]>&#10;<!-- forge-break
-  --><![CDATA[second ]]]]><![CDATA[> tail]]></body>
+  <body mutable="true"><![CDATA[first
+second ]]]]><![CDATA[> tail]]></body>
   <comments>
     <comment id="10" url="https://github.com/Acme/widget/issues/7#issuecomment-10" created-at="2026-01-03T00:00:00Z" updated-at="2026-01-03T01:00:00Z">
       <author login="helper[bot]" kind="bot"/>
@@ -152,7 +153,15 @@ describe("renderForgeDocument", () => {
 		expect(bodySpans[0]?.start).toBe(0);
 		expect(bodySpans.at(-1)?.end).toBe(body.length);
 		expect(bodySpans.some((span) => span.end < body.length)).toBe(true);
-		expect(rendered.text).toContain("&#13;&#10;");
+		expect(rendered.text).toContain("&#13;\nlast");
+	});
+
+	it("uses physical LF while preserving distinct CR and CRLF content", () => {
+		const rendered = renderForgeDocument(repository, issue({ body: "lf\ncr\rend\r\ntrail\n" }));
+		expect(rendered.text).toContain('<body mutable="true">lf\ncr&#13;end&#13;\ntrail\n</body>');
+		expect(rendered.text).not.toContain("&#10;");
+		const bodySpans = rendered.fieldSpans.filter((span) => span.target.kind === "artifact" && span.field === "body");
+		expect(bodySpans.at(-1)?.end).toBe("lf\ncr\rend\r\ntrail\n".length);
 	});
 
 	it("keeps untrusted read-only strings bounded, line-safe, and losslessly continuable", () => {
@@ -175,9 +184,9 @@ describe("renderForgeDocument", () => {
 				},
 			}),
 		);
-		expect(rendered.text).toContain("<label><![CDATA[line]]>&#10;<!-- forge-break");
-		expect(rendered.text).toContain("--><![CDATA[label]]>&#9;<![CDATA[value]]></label>");
-		expect(rendered.text).toContain("<path><![CDATA[first]]>&#10;<!-- forge-break");
+		expect(rendered.text).toContain("<label><![CDATA[line\nlabel]]>&#9;<![CDATA[value]]></label>");
+		expect(rendered.text).toContain("<path><![CDATA[first\nsecond.ts]]></path>");
+		expect(rendered.text).not.toContain("line]]><!-- forge-break");
 		expect(rendered.text).toContain("<previous-path><![CDATA[old]]>&#9;<![CDATA[name.ts]]></previous-path>");
 		for (const line of rendered.lines) expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(32 * 1024);
 
@@ -193,6 +202,27 @@ describe("renderForgeDocument", () => {
 		expect(parts.join("\n")).toBe(rendered.text);
 	});
 
+	it.each(["\n", "\r\n"])("keeps representative %j line-heavy content free of bridge overhead", (ending) => {
+		const body = Array.from({ length: 1000 }, (_, index) => `line ${index}`).join(ending);
+		const rendered = renderForgeDocument(repository, issue({ body }));
+		expect((rendered.text.match(/forge-break/g) ?? []).length).toBe(0);
+		const lineEndingOverhead = ending === "\r\n" ? 5 * 999 : 0;
+		expect(Buffer.byteLength(rendered.text, "utf8")).toBeLessThan(
+			Buffer.byteLength(body, "utf8") + lineEndingOverhead + 5000,
+		);
+	});
+
+	it("renders unsupported review decisions explicitly", () => {
+		const rendered = renderForgeDocument(
+			repository,
+			pullRequest({
+				readiness: { ...pullRequest().readiness, reviewDecision: { capability: "unsupported" } },
+			}),
+		);
+		expect(rendered.text).toContain('review-decision-capability="unsupported"');
+		expect(rendered.text).not.toContain('review-decision="');
+	});
+
 	it("renders PR readiness before mutable fields and optional sections after comments in fixed order", () => {
 		const rendered = renderForgeDocument(
 			repository,
@@ -204,6 +234,7 @@ describe("renderForgeDocument", () => {
 				},
 			}),
 		);
+		expect(rendered.text).toContain('review-decision-capability="supported" review-decision="approved"');
 		expect(rendered.text.indexOf("<readiness ")).toBeLessThan(rendered.text.indexOf("<title mutable"));
 		expect(rendered.text.indexOf("<comments>")).toBeLessThan(rendered.text.indexOf("<files>"));
 		expect(rendered.text.indexOf("<files>")).toBeLessThan(rendered.text.indexOf("<commits>"));
@@ -228,6 +259,13 @@ describe("sliceForgeDocument", () => {
 			totalLines: rendered.coreLines.end,
 			ranges: [{ start: 0, end: rendered.coreLines.end }],
 		});
+		expect(slice.details.display).toContain("<body>first\nsecond ]]> tail</body>");
+		expect(slice.details.display).not.toContain("CDATA");
+		expect(slice.details.display).not.toContain("forge-break");
+
+		const bidi = sliceForgeDocument(renderForgeDocument(repository, issue({ body: "safe\u202Espoof" })), {});
+		expect(bidi.details.display).toContain("safe\\u202Espoof");
+		expect(bidi.details.display).not.toContain("\u202E");
 		for (const field of slice.details.fields) {
 			expect(field.ranges).toEqual(field.totalCodeUnits === 0 ? [] : [{ start: 0, end: field.totalCodeUnits }]);
 		}

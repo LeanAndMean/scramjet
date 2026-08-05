@@ -59,6 +59,7 @@ The fallback does not serialize the entry's `data`, retry or roll back persisten
 | `subdir-context` | `subdir-context.ts` | Subdirectory context discovery warnings and debug traces |
 | `model-switch` | `model-switch-tool.ts` | Agent-initiated model switch outcomes (unknown/unauthorized/failed target warnings, switch debug traces) |
 | `model-notice` | `model-change-notice.ts` | Model-change notice delivery failures |
+| `forge` | `forge/tools.ts` | Unexpected detached forge prerequisite-probe and UI-notification defects; expected unsupported, unavailable, and transient outcomes remain silent |
 
 ## Session JSONL location
 

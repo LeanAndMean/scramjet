@@ -1,8 +1,21 @@
 import { createHash } from "node:crypto";
-import type { ExecOptions, ExecResult } from "@leanandmean/coding-agent";
+import { type ExecOptions, type ExecResult, truncateTail } from "@leanandmean/coding-agent";
 import type { ForgeRepository } from "./types.js";
 
 export const FORGE_EXEC_TIMEOUT_MS = 3000;
+const PROCESS_DIAGNOSTIC_MAX_BYTES = 4096;
+const PROCESS_DIAGNOSTIC_MAX_LINES = 40;
+
+export const FORGE_AUTH_FAILURE_PATTERNS = [
+	/\bnot logged (?:in|into)\b/i,
+	/\bno hosts? (?:are )?configured\b/i,
+	/\bno (?:authentication |auth )?token (?:is )?found\b/i,
+	/\btoken\b[^\n]*(?:invalid|expired|revoked)\b/i,
+	/(?:invalid|expired|revoked)[^\n]*\btoken\b/i,
+	/\bauthentication (?:failed|required)\b/i,
+	/\bunauthorized\b/i,
+	/\bHTTP(?:\/\S+)?\s+401\b/i,
+];
 
 export type ForgeExec = (command: string, args: string[], options?: ExecOptions) => Promise<ExecResult>;
 
@@ -17,22 +30,39 @@ export interface ForgeInvocation {
 
 export type ForgeCommandErrorKind = "missing-executable" | "cancelled" | "timeout" | "stdin" | "failed" | "execution";
 
+export interface ForgeProcessDiagnostic {
+	exitCode: number | null;
+	stdout: string;
+	stderr: string;
+	authenticationFailure?: boolean;
+}
+
 export interface ForgeInvocationDiagnostic {
 	command: string;
 	args: string[];
 	cwd: string;
 	stdin?: { bytes: number; sha256: string };
+	process?: ForgeProcessDiagnostic;
 }
 
 export class ForgeCommandError extends Error {
 	readonly kind: ForgeCommandErrorKind;
 	readonly invocation: ForgeInvocationDiagnostic;
+	readonly authenticationFailure: boolean;
 
 	constructor(kind: ForgeCommandErrorKind, invocation: ForgeInvocationDiagnostic, cause?: unknown) {
 		super(messageForFailure(kind, invocation), cause === undefined ? undefined : { cause });
 		this.name = "ForgeCommandError";
 		this.kind = kind;
 		this.invocation = invocation;
+		this.authenticationFailure = processAuthenticationFailure(invocation.process);
+	}
+}
+
+export class UnsupportedForgeOriginError extends Error {
+	constructor() {
+		super("Origin is not a supported GitHub or GitLab origin");
+		this.name = "UnsupportedForgeOriginError";
 	}
 }
 
@@ -49,10 +79,83 @@ function messageForFailure(kind: ForgeCommandErrorKind, invocation: ForgeInvocat
 		failed: "Command failed",
 		execution: "Command execution failed",
 	}[kind];
-	return `${reason}: ${command}${stdin}`;
+	const process = invocation.process;
+	const processText = process
+		? [
+				process.exitCode === null ? null : `exit code ${process.exitCode}`,
+				process.stdout === "" ? null : `stdout ${JSON.stringify(process.stdout)}`,
+				process.stderr === "" ? null : `stderr ${JSON.stringify(process.stderr)}`,
+			].filter((part): part is string => part !== null)
+		: [];
+	const diagnostic = processText.length === 0 ? "" : `; ${processText.join("; ")}`;
+	const guidance = processAuthenticationFailure(process)
+		? invocation.command === "gh"
+			? " Run `gh auth login --hostname github.com`, then retry after confirming authentication."
+			: invocation.command === "glab"
+				? " Run `glab auth login --hostname gitlab.com`, then retry after confirming authentication."
+				: ""
+		: "";
+	return `${reason}: ${command}${stdin}${diagnostic}.${guidance}`;
 }
 
-function diagnosticFor(invocation: ForgeInvocation): ForgeInvocationDiagnostic {
+function processAuthenticationFailure(process: ForgeProcessDiagnostic | undefined): boolean {
+	if (process === undefined) return false;
+	if (process.authenticationFailure !== undefined) return process.authenticationFailure;
+	const diagnostic = `${process.stdout}\n${process.stderr}`;
+	return FORGE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(diagnostic));
+}
+
+function redactionValues(stdin: string | undefined): string[] {
+	if (stdin === undefined) return [];
+	const values = new Set<string>([stdin]);
+	try {
+		const visit = (value: unknown) => {
+			if (typeof value === "string") {
+				if (value !== "") {
+					values.add(value);
+					values.add(JSON.stringify(value).slice(1, -1));
+				}
+				return;
+			}
+			if (Array.isArray(value)) {
+				for (const item of value) visit(item);
+				return;
+			}
+			if (typeof value === "object" && value !== null) {
+				for (const item of Object.values(value)) visit(item);
+			}
+		};
+		visit(JSON.parse(stdin));
+	} catch {}
+	return [...values].sort((left, right) => right.length - left.length);
+}
+
+function redactProcessOutput(value: string, secrets: readonly string[]): string {
+	let redacted = value;
+	for (const secret of secrets) redacted = redacted.replaceAll(secret, "[redacted]");
+	return redacted.replace(/"(?:\\.|[^"\\])*"/g, (token) => {
+		let decoded: unknown;
+		try {
+			decoded = JSON.parse(token);
+		} catch {
+			return token;
+		}
+		return typeof decoded === "string" && secrets.some((secret) => decoded.includes(secret)) ? '"[redacted]"' : token;
+	});
+}
+
+function boundedProcessOutput(value: string): string {
+	const truncated = truncateTail(value, {
+		maxBytes: PROCESS_DIAGNOSTIC_MAX_BYTES,
+		maxLines: PROCESS_DIAGNOSTIC_MAX_LINES,
+	});
+	return truncated.truncated ? `[truncated] ${truncated.content}` : truncated.content;
+}
+
+function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeInvocationDiagnostic {
+	const secrets = redactionValues(invocation.stdin);
+	const stdout = result === undefined ? "" : redactProcessOutput(result.stdout, secrets);
+	const stderr = result === undefined ? "" : redactProcessOutput(result.stderr, secrets);
 	return {
 		command: invocation.command,
 		args: [...invocation.args],
@@ -63,6 +166,18 @@ function diagnosticFor(invocation: ForgeInvocation): ForgeInvocationDiagnostic {
 					stdin: {
 						bytes: Buffer.byteLength(invocation.stdin, "utf8"),
 						sha256: createHash("sha256").update(invocation.stdin, "utf8").digest("hex"),
+					},
+				}),
+		...(result === undefined
+			? {}
+			: {
+					process: {
+						exitCode: result.code,
+						stdout: boundedProcessOutput(stdout),
+						stderr: boundedProcessOutput(stderr),
+						authenticationFailure: FORGE_AUTH_FAILURE_PATTERNS.some((pattern) =>
+							pattern.test(`${stdout}\n${stderr}`),
+						),
 					},
 				}),
 	};
@@ -82,16 +197,17 @@ export async function runForgeCommand(exec: ForgeExec, invocation: ForgeInvocati
 		throw new ForgeCommandError("execution", diagnostic, error);
 	}
 
-	if (result.spawnError?.code === "ENOENT") throw new ForgeCommandError("missing-executable", diagnostic);
-	if (result.killed && invocation.signal?.aborted) throw new ForgeCommandError("cancelled", diagnostic);
-	if (result.killed) throw new ForgeCommandError("timeout", diagnostic);
-	if (result.stdinError) throw new ForgeCommandError("stdin", diagnostic);
-	if (result.spawnError || result.code !== 0) throw new ForgeCommandError("failed", diagnostic);
+	const processDiagnostic = diagnosticFor(invocation, result);
+	if (result.spawnError?.code === "ENOENT") throw new ForgeCommandError("missing-executable", processDiagnostic);
+	if (result.killed && invocation.signal?.aborted) throw new ForgeCommandError("cancelled", processDiagnostic);
+	if (result.killed) throw new ForgeCommandError("timeout", processDiagnostic);
+	if (result.stdinError) throw new ForgeCommandError("stdin", processDiagnostic);
+	if (result.spawnError || result.code !== 0) throw new ForgeCommandError("failed", processDiagnostic);
 	return result;
 }
 
 function invalidRemote(): never {
-	throw new Error("Origin is not a supported GitHub or GitLab origin");
+	throw new UnsupportedForgeOriginError();
 }
 
 function repositoryFor(host: string, rawPath: string): ForgeRepository {

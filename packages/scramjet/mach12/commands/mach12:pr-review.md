@@ -51,14 +51,14 @@ git pull
 
 ## Step 3: Run the review
 
-Determine the changed files and complete diff before launching reviewers:
+Use `read_pr` with `include: ["files"]` and continue every returned range with the unchanged snapshot until the complete PR document and top-level conversation are visible. Extract the authoritative base branch from the verified readiness element before computing the reviewer diff, including non-`main` targets such as `release/next`. Validate the extracted value with `git check-ref-format --branch "$base_branch"`, fetch that exact quoted branch into its remote-tracking ref with `git fetch origin "refs/heads/$base_branch:refs/remotes/origin/$base_branch"`, and require `git rev-parse --verify "refs/remotes/origin/$base_branch"` to succeed. Treat the extracted branch as data—never interpolate it into shell source. Stop before reviewer dispatch if extraction, validation, fetch, or verification fails.
+
+Determine the changed files and complete diff against that verified base ref before launching reviewers:
 
 ```
-git diff --name-only origin/main...HEAD
-git diff --find-renames origin/main...HEAD
+git diff --name-only "refs/remotes/origin/$base_branch...HEAD"
+git diff --find-renames "refs/remotes/origin/$base_branch...HEAD"
 ```
-
-Use `read_pr` with `include: ["files"]` and continue every returned range with the unchanged snapshot until the complete PR document and top-level conversation are visible.
 
 Identify linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
 
@@ -88,7 +88,7 @@ Also include supplementary domain-relevant agents from any installed source when
 
 Dispatch all selected review tasks in a single parallel `subagent` call. Give each reviewer a focused brief that includes:
 
-- PR number, title, body, changed files, complete diff, and any relevant PR comments. The completeness lens must receive the complete diff supplied by this parent command because its read-only tool scope omits `bash`.
+- PR number, title, body, authoritative base branch, changed files, complete diff, and any relevant PR comments. The completeness lens must receive the complete diff supplied by this parent command because its read-only tool scope omits `bash`.
 - The specific lens it is responsible for.
 - The user context from Step 1, if provided: `> **User context:** <context>`
 - Relevant artifact timestamps, identified freshness caveats, and which claims were checked against current authority.

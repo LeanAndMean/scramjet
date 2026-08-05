@@ -76,7 +76,7 @@ function pullRequest(overrides: Partial<ForgePullRequest> = {}): ForgePullReques
 		readiness: {
 			draft: false,
 			mergeable: "mergeable",
-			reviewDecision: "approved",
+			reviewDecision: { capability: "supported", value: "approved" },
 			head: "feature/parser",
 			base: "main",
 		},
@@ -339,6 +339,7 @@ describe("registerForgeTools read contracts", () => {
 					edits: [{ field: "state", oldText: "open", newText: "closed" }],
 				}),
 			).toBe(false);
+			expect(JSON.stringify(tool.parameters)).toContain("comment targets accept body only");
 		}
 	});
 
@@ -554,6 +555,14 @@ describe("registerForgeTools read contracts", () => {
 			lastComponent: undefined,
 		});
 		expect(collapsed.render(120).join("\n")).toMatch(/lines 1-\d+ of \d+/);
+		const expanded = issueTool.renderResult(result, { expanded: true, isPartial: false }, theme(), {
+			args: { number: 7 },
+			lastComponent: undefined,
+		});
+		const expandedText = expanded.render(120).join("\n");
+		expect(expandedText).toContain("<body>first line");
+		expect(expandedText).not.toContain("CDATA");
+		expect(expandedText).not.toContain("forge-break");
 
 		const replayFallback = issueTool.renderResult(
 			{ content: [{ type: "text", text: "persisted text" }], details: { malformed: true } },
@@ -754,7 +763,25 @@ describe("registerForgeTools creation contracts", () => {
 		expect(readArtifact).not.toHaveBeenCalled();
 	});
 
-	it("preserves definite CLI failures for artifact and comment creation", async () => {
+	it("rejects an unprefixed GitLab draft title before attempting creation", async () => {
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>();
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>();
+		const { createPrTool } = toolSetup(pullRequest(), { createArtifact, readArtifact }, gitlabRepository);
+
+		await expect(
+			createPrTool.execute(
+				"create-pr",
+				{ title: "Release", body: "Body", head: "feature", base: "main", draft: true },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toThrow(/exact approved title.*draft prefix/i);
+		expect(createArtifact).not.toHaveBeenCalled();
+		expect(readArtifact).not.toHaveBeenCalled();
+	});
+
+	it("treats generic post-send CLI failures as ambiguous for artifact and comment creation", async () => {
 		const failure = new ForgeCommandError("failed", { command: "gh", args: ["api"], cwd: "/repo" });
 		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
 			throw failure;
@@ -768,7 +795,7 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toBe(failure);
+		).rejects.toThrow(/may have succeeded.*reread/i);
 
 		const original = issue();
 		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => original);
@@ -785,9 +812,33 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(branch),
 			),
-		).rejects.toBe(failure);
+		).rejects.toThrow(/may have succeeded.*reread/i);
 		expect(addComment).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		new ForgeCommandError("missing-executable", { command: "gh", args: ["api"], cwd: "/repo" }),
+		new ForgeCommandError("failed", {
+			command: "gh",
+			args: ["api"],
+			cwd: "/repo",
+			process: { exitCode: 1, stdout: "", stderr: "HTTP 401 Unauthorized" },
+		}),
+	])("preserves conclusively definite mutation rejection", async (failure) => {
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
+			throw failure;
+		});
+		const { createIssueTool } = toolSetup(issue(), { createArtifact });
+		await expect(
+			createIssueTool.execute(
+				"create",
+				{ title: "Created issue", body: "Body" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+		).rejects.toBe(failure);
 	});
 
 	it("treats a failed post-identity verification read as ambiguous", async () => {
@@ -944,6 +995,9 @@ describe("registerForgeTools edit contracts", () => {
 		);
 		expect(result.content[0].text).toContain('"newText":"Strict <parser>"');
 		expect(result.content[0].text).toContain('"newText":"<node>"');
+		expect(result.content[0].text).toContain("Verified fresh postimage (non-authorizing)");
+		expect(result.content[0].text).toContain('<title mutable="true"><![CDATA[Strict <parser> failure]]></title>');
+		expect(result.content[0].text).toContain("literal &lt;node&gt;");
 		expect(result.details).toMatchObject({
 			schema: "scramjet:forge-mutation@1",
 			operation: "edit_issue",
@@ -998,6 +1052,7 @@ describe("registerForgeTools edit contracts", () => {
 		expect(adapter.updateArtifact).not.toHaveBeenCalled();
 		expect(result.content[0].text).toContain('"field":"body"');
 		expect(result.content[0].text).toContain("<done>");
+		expect(result.content[0].text).toContain('<body mutable="true"><![CDATA[');
 		expect(result.details).toMatchObject({
 			operation: "edit_issue",
 			identity: { kind: "comment", id: "101" },
@@ -1059,6 +1114,35 @@ describe("registerForgeTools edit contracts", () => {
 			undefined,
 		);
 		expect(result.details).toMatchObject({ operation: "edit_pr", identity: { kind: "pr", number: 12 } });
+		expect(result.content[0].text).toContain("After PR");
+	});
+
+	it("bounds a verified fresh edit postimage without authorizing another mutation", async () => {
+		const original = issue({ title: "Old title", body: "x".repeat(100_000) });
+		let current = original;
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => current);
+		const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>(async (_repository, input) => {
+			current = issue({ ...current, title: input.title ?? current.title });
+			return { kind: "issue", number: 7, url: current.url };
+		});
+		const { editIssueTool } = toolSetup(original, { readArtifact, updateArtifact });
+		const branch = evidenceBranch(fieldReceipts(original, { kind: "artifact" }, "title"), "read_issue", [
+			{ id: "edit-large", name: "edit_issue" },
+		]);
+		const result = await editIssueTool.execute(
+			"edit-large",
+			{
+				number: 7,
+				target: { kind: "artifact" },
+				edits: [{ field: "title", oldText: "Old", newText: "New" }],
+			},
+			undefined,
+			undefined,
+			toolContext(branch),
+		);
+		expect(result.details.postimage.truncated).toBe(true);
+		expect(Buffer.byteLength(result.details.postimage.content, "utf8")).toBeLessThanOrEqual(42 * 1024);
+		expect(result.content[0].text).toContain("Verified postimage truncated");
 	});
 
 	it.each([
@@ -1251,7 +1335,7 @@ describe("registerForgeTools edit contracts", () => {
 		expect(updateArtifact).not.toHaveBeenCalled();
 
 		releaseComment();
-		await expect(comment).rejects.toBe(failure);
+		await expect(comment).rejects.toThrow(/may have succeeded.*reread/i);
 		await expect(edit).resolves.toMatchObject({ details: { verified: true } });
 		expect(updateArtifact).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(3);
@@ -1338,10 +1422,12 @@ describe("forge startup prerequisites", () => {
 			return authResult;
 		});
 		const notify = vi.fn();
-		registerForgeTools(bag.pi, { createAdapter: () => adapterFor(vi.fn()) });
+		const warn = vi.fn();
+		registerForgeTools(bag.pi, { createAdapter: () => adapterFor(vi.fn()), logger: { warn } });
 		return {
 			bag,
 			notify,
+			warn,
 			ctx: { cwd: "/repo", hasUI: options.hasUI ?? true, ui: { notify } },
 		};
 	}
@@ -1433,35 +1519,63 @@ describe("forge startup prerequisites", () => {
 		const headless = startupSetup("https://github.com/Acme/widget.git", execResult(), { hasUI: false });
 		await headless.bag.emit("session_start", {}, headless.ctx);
 		expect(headless.bag.pi.exec).not.toHaveBeenCalled();
+		expect(headless.warn).not.toHaveBeenCalled();
 
 		const unsupported = startupSetup("git@github-work:Acme/widget.git", execResult());
 		await unsupported.bag.emit("session_start", {}, unsupported.ctx);
 		await flush();
 		expect(unsupported.bag.pi.exec).toHaveBeenCalledTimes(1);
 		expect(unsupported.notify).not.toHaveBeenCalled();
+		expect(unsupported.warn).not.toHaveBeenCalled();
 
 		const unavailable = startupSetup("", execResult(), { rejectGit: true });
 		await unavailable.bag.emit("session_start", {}, unavailable.ctx);
 		await flush();
 		expect(unavailable.notify).not.toHaveBeenCalled();
+		expect(unavailable.warn).not.toHaveBeenCalled();
 	});
 
-	it("detaches the caught probe from session_start", async () => {
+	it("journals unexpected detached startup probe defects", async () => {
+		const bag = recordingPi();
+		const warn = vi.fn();
+		registerForgeTools(bag.pi, {
+			createAdapter: () => adapterFor(vi.fn()),
+			resolveRepository: async () => {
+				throw new Error("resolver defect");
+			},
+			logger: { warn },
+		});
+		await bag.emit("session_start", {}, { cwd: "/repo", hasUI: true, ui: { notify: vi.fn() } });
+		await flush();
+		expect(warn).toHaveBeenCalledWith("forge", "startup prerequisite probe failed", {
+			error: "Error: resolver defect",
+		});
+	});
+
+	it("detaches the probe from session_start and journals notification defects", async () => {
 		let resolveGit!: (result: ExecResult) => void;
 		const gitPending = new Promise<ExecResult>((resolve) => {
 			resolveGit = resolve;
 		});
 		const bag = recordingPi();
-		bag.pi.exec = vi.fn(() => gitPending);
+		bag.pi.exec = vi.fn((command: string) =>
+			command === "git"
+				? gitPending
+				: Promise.resolve(execResult({ spawnError: { code: "ENOENT", message: "missing" } })),
+		);
 		const notify = vi.fn(() => {
 			throw new Error("stale UI");
 		});
-		registerForgeTools(bag.pi, { createAdapter: () => adapterFor(vi.fn()) });
+		const warn = vi.fn();
+		registerForgeTools(bag.pi, { createAdapter: () => adapterFor(vi.fn()), logger: { warn } });
 
 		await expect(
 			bag.emit("session_start", {}, { cwd: "/repo", hasUI: true, ui: { notify } }),
 		).resolves.toBeUndefined();
 		resolveGit(execResult({ stdout: "https://github.com/Acme/widget.git" }));
 		await flush();
+		expect(warn).toHaveBeenCalledWith("forge", "startup prerequisite probe failed", {
+			error: "Error: stale UI",
+		});
 	});
 });

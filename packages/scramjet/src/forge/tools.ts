@@ -7,14 +7,17 @@ import type {
 	Theme,
 	ToolRenderResultOptions,
 } from "@leanandmean/coding-agent";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@leanandmean/coding-agent";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@leanandmean/coding-agent";
 import { Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
+import type { ScramjetLogger } from "../logger.js";
 import {
+	FORGE_AUTH_FAILURE_PATTERNS,
 	FORGE_EXEC_TIMEOUT_MS,
 	ForgeCommandError,
 	type ForgeExec,
 	resolveCurrentRepository,
+	UnsupportedForgeOriginError,
 	withForgeMutationQueue,
 } from "./client.js";
 import {
@@ -22,6 +25,7 @@ import {
 	type ForgeRangeRequest,
 	isForgeReadDetails,
 	renderForgeDocument,
+	renderForgeTargetPostimage,
 	sliceForgeDocument,
 } from "./document.js";
 import { createGithubAdapter } from "./github.js";
@@ -114,15 +118,26 @@ function editSchema() {
 		{
 			number: ARTIFACT_NUMBER,
 			target: Type.Union([
-				Type.Object({ kind: Type.Literal("artifact") }, { additionalProperties: false }),
 				Type.Object(
-					{ kind: Type.Literal("comment"), id: Type.String({ minLength: 1, description: "Opaque comment ID" }) },
+					{ kind: Type.Literal("artifact", { description: "Artifact target; edits may change title or body" }) },
+					{ additionalProperties: false },
+				),
+				Type.Object(
+					{
+						kind: Type.Literal("comment", { description: "Comment target; edits may change body only" }),
+						id: Type.String({ minLength: 1, description: "Opaque comment ID" }),
+					},
 					{ additionalProperties: false },
 				),
 			]),
 			edits: Type.Array(
 				Type.Object(
-					{ field: StringEnum(["title", "body"] as const), ...REPLACEMENT },
+					{
+						field: StringEnum(["title", "body"] as const, {
+							description: "Artifact targets accept title or body; comment targets accept body only",
+						}),
+						...REPLACEMENT,
+					},
 					{ additionalProperties: false },
 				),
 				{ minItems: 1 },
@@ -151,6 +166,7 @@ type ForgeAdapterFactory = (repository: ForgeRepository, exec: ForgeExec, cwd: s
 export interface ForgeToolDependencies {
 	resolveRepository?: typeof resolveCurrentRepository;
 	createAdapter?: ForgeAdapterFactory;
+	logger?: Pick<ScramjetLogger, "warn">;
 }
 
 function defaultAdapter(repository: ForgeRepository, exec: ForgeExec, cwd: string): ForgeAdapter {
@@ -332,20 +348,18 @@ function assertArtifactIdentity(artifact: ForgeArtifact, kind: ForgeArtifactKind
 const GITLAB_DRAFT_PREFIX = /^(?:Draft:|\[Draft\]|\(Draft\))\s*/i;
 
 function validateCreateInput(repository: ForgeRepository, input: ForgeCreateInput): void {
-	if (repository.forge === "gitlab" && input.kind === "pr" && !input.draft && GITLAB_DRAFT_PREFIX.test(input.title)) {
+	if (repository.forge !== "gitlab" || input.kind !== "pr") return;
+	const prefixed = GITLAB_DRAFT_PREFIX.test(input.title);
+	if (!input.draft && prefixed) {
 		throw new Error("GitLab cannot create a non-draft merge request with a draft-prefixed title");
 	}
-}
-
-function expectedCreatedTitle(repository: ForgeRepository, input: ForgeCreateInput): string {
-	if (repository.forge === "gitlab" && input.kind === "pr" && input.draft && !GITLAB_DRAFT_PREFIX.test(input.title)) {
-		return `Draft: ${input.title}`;
+	if (input.draft && !prefixed) {
+		throw new Error("GitLab draft merge requests require the exact approved title to include a draft prefix");
 	}
-	return input.title;
 }
 
-function verifyCreatedArtifact(repository: ForgeRepository, input: ForgeCreateInput, artifact: ForgeArtifact): void {
-	if (artifact.title !== expectedCreatedTitle(repository, input) || artifact.body !== input.body) {
+function verifyCreatedArtifact(_repository: ForgeRepository, input: ForgeCreateInput, artifact: ForgeArtifact): void {
+	if (artifact.title !== input.title || artifact.body !== input.body) {
 		throw new Error("Created artifact content did not match the requested title and body");
 	}
 	if (
@@ -392,7 +406,10 @@ function ambiguousMutation(operation: string, error: unknown): Error {
 }
 
 function mutationAttemptFailure(operation: string, error: unknown): Error {
-	if (error instanceof ForgeCommandError && (error.kind === "missing-executable" || error.kind === "failed")) {
+	if (
+		error instanceof ForgeCommandError &&
+		(error.kind === "missing-executable" || (error.kind === "failed" && error.authenticationFailure))
+	) {
 		return error;
 	}
 	return ambiguousMutation(operation, error);
@@ -515,12 +532,20 @@ function editMutationResult(
 	identity: ForgeIdentity,
 	target: ForgeMutationTarget,
 	diff: ForgeEditDiff[],
+	artifact: ForgeArtifact,
 ) {
+	const postimage = truncateHead(renderForgeTargetPostimage(renderForgeDocument(repository, artifact), target), {
+		maxLines: DEFAULT_MAX_LINES - 20,
+		maxBytes: DEFAULT_MAX_BYTES - 8192,
+	});
+	const truncation = postimage.truncated
+		? `\n[Verified postimage truncated by ${postimage.truncatedBy}; ${postimage.totalLines} lines, ${postimage.totalBytes} bytes total.]`
+		: "";
 	return {
 		content: [
 			{
 				type: "text" as const,
-				text: `Edited and verified ${operation}: ${JSON.stringify({ identity, target, diff })}`,
+				text: `Edited and verified ${operation}: ${JSON.stringify({ identity, target, diff })}\n\nVerified fresh postimage (non-authorizing):\n${postimage.content}${truncation}`,
 			},
 		],
 		details: {
@@ -530,6 +555,7 @@ function editMutationResult(
 			identity,
 			target,
 			diff,
+			postimage: { content: postimage.content, truncated: postimage.truncated },
 			verified: true as const,
 		},
 	};
@@ -601,7 +627,7 @@ async function editArtifact(
 				if (updated.title !== title || updated.body !== body) {
 					throw new Error("Updated artifact mutable content did not match the requested postimage");
 				}
-				return editMutationResult(toolName, repository, identity, target, diff);
+				return editMutationResult(toolName, repository, identity, target, diff, updated);
 			} catch (error) {
 				throw ambiguousMutation(operation, error);
 			}
@@ -635,7 +661,7 @@ async function editArtifact(
 			if (updatedComment === undefined || updatedComment.url !== comment.url || updatedComment.body !== body) {
 				throw new Error("Updated comment mutable content did not match the requested postimage");
 			}
-			return editMutationResult(toolName, repository, identity, target, diff);
+			return editMutationResult(toolName, repository, identity, target, diff, updated);
 		} catch (error) {
 			throw ambiguousMutation(operation, error);
 		}
@@ -686,24 +712,12 @@ function renderResult(
 	const { offset, lines, totalLines } = result.details.range;
 	const end = offset + lines - 1;
 	let content = theme.fg("success", `lines ${offset}-${end} of ${totalLines}`);
-	if (options.expanded) {
-		const persisted = resultText(result);
-		if (persisted !== "") content += `\n${theme.fg("toolOutput", persisted)}`;
+	if (options.expanded && result.details.display !== "") {
+		content += `\n${theme.fg("toolOutput", result.details.display)}`;
 	}
 	text.setText(content);
 	return text;
 }
-
-const AUTH_FAILURE = [
-	/\bnot logged (?:in|into)\b/i,
-	/\bno hosts? (?:are )?configured\b/i,
-	/\bno (?:authentication |auth )?token (?:is )?found\b/i,
-	/\btoken\b[^\n]*(?:invalid|expired|revoked)\b/i,
-	/(?:invalid|expired|revoked)[^\n]*\btoken\b/i,
-	/\bauthentication (?:failed|required)\b/i,
-	/\bunauthorized\b/i,
-	/\bHTTP(?:\/\S+)?\s+401\b/i,
-];
 
 function prerequisiteWarning(repository: ForgeRepository, result: ExecResult): string | null {
 	const cli = repository.forge === "github" ? "gh" : "glab";
@@ -713,7 +727,7 @@ function prerequisiteWarning(repository: ForgeRepository, result: ExecResult): s
 	}
 	if (result.code === 0 || result.killed || result.spawnError || result.stdinError) return null;
 	const diagnostic = `${result.stdout}\n${result.stderr}`;
-	if (!AUTH_FAILURE.some((pattern) => pattern.test(diagnostic))) return null;
+	if (!FORGE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(diagnostic))) return null;
 	return `Scramjet forge tools cannot authenticate to ${repository.host}. Run \`${cli} auth login --hostname ${repository.host}\`, then restart Scramjet.`;
 }
 
@@ -722,7 +736,13 @@ async function probePrerequisite(
 	cwd: string,
 	resolveRepository: typeof resolveCurrentRepository,
 ): Promise<string | null> {
-	const repository = await resolveRepository(exec, cwd);
+	let repository: ForgeRepository;
+	try {
+		repository = await resolveRepository(exec, cwd);
+	} catch (error) {
+		if (error instanceof ForgeCommandError || error instanceof UnsupportedForgeOriginError) return null;
+		throw error;
+	}
 	const cli = repository.forge === "github" ? "gh" : "glab";
 	const args = ["auth", "status", "--hostname", repository.host];
 	if (repository.forge === "github") args.push("--active");
@@ -737,6 +757,7 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 	const dependencies: Required<ForgeToolDependencies> = {
 		resolveRepository: overrides.resolveRepository ?? resolveCurrentRepository,
 		createAdapter: overrides.createAdapter ?? defaultAdapter,
+		logger: overrides.logger ?? { warn() {} },
 	};
 	const exec = forgeExec(pi);
 
@@ -798,6 +819,7 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		promptSnippet: "Create a pull request from explicit existing branches in the current repository",
 		promptGuidelines: [
 			"Use create_pr only after the user has approved the exact pull request title and body.",
+			"For GitLab draft merge requests, the approved exact title must already include a GitLab draft prefix.",
 			"Pass explicit existing head and base branches; create_pr never mutates Git state.",
 		],
 		parameters: CREATE_PR_SCHEMA,
@@ -912,6 +934,8 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 			.then((warning) => {
 				if (warning !== null) ctx.ui.notify(warning, "warning");
 			})
-			.catch(() => {});
+			.catch((error) => {
+				dependencies.logger.warn("forge", "startup prerequisite probe failed", { error: String(error) });
+			});
 	});
 }

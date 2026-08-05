@@ -118,6 +118,7 @@ describe("createGithubAdapter reads", () => {
 				capability: "supported",
 				items: [
 					{
+						repository,
 						relation: "parent",
 						source: "native",
 						number: 3,
@@ -126,6 +127,7 @@ describe("createGithubAdapter reads", () => {
 						title: "Parent issue",
 					},
 					{
+						repository,
 						relation: "child",
 						source: "native",
 						number: 8,
@@ -134,12 +136,22 @@ describe("createGithubAdapter reads", () => {
 						title: "First child",
 					},
 					{
+						repository,
 						relation: "child",
 						source: "native",
 						number: 9,
 						url: "https://github.com/Acme/widget/issues/9",
 						state: "open",
 						title: "Second child",
+					},
+					{
+						repository: { ...repository, projectPath: "Other/repository" },
+						relation: "child",
+						source: "native",
+						number: 8,
+						url: "https://github.com/Other/repository/issues/8",
+						state: "open",
+						title: "External same-number child",
 					},
 				],
 			},
@@ -154,14 +166,28 @@ describe("createGithubAdapter reads", () => {
 		expect(relationshipQuery).toContain("subIssues(first: 100, after: $endCursor)");
 	});
 
-	it("uses the same-repository task-list fallback only when native relationships fail", async () => {
-		const exec = readExec({ relationships: result("", { code: 1, stderr: "sub-issues unavailable" }) });
+	it("uses the same-repository task-list fallback only when native relationships are unsupported", async () => {
+		const exec = readExec({
+			relationships: result(
+				[
+					{
+						errors: [
+							{
+								extensions: { code: "undefinedField", typeName: "Issue", fieldName: "subIssues" },
+							},
+						],
+					},
+				],
+				{ code: 1, stderr: "Field subIssues does not exist on type Issue" },
+			),
+		});
 		const artifact = await createGithubAdapter(exec, "/repo").readArtifact(repository, "issue", 7, []);
 
 		expect(artifact.kind).toBe("issue");
 		if (artifact.kind !== "issue") throw new Error("Expected issue");
 		expect(artifact.relationships.items).toEqual([
 			{
+				repository,
 				relation: "child",
 				source: "task-list",
 				number: 8,
@@ -177,6 +203,18 @@ describe("createGithubAdapter reads", () => {
 		for (const excluded of [10, 99, 100]) {
 			expect(vi.mocked(exec).mock.calls[2][1]).not.toContain(`number=${excluded}`);
 		}
+	});
+
+	it.each([
+		result([{ errors: [{ extensions: { code: "RATE_LIMITED" } }] }], { code: 1, stderr: "rate limited" }),
+		result("", { code: 1, stderr: "HTTP 401 Unauthorized" }),
+		result("not-json", { code: 1, stderr: "network failure" }),
+	])("propagates operational native relationship failures without fallback", async (relationships) => {
+		const exec = readExec({ relationships });
+		await expect(createGithubAdapter(exec, "/repo").readArtifact(repository, "issue", 7, [])).rejects.toBeInstanceOf(
+			ForgeCommandError,
+		);
+		expect(exec).toHaveBeenCalledTimes(2);
 	});
 
 	it("does not turn cancellation into task-list fallback data", async () => {
@@ -204,7 +242,7 @@ describe("createGithubAdapter reads", () => {
 			readiness: {
 				draft: false,
 				mergeable: "mergeable",
-				reviewDecision: "approved",
+				reviewDecision: { capability: "supported", value: "approved" },
 				head: "feature/ship",
 				base: "main",
 			},
@@ -482,6 +520,25 @@ describe("createGithubAdapter mutations", () => {
 				signal: undefined,
 			},
 		);
+	});
+
+	it("accepts canonical response casing for a lowercase repository origin", async () => {
+		const mutations = fixture("github-mutations.json") as Record<string, unknown>;
+		const lowercase = { ...repository, projectPath: "acme/widget" };
+		const exec = vi.fn<ForgeExec>(async (_command, args) => {
+			if (args.at(-1) === "repos/acme/widget/issues") return result(mutations.issue);
+			if (args.at(-1) === "repos/acme/widget/issues/7/comments") return result(mutations.issueComment);
+			throw new Error(`Unexpected endpoint ${args.at(-1)}`);
+		});
+		const adapter = createGithubAdapter(exec, "/repo");
+		await expect(adapter.createArtifact(lowercase, { kind: "issue", title: "Title", body: "Body" })).resolves.toEqual(
+			{ kind: "issue", number: 41, url: "https://github.com/Acme/widget/issues/41" },
+		);
+		await expect(adapter.addComment(lowercase, { kind: "issue", number: 7, body: "Body" })).resolves.toEqual({
+			kind: "comment",
+			id: "9876543210",
+			url: "https://github.com/Acme/widget/issues/7#issuecomment-9876543210",
+		});
 	});
 
 	it("rejects malformed, mismatched, and unsafe mutation identities", async () => {

@@ -118,6 +118,52 @@ describe("runForgeCommand", () => {
 		});
 	});
 
+	it("retains bounded safe diagnostics and shared authentication guidance without exposing stdin content", async () => {
+		const body = "<private mutation body>";
+		const stdin = JSON.stringify({ title: "private title", body });
+		const exec: ForgeExec = async () =>
+			result({
+				code: 1,
+				stdout: '{"body":"\\u003cprivate mutation body\\u003e","title":"private title"}\u001b[31m',
+				stderr: `HTTP 401 Unauthorized ${"x".repeat(10_000)}`,
+			});
+		let caught: unknown;
+		try {
+			await runForgeCommand(exec, { ...invocation, stdin });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(ForgeCommandError);
+		const error = caught as ForgeCommandError;
+		expect(error.authenticationFailure).toBe(true);
+		expect(error.message).toContain("exit code 1");
+		expect(error.message).toContain("[redacted]");
+		expect(error.message).toContain("\\u001b");
+		expect(error.message).toContain("gh auth login --hostname github.com");
+		expect(error.message).not.toContain(stdin);
+		expect(error.message).not.toContain(body);
+		expect(error.message).not.toContain("private title");
+		expect(error.invocation.process?.stderr).toContain("[truncated]");
+		expect(Buffer.byteLength(error.invocation.process?.stderr ?? "", "utf8")).toBeLessThan(4200);
+	});
+
+	it("does not classify authentication from echoed mutation content", async () => {
+		const stdin = JSON.stringify({ body: "HTTP 401 Unauthorized" });
+		const exec: ForgeExec = async () =>
+			result({ code: 1, stderr: `validation rejected ${JSON.stringify("HTTP 401 Unauthorized")}` });
+		let caught: unknown;
+		try {
+			await runForgeCommand(exec, { ...invocation, stdin });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(ForgeCommandError);
+		const error = caught as ForgeCommandError;
+		expect(error.authenticationFailure).toBe(false);
+		expect(error.message).not.toContain("auth login");
+		expect(error.message).not.toContain("HTTP 401 Unauthorized");
+	});
+
 	it("reports stdin only by byte count and digest", async () => {
 		const secret = "private body λ";
 		const exec: ForgeExec = async () => result({ code: 1 });

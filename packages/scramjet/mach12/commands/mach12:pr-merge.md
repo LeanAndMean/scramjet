@@ -32,7 +32,7 @@ Extract the PR number from the input. If the input is ambiguous, ask the user to
 
 Use `read_pr` immediately before merging to read the PR's state, draft flag, mergeability, review decision, head/base branches, and complete top-level conversation. Retain a narrow `gh pr view <pr-number> --json mergeStateStatus` query for GitHub branch-freshness state.
 
-Require the PR to be open, non-draft, free of requested changes or required review, current with the default branch, conflict-free, and passing its required checks. Use `gh pr checks <pr-number> --required` to distinguish required checks; repositories without required checks may continue. If mergeability remains unknown after one brief reread with `read_pr`, report incomplete rather than guessing.
+Require the PR to be open, non-draft, free of requested changes or required review, current with the default branch, conflict-free, and passing its required checks. Treat `review-decision-capability="supported"` as required readiness evidence; if the capability is unsupported, use a narrow provider query only when it can conclusively establish both requested-change and required-review state, otherwise report incomplete rather than treating absence as review-clear. Use `gh pr checks <pr-number> --required` to distinguish required checks; repositories without required checks may continue. If mergeability remains unknown after one brief reread with `read_pr`, report incomplete rather than guessing.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness. Do not offer a force merge, force push, or readiness bypass.
 

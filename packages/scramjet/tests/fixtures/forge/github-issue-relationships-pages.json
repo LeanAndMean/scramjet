@@ -11,7 +11,7 @@
             "title": "Parent issue"
           },
           "subIssues": {
-            "totalCount": 2,
+            "totalCount": 3,
             "nodes": [
               {
                 "number": 8,
@@ -38,13 +38,19 @@
             "title": "Parent issue"
           },
           "subIssues": {
-            "totalCount": 2,
+            "totalCount": 3,
             "nodes": [
               {
                 "number": 9,
                 "url": "https://github.com/Acme/widget/issues/9",
                 "state": "OPEN",
                 "title": "Second child"
+              },
+              {
+                "number": 8,
+                "url": "https://github.com/Other/repository/issues/8",
+                "state": "OPEN",
+                "title": "External same-number child"
               }
             ],
             "pageInfo": { "hasNextPage": false, "endCursor": "child-2" }

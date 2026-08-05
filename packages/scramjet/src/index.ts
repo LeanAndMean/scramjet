@@ -122,7 +122,7 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 	registerModelChangeNotice(pi, state);
 	registerNextStepRecord(pi);
 	registerHistory(pi, state);
-	registerForgeTools(pi);
+	registerForgeTools(pi, { logger: state.logger });
 	registerPrIndicator(pi);
 	registerUpdateNotifier(pi, updateNotifierDependencies);
 	registerBaseDirectives(pi);

@@ -38,6 +38,7 @@ interface ForgeArtifactBase {
 }
 
 export interface ForgeIssueRelationship {
+	repository: ForgeRepository;
 	relation: "parent" | "child";
 	source: "native" | "task-list";
 	number: number;
@@ -56,10 +57,12 @@ export interface ForgeIssue extends ForgeArtifactBase {
 	relationships: ForgeIssueRelationships;
 }
 
+export type ForgePrReviewDecision = { capability: "supported"; value: string | null } | { capability: "unsupported" };
+
 export interface ForgePrReadiness {
 	draft: boolean;
 	mergeable: "mergeable" | "conflicting" | "unknown";
-	reviewDecision: string | null;
+	reviewDecision: ForgePrReviewDecision;
 	head: string;
 	base: string;
 }
@@ -198,4 +201,5 @@ export interface ForgeReadDetails {
 	range: { offset: number; lines: number; totalLines: number };
 	fields: ForgeFieldCoverage[];
 	core: { totalLines: number; ranges: ForgeCoverageRange[] };
+	display: string;
 }

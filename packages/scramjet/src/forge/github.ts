@@ -122,7 +122,7 @@ interface CoreArtifact {
 interface PrCore extends CoreArtifact {
 	draft: boolean;
 	mergeable: "mergeable" | "conflicting" | "unknown";
-	reviewDecision: string | null;
+	reviewDecision: { capability: "supported"; value: string | null };
 	head: string;
 	base: string;
 	changedFiles: number;
@@ -430,20 +430,48 @@ async function readCore(
 		comments,
 		draft: boolean(value.isDraft, "pull request"),
 		mergeable,
-		reviewDecision: nullableString(value.reviewDecision, "pull request")?.toLowerCase() ?? null,
+		reviewDecision: {
+			capability: "supported",
+			value: nullableString(value.reviewDecision, "pull request")?.toLowerCase() ?? null,
+		},
 		head: string(value.headRefName, "pull request"),
 		base: string(value.baseRefName, "pull request"),
 		changedFiles: nonnegativeInteger(value.changedFiles, "pull request"),
 	};
 }
 
+function repositoriesEqual(left: ForgeRepository, right: ForgeRepository): boolean {
+	return (
+		left.forge === right.forge &&
+		left.host === right.host &&
+		left.projectPath.toLowerCase() === right.projectPath.toLowerCase()
+	);
+}
+
+function githubArtifactRepository(
+	url: string,
+	kind: ForgeArtifactKind,
+	number: number,
+	label: string,
+): ForgeRepository {
+	const segment = kind === "issue" ? "issues" : "pull";
+	const match = new RegExp(`^https://github\\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/${segment}/${number}$`).exec(
+		url,
+	);
+	if (match === null) return malformed(label);
+	return { forge: "github", host: "github.com", projectPath: `${match[1]}/${match[2]}` };
+}
+
 function parseRelationship(value: unknown, relation: "parent" | "child", source: "native" | "task-list") {
 	const issue = record(value, "relationships");
+	const number = positiveInteger(issue.number, "relationships");
+	const url = string(issue.url, "relationships");
 	return {
+		repository: githubArtifactRepository(url, "issue", number, "relationships"),
 		relation,
 		source,
-		number: positiveInteger(issue.number, "relationships"),
-		url: string(issue.url, "relationships"),
+		number,
+		url,
 		state: string(issue.state, "relationships").toLowerCase(),
 		title: string(issue.title, "relationships"),
 	} satisfies ForgeIssueRelationship;
@@ -470,10 +498,14 @@ async function readNativeRelationships(
 		(page) => pageArtifact(page, "issue", "relationships").subIssues,
 		"relationships",
 		(node) => parseRelationship(node, "child", "native"),
-		(child) => String(child.number),
+		(child) => `${child.repository.projectPath.toLowerCase()}:${child.number}`,
 	);
 	const relationships = parent === null ? children : [parent, ...children];
-	if (new Set(relationships.map((item) => `${item.relation}:${item.number}`)).size !== relationships.length) {
+	if (
+		new Set(
+			relationships.map((item) => `${item.relation}:${item.repository.projectPath.toLowerCase()}:${item.number}`),
+		).size !== relationships.length
+	) {
 		return malformed("relationships");
 	}
 	return relationships;
@@ -513,10 +545,35 @@ async function readTaskListRelationships(
 		const data = record(response.data, "relationships");
 		const remoteRepository = record(data.repository, "relationships");
 		const relationship = parseRelationship(remoteRepository.task, "child", "task-list");
-		if (relationship.number !== number) return malformed("relationships");
+		if (relationship.number !== number || !repositoriesEqual(relationship.repository, repository)) {
+			return malformed("relationships");
+		}
 		relationships.push(relationship);
 	}
 	return relationships;
+}
+
+function nativeRelationshipsUnsupported(error: ForgeCommandError): boolean {
+	if (error.kind !== "failed" || error.invocation.process === undefined) return false;
+	let pages: unknown;
+	try {
+		pages = JSON.parse(error.invocation.process.stdout);
+	} catch {
+		return false;
+	}
+	if (!Array.isArray(pages) || pages.length === 0) return false;
+	return pages.every((page) => {
+		if (!isRecord(page) || !Array.isArray(page.errors) || page.errors.length === 0) return false;
+		return page.errors.every((item) => {
+			if (!isRecord(item) || !isRecord(item.extensions)) return false;
+			const extensions = item.extensions;
+			return (
+				extensions.code === "undefinedField" &&
+				extensions.typeName === "Issue" &&
+				(extensions.fieldName === "parent" || extensions.fieldName === "subIssues")
+			);
+		});
+	});
 }
 
 async function readRelationships(
@@ -529,7 +586,9 @@ async function readRelationships(
 	try {
 		return await readNativeRelationships(context, repository, number, signal);
 	} catch (error) {
-		if (!(error instanceof ForgeCommandError) || error.kind !== "failed" || signal?.aborted) throw error;
+		if (!(error instanceof ForgeCommandError) || !nativeRelationshipsUnsupported(error) || signal?.aborted) {
+			throw error;
+		}
 		return readTaskListRelationships(context, repository, number, body, signal);
 	}
 }
@@ -657,10 +716,6 @@ async function readChecks(
 	);
 }
 
-function artifactUrl(repository: ForgeRepository, kind: ForgeArtifactKind, number: number): string {
-	return `https://github.com/${repository.projectPath}/${kind === "issue" ? "issues" : "pull"}/${number}`;
-}
-
 function mutationIdentity(
 	value: unknown,
 	repository: ForgeRepository,
@@ -670,7 +725,11 @@ function mutationIdentity(
 	const response = record(value, "mutation response");
 	const number = positiveInteger(response.number, "mutation response");
 	const url = string(response.html_url, "mutation response");
-	if ((expectedNumber !== undefined && number !== expectedNumber) || url !== artifactUrl(repository, kind, number)) {
+	const responseRepository = githubArtifactRepository(url, kind, number, "mutation response");
+	if (
+		(expectedNumber !== undefined && number !== expectedNumber) ||
+		!repositoriesEqual(responseRepository, repository)
+	) {
 		return malformed("mutation response");
 	}
 	return { kind, number, url };
@@ -693,10 +752,28 @@ function commentIdentity(
 				: malformed("mutation response");
 	const url = string(response.html_url, "mutation response");
 	const issueUrl = string(response.issue_url, "mutation response");
+	const segment = kind === "issue" ? "issues" : "pull";
+	const commentMatch = new RegExp(
+		`^https://github\\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/${segment}/${parentNumber}#issuecomment-${id}$`,
+	).exec(url);
+	const issueMatch = new RegExp(
+		`^https://api\\.github\\.com/repos/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/issues/${parentNumber}$`,
+	).exec(issueUrl);
+	if (commentMatch === null || issueMatch === null) return malformed("mutation response");
+	const commentRepository: ForgeRepository = {
+		forge: "github",
+		host: "github.com",
+		projectPath: `${commentMatch[1]}/${commentMatch[2]}`,
+	};
+	const issueRepository: ForgeRepository = {
+		forge: "github",
+		host: "github.com",
+		projectPath: `${issueMatch[1]}/${issueMatch[2]}`,
+	};
 	if (
 		(expectedId !== undefined && id !== expectedId) ||
-		url !== `${artifactUrl(repository, kind, parentNumber)}#issuecomment-${id}` ||
-		issueUrl !== `https://api.github.com/repos/${repository.projectPath}/issues/${parentNumber}`
+		!repositoriesEqual(commentRepository, repository) ||
+		!repositoriesEqual(issueRepository, repository)
 	) {
 		return malformed("mutation response");
 	}

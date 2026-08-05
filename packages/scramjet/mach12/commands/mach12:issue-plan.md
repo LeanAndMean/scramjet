@@ -265,15 +265,15 @@ After the user approves the plan:
    - Example: `feature/issue-55-fix-analytics-url`.
    - Push the branch to remote with `-u` flag.
 
-3. **Detect sub-issues** for the assignment step below. From the complete `read_issue` document, collect only relationships whose `relation` is `child`. Preserve each relationship's `source` (`native` or `task-list`) and do not reinterpret unrelated references as sub-issues. An unsupported or empty relationship section means there are no assignable sub-issues.
+3. **Detect sub-issues** for the assignment step below. From the complete `read_issue` document, collect only relationships whose `relation` is `child`. Preserve each relationship's verified `repository`, canonical `url`, and `source` (`native` or `task-list`); do not reinterpret unrelated references as sub-issues. Compare each child repository with the root artifact repository, case-insensitively for GitHub. Partition same-repository children from external children. An unsupported or empty relationship section means there are no assignable sub-issues.
 
-4. **Assign the issue and any sub-issues** to the current user. Delegate to:
+4. **Assign the issue and same-repository sub-issues** to the current user. Delegate to:
 
    ```
    /mach12:gh-assign <issue-number> [<sub-issue-number> ...]
    ```
 
-   Pass the parent issue number followed by every sub-issue number detected in step 3. The subroutine resolves the current user, classifies each issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt at the end (Add me / Skip / Replace). Assignment failures are non-blocking.
+   Pass the parent issue number followed only by same-repository sub-issue numbers detected in step 3. Never pass an external child's bare number to this current-repository-only subroutine. Report each external child by its verified canonical URL without attempting to assign it. The subroutine resolves the current user, classifies each issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt at the end (Add me / Skip / Replace). Assignment failures are non-blocking.
 
 Apply the plan-comment contract’s reference policy: intentional same-repository issue or pull-request relationships use `#N`, cross-repository relationships use `owner/repo#N` or an already verified canonical URL, and artifact-local findings, suggestions, and stages use stable labels or plain words rather than bare `#N`. Do not introduce closing keywords for ordinary references.
 

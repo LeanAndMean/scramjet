@@ -43,7 +43,13 @@ interface ReadOverrides {
 	prNotes?: unknown;
 	diffs?: unknown;
 	commits?: unknown;
+	commitTotal?: number | string;
 	pipelines?: unknown;
+	pipelineTotal?: number | string;
+}
+
+function totalResult(value: number | string): ExecResult {
+	return result(typeof value === "number" ? `HTTP/2 200 OK\r\nX-Total: ${value}\r\n\r\n` : value);
 }
 
 function readExec(overrides: ReadOverrides = {}): ForgeExec {
@@ -76,10 +82,18 @@ function readExec(overrides: ReadOverrides = {}): ForgeExec {
 			return listResult(overrides.diffs ?? fixture("gitlab-pr-diffs.json"));
 		}
 		if (endpoint === "projects/Acme%2Fplatform%2Fwidget/merge_requests/12/commits?per_page=100") {
-			return listResult(overrides.commits ?? fixture("gitlab-pr-commits.json"));
+			const commits = overrides.commits ?? fixture("gitlab-pr-commits.json");
+			if (args.includes("--include")) {
+				return totalResult(overrides.commitTotal ?? (Array.isArray(commits) ? commits.length : 0));
+			}
+			return listResult(commits);
 		}
 		if (endpoint === "projects/Acme%2Fplatform%2Fwidget/merge_requests/12/pipelines?per_page=100") {
-			return listResult(overrides.pipelines ?? fixture("gitlab-pr-pipelines.json"));
+			const pipelines = overrides.pipelines ?? fixture("gitlab-pr-pipelines.json");
+			if (args.includes("--include")) {
+				return totalResult(overrides.pipelineTotal ?? (Array.isArray(pipelines) ? pipelines.length : 0));
+			}
+			return listResult(pipelines);
 		}
 		throw new Error(`Unexpected invocation: ${JSON.stringify(args)}`);
 	});
@@ -144,6 +158,7 @@ describe("createGitlabAdapter reads", () => {
 				capability: "supported",
 				items: [
 					{
+						repository,
 						relation: "parent",
 						source: "native",
 						number: 3,
@@ -152,6 +167,7 @@ describe("createGitlabAdapter reads", () => {
 						title: "Parent issue",
 					},
 					{
+						repository,
 						relation: "child",
 						source: "native",
 						number: 8,
@@ -160,6 +176,7 @@ describe("createGitlabAdapter reads", () => {
 						title: "First child",
 					},
 					{
+						repository,
 						relation: "child",
 						source: "native",
 						number: 9,
@@ -301,7 +318,7 @@ describe("createGitlabAdapter reads", () => {
 			readiness: {
 				draft: false,
 				mergeable: "mergeable",
-				reviewDecision: null,
+				reviewDecision: { capability: "unsupported" },
 				head: "feature/ship",
 				base: "main",
 			},
@@ -346,10 +363,20 @@ describe("createGitlabAdapter reads", () => {
 				],
 			},
 		});
-		expect(exec).toHaveBeenCalledTimes(5);
+		expect(exec).toHaveBeenCalledTimes(7);
 		for (const call of vi.mocked(exec).mock.calls) {
 			expect(call[1].join(" ")).toContain("Acme%2Fplatform%2Fwidget");
 		}
+	});
+
+	it("validates authoritative commit and pipeline totals with separate header requests", async () => {
+		const exec = readExec();
+		await createGitlabAdapter(exec, "/repo").readArtifact(repository, "pr", 12, ["commits", "checks"]);
+		const countedCalls = vi.mocked(exec).mock.calls.filter((call) => call[1].includes("--include"));
+		expect(countedCalls.map((call) => call[1].slice(0, 3))).toEqual([
+			["api", "--include", "--silent"],
+			["api", "--include", "--silent"],
+		]);
 	});
 
 	it("does not fetch or expose unrequested MR facets", async () => {
@@ -411,6 +438,17 @@ describe("createGitlabAdapter reads", () => {
 		).rejects.toThrow(new RegExp(`GitLab ${section}`, "i"));
 	});
 
+	it.each([
+		["commits", { commitTotal: 3 }],
+		["checks", { pipelineTotal: 3 }],
+		["commits", { commitTotal: "HTTP/2 200 OK\r\n\r\n" }],
+		["checks", { pipelineTotal: "HTTP/2 200 OK\r\nX-Total: 2\r\nX-Total: 2\r\n\r\n" }],
+	])("rejects successful partial or unprovable %s pagination", async (section, overrides) => {
+		await expect(
+			createGitlabAdapter(readExec(overrides), "/repo").readArtifact(repository, "pr", 12, [section]),
+		).rejects.toThrow(new RegExp(`GitLab ${section}`, "i"));
+	});
+
 	it("rejects a non-GitLab repository before invoking the CLI", async () => {
 		const exec = readExec();
 		await expect(
@@ -469,7 +507,7 @@ describe("createGitlabAdapter mutations", () => {
 		await expect(
 			adapter.createArtifact(repository, {
 				kind: "pr",
-				title: "Created MR",
+				title: "Draft: Created MR",
 				body: "MR body",
 				head: "feature",
 				base: "main",
@@ -578,6 +616,21 @@ describe("createGitlabAdapter mutations", () => {
 				signal: undefined,
 			},
 		);
+	});
+
+	it("rejects an unprefixed draft title instead of changing approved content", async () => {
+		const exec = vi.fn<ForgeExec>();
+		await expect(
+			createGitlabAdapter(exec, "/repo").createArtifact(repository, {
+				kind: "pr",
+				title: "Release",
+				body: "Body",
+				head: "feature",
+				base: "main",
+				draft: true,
+			}),
+		).rejects.toThrow(/exact approved title.*draft prefix/i);
+		expect(exec).not.toHaveBeenCalled();
 	});
 
 	it("rejects a draft-prefixed title when draft creation is disabled", async () => {

@@ -427,7 +427,9 @@ List every operation a command uses directly in `allowed-tools`; these are model
 
 `read_issue` and `read_pr` return bounded deterministic XML. A command that needs complete context must follow the returned offset/snapshot continuation until complete. Comment creation requires a complete aggregate parent read in an earlier assistant message; edits require complete prior coverage of every changed decoded field. Same-assistant-batch reads cannot authorize sibling mutations, and compaction invalidates older evidence.
 
-Mutation tools verify canonical identity and remote postimages. They may report that a timeout or verification failure could have succeeded; commands must preserve that ambiguity and never instruct an automatic retry. Approval remains command-owned—the tools establish safe transport and verification, not user authorization.
+Mutation tools verify canonical identity and remote postimages. Generic process failures after mutation dispatch, timeouts, and verification failures may report that the operation could have succeeded; commands must preserve that ambiguity and never instruct an automatic retry. Successful edits include a bounded verified fresh target postimage, but it is not new prior-read evidence. Approval remains command-owned—the tools establish safe transport and verification, not user authorization.
+
+Issue relationships are repository-qualified. A command that passes child numbers to a current-repository-only mutation must compare each relationship repository with the root artifact repository first and must report external children by canonical URL without mutating a same-numbered local issue. PR readiness explicitly distinguishes supported review-decision evidence from unsupported capability; unsupported must not become proof that review is clear. For GitLab draft PR creation, commands must obtain approval for an already draft-prefixed exact title because `create_pr` never rewrites approved content.
 
 See [Forge Content Tools](forge-tools.md) for the public schemas, XML contract, evidence reconstruction, exact replacement rules, queueing, failure semantics, and deliberate exclusions.
 
