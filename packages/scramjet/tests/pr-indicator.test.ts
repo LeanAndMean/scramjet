@@ -5,6 +5,7 @@ import { recordingPi } from "./helpers.js";
 type ExecReply = { stdout: string; code: number };
 
 const GH_REMOTE: ExecReply = { stdout: "https://github.com/LeanAndMean/scramjet.git\n", code: 0 };
+const GH_SSH_REMOTE: ExecReply = { stdout: "git@github.com:LeanAndMean/scramjet.git\n", code: 0 };
 const GL_REMOTE: ExecReply = { stdout: "https://gitlab.com/acme/widget.git\n", code: 0 };
 const BRANCH: ExecReply = { stdout: "feature/issue-75-show-active-pr\n", code: 0 };
 const ONE_PR: ExecReply = { stdout: JSON.stringify([{ number: 72 }]), code: 0 };
@@ -25,6 +26,17 @@ function fakeExec(opts: { remote?: ExecReply; branch?: ExecReply; prList?: ExecR
 describe("resolvePr", () => {
 	it("returns the PR number for a GitHub remote with exactly one open PR", async () => {
 		expect(await resolvePr(fakeExec())).toBe(72);
+		expect(await resolvePr(fakeExec({ remote: GH_SSH_REMOTE }))).toBe(72);
+	});
+
+	it("uses the shared strict remote parser instead of substring classification", async () => {
+		const calls: string[] = [];
+		expect(
+			await resolvePr(
+				fakeExec({ remote: { stdout: "https://example.com/github.com/acme/widget", code: 0 }, calls }),
+			),
+		).toBeNull();
+		expect(calls.some((call) => call.startsWith("gh"))).toBe(false);
 	});
 
 	it("returns null when zero PRs match", async () => {

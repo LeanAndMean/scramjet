@@ -292,6 +292,20 @@ describe("integration smoke — next-step record tool wired into the extension f
 	});
 });
 
+describe("integration smoke — forge reads wired into the extension factory", () => {
+	it("scramjet() registers both model-callable aggregate forge read tools", () => {
+		const { pi, tools } = recordingPi();
+		initScramjet(pi);
+
+		for (const name of ["read_issue", "read_pr"]) {
+			const tool = tools.find((candidate: any) => candidate.name === name);
+			expect(tool).toBeDefined();
+			expect(tool.activation).toBeUndefined();
+			expect(tool.promptSnippet).toEqual(expect.any(String));
+		}
+	});
+});
+
 // S21: end-to-end chain smoke under /autopilot on. Exercises every harness
 // module that participates in the dispatch loop — autopilot-command,
 // history, command-status, auto-continue — against a synthetic two-command

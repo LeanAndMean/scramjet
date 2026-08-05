@@ -13,6 +13,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
+import { parseForgeRemote } from "./forge/client.js";
 
 const STATUS_KEY = "scramjet-pr";
 export const EXEC_TIMEOUT_MS = 3000;
@@ -42,7 +43,11 @@ export async function resolvePr(exec: ExecFn): Promise<number | null> {
 	// host alias, a self-hosted forge) shows nothing.
 	// forge-swap point: a future `glab` branch slots in here — key on a GitLab
 	// host and render `MR !<iid>` instead of `PR #<n>`.
-	if (!remote.stdout.includes("github.com")) return null;
+	try {
+		if (parseForgeRemote(remote.stdout).forge !== "github") return null;
+	} catch {
+		return null;
+	}
 
 	const branchRes = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
 	if (branchRes.code !== 0) return null;

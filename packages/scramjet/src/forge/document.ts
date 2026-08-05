@@ -416,7 +416,8 @@ export function sliceForgeDocument(rendered: RenderedForgeDocument, request: For
 	const nextOffset = hasMore ? end + 1 : undefined;
 	let content = truncation.content;
 	if (nextOffset !== undefined) {
-		content += `\n\n[Showing lines ${start + 1}-${end} of ${rendered.lines.length}. Use offset=${nextOffset} snapshot=${rendered.snapshot} to continue.]`;
+		const include = rendered.include.length === 0 ? "" : ` include=${JSON.stringify(rendered.include)}`;
+		content += `\n\n[Showing lines ${start + 1}-${end} of ${rendered.lines.length}. Use offset=${nextOffset} snapshot=${rendered.snapshot}${include} to continue.]`;
 	}
 	const coreStart = Math.max(start, rendered.coreLines.start);
 	const coreEnd = Math.min(end, rendered.coreLines.end);
