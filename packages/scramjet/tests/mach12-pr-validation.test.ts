@@ -988,7 +988,13 @@ describe("mach12 executable validation integration", () => {
 		expect(commitAndPush).toContain("declared predecessor as its sole parent");
 		expect(commitAndPush).toContain("fresh GitHub `headRefOid`");
 		expect(commitAndPush).toContain("clean index and tracked/untracked worktree");
-		expectInOrder(push, "exact bounded-operation patch SHA-256", "## Step 2: Commit", "## Step 3: Push", "## Step 4: Post progress comment");
+		expectInOrder(
+			push,
+			"exact bounded-operation patch SHA-256",
+			"## Step 2: Commit",
+			"## Step 3: Push",
+			"## Step 4: Post progress comment",
+		);
 	});
 
 	it("terminates assessment cleanup after its one verified push", () => {
