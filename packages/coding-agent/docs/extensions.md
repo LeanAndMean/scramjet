@@ -1526,12 +1526,20 @@ if (pi.getFlag("plan")) {
 
 ### pi.exec(command, args, options?)
 
-Execute a shell command.
+Execute a command directly with an argument array (`shell: false`). Options support `signal`, `timeout`, `cwd`, and exact UTF-8 `stdin` string transport.
 
 ```typescript
-const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
+const input = JSON.stringify({ body: "exact content" });
+const result = await pi.exec("some-cli", ["api", "resource", "--input", "-"], {
+  signal,
+  timeout: 5000,
+  stdin: input,
+});
 // result.stdout, result.stderr, result.code, result.killed
+// result.spawnError?.code/message, result.stdinError?.code/message
 ```
+
+When `stdin` is omitted, the child receives immediate EOF as before. When supplied, Scramjet pipes the string once and closes stdin; no shell or temporary file is involved. `spawnError` distinguishes failures such as a missing executable (`code: "ENOENT"`), while `stdinError` reports write or close failures. Both error facts omit the supplied stdin content.
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
