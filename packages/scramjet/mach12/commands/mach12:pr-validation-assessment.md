@@ -9,7 +9,10 @@ allowed-tools:
   - edit
   - write
   - subagent
-  - delegate
+  - get_scramjet_user_input
+  - read_pr
+  - read_issue
+  - add_pr_comment
 next:
   mode: closed
   candidates:
@@ -54,17 +57,9 @@ Verify that the returned comment belongs to the supplied repository and PR, its 
 
 Reacquire authoritative evidence rather than trusting the first session's summary:
 
-1. Read the PR title, body, base and head identities, files, commits, and all top-level PR conversation comments. Use direct `gh` queries for identities, then delegate for those comments:
+1. Read the PR title, body, base and head identities, files, commits, and all top-level PR conversation comments. Retain narrow direct `gh` identity queries, then use `read_pr` with `include: ["files", "commits"]` and continue every returned range with the unchanged snapshot until the complete requested document is visible.
 
-   ```
-   /mach12:gh-pr-read <pr-number>
-   ```
-
-2. Identify every linked issue. For each linked issue, delegate to read its title, body, acceptance criteria, and complete comments:
-
-   ```
-   /mach12:gh-issue-read <issue-number>
-   ```
+2. Identify every linked issue. For each linked issue, use `read_issue` and continue every returned range with the unchanged snapshot to read its title, body, acceptance criteria, and complete comments.
 
 3. Locate the latest approved `<!-- mach12-plan -->`, then read later amendments, decisions, and review-fix progress that alter or clarify it.
 4. Read the complete merge-base-to-head diff using the identities recorded in the review artifact, and independently resolve the actual merge base rather than assuming a branch name.
@@ -171,17 +166,11 @@ State explicitly that retained tests are already in permanent behavioral suites 
 
 ### Post the artifact
 
-Compute and record SHA-256 over the exact complete assessment body without inserting the digest into or subsequently rewriting that body. Delegate the complete prepared body unchanged:
-
-```
-/mach12:gh-comment pr <pr-number>
-```
-
-Capture the returned URL and numeric assessment comment ID.
+Compute and record SHA-256 over the exact complete assessment body without inserting the digest into or subsequently rewriting that body. Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact prepared body unchanged to `add_pr_comment`. Capture the verified URL and opaque assessment comment ID; on GitHub, retain its numeric form for downstream command wires.
 
 ### Verify publication
 
-Fetch the numeric assessment comment ID and verify repository/PR ownership, trusted author identity/association, and that its complete body exactly equals the prepared body, including the marker, exact review link and ID, review digest, and reviewed-head identity. Recompute the body SHA-256 and require the recorded assessment digest. If posting returns an ambiguous failure, search existing PR comments for a complete-body exact match. Never blindly retry based only on a marker or head match.
+On GitHub, fetch the numeric assessment comment ID through the narrow comment-metadata API and verify repository/PR ownership, trusted author identity/association, and that its complete body exactly equals the prepared body, including the marker, exact review link and ID, review digest, and reviewed-head identity. Recompute the body SHA-256 and require the recorded assessment digest. If posting returns an ambiguous failure, use a fresh complete `read_pr` to search existing PR comments for a complete-body exact match. Never blindly retry based only on a marker or head match.
 
 If the exact durable artifact cannot be verified, do not route onward. Report a non-completed status instead. Present the review and assessment URLs and numeric IDs, each final classification, removed proofs, retained node IDs and consolidated result, remaining dirty paths, staged repair plan, and recommended route to the user only after verification.
 

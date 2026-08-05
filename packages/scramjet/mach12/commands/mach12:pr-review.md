@@ -7,7 +7,10 @@ allowed-tools:
   - grep
   - glob
   - subagent
-  - delegate
+  - get_scramjet_user_input
+  - read_pr
+  - read_issue
+  - add_pr_comment
 next:
   mode: forced
   target: mach12:pr-review-assessment
@@ -48,16 +51,18 @@ git pull
 
 ## Step 3: Run the review
 
-Determine the changed files and PR context before launching reviewers:
+Determine the changed files and complete diff before launching reviewers:
 
 ```
 git diff --name-only origin/main...HEAD
-gh pr view <pr-number> --json title,body,createdAt,updatedAt,comments,files
+git diff --find-renames origin/main...HEAD
 ```
+
+Use `read_pr` with `include: ["files"]` and continue every returned range with the unchanged snapshot until the complete PR document and top-level conversation are visible.
 
 Identify linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
 
-Before briefing reviewers, delegate to `/mach12:gh-issue-read <issue-number>` for each linked issue so its current body, complete discussion, and timestamps are available alongside plans and prior reviews in the PR comments. If any linked issue cannot be read completely, surface the failed issue and error, stop before reviewer dispatch, and report the review blocked or incomplete; do not silently continue with reduced authoritative context.
+Before briefing reviewers, use `read_issue` for each linked issue and continue every returned range with the unchanged snapshot so its current body, complete discussion, and timestamps are available alongside plans and prior reviews in the PR comments. If any linked issue cannot be read completely, surface the failed issue and error, stop before reviewer dispatch, and report the review blocked or incomplete; do not silently continue with reduced authoritative context.
 
 Treat the PR description, comments, linked issues, plans, and prior reviews as point-in-time evidence. Use their timestamps and relevant intervening changes to identify material historical claims, then verify potentially stale claims against the checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance. Preserve still-supported historical intent and decisions; neither age, status, nor recent activity proves current validity or invalidity.
 
@@ -83,7 +88,7 @@ Also include supplementary domain-relevant agents from any installed source when
 
 Dispatch all selected review tasks in a single parallel `subagent` call. Give each reviewer a focused brief that includes:
 
-- PR number, title, body, changed files, and any relevant PR comments.
+- PR number, title, body, changed files, complete diff, and any relevant PR comments. The completeness lens must receive the complete diff supplied by this parent command because its read-only tool scope omits `bash`.
 - The specific lens it is responsible for.
 - The user context from Step 1, if provided: `> **User context:** <context>`
 - Relevant artifact timestamps, identified freshness caveats, and which claims were checked against current authority.
@@ -115,13 +120,7 @@ Format the comment as a well-structured markdown document that can serve as inpu
 
 Format intentional GitHub relationships in the review body so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact comment URLs and numeric provenance fields when their stronger format is required.
 
-Post the prepared body by delegating to:
-
-```
-/mach12:gh-comment pr <pr-number>
-```
-
-The subroutine posts the body and returns the comment URL and numeric ID. Record the numeric ID -- the next-step assessment command consumes it.
+Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact prepared body to `add_pr_comment`. Record the verified comment URL and opaque ID; when the selected forge is GitHub, the numeric ID is the next-step assessment command's `--review-comment` value.
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"`. This command declares a `forced` next step, so Scramjet runs `mach12:pr-review-assessment` regardless; include a single `next_steps` entry only to pass the runtime context to that forced target:
 

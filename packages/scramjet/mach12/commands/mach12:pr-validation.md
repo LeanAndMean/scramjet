@@ -9,7 +9,10 @@ allowed-tools:
   - edit
   - write
   - subagent
-  - delegate
+  - get_scramjet_user_input
+  - read_pr
+  - read_issue
+  - add_pr_comment
 next:
   mode: forced
   target: mach12:pr-validation-assessment
@@ -50,17 +53,9 @@ Record the repository owner/name, authenticated GitHub login, PR head OID, base 
 
 Gather all authoritative context before designer fan-out:
 
-1. Read the PR title, body, base and head identities, files, commits, and all top-level PR conversation comments. Use direct `gh` queries for metadata, then delegate for those comments:
+1. Read the PR title, body, base and head identities, files, commits, and all top-level PR conversation comments. Retain the narrow direct `gh` identity query from preflight, then use `read_pr` with `include: ["files", "commits"]` and continue every returned range with the unchanged snapshot until the complete requested document is visible.
 
-   ```
-   /mach12:gh-pr-read <pr-number>
-   ```
-
-2. Identify every linked issue. For each issue, delegate to read its title, body, acceptance criteria, and complete comments:
-
-   ```
-   /mach12:gh-issue-read <issue-number>
-   ```
+2. Identify every linked issue. For each issue, use `read_issue` and continue every returned range with the unchanged snapshot to read its title, body, acceptance criteria, and complete comments.
 
 3. Locate the latest approved `<!-- mach12-plan -->` artifact, then read later amendments, decisions, and review-fix progress that alter or clarify it.
 4. Read the complete merge-base-to-head diff from the frozen actual merge-base OID to the frozen PR head OID. Do not assume `origin/main` or another branch name.
@@ -179,17 +174,11 @@ Also include rejected-candidate disposition counts, any non-finding coverage sug
 
 Compute and record the SHA-256 digest of the exact complete prepared body before posting. This digest is the immutable handoff binding; do not insert it into or otherwise rewrite the body after hashing.
 
-Post the prepared body by delegating to:
-
-```
-/mach12:gh-comment pr <pr-number>
-```
-
-Capture the returned URL and numeric comment ID. Completion requires a durable comment, not merely a successful-looking command result.
+Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact prepared body to `add_pr_comment`. Capture the verified URL and opaque comment ID. Completion requires a durable comment, not merely a successful-looking tool result.
 
 ### Verify publication and report status
 
-Fetch the exact numeric comment ID and verify repository/PR ownership, that the comment author equals the recorded authenticated publisher login with `OWNER`, `MEMBER`, or `COLLABORATOR` association, and that its body exactly equals the complete prepared body, including the expected marker and reviewed-head identity. Recompute the fetched body's SHA-256 and require the recorded digest. If posting returns an ambiguous failure, search existing PR comments for one whose complete body exactly equals the prepared body; marker and head identity alone are insufficient because an older validation may share both. Never blindly retry and create a duplicate. If the exact artifact cannot be found and verified, report a non-completed status and do not hand off.
+On GitHub, fetch the exact numeric comment ID through the narrow comment-metadata API and verify repository/PR ownership, that the comment author equals the recorded authenticated publisher login with `OWNER`, `MEMBER`, or `COLLABORATOR` association, and that its body exactly equals the complete prepared body, including the expected marker and reviewed-head identity. Recompute the fetched body's SHA-256 and require the recorded digest. If posting returns an ambiguous failure, use a fresh complete `read_pr` to search existing PR comments for one whose complete body exactly equals the prepared body; marker and head identity alone are insufficient because an older validation may share both. Never blindly retry and create a duplicate. If the exact artifact cannot be found and verified, report a non-completed status and do not hand off.
 
 Present the retained findings, rejected disposition counts, consolidated red result, remaining dirty test paths, review URL and numeric ID, and any unreviewed boundaries to the user. Report completion only after successful verified publication.
 

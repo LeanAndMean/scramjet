@@ -6,7 +6,8 @@ allowed-tools:
   - read
   - grep
   - glob
-  - delegate
+  - read_pr
+  - read_issue
 ---
 
 # Merge and Release
@@ -29,22 +30,17 @@ Extract the PR number from the input. If the input is ambiguous, ask the user to
 
 ## Step 2: Verify readiness
 
-Read ordinary GitHub readiness immediately before merging:
+Use `read_pr` immediately before merging to read the PR's state, draft flag, mergeability, review decision, head/base branches, and complete top-level conversation. Retain a narrow `gh pr view <pr-number> --json mergeStateStatus` query for GitHub branch-freshness state.
 
-```
-gh pr view <pr-number> --json state,isDraft,mergeable,mergeStateStatus,reviewDecision
-```
-
-Require the PR to be open, non-draft, free of requested changes or required review, current with the default branch, conflict-free, and passing its required checks. Use `gh pr checks <pr-number> --required` to distinguish required checks; repositories without required checks may continue. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
+Require the PR to be open, non-draft, free of requested changes or required review, current with the default branch, conflict-free, and passing its required checks. Use `gh pr checks <pr-number> --required` to distinguish required checks; repositories without required checks may continue. If mergeability remains unknown after one brief reread with `read_pr`, report incomplete rather than guessing.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness. Do not offer a force merge, force push, or readiness bypass.
 
 ## Step 3: Merge
 
-Record the feature branch name, then merge without a force or readiness bypass:
+Record the feature branch name from the verified `read_pr` readiness document, then merge without a force or readiness bypass:
 
 ```
-gh pr view <pr-number> --json headRefName --jq .headRefName
 gh pr merge <pr-number> --delete-branch
 ```
 
@@ -98,19 +94,9 @@ gh release view <latest-tag>
 
 If the user provided context, use it to inform the release draft (e.g., specific tag, highlighted changes, notes style).
 
-Gather context from the PR, linked issues, and commits:
+Gather the PR title, body, commits, and complete conversation with `read_pr` using `include: ["commits"]`; continue every returned range with the unchanged snapshot. Retain a narrow `gh pr view <pr-number> --json closingIssuesReferences` query because closing relationships are outside the forge-tool model.
 
-```
-gh pr view <pr-number> --json title,body,closingIssuesReferences,commits
-```
-
-For each linked issue in `closingIssuesReferences`, delegate to:
-
-```
-/mach12:gh-issue-read <issue-number> --marker mach12-plan
-```
-
-This retrieves the issue title, body, and implementation plan. If no `mach12-plan` marker is found for an issue, use just its title and body. If there are no linked issues, continue without — this is not an error.
+For each linked issue in `closingIssuesReferences`, use `read_issue` and continue every range with the unchanged snapshot. Scan the complete comments for the last `<!-- mach12-plan -->` marker. If no marker is found, use just the issue title and body. If there are no linked issues, continue without—this is not an error.
 
 Draft a release using the PR title/body, linked issue context (including plans when available), and commit headlines alongside the existing style reference:
 - **Tag**: follow existing tagging convention (e.g., `v1.2.3`, `1.2.3`). If a version bump was done in pre-merge, use that version.

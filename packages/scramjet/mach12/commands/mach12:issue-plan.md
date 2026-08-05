@@ -8,6 +8,9 @@ allowed-tools:
   - glob
   - subagent
   - delegate
+  - get_scramjet_user_input
+  - read_issue
+  - add_issue_comment
 next:
   mode: open
   candidates:
@@ -49,13 +52,7 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue
 
-Delegate to:
-
-```
-/mach12:gh-issue-read <issue-number>
-```
-
-The subroutine returns the issue title, body, parent `createdAt` and `updatedAt`, and the full comments stream with comment creation timestamps. Parse and understand:
+Use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Treat its artifact and comment timestamps as point-in-time evidence. Parse and understand:
 - The problem statement
 - Any constraints or requirements mentioned
 - Prior discussion or decisions in the comments
@@ -260,13 +257,7 @@ If the user requests changes, discuss the feedback. In the next drafting turn, l
 
 After the user approves the plan:
 
-1. **Post the approved plan as a reply comment on the issue.** Pass the exact approved body unchanged to the existing comment subroutine; do not regenerate, summarize, or reformat it after approval. Then delegate to:
-
-   ```
-   /mach12:gh-comment issue <issue-number>
-   ```
-
-   The subroutine posts the prepared body and returns the comment URL and numeric ID.
+1. **Post the approved plan as a reply comment on the issue.** Immediately before posting, completely reread the issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact approved body unchanged to `add_issue_comment`; do not regenerate, summarize, or reformat it after approval. Record the verified comment URL and opaque ID.
 
 2. **Create a feature branch**:
    - Derive a short slug from the issue title (lowercase, hyphens, 3-5 words max).
@@ -274,13 +265,7 @@ After the user approves the plan:
    - Example: `feature/issue-55-fix-analytics-url`.
    - Push the branch to remote with `-u` flag.
 
-3. **Detect sub-issues** for the assignment step below. Delegate to:
-
-   ```
-   /mach12:gh-sub-issues <issue-number>
-   ```
-
-   The subroutine returns the list of sub-issue numbers (possibly empty) and which strategy produced them.
+3. **Detect sub-issues** for the assignment step below. From the complete `read_issue` document, collect only relationships whose `relation` is `child`. Preserve each relationship's `source` (`native` or `task-list`) and do not reinterpret unrelated references as sub-issues. An unsupported or empty relationship section means there are no assignable sub-issues.
 
 4. **Assign the issue and any sub-issues** to the current user. Delegate to:
 

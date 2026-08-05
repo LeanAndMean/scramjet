@@ -7,7 +7,10 @@ allowed-tools:
   - read
   - grep
   - glob
-  - delegate
+  - read_issue
+  - read_pr
+  - add_issue_comment
+  - add_pr_comment
 ---
 
 # Push
@@ -107,23 +110,9 @@ Do not include next-step suggestions in the comment body. The caller's `next:` b
 
 Format intentional GitHub relationships in the progress comment so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact review comment IDs and validation provenance fields in their required labeled formats.
 
-Then delegate to the appropriate posting subroutine:
+Immediately before posting, completely reread the selected target in an earlier assistant tool round: use `read_issue` for an issue or `read_pr` for a PR, continuing every range with the unchanged snapshot. Then pass the exact prepared body to `add_issue_comment` or `add_pr_comment` respectively. Record the verified comment URL and opaque ID.
 
-- **Issue target:**
-
-  ```
-  /mach12:gh-comment issue <issue-number>
-  ```
-
-- **PR target:**
-
-  ```
-  /mach12:gh-comment pr <pr-number>
-  ```
-
-The subroutine handles the post and URL capture; the body content you prepared above is what gets posted.
-
-If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment without recommitting or repushing. For an ordinary repair, preserve the exact originating review ID supplied by the caller. For a validation-origin repair, preserve the already-validated structured provenance payload verbatim. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
+If publication or exact comment verification fails after the push, preserve whether the result says the mutation may have succeeded, then return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to perform a fresh complete parent read and reconcile the exact body and returned identity without recommitting or repushing. Never repost unless that complete read conclusively establishes the prepared body is absent; never blindly retry an ambiguous write. For an ordinary repair, preserve the exact originating review ID supplied by the caller. For a validation-origin repair, preserve the already-validated structured provenance payload verbatim. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
 
 ## Step 5: Confirm
 

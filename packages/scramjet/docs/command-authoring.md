@@ -275,15 +275,15 @@ In the command body, instruct the agent to delegate:
 Delegate to:
 
 \```
-/mach12:gh-issue-read <issue-number> --marker mach12-plan
+/mach12:gh-assign <issue-number> [<sub-issue-number> ...]
 \```
 
-The subroutine returns the issue title, body, and comments.
+The subroutine classifies the requested issues by assignment state and returns each resolution.
 ```
 
 The agent calls the `delegate` tool with:
-- `command`: The qualified command name (e.g., `"mach12:gh-issue-read"`)
-- `args`: The argument string (e.g., `"55 --marker mach12-plan"`)
+- `command`: The qualified command name (e.g., `"mach12:gh-assign"`)
+- `args`: The argument string (e.g., `"55 56"`)
 
 ### Argument substitution
 
@@ -332,8 +332,8 @@ A delegate-only subroutine:
 
 ```yaml
 ---
-description: Read a GitHub issue's title, body, and all comments
-argument-hint: "<issue-number> [--marker <html-marker>]"
+description: Assign one or more GitHub issues
+argument-hint: "<issue-number> [<issue-number> ...]"
 delegate-only: true
 allowed-tools:
   - bash
@@ -343,9 +343,9 @@ allowed-tools:
 **Example subroutine body pattern:**
 
 ```markdown
-# Read GitHub Issue
+# Assign GitHub Issues
 
-You are reading a GitHub issue.
+You are assigning the requested GitHub issues.
 
 <caller-context>
 $ARGUMENTS
@@ -353,17 +353,15 @@ $ARGUMENTS
 
 ## Step 1: Parse input
 
-Extract the **issue number** (required, first token).
+Extract one or more **issue numbers**.
 
-## Step 2: Read the issue
+## Step 2: Classify assignment state
 
-\```
-gh issue view <issue-number> --json title,body,comments
-\```
+Resolve the current user and inspect each issue's assignees without mutating unrelated metadata.
 
 ## Step 3: Return
 
-Return the issue title, body, and comments to the caller.
+Return each issue's assignment resolution to the caller.
 
 </scramjet-command>
 ```
@@ -417,6 +415,21 @@ Command frontmatter `allowed-tools` and subagent frontmatter `tools:` have diffe
 - Don't omit `delegate` from `allowed-tools` if the command body instructs delegation.
 - Don't omit `subagent` if the command dispatches subagents.
 - Don't declare tools a command never uses — tighter scopes are better for intersection behavior and future hard enforcement.
+
+### First-class forge content tools
+
+Scramjet registers eight independently allowlistable current-repository tools:
+
+- Issues: `read_issue`, `edit_issue`, `create_issue`, `add_issue_comment`.
+- Pull requests: `read_pr`, `edit_pr`, `create_pr`, `add_pr_comment`.
+
+List every operation a command uses directly in `allowed-tools`; these are model-callable tools, not delegated commands, so they do not require `delegate`. Prefer them over raw `gh`/`glab` content commands for aggregate issue/PR reads, artifact creation, top-level comment creation, and exact content edits. Keep narrow shell operations only for capabilities outside their boundary, such as search, labels, assignment, trust metadata, checks, merge, release, and Git.
+
+`read_issue` and `read_pr` return bounded deterministic XML. A command that needs complete context must follow the returned offset/snapshot continuation until complete. Comment creation requires a complete aggregate parent read in an earlier assistant message; edits require complete prior coverage of every changed decoded field. Same-assistant-batch reads cannot authorize sibling mutations, and compaction invalidates older evidence.
+
+Mutation tools verify canonical identity and remote postimages. They may report that a timeout or verification failure could have succeeded; commands must preserve that ambiguity and never instruct an automatic retry. Approval remains command-owned—the tools establish safe transport and verification, not user authorization.
+
+See [Forge Content Tools](forge-tools.md) for the public schemas, XML contract, evidence reconstruction, exact replacement rules, queueing, failure semantics, and deliberate exclusions.
 
 ---
 

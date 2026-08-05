@@ -101,11 +101,7 @@ const WIRING: WiringRow[] = [
 	{ basename: "push", expected: null, delegateOnly: true },
 	{ basename: "plan-comment-contract", expected: null, delegateOnly: true },
 	{ basename: "find-contribution-guidelines", expected: null, delegateOnly: true },
-	{ basename: "gh-issue-read", expected: null, delegateOnly: true },
-	{ basename: "gh-pr-read", expected: null, delegateOnly: true },
-	{ basename: "gh-sub-issues", expected: null, delegateOnly: true },
 	{ basename: "gh-assign", expected: null, delegateOnly: true },
-	{ basename: "gh-comment", expected: null, delegateOnly: true },
 ];
 
 // Strip hint strings from a policy so the wiring test compares modes, targets,
@@ -229,16 +225,115 @@ describe("mach12 wiring — bundled command set", () => {
 		}
 	});
 
-	it.each(["pr-validation", "pr-validation-assessment"])(
-		"%s declares the repository and subagent capabilities needed by executable validation",
-		(basename) => {
-			const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
-			const content = readFileSync(filePath, "utf-8");
-			const result = parseCommandFile(filePath, content, SET_NAME);
-
-			expect(result.ok).toBe(true);
-			if (!result.ok) return;
-			expect(result.def.allowedTools).toEqual([
+	it.each([
+		[
+			"issue-create",
+			[
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"subagent",
+				"delegate",
+				"get_scramjet_user_input",
+				"read_issue",
+				"create_issue",
+				"add_issue_comment",
+			],
+		],
+		[
+			"issue-plan",
+			[
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"subagent",
+				"delegate",
+				"get_scramjet_user_input",
+				"read_issue",
+				"add_issue_comment",
+			],
+		],
+		[
+			"issue-review",
+			[
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"subagent",
+				"delegate",
+				"get_scramjet_user_input",
+				"read_issue",
+				"add_issue_comment",
+			],
+		],
+		[
+			"issue-implement",
+			[
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"edit",
+				"write",
+				"subagent",
+				"delegate",
+				"get_scramjet_user_input",
+				"read_issue",
+			],
+		],
+		["pr-create", ["bash", "read", "grep", "glob", "get_scramjet_user_input", "read_issue", "create_pr"]],
+		[
+			"pr-review",
+			[
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"subagent",
+				"get_scramjet_user_input",
+				"read_pr",
+				"read_issue",
+				"add_pr_comment",
+			],
+		],
+		[
+			"pr-review-assessment",
+			[
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"subagent",
+				"get_scramjet_user_input",
+				"read_pr",
+				"edit_pr",
+				"read_issue",
+				"create_issue",
+				"add_issue_comment",
+				"add_pr_comment",
+			],
+		],
+		[
+			"pr-review-fix",
+			[
+				"bash",
+				"read",
+				"grep",
+				"glob",
+				"edit",
+				"write",
+				"subagent",
+				"delegate",
+				"get_scramjet_user_input",
+				"read_pr",
+			],
+		],
+		[
+			"pr-validation",
+			[
 				"bash",
 				"read",
 				"grep",
@@ -246,8 +341,103 @@ describe("mach12 wiring — bundled command set", () => {
 				"edit",
 				"write",
 				"subagent",
-				"delegate",
-			]);
+				"get_scramjet_user_input",
+				"read_pr",
+				"read_issue",
+				"add_pr_comment",
+			],
+		],
+		[
+			"pr-validation-assessment",
+			[
+				"bash",
+				"read",
+				"grep",
+				"find",
+				"edit",
+				"write",
+				"subagent",
+				"get_scramjet_user_input",
+				"read_pr",
+				"read_issue",
+				"add_pr_comment",
+			],
+		],
+		[
+			"pr-pre-merge",
+			["bash", "read", "grep", "glob", "edit", "write", "delegate", "get_scramjet_user_input", "read_pr"],
+		],
+		["pr-merge", ["bash", "read", "grep", "glob", "read_pr", "read_issue"]],
+		["push", ["bash", "read", "grep", "glob", "read_issue", "read_pr", "add_issue_comment", "add_pr_comment"]],
+	] as const)("%s declares its exact forge-aware tool scope", (basename, expectedTools) => {
+		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
+		const content = readFileSync(filePath, "utf-8");
+		const result = parseCommandFile(filePath, content, SET_NAME);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.def.allowedTools).toEqual(expectedTools);
+	});
+
+	it("uses first-class forge tools for covered content operations while retaining excluded shell flows", () => {
+		const commands = readdirSync(MACH12_COMMANDS_DIR)
+			.filter((file) => file.endsWith(".md"))
+			.map((file) => readFileSync(join(MACH12_COMMANDS_DIR, file), "utf-8"))
+			.join("\n");
+
+		for (const obsolete of ["gh-issue-read", "gh-pr-read", "gh-comment", "gh-sub-issues"]) {
+			expect(commands).not.toContain(obsolete);
+		}
+		for (const covered of [
+			"read_issue",
+			"create_issue",
+			"add_issue_comment",
+			"read_pr",
+			"edit_pr",
+			"create_pr",
+			"add_pr_comment",
+		]) {
+			expect(commands).toContain(covered);
+		}
+		expect(commands).not.toMatch(/\bgh issue create\b/);
+		expect(commands).not.toMatch(/\bgh pr create\b/);
+		expect(commands).not.toMatch(/gh pr view[^\n]*(?:title|body|comments|files|commits)/);
+		expect(commands).not.toContain("--method PATCH --raw-field body=");
+
+		for (const retained of [
+			"gh issue list",
+			"gh issue edit",
+			"gh pr checks",
+			"gh pr merge",
+			"gh release create",
+			"gh pr view --json number,url",
+		]) {
+			expect(commands).toContain(retained);
+		}
+	});
+
+	it.each([
+		"issue-create",
+		"issue-plan",
+		"issue-review",
+		"pr-review",
+		"pr-review-assessment",
+		"pr-validation",
+		"pr-validation-assessment",
+		"push",
+	])("%s refreshes complete parent evidence in an earlier tool round immediately before comments", (basename) => {
+		const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+		expect(content).toContain("Immediately before posting");
+		expect(content).toContain("in an earlier assistant tool round");
+		expect(content).toContain("continuing every range with the unchanged snapshot");
+	});
+
+	it.each(["pr-review-assessment", "pr-review-fix"])(
+		"%s selects ordinary review bodies from read_pr rather than a raw comment-content request",
+		(basename) => {
+			const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+			expect(content).not.toContain("gh api repos/:owner/:repo/issues/comments/");
+			expect(content).toContain("Do not fetch a second raw copy of content");
 		},
 	);
 });
@@ -324,7 +514,6 @@ describe("mach12 plan-comment artifact contract", () => {
 	const contract = readFileSync(contractPath, "utf-8");
 	const issuePlan = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-plan.md`), "utf-8");
 	const issueReview = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-review.md`), "utf-8");
-	const ghComment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-comment.md`), "utf-8");
 
 	it("loads one mode through the delegated same-context contract", () => {
 		expect(contract.match(/\$ARGUMENTS/g)).toHaveLength(1);
@@ -398,8 +587,8 @@ describe("mach12 plan-comment artifact contract", () => {
 			/Draft the exact,\s+complete post-ready body/,
 			/Display the exact,\s+complete marker-bearing body/,
 			/After the user approves the plan/,
-			/Pass the exact approved body unchanged/,
-			/\/mach12:gh-comment\s+issue\s+<issue-number>/,
+			/pass the exact approved body unchanged/,
+			/add_issue_comment/,
 		]);
 		expectInOrder(issueReview, [
 			/\/mach12:plan-comment-contract\s+revision/,
@@ -409,7 +598,7 @@ describe("mach12 plan-comment artifact contract", () => {
 			/After the gate passes, ask the user how to proceed/,
 			/When the user picks "Post revised plan"/,
 			/pass the exact approved body unchanged/,
-			/\/mach12:gh-comment\s+issue\s+<issue-number>/,
+			/add_issue_comment/,
 		]);
 	});
 
@@ -420,15 +609,14 @@ describe("mach12 plan-comment artifact contract", () => {
 		expect(issueReview).toContain("Suggestions stay visible but are optional and do not block publication");
 	});
 
-	it("posts the prepared comment body unchanged through collision-safe stdin", () => {
-		expect(ghComment).toContain("Treat the body the caller prepared as immutable");
-		expect(ghComment).toContain("does not occur as a standalone line anywhere in the prepared body");
-		expect(ghComment).toContain("If it is not newline-terminated or its final-newline state cannot be verified");
-		expect(ghComment).toContain("return an error without posting");
-		expect(ghComment).toContain("--body-file -");
-		expect(ghComment).toContain("<<'MACH12_COMMENT_BODY'");
-		expect(ghComment).toContain("Insert the verified body exactly");
-		expect(ghComment).not.toContain('--body "$(cat');
+	it("passes approved plan bodies unchanged after fresh evidence in an earlier tool round", () => {
+		for (const command of [issuePlan, issueReview]) {
+			expect(command).toContain("add_issue_comment");
+			expect(command).toContain("exact approved body unchanged");
+			expect(command).toContain("Immediately before posting");
+			expect(command).toContain("in an earlier assistant tool round");
+			expect(command).toContain("continuing every range with the unchanged snapshot");
+		}
 	});
 });
 
@@ -699,7 +887,9 @@ describe("mach12 issue creation — ambiguous duplicate handling", () => {
 	it("comments on exactly one selected match and skips creation", () => {
 		expect(ambiguousMatches).toContain("ask the user to select exactly one successfully read issue");
 		expect(ambiguousMatches).toContain("Only after the user explicitly selects the target");
-		expect(ambiguousMatches).toMatch(/post the prepared comment only to that issue/i);
+		expect(ambiguousMatches).toContain(
+			"pass that exact prepared body to `add_issue_comment` for only the chosen issue",
+		);
 		expect(ambiguousMatches).toContain("skip creation");
 	});
 
@@ -748,50 +938,31 @@ describe("mach12 issue creation — duplicate search and publication safety", ()
 		expect(duplicateCheck).not.toContain('--search "<keywords>"');
 	});
 
-	it("transports the approved title and body without shell interpolation", () => {
-		const temporaryDirectory = creation.indexOf("issue_transport_dir=$(mktemp -d)");
-		const cleanup = creation.indexOf("trap 'rm -rf");
-		const titleWrite = creation.indexOf('cat >"$issue_transport_dir/title"');
-		const bodyWrite = creation.indexOf('cat >"$issue_transport_dir/body"');
-		const publish = creation.indexOf("gh issue create");
-		expect(temporaryDirectory).toBeGreaterThan(-1);
-		expect(cleanup).toBeGreaterThan(temporaryDirectory);
-		expect(titleWrite).toBeGreaterThan(cleanup);
-		expect(bodyWrite).toBeGreaterThan(titleWrite);
-		expect(publish).toBeGreaterThan(bodyWrite);
+	it("passes the exact approved title and body to create_issue", () => {
+		expect(creation).toContain("create_issue");
+		expect(creation).toContain("latest explicitly approved title and body unchanged");
 		expect(creation).toContain("approved title is one line");
 		expect(creation).toContain("approved body is newline-terminated");
-		expect(creation).toContain("Never interpolate either value into a shell command");
-		expect(creation).toContain("occurs as a standalone line");
-		expect(creation).toContain("<<'MACH12_ISSUE_TITLE'");
-		expect(creation).toContain("<<'MACH12_ISSUE_BODY'");
-		expect(creation).toContain('--title "$(<"$issue_transport_dir/title")"');
-		expect(creation).toContain('--body-file "$issue_transport_dir/body"');
-		expect(creation).not.toContain('--title "<approved-title>"');
-		expect(creation).not.toContain('--body "<approved-body>"');
-		expect(creation).toContain("must not mutate or expand backticks, `$()`, variables, quotes, or backslashes");
+		expect(creation).toContain("exact Markdown body");
+		expect(creation).not.toContain("issue_transport_dir");
+		expect(creation).not.toContain("gh issue create");
 	});
 
-	it("fails closed across issue staging, creation, identity validation, and metadata", () => {
-		const titleWrite = creation.indexOf('cat >"$issue_transport_dir/title"');
-		const bodyWrite = creation.indexOf('cat >"$issue_transport_dir/body"');
-		const guardedCreate = creation.indexOf("if ! created_issue_output=$(gh issue create");
-		const identityValidation = creation.indexOf('gh issue view "$created_issue_url" --json number,url');
+	it("requires verified creation before separate metadata mutations", () => {
+		const create = creation.indexOf("create_issue");
+		const identity = creation.indexOf("verified canonical issue number and URL");
 		const metadata = creation.indexOf(
 			"Apply each user-requested or repository-standard label and assignee operation",
 		);
-		expect(creation.slice(titleWrite, bodyWrite)).toContain("Could not stage the approved issue title");
-		expect(creation.slice(bodyWrite, guardedCreate)).toContain("Could not stage the approved issue body");
-		expect(guardedCreate).toBeGreaterThan(bodyWrite);
-		expect(creation).toContain("GitHub issue creation failed; no metadata was applied");
-		expect(identityValidation).toBeGreaterThan(guardedCreate);
-		expect(metadata).toBeGreaterThan(identityValidation);
-		expect(creation).toContain("positive integer `number` and a non-empty `url`");
-		expect(creation).toMatch(/identity validation fails[^.]*do not retry creation[^.]*non-completed status/i);
+		expect(create).toBeGreaterThan(-1);
+		expect(identity).toBeGreaterThan(create);
+		expect(metadata).toBeGreaterThan(identity);
+		expect(creation).toContain("do not retry creation");
+		expect(creation).toContain("may have succeeded");
 		expect(creation).toContain("requiring the command to succeed and return exactly one non-empty login");
-		expect(creation).toMatch(/resolution fails[^.]*confirmed issue number and URL[^.]*non-completed status/i);
+		expect(creation).toMatch(/resolution fails[^.]*verified issue number and URL[^.]*non-completed status/i);
 		expect(creation).toMatch(
-			/metadata operation fails[^.]*confirmed issue number and URL[^.]*exact label or assignee operation/i,
+			/metadata operation fails[^.]*verified issue number and URL[^.]*exact label or assignee operation/i,
 		);
 		expect(creation).toMatch(/do not retry issue creation or claim complete success[^.]*non-completed status/i);
 	});
@@ -844,16 +1015,16 @@ describe("mach12 standard PR linkage", () => {
 		expect(prCreate).toContain("reject a line with multiple targets, multiple closing keywords");
 		expect(prCreate).toContain("revalidate the displayed complete body");
 		expect(prCreate).toContain("Immediately before creation, validate the final approved body once more");
-		expect(prCreate.indexOf("Immediately before creation")).toBeLessThan(prCreate.indexOf("gh pr create"));
+		expect(prCreate.indexOf("Immediately before creation")).toBeLessThan(prCreate.indexOf("Call `create_pr`"));
 		expect(prCreate).toContain("Present the validated title and complete body");
 		expect(prCreate).toContain("Approve, Modify, or Cancel");
-		expect(prCreate).toContain("<approved-body>");
+		expect(prCreate).toContain("exact approved title and body");
 		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
 	});
 
 	it("re-resolves changed linkage and pushes without force", () => {
 		expect(prCreate).toContain("closing reference was added or changed");
-		expect(prCreate).toContain("repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract");
+		expect(prCreate).toContain("repeat Step 1's canonical-number validation and complete `read_issue` contract");
 		expect(prCreate).toContain("git push -u origin <branch-name>");
 		expect(prCreate).not.toMatch(/git push (?:--force|-f)\b/);
 	});
@@ -900,13 +1071,12 @@ describe("mach12 GitHub reference authoring contracts", () => {
 		expect(assessment).toContain("finding retains its F/S identifier");
 	});
 
-	it("preserves the single optional PR closer and policy-free comment transport", () => {
+	it("preserves the single optional PR closer while using verified content tools", () => {
 		const prCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-create.md`), "utf-8");
-		const ghComment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:gh-comment.md`), "utf-8");
 		expect(prCreate).toContain("exactly one optional standalone `Fixes #N` line");
 		expect(prCreate).toContain("Ordinary references must not add closing keywords");
-		expect(ghComment).not.toContain("owner/repo#N");
-		expect(ghComment).not.toContain("Artifact-local identifiers");
+		expect(prCreate).toContain("create_pr");
+		expect(prCreate).not.toContain("gh pr create");
 	});
 });
 
@@ -934,26 +1104,21 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection).not.toContain("shared batch label decision described in Option 1");
 	});
 
-	it("labels only newly created issues after canonical identity validation", () => {
+	it("labels only newly created issues after verified tool identity", () => {
 		expect(deferredSection).toContain("Never inspect, create, or apply the label to a clear duplicate");
 		expect(deferredSection).toContain("collect the intended disposition without mutating issues yet");
 		expect(deferredSection).toContain("If every item is a clear duplicate, skip label resolution");
-		expect(deferredSection).toContain("Do not pass `--label` to `gh issue create`");
+		expect(deferredSection).toContain("Create the issue with `create_issue` without coupling publication to labels");
 		expect(deferredSection).toContain(
 			"other relevant labels through separate guarded `gh issue edit --add-label` operations",
 		);
-		expect(deferredSection).toContain('gh issue view "$created_issue_url" --json number,url');
-		expect(deferredSection).toContain('gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"');
-		expect(deferredSection.indexOf("gh issue create")).toBeLessThan(
-			deferredSection.indexOf('gh issue view "$created_issue_url" --json number,url'),
+		expect(deferredSection).toContain('gh issue edit "$verified_issue_url" --add-label "PR review deferral"');
+		expect(deferredSection.indexOf("create_issue")).toBeLessThan(
+			deferredSection.indexOf('gh issue edit "$verified_issue_url" --add-label "PR review deferral"'),
 		);
-		expect(deferredSection.indexOf('gh issue view "$created_issue_url" --json number,url')).toBeLessThan(
-			deferredSection.indexOf('gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"'),
-		);
-		expect(deferredSection).toContain("Require a positive integer number and a non-empty canonical URL");
-		expect(deferredSection).toMatch(
-			/If identity validation fails, do not label or retry creation; report that creation may have succeeded and return a non-completed command status\./,
-		);
+		expect(deferredSection).toContain("verified canonical issue number and URL");
+		expect(deferredSection).not.toContain("gh issue create");
+		expect(deferredSection).not.toContain("gh issue view");
 	});
 
 	it("allows mutation after every resolved label decision and pauses only on cancellation", () => {
@@ -980,13 +1145,12 @@ describe("mach12 deferred-review issue labels", () => {
 		);
 	});
 
-	it("distinguishes definite and ambiguous issue-creation failures", () => {
-		expect(deferredSection).toMatch(
-			/If the command fails, surface the error, apply no metadata, do not retry automatically, and return a non-completed command status\./,
-		);
-		expect(deferredSection).toMatch(
-			/Zero or multiple non-empty output lines are ambiguous: report that creation may have succeeded, apply no metadata, do not retry creation, and return a non-completed command status\./,
-		);
+	it("preserves definite and ambiguous creation failure semantics", () => {
+		expect(deferredSection).toContain("If `create_issue` fails, surface the error");
+		expect(deferredSection).toContain("apply no metadata");
+		expect(deferredSection).toContain("do not retry automatically");
+		expect(deferredSection).toContain("may have succeeded");
+		expect(deferredSection).toContain("return a non-completed command status");
 	});
 });
 
@@ -1169,6 +1333,18 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 			expect(typeof frontmatter.description).toBe("string");
 			expect((frontmatter.description as string).trim().length).toBeGreaterThan(0);
 		}
+	});
+
+	it("keeps the feature-completeness checker read-only with first-class forge reads", () => {
+		const content = readFileSync(join(MACH12_AGENTS_DIR, "mach12:feature-completeness-checker.md"), "utf-8");
+		const tools = content
+			.match(/^tools:\s*(.+)$/m)?.[1]
+			.split(",")
+			.map((tool) => tool.trim());
+
+		expect(tools).toEqual(["read", "grep", "find", "ls", "read_issue", "read_pr"]);
+		expect(tools).not.toContain("bash");
+		expect(content).toContain("Use the complete diff supplied by the parent review command");
 	});
 });
 

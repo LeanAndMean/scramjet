@@ -88,10 +88,10 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 			expect(context).toContain(source);
 		}
 		expect(context).toContain("untrusted evidence");
-		expect(context).toContain("delegate for those comments");
-		expect(context).toContain("/mach12:gh-pr-read <pr-number>");
-		expect(context).toContain("For each issue, delegate");
-		expect(context).toContain("/mach12:gh-issue-read <issue-number>");
+		expect(context).toContain('`read_pr` with `include: ["files", "commits"]`');
+		expect(context).toContain("For each issue, use `read_issue`");
+		expect(context).not.toContain("mach12:gh-pr-read");
+		expect(context).not.toContain("mach12:gh-issue-read");
 		expectInOrder(command, "## Step 2:", "## Step 3:", "## Step 4:", "Implement the test");
 	});
 
@@ -283,7 +283,7 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 			"Before hashing or posting, format intentional GitHub relationships",
 			"Prepare a fix-compatible review body",
 			"Compute and record the SHA-256 digest",
-			"/mach12:gh-comment pr <pr-number>",
+			"add_pr_comment",
 		);
 		for (const field of [
 			"severity and production references",
@@ -305,7 +305,7 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 		expect(publication).toContain("consolidated red command and result");
 		expect(publication).toContain("reviewed head and merge-base identities");
 		expect(publication).toContain("only normalized test changes remain");
-		expect(publication).toContain("/mach12:gh-comment pr <pr-number>");
+		expect(publication).toContain("add_pr_comment");
 		expect(publication).toContain("numeric comment ID");
 		expect(publication).toContain("complete body exactly equals the prepared body");
 		expect(publication).toContain(
@@ -503,7 +503,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 			"Before hashing or posting, format intentional GitHub relationships",
 			"Prepare the comment body",
 			"Compute and record SHA-256",
-			"/mach12:gh-comment pr <pr-number>",
+			"add_pr_comment",
 		);
 		expect(artifact).toContain("exact review comment URL");
 		expect(artifact).toContain("exact review-body SHA-256");
@@ -521,7 +521,7 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(artifact).toContain("already in permanent behavioral suites");
 		expect(artifact).toContain("must pass in place through production repairs");
 		expect(artifact).toContain("must not be weakened, renamed, relocated, or duplicated");
-		expect(artifact).toContain("/mach12:gh-comment pr <pr-number>");
+		expect(artifact).toContain("add_pr_comment");
 		expect(artifact).toContain("numeric assessment comment ID");
 		expect(artifact).toContain("complete body exactly equals the prepared body");
 		expect(artifact).toMatch(/never blindly retry/i);
@@ -630,36 +630,17 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 	});
 });
 
-describe("mach12 authoritative GitHub history helpers", () => {
-	it.each(["gh-pr-read", "gh-issue-read"])("%s paginates and verifies its comment stream", (basename) => {
-		const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
-		for (const clause of [
-			"gh api graphql --paginate",
-			"comments(first: 100, after: $endCursor)",
-			"totalCount",
-			"pageInfo { hasNextPage endCursor }",
-			"accumulated node count exactly equals `totalCount`",
-			"reject duplicate database IDs",
-			"do not return a partial array as complete",
-		]) {
-			expect(command).toContain(clause);
-		}
-	});
-
-	it.each(["gh-pr-read", "gh-issue-read"])(
-		"%s exposes parent and comment timestamps with freshness guidance",
+describe("mach12 authoritative forge history", () => {
+	it.each(["pr-validation", "pr-validation-assessment"])(
+		"%s uses complete aggregate forge reads for PR and linked-issue context",
 		(basename) => {
 			const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
-			const request = section(command, "Request parent", "The query must declare");
-			const result = section(command, "## Step 4: Return");
-
-			expect(request).toContain("`title`, `body`, `createdAt`, `updatedAt`");
-			expect(request).toContain("authorAssociation createdAt url");
-			expect(result).toContain("`createdAt`, and `updatedAt`");
-			expect(result).toContain("each comment's `createdAt`");
-			expect(result).toContain("point-in-time evidence");
-			expect(result).toContain("verify potentially stale material claims against current authoritative context");
-			expect(result).toContain("never treat age alone as proof of invalidity");
+			expect(command).toContain("read_pr");
+			expect(command).toContain("read_issue");
+			expect(command).toContain("all top-level PR conversation comments");
+			expect(command).toContain("complete comments");
+			expect(command).not.toContain("mach12:gh-pr-read");
+			expect(command).not.toContain("mach12:gh-issue-read");
 		},
 	);
 
@@ -667,17 +648,16 @@ describe("mach12 authoritative GitHub history helpers", () => {
 		const issuePlan = readFileSync(join(COMMANDS_DIR, "mach12:issue-plan.md"), "utf-8");
 		const prReview = readFileSync(join(COMMANDS_DIR, "mach12:pr-review.md"), "utf-8");
 
-		expect(issuePlan).toContain("parent `createdAt` and `updatedAt`");
+		expect(issuePlan).toContain("artifact and comment timestamps");
 		expect(issuePlan).toContain("Verify those claims against current repository authority");
-		expect(prReview).toContain("--json title,body,createdAt,updatedAt,comments,files");
+		expect(prReview).toContain('read_pr` with `include: ["files"]`');
 		expectInOrder(
 			prReview,
 			"Identify linked issues from explicit relationship forms",
 			"contextually relevant bare `#<number>` references in the PR body",
 			"references found only in the conversation as candidates",
 			"Deduplicate issue numbers",
-			"Before briefing reviewers",
-			"/mach12:gh-issue-read <issue-number>",
+			"Before briefing reviewers, use `read_issue`",
 		);
 		expect(prReview).toContain("If any linked issue cannot be read completely");
 		expect(prReview).toContain("stop before reviewer dispatch");
@@ -698,7 +678,7 @@ describe("mach12 authoritative GitHub history helpers", () => {
 		expect(plausibleMatches).toContain(
 			"Before confidently classifying any candidate as a duplicate or recommending linkage",
 		);
-		expect(plausibleMatches).toContain("/mach12:gh-issue-read <candidate-number>");
+		expect(plausibleMatches).toContain("read_issue");
 		expect(plausibleMatches).toContain("Track which candidates were read completely");
 		expect(plausibleMatches).toContain("If a read fails");
 		expect(plausibleMatches).toContain(

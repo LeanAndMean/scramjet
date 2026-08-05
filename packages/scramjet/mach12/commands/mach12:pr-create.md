@@ -6,7 +6,9 @@ allowed-tools:
   - read
   - grep
   - glob
-  - delegate
+  - get_scramjet_user_input
+  - read_issue
+  - create_pr
 next:
   mode: open
   candidates:
@@ -41,7 +43,7 @@ Resolve issue-linkage ambiguity before constructing a draft:
 - If no issue was supplied and exactly one issue is unambiguously encoded by a branch pattern such as `feature/issue-55-*`, `fix/issue-55-*`, or `55-some-description`, use that issue.
 - If no issue was supplied and the branch yields no candidate, proceed unlinked.
 
-When one issue is selected, delegate to `/mach12:gh-issue-read <issue-number>`. If the read fails, report the error and stop. Issue comments may inform the summary and test plan but must not be copied verbatim. Never expand a parent issue, sub-issues, or other relationships into additional closers.
+When one issue is selected, use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. If the read fails, report the error and stop. Issue comments may inform the summary and test plan but must not be copied verbatim. Never expand a parent issue, sub-issues, or other relationships into additional closers.
 
 ## Step 2: Gather branch context
 
@@ -86,7 +88,7 @@ Before presenting any initial or modified complete body, validate that it contai
 Present the validated title and complete body, then ask the user to Approve, Modify, or Cancel.
 
 - **Approve:** revalidate the displayed complete body, then continue.
-- **Modify:** ask what to change and apply it. If the closing reference was added or changed, treat its canonical positive issue number as a newly selected issue and repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract before using it. If that read fails, report the error and do not present or create the revised draft. Then validate the complete body again and only present the complete draft after its selected linkage has been resolved and read. The user may remove linkage without an issue read.
+- **Modify:** ask what to change and apply it. If the closing reference was added or changed, treat its canonical positive issue number as a newly selected issue and repeat Step 1's canonical-number validation and complete `read_issue` contract before using it. If that read fails, report the error and do not present or create the revised draft. Then validate the complete body again and only present the complete draft after its selected linkage has been resolved and read. The user may remove linkage without an issue read.
 - **Cancel:** stop without creating a PR.
 
 Immediately before creation, validate the final approved body once more. If it no longer contains zero or one valid closing reference, stop and return to complete-body review. Create only the exact validated title and body the user approves.
@@ -95,16 +97,9 @@ Immediately before creation, validate the final approved body once more. If it n
 
 After approval, push the current branch with `git push -u origin <branch-name>`. If the push fails, report the error and stop; never force-push.
 
-Create the PR using a HEREDOC so the complete approved body is preserved exactly:
+Call `create_pr` with the exact approved title and body, the current branch as `head`, the resolved default branch as `base`, and `draft: false`. The tool never pushes or mutates Git state and returns the verified canonical PR number and URL.
 
-```text
-gh pr create --title "<approved-title>" --body "$(cat <<'EOF'
-<approved-body>
-EOF
-)"
-```
-
-If creation fails, report the full error. For an existing PR on the branch, report its URL with `gh pr view`; for authentication errors, suggest `gh auth status`.
+If creation fails, report the full tool error and never retry automatically. When the error says creation may have succeeded, preserve that ambiguity. For an existing PR on the branch, report its URL with the narrow current-branch lookup `gh pr view --json number,url`; for authentication errors, suggest checking the selected forge CLI's auth status.
 
 ## Step 5: Confirm
 
