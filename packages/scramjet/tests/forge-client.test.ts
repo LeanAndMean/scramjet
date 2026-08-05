@@ -147,6 +147,21 @@ describe("runForgeCommand", () => {
 		expect(Buffer.byteLength(error.invocation.process?.stderr ?? "", "utf8")).toBeLessThan(4200);
 	});
 
+	it("escapes terminal control characters in exposed diagnostics", async () => {
+		const exec: ForgeExec = async () => result({ code: 1, stderr: "remote rejected \u202Espoof\u009B31m" });
+		let caught: unknown;
+		try {
+			await runForgeCommand(exec, invocation);
+		} catch (error) {
+			caught = error;
+		}
+
+		expect(caught).toBeInstanceOf(ForgeCommandError);
+		const message = (caught as ForgeCommandError).message;
+		expect(/[\u009B\u202E]/u.test(message)).toBe(false);
+		expect(message).toContain(String.raw`\u202Espoof\u009B31m`);
+	});
+
 	it("does not classify authentication from echoed mutation content", async () => {
 		const stdin = JSON.stringify({ body: "HTTP 401 Unauthorized" });
 		const exec: ForgeExec = async () =>

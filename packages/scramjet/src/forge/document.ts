@@ -184,10 +184,14 @@ function fieldChunks(value: string): FieldChunk[] {
 	return chunks;
 }
 
-function displayText(value: string): string {
+export function controlSafeText(value: string): string {
 	let output = "";
 	for (let index = 0; index < value.length; index++) {
 		const codeUnit = value.charCodeAt(index);
+		if (codeUnit === 0x0a) {
+			output += "\n";
+			continue;
+		}
 		if (codeUnit === 0x09) {
 			output += "\\t";
 			continue;
@@ -261,7 +265,7 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			const displayPrefix = first ? `${indent}<${name}>` : precedingBreak === "forced" ? `${indent}↳ ` : "";
 			const displaySuffix = last ? `</${name}>` : chunk.breakAfter === "forced" ? " [continued]" : "";
 			const encoded = useCdata ? escapeCdata(chunk.text) : escapeText(chunk.text);
-			add(`${prefix}${encoded}${suffix}`, `${displayPrefix}${displayText(chunk.text)}${displaySuffix}`);
+			add(`${prefix}${encoded}${suffix}`, `${displayPrefix}${controlSafeText(chunk.text)}${displaySuffix}`);
 			precedingBreak = chunk.breakAfter;
 		}
 		return chunks;

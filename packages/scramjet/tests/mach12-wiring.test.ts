@@ -1408,6 +1408,19 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 		expect(tools).not.toContain("bash");
 		expect(content).toContain("Use the complete diff supplied by the parent review command");
 	});
+
+	it("requires snapshot continuation for feature-completeness forge reads", () => {
+		const content = readFileSync(join(MACH12_AGENTS_DIR, "mach12:feature-completeness-checker.md"), "utf-8");
+		const contextStep = content.slice(
+			content.indexOf("### Step 1: Gather Requirements Context"),
+			content.indexOf("### Step 2: Catalog the Actual Changes"),
+		);
+
+		for (const tool of ["read_pr", "read_issue"]) {
+			const instruction = contextStep.split("\n").find((line) => line.includes(`Use \`${tool}\``));
+			expect(instruction).toContain("continue every returned range with the unchanged snapshot");
+		}
+	});
 });
 
 describe("mach12 test designer contract", () => {

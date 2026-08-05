@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { type ExecOptions, type ExecResult, truncateTail } from "@leanandmean/coding-agent";
+import { controlSafeText } from "./document.js";
 import type { ForgeRepository } from "./types.js";
 
 export const FORGE_EXEC_TIMEOUT_MS = 3000;
@@ -66,8 +67,15 @@ export class UnsupportedForgeOriginError extends Error {
 	}
 }
 
+function quotedDiagnostic(value: string): string {
+	return JSON.stringify(value).replace(/\\\\u([0-9A-F]{4})/g, (_match, hex: string) => {
+		const rendered = Number.parseInt(hex, 16) < 0x20 ? hex.toLowerCase() : hex;
+		return `\\u${rendered}`;
+	});
+}
+
 function messageForFailure(kind: ForgeCommandErrorKind, invocation: ForgeInvocationDiagnostic): string {
-	const command = [invocation.command, ...invocation.args].map((part) => JSON.stringify(part)).join(" ");
+	const command = [invocation.command, ...invocation.args].map(quotedDiagnostic).join(" ");
 	const stdin = invocation.stdin
 		? ` with ${invocation.stdin.bytes} stdin bytes (sha256 ${invocation.stdin.sha256})`
 		: "";
@@ -83,8 +91,8 @@ function messageForFailure(kind: ForgeCommandErrorKind, invocation: ForgeInvocat
 	const processText = process
 		? [
 				process.exitCode === null ? null : `exit code ${process.exitCode}`,
-				process.stdout === "" ? null : `stdout ${JSON.stringify(process.stdout)}`,
-				process.stderr === "" ? null : `stderr ${JSON.stringify(process.stderr)}`,
+				process.stdout === "" ? null : `stdout ${quotedDiagnostic(process.stdout)}`,
+				process.stderr === "" ? null : `stderr ${quotedDiagnostic(process.stderr)}`,
 			].filter((part): part is string => part !== null)
 		: [];
 	const diagnostic = processText.length === 0 ? "" : `; ${processText.join("; ")}`;
@@ -145,11 +153,19 @@ function redactProcessOutput(value: string, secrets: readonly string[]): string 
 }
 
 function boundedProcessOutput(value: string): string {
-	const truncated = truncateTail(value, {
+	const options = {
 		maxBytes: PROCESS_DIAGNOSTIC_MAX_BYTES,
 		maxLines: PROCESS_DIAGNOSTIC_MAX_LINES,
-	});
-	return truncated.truncated ? `[truncated] ${truncated.content}` : truncated.content;
+	};
+	const truncated = truncateTail(value, options);
+	if (!truncated.truncated) return truncated.content;
+	const prefix = "[truncated] ";
+	return `${prefix}${
+		truncateTail(value, {
+			...options,
+			maxBytes: options.maxBytes - Buffer.byteLength(prefix, "utf8"),
+		}).content
+	}`;
 }
 
 function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeInvocationDiagnostic {
@@ -157,9 +173,9 @@ function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeI
 	const stdout = result === undefined ? "" : redactProcessOutput(result.stdout, secrets);
 	const stderr = result === undefined ? "" : redactProcessOutput(result.stderr, secrets);
 	return {
-		command: invocation.command,
-		args: [...invocation.args],
-		cwd: invocation.cwd,
+		command: controlSafeText(invocation.command),
+		args: invocation.args.map(controlSafeText),
+		cwd: controlSafeText(invocation.cwd),
 		...(invocation.stdin === undefined
 			? {}
 			: {
@@ -173,8 +189,8 @@ function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeI
 			: {
 					process: {
 						exitCode: result.code,
-						stdout: boundedProcessOutput(stdout),
-						stderr: boundedProcessOutput(stderr),
+						stdout: boundedProcessOutput(controlSafeText(stdout)),
+						stderr: boundedProcessOutput(controlSafeText(stderr)),
 						authenticationFailure: FORGE_AUTH_FAILURE_PATTERNS.some((pattern) =>
 							pattern.test(`${stdout}\n${stderr}`),
 						),
