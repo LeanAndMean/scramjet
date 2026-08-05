@@ -28,6 +28,8 @@ For initial validation-proof mode, revalidate that `HEAD` equals the frozen impl
 
 When the caller supplies a structured validation-origin provenance payload for repair, validate it before staging, committing, or pushing. Require review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests; require every field to be unambiguous and internally complete. If validation fails, stop before any repository or remote mutation and report the missing or malformed fields.
 
+Recognize a distinct assessment-cleanup payload before ordinary or validation-repair staging. Require repository and PR identity, head branch, frozen implementation parent `P`, original proof commit `V`, exact pre-cleanup head, exact rejected ownership groups and paths, surviving groups and content identities, and authenticated review provenance. Revalidate a clean index before the assessor's targeted removals, require the dirty diff to consist exactly of complete rejected-group test removals, and reject production, temporary, unrelated, secret-bearing, or survivor modifications. Stage only those exact paths, create exactly one cleanup commit, and push exactly once. Verify the commit has one parent equal to the declared pre-cleanup head, its diff is the exact tests-only rejected-group removal, local `HEAD`, upstream, and fresh GitHub `headRefOid` agree, and the worktree is clean. Return `P`, `V`, cleanup commit, removed groups/paths, surviving identities, and remote verification. If no group is rejected, this mode must not be invoked.
+
 Run `git status` and `git diff --staged` to understand the current state.
 
 For every mode other than initial validation-proof mode, use these staging rules:
