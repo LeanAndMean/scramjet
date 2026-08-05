@@ -22,11 +22,15 @@ This command is delegate-only. The next step belongs to the caller's `next:` dec
 
 ## Step 1: Determine what to commit
 
-When the caller supplies a structured validation-origin provenance payload, validate it before staging, committing, or pushing. Require review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests; require every field to be unambiguous and internally complete. If validation fails, stop before any repository or remote mutation and report the missing or malformed fields.
+Recognize a distinct initial validation-proof payload before applying ordinary or validation-repair staging rules. Require repository and PR identity, head branch, frozen implementation parent, exact proof paths, exhaustive path/node/finding/ownership-group mappings, classifications, consolidated-red evidence, and an intentional-red designation. This mode does not require review or assessment IDs or digests because validation has not published those artifacts yet. Reject an ambiguous payload or one mixed with validation-repair provenance before repository or remote mutation.
+
+For initial validation-proof mode, revalidate that `HEAD` equals the frozen implementation parent, the index is empty, and the dirty path set exactly equals the declared proof paths. Require the complete dirty diff to be tests-only and reject production, temporary, unrelated, or secret-bearing content. In this mode, stage only the exact supplied proof paths—never `git add .` or `git add -A`—then require the staged diff to equal the complete declared tests-only worktree diff with no unstaged residual content. Stop before committing if any identity, mapping, path, diff, or red-evidence guard fails.
+
+When the caller supplies a structured validation-origin provenance payload for repair, validate it before staging, committing, or pushing. Require review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests; require every field to be unambiguous and internally complete. If validation fails, stop before any repository or remote mutation and report the missing or malformed fields.
 
 Run `git status` and `git diff --staged` to understand the current state.
 
-Staging rules:
+For every mode other than initial validation-proof mode, use these staging rules:
 - If you have context from this session about which files were modified, stage those specific files by name. Do NOT use `git add -A` or `git add .`.
 - If files are already staged and the staging looks correct based on session context, proceed with those.
 - If it is unclear what should be staged (e.g., this is a fresh session with no prior context), present the untracked and unstaged files to the user and ask for guidance.
@@ -57,15 +61,19 @@ EOF
 
 Do not append model-identity or tooling co-author footers unless the repository's existing commit history demonstrates that convention.
 
+In initial validation-proof mode, create exactly one commit. Verify it has exactly one parent equal to the frozen implementation parent and that the parent-to-commit diff is tests-only and exactly matches the supplied proof paths. A focused test failure is the intentional proof state, not commit failure or merge readiness.
+
 ## Step 3: Push
 
 ```
 git push
 ```
 
-If no upstream is set, push with `-u` to the current branch name.
+If no upstream is set, push with `-u` to the current branch name. In initial validation-proof mode, push exactly once, then verify local `HEAD`, the upstream branch, and a fresh GitHub `headRefOid` all equal the proof commit. Require a clean index and tracked/untracked worktree, then return the frozen implementation parent, proof commit, committed paths, and remote verification to validation. If commit, push, or verification fails, return the exact local and remote identities without retrying, force-pushing, or adapting to a changed head.
 
 ## Step 4: Post progress comment
+
+Initial validation-proof mode returns to validation after verified push and does not post a progress comment; validation owns the initial review artifact. Every other mode continues below.
 
 Determine the comment target using this priority order:
 
@@ -101,7 +109,7 @@ Prepare a brief progress comment covering:
 
 Preserve an ordinary originating review ID exactly as supplied; it associates the progress artifact with that review cycle but does not constitute validation provenance.
 
-When the caller supplies a structured validation-origin provenance payload, preserve every field and value verbatim in a dedicated `Validation repair provenance` section and append the exact pushed `HEAD` as the predecessor head. Require the payload to include review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests. Do not summarize, reorder, omit, or rewrite these fields; if the payload is incomplete, stop before posting the progress comment and report the push workflow incomplete.
+When the caller supplies a structured validation-origin repair provenance payload, preserve every field and value verbatim in a dedicated `Validation repair provenance` section and append the exact pushed `HEAD` as the predecessor head. Require the payload to include review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests. Do not summarize, reorder, omit, or rewrite these fields; if the payload is incomplete, stop before posting the progress comment and report the push workflow incomplete.
 
 Do not include next-step suggestions in the comment body. The caller's `next:` block surfaces follow-ups -- a duplicate suggestion here would compete with the harness.
 

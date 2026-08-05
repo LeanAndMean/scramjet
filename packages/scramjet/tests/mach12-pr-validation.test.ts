@@ -132,7 +132,7 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 			"assessor verdict",
 			"narrowing allowance",
 			"final disposition",
-			"final path, node ID, finding ID, proof-patch digest, and ownership group",
+			"final path, node ID, finding ID, classification, and ownership group",
 		]) {
 			expect(candidates).toContain(field);
 		}
@@ -227,17 +227,17 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 			normalization,
 			"When one or more findings are retained",
 			"all retained nodes together sequentially",
-			"When zero findings are retained",
 			"Remove every temporary file and rejected candidate hunk",
-			"Before publication",
 			"mach12:code-architect",
+			"Before delegating a retained run",
+			"When zero findings are retained",
 		);
 		expect(normalization).toContain("exactly the expected failures");
 		expect(normalization).toContain("targeted edits only");
-		expect(normalization).toContain("dirty paths consist only of normalized retained test files");
+		expect(normalization).toContain("dirty paths consist exactly of the declared normalized proof paths");
 		expect(normalization).toContain("no production diff");
-		expect(normalization).toContain("no temporary investigation files");
-		expect(normalization).toMatch(/final node ID.+reproducible/);
+		expect(normalization).toContain("temporary investigation content");
+		expect(normalization).toMatch(/retained node ID.+reproducibly red/);
 		expect(normalization).toContain("minimal production fix proposals");
 		expect(normalization).toContain("do not mutate");
 		expect(normalization).toContain("require a clean primary worktree");
@@ -259,14 +259,74 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 		expect(normalization).toContain("a path-only check is insufficient");
 	});
 
-	it("binds each retained finding to an authenticated and reconstructible proof patch", () => {
+	it("persists one pushed proof commit for every retained run before publication", () => {
 		const normalization = section(command, "## Step 6:", "## Step 7:");
-		expect(normalization).toContain("exact repository-relative patch for each retained finding");
-		expect(normalization).toContain("imports, fixtures, helpers, and setup");
-		expect(normalization).toContain("one ownership group");
-		expect(normalization).toContain("inseparable union patch");
-		expect(normalization).toContain("lowercase SHA-256 digest");
-		expect(normalization).toContain("reconstructs the complete normalized primary-worktree diff byte-for-byte");
+		expect(normalization).toContain("exactly one proof commit for the complete retained validation run");
+		expect(normalization).toContain("regardless of ownership-group count");
+		expect(normalization).toContain("/mach12:push");
+		expect(normalization).toContain("initial validation-proof payload");
+		for (const field of [
+			"repository and PR identity",
+			"head branch",
+			"frozen implementation parent",
+			"exact proof paths",
+			"path, node, finding, and ownership-group mapping",
+			"intentional-red designation",
+		]) {
+			expect(normalization).toContain(field);
+		}
+		expect(normalization).toContain("must not require a review or assessment comment ID or digest");
+		expectInOrder(
+			normalization,
+			"all retained nodes together sequentially",
+			"initial validation-proof payload",
+			"/mach12:push",
+			"independently verify",
+		);
+	});
+
+	it("creates no proof commit for zero findings and treats red proofs as non-merge-ready evidence", () => {
+		const normalization = section(command, "## Step 6:", "## Step 7:");
+		expect(normalization).toContain("create no commit and do not delegate to `/mach12:push`");
+		expect(normalization).toContain("unchanged frozen implementation parent");
+		expect(normalization).toContain("intentionally failing evidence");
+		expect(normalization).toContain("does not claim successful CI or merge readiness");
+		const publication = section(command, "## Step 7:");
+		expect(publication).toContain("For a zero-finding run, record `proof commit: none`");
+		expect(publication).toContain("require the marker, `proof commit: none`, and unchanged frozen implementation parent");
+		expect(publication).toContain("proof commit or zero-finding unchanged parent");
+	});
+
+	it("verifies the pushed proof boundary before preparing or publishing the review", () => {
+		expectInOrder(
+			command,
+			"/mach12:push",
+			"local `HEAD`, its upstream branch, and a fresh GitHub `headRefOid` all equal the returned proof commit",
+			"### Prepare the review artifact",
+			"### Post the review artifact",
+			"### Verify publication and report status",
+		);
+		const publication = section(command, "## Step 7:");
+		for (const field of [
+			"frozen implementation parent",
+			"proof commit",
+			"actual merge base",
+			"path, node, finding, and ownership-group mapping",
+			"expected red results",
+			"publisher login",
+		]) {
+			expect(publication).toContain(field);
+		}
+		expect(publication).toContain("Git commit and declared proof mapping are the executable authority");
+	});
+
+	it("preserves a pushed proof commit across publication reconciliation", () => {
+		const publication = section(command, "## Step 7:");
+		expect(publication).toContain("If the proof push succeeded but publication failed or is ambiguous");
+		expect(publication).toContain("preserve the exact pushed proof commit");
+		expect(publication).toContain("search for the intended artifact");
+		expect(publication).toContain("repository, PR, trusted publisher, frozen implementation parent, and proof commit identities");
+		expect(publication).toContain("never recommit, repush, force-push, or blindly duplicate the comment");
 	});
 
 	it("publishes a verified fix-compatible review artifact before the fresh forced handoff", () => {
@@ -302,16 +362,17 @@ describe("mach12 pr-validation executable-proof workflow", () => {
 			expect(publication).toContain(field);
 		}
 		expect(publication).toContain("rejected-candidate disposition counts");
-		expect(publication).toContain("consolidated red command and result");
-		expect(publication).toContain("reviewed head and merge-base identities");
-		expect(publication).toContain("only normalized test changes remain");
+		expect(publication).toContain("consolidated red command and expected red results");
+		expect(publication).toContain("frozen implementation parent");
+		expect(publication).toContain("actual merge base");
+		expect(publication).toContain("confirmation that the worktree is clean");
 		expect(publication).toContain("/mach12:gh-comment pr <pr-number>");
 		expect(publication).toContain("numeric comment ID");
 		expect(publication).toContain("complete body exactly equals the prepared body");
 		expect(publication).toContain(
 			"search existing PR comments for one whose complete body exactly equals the prepared body",
 		);
-		expect(publication).toContain("marker and head identity alone are insufficient");
+		expect(publication).toContain("marker and proof identity alone are insufficient");
 		expect(publication).toMatch(/never blindly retry/i);
 		expect(publication).toContain("`none — zero retained findings` result");
 		expect(publication).toContain("include exactly one selector-visible context entry");
@@ -1003,8 +1064,35 @@ describe("mach12 executable validation integration", () => {
 		expect(finalRoutes).toContain("recommend `mach12:pr-pre-merge` (index 2)");
 	});
 
+	it("owns the initial validation-proof commit as an exact tests-only push mode", () => {
+		const determine = section(push, "## Step 1:", "## Step 2:");
+		expect(determine).toContain("distinct initial validation-proof payload");
+		expect(determine).toContain("does not require review or assessment IDs or digests");
+		for (const guard of [
+			"`HEAD` equals the frozen implementation parent",
+			"index is empty",
+			"dirty path set exactly equals the declared proof paths",
+			"tests-only",
+			"temporary",
+			"unrelated",
+			"secret-bearing",
+		]) {
+			expect(determine).toContain(guard);
+		}
+		expect(determine).toContain("stage only the exact supplied proof paths");
+		expect(determine).toContain("complete declared tests-only worktree diff");
+		expect(determine).toContain("no unstaged residual content");
+
+		const commit = section(push, "## Step 2:", "## Step 4:");
+		expect(commit).toContain("exactly one commit");
+		expect(commit).toContain("push exactly once");
+		expect(commit).toContain("exactly one parent equal to the frozen implementation parent");
+		expect(commit).toContain("local `HEAD`, the upstream branch, and a fresh GitHub `headRefOid`");
+		expect(commit).toContain("clean index and tracked/untracked worktree");
+		expect(commit).toContain("return the frozen implementation parent, proof commit, committed paths, and remote verification");
+	});
+
 	it("preserves staged repair provenance verbatim through the push subroutine", () => {
-		const push = readFileSync(join(COMMANDS_DIR, "mach12:push.md"), "utf-8");
 		expect(push).toContain("structured validation-origin provenance payload");
 		expectInOrder(
 			push,

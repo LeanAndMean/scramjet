@@ -97,7 +97,7 @@ Maintain an in-session candidate ledger with these fields:
 - assessor verdict;
 - whether the narrowing allowance was consumed;
 - final disposition;
-- final path, node ID, finding ID, proof-patch digest, and ownership group when retained.
+- final path, node ID, finding ID, classification, and ownership group when retained.
 
 Process selected candidates one at a time. Parallelize designer analysis only. All repository mutation and initial comparison execution is main-agent-owned and sequential; each independent assessor may rerun only its supplied focused commands, sequentially and without mutation.
 
@@ -134,24 +134,34 @@ Only independently validated PR-head-red findings survive in the primary working
 
 Move each retained proof into the established permanent behavioral suite that owns its production boundary. Create a file only when no established suite fits, and then use a stable subsystem-oriented name. Permanent file names and node IDs must not encode PR numbers, issue numbers, finding IDs, `probe`, `review`, `review_fix`, `postfix`, or implementation history.
 
-When one or more findings are retained, rerun every final node ID after relocation. Then run all retained nodes together sequentially; the consolidated result must contain exactly the expected failures and no extra setup, discovery, or environmental failures.
+When one or more findings are retained, rerun every final node ID after relocation. Then run all retained nodes together sequentially; the consolidated result must contain exactly the expected failures and no extra setup, discovery, or environmental failures. This intentionally failing evidence does not claim successful CI or merge readiness.
 
-After normalization, derive an exact repository-relative patch for each retained finding against the frozen reviewed head. Include every addition that finding needs: test bodies, imports, fixtures, helpers, and setup. Assign an ownership-group ID when two or more findings share any support addition; every member then owns the same inseparable union patch, and replay, repair staging, or cleanup must treat the whole group as one disposition unit. Reject overlapping per-finding patches that are not declared as one ownership group. Record each patch's exact unified-diff body and lowercase SHA-256 digest in the in-session ledger; verify that applying all distinct ownership-group patches reconstructs the complete normalized primary-worktree diff byte-for-byte.
-
-When zero findings are retained, remove all candidate test changes with targeted edits, require a clean primary worktree, skip final-node and consolidated-red execution, and skip architect dispatch. Publish a verified no-findings review artifact with the candidate disposition counts and frozen identities, then continue the forced assessment handoff.
+Assign every retained finding to its permanent repository-relative test path, exact node ID, classification, and exactly one ownership-group ID. Assign a shared group when findings depend on common imports, fixtures, helpers, setup, or assertions; every member then remains one indivisible disposition unit. Require the path/node/finding/group mapping to be exhaustive and non-overlapping, and require the complete normalized worktree diff to consist exactly of the declared proof paths.
 
 Remove every temporary file and rejected candidate hunk with targeted edits only. Never reset or clean the primary worktree. Immediately after creation, emit a concise user-visible progress record containing the exact detached-worktree and isolated-bootstrap paths before making another tool call, so interruption recovery does not depend on in-memory state. On every controlled normal, failure, stop, assessor-error, and user-cancellation path that returns control to this command, attempt to remove only the recorded paths and verify removal before reporting status. Abrupt cancellation or process termination cannot run later Markdown cleanup; the durable path record is the recovery contract, and the resumed or next session must report the recorded paths, their state, and the exact manual recovery command before continuing. If unexpected mutation makes removal unsafe or cleanup fails, preserve the worktree as evidence, report its exact path and state, provide the exact manual recovery command, and report the workflow incomplete. Never remove an unrecorded path or silently strand a worktree.
 
-Before publication, require all of these conditions:
-
-- The local and GitHub PR head remain the frozen PR head OID.
-- The index is empty.
-- The dirty paths consist only of normalized retained test files.
-- There is no production diff.
-- There are no temporary investigation files.
-- Every final node ID is discoverable and reproducible.
-
 After retained root causes are settled, group compatible findings by subsystem. Snapshot the exact primary-worktree diff and every untracked-file content hash, then dispatch `mach12:code-architect` tasks with `agentScope: "user"`. Architects return minimal production fix proposals tied to making the unchanged proofs pass, including affected files and preserved invariants; they do not mutate the repository. Do not ask architects to redesign rejected evidence or broaden the approved scope. After dispatch, require the frozen head and empty index and compare the complete diff and untracked contents byte-for-byte with the snapshot; a path-only check is insufficient.
+
+Before delegating a retained run, require all of these conditions:
+
+- The local and GitHub PR heads still equal the frozen implementation parent.
+- The index is empty.
+- The dirty paths consist exactly of the declared normalized proof paths.
+- There is no production diff, temporary investigation content, or unrelated worktree content.
+- Every retained node ID is discoverable and reproducibly red.
+- The finding-to-ownership-group mapping is exhaustive and non-overlapping.
+
+Build a distinct initial validation-proof payload containing the repository and PR identity, head branch, frozen implementation parent, exact proof paths, complete path, node, finding, and ownership-group mapping, classifications, consolidated-red evidence, and intentional-red designation. It must not require a review or assessment comment ID or digest because those artifacts do not exist yet.
+
+Delegate exactly one proof commit for the complete retained validation run, regardless of ownership-group count, to:
+
+```
+/mach12:push <initial-validation-proof-payload>
+```
+
+After `/mach12:push` returns, independently verify that the returned proof commit has exactly one parent equal to the frozen implementation parent; that the parent-to-proof diff is tests-only and equals the declared proof paths; that local `HEAD`, its upstream branch, and a fresh GitHub `headRefOid` all equal the returned proof commit; and that the index and tracked/untracked worktree are clean. If commit or push fails, stop without handoff and report the exact local and remote state. Do not prepare or publish the review until this verification succeeds.
+
+When zero findings are retained, remove all candidate test changes with targeted edits, require a clean primary worktree at the unchanged frozen implementation parent, skip final-node and consolidated-red execution, skip architect dispatch, create no commit and do not delegate to `/mach12:push`. Publish a verified no-findings review artifact with the candidate disposition counts and frozen identities, then continue the forced assessment handoff.
 
 ## Step 7: Publish and hand off
 
@@ -165,7 +175,7 @@ For each finding include:
 
 - severity and production references;
 - exact final test path, node ID, and command;
-- exact proof-patch unified diff, its lowercase SHA-256 digest, and its ownership-group ID (the finding ID itself when unshared);
+- frozen implementation parent, proof commit, exact test path, node ID, and ownership-group ID (the finding ID itself when unshared);
 - expected and observed behavior;
 - head / merge-base classification;
 - root cause and confidence;
@@ -173,7 +183,7 @@ For each finding include:
 - practical trigger, observer-visible consequence, durable-state safety, realistic frequency, and operational severity;
 - concise architect-informed fix direction.
 
-Also include rejected-candidate disposition counts, any non-finding coverage suggestions, disclosed unreviewed boundaries, the consolidated red command and result (or an explicit `none — zero retained findings` result), the structured executable manifest, the complete proof-patch manifest and exhaustive finding-to-ownership-group mapping, reviewed head and merge-base identities, publisher login, and confirmation that only normalized test changes remain or that the zero-finding worktree is clean. Treat rendered command strings as display-only; the next session must reconstruct invocations locally from the manifest. End with model attribution from the Model Identity section of the system prompt and note that this is an automated executable review.
+Also include rejected-candidate disposition counts, any non-finding coverage suggestions, disclosed unreviewed boundaries, the consolidated red command and expected red results (or an explicit `none — zero retained findings` result), the structured executable manifest, the exhaustive path, node, finding, and ownership-group mapping, frozen implementation parent, actual merge base, publisher login, and confirmation that the worktree is clean. For a retained run, include the verified proof commit. For a zero-finding run, record `proof commit: none` and the unchanged frozen implementation parent. The Git commit and declared proof mapping are the executable authority; human-readable formatting is not executable proof transport. Treat rendered command strings as display-only; the next session must reconstruct invocations locally from the manifest. End with model attribution from the Model Identity section of the system prompt and note that this is an automated executable review.
 
 ### Post the review artifact
 
@@ -189,9 +199,11 @@ Capture the returned URL and numeric comment ID. Completion requires a durable c
 
 ### Verify publication and report status
 
-Fetch the exact numeric comment ID and verify repository/PR ownership, that the comment author equals the recorded authenticated publisher login with `OWNER`, `MEMBER`, or `COLLABORATOR` association, and that its body exactly equals the complete prepared body, including the expected marker and reviewed-head identity. Recompute the fetched body's SHA-256 and require the recorded digest. If posting returns an ambiguous failure, search existing PR comments for one whose complete body exactly equals the prepared body; marker and head identity alone are insufficient because an older validation may share both. Never blindly retry and create a duplicate. If the exact artifact cannot be found and verified, report a non-completed status and do not hand off.
+Fetch the exact numeric comment ID and verify repository/PR ownership, that the comment author equals the recorded authenticated publisher login with `OWNER`, `MEMBER`, or `COLLABORATOR` association, and that its body exactly equals the complete prepared body. For a retained run, require the expected marker and proof-commit identity. For a zero-finding run, require the marker, `proof commit: none`, and unchanged frozen implementation parent. Recompute the fetched body's SHA-256 and require the recorded digest. If posting returns an ambiguous failure, search existing PR comments for one whose complete body exactly equals the prepared body; marker and proof identity alone are insufficient because an older attempt may share both. Never blindly retry and create a duplicate.
 
-Present the retained findings, rejected disposition counts, consolidated red result, remaining dirty test paths, review URL and numeric ID, and any unreviewed boundaries to the user. Report completion only after successful verified publication.
+If the proof push succeeded but publication failed or is ambiguous, preserve the exact pushed proof commit and search for the intended artifact using the repository, PR, trusted publisher, frozen implementation parent, and proof commit identities. Report those commit identities and the exact observed publication state. Reconcile the one existing or missing artifact without changing Git: never recommit, repush, force-push, or blindly duplicate the comment. Report a non-completed status and do not hand off until the exact artifact is verified.
+
+Present the retained findings, rejected disposition counts, consolidated red result, the clean verified proof commit or zero-finding unchanged parent, review URL and numeric ID, and any unreviewed boundaries to the user. Report completion only after successful verified publication.
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"`. This command declares a forced next step; include exactly one selector-visible context entry:
 
