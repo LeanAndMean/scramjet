@@ -20,10 +20,10 @@ Scramjet reduces that friction:
 - **Reusable commands** capture recurring instructions once instead of refining the same prompt repeatedly.
 - **Composable subroutines** keep shared process fragments in one maintained definition instead of copies that drift.
 - **Declared, validated next steps** turn likely follow-ups into guided transitions rather than manual command handoffs.
-- **Fresh sessions** give each substantial step a bounded context window.
+- **Fresh sessions** can give substantial steps a bounded context window.
 - **Durable GitHub artifacts** carry plans, decisions, reviews, assessments, and implementation evidence across agents and sessions.
 
-Scramjet does not impose a central workflow graph or background job system. Each command owns its possible next step. When a transition offers choices, users can select another route or dismiss it; deterministic forced transitions follow the command's declared contract.
+Scramjet does not impose a central workflow graph or background job system. Each command owns its possible next steps. When a transition offers choices, users can select another route or dismiss it; deterministic forced transitions follow the command's declared contract.
 
 ## A representative issue-to-ship path
 
@@ -83,7 +83,7 @@ scramjet
 | `packages/coding-agent` | CLI, tools, sessions (Pi runtime entry point) |
 | `packages/scramjet` | The product: commands, orchestration, distribution |
 
-The four Pi runtime packages are vendored from a LeanAndMean fork of [upstream Pi](https://github.com/earendil-works/pi-mono) and modified directly where needed. `packages/scramjet` is the primary published package (`@leanandmean/scramjet`); its `scramjet/` directory contains product operational commands, while `mach12/` contains the bundled development methodology.
+The four Pi runtime packages are vendored from a LeanAndMean fork of [upstream Pi](https://github.com/earendil-works/pi) and modified directly where needed. `packages/scramjet` is the primary published package (`@leanandmean/scramjet`); its `scramjet/` directory contains product operational commands, while `mach12/` contains the bundled development methodology.
 
 ## Development
 
