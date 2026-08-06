@@ -141,7 +141,7 @@ The diagnosis may route to a registered continuation command or to `/mach12:issu
 
 ## Forge content tools
 
-Scramjet provides eight independently allowlistable tools for current-repository issue and pull-request content: `read_issue`, `edit_issue`, `create_issue`, `add_issue_comment`, `read_pr`, `edit_pr`, `create_pr`, and `add_pr_comment`. Aggregate reads use compact deterministic XML measured against semantically equivalent CLI JSON; mutations return only the verified canonical URL. Structured failures distinguish no-write paths from ambiguous writes and support deliberate read-only `gh`/`glab` recovery without automatic fallback or unsafe retry.
+Scramjet provides eight independently allowlistable tools for current-repository issue and pull-request content: `read_issue`, `edit_issue`, `create_issue`, `add_issue_comment`, `read_pr`, `edit_pr`, `create_pr`, and `add_pr_comment`. Aggregate reads use compact deterministic tagged text measured against semantically equivalent CLI JSON, and Ctrl+O displays the same readable representation the model receives; mutations return only the verified canonical URL. Structured failures distinguish no-write paths from ambiguous writes and support deliberate read-only `gh`/`glab` recovery without automatic fallback or unsafe retry.
 
 Canonical public GitHub and GitLab remotes select `gh` or `glab` respectively. The tools deliberately exclude search, labels, assignees, reviews, inline threads, checks/actions, merge, release, and Git operations. See [Forge Content Tools](docs/forge-tools.md) for schemas, range continuation, evidence rules, exact-edit guarantees, failure semantics, and scope boundaries.
 

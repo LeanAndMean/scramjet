@@ -362,13 +362,13 @@ describe("registerForgeTools read contracts", () => {
 		}
 	});
 
-	it("fetches and validates the aggregate issue before returning canonical XML with trusted details", async () => {
+	it("fetches and validates the aggregate issue before returning canonical tagged text with trusted details", async () => {
 		const { issueTool, readArtifact } = toolSetup(issue());
 		const controller = new AbortController();
 		const result = await issueTool.execute("read-1", { number: 7 }, controller.signal, undefined, toolContext());
 
 		expect(readArtifact).toHaveBeenCalledWith(githubRepository, "issue", 7, [], controller.signal);
-		expect(result.content[0].text).toContain('<forge-artifact version="1" forge="github"');
+		expect(result.content[0].text).toContain('<artifact repository="Acme/widget" kind="issue"');
 		expect(result.content[0].text).toContain('<comment id="101"');
 		expect(result.details).toMatchObject({
 			schema: "scramjet:forge-read@1",
@@ -667,12 +667,16 @@ describe("registerForgeTools read contracts", () => {
 			args: { number: 7 },
 			lastComponent: undefined,
 		});
-		expect(collapsed.render(120).join("\n")).toMatch(/lines 1-\d+ of \d+/);
+		expect(collapsed.render(120).join("\n")).toMatch(/positions 1-\d+ of \d+/);
 		const expanded = issueTool.renderResult(result, { expanded: true, isPartial: false }, theme(), {
 			args: { number: 7 },
 			lastComponent: undefined,
 		});
-		const expandedText = expanded.render(120).join("\n");
+		const expandedText = expanded.render(10_000).join("\n").replace(/ +$/gm, "");
+		const { offset, lines, totalLines } = result.details.range;
+		expect(expandedText).toBe(
+			`positions ${offset}-${offset + lines - 1} of ${totalLines}\n${result.content[0].text}`,
+		);
 		expect(expandedText).toContain("<body>first line");
 		expect(expandedText).not.toContain("CDATA");
 		expect(expandedText).not.toContain("forge-break");

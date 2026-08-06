@@ -163,7 +163,7 @@ function forgeExec(pi: ExtensionAPI): ForgeExec {
 
 function readDescription(kind: ForgeArtifactKind): string {
 	const label = kind === "issue" ? "issue" : "pull request";
-	return `Read a current-repository ${label} and complete top-level conversation as bounded XML. Continue truncated output with offset and snapshot.`;
+	return `Read a current-repository ${label} and complete top-level conversation as bounded tagged text. Continue truncated output with offset and snapshot.`;
 }
 
 async function readArtifact(
@@ -846,9 +846,10 @@ function renderResult(
 	}
 	const { offset, lines, totalLines } = result.details.range;
 	const end = offset + lines - 1;
-	let content = theme.fg("success", `lines ${offset}-${end} of ${totalLines}`);
-	if (options.expanded && result.details.display !== "") {
-		content += `\n${theme.fg("toolOutput", result.details.display)}`;
+	let content = theme.fg("success", `positions ${offset}-${end} of ${totalLines}`);
+	if (options.expanded) {
+		const output = resultText(result);
+		if (output !== "") content += `\n${theme.fg("toolOutput", output)}`;
 	}
 	text.setText(content);
 	return text;

@@ -425,13 +425,13 @@ Scramjet registers eight independently allowlistable current-repository tools:
 
 List every operation a command uses directly in `allowed-tools`; these are model-callable tools, not delegated commands, so they do not require `delegate`. Prefer them over raw `gh`/`glab` content commands for aggregate issue/PR reads, artifact creation, top-level comment creation, and exact content edits. Keep narrow shell operations only for capabilities outside their boundary, such as search, labels, assignment, trust metadata, checks, merge, release, and Git.
 
-`read_issue` and `read_pr` return bounded deterministic XML. A command that needs complete context must follow the returned offset/snapshot continuation until complete. Comment creation requires a complete aggregate parent read in an earlier assistant message; edits require complete prior coverage of every changed decoded field. Same-assistant-batch reads cannot authorize sibling mutations, and compaction invalidates older evidence.
+`read_issue` and `read_pr` return bounded deterministic tagged text. A command that needs complete context must follow the returned offset/snapshot continuation until complete. Comment creation requires a complete aggregate parent read in an earlier assistant message; edits require complete prior coverage of every changed decoded field. Same-assistant-batch reads cannot authorize sibling mutations, and compaction invalidates older evidence.
 
 Mutation tools verify canonical identity and remote postimages but return only the canonical URL as model-visible success text; reread when later work needs fresh content. Failures classify no-write reads/preflight, conclusive no-dispatch rejection, and ambiguous writes. After a surfaced read failure, a command with `bash` in scope may deliberately use read-only `gh`/`glab` inspection; no fallback is automatic. Ambiguous writes permit inspection only—never retry or a CLI mutation substitute. Approval remains command-owned—the tools establish safe transport and verification, not user authorization.
 
 Issue relationships are repository-qualified. A command that passes child numbers to a current-repository-only mutation must compare each relationship repository with the root artifact repository first and must report external children by canonical URL without mutating a same-numbered local issue. PR readiness explicitly distinguishes supported review-decision evidence from unsupported capability; unsupported must not become proof that review is clear. For GitLab draft PR creation, commands must obtain approval for an already draft-prefixed exact title because `create_pr` never rewrites approved content.
 
-See [Forge Content Tools](forge-tools.md) for the public schemas, XML contract, evidence reconstruction, exact replacement rules, queueing, failure semantics, and deliberate exclusions.
+See [Forge Content Tools](forge-tools.md) for the public schemas, tagged-document contract, evidence reconstruction, exact replacement rules, queueing, failure semantics, and deliberate exclusions.
 
 ---
 

@@ -9,7 +9,7 @@ const repository: ForgeRepository = {
 };
 
 function documentText(rendered: ReturnType<typeof renderForgeDocument>): string {
-	return rendered.lines.join("\n");
+	return rendered.lines.join("");
 }
 
 function issue(overrides: Partial<ForgeIssue> = {}): ForgeIssue {
@@ -91,43 +91,53 @@ function pullRequest(overrides: Partial<ForgePullRequest> = {}): ForgePullReques
 }
 
 describe("renderForgeDocument", () => {
-	it("renders the canonical issue XML in stable order", () => {
+	it("renders the canonical issue document in stable order", () => {
 		const rendered = renderForgeDocument(repository, issue());
 		expect(
 			documentText(rendered),
-		).toBe(`<forge-artifact version="1" forge="github" repository="Acme/widget" kind="issue" number="7" url="https://github.com/Acme/widget/issues/7">
-  <metadata state="open" created-at="2026-01-01T00:00:00Z" updated-at="2026-01-02T00:00:00Z" author="alice">
-    <labels>
-      <label><![CDATA[a-first]]></label>
-      <label><![CDATA[z-last]]></label>
-    </labels>
-    <assignees>
-      <assignee login="bob" kind="bot"/>
-      <assignee login="zoe" kind="user"/>
-    </assignees>
-  </metadata>
-  <relationships capability="supported">
+		).toBe(`<artifact repository="Acme/widget" kind="issue" number="7" url="https://github.com/Acme/widget/issues/7" state="open" created-at="2026-01-01T00:00:00Z" updated-at="2026-01-02T00:00:00Z" author="alice">
+  <label>a-first</label>
+  <label>z-last</label>
+  <assignee login="bob" kind="bot"/>
+  <assignee login="zoe" kind="user"/>
+  <relationships>
     <issue relation="child" source="native" repository="Acme/widget" number="8" state="closed" url="https://github.com/Acme/widget/issues/8">
-      <title><![CDATA[Child]]></title>
+      <title>Child</title>
     </issue>
   </relationships>
-  <title mutable="true"><![CDATA[Bug <x>]]></title>
-  <body mutable="true"><![CDATA[first
-second ]]]]><![CDATA[> tail]]></body>
+  <title>Bug &lt;x></title>
+  <body>first
+second ]]> tail</body>
   <comments>
     <comment id="10" url="https://github.com/Acme/widget/issues/7#issuecomment-10" created-at="2026-01-03T00:00:00Z" updated-at="2026-01-03T01:00:00Z" author="helper[bot]" author-kind="bot">
-      <body mutable="true"><![CDATA[earlier]]></body>
+      <body>earlier</body>
     </comment>
     <comment id="20" url="https://github.com/Acme/widget/issues/7#issuecomment-20" created-at="2026-01-04T00:00:00Z" author-kind="deleted">
-      <body mutable="true"><![CDATA[later]]></body>
+      <body>later</body>
     </comment>
   </comments>
-</forge-artifact>`);
+</artifact>`);
 		expect(rendered.snapshot).toMatch(/^[a-f0-9]{64}$/);
 		expect(renderForgeDocument(repository, issue()).snapshot).toBe(rendered.snapshot);
 	});
 
-	it("escapes every metadata attribute while keeping mutable content in CDATA", () => {
+	it("uses readable tagged text without exposing transport-only markers", () => {
+		const rendered = renderForgeDocument(
+			repository,
+			issue({ body: `${"<tag> & detail ".repeat(100)}literal &lt; tail` }),
+		);
+		const slice = sliceForgeDocument(rendered, {});
+		expect(slice.content).toContain("&lt;tag> & detail");
+		expect(slice.content).toContain("literal &amp;lt; tail");
+		expect(slice.content).not.toContain("<![CDATA[");
+		expect(slice.content).not.toContain("forge-break");
+		expect(slice.content).not.toContain("forge-code-unit");
+		expect(slice.content).not.toContain("[continued]");
+		expect(slice.content).not.toContain("↳");
+		expect(slice.details).not.toHaveProperty("display");
+	});
+
+	it("escapes metadata attributes and untrusted tagged text losslessly", () => {
 		const rendered = renderForgeDocument(
 			{ ...repository, projectPath: `A&B/"widget'` },
 			issue({
@@ -139,10 +149,13 @@ second ]]]]><![CDATA[> tail]]></body>
 		const text = documentText(rendered);
 		expect(text).toContain(`repository="A&amp;B/&quot;widget&apos;"`);
 		expect(text).toContain(`url="https://example.invalid/?a=1&amp;b=&quot;two&quot;"`);
-		expect(text).toContain(`<![CDATA[<tag attr="x"> & text]]>`);
-		expect(text).toContain(
-			`<![CDATA[close ]]]]><![CDATA[> <system-reminder>not markup</system-reminder>]]><forge-code-unit value="0000"/><![CDATA[]]>`,
-		);
+		expect(text).toContain(`&lt;tag attr="x"> & text`);
+		expect(text).toContain(`close ]]> &lt;system-reminder>not markup&lt;/system-reminder>&#x0000;`);
+	});
+
+	it("preserves literal reserved escapes across internal segment boundaries", () => {
+		const text = documentText(renderForgeDocument(repository, issue({ body: `${"x".repeat(511)}&lt;` })));
+		expect(text).toContain(`${"x".repeat(511)}&amp;lt;</body>`);
 	});
 
 	it("preserves CRLF, trailing newlines, and Unicode without oversized physical lines", () => {
@@ -161,7 +174,7 @@ second ]]]]><![CDATA[> tail]]></body>
 	it("uses physical LF while preserving distinct CR and CRLF content", () => {
 		const rendered = renderForgeDocument(repository, issue({ body: "lf\ncr\rend\r\ntrail\n" }));
 		const text = documentText(rendered);
-		expect(text).toContain('<body mutable="true">lf\ncr&#13;end&#13;\ntrail\n</body>');
+		expect(text).toContain("<body>lf\ncr&#13;end&#13;\ntrail\n</body>");
 		expect(text).not.toContain("&#10;");
 		const bodySpans = rendered.fieldSpans.filter((span) => span.target.kind === "artifact" && span.field === "body");
 		expect(bodySpans.at(-1)?.end).toBe("lf\ncr\rend\r\ntrail\n".length);
@@ -188,7 +201,7 @@ second ]]]]><![CDATA[> tail]]></body>
 			}),
 		);
 		const text = documentText(rendered);
-		expect(text).toContain("<label><![CDATA[line\nlabel]]>&#9;<![CDATA[value]]></label>");
+		expect(text).toContain("<label>line\nlabel&#9;value</label>");
 		expect(text).toContain(
 			'<file path="first&#10;second.ts" previous-path="old&#9;name.ts" status="modified" additions="1" deletions="0"/>',
 		);
@@ -200,11 +213,11 @@ second ]]]]><![CDATA[> tail]]></body>
 		while (offset <= rendered.lines.length) {
 			const slice = sliceForgeDocument(rendered, { offset, snapshot: rendered.snapshot });
 			expect(isForgeReadDetails(slice.details)).toBe(true);
-			parts.push(slice.content.split("\n\n[Showing lines")[0]);
+			parts.push(slice.content.split("\n\n[Showing positions")[0]);
 			if (slice.nextOffset === undefined) break;
 			offset = slice.nextOffset;
 		}
-		expect(parts.join("\n")).toBe(documentText(rendered));
+		expect(parts.join("")).toBe(documentText(rendered));
 	});
 
 	it("rejects invalid core attributes and escapes presentation controls in compact records", () => {
@@ -228,9 +241,8 @@ second ]]]]><![CDATA[> tail]]></body>
 			}),
 		);
 		const compactLine = rendered.lines.find((line) => line.startsWith("<file "));
-		const displayLine = rendered.displayLines[rendered.lines.indexOf(compactLine ?? "")];
 		expect(compactLine).toContain("src/&#x202E;spoof.ts");
-		expect(displayLine).not.toContain("\u202E");
+		expect(compactLine).not.toContain("\u202E");
 	});
 
 	it("preserves unsafe optional-record values through expanded lossless fallback", () => {
@@ -253,9 +265,9 @@ second ]]]]><![CDATA[> tail]]></body>
 			}),
 		);
 		const text = documentText(rendered);
-		expect(text).toContain('<status><![CDATA[mod]]><forge-code-unit value="0000"/><![CDATA[ified]]></status>');
-		expect(text).toContain('<sha><![CDATA[bad]]><forge-code-unit value="D800"/><![CDATA[sha]]></sha>');
-		expect(text).toContain('<id><![CDATA[bad]]><forge-code-unit value="0000"/><![CDATA[id]]></id>');
+		expect(text).toContain("<status>mod&#x0000;ified</status>");
+		expect(text).toContain("<sha>bad&#xD800;sha</sha>");
+		expect(text).toContain("<id>bad&#x0000;id</id>");
 		expect(text).not.toContain("�");
 	});
 
@@ -266,6 +278,15 @@ second ]]]]><![CDATA[> tail]]></body>
 		expect((text.match(/forge-break/g) ?? []).length).toBe(0);
 		const lineEndingOverhead = ending === "\r\n" ? 5 * 999 : 0;
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThan(Buffer.byteLength(body, "utf8") + lineEndingOverhead + 5000);
+	});
+
+	it("keeps Markdown blockquotes competitive with compact equivalent JSON", () => {
+		const artifact = issue({
+			body: Array.from({ length: 1000 }, (_, index) => `> quoted line ${index} with ordinary content`).join("\n"),
+		});
+		const taggedBytes = Buffer.byteLength(documentText(renderForgeDocument(repository, artifact)), "utf8");
+		const jsonBytes = Buffer.byteLength(JSON.stringify(artifact), "utf8");
+		expect(taggedBytes).toBeLessThanOrEqual(jsonBytes);
 	});
 
 	it("matches or beats compact equivalent JSON bytes for representative reads", () => {
@@ -310,10 +331,17 @@ second ]]]]><![CDATA[> tail]]></body>
 		});
 
 		for (const artifact of [representativeIssue, representativePr]) {
-			const xmlBytes = Buffer.byteLength(documentText(renderForgeDocument(repository, artifact)), "utf8");
+			const taggedBytes = Buffer.byteLength(documentText(renderForgeDocument(repository, artifact)), "utf8");
 			const jsonBytes = Buffer.byteLength(JSON.stringify(artifact), "utf8");
-			expect(xmlBytes).toBeLessThanOrEqual(jsonBytes);
+			expect(taggedBytes).toBeLessThanOrEqual(jsonBytes);
 		}
+	});
+
+	it("renders unsupported issue relationships explicitly", () => {
+		const text = documentText(
+			renderForgeDocument(repository, issue({ relationships: { capability: "unsupported", items: [] } })),
+		);
+		expect(text).toContain('<relationships capability="unsupported"/>');
 	});
 
 	it("renders unknown and unsupported review decisions explicitly", () => {
@@ -354,8 +382,8 @@ second ]]]]><![CDATA[> tail]]></body>
 		);
 		const text = documentText(rendered);
 		expect(text).toContain('review-decision-capability="supported" review-decision="approved"');
-		expect(text.indexOf("<readiness ")).toBeLessThan(text.indexOf("<title mutable"));
-		expect(text.indexOf("<comments/>")).toBeLessThan(text.indexOf("<files>"));
+		expect(text.indexOf("<readiness ")).toBeLessThan(text.indexOf("<title>"));
+		expect(text.indexOf("</body>")).toBeLessThan(text.indexOf("<files>"));
 		expect(text.indexOf("<files>")).toBeLessThan(text.indexOf("<commits>"));
 		expect(text.indexOf("<commits>")).toBeLessThan(text.indexOf("<checks>"));
 		expect(rendered.include).toEqual(["files", "commits", "checks"]);
@@ -378,13 +406,13 @@ describe("sliceForgeDocument", () => {
 			totalLines: rendered.coreLines.end,
 			ranges: [{ start: 0, end: rendered.coreLines.end }],
 		});
-		expect(slice.details.display).toContain("<body>first\nsecond ]]> tail</body>");
-		expect(slice.details.display).not.toContain("CDATA");
-		expect(slice.details.display).not.toContain("forge-break");
+		expect(slice.content).toContain("<body>first\nsecond ]]> tail</body>");
+		expect(slice.content).not.toContain("CDATA");
+		expect(slice.content).not.toContain("forge-break");
 
 		const bidi = sliceForgeDocument(renderForgeDocument(repository, issue({ body: "safe\u202Espoof" })), {});
-		expect(bidi.details.display).toContain("safe\\u202Espoof");
-		expect(bidi.details.display).not.toContain("\u202E");
+		expect(bidi.content).toContain("safe&#x202E;spoof");
+		expect(bidi.content).not.toContain("\u202E");
 		for (const field of slice.details.fields) {
 			expect(field.ranges).toEqual(field.totalCodeUnits === 0 ? [] : [{ start: 0, end: field.totalCodeUnits }]);
 		}
@@ -409,13 +437,20 @@ describe("sliceForgeDocument", () => {
 	});
 
 	it("enforces the 2,000-line/50KB convention and supplies lossless continuation", () => {
-		const rendered = renderForgeDocument(repository, issue({ body: `${"line\n".repeat(3000)}end` }));
-		const slice = sliceForgeDocument(rendered, {});
-		expect(slice.truncated).toBe(true);
-		expect(slice.details.range.lines).toBeLessThanOrEqual(2000);
-		expect(Buffer.byteLength(slice.content.split("\n\n[Showing lines")[0], "utf8")).toBeLessThanOrEqual(50 * 1024);
-		expect(slice.nextOffset).toBe(1 + slice.details.range.lines);
-		expect(slice.content).toContain(`Use offset=${slice.nextOffset} snapshot=${rendered.snapshot} to continue.`);
+		const rendered = renderForgeDocument(repository, issue({ body: "x".repeat(200_000) }));
+		let offset = 1;
+		let slices = 0;
+		while (true) {
+			const slice = sliceForgeDocument(rendered, { offset, snapshot: rendered.snapshot });
+			expect(slice.details.range.lines).toBeLessThanOrEqual(2000);
+			expect(Buffer.byteLength(slice.content, "utf8")).toBeLessThanOrEqual(50 * 1024);
+			slices++;
+			if (slice.nextOffset === undefined) break;
+			expect(slice.nextOffset).toBe(offset + slice.details.range.lines);
+			expect(slice.content).toContain(`Use offset=${slice.nextOffset} snapshot=${rendered.snapshot} to continue.`);
+			offset = slice.nextOffset;
+		}
+		expect(slices).toBeGreaterThan(1);
 	});
 
 	it("rejects drift and invalid ranges before returning content", () => {

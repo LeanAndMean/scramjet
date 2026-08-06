@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@leanandmean/coding-agent";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@leanandmean/coding-agent";
 import type {
 	ForgeActor,
 	ForgeArtifact,
@@ -26,7 +26,6 @@ export interface ForgeFieldSpan {
 
 export interface RenderedForgeDocument {
 	lines: string[];
-	displayLines: string[];
 	snapshot: string;
 	repository: ForgeRepository;
 	artifact: { kind: "issue" | "pr"; number: number };
@@ -175,46 +174,9 @@ function compactRecord(name: string, values: Array<[string, string | number | bo
 	return Buffer.byteLength(line, "utf8") <= COMPACT_RECORD_MAX_BYTES ? line : null;
 }
 
-function escapeCdata(value: string): string {
-	let output = "";
-	let plain = "";
-	const flush = () => {
-		output += plain.replaceAll("]]>", "]]]]><![CDATA[>").replaceAll("\t", "]]>&#9;<![CDATA[");
-		plain = "";
-	};
+const TAGGED_TEXT_ESCAPE = /^&(amp|lt|gt|#\d+|#x[0-9a-f]+);/i;
 
-	for (let index = 0; index < value.length; index++) {
-		const codeUnit = value.charCodeAt(index);
-		if (codeUnit === 0x0d) {
-			flush();
-			output += "]]>&#13;<![CDATA[";
-			continue;
-		}
-		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-			const next = value.charCodeAt(index + 1);
-			if (next >= 0xdc00 && next <= 0xdfff) {
-				plain += value.slice(index, index + 2);
-				index++;
-				continue;
-			}
-		} else if (
-			(codeUnit === 0x09 || codeUnit === 0x0a || codeUnit === 0x0d || codeUnit >= 0x20) &&
-			codeUnit !== 0xfffe &&
-			codeUnit !== 0xffff &&
-			!(codeUnit >= 0xdc00 && codeUnit <= 0xdfff)
-		) {
-			plain += value[index];
-			continue;
-		}
-
-		flush();
-		output += `]]><forge-code-unit value="${codeUnit.toString(16).toUpperCase().padStart(4, "0")}"/><![CDATA[`;
-	}
-	flush();
-	return output;
-}
-
-function escapeText(value: string): string {
+function escapeText(value: string, following = ""): string {
 	let output = "";
 	for (let index = 0; index < value.length; index++) {
 		const codeUnit = value.charCodeAt(index);
@@ -234,11 +196,24 @@ function escapeText(value: string): string {
 			output += "&#13;";
 			continue;
 		}
-		if (codeUnit < 0x20 || codeUnit === 0xfffe || codeUnit === 0xffff || (codeUnit >= 0xdc00 && codeUnit <= 0xdfff)) {
-			output += `<forge-code-unit value="${codeUnit.toString(16).toUpperCase().padStart(4, "0")}"/>`;
+		if (
+			(codeUnit >= 0x7f && codeUnit <= 0x9f) ||
+			codeUnit === 0x061c ||
+			codeUnit === 0x200e ||
+			codeUnit === 0x200f ||
+			(codeUnit >= 0x202a && codeUnit <= 0x202e) ||
+			(codeUnit >= 0x2066 && codeUnit <= 0x2069)
+		) {
+			output += `&#x${codeUnit.toString(16).toUpperCase().padStart(4, "0")};`;
 			continue;
 		}
-		output += value[index].replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+		if (codeUnit < 0x20 || codeUnit === 0xfffe || codeUnit === 0xffff || (codeUnit >= 0xd800 && codeUnit <= 0xdfff)) {
+			output += `&#x${codeUnit.toString(16).toUpperCase().padStart(4, "0")};`;
+			continue;
+		}
+		if (codeUnit === 0x26) output += TAGGED_TEXT_ESCAPE.test(value.slice(index) + following) ? "&amp;" : "&";
+		else if (codeUnit === 0x3c) output += "&lt;";
+		else output += value[index];
 	}
 	return output;
 }
@@ -323,40 +298,28 @@ function targetKey(target: ForgeMutationTarget): string {
 
 export function renderForgeDocument(repository: ForgeRepository, artifact: ForgeArtifact): RenderedForgeDocument {
 	const lines: string[] = [];
-	const displayLines: string[] = [];
 	const fieldSpans: ForgeFieldSpan[] = [];
-	const add = (line: string, display = line) => {
+	const add = (line: string, breakBefore = true) => {
+		if (lines.length > 0 && breakBefore) lines[lines.length - 1] += "\n";
 		lines.push(line);
-		displayLines.push(display);
 	};
-	const addContent = (indent: string, name: string, value: string, mutable: boolean) => {
+	const addContent = (indent: string, name: string, value: string) => {
 		const chunks = fieldChunks(value);
-		const useCdata = !value.includes("\r");
 		let precedingBreak: FieldChunk["breakAfter"] = "none";
 		for (let index = 0; index < chunks.length; index++) {
 			const chunk = chunks[index];
 			const first = index === 0;
 			const last = index === chunks.length - 1;
-			const prefix = first
-				? `${indent}<${name}${mutable ? ' mutable="true"' : ""}>${useCdata ? "<![CDATA[" : ""}`
-				: precedingBreak === "forced"
-					? `${indent}-->${useCdata ? "<![CDATA[" : ""}`
-					: "";
-			const suffix = last
-				? `${useCdata ? "]]>" : ""}</${name}>`
-				: chunk.breakAfter === "forced"
-					? `${useCdata ? "]]>" : ""}<!-- forge-break`
-					: "";
-			const displayPrefix = first ? `${indent}<${name}>` : precedingBreak === "forced" ? `${indent}↳ ` : "";
-			const displaySuffix = last ? `</${name}>` : chunk.breakAfter === "forced" ? " [continued]" : "";
-			const encoded = useCdata ? escapeCdata(chunk.text) : escapeText(chunk.text);
-			add(`${prefix}${encoded}${suffix}`, `${displayPrefix}${controlSafeText(chunk.text)}${displaySuffix}`);
+			const prefix = first ? `${indent}<${name}>` : "";
+			const suffix = last ? `</${name}>` : "";
+			const followingText = value.slice(chunk.start + chunk.text.length, chunk.start + chunk.text.length + 16);
+			add(`${prefix}${escapeText(chunk.text, followingText)}${suffix}`, precedingBreak !== "forced");
 			precedingBreak = chunk.breakAfter;
 		}
 		return chunks;
 	};
 	const addField = (indent: string, name: "title" | "body", value: string, target: ForgeMutationTarget) => {
-		const chunks = addContent(indent, name, value, true);
+		const chunks = addContent(indent, name, value);
 		for (let index = 0; index < chunks.length; index++) {
 			const chunk = chunks[index];
 			fieldSpans.push({
@@ -370,50 +333,34 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 		}
 	};
 	const addReadonly = (indent: string, name: string, value: string) => {
-		addContent(indent, name, value, false);
+		addContent(indent, name, value);
 	};
 
 	add(
-		`<forge-artifact${attributes([
-			["version", "1"],
-			["forge", repository.forge],
+		`<artifact${attributes([
 			["repository", repository.projectPath],
 			["kind", artifact.kind],
 			["number", artifact.number],
 			["url", artifact.url],
-		])}>`,
-	);
-	add(
-		`  <metadata${attributes([
 			["state", artifact.state],
 			["created-at", artifact.createdAt],
 			["updated-at", artifact.updatedAt],
 			...actorAttributes(artifact.author, "author-"),
 		])}>`,
 	);
-	if (artifact.labels.length === 0) add("    <labels/>");
-	else {
-		add("    <labels>");
-		for (const label of [...artifact.labels].sort(compareText)) addReadonly("      ", "label", label);
-		add("    </labels>");
+	for (const label of [...artifact.labels].sort(compareText)) addReadonly("  ", "label", label);
+	for (const assignee of [...artifact.assignees].sort((left, right) =>
+		compareText(left.login ?? "", right.login ?? ""),
+	)) {
+		add(`  <assignee${attributes(actorAttributes(assignee))}/>`);
 	}
-	if (artifact.assignees.length === 0) add("    <assignees/>");
-	else {
-		add("    <assignees>");
-		for (const assignee of [...artifact.assignees].sort((left, right) =>
-			compareText(left.login ?? "", right.login ?? ""),
-		)) {
-			add(`      <assignee${attributes(actorAttributes(assignee))}/>`);
-		}
-		add("    </assignees>");
-	}
-	add("  </metadata>");
 
 	if (artifact.kind === "issue") {
+		const capability = artifact.relationships.capability === "supported" ? null : artifact.relationships.capability;
 		if (artifact.relationships.items.length === 0) {
-			add(`  <relationships${attributes([["capability", artifact.relationships.capability]])}/>`);
+			add(`  <relationships${attributes([["capability", capability]])}/>`);
 		} else {
-			add(`  <relationships${attributes([["capability", artifact.relationships.capability]])}>`);
+			add(`  <relationships${attributes([["capability", capability]])}>`);
 			for (const item of [...artifact.relationships.items].sort((left, right) => {
 				const relation = compareText(left.relation, right.relation);
 				return (
@@ -458,8 +405,7 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 
 	addField("  ", "title", artifact.title, { kind: "artifact" });
 	addField("  ", "body", artifact.body, { kind: "artifact" });
-	if (artifact.comments.length === 0) add("  <comments/>");
-	else add("  <comments>");
+	if (artifact.comments.length > 0) add("  <comments>");
 	for (const comment of [...artifact.comments].sort(
 		(left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id),
 	)) {
@@ -491,7 +437,7 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 					["additions", file.additions],
 					["deletions", file.deletions],
 				]);
-				if (compact !== null) add(compact, controlSafeText(compact));
+				if (compact !== null) add(compact);
 				else {
 					add(
 						`    <file${attributes([
@@ -520,7 +466,7 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 					["created-at", commit.createdAt],
 					["url", commit.url],
 				]);
-				if (compact !== null) add(compact, controlSafeText(compact));
+				if (compact !== null) add(compact);
 				else {
 					add("    <commit>");
 					addReadonly("      ", "sha", commit.sha);
@@ -546,7 +492,7 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 					["conclusion", check.conclusion],
 					["url", check.url],
 				]);
-				if (compact !== null) add(compact, controlSafeText(compact));
+				if (compact !== null) add(compact);
 				else {
 					add("    <check>");
 					addReadonly("      ", "id", check.id);
@@ -560,12 +506,11 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			add("  </checks>");
 		}
 	}
-	add("</forge-artifact>");
+	add("</artifact>");
 
-	const text = lines.join("\n");
+	const text = lines.join("");
 	return {
 		lines,
-		displayLines,
 		snapshot: createHash("sha256").update(text, "utf8").digest("hex"),
 		repository,
 		artifact: { kind: artifact.kind, number: artifact.number },
@@ -627,24 +572,36 @@ export function sliceForgeDocument(rendered: RenderedForgeDocument, request: For
 	const start = (request.offset ?? 1) - 1;
 	if (start >= rendered.lines.length) {
 		throw new Error(
-			`Offset ${request.offset} is beyond end of forge document (${rendered.lines.length} lines total)`,
+			`Offset ${request.offset} is beyond end of forge document (${rendered.lines.length} positions total)`,
 		);
 	}
-	const requestedEnd = Math.min(rendered.lines.length, start + (request.limit ?? rendered.lines.length));
-	const selected = rendered.lines.slice(start, requestedEnd).join("\n");
-	const truncation = truncateHead(selected, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-	if (truncation.outputLines === 0) throw new Error("A forge document line exceeds the output byte limit");
-	const end = start + truncation.outputLines;
+	const requestedEnd = Math.min(
+		rendered.lines.length,
+		start + Math.min(request.limit ?? DEFAULT_MAX_LINES, DEFAULT_MAX_LINES),
+	);
+	let end = start;
+	let selectedBytes = 0;
+	while (end < requestedEnd) {
+		const segmentBytes = Buffer.byteLength(rendered.lines[end], "utf8");
+		if (selectedBytes + segmentBytes > DEFAULT_MAX_BYTES) break;
+		selectedBytes += segmentBytes;
+		end++;
+	}
+	if (end === start) throw new Error("A forge document position exceeds the output byte limit");
+	const include = rendered.include.length === 0 ? "" : ` include=${JSON.stringify(rendered.include)}`;
+	let continuation = "";
+	while (end < rendered.lines.length) {
+		const nextOffset = end + 1;
+		continuation = `[Showing positions ${start + 1}-${end} of ${rendered.lines.length}. Use offset=${nextOffset} snapshot=${rendered.snapshot}${include} to continue.]`;
+		if (selectedBytes + Buffer.byteLength(`\n\n${continuation}`, "utf8") <= DEFAULT_MAX_BYTES) break;
+		end--;
+		selectedBytes -= Buffer.byteLength(rendered.lines[end], "utf8");
+		if (end === start) throw new Error("A forge document position exceeds the output byte limit");
+	}
 	const hasMore = end < rendered.lines.length;
 	const nextOffset = hasMore ? end + 1 : undefined;
-	let content = truncation.content;
-	let display = rendered.displayLines.slice(start, end).join("\n");
-	if (nextOffset !== undefined) {
-		const include = rendered.include.length === 0 ? "" : ` include=${JSON.stringify(rendered.include)}`;
-		const continuation = `[Showing lines ${start + 1}-${end} of ${rendered.lines.length}. Use offset=${nextOffset} snapshot=${rendered.snapshot}${include} to continue.]`;
-		content += `\n\n${continuation}`;
-		display += `\n\n${continuation}`;
-	}
+	let content = rendered.lines.slice(start, end).join("");
+	if (hasMore) content += `\n\n${continuation}`;
 	const coreStart = Math.max(start, rendered.coreLines.start);
 	const coreEnd = Math.min(end, rendered.coreLines.end);
 	return {
@@ -655,13 +612,12 @@ export function sliceForgeDocument(rendered: RenderedForgeDocument, request: For
 			artifact: rendered.artifact,
 			snapshot: rendered.snapshot,
 			include: [...rendered.include],
-			range: { offset: start + 1, lines: truncation.outputLines, totalLines: rendered.lines.length },
+			range: { offset: start + 1, lines: end - start, totalLines: rendered.lines.length },
 			fields: fieldCoverage(rendered, start, end),
 			core: {
 				totalLines: rendered.coreLines.end - rendered.coreLines.start,
 				ranges: coreEnd > coreStart ? [{ start: coreStart, end: coreEnd }] : [],
 			},
-			display,
 		},
 		truncated: hasMore,
 		...(nextOffset === undefined ? {} : { nextOffset }),
@@ -749,11 +705,7 @@ export function isForgeReadDetails(value: unknown): value is ForgeReadDetails {
 		return false;
 	}
 	const core = value.core;
-	return (
-		Array.isArray(core.ranges) &&
-		core.ranges.every((range) => isRange(range, core.totalLines as number)) &&
-		typeof value.display === "string"
-	);
+	return Array.isArray(core.ranges) && core.ranges.every((range) => isRange(range, core.totalLines as number));
 }
 
 export function applyExactEdits(original: string, edits: readonly ForgeTextEdit[], label: string): string {

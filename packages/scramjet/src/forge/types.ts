@@ -206,5 +206,4 @@ export interface ForgeReadDetails {
 	range: { offset: number; lines: number; totalLines: number };
 	fields: ForgeFieldCoverage[];
 	core: { totalLines: number; ranges: ForgeCoverageRange[] };
-	display: string;
 }
