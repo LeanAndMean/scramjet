@@ -78,12 +78,7 @@ const WIRING: WiringRow[] = [
 		basename: "pr-review-fix",
 		expected: {
 			mode: "open",
-			candidates: [
-				{ name: "mach12:pr-review-fix" },
-				{ name: "mach12:pr-review" },
-				{ name: "mach12:pr-validation" },
-				{ name: "mach12:pr-pre-merge" },
-			],
+			candidates: [{ name: "mach12:pr-review" }, { name: "mach12:pr-validation" }, { name: "mach12:pr-pre-merge" }],
 		},
 	},
 	{
@@ -324,13 +319,14 @@ describe("mach12 wiring — bundled command set", () => {
 				"bash",
 				"read",
 				"grep",
-				"glob",
+				"find",
 				"edit",
 				"write",
 				"subagent",
 				"delegate",
 				"get_scramjet_user_input",
 				"read_pr",
+				"add_pr_comment",
 			],
 		],
 		[
@@ -359,6 +355,7 @@ describe("mach12 wiring — bundled command set", () => {
 				"edit",
 				"write",
 				"subagent",
+				"delegate",
 				"get_scramjet_user_input",
 				"read_pr",
 				"read_issue",
@@ -370,7 +367,7 @@ describe("mach12 wiring — bundled command set", () => {
 			["bash", "read", "grep", "glob", "edit", "write", "delegate", "get_scramjet_user_input", "read_pr"],
 		],
 		["pr-merge", ["bash", "read", "grep", "glob", "read_pr", "read_issue"]],
-		["push", ["bash", "read", "grep", "glob", "read_issue", "read_pr", "add_issue_comment", "add_pr_comment"]],
+		["push", ["bash", "read", "grep", "read_issue", "read_pr", "add_issue_comment", "add_pr_comment"]],
 	] as const)("%s declares its exact forge-aware tool scope", (basename, expectedTools) => {
 		const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
 		const content = readFileSync(filePath, "utf-8");
