@@ -6,130 +6,62 @@ allowed-tools:
   - bash
   - read
   - grep
-  - glob
   - delegate
 ---
 
 # Push
 
-You are finalizing a batch of work: committing changes, pushing to remote, and documenting progress on the associated PR or issue.
+Finalize one bounded batch of work by committing intended files, pushing once, and documenting progress on the associated PR or issue whenever one can be identified.
 
 <caller-context>
 $ARGUMENTS
 </caller-context>
 
-This command is delegate-only. The next step belongs to the caller's `next:` declaration -- do not embed routing suggestions in the progress comment or CLI output.
+This command is delegate-only. Routing belongs to the caller.
 
-## Step 1: Determine what to commit
+## Step 1: Establish the bounded change
 
-When the caller supplies a structured validation-origin provenance payload, validate it before staging, committing, or pushing. Require review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests; require every field to be unambiguous and internally complete. If validation fails, stop before any repository or remote mutation and report the missing or malformed fields.
+Run `git status`, inspect staged and unstaged diffs, and use the caller context to identify exactly which files belong to this batch. Never use `git add .` or `git add -A`, and never stage likely secrets.
 
-Run `git status` and `git diff --staged` to understand the current state.
+When the caller supplies an **accepted validation-proof** payload, treat it as a distinct mode. Before repository or remote mutation, require:
 
-Staging rules:
-- If you have context from this session about which files were modified, stage those specific files by name. Do NOT use `git add -A` or `git add .`.
-- If files are already staged and the staging looks correct based on session context, proceed with those.
-- If it is unclear what should be staged (e.g., this is a fresh session with no prior context), present the untracked and unstaged files to the user and ask for guidance.
-- Never stage files that likely contain secrets (`.env`, `credentials.json`, key material, etc.).
+- an authenticated open PR, repository, head branch, upstream destination, and matching upstream repository;
+- local `HEAD`, upstream, and fresh GitHub `headRefOid` all equal the supplied implementation parent `P`;
+- an empty index;
+- worktree changes consisting exactly of the supplied accepted test paths;
+- a tests-only diff with no production, temporary, unrelated, or secret-bearing content;
+- every supplied node discoverable with the expected red assertion result.
+
+Stage only the accepted test paths and require the staged diff to equal the complete worktree diff with no residual changes. If any boundary is unclear or false, stop before committing or pushing and report the observed state. Do not infer missing accepted paths or adapt the proof set.
+
+For ordinary work, stage only the files known from the current session. If ownership is unclear, ask the user rather than guessing.
 
 ## Step 2: Commit
 
-Review recent commit messages for style consistency:
+Review recent commit messages for repository style and create one concise commit describing why the bounded change exists. Do not add model or tool co-author footers unless established repository history requires them.
 
-```
-git log --oneline -10
-```
+In accepted validation-proof mode, create exactly one direct successor of `P`. Before pushing, verify that it has sole parent `P` and that `P..HEAD` is the exact accepted tests-only diff. An expected focused test failure is proof evidence, not commit failure or merge readiness.
 
-Generate a commit message that:
-- Follows the repository's existing style.
-- Summarizes the nature of the changes (new feature, bug fix, refactor, etc.).
-- Focuses on the "why" rather than the "what".
-- If context was provided above: if it reads like a commit message, use it verbatim; otherwise treat it as guidance.
+For ordinary work, verify the commit contains only the intended batch and leaves no unintended staged changes.
 
-Create the commit using a HEREDOC for the message to preserve formatting:
+## Step 3: Push and verify
 
-```
-git commit -m "$(cat <<'EOF'
-<commit message>
-EOF
-)"
-```
+Push once. If ordinary mode has no upstream, set one for the current branch. In accepted validation-proof mode, push the already authenticated upstream destination explicitly; never infer or create another destination after committing.
 
-Do not append model-identity or tooling co-author footers unless the repository's existing commit history demonstrates that convention.
+After push, verify local `HEAD`, upstream, and a fresh GitHub PR head agree and that the index and tracked/untracked worktree are clean. If push or verification is failed or ambiguous, report exact local and remote identities without force-pushing, recommitting, or blindly retrying.
 
-## Step 3: Push
+Accepted validation-proof mode returns `P`, proof commit `V`, accepted paths and nodes, and convergence evidence to assessment, then stops. It does not post a progress comment because assessment owns the final artifact.
 
-```
-git push
-```
+## Step 4: Post ordinary progress
 
-If no upstream is set, push with `-u` to the current branch name.
+For ordinary mode, determine the active PR or issue from the caller context, preferring an open PR on the current branch. Exhaust current session context and branch-based detection before concluding no target exists. Skip publication only when neither source supports an associated PR or issue, and say why.
 
-## Step 4: Post progress comment
+Prepare a concise body beginning `<!-- mach12-progress -->` with the completed change, commit, meaningful decisions, and verification. Preserve an exact originating review ID supplied by a static or executable review-fix caller. Do not include next-step suggestions.
 
-Determine the comment target using this priority order:
+Format intentional GitHub relationships consistently: same-repository issue or pull-request references use `#N`; cross-repository relationships use `owner/repo#N` or an already verified canonical URL. Artifact-local identifiers use stable labels or plain words and never bare `#N`.
 
-### 1. Session context
+Delegate publication to `/mach12:gh-comment pr <number>` or `/mach12:gh-comment issue <number>` as appropriate. If publication fails after a successful push, preserve the pushed commit and return an incomplete result with enough context to reconcile the comment without another commit or push.
 
-Check the conversation for signals about what was being worked on. If an earlier command targeted a specific issue or PR, use that as the comment target.
+## Step 5: Return
 
-- **Issue-oriented signals** (post on the issue): `mach12:issue-implement`, `mach12:issue-plan`, `mach12:issue-review` invoked with an issue number.
-- **PR-oriented signals** (post on the PR): `mach12:pr-review-fix`, `mach12:pr-review`, `mach12:pr-pre-merge` invoked with a PR number.
-
-If session context points to an issue but a PR also exists on the current branch (`gh pr view --json number,url` succeeds), prefer the PR -- it supersedes the issue as the active work context.
-
-### 2. Detection fallback
-
-If session context is ambiguous or unavailable (fresh session, standalone push):
-
-1. **Try PR first:** `gh pr view --json number,url` on the current branch. If a PR exists, comment on it.
-2. **Fall back to issue:** if no PR, check the branch name for an issue-number pattern (e.g., `feature/issue-55-*`, `fix/issue-23-*`). If found, comment on that issue.
-
-### 3. Skip gracefully
-
-If neither session context nor detection yields a target, skip commenting and inform the user.
-
-### Comment content
-
-Include `<!-- mach12-progress -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
-
-Prepare a brief progress comment covering:
-- Summary of changes in this batch.
-- Commit hash(es) included.
-- Notable decisions or deviations from the plan.
-- For an ordinary static-review repair, the exact numeric review comment ID supplied by the caller, labeled as the originating review ID.
-
-Preserve an ordinary originating review ID exactly as supplied; it associates the progress artifact with that review cycle but does not constitute validation provenance.
-
-When the caller supplies a structured validation-origin provenance payload, preserve every field and value verbatim in a dedicated `Validation repair provenance` section and append the exact pushed `HEAD` as the predecessor head. Require the payload to include review and assessment IDs/digests, pre-commit head, selected IDs, remaining staged IDs, ownership groups, and unchanged proof paths/node IDs/digests. Do not summarize, reorder, omit, or rewrite these fields; if the payload is incomplete, stop before posting the progress comment and report the push workflow incomplete.
-
-Do not include next-step suggestions in the comment body. The caller's `next:` block surfaces follow-ups -- a duplicate suggestion here would compete with the harness.
-
-Format intentional GitHub relationships in the progress comment so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact review comment IDs and validation provenance fields in their required labeled formats.
-
-Then delegate to the appropriate posting subroutine:
-
-- **Issue target:**
-
-  ```
-  /mach12:gh-comment issue <issue-number>
-  ```
-
-- **PR target:**
-
-  ```
-  /mach12:gh-comment pr <pr-number>
-  ```
-
-The subroutine handles the post and URL capture; the body content you prepared above is what gets posted.
-
-If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment without recommitting or repushing. For an ordinary repair, preserve the exact originating review ID supplied by the caller. For a validation-origin repair, preserve the already-validated structured provenance payload verbatim. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
-
-## Step 5: Confirm
-
-Report to the user in CLI output:
-- What was committed (files and message).
-- Where it was pushed.
-- Where the progress comment was posted (with URL), or that posting was skipped.
-
-Do not include next-step suggestions in the CLI output. The harness surfaces the caller's declared next-step.
+Report the committed files and message, pushed destination and verified head, and progress comment URL or the reason publication was skipped. Return control to the caller without proposing workflow routing.
