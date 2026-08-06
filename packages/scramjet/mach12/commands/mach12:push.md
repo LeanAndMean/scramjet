@@ -6,146 +6,62 @@ allowed-tools:
   - bash
   - read
   - grep
-  - glob
   - delegate
 ---
 
 # Push
 
-You are finalizing a batch of work: committing changes, pushing to remote, and documenting progress on the associated PR or issue.
+Finalize one bounded batch of work by committing intended files, pushing once, and documenting progress when appropriate.
 
 <caller-context>
 $ARGUMENTS
 </caller-context>
 
-This command is delegate-only. The next step belongs to the caller's `next:` declaration -- do not embed routing suggestions in the progress comment or CLI output.
+This command is delegate-only. Routing belongs to the caller.
 
-## Step 1: Determine what to commit
+## Step 1: Establish the bounded change
 
-Recognize a distinct initial validation-proof payload before applying ordinary or validation-repair staging rules. Require repository and PR identity, head branch, frozen implementation parent, exact proof paths, exhaustive path/node/finding/ownership-group mappings, classifications, consolidated-red evidence, and an intentional-red designation. This mode does not require review or assessment IDs or digests because validation has not published those artifacts yet. Reject an ambiguous payload or one mixed with validation-repair provenance before repository or remote mutation.
+Run `git status`, inspect staged and unstaged diffs, and use the caller context to identify exactly which files belong to this batch. Never use `git add .` or `git add -A`, and never stage likely secrets.
 
-For initial validation-proof mode, enforce this order: authenticate the payload's repository, open PR, branch, upstream destination, remote repository, and fresh GitHub head before validating the index and complete dirty diff; only then stage, commit, push the authenticated ref explicitly, and verify convergence. Resolve the upstream ref's remote and require its canonical owner/repository to equal the authenticated PR repository; require the current branch to be non-detached and equal the PR head branch and declared head branch, its exact upstream ref to be the declared destination, and local `HEAD`, that upstream ref, and fresh GitHub `headRefOid` to equal the frozen implementation parent. Revalidate that the index is empty and the dirty path set exactly equals the declared proof paths. Require the complete dirty diff to be tests-only and reject production, temporary, unrelated, or secret-bearing content. In this mode, stage only the exact supplied proof paths—never `git add .` or `git add -A`—then require the staged diff to equal the complete declared tests-only worktree diff with no unstaged residual content. Stop before committing if any identity, mapping, path, diff, or red-evidence guard fails.
+When the caller supplies an **accepted validation-proof** payload, treat it as a distinct mode. Before repository or remote mutation, require:
 
-When the caller supplies a structured validation-origin provenance payload for repair or declined-proof cleanup, enforce this order: authenticate the repository, open PR, branch, upstream destination, remote repository, and fresh GitHub head; validate the empty index and exact complete bounded-operation diff; stage every and only bounded paths; commit one direct successor; verify its sole parent and exact committed diff; push the authenticated ref explicitly once; then verify remote convergence and a clean tree. In particular, validate it before staging, committing, or pushing. Require repository and open PR identity, head branch, exact upstream ref, and that upstream remote's canonical repository identity, review and assessment IDs/digests, frozen implementation parent `P`, original proof commit `V`, authenticated assessment head, exact `prior_head` for this commit, selected IDs, remaining staged IDs, cleanup IDs, ownership groups, unchanged proof paths, node IDs, and content identities, and the exact bounded-operation patch SHA-256; require every field to be unambiguous and internally complete. Before mutation, resolve the upstream ref's remote and require its canonical owner/repository to equal the authenticated PR repository; require the current branch to be non-detached and equal both the declared branch and fresh PR head branch, require its upstream to equal the declared destination, and require local `HEAD`, that upstream ref, and fresh GitHub `headRefOid` to equal `prior_head`; require `V` to descend directly from `P` and remain an ancestor of both the assessment head and `prior_head`, and require the assessment-head-to-`prior_head` segment to be merge-free. Require an empty index before push-owned staging. Require the resulting complete dirty diff to match the declared operation and patch SHA-256 byte-for-byte: production paths only for repair, or exact complete ownership-group test removals only for cleanup. This is a clean authenticated committed state; never reconstruct it from comment-embedded patches. If validation fails, stop before any repository or remote mutation and report the missing or malformed fields.
+- an authenticated open PR, repository, head branch, upstream destination, and matching upstream repository;
+- local `HEAD`, upstream, and fresh GitHub `headRefOid` all equal the supplied implementation parent `P`;
+- an empty index;
+- worktree changes consisting exactly of the supplied accepted test paths;
+- a tests-only diff with no production, temporary, unrelated, or secret-bearing content;
+- every supplied node discoverable with the expected red assertion result.
 
-Recognize a distinct assessment-cleanup payload before ordinary or validation-repair staging. Require repository and open PR identity, head branch, exact upstream ref, and that upstream remote's canonical repository identity, frozen implementation parent `P`, original proof commit `V`, exact pre-cleanup head, exact rejected ownership groups and paths, surviving groups and content identities, authenticated review provenance, and the trusted pre-cleanup checkpoint ID and digest. Enforce this order: authenticate the repository, open PR, branch, upstream destination, remote repository, fresh GitHub head, and checkpoint; validate the empty index and exact cleanup diff; stage only rejected-group paths; commit one cleanup successor; verify its sole parent and exact committed diff; push the authenticated ref explicitly once; then verify remote convergence and a clean tree. Before staging or committing, resolve the upstream ref's remote and require its canonical owner/repository to equal the authenticated PR repository; require the current branch to be non-detached and equal both the declared branch and fresh PR head branch, require its upstream to equal the declared destination, and require local `HEAD`, that upstream ref, and fresh GitHub `headRefOid` to equal the exact pre-cleanup head. Require each proof path to belong to exactly one indivisible ownership group, an empty index before push-owned staging, a dirty diff consisting exactly of complete rejected-group test removals, and no production, temporary, unrelated, secret-bearing, or survivor modification. Stage only those exact paths, create exactly one cleanup commit, and push the authenticated upstream ref explicitly exactly once. Verify the commit has one parent equal to the declared pre-cleanup head, its diff is the exact tests-only rejected-group removal, local `HEAD`, upstream, and fresh GitHub `headRefOid` agree, and the worktree is clean. Return `P`, `V`, cleanup commit, removed groups/paths, surviving identities, and remote verification, then stop assessment-cleanup mode immediately. Do not enter the generic staging, commit, push, or progress-comment steps; assessment owns publication. If no group is rejected, this mode must not be invoked.
+Stage only the accepted test paths and require the staged diff to equal the complete worktree diff with no residual changes. If any boundary is unclear or false, stop before committing or pushing and report the observed state. Do not infer missing accepted paths or adapt the proof set.
 
-Run `git status` and `git diff --staged` to understand the current state.
-
-For validation-origin repair or declined-proof cleanup, stage every and only path in the authenticated bounded operation. Require the staged patch SHA-256 to equal the declared complete dirty patch, with no unstaged or untracked residual. These modes bypass selective generic staging.
-
-For ordinary mode, use these staging rules:
-- If you have context from this session about which files were modified, stage those specific files by name. Do NOT use `git add -A` or `git add .`.
-- If files are already staged and the staging looks correct based on session context, proceed with those.
-- If it is unclear what should be staged (e.g., this is a fresh session with no prior context), present the untracked and unstaged files to the user and ask for guidance.
-- Never stage files that likely contain secrets (`.env`, `credentials.json`, key material, etc.).
+For ordinary work, stage only the files known from the current session. If ownership is unclear, ask the user rather than guessing.
 
 ## Step 2: Commit
 
-Review recent commit messages for style consistency:
+Review recent commit messages for repository style and create one concise commit describing why the bounded change exists. Do not add model or tool co-author footers unless established repository history requires them.
 
-```
-git log --oneline -10
-```
+In accepted validation-proof mode, create exactly one direct successor of `P`. Before pushing, verify that it has sole parent `P` and that `P..HEAD` is the exact accepted tests-only diff. An expected focused test failure is proof evidence, not commit failure or merge readiness.
 
-Generate a commit message that:
-- Follows the repository's existing style.
-- Summarizes the nature of the changes (new feature, bug fix, refactor, etc.).
-- Focuses on the "why" rather than the "what".
-- If context was provided above: if it reads like a commit message, use it verbatim; otherwise treat it as guidance.
+For ordinary work, verify the commit contains only the intended batch and leaves no unintended staged changes.
 
-Create the commit using a HEREDOC for the message to preserve formatting:
+## Step 3: Push and verify
 
-```
-git commit -m "$(cat <<'EOF'
-<commit message>
-EOF
-)"
-```
+Push once. If ordinary mode has no upstream, set one for the current branch. In accepted validation-proof mode, push the already authenticated upstream destination explicitly; never infer or create another destination after committing.
 
-Do not append model-identity or tooling co-author footers unless the repository's existing commit history demonstrates that convention.
+After push, verify local `HEAD`, upstream, and a fresh GitHub PR head agree and that the index and tracked/untracked worktree are clean. If push or verification is failed or ambiguous, report exact local and remote identities without force-pushing, recommitting, or blindly retrying.
 
-In initial validation-proof mode, create exactly one commit. Verify it has exactly one parent equal to the frozen implementation parent and that the parent-to-commit diff is tests-only and exactly matches the supplied proof paths. A focused test failure is the intentional proof state, not commit failure or merge readiness.
+Accepted validation-proof mode returns `P`, proof commit `V`, accepted paths and nodes, and convergence evidence to assessment, then stops. It does not post a progress comment because assessment owns the final artifact.
 
-In validation-origin repair or declined-proof cleanup mode, create exactly one direct successor of the declared predecessor and require its predecessor-to-successor diff to equal the authenticated bounded-operation patch byte-for-byte. Do not commit if staged or residual state differs.
+## Step 4: Post ordinary progress
 
-## Step 3: Push
+For ordinary mode, determine the active PR or issue from the caller context, preferring an open PR on the current branch. If no target is supported by current evidence, skip publication and say so.
 
-```
-git push
-```
+Prepare a concise body beginning `<!-- mach12-progress -->` with the completed change, commit, meaningful decisions, and verification. Preserve an exact originating review ID supplied by a static or executable review-fix caller. Do not include next-step suggestions.
 
-If no upstream is set in ordinary mode, push with `-u` to the current branch name. In every structured validation mode, push the already authenticated explicit upstream destination exactly once; never infer or create a destination after mutation. In initial validation-proof mode, push exactly once, then verify local `HEAD`, the upstream branch, and a fresh GitHub `headRefOid` all equal the proof commit. Require a clean index and tracked/untracked worktree, then return the frozen implementation parent, proof commit, committed paths, and remote verification to validation. If commit, push, or verification fails, return the exact local and remote identities without retrying, force-pushing, or adapting to a changed head.
+Format intentional GitHub relationships consistently: same-repository issue or pull-request references use `#N`; cross-repository relationships use `owner/repo#N` or an already verified canonical URL. Artifact-local identifiers use stable labels or plain words and never bare `#N`.
 
-In validation-origin repair or declined-proof cleanup mode, push exactly once. Before progress publication, require the successor to have the declared predecessor as its sole parent, require its exact diff to equal the bounded-operation patch, and require local `HEAD`, upstream, and a fresh GitHub `headRefOid` to equal that successor with a clean index and tracked/untracked worktree. On any mismatch, return the exact identities and residual state without publishing, retrying, recommitting, or repushing.
+Delegate publication to `/mach12:gh-comment pr <number>` or `/mach12:gh-comment issue <number>` as appropriate. If publication fails after a successful push, preserve the pushed commit and return an incomplete result with enough context to reconcile the comment without another commit or push.
 
-## Step 4: Post progress comment
+## Step 5: Return
 
-Initial validation-proof mode returns to validation after verified push and does not post a progress comment; validation owns the initial review artifact. Every other mode continues below.
-
-Determine the comment target using this priority order:
-
-### 1. Session context
-
-Check the conversation for signals about what was being worked on. If an earlier command targeted a specific issue or PR, use that as the comment target.
-
-- **Issue-oriented signals** (post on the issue): `mach12:issue-implement`, `mach12:issue-plan`, `mach12:issue-review` invoked with an issue number.
-- **PR-oriented signals** (post on the PR): `mach12:pr-review-fix`, `mach12:pr-review`, `mach12:pr-pre-merge` invoked with a PR number.
-
-If session context points to an issue but a PR also exists on the current branch (`gh pr view --json number,url` succeeds), prefer the PR -- it supersedes the issue as the active work context.
-
-### 2. Detection fallback
-
-If session context is ambiguous or unavailable (fresh session, standalone push):
-
-1. **Try PR first:** `gh pr view --json number,url` on the current branch. If a PR exists, comment on it.
-2. **Fall back to issue:** if no PR, check the branch name for an issue-number pattern (e.g., `feature/issue-55-*`, `fix/issue-23-*`). If found, comment on that issue.
-
-### 3. Skip gracefully
-
-If neither session context nor detection yields a target, skip commenting and inform the user.
-
-### Comment content
-
-Include `<!-- mach12-progress -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
-
-Prepare a brief progress comment covering:
-- Summary of changes in this batch.
-- Commit hash(es) included.
-- Notable decisions or deviations from the plan.
-- For an ordinary static-review repair, the exact numeric review comment ID supplied by the caller, labeled as the originating review ID.
-
-Preserve an ordinary originating review ID exactly as supplied; it associates the progress artifact with that review cycle but does not constitute validation provenance.
-
-When the caller supplies a structured validation-origin repair or cleanup provenance payload, preserve every field and value verbatim in a dedicated `Validation repair provenance` section and append the exact pushed `HEAD` as `successor_head`. Require the payload to include review and assessment IDs/digests, `P`, original `V`, authenticated assessment head, exact `prior_head`, selected IDs, remaining staged IDs, cleanup IDs, ownership groups, unchanged proof paths, node IDs, and content identities, and the exact bounded-operation patch SHA-256. Do not duplicate executable proof bodies. Do not summarize, reorder, omit, or rewrite these fields; if the payload is incomplete, stop before posting the progress comment and report the push workflow incomplete.
-
-Do not include next-step suggestions in the comment body. The caller's `next:` block surfaces follow-ups -- a duplicate suggestion here would compete with the harness.
-
-Format intentional GitHub relationships in the progress comment so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact review comment IDs and validation provenance fields in their required labeled formats.
-
-Then delegate to the appropriate posting subroutine:
-
-- **Issue target:**
-
-  ```
-  /mach12:gh-comment issue <issue-number>
-  ```
-
-- **PR target:**
-
-  ```
-  /mach12:gh-comment pr <pr-number>
-  ```
-
-The subroutine handles the post and URL capture; the body content you prepared above is what gets posted.
-
-If publication or exact comment verification fails after the push, return an incomplete result to the caller with the exact pushed `HEAD`, the unverified or missing comment state, and recovery instructions to publish and verify one progress comment without recommitting or repushing. For an ordinary repair, preserve the exact originating review ID supplied by the caller. For a validation-origin repair, preserve the already-validated structured provenance payload verbatim. The top-level caller reports the workflow status. Never retry a commit or push as publication recovery.
-
-## Step 5: Confirm
-
-Report to the user in CLI output:
-- What was committed (files and message).
-- Where it was pushed.
-- Where the progress comment was posted (with URL), or that posting was skipped.
-
-Do not include next-step suggestions in the CLI output. The harness surfaces the caller's declared next-step.
+Report the committed files and message, pushed destination and verified head, and progress comment URL or the reason publication was skipped. Return control to the caller without proposing workflow routing.
