@@ -509,6 +509,32 @@ describe("Agent.runHarnessTool", () => {
 		}
 	});
 
+	it("preserves structured details from a returned error result", async () => {
+		const details = { code: "FORGE_READ_FAILED", phase: "read" };
+		const returnedErrorTool: AgentTool = {
+			name: "structured_error",
+			label: "Structured Error",
+			description: "harness tool that returns a structured error",
+			parameters: { type: "object", properties: {}, required: [] },
+			execute: async () => ({
+				content: [{ type: "text", text: "safe failure" }],
+				details,
+				isError: true,
+			}),
+		};
+		const agent = new Agent({ initialState: { model: testModel, tools: [] } });
+		let executionEnd: Extract<AgentEvent, { type: "tool_execution_end" }> | undefined;
+		agent.subscribe((event) => {
+			if (event.type === "tool_execution_end") executionEnd = event;
+		});
+
+		await expect(agent.runHarnessTool(returnedErrorTool, {})).resolves.toBeUndefined();
+
+		const result = agent.state.messages.find((message) => message.role === "toolResult");
+		expect(result).toMatchObject({ isError: true, details, content: [{ type: "text", text: "safe failure" }] });
+		expect(executionEnd).toMatchObject({ isError: true, result: { details } });
+	});
+
 	it("fulfills the promise (with an isError result) when the tool's execute throws", async () => {
 		const throwingTool: AgentTool = {
 			name: "boom",

@@ -298,12 +298,52 @@ describe("createGithubAdapter reads", () => {
 		]);
 	});
 
-	it("rejects unknown pull request review decisions", async () => {
+	it("keeps unknown pull request readiness values explicitly non-favorable", async () => {
 		const pages = structuredClone(fixture("github-pr-pages.json")) as any[];
 		pages[0].data.repository.pullRequest.reviewDecision = "FUTURE_DECISION";
-		await expect(
-			createGithubAdapter(readExec({ prPages: pages }), "/repo").readArtifact(repository, "pr", 12, []),
-		).rejects.toThrow(/GitHub pull request response was malformed or incomplete/);
+		pages[0].data.repository.pullRequest.mergeable = "FUTURE_MERGEABILITY";
+		const artifact = await createGithubAdapter(readExec({ prPages: pages }), "/repo").readArtifact(
+			repository,
+			"pr",
+			12,
+			[],
+		);
+		expect(artifact.kind).toBe("pr");
+		if (artifact.kind !== "pr") throw new Error("Expected PR");
+		expect(artifact.readiness).toMatchObject({
+			mergeable: "unknown",
+			reviewDecision: { capability: "unknown", value: "future_decision" },
+		});
+	});
+
+	it("preserves future actors and check states without favorable guesses", async () => {
+		const issuePages = structuredClone(fixture("github-issue-pages.json")) as any[];
+		for (const page of issuePages) page.data.repository.issue.author.__typename = "FutureActor";
+		const unknownActor = await createGithubAdapter(readExec({ issuePages }), "/repo").readArtifact(
+			repository,
+			"issue",
+			7,
+			[],
+		);
+		expect(unknownActor.author).toEqual({ login: "alice", kind: "unknown" });
+
+		const checkPages = structuredClone(fixture("github-pr-checks-pages.json")) as any[];
+		checkPages[1].data.repository.pullRequest.statusCheckRollup.contexts.nodes[0].state = "FUTURE_STATE";
+		const fallback = readExec();
+		const exec = vi.fn<ForgeExec>(async (command, args, options) => {
+			if (args[1] === "graphql" && queryFrom(args).includes("statusCheckRollup")) return result(checkPages);
+			return fallback(command, args, options);
+		});
+		const artifact = await createGithubAdapter(exec, "/repo").readArtifact(repository, "pr", 12, ["checks"]);
+		expect(artifact.kind).toBe("pr");
+		if (artifact.kind !== "pr") throw new Error("Expected PR");
+		expect(artifact.sections.checks).toContainEqual({
+			id: "SC_kwDOBB",
+			name: "lint",
+			status: "unknown",
+			conclusion: null,
+			url: null,
+		});
 	});
 
 	it("does not fetch or expose unrequested PR facets", async () => {

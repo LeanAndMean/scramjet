@@ -96,8 +96,7 @@ describe("renderForgeDocument", () => {
 		expect(
 			documentText(rendered),
 		).toBe(`<forge-artifact version="1" forge="github" repository="Acme/widget" kind="issue" number="7" url="https://github.com/Acme/widget/issues/7">
-  <metadata state="open" created-at="2026-01-01T00:00:00Z" updated-at="2026-01-02T00:00:00Z">
-    <author login="alice" kind="user"/>
+  <metadata state="open" created-at="2026-01-01T00:00:00Z" updated-at="2026-01-02T00:00:00Z" author="alice">
     <labels>
       <label><![CDATA[a-first]]></label>
       <label><![CDATA[z-last]]></label>
@@ -116,12 +115,10 @@ describe("renderForgeDocument", () => {
   <body mutable="true"><![CDATA[first
 second ]]]]><![CDATA[> tail]]></body>
   <comments>
-    <comment id="10" url="https://github.com/Acme/widget/issues/7#issuecomment-10" created-at="2026-01-03T00:00:00Z" updated-at="2026-01-03T01:00:00Z">
-      <author login="helper[bot]" kind="bot"/>
+    <comment id="10" url="https://github.com/Acme/widget/issues/7#issuecomment-10" created-at="2026-01-03T00:00:00Z" updated-at="2026-01-03T01:00:00Z" author="helper[bot]" author-kind="bot">
       <body mutable="true"><![CDATA[earlier]]></body>
     </comment>
-    <comment id="20" url="https://github.com/Acme/widget/issues/7#issuecomment-20" created-at="2026-01-04T00:00:00Z" updated-at="2026-01-04T00:00:00Z">
-      <author kind="deleted"/>
+    <comment id="20" url="https://github.com/Acme/widget/issues/7#issuecomment-20" created-at="2026-01-04T00:00:00Z" author-kind="deleted">
       <body mutable="true"><![CDATA[later]]></body>
     </comment>
   </comments>
@@ -192,9 +189,10 @@ second ]]]]><![CDATA[> tail]]></body>
 		);
 		const text = documentText(rendered);
 		expect(text).toContain("<label><![CDATA[line\nlabel]]>&#9;<![CDATA[value]]></label>");
-		expect(text).toContain("<path><![CDATA[first\nsecond.ts]]></path>");
+		expect(text).toContain(
+			'<file path="first&#10;second.ts" previous-path="old&#9;name.ts" status="modified" additions="1" deletions="0"/>',
+		);
 		expect(text).not.toContain("line]]><!-- forge-break");
-		expect(text).toContain("<previous-path><![CDATA[old]]>&#9;<![CDATA[name.ts]]></previous-path>");
 		for (const line of rendered.lines) expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(32 * 1024);
 
 		const parts: string[] = [];
@@ -209,6 +207,58 @@ second ]]]]><![CDATA[> tail]]></body>
 		expect(parts.join("\n")).toBe(documentText(rendered));
 	});
 
+	it("rejects invalid core attributes and escapes presentation controls in compact records", () => {
+		expect(() => renderForgeDocument(repository, issue({ state: "open\u0000hidden" }))).toThrow(
+			/unsupported XML code unit/,
+		);
+		const rendered = renderForgeDocument(
+			repository,
+			pullRequest({
+				sections: {
+					files: [
+						{
+							path: "src/\u202Espoof.ts",
+							status: "modified",
+							additions: 1,
+							deletions: 0,
+							previousPath: null,
+						},
+					],
+				},
+			}),
+		);
+		const compactLine = rendered.lines.find((line) => line.startsWith("<file "));
+		const displayLine = rendered.displayLines[rendered.lines.indexOf(compactLine ?? "")];
+		expect(compactLine).toContain("src/&#x202E;spoof.ts");
+		expect(displayLine).not.toContain("\u202E");
+	});
+
+	it("preserves unsafe optional-record values through expanded lossless fallback", () => {
+		const rendered = renderForgeDocument(
+			repository,
+			pullRequest({
+				sections: {
+					files: [
+						{
+							path: "src/file.ts",
+							status: "mod\u0000ified",
+							additions: 1,
+							deletions: 0,
+							previousPath: null,
+						},
+					],
+					commits: [{ sha: "bad\ud800sha", title: "Title", author: null, createdAt: "2026-01-01", url: null }],
+					checks: [{ id: "bad\u0000id", name: "check", status: "unknown", conclusion: null, url: null }],
+				},
+			}),
+		);
+		const text = documentText(rendered);
+		expect(text).toContain('<status><![CDATA[mod]]><forge-code-unit value="0000"/><![CDATA[ified]]></status>');
+		expect(text).toContain('<sha><![CDATA[bad]]><forge-code-unit value="D800"/><![CDATA[sha]]></sha>');
+		expect(text).toContain('<id><![CDATA[bad]]><forge-code-unit value="0000"/><![CDATA[id]]></id>');
+		expect(text).not.toContain("�");
+	});
+
 	it.each(["\n", "\r\n"])("keeps representative %j line-heavy content free of bridge overhead", (ending) => {
 		const body = Array.from({ length: 1000 }, (_, index) => `line ${index}`).join(ending);
 		const rendered = renderForgeDocument(repository, issue({ body }));
@@ -218,7 +268,68 @@ second ]]]]><![CDATA[> tail]]></body>
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThan(Buffer.byteLength(body, "utf8") + lineEndingOverhead + 5000);
 	});
 
-	it("renders unsupported review decisions explicitly", () => {
+	it("matches or beats compact equivalent JSON bytes for representative reads", () => {
+		const comments = Array.from({ length: 20 }, (_, index) => ({
+			...issue().comments[0],
+			id: String(100 + index),
+			url: `https://github.com/Acme/widget/issues/7#issuecomment-${100 + index}`,
+			body: `Comment ${index}: ${"detail ".repeat(20)}`,
+			createdAt: `2026-01-${String(3 + (index % 20)).padStart(2, "0")}T00:00:00Z`,
+			updatedAt: `2026-01-${String(3 + (index % 20)).padStart(2, "0")}T00:00:00Z`,
+		}));
+		const representativeIssue = issue({
+			body: Array.from({ length: 1000 }, (_, index) => `line ${index}: ordinary Markdown content`).join("\n"),
+			comments,
+		});
+		const representativePr = pullRequest({
+			body: representativeIssue.body,
+			comments,
+			sections: {
+				files: Array.from({ length: 100 }, (_, index) => ({
+					path: `src/file-${index}.ts`,
+					status: "modified",
+					additions: index + 1,
+					deletions: index % 5,
+					previousPath: null,
+				})),
+				commits: Array.from({ length: 100 }, (_, index) => ({
+					sha: String(index).padStart(40, "a"),
+					title: `Commit ${index} ${"detail ".repeat(5)}`,
+					author: "Alice",
+					createdAt: `2026-02-${String(1 + (index % 28)).padStart(2, "0")}T00:00:00Z`,
+					url: `https://github.com/Acme/widget/commit/${String(index).padStart(40, "a")}`,
+				})),
+				checks: Array.from({ length: 100 }, (_, index) => ({
+					id: `check-${index}`,
+					name: `check ${index}`,
+					status: "completed",
+					conclusion: "success",
+					url: `https://github.com/Acme/widget/actions/${index}`,
+				})),
+			},
+		});
+
+		for (const artifact of [representativeIssue, representativePr]) {
+			const xmlBytes = Buffer.byteLength(documentText(renderForgeDocument(repository, artifact)), "utf8");
+			const jsonBytes = Buffer.byteLength(JSON.stringify(artifact), "utf8");
+			expect(xmlBytes).toBeLessThanOrEqual(jsonBytes);
+		}
+	});
+
+	it("renders unknown and unsupported review decisions explicitly", () => {
+		const unknown = documentText(
+			renderForgeDocument(
+				repository,
+				pullRequest({
+					readiness: {
+						...pullRequest().readiness,
+						reviewDecision: { capability: "unknown", value: "future_decision" },
+					},
+				}),
+			),
+		);
+		expect(unknown).toContain('review-decision-capability="unknown" review-decision="future_decision"');
+
 		const rendered = renderForgeDocument(
 			repository,
 			pullRequest({
@@ -244,7 +355,7 @@ second ]]]]><![CDATA[> tail]]></body>
 		const text = documentText(rendered);
 		expect(text).toContain('review-decision-capability="supported" review-decision="approved"');
 		expect(text.indexOf("<readiness ")).toBeLessThan(text.indexOf("<title mutable"));
-		expect(text.indexOf("<comments>")).toBeLessThan(text.indexOf("<files>"));
+		expect(text.indexOf("<comments/>")).toBeLessThan(text.indexOf("<files>"));
 		expect(text.indexOf("<files>")).toBeLessThan(text.indexOf("<commits>"));
 		expect(text.indexOf("<commits>")).toBeLessThan(text.indexOf("<checks>"));
 		expect(rendered.include).toEqual(["files", "commits", "checks"]);

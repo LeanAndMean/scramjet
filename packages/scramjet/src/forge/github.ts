@@ -12,7 +12,7 @@ import type {
 	ForgePrCheck,
 	ForgePrCommit,
 	ForgePrFile,
-	ForgePrReviewDecisionValue,
+	ForgePrReviewDecision,
 	ForgePrSection,
 	ForgeRepository,
 } from "./types.js";
@@ -123,7 +123,7 @@ interface CoreArtifact {
 interface PrCore extends CoreArtifact {
 	draft: boolean;
 	mergeable: "mergeable" | "conflicting" | "unknown";
-	reviewDecision: { capability: "supported"; value: ForgePrReviewDecisionValue | null };
+	reviewDecision: ForgePrReviewDecision;
 	head: string;
 	base: string;
 	changedFiles: number;
@@ -159,7 +159,7 @@ function nullableString(value: unknown, label: string): string | null {
 	return string(value, label);
 }
 
-function reviewDecision(value: unknown): ForgePrReviewDecisionValue | null {
+function reviewDecision(value: unknown): ForgePrReviewDecision {
 	const decision = nullableString(value, "pull request")?.toLowerCase() ?? null;
 	if (
 		decision === null ||
@@ -167,9 +167,9 @@ function reviewDecision(value: unknown): ForgePrReviewDecisionValue | null {
 		decision === "changes_requested" ||
 		decision === "review_required"
 	) {
-		return decision;
+		return { capability: "supported", value: decision };
 	}
-	return malformed("pull request");
+	return { capability: "unknown", value: decision };
 }
 
 function positiveInteger(value: unknown, label: string): number {
@@ -282,7 +282,8 @@ function parseActor(value: unknown, label: string): ForgeActor {
 	const actor = record(value, label);
 	const login = nullableString(actor.login, label);
 	if (login === null) return { login: null, kind: "deleted" };
-	return { login, kind: actor.__typename === "Bot" ? "bot" : "user" };
+	const type = string(actor.__typename, label);
+	return { login, kind: type === "Bot" ? "bot" : type === "User" ? "user" : "unknown" };
 }
 
 function parseLabels(value: unknown, label: string): string[] {
@@ -422,10 +423,7 @@ async function readCore(
 	if (kind === "issue") return { ...core, comments };
 	const value = pageArtifact(pages[0], field, "pull request");
 	const rawMergeable = string(value.mergeable, "pull request").toLowerCase();
-	const mergeable =
-		rawMergeable === "mergeable" || rawMergeable === "conflicting" || rawMergeable === "unknown"
-			? rawMergeable
-			: malformed("pull request");
+	const mergeable = rawMergeable === "mergeable" || rawMergeable === "conflicting" ? rawMergeable : "unknown";
 	for (const page of pages.slice(1)) {
 		const current = pageArtifact(page, field, "pull request");
 		for (const key of [
@@ -444,7 +442,7 @@ async function readCore(
 		comments,
 		draft: boolean(value.isDraft, "pull request"),
 		mergeable,
-		reviewDecision: { capability: "supported", value: reviewDecision(value.reviewDecision) },
+		reviewDecision: reviewDecision(value.reviewDecision),
 		head: string(value.headRefName, "pull request"),
 		base: string(value.baseRefName, "pull request"),
 		changedFiles: nonnegativeInteger(value.changedFiles, "pull request"),
@@ -679,22 +677,43 @@ function parseCheck(value: unknown): ForgePrCheck {
 	const check = record(value, "checks");
 	const type = string(check.__typename, "checks");
 	if (type === "CheckRun") {
+		const rawStatus = string(check.status, "checks").toLowerCase();
+		const status = new Set(["queued", "in_progress", "completed", "waiting", "requested", "pending"]).has(rawStatus)
+			? rawStatus
+			: "unknown";
+		const rawConclusion = nullableString(check.conclusion, "checks")?.toLowerCase() ?? null;
+		const conclusion =
+			rawConclusion === null ||
+			new Set([
+				"action_required",
+				"cancelled",
+				"failure",
+				"neutral",
+				"skipped",
+				"stale",
+				"startup_failure",
+				"success",
+				"timed_out",
+			]).has(rawConclusion)
+				? rawConclusion
+				: "unknown";
 		return {
 			id: string(check.id, "checks"),
 			name: string(check.name, "checks"),
-			status: string(check.status, "checks").toLowerCase(),
-			conclusion: nullableString(check.conclusion, "checks")?.toLowerCase() ?? null,
+			status,
+			conclusion,
 			url: nullableString(check.detailsUrl, "checks"),
 		};
 	}
 	if (type === "StatusContext") {
 		const state = string(check.state, "checks").toLowerCase();
 		const pending = state === "pending" || state === "expected";
+		const completed = state === "success" || state === "error" || state === "failure";
 		return {
 			id: string(check.id, "checks"),
 			name: string(check.context, "checks"),
-			status: pending ? "pending" : "completed",
-			conclusion: pending ? null : state,
+			status: pending ? "pending" : completed ? "completed" : "unknown",
+			conclusion: completed ? state : null,
 			url: nullableString(check.targetUrl, "checks"),
 		};
 	}

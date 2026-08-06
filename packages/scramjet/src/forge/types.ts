@@ -10,7 +10,7 @@ export interface ForgeRepository {
 
 export interface ForgeActor {
 	login: string | null;
-	kind: "user" | "bot" | "deleted";
+	kind: "user" | "bot" | "deleted" | "unknown";
 }
 
 export interface ForgeComment {
@@ -61,7 +61,8 @@ export type ForgePrReviewDecisionValue = "approved" | "changes_requested" | "rev
 
 export type ForgePrReviewDecision =
 	| { capability: "supported"; value: ForgePrReviewDecisionValue | null }
-	| { capability: "unsupported" };
+	| { capability: "unsupported" }
+	| { capability: "unknown"; value: string };
 
 export interface ForgePrReadiness {
 	draft: boolean;

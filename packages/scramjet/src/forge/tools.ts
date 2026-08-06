@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { StringEnum } from "@leanandmean/ai";
 import type {
 	AgentToolResult,
@@ -7,7 +8,7 @@ import type {
 	Theme,
 	ToolRenderResultOptions,
 } from "@leanandmean/coding-agent";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncateHead } from "@leanandmean/coding-agent";
+import { truncateHead } from "@leanandmean/coding-agent";
 import { Text } from "@leanandmean/tui";
 import { type Static, Type } from "typebox";
 import type { ScramjetLogger } from "../logger.js";
@@ -22,10 +23,10 @@ import {
 } from "./client.js";
 import {
 	applyExactEdits,
+	controlSafeText,
 	type ForgeRangeRequest,
 	isForgeReadDetails,
 	renderForgeDocument,
-	renderForgeTargetPostimage,
 	sliceForgeDocument,
 } from "./document.js";
 import { createGithubAdapter } from "./github.js";
@@ -43,15 +44,10 @@ import type {
 	ForgeRepository,
 } from "./types.js";
 
-const ARTIFACT_NUMBER = Type.Integer({ minimum: 1, description: "Issue or pull request number" });
-const OFFSET = Type.Optional(Type.Integer({ minimum: 1, description: "1-indexed XML line to start reading from" }));
-const LIMIT = Type.Optional(Type.Integer({ minimum: 1, description: "Maximum XML lines to return" }));
-const SNAPSHOT = Type.Optional(
-	Type.String({
-		pattern: "^[a-f0-9]{64}$",
-		description: "Snapshot from the preceding range; fails if the remote artifact changed",
-	}),
-);
+const ARTIFACT_NUMBER = Type.Integer({ minimum: 1 });
+const OFFSET = Type.Optional(Type.Integer({ minimum: 1 }));
+const LIMIT = Type.Optional(Type.Integer({ minimum: 1 }));
+const SNAPSHOT = Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" }));
 
 export const READ_ISSUE_SCHEMA = Type.Object(
 	{
@@ -70,7 +66,6 @@ export const READ_PR_SCHEMA = Type.Object(
 			Type.Array(StringEnum(["files", "commits", "checks"] as const), {
 				uniqueItems: true,
 				maxItems: 3,
-				description: "Optional bulky sections; readiness and conversation comments are always included",
 			}),
 		),
 		offset: OFFSET,
@@ -80,10 +75,10 @@ export const READ_PR_SCHEMA = Type.Object(
 	{ additionalProperties: false },
 );
 
-const TITLE = Type.String({ minLength: 1, description: "Artifact title" });
-const BODY = Type.String({ description: "Exact Markdown body" });
-const COMMENT_BODY = Type.String({ minLength: 1, description: "Exact Markdown comment body" });
-const BRANCH = Type.String({ minLength: 1, description: "Explicit branch name" });
+const TITLE = Type.String({ minLength: 1 });
+const BODY = Type.String();
+const COMMENT_BODY = Type.String({ minLength: 1 });
+const BRANCH = Type.String({ minLength: 1 });
 
 export const CREATE_ISSUE_SCHEMA = Type.Object({ title: TITLE, body: BODY }, { additionalProperties: false });
 export const CREATE_PR_SCHEMA = Type.Object(
@@ -92,7 +87,7 @@ export const CREATE_PR_SCHEMA = Type.Object(
 		body: BODY,
 		head: BRANCH,
 		base: BRANCH,
-		draft: Type.Optional(Type.Boolean({ description: "Create as a draft pull request" })),
+		draft: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
 );
@@ -106,11 +101,8 @@ export const ADD_PR_COMMENT_SCHEMA = Type.Object(
 );
 
 const REPLACEMENT = {
-	oldText: Type.String({
-		minLength: 1,
-		description: "Exact, unique text in the original decoded field",
-	}),
-	newText: Type.String({ description: "Exact replacement text" }),
+	oldText: Type.String({ minLength: 1 }),
+	newText: Type.String(),
 };
 
 function editSchema() {
@@ -118,24 +110,16 @@ function editSchema() {
 		{
 			number: ARTIFACT_NUMBER,
 			target: Type.Union([
+				Type.Object({ kind: Type.Literal("artifact") }, { additionalProperties: false }),
 				Type.Object(
-					{ kind: Type.Literal("artifact", { description: "Artifact target; edits may change title or body" }) },
-					{ additionalProperties: false },
-				),
-				Type.Object(
-					{
-						kind: Type.Literal("comment", { description: "Comment target; edits may change body only" }),
-						id: Type.String({ minLength: 1, description: "Opaque comment ID" }),
-					},
+					{ kind: Type.Literal("comment"), id: Type.String({ minLength: 1 }) },
 					{ additionalProperties: false },
 				),
 			]),
 			edits: Type.Array(
 				Type.Object(
 					{
-						field: StringEnum(["title", "body"] as const, {
-							description: "Artifact targets accept title or body; comment targets accept body only",
-						}),
+						field: StringEnum(["title", "body"] as const),
 						...REPLACEMENT,
 					},
 					{ additionalProperties: false },
@@ -179,7 +163,7 @@ function forgeExec(pi: ExtensionAPI): ForgeExec {
 
 function readDescription(kind: ForgeArtifactKind): string {
 	const label = kind === "issue" ? "issue" : "pull request";
-	return `Read a ${label} from the current repository as deterministic XML, including its complete top-level conversation. Output is bounded to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; use offset, limit, and the returned snapshot for lossless continuation.`;
+	return `Read a current-repository ${label} and complete top-level conversation as bounded XML. Continue truncated output with offset and snapshot.`;
 }
 
 async function readArtifact(
@@ -377,46 +361,201 @@ function verifyCreatedArtifact(_repository: ForgeRepository, input: ForgeCreateI
 	}
 }
 
+type ForgeMutationOperation =
+	| "create_issue"
+	| "create_pr"
+	| "add_issue_comment"
+	| "add_pr_comment"
+	| "edit_issue"
+	| "edit_pr";
+
+interface ForgeMutationSummary {
+	target?: ForgeMutationTarget;
+	fields?: Array<"title" | "body">;
+	replacements?: number;
+}
+
 function mutationResult(
-	operation: "create_issue" | "create_pr" | "add_issue_comment" | "add_pr_comment",
+	operation: ForgeMutationOperation,
 	repository: ForgeRepository,
 	identity: ForgeIdentity,
-	artifact: ForgeArtifact,
-	createdCommentBody?: string,
+	summary: ForgeMutationSummary = {},
 ) {
-	const slice = sliceForgeDocument(renderForgeDocument(repository, artifact), {});
-	const verified =
-		identity.kind === "comment"
-			? JSON.stringify({ id: identity.id, url: identity.url, body: createdCommentBody })
-			: JSON.stringify(identity);
 	return {
-		content: [{ type: "text" as const, text: `Created and verified ${operation}: ${verified}\n\n${slice.content}` }],
+		content: [{ type: "text" as const, text: identity.url }],
 		details: {
 			schema: "scramjet:forge-mutation@1" as const,
 			operation,
 			repository,
 			identity,
+			...summary,
 			verified: true as const,
 		},
 	};
 }
 
-function ambiguousMutation(operation: string, error: unknown): Error {
-	const cause = error instanceof Error ? error : new Error(String(error));
-	return new Error(
-		`${operation} may have succeeded, but its identity or exact content could not be verified. Reread the forge artifact before retrying to avoid a duplicate. ${cause.message}`,
-		{ cause },
-	);
+type ForgeFailureClass =
+	| "FORGE_READ_FAILED"
+	| "FORGE_PREFLIGHT_FAILED"
+	| "FORGE_WRITE_REJECTED"
+	| "FORGE_WRITE_AMBIGUOUS";
+
+type ForgeFailurePhase = "repository" | "evidence" | "refetch" | "dispatch" | "response" | "verify";
+type ForgeWriteState = "not_attempted" | "rejected" | "possible";
+
+interface ForgeFailureDetails {
+	schema: "scramjet:forge-failure@1";
+	class: ForgeFailureClass;
+	operation: string;
+	phase: ForgeFailurePhase;
+	writeState: ForgeWriteState;
+	diagnostic?: ForgeCommandError["invocation"];
+	trace?: string;
+}
+
+class ForgePreflightError extends Error {
+	readonly phase: "refetch";
+
+	constructor(cause: Error) {
+		super("Forge mutation preflight refetch failed", { cause });
+		this.name = "ForgePreflightError";
+		this.phase = "refetch";
+	}
+}
+
+class ForgeMutationAmbiguityError extends Error {
+	readonly phase: "dispatch" | "response" | "verify";
+
+	constructor(operation: string, phase: "dispatch" | "response" | "verify", cause: Error) {
+		super(`${operation} may have succeeded`, { cause });
+		this.name = "ForgeMutationAmbiguityError";
+		this.phase = phase;
+	}
+}
+
+function forgeCommandError(error: unknown): ForgeCommandError | undefined {
+	let current = error;
+	for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+		if (current instanceof ForgeCommandError) return current;
+		current = current.cause;
+	}
+	return undefined;
+}
+
+function ambiguousMutation(
+	operation: string,
+	error: unknown,
+	phase: "dispatch" | "response" | "verify" = "verify",
+): Error {
+	return new ForgeMutationAmbiguityError(operation, phase, error instanceof Error ? error : new Error(String(error)));
 }
 
 function mutationAttemptFailure(operation: string, error: unknown): Error {
-	if (
-		error instanceof ForgeCommandError &&
-		(error.kind === "missing-executable" || (error.kind === "failed" && error.authenticationFailure))
-	) {
-		return error;
+	if (error instanceof ForgeCommandError && error.kind === "missing-executable") return error;
+	return ambiguousMutation(operation, error, error instanceof ForgeCommandError ? "dispatch" : "response");
+}
+
+function deepestError(error: unknown): Error | undefined {
+	let current = error instanceof Error ? error : undefined;
+	for (let depth = 0; depth < 5 && current?.cause instanceof Error; depth++) current = current.cause;
+	return current;
+}
+
+function boundedFailureCause(error: unknown, commandError: ForgeCommandError | undefined): string {
+	const cause = commandError ?? deepestError(error);
+	const value = controlSafeText(cause?.message ?? String(error));
+	const truncated = truncateHead(value, { maxBytes: 240, maxLines: 4 });
+	if (!truncated.truncated) return truncated.content;
+	const marker = `[truncated ${truncated.totalBytes} bytes/${truncated.totalLines} lines; sha256 ${createHash("sha256").update(value, "utf8").digest("hex")}]`;
+	return truncated.content === "" ? marker : `${truncated.content}\n${marker}`;
+}
+
+function failureTrace(error: unknown): string | undefined {
+	const cause = deepestError(error);
+	if (cause?.stack === undefined) return undefined;
+	const frames = controlSafeText(cause.stack.split("\n").slice(1, 7).join("\n"));
+	const truncated = truncateHead(frames, { maxBytes: 1024, maxLines: 6 });
+	return truncated.content === "" ? undefined : truncated.content;
+}
+
+function failureResult(
+	operation: string,
+	mode: "read" | "mutation",
+	error: unknown,
+): AgentToolResult<ForgeFailureDetails> {
+	const commandError = forgeCommandError(error);
+	const ambiguity = error instanceof ForgeMutationAmbiguityError ? error : undefined;
+	const preflight = error instanceof ForgePreflightError ? error : undefined;
+	const unsupportedOrigin = error instanceof UnsupportedForgeOriginError;
+	const failureClass: ForgeFailureClass =
+		mode === "read"
+			? "FORGE_READ_FAILED"
+			: ambiguity
+				? "FORGE_WRITE_AMBIGUOUS"
+				: commandError?.kind === "missing-executable"
+					? "FORGE_WRITE_REJECTED"
+					: "FORGE_PREFLIGHT_FAILED";
+	const phase: ForgeFailurePhase =
+		ambiguity?.phase ??
+		preflight?.phase ??
+		(unsupportedOrigin || commandError?.invocation.command === "git"
+			? "repository"
+			: mode === "read"
+				? "response"
+				: commandError?.kind === "missing-executable"
+					? "dispatch"
+					: "evidence");
+	const writeState: ForgeWriteState =
+		failureClass === "FORGE_WRITE_AMBIGUOUS"
+			? "possible"
+			: failureClass === "FORGE_WRITE_REJECTED"
+				? "rejected"
+				: "not_attempted";
+	const cli = commandError?.invocation.command;
+	const providerCli = cli === "gh" || cli === "glab" ? cli : undefined;
+	const cause = boundedFailureCause(error, commandError);
+	const trace = failureTrace(error);
+	const recovery = unsupportedOrigin
+		? "No write was attempted. The current origin is not a supported public GitHub or GitLab repository, so no provider CLI fallback was selected. Correct the origin or report this Scramjet failure code."
+		: failureClass === "FORGE_READ_FAILED"
+			? providerCli === undefined
+				? "No write was attempted. No provider CLI fallback was selected. Correct repository resolution or report this Scramjet failure code."
+				: `No write was attempted. If bash is available, deliberate read-only ${providerCli} inspection is a fallback. If direct CLI inspection succeeds, report this Scramjet failure code.`
+			: failureClass === "FORGE_PREFLIGHT_FAILED"
+				? "No write was attempted. Correct the repository, evidence, input, or provider constraint, then make a new forge-tool call; do not substitute a CLI mutation. If the cause is not actionable, report this Scramjet failure code."
+				: failureClass === "FORGE_WRITE_REJECTED"
+					? "No request reached the provider. Correct the prerequisite, then make a new deliberate forge-tool call; do not substitute a CLI mutation."
+					: `The mutation may have succeeded. DO NOT RETRY this call or run a CLI mutation fallback. Reconcile with a fresh forge read${providerCli === undefined ? "." : ` or, when bash is available, read-only ${providerCli} inspection.`}`;
+	return {
+		content: [
+			{
+				type: "text",
+				text: `${failureClass} operation=${operation} phase=${phase} write=${writeState}\n${cause}\n${recovery}`,
+			},
+		],
+		details: {
+			schema: "scramjet:forge-failure@1",
+			class: failureClass,
+			operation,
+			phase,
+			writeState,
+			...(commandError === undefined ? {} : { diagnostic: commandError.invocation }),
+			...(trace === undefined ? {} : { trace }),
+		},
+		isError: true,
+	};
+}
+
+async function executeForgeTool<T>(
+	operation: string,
+	mode: "read" | "mutation",
+	execute: () => Promise<AgentToolResult<T>>,
+): Promise<AgentToolResult<T | ForgeFailureDetails>> {
+	try {
+		return await execute();
+	} catch (error) {
+		return failureResult(operation, mode, error);
 	}
-	return ambiguousMutation(operation, error);
 }
 
 async function createArtifact(
@@ -453,7 +592,7 @@ async function createArtifact(
 		const artifact = await adapter.readArtifact(repository, kind, identity.number, [], signal);
 		assertArtifactIdentity(artifact, kind, identity.number, identity.url);
 		verifyCreatedArtifact(repository, input, artifact);
-		return mutationResult(kind === "issue" ? "create_issue" : "create_pr", repository, identity, artifact);
+		return mutationResult(kind === "issue" ? "create_issue" : "create_pr", repository, identity);
 	} catch (error) {
 		throw ambiguousMutation(operation, error);
 	}
@@ -495,8 +634,13 @@ async function addComment(
 	const adapter = dependencies.createAdapter(repository, exec, cwd);
 	const key = mutationQueueKey(repository, kind, params.number, { kind: "artifact" });
 	return withForgeMutationQueue(key, async () => {
-		const parent = await adapter.readArtifact(repository, kind, params.number, [], signal);
-		assertArtifactIdentity(parent, kind, params.number);
+		let parent: ForgeArtifact;
+		try {
+			parent = await adapter.readArtifact(repository, kind, params.number, [], signal);
+			assertArtifactIdentity(parent, kind, params.number);
+		} catch (error) {
+			throw new ForgePreflightError(error instanceof Error ? error : new Error(String(error)));
+		}
 		const operation = kind === "issue" ? "Issue comment creation" : "PR comment creation";
 		let identity: Awaited<ReturnType<ForgeAdapter["addComment"]>>;
 		try {
@@ -511,23 +655,11 @@ async function addComment(
 			if (comment === undefined || comment.url !== identity.url || comment.body !== params.body) {
 				throw new Error("Created comment did not match its returned identity and requested body");
 			}
-			return mutationResult(
-				kind === "issue" ? "add_issue_comment" : "add_pr_comment",
-				repository,
-				identity,
-				updated,
-				params.body,
-			);
+			return mutationResult(kind === "issue" ? "add_issue_comment" : "add_pr_comment", repository, identity);
 		} catch (error) {
 			throw ambiguousMutation(operation, error);
 		}
 	});
-}
-
-interface ForgeEditDiff {
-	field: "title" | "body";
-	oldText: string;
-	newText: string;
 }
 
 function editMutationResult(
@@ -535,34 +667,13 @@ function editMutationResult(
 	repository: ForgeRepository,
 	identity: ForgeIdentity,
 	target: ForgeMutationTarget,
-	diff: ForgeEditDiff[],
-	artifact: ForgeArtifact,
+	edits: EditParams["edits"],
 ) {
-	const postimage = truncateHead(renderForgeTargetPostimage(renderForgeDocument(repository, artifact), target), {
-		maxLines: DEFAULT_MAX_LINES - 20,
-		maxBytes: DEFAULT_MAX_BYTES - 8192,
+	return mutationResult(operation, repository, identity, {
+		target,
+		fields: [...new Set(edits.map((edit) => edit.field))],
+		replacements: edits.length,
 	});
-	const truncation = postimage.truncated
-		? `\n[Verified postimage truncated by ${postimage.truncatedBy}; ${postimage.totalLines} lines, ${postimage.totalBytes} bytes total.]`
-		: "";
-	return {
-		content: [
-			{
-				type: "text" as const,
-				text: `Edited and verified ${operation}: ${JSON.stringify({ identity, target, diff })}\n\nVerified fresh postimage (non-authorizing):\n${postimage.content}${truncation}`,
-			},
-		],
-		details: {
-			schema: "scramjet:forge-mutation@1" as const,
-			operation,
-			repository,
-			identity,
-			target,
-			diff,
-			postimage: { content: postimage.content, truncated: postimage.truncated },
-			verified: true as const,
-		},
-	};
 }
 
 async function editArtifact(
@@ -591,8 +702,13 @@ async function editArtifact(
 	const adapter = dependencies.createAdapter(repository, exec, cwd);
 	const key = mutationQueueKey(repository, kind, params.number, target);
 	return withForgeMutationQueue(key, async () => {
-		const original = await adapter.readArtifact(repository, kind, params.number, [], signal);
-		assertArtifactIdentity(original, kind, params.number);
+		let original: ForgeArtifact;
+		try {
+			original = await adapter.readArtifact(repository, kind, params.number, [], signal);
+			assertArtifactIdentity(original, kind, params.number);
+		} catch (error) {
+			throw new ForgePreflightError(error instanceof Error ? error : new Error(String(error)));
+		}
 		const operation = kind === "issue" ? "Issue edit" : "Pull request edit";
 		const toolName = kind === "issue" ? "edit_issue" : "edit_pr";
 
@@ -605,7 +721,6 @@ async function editArtifact(
 				.map(({ oldText, newText }) => ({ oldText, newText }));
 			const title = titleEdits.length === 0 ? original.title : applyExactEdits(original.title, titleEdits, "title");
 			const body = bodyEdits.length === 0 ? original.body : applyExactEdits(original.body, bodyEdits, "body");
-			const diff: ForgeEditDiff[] = params.edits.map((edit) => ({ ...edit }));
 			if (
 				repository.forge === "gitlab" &&
 				kind === "pr" &&
@@ -648,7 +763,7 @@ async function editArtifact(
 				) {
 					throw new Error("Updated GitLab pull request changed draft state");
 				}
-				return editMutationResult(toolName, repository, identity, target, diff, updated);
+				return editMutationResult(toolName, repository, identity, target, params.edits);
 			} catch (error) {
 				throw ambiguousMutation(operation, error);
 			}
@@ -661,7 +776,6 @@ async function editArtifact(
 			params.edits.map(({ oldText, newText }) => ({ oldText, newText })),
 			"comment body",
 		);
-		const diff: ForgeEditDiff[] = params.edits.map((edit) => ({ ...edit }));
 		let identity: Awaited<ReturnType<ForgeAdapter["updateComment"]>>;
 		try {
 			identity = await adapter.updateComment(
@@ -682,7 +796,7 @@ async function editArtifact(
 			if (updatedComment === undefined || updatedComment.url !== comment.url || updatedComment.body !== body) {
 				throw new Error("Updated comment mutable content did not match the requested postimage");
 			}
-			return editMutationResult(toolName, repository, identity, target, diff, updated);
+			return editMutationResult(toolName, repository, identity, target, params.edits);
 		} catch (error) {
 			throw ambiguousMutation(operation, error);
 		}
@@ -786,14 +900,13 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		name: "read_issue",
 		label: "read issue",
 		description: readDescription("issue"),
-		promptSnippet: "Read an issue and all top-level comments from the current repository",
-		promptGuidelines: [
-			"Use read_issue instead of bash or forge CLI commands when reading a current-repository issue.",
-			"When read_issue output is truncated, continue with offset and the unchanged snapshot until complete.",
-		],
+		promptSnippet: "Read a current-repository issue conversation",
+		promptGuidelines: ["Continue truncated read_issue output with offset and the unchanged snapshot until complete."],
 		parameters: READ_ISSUE_SCHEMA,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			return readArtifact("issue", params, signal, ctx.cwd, exec, dependencies);
+			return executeForgeTool("read_issue", "read", () =>
+				readArtifact("issue", params, signal, ctx.cwd, exec, dependencies),
+			);
 		},
 		renderCall(args, theme, context) {
 			return renderCall("read_issue", args, theme, context);
@@ -805,14 +918,13 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		name: "read_pr",
 		label: "read pull request",
 		description: readDescription("pr"),
-		promptSnippet: "Read a pull request and all top-level comments from the current repository",
-		promptGuidelines: [
-			"Use read_pr instead of bash or forge CLI commands when reading a current-repository pull request.",
-			"When read_pr output is truncated, continue with offset and the unchanged snapshot until complete.",
-		],
+		promptSnippet: "Read a current-repository pull request conversation",
+		promptGuidelines: ["Continue truncated read_pr output with offset and the unchanged snapshot until complete."],
 		parameters: READ_PR_SCHEMA,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			return readArtifact("pr", params, signal, ctx.cwd, exec, dependencies);
+			return executeForgeTool("read_pr", "read", () =>
+				readArtifact("pr", params, signal, ctx.cwd, exec, dependencies),
+			);
 		},
 		renderCall(args, theme, context) {
 			return renderCall("read_pr", args, theme, context);
@@ -824,11 +936,13 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		name: "create_issue",
 		label: "create issue",
 		description: "Create and verify an issue in the current repository with an exact title and Markdown body.",
-		promptSnippet: "Create an issue in the current repository",
-		promptGuidelines: ["Use create_issue only after the user has approved the exact issue title and body."],
+		promptSnippet: "Create a current-repository issue",
+		promptGuidelines: ["Call create_issue only after exact title and body approval."],
 		parameters: CREATE_ISSUE_SCHEMA,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			return createArtifact("issue", params, signal, ctx.cwd, exec, dependencies);
+			return executeForgeTool("create_issue", "mutation", () =>
+				createArtifact("issue", params, signal, ctx.cwd, exec, dependencies),
+			);
 		},
 	});
 
@@ -837,15 +951,16 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		label: "create pull request",
 		description:
 			"Create and verify a pull request in the current repository with exact content and explicit head/base branches. This never creates, checks out, or pushes branches.",
-		promptSnippet: "Create a pull request from explicit existing branches in the current repository",
+		promptSnippet: "Create a PR from explicit existing branches",
 		promptGuidelines: [
-			"Use create_pr only after the user has approved the exact pull request title and body.",
-			"For GitLab draft merge requests, the approved exact title must already include a GitLab draft prefix.",
-			"Pass explicit existing head and base branches; create_pr never mutates Git state.",
+			"Call create_pr only after exact title and body approval; GitLab draft titles must already carry a draft prefix.",
+			"Pass explicit head/base branches; create_pr never mutates Git state.",
 		],
 		parameters: CREATE_PR_SCHEMA,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			return createArtifact("pr", params, signal, ctx.cwd, exec, dependencies);
+			return executeForgeTool("create_pr", "mutation", () =>
+				createArtifact("pr", params, signal, ctx.cwd, exec, dependencies),
+			);
 		},
 	});
 
@@ -854,21 +969,21 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		label: "add issue comment",
 		description:
 			"Add and verify one top-level issue comment after a complete prior read_issue of the parent conversation.",
-		promptSnippet: "Add a top-level comment to a previously read issue in the current repository",
-		promptGuidelines: [
-			"Before add_issue_comment, completely read the same issue and all top-level comments with read_issue.",
-		],
+		promptSnippet: "Add a comment to a previously read issue",
+		promptGuidelines: ["Before add_issue_comment, completely read the parent with read_issue."],
 		parameters: ADD_ISSUE_COMMENT_SCHEMA,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
-			return addComment(
-				"issue",
-				params,
-				toolCallId,
-				signal,
-				ctx.cwd,
-				ctx.sessionManager.getBranch(),
-				exec,
-				dependencies,
+			return executeForgeTool("add_issue_comment", "mutation", () =>
+				addComment(
+					"issue",
+					params,
+					toolCallId,
+					signal,
+					ctx.cwd,
+					ctx.sessionManager.getBranch(),
+					exec,
+					dependencies,
+				),
 			);
 		},
 	});
@@ -878,21 +993,12 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		label: "add pull request comment",
 		description:
 			"Add and verify one top-level pull request comment after a complete prior read_pr of the parent conversation.",
-		promptSnippet: "Add a top-level comment to a previously read pull request in the current repository",
-		promptGuidelines: [
-			"Before add_pr_comment, completely read the same pull request and all top-level comments with read_pr.",
-		],
+		promptSnippet: "Add a comment to a previously read PR",
+		promptGuidelines: ["Before add_pr_comment, completely read the parent with read_pr."],
 		parameters: ADD_PR_COMMENT_SCHEMA,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
-			return addComment(
-				"pr",
-				params,
-				toolCallId,
-				signal,
-				ctx.cwd,
-				ctx.sessionManager.getBranch(),
-				exec,
-				dependencies,
+			return executeForgeTool("add_pr_comment", "mutation", () =>
+				addComment("pr", params, toolCallId, signal, ctx.cwd, ctx.sessionManager.getBranch(), exec, dependencies),
 			);
 		},
 	});
@@ -902,23 +1008,23 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		label: "edit issue",
 		description:
 			"Edit one previously read issue or top-level issue comment using exact, unique, non-overlapping replacements against the current decoded content.",
-		promptSnippet: "Precisely edit a previously read issue title, body, or one top-level comment",
+		promptSnippet: "Exactly edit a previously read issue or comment",
 		promptGuidelines: [
-			"Before edit_issue, completely read every field being edited with read_issue.",
-			"Each replacement matches the refetched original decoded field exactly, never XML-escaped or normalized text.",
-			"One edit_issue call may target the issue title/body or one comment, never multiple remote objects.",
+			"Before edit_issue, completely read every edited field; replacements match decoded text exactly and target one object.",
 		],
 		parameters: EDIT_ISSUE_SCHEMA,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
-			return editArtifact(
-				"issue",
-				params,
-				toolCallId,
-				signal,
-				ctx.cwd,
-				ctx.sessionManager.getBranch(),
-				exec,
-				dependencies,
+			return executeForgeTool("edit_issue", "mutation", () =>
+				editArtifact(
+					"issue",
+					params,
+					toolCallId,
+					signal,
+					ctx.cwd,
+					ctx.sessionManager.getBranch(),
+					exec,
+					dependencies,
+				),
 			);
 		},
 	});
@@ -928,23 +1034,14 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		label: "edit pull request",
 		description:
 			"Edit one previously read pull request or top-level pull request comment using exact, unique, non-overlapping replacements against the current decoded content.",
-		promptSnippet: "Precisely edit a previously read pull request title, body, or one top-level comment",
+		promptSnippet: "Exactly edit a previously read PR or comment",
 		promptGuidelines: [
-			"Before edit_pr, completely read every field being edited with read_pr.",
-			"Each replacement matches the refetched original decoded field exactly, never XML-escaped or normalized text.",
-			"One edit_pr call may target the pull request title/body or one comment, never multiple remote objects.",
+			"Before edit_pr, completely read every edited field; replacements match decoded text exactly and target one object.",
 		],
 		parameters: EDIT_PR_SCHEMA,
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
-			return editArtifact(
-				"pr",
-				params,
-				toolCallId,
-				signal,
-				ctx.cwd,
-				ctx.sessionManager.getBranch(),
-				exec,
-				dependencies,
+			return executeForgeTool("edit_pr", "mutation", () =>
+				editArtifact("pr", params, toolCallId, signal, ctx.cwd, ctx.sessionManager.getBranch(), exec, dependencies),
 			);
 		},
 	});

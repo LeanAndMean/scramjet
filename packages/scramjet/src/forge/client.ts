@@ -35,6 +35,8 @@ export interface ForgeProcessDiagnostic {
 	exitCode: number | null;
 	stdout: string;
 	stderr: string;
+	spawnError?: { message: string; code?: string };
+	stdinError?: { message: string; code?: string };
 	authenticationFailure?: boolean;
 }
 
@@ -49,14 +51,12 @@ export interface ForgeInvocationDiagnostic {
 export class ForgeCommandError extends Error {
 	readonly kind: ForgeCommandErrorKind;
 	readonly invocation: ForgeInvocationDiagnostic;
-	readonly authenticationFailure: boolean;
 
 	constructor(kind: ForgeCommandErrorKind, invocation: ForgeInvocationDiagnostic, cause?: unknown) {
 		super(messageForFailure(kind, invocation), cause === undefined ? undefined : { cause });
 		this.name = "ForgeCommandError";
 		this.kind = kind;
 		this.invocation = invocation;
-		this.authenticationFailure = processAuthenticationFailure(invocation.process);
 	}
 }
 
@@ -74,8 +74,13 @@ function quotedDiagnostic(value: string): string {
 	});
 }
 
+function summarizedArgument(value: string): string {
+	if (!value.startsWith("query=")) return value;
+	return `query=<sha256:${createHash("sha256").update(value, "utf8").digest("hex").slice(0, 12)}>`;
+}
+
 function messageForFailure(kind: ForgeCommandErrorKind, invocation: ForgeInvocationDiagnostic): string {
-	const command = [invocation.command, ...invocation.args].map(quotedDiagnostic).join(" ");
+	const command = [invocation.command, ...invocation.args.map(summarizedArgument)].map(quotedDiagnostic).join(" ");
 	const stdin = invocation.stdin
 		? ` with ${invocation.stdin.bytes} stdin bytes (sha256 ${invocation.stdin.sha256})`
 		: "";
@@ -91,18 +96,29 @@ function messageForFailure(kind: ForgeCommandErrorKind, invocation: ForgeInvocat
 	const processText = process
 		? [
 				process.exitCode === null ? null : `exit code ${process.exitCode}`,
+				process.spawnError === undefined
+					? null
+					: `spawn error${process.spawnError.code ? ` ${process.spawnError.code}` : ""} ${quotedDiagnostic(process.spawnError.message)}`,
+				process.stdinError === undefined
+					? null
+					: `stdin error${process.stdinError.code ? ` ${process.stdinError.code}` : ""} ${quotedDiagnostic(process.stdinError.message)}`,
 				process.stdout === "" ? null : `stdout ${quotedDiagnostic(process.stdout)}`,
 				process.stderr === "" ? null : `stderr ${quotedDiagnostic(process.stderr)}`,
 			].filter((part): part is string => part !== null)
 		: [];
 	const diagnostic = processText.length === 0 ? "" : `; ${processText.join("; ")}`;
-	const guidance = processAuthenticationFailure(process)
-		? invocation.command === "gh"
-			? " Run `gh auth login --hostname github.com`, then retry after confirming authentication."
+	const login =
+		invocation.command === "gh"
+			? "Run `gh auth login --hostname github.com`"
 			: invocation.command === "glab"
-				? " Run `glab auth login --hostname gitlab.com`, then retry after confirming authentication."
-				: ""
-		: "";
+				? "Run `glab auth login --hostname gitlab.com`"
+				: "";
+	const guidance =
+		processAuthenticationFailure(process) && login !== ""
+			? invocation.stdin === undefined
+				? ` ${login}, then retry the read after confirming authentication.`
+				: ` ${login}. Authentication recovery does not establish whether the mutation occurred.`
+			: "";
 	return `${reason}: ${command}${stdin}${diagnostic}.${guidance}`;
 }
 
@@ -168,6 +184,11 @@ function boundedProcessOutput(value: string): string {
 	}`;
 }
 
+function suppressedProcessOutput(value: string): string {
+	if (value === "") return "";
+	return `[suppressed ${Buffer.byteLength(value, "utf8")} bytes; sha256 ${createHash("sha256").update(value, "utf8").digest("hex")}]`;
+}
+
 function authenticationFailure(output: string, stdin: string | undefined): boolean {
 	return FORGE_AUTH_FAILURE_PATTERNS.some((pattern) => {
 		const match = output.match(pattern)?.[0];
@@ -177,8 +198,16 @@ function authenticationFailure(output: string, stdin: string | undefined): boole
 
 function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeInvocationDiagnostic {
 	const secrets = redactionValues(invocation.stdin);
-	const stdout = result === undefined ? "" : redactProcessOutput(result.stdout, secrets);
-	const stderr = result === undefined ? "" : redactProcessOutput(result.stderr, secrets);
+	const rawStdout = result === undefined ? "" : redactProcessOutput(result.stdout, secrets);
+	const rawStderr = result === undefined ? "" : redactProcessOutput(result.stderr, secrets);
+	const stdout =
+		invocation.stdin === undefined
+			? boundedProcessOutput(controlSafeText(rawStdout))
+			: suppressedProcessOutput(rawStdout);
+	const stderr =
+		invocation.stdin === undefined
+			? boundedProcessOutput(controlSafeText(rawStderr))
+			: suppressedProcessOutput(rawStderr);
 	return {
 		command: controlSafeText(invocation.command),
 		args: invocation.args.map(controlSafeText),
@@ -196,9 +225,29 @@ function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeI
 			: {
 					process: {
 						exitCode: result.code,
-						stdout: boundedProcessOutput(controlSafeText(stdout)),
-						stderr: boundedProcessOutput(controlSafeText(stderr)),
-						authenticationFailure: authenticationFailure(`${stdout}\n${stderr}`, invocation.stdin),
+						stdout,
+						stderr,
+						...(result.spawnError === undefined
+							? {}
+							: {
+									spawnError: {
+										message: boundedProcessOutput(controlSafeText(result.spawnError.message)),
+										...(result.spawnError.code === undefined
+											? {}
+											: { code: controlSafeText(result.spawnError.code) }),
+									},
+								}),
+						...(result.stdinError === undefined
+							? {}
+							: {
+									stdinError: {
+										message: boundedProcessOutput(controlSafeText(result.stdinError.message)),
+										...(result.stdinError.code === undefined
+											? {}
+											: { code: controlSafeText(result.stdinError.code) }),
+									},
+								}),
+						authenticationFailure: authenticationFailure(`${rawStdout}\n${rawStderr}`, invocation.stdin),
 					},
 				}),
 	};

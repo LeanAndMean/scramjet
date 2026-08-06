@@ -13,6 +13,7 @@ import type {
 } from "./types.js";
 
 const FIELD_CHUNK_BYTES = 512;
+const COMPACT_RECORD_MAX_BYTES = 2048;
 
 export interface ForgeFieldSpan {
 	line: number;
@@ -59,15 +60,68 @@ function compareText(left: string, right: string): number {
 }
 
 function escapeAttribute(value: string | number | boolean): string {
-	return String(value)
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&apos;")
-		.replaceAll("\t", "&#9;")
-		.replaceAll("\r", "&#13;")
-		.replaceAll("\n", "&#10;");
+	const text = String(value);
+	let output = "";
+	for (let index = 0; index < text.length; index++) {
+		const codeUnit = text.charCodeAt(index);
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const next = text.charCodeAt(index + 1);
+			if (next >= 0xdc00 && next <= 0xdfff) {
+				output += text.slice(index, index + 2);
+				index++;
+				continue;
+			}
+			throw new Error("Forge attribute contained an unsupported XML code unit");
+		}
+		if (
+			(codeUnit < 0x20 && codeUnit !== 0x09 && codeUnit !== 0x0a && codeUnit !== 0x0d) ||
+			codeUnit === 0xfffe ||
+			codeUnit === 0xffff ||
+			(codeUnit >= 0xdc00 && codeUnit <= 0xdfff)
+		) {
+			throw new Error("Forge attribute contained an unsupported XML code unit");
+		}
+		if (
+			(codeUnit >= 0x7f && codeUnit <= 0x9f) ||
+			codeUnit === 0x061c ||
+			codeUnit === 0x200e ||
+			codeUnit === 0x200f ||
+			(codeUnit >= 0x202a && codeUnit <= 0x202e) ||
+			(codeUnit >= 0x2066 && codeUnit <= 0x2069)
+		) {
+			output += `&#x${codeUnit.toString(16).toUpperCase().padStart(4, "0")};`;
+			continue;
+		}
+		switch (codeUnit) {
+			case 0x26:
+				output += "&amp;";
+				break;
+			case 0x3c:
+				output += "&lt;";
+				break;
+			case 0x3e:
+				output += "&gt;";
+				break;
+			case 0x22:
+				output += "&quot;";
+				break;
+			case 0x27:
+				output += "&apos;";
+				break;
+			case 0x09:
+				output += "&#9;";
+				break;
+			case 0x0d:
+				output += "&#13;";
+				break;
+			case 0x0a:
+				output += "&#10;";
+				break;
+			default:
+				output += text[index];
+		}
+	}
+	return output;
 }
 
 function attributes(values: Array<[string, string | number | boolean | null | undefined]>): string {
@@ -77,11 +131,48 @@ function attributes(values: Array<[string, string | number | boolean | null | un
 		.join("");
 }
 
-function actorAttributes(actor: ForgeActor): Array<[string, string | null]> {
+function actorAttributes(actor: ForgeActor, prefix = ""): Array<[string, string | null]> {
+	if (prefix === "author-") {
+		return [
+			["author", actor.login],
+			["author-kind", actor.kind === "user" ? null : actor.kind],
+		];
+	}
 	return [
-		["login", actor.login],
-		["kind", actor.kind],
+		[`${prefix}login`, actor.login],
+		[`${prefix}kind`, actor.kind],
 	];
+}
+
+function attributeSafe(value: string | number | boolean | null): boolean {
+	if (value === null) return true;
+	const text = String(value);
+	for (let index = 0; index < text.length; index++) {
+		const codeUnit = text.charCodeAt(index);
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const next = text.charCodeAt(index + 1);
+			if (next >= 0xdc00 && next <= 0xdfff) {
+				index++;
+				continue;
+			}
+			return false;
+		}
+		if (
+			(codeUnit < 0x20 && codeUnit !== 0x09 && codeUnit !== 0x0a && codeUnit !== 0x0d) ||
+			codeUnit === 0xfffe ||
+			codeUnit === 0xffff ||
+			(codeUnit >= 0xdc00 && codeUnit <= 0xdfff)
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function compactRecord(name: string, values: Array<[string, string | number | boolean | null]>): string | null {
+	if (!values.every(([, value]) => attributeSafe(value))) return null;
+	const line = `<${name}${attributes(values)}/>`;
+	return Buffer.byteLength(line, "utf8") <= COMPACT_RECORD_MAX_BYTES ? line : null;
 }
 
 function escapeCdata(value: string): string {
@@ -230,11 +321,6 @@ function targetKey(target: ForgeMutationTarget): string {
 	return target.kind === "artifact" ? "artifact" : `comment:${target.id}`;
 }
 
-function targetsEqual(left: ForgeMutationTarget, right: ForgeMutationTarget): boolean {
-	if (left.kind === "artifact") return right.kind === "artifact";
-	return right.kind === "comment" && left.id === right.id;
-}
-
 export function renderForgeDocument(repository: ForgeRepository, artifact: ForgeArtifact): RenderedForgeDocument {
 	const lines: string[] = [];
 	const displayLines: string[] = [];
@@ -302,46 +388,56 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			["state", artifact.state],
 			["created-at", artifact.createdAt],
 			["updated-at", artifact.updatedAt],
+			...actorAttributes(artifact.author, "author-"),
 		])}>`,
 	);
-	add(`    <author${attributes(actorAttributes(artifact.author))}/>`);
-	add("    <labels>");
-	for (const label of [...artifact.labels].sort(compareText)) addReadonly("      ", "label", label);
-	add("    </labels>");
-	add("    <assignees>");
-	for (const assignee of [...artifact.assignees].sort((left, right) =>
-		compareText(left.login ?? "", right.login ?? ""),
-	)) {
-		add(`      <assignee${attributes(actorAttributes(assignee))}/>`);
+	if (artifact.labels.length === 0) add("    <labels/>");
+	else {
+		add("    <labels>");
+		for (const label of [...artifact.labels].sort(compareText)) addReadonly("      ", "label", label);
+		add("    </labels>");
 	}
-	add("    </assignees>");
+	if (artifact.assignees.length === 0) add("    <assignees/>");
+	else {
+		add("    <assignees>");
+		for (const assignee of [...artifact.assignees].sort((left, right) =>
+			compareText(left.login ?? "", right.login ?? ""),
+		)) {
+			add(`      <assignee${attributes(actorAttributes(assignee))}/>`);
+		}
+		add("    </assignees>");
+	}
 	add("  </metadata>");
 
 	if (artifact.kind === "issue") {
-		add(`  <relationships${attributes([["capability", artifact.relationships.capability]])}>`);
-		for (const item of [...artifact.relationships.items].sort((left, right) => {
-			const relation = compareText(left.relation, right.relation);
-			return (
-				relation ||
-				compareText(left.repository.projectPath, right.repository.projectPath) ||
-				left.number - right.number ||
-				compareText(left.source, right.source)
-			);
-		})) {
-			add(
-				`    <issue${attributes([
-					["relation", item.relation],
-					["source", item.source],
-					["repository", item.repository.projectPath],
-					["number", item.number],
-					["state", item.state],
-					["url", item.url],
-				])}>`,
-			);
-			addReadonly("      ", "title", item.title);
-			add("    </issue>");
+		if (artifact.relationships.items.length === 0) {
+			add(`  <relationships${attributes([["capability", artifact.relationships.capability]])}/>`);
+		} else {
+			add(`  <relationships${attributes([["capability", artifact.relationships.capability]])}>`);
+			for (const item of [...artifact.relationships.items].sort((left, right) => {
+				const relation = compareText(left.relation, right.relation);
+				return (
+					relation ||
+					compareText(left.repository.projectPath, right.repository.projectPath) ||
+					left.number - right.number ||
+					compareText(left.source, right.source)
+				);
+			})) {
+				add(
+					`    <issue${attributes([
+						["relation", item.relation],
+						["source", item.source],
+						["repository", item.repository.projectPath],
+						["number", item.number],
+						["state", item.state],
+						["url", item.url],
+					])}>`,
+				);
+				addReadonly("      ", "title", item.title);
+				add("    </issue>");
+			}
+			add("  </relationships>");
 		}
-		add("  </relationships>");
 	} else {
 		add(
 			`  <readiness${attributes([
@@ -350,9 +446,9 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 				["review-decision-capability", artifact.readiness.reviewDecision.capability],
 				[
 					"review-decision",
-					artifact.readiness.reviewDecision.capability === "supported"
-						? artifact.readiness.reviewDecision.value
-						: null,
+					artifact.readiness.reviewDecision.capability === "unsupported"
+						? null
+						: artifact.readiness.reviewDecision.value,
 				],
 				["head", artifact.readiness.head],
 				["base", artifact.readiness.base],
@@ -362,7 +458,8 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 
 	addField("  ", "title", artifact.title, { kind: "artifact" });
 	addField("  ", "body", artifact.body, { kind: "artifact" });
-	add("  <comments>");
+	if (artifact.comments.length === 0) add("  <comments/>");
+	else add("  <comments>");
 	for (const comment of [...artifact.comments].sort(
 		(left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id),
 	)) {
@@ -371,14 +468,14 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 				["id", comment.id],
 				["url", comment.url],
 				["created-at", comment.createdAt],
-				["updated-at", comment.updatedAt],
+				["updated-at", comment.updatedAt === comment.createdAt ? null : comment.updatedAt],
+				...actorAttributes(comment.author, "author-"),
 			])}>`,
 		);
-		add(`      <author${attributes(actorAttributes(comment.author))}/>`);
 		addField("      ", "body", comment.body, { kind: "comment", id: comment.id });
 		add("    </comment>");
 	}
-	add("  </comments>");
+	if (artifact.comments.length > 0) add("  </comments>");
 	const coreLines = { start: 0, end: lines.length };
 	const include: ForgePrSection[] = [];
 
@@ -387,16 +484,26 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			include.push("files");
 			add("  <files>");
 			for (const file of [...artifact.sections.files].sort((left, right) => compareText(left.path, right.path))) {
-				add(
-					`    <file${attributes([
-						["status", file.status],
-						["additions", file.additions],
-						["deletions", file.deletions],
-					])}>`,
-				);
-				addReadonly("      ", "path", file.path);
-				if (file.previousPath !== null) addReadonly("      ", "previous-path", file.previousPath);
-				add("    </file>");
+				const compact = compactRecord("file", [
+					["path", file.path],
+					["previous-path", file.previousPath],
+					["status", file.status],
+					["additions", file.additions],
+					["deletions", file.deletions],
+				]);
+				if (compact !== null) add(compact, controlSafeText(compact));
+				else {
+					add(
+						`    <file${attributes([
+							["additions", file.additions],
+							["deletions", file.deletions],
+						])}>`,
+					);
+					addReadonly("      ", "path", file.path);
+					if (file.previousPath !== null) addReadonly("      ", "previous-path", file.previousPath);
+					addReadonly("      ", "status", file.status);
+					add("    </file>");
+				}
 			}
 			add("  </files>");
 		}
@@ -406,16 +513,23 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			for (const commit of [...artifact.sections.commits].sort(
 				(left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.sha, right.sha),
 			)) {
-				add(
-					`    <commit${attributes([
-						["sha", commit.sha],
-						["created-at", commit.createdAt],
-						["url", commit.url],
-					])}>`,
-				);
-				addReadonly("      ", "title", commit.title);
-				if (commit.author !== null) addReadonly("      ", "author", commit.author);
-				add("    </commit>");
+				const compact = compactRecord("commit", [
+					["sha", commit.sha],
+					["title", commit.title],
+					["author", commit.author],
+					["created-at", commit.createdAt],
+					["url", commit.url],
+				]);
+				if (compact !== null) add(compact, controlSafeText(compact));
+				else {
+					add("    <commit>");
+					addReadonly("      ", "sha", commit.sha);
+					addReadonly("      ", "title", commit.title);
+					if (commit.author !== null) addReadonly("      ", "author", commit.author);
+					addReadonly("      ", "created-at", commit.createdAt);
+					if (commit.url !== null) addReadonly("      ", "url", commit.url);
+					add("    </commit>");
+				}
 			}
 			add("  </commits>");
 		}
@@ -425,16 +539,23 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			for (const check of [...artifact.sections.checks].sort(
 				(left, right) => compareText(left.name, right.name) || compareText(left.id, right.id),
 			)) {
-				add(
-					`    <check${attributes([
-						["id", check.id],
-						["status", check.status],
-						["conclusion", check.conclusion],
-						["url", check.url],
-					])}>`,
-				);
-				addReadonly("      ", "name", check.name);
-				add("    </check>");
+				const compact = compactRecord("check", [
+					["id", check.id],
+					["name", check.name],
+					["status", check.status],
+					["conclusion", check.conclusion],
+					["url", check.url],
+				]);
+				if (compact !== null) add(compact, controlSafeText(compact));
+				else {
+					add("    <check>");
+					addReadonly("      ", "id", check.id);
+					addReadonly("      ", "name", check.name);
+					addReadonly("      ", "status", check.status);
+					if (check.conclusion !== null) addReadonly("      ", "conclusion", check.conclusion);
+					if (check.url !== null) addReadonly("      ", "url", check.url);
+					add("    </check>");
+				}
 			}
 			add("  </checks>");
 		}
@@ -452,19 +573,6 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 		fieldSpans,
 		coreLines,
 	};
-}
-
-export function renderForgeTargetPostimage(rendered: RenderedForgeDocument, target: ForgeMutationTarget): string {
-	const lines = new Set<number>();
-	for (const span of rendered.fieldSpans) {
-		if (!targetsEqual(span.target, target)) continue;
-		lines.add(span.line);
-	}
-	if (lines.size === 0) throw new Error("Verified forge mutation target was missing from the fresh postimage");
-	return [...lines]
-		.sort((left, right) => left - right)
-		.map((line) => rendered.lines[line])
-		.join("\n");
 }
 
 function mergeRanges(ranges: ForgeCoverageRange[]): ForgeCoverageRange[] {

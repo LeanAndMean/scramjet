@@ -96,6 +96,24 @@ describe("runForgeCommand", () => {
 		await expect(runForgeCommand(exec, invocation)).rejects.toMatchObject({ name: "ForgeCommandError", kind });
 	});
 
+	it.each([
+		["spawn", result({ spawnError: { message: "permission \u202Edenied", code: "EACCES" } }), "spawnError", "EACCES"],
+		["stdin", result({ stdinError: { message: "write \u009Bclosed", code: "EPIPE" } }), "stdinError", "EPIPE"],
+	] as const)("retains bounded control-safe %s causes", async (_name, reply, field, code) => {
+		let caught: unknown;
+		try {
+			await runForgeCommand(async () => reply, { ...invocation, stdin: "private body" });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(ForgeCommandError);
+		const process = (caught as ForgeCommandError).invocation.process;
+		expect(process?.[field]).toMatchObject({ code });
+		expect(process?.[field]?.message).not.toMatch(/[\u009B\u202E]/u);
+		expect(process?.[field]?.message).toContain("\\u");
+		expect(JSON.stringify(process)).not.toContain("private body");
+	});
+
 	it("distinguishes cancellation from timeout", async () => {
 		const controller = new AbortController();
 		controller.abort();
@@ -135,16 +153,33 @@ describe("runForgeCommand", () => {
 		}
 		expect(caught).toBeInstanceOf(ForgeCommandError);
 		const error = caught as ForgeCommandError;
-		expect(error.authenticationFailure).toBe(true);
+		expect(error.invocation.process?.authenticationFailure).toBe(true);
 		expect(error.message).toContain("exit code 1");
-		expect(error.message).toContain("[redacted]");
-		expect(error.message).toContain("\\u001b");
+		expect(error.message).toContain("[suppressed 47 bytes; sha256");
 		expect(error.message).toContain("gh auth login --hostname github.com");
 		expect(error.message).not.toContain(stdin);
 		expect(error.message).not.toContain(body);
 		expect(error.message).not.toContain("private title");
-		expect(error.invocation.process?.stderr).toContain("[truncated]");
-		expect(Buffer.byteLength(error.invocation.process?.stderr ?? "", "utf8")).toBeLessThan(4200);
+		expect(error.invocation.process?.stdout).toMatch(/^\[suppressed \d+ bytes; sha256 [a-f0-9]{64}\]$/);
+		expect(error.invocation.process?.stderr).toMatch(/^\[suppressed \d+ bytes; sha256 [a-f0-9]{64}\]$/);
+		expect(JSON.stringify(error.invocation)).not.toContain("private mutation body");
+	});
+
+	it("fingerprints GraphQL query arguments in exposed diagnostics", async () => {
+		const query = `query VeryLarge { ${"field ".repeat(1000)} }`;
+		let caught: unknown;
+		try {
+			await runForgeCommand(async () => result({ code: 1, stderr: "failed" }), {
+				...invocation,
+				args: ["api", "graphql", "-f", `query=${query}`],
+			});
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeInstanceOf(ForgeCommandError);
+		const message = (caught as ForgeCommandError).message;
+		expect(message).toContain("query=<sha256:");
+		expect(message).not.toContain("query VeryLarge");
 	});
 
 	it("escapes terminal control characters in exposed diagnostics", async () => {
@@ -177,7 +212,7 @@ describe("runForgeCommand", () => {
 		}
 		expect(caught).toBeInstanceOf(ForgeCommandError);
 		const error = caught as ForgeCommandError;
-		expect(error.authenticationFailure).toBe(false);
+		expect(error.invocation.process?.authenticationFailure).toBe(false);
 		expect(error.message).not.toContain("auth login");
 	});
 

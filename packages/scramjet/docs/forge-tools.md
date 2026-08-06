@@ -21,7 +21,7 @@ Every call resolves the current Git `origin` and supports canonical public `gith
 
 Interactive session startup probes only the CLI selected by the current origin. It warns for a conclusively missing executable or authentication failure. Headless sessions, unsupported repositories, unrelated CLIs, and transient failures remain silent. Unexpected detached probe or notification defects are journaled under the `forge` log category without blocking startup.
 
-The tools invoke the selected CLI without a shell. Mutation JSON is sent through exact UTF-8 stdin; user content is not placed in argv or logs. Process failures retain bounded, control-safe stdout/stderr and exit status for recovery, redact the exact stdin and its JSON string values, and give tool-time authentication failures the same provider-specific login guidance as startup. Authentication text that also occurs within mutation stdin cannot establish conclusive rejection, even when the CLI echoes only a fragment of that content.
+The tools invoke the selected CLI without a shell. Mutation JSON is sent through exact UTF-8 stdin; user content is not placed in argv or logs. Read failures retain bounded, control-safe stdout/stderr. Stdin-bearing mutation diagnostics retain only exit status, stream byte counts and hashes, stdin size/hash, and process facts—never raw process output. Large GraphQL arguments are fingerprinted in displayed diagnostics. Authentication text provides recovery guidance but never proves that a dispatched mutation was rejected.
 
 ## Aggregate reads
 
@@ -38,7 +38,7 @@ Each call fetches and validates the complete requested remote data before render
 
 ### XML document
 
-Reads return deterministic nested XML. Remote content is untrusted data: metadata is attribute-escaped, ordinary LF is represented by the XML's physical line break, LF-only fields use CDATA, CR-bearing fields use escaped XML text with explicit `&#13;`, unsupported XML code units receive markers, and oversized physical lines alone use Unicode-safe bridge chunks. Mutable title, body, and comment-body elements carry `mutable="true"`; metadata and relationship elements are read-only. Expanded TUI output uses a persisted control-safe human projection rather than exposing CDATA and bridge transport syntax; canonical XML remains the model-facing and snapshot-authorizing representation.
+Reads return deterministic nested XML. Remote content is untrusted data: metadata is attribute-escaped, ordinary LF is represented by the XML's physical line break, LF-only fields use CDATA, CR-bearing fields use escaped XML text with explicit `&#13;`, unsupported XML code units receive markers, and oversized physical lines alone use Unicode-safe bridge chunks. Mutable title, body, and comment-body elements carry `mutable="true"`; metadata and relationship elements are read-only. Default user authors omit `author-kind="user"`; other author kinds are explicit. Equal comment creation/update timestamps omit the redundant update attribute. Empty collections self-close, and ordinary file/commit/check records use compact escaped attributes with deterministic expanded fallback for unsafe or oversized values. Expanded TUI output uses a persisted control-safe human projection rather than exposing transport syntax.
 
 Stable document order is:
 
@@ -63,7 +63,7 @@ create_issue({ title, body })
 create_pr({ title, body, head, base, draft? })
 ```
 
-Artifact creation does not require a prior read because no target exists. `create_pr` requires explicit existing head and base branch names and never creates, checks out, commits, or pushes Git state. Both tools use the mutation response's canonical identity, refetch that exact artifact, and verify its supplied content before returning the canonical number and URL. GitHub draft state is transported separately. For a GitLab draft merge request, the exact approved title must already include a provider-valid draft prefix; the tool never adds or normalizes one.
+Artifact creation does not require a prior read because no target exists. `create_pr` requires explicit existing head and base branch names and never creates, checks out, commits, or pushes Git state. Both tools use the mutation response's canonical identity, refetch that exact artifact, and verify its supplied content before returning only the canonical URL as model-visible text; structured result details retain the verified identity. GitHub draft state is transported separately. For a GitLab draft merge request, the exact approved title must already include a provider-valid draft prefix; the tool never adds or normalizes one.
 
 Commands should preserve their own approval gates. The tools verify transport, identity, and remote content; they do not decide whether publication was authorized.
 
@@ -98,7 +98,7 @@ An artifact target may edit title and body in one call. A comment target accepts
 
 Every `oldText` must be non-empty, exact, unique in its original decoded field, and non-overlapping with sibling replacements. Replacements are all computed against the same refetched original, not incrementally. No whitespace, Unicode, quote, dash, line-ending, XML-escaping, or fuzzy normalization is applied. No-op replacements are rejected.
 
-Each edited field must have complete prior-read coverage. Partial ranges can combine only when their trusted receipts share one canonical snapshot. GitLab pull-request title edits must preserve the existing prefix-derived draft state; draft-state changes remain outside the edit surface. A successful edit returns the requested deltas plus a bounded verified fresh view of the edited artifact title/body or comment body, including unrelated content preserved by the queue-time refetch. This postimage is mutation evidence only and does not establish a new prior read.
+Each edited field must have complete prior-read coverage. Partial ranges can combine only when their trusted receipts share one canonical snapshot. GitLab pull-request title edits must preserve the existing prefix-derived draft state; draft-state changes remain outside the edit surface. A successful edit returns only the canonical target URL as model-visible text; structured details retain identity, target, changed field names, replacement count, and verification status. The exact request already persists in the tool call. Reread when later work needs fresh remote content.
 
 ## Evidence and compaction
 
@@ -117,7 +117,13 @@ Receipts are not consumed by successful mutations. Created artifacts and comment
 
 Every mutation resolves the current repository before remote side effects and validates evidence when the operation requires it. Existing-object changes then enter a process-local queue for the exact object, refetch inside the queue, compute the change, perform exactly one mutation request, refetch, and byte-verify the mutable postimage. Artifact creation has no pre-existing object key and is not queued; it still correlates the mutation response identity and verifies the exact created content. Distinct existing-object keys may proceed concurrently. There is no cross-process lock or remote compare-and-swap guarantee, so an external writer can still race an existing-object operation.
 
-Definite preflight failures, missing executables, and process diagnostics that conclusively prove rejection (currently authentication rejection) are reported directly. Once a mutation process starts, a generic nonzero exit, timeout, cancellation, stdin failure, malformed success response, lost mutation identity, or post-write mismatch may mean the remote mutation succeeded. These failures say so, direct the model to reread, and never retry or roll back automatically.
+Expected post-validation forge execution failures are real error tool results with model-hidden `scramjet:forge-failure@1` details: stable class, operation, phase, write certainty, and safe diagnostics. Harness argument-schema failures occur before tool execution and use the runtime's ordinary actionable validation error. `FORGE_READ_FAILED` and `FORGE_PREFLIGHT_FAILED` prove no write was attempted. `FORGE_WRITE_REJECTED` is reserved for conclusive no-dispatch evidence such as a missing executable. `FORGE_WRITE_AMBIGUOUS` means the mutation may have succeeded; it prohibits retry and directs the model to reconcile through a fresh forge read or, when `bash` is available, deliberate read-only `gh`/`glab` inspection. No failure automatically invokes a fallback, and mutation failures never recommend a CLI mutation substitute.
+
+Unknown provider values remain visible when they are descriptive. Decision-bearing unknowns normalize to explicit non-favorable states: they never become approved, review-clear, mergeable, completed, or successful. Identity, ownership, pagination, and requested-section completeness remain strict.
+
+## Token-efficiency contract
+
+Model-visible read output is compared with compact, semantically equivalent provider-CLI JSON containing the same complete data and pagination. Representative line-heavy issue and metadata-heavy PR corpora must match or beat that baseline under the active `o200k_base` measurement; deterministic byte comparisons remain in CI as a tokenizer-free proxy. Mutation success text is exactly the canonical URL, matching a provider command filtered to identity. Tool metadata and failure output have independent bounds because they have different recurrence and recovery costs.
 
 ## Deliberate boundaries
 

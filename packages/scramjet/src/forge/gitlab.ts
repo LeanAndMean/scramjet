@@ -66,7 +66,7 @@ interface GitlabPrCore extends GitlabCore {
 	reviewDecision: { capability: "unsupported" };
 	head: string;
 	base: string;
-	changedFiles: number | "pending" | "overflow";
+	changedFiles: number | null;
 }
 
 interface ParsedHierarchyPage {
@@ -256,15 +256,14 @@ function parseAssignees(value: unknown, label: string): ForgeActor[] {
 	return assignees;
 }
 
-function parseChangedFiles(value: unknown): number | "pending" | "overflow" {
-	if (value === null || value === "") return "pending";
+function parseChangedFiles(value: unknown): number | null {
+	if (value === null || value === "") return null;
 	const count = string(value, "merge request");
 	if (/^\d+$/.test(count)) {
 		const number = Number(count);
 		if (Number.isSafeInteger(number)) return number;
 	}
-	if (/^[1-9]\d*\+$/.test(count)) return "overflow";
-	return malformed("merge request");
+	return null;
 }
 
 function parseCore(
@@ -373,8 +372,9 @@ async function readComments(
 	) {
 		return malformed("notes");
 	}
+	const excludedTypes = new Set(["DiscussionNote", "DiffNote"]);
 	return notes
-		.filter((note) => !note.system && note.position === null && (note.type === null || note.type === "Note"))
+		.filter((note) => !note.system && note.position === null && (note.type === null || !excludedTypes.has(note.type)))
 		.map((note) => note.comment);
 }
 
@@ -595,13 +595,23 @@ function parseCheck(value: unknown, expectedProjectId: number): ForgePrCheck {
 	const id = decimalId(pipeline.id, "checks");
 	if (positiveInteger(pipeline.project_id, "checks") !== expectedProjectId) return malformed("checks");
 	const name = nullableString(pipeline.name, "checks");
-	const status = string(pipeline.status, "checks").toLowerCase();
+	const rawStatus = string(pipeline.status, "checks").toLowerCase();
 	const terminal = new Set(["success", "failed", "canceled", "cancelled", "skipped"]);
+	const active = new Set([
+		"created",
+		"waiting_for_resource",
+		"preparing",
+		"pending",
+		"running",
+		"scheduled",
+		"manual",
+	]);
+	const status = terminal.has(rawStatus) || active.has(rawStatus) ? rawStatus : "unknown";
 	return {
 		id,
 		name: name === null || name.length === 0 ? `pipeline #${id}` : name,
 		status,
-		conclusion: terminal.has(status) ? status : null,
+		conclusion: terminal.has(rawStatus) ? rawStatus : null,
 		url: nullableString(pipeline.web_url, "checks"),
 	};
 }

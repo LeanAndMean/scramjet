@@ -388,7 +388,7 @@ describe("createGitlabAdapter reads", () => {
 		expect(exec).toHaveBeenCalledTimes(2);
 	});
 
-	it.each([null, "", "1000+"])(
+	it.each([null, "", "1000+", "future"])(
 		"allows incomplete diff metadata in core reads but rejects a requested files section (%s)",
 		async (changesCount) => {
 			const pr = structuredClone(fixture("gitlab-pr.json")) as any;
@@ -406,6 +406,27 @@ describe("createGitlabAdapter reads", () => {
 			expect(exec).toHaveBeenCalledTimes(2);
 		},
 	);
+
+	it("preserves future top-level notes and keeps future pipeline states non-favorable", async () => {
+		const notes = structuredClone(fixture("gitlab-issue-notes.json")) as any[];
+		notes.find((note) => note.id === 404).type = "FutureNote";
+		const artifact = await createGitlabAdapter(readExec({ issueNotes: notes }), "/repo").readArtifact(
+			repository,
+			"issue",
+			7,
+			[],
+		);
+		expect(artifact.comments).toContainEqual(expect.objectContaining({ id: "404", body: "review discussion" }));
+
+		const pipelines = structuredClone(fixture("gitlab-pr-pipelines.json")) as any[];
+		pipelines[0].status = "future_status";
+		const pr = await createGitlabAdapter(readExec({ pipelines }), "/repo").readArtifact(repository, "pr", 12, [
+			"checks",
+		]);
+		expect(pr.kind).toBe("pr");
+		if (pr.kind !== "pr") throw new Error("Expected PR");
+		expect(pr.sections.checks?.[0]).toMatchObject({ status: "unknown", conclusion: null });
+	});
 
 	it.each([
 		[

@@ -13,7 +13,7 @@ import {
 } from "@leanandmean/coding-agent";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
-import { ForgeCommandError, runForgeCommand } from "../src/forge/client.js";
+import { ForgeCommandError, runForgeCommand, UnsupportedForgeOriginError } from "../src/forge/client.js";
 import { renderForgeDocument, sliceForgeDocument } from "../src/forge/document.js";
 import { registerForgeTools } from "../src/forge/tools.js";
 import type { ForgeAdapter, ForgeArtifact, ForgeIssue, ForgePullRequest, ForgeRepository } from "../src/forge/types.js";
@@ -241,6 +241,17 @@ function theme() {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+async function expectForgeFailure(promise: Promise<any>, failureClass: string, message?: RegExp) {
+	const result = await promise;
+	expect(result).toMatchObject({
+		isError: true,
+		details: { schema: "scramjet:forge-failure@1", class: failureClass },
+	});
+	if (message) expect(result.content[0].text).toMatch(message);
+	expect(Buffer.byteLength(result.content[0].text, "utf8")).toBeLessThanOrEqual(1024);
+	return result;
+}
+
 describe("registerForgeTools read contracts", () => {
 	it("registers independently named, strict model-callable forge tools", () => {
 		const {
@@ -264,6 +275,13 @@ describe("registerForgeTools read contracts", () => {
 			"edit_issue",
 			"edit_pr",
 		]);
+		const providerMetadata = JSON.stringify(
+			bag.tools.map(({ name, description, parameters }) => ({ name, description, parameters })),
+		);
+		const promptMetadata = JSON.stringify(
+			bag.tools.map(({ promptSnippet, promptGuidelines }) => ({ promptSnippet, promptGuidelines })),
+		);
+		expect(Buffer.byteLength(providerMetadata + promptMetadata, "utf8")).toBeLessThanOrEqual(6400);
 		for (const tool of [issueTool, prTool]) {
 			expect(tool.activation).toBeUndefined();
 			expect(tool.promptSnippet).toEqual(expect.any(String));
@@ -340,7 +358,7 @@ describe("registerForgeTools read contracts", () => {
 					edits: [{ field: "state", oldText: "open", newText: "closed" }],
 				}),
 			).toBe(false);
-			expect(JSON.stringify(tool.parameters)).toContain("comment targets accept body only");
+			expect(tool.promptGuidelines?.join(" ")).toContain("target one object");
 		}
 	});
 
@@ -431,7 +449,7 @@ describe("registerForgeTools read contracts", () => {
 				toolContext(),
 			),
 		).resolves.toMatchObject({ details: { snapshot: first.details.snapshot } });
-		await expect(
+		await expectForgeFailure(
 			tool.execute(
 				"pr-range-3",
 				{ number: 12, offset: 2, snapshot: first.details.snapshot },
@@ -439,7 +457,9 @@ describe("registerForgeTools read contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/snapshot changed/i);
+			"FORGE_READ_FAILED",
+			/snapshot changed/i,
+		);
 	});
 
 	it("returns exact range receipts and requires a stable snapshot for continuation", async () => {
@@ -478,7 +498,7 @@ describe("registerForgeTools read contracts", () => {
 		expect(readArtifact).toHaveBeenCalledTimes(2);
 
 		current = issue({ ...current, title: "Changed externally" });
-		await expect(
+		await expectForgeFailure(
 			issueTool.execute(
 				"range-3",
 				{ number: 7, offset: bodyLine + 5, snapshot: first.details.snapshot },
@@ -486,7 +506,9 @@ describe("registerForgeTools read contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/snapshot changed/i);
+			"FORGE_READ_FAILED",
+			/snapshot changed/i,
+		);
 		expect(readArtifact).toHaveBeenCalledTimes(3);
 	});
 
@@ -496,7 +518,8 @@ describe("registerForgeTools read contracts", () => {
 		const agentDir = join(root, "agent");
 		mkdirSync(cwd);
 		const tools: ToolDefinition[] = [];
-		const adapter = adapterFor(async () => issue());
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => issue());
+		const adapter = adapterFor(readArtifact);
 		const pi = {
 			registerTool(tool: ToolDefinition) {
 				tools.push(tool);
@@ -551,10 +574,85 @@ describe("registerForgeTools read contracts", () => {
 				artifact: { kind: "issue", number: 7 },
 				range: { offset: 1 },
 			});
+
+			readArtifact.mockRejectedValueOnce(
+				new ForgeCommandError("failed", {
+					command: "gh",
+					args: ["api", "repos/Acme/widget/issues/7"],
+					cwd,
+					process: { exitCode: 1, stdout: "", stderr: "HTTP 403 forbidden" },
+				}),
+			);
+			await session.invokeHarnessTool("read_issue", { number: 7 });
+			const failure = sessionManager
+				.getBranch()
+				.findLast(
+					(entry) =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolName === "read_issue",
+				);
+			if (failure?.type !== "message" || failure.message.role !== "toolResult") {
+				throw new Error("missing forge failure result");
+			}
+			expect(failure.message).toMatchObject({
+				isError: true,
+				details: {
+					schema: "scramjet:forge-failure@1",
+					class: "FORGE_READ_FAILED",
+					operation: "read_issue",
+					writeState: "not_attempted",
+				},
+			});
+			expect(failure.message.content[0]).toMatchObject({
+				type: "text",
+				text: expect.stringContaining("read-only gh"),
+			});
 		} finally {
 			session?.dispose();
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("retains diagnostic evidence when an unexpected message exceeds the model budget", async () => {
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => {
+			throw new TypeError("x".repeat(2000));
+		});
+		const { issueTool } = toolSetup(issue(), { readArtifact });
+		const result = await expectForgeFailure(
+			issueTool.execute("unexpected", { number: 7 }, undefined, undefined, toolContext()),
+			"FORGE_READ_FAILED",
+			/truncated 2000 bytes\/1 lines; sha256/i,
+		);
+		expect(result.details.trace).toContain("forge-tools.test.ts");
+
+		const multiline = vi.fn<ForgeAdapter["readArtifact"]>(async () => {
+			throw new TypeError(Array.from({ length: 100 }, (_, index) => `line ${index}`).join("\n"));
+		});
+		const multilineSetup = toolSetup(issue(), { readArtifact: multiline });
+		await expectForgeFailure(
+			multilineSetup.issueTool.execute("multiline", { number: 7 }, undefined, undefined, toolContext()),
+			"FORGE_READ_FAILED",
+			/truncated \d+ bytes\/100 lines; sha256/i,
+		);
+	});
+
+	it("classifies an unsupported origin as repository failure without selecting a CLI fallback", async () => {
+		const bag = recordingPi();
+		registerForgeTools(bag.pi, {
+			resolveRepository: async () => {
+				throw new UnsupportedForgeOriginError();
+			},
+		});
+		const tool = bag.tools.find((candidate) => candidate.name === "read_issue");
+		const result = await expectForgeFailure(
+			tool.execute("unsupported", { number: 7 }, undefined, undefined, toolContext()),
+			"FORGE_READ_FAILED",
+			/supported public GitHub or GitLab/i,
+		);
+		expect(result.details.phase).toBe("repository");
+		expect(result.content[0].text).not.toContain("read-only gh");
+		expect(result.content[0].text).not.toContain("read-only glab");
 	});
 
 	it("renders compactly from persisted data without performing remote work", async () => {
@@ -660,8 +758,11 @@ describe("registerForgeTools creation contracts", () => {
 			["issue", 41, []],
 			["pr", 42, []],
 		]);
-		expect(issueResult.content[0].text).toContain('<forge-artifact version="1" forge="github"');
-		expect(prResult.content[0].text).toContain('head="feature" base="main"');
+		expect(issueResult.content[0].text).toBe(createdIssue.url);
+		expect(prResult.content[0].text).toBe(createdPr.url);
+		expect(Buffer.byteLength(issueResult.content[0].text, "utf8")).toBeLessThanOrEqual(512);
+		expect(JSON.stringify(issueResult)).not.toContain("Issue body");
+		expect(JSON.stringify(prResult)).not.toContain("PR body");
 		expect(issueResult.details).toMatchObject({
 			schema: "scramjet:forge-mutation@1",
 			operation: "create_issue",
@@ -698,9 +799,9 @@ describe("registerForgeTools creation contracts", () => {
 			{ kind: "issue", number: 7, body: "New comment" },
 			undefined,
 		);
-		expect(result.content[0].text).toContain('"id":"202"');
-		expect(result.content[0].text).toContain('"body":"New comment"');
-		expect(result.content[0].text).not.toContain('<comment id="202"');
+		expect(result.content[0].text).toBe(current.comments.at(-1)?.url);
+		expect(JSON.stringify(result)).not.toContain("New comment");
+		expect(Buffer.byteLength(result.content[0].text, "utf8")).toBeLessThanOrEqual(512);
 		expect(result.details).toMatchObject({
 			operation: "add_issue_comment",
 			identity: { kind: "comment", id: "202" },
@@ -747,7 +848,7 @@ describe("registerForgeTools creation contracts", () => {
 		const addComment = vi.fn<ForgeAdapter["addComment"]>();
 		const { addIssueCommentTool } = toolSetup(original, { readArtifact, addComment });
 
-		await expect(
+		await expectForgeFailure(
 			addIssueCommentTool.execute(
 				"add",
 				{ number: 7, body: "New comment" },
@@ -755,7 +856,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(branch(fullReceipt(original))),
 			),
-		).rejects.toThrow(/complete prior read_issue/i);
+			"FORGE_PREFLIGHT_FAILED",
+			/complete prior read_issue/i,
+		);
 		expect(readArtifact).not.toHaveBeenCalled();
 		expect(addComment).not.toHaveBeenCalled();
 	});
@@ -779,7 +882,7 @@ describe("registerForgeTools creation contracts", () => {
 			const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => original);
 			const addComment = vi.fn<ForgeAdapter["addComment"]>();
 			const { addIssueCommentTool } = toolSetup(original, { readArtifact, addComment });
-			await expect(
+			await expectForgeFailure(
 				addIssueCommentTool.execute(
 					"add",
 					{ number: 7, body: "New comment" },
@@ -787,7 +890,9 @@ describe("registerForgeTools creation contracts", () => {
 					undefined,
 					toolContext(branch),
 				),
-			).rejects.toThrow(/complete prior read_issue/i);
+				"FORGE_PREFLIGHT_FAILED",
+				/complete prior read_issue/i,
+			);
 			expect(readArtifact).not.toHaveBeenCalled();
 			expect(addComment).not.toHaveBeenCalled();
 		}
@@ -798,7 +903,7 @@ describe("registerForgeTools creation contracts", () => {
 		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>();
 		const { createPrTool } = toolSetup(pullRequest(), { createArtifact, readArtifact }, gitlabRepository);
 
-		await expect(
+		await expectForgeFailure(
 			createPrTool.execute(
 				"create-pr",
 				{ title: "Draft: Release", body: "Body", head: "feature", base: "main" },
@@ -806,7 +911,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/cannot create a non-draft merge request/i);
+			"FORGE_PREFLIGHT_FAILED",
+			/cannot create a non-draft merge request/i,
+		);
 		expect(createArtifact).not.toHaveBeenCalled();
 		expect(readArtifact).not.toHaveBeenCalled();
 	});
@@ -816,7 +923,7 @@ describe("registerForgeTools creation contracts", () => {
 		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>();
 		const { createPrTool } = toolSetup(pullRequest(), { createArtifact, readArtifact }, gitlabRepository);
 
-		await expect(
+		await expectForgeFailure(
 			createPrTool.execute(
 				"create-pr",
 				{ title: "Release", body: "Body", head: "feature", base: "main", draft: true },
@@ -824,7 +931,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/exact approved title.*draft prefix/i);
+			"FORGE_PREFLIGHT_FAILED",
+			/exact approved title.*draft prefix/i,
+		);
 		expect(createArtifact).not.toHaveBeenCalled();
 		expect(readArtifact).not.toHaveBeenCalled();
 	});
@@ -835,7 +944,7 @@ describe("registerForgeTools creation contracts", () => {
 			throw failure;
 		});
 		const createSetup = toolSetup(issue(), { createArtifact });
-		await expect(
+		await expectForgeFailure(
 			createSetup.createIssueTool.execute(
 				"create",
 				{ title: "Created issue", body: "Body" },
@@ -843,7 +952,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/may have succeeded.*reread/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
 
 		const original = issue();
 		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => original);
@@ -852,7 +963,7 @@ describe("registerForgeTools creation contracts", () => {
 		});
 		const commentSetup = toolSetup(original, { readArtifact, addComment });
 		const branch = evidenceBranch([fullReceipt(original)], "read_issue", [{ id: "add", name: "add_issue_comment" }]);
-		await expect(
+		await expectForgeFailure(
 			commentSetup.addIssueCommentTool.execute(
 				"add",
 				{ number: 7, body: "Comment" },
@@ -860,7 +971,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(branch),
 			),
-		).rejects.toThrow(/may have succeeded.*reread/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
 		expect(addComment).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(1);
 	});
@@ -870,7 +983,7 @@ describe("registerForgeTools creation contracts", () => {
 			throw new ForgeCommandError(kind, { command: "gh", args: ["api"], cwd: "/repo" });
 		});
 		const { createIssueTool } = toolSetup(issue(), { createArtifact });
-		await expect(
+		await expectForgeFailure(
 			createIssueTool.execute(
 				"create",
 				{ title: "Created issue", body: "Body" },
@@ -878,7 +991,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/may have succeeded.*reread/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
 		expect(createArtifact).toHaveBeenCalledTimes(1);
 	});
 
@@ -895,12 +1010,12 @@ describe("registerForgeTools creation contracts", () => {
 		} catch (error) {
 			failure = error;
 		}
-		expect(failure).toMatchObject({ authenticationFailure: false });
+		expect(failure).toMatchObject({ invocation: { process: { authenticationFailure: false } } });
 		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
 			throw failure;
 		});
 		const { createIssueTool } = toolSetup(issue(), { createArtifact });
-		await expect(
+		const result = await expectForgeFailure(
 			createIssueTool.execute(
 				"create",
 				{ title: "Created issue", body: "Body" },
@@ -908,23 +1023,43 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/may have succeeded.*reread/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
+		expect(result.content[0].text).not.toMatch(/then retry|retry after|retry the/i);
 	});
 
-	it.each([
-		new ForgeCommandError("missing-executable", { command: "gh", args: ["api"], cwd: "/repo" }),
-		new ForgeCommandError("failed", {
+	it("reports only a missing executable as a conclusive write rejection", async () => {
+		const failure = new ForgeCommandError("missing-executable", { command: "gh", args: ["api"], cwd: "/repo" });
+		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
+			throw failure;
+		});
+		const { createIssueTool } = toolSetup(issue(), { createArtifact });
+		await expectForgeFailure(
+			createIssueTool.execute(
+				"create",
+				{ title: "Created issue", body: "Body" },
+				undefined,
+				undefined,
+				toolContext(),
+			),
+			"FORGE_WRITE_REJECTED",
+			/no request reached/i,
+		);
+	});
+
+	it("uses authentication diagnostics as guidance without proving mutation rejection", async () => {
+		const failure = new ForgeCommandError("failed", {
 			command: "gh",
 			args: ["api"],
 			cwd: "/repo",
 			process: { exitCode: 1, stdout: "", stderr: "HTTP 401 Unauthorized" },
-		}),
-	])("preserves conclusively definite mutation rejection", async (failure) => {
+		});
 		const createArtifact = vi.fn<ForgeAdapter["createArtifact"]>(async () => {
 			throw failure;
 		});
 		const { createIssueTool } = toolSetup(issue(), { createArtifact });
-		await expect(
+		await expectForgeFailure(
 			createIssueTool.execute(
 				"create",
 				{ title: "Created issue", body: "Body" },
@@ -932,7 +1067,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toBe(failure);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
 	});
 
 	it("treats a failed post-identity verification read as ambiguous", async () => {
@@ -947,7 +1084,7 @@ describe("registerForgeTools creation contracts", () => {
 		});
 		const { createIssueTool } = toolSetup(issue(), { createArtifact, readArtifact });
 
-		await expect(
+		await expectForgeFailure(
 			createIssueTool.execute(
 				"create",
 				{ title: "Created issue", body: "Issue body" },
@@ -955,7 +1092,9 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/may have succeeded.*reread/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
 		expect(createArtifact).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(1);
 	});
@@ -976,7 +1115,7 @@ describe("registerForgeTools creation contracts", () => {
 		);
 		const { createIssueTool } = toolSetup(issue(), { createArtifact, readArtifact });
 
-		await expect(
+		const failure = await expectForgeFailure(
 			createIssueTool.execute(
 				"create",
 				{ title: "Created issue", body: "Issue body" },
@@ -984,7 +1123,11 @@ describe("registerForgeTools creation contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/may have succeeded.*reread/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
+		expect(failure.content[0].text).toMatch(/created artifact content did not match/i);
+		expect(failure.details.trace).toContain("verifyCreatedArtifact");
 		expect(createArtifact).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(1);
 	});
@@ -1039,7 +1182,7 @@ describe("registerForgeTools creation contracts", () => {
 });
 
 describe("registerForgeTools edit contracts", () => {
-	it("edits artifact title and body exactly against one refetched original and verifies the full postimage", async () => {
+	it("edits artifact title and body exactly while returning only a compact verified summary", async () => {
 		const original = issue({ title: "Parser & failure", body: "alpha beta\r\nliteral <tag>" });
 		let current = original;
 		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => current);
@@ -1087,23 +1230,17 @@ describe("registerForgeTools edit contracts", () => {
 			},
 			undefined,
 		);
-		expect(result.content[0].text).toContain('"newText":"Strict <parser>"');
-		expect(result.content[0].text).toContain('"newText":"<node>"');
-		expect(result.content[0].text).toContain("Verified fresh postimage (non-authorizing)");
-		expect(result.content[0].text).toContain('<title mutable="true"><![CDATA[Strict <parser> failure]]></title>');
-		expect(result.content[0].text).toContain("literal &lt;node&gt;");
+		expect(result.content[0].text).toBe(original.url);
+		expect(Buffer.byteLength(result.content[0].text, "utf8")).toBeLessThanOrEqual(512);
+		expect(JSON.stringify(result)).not.toMatch(/Strict <parser>|<node>|alpha|gamma/);
 		expect(result.details).toMatchObject({
 			schema: "scramjet:forge-mutation@1",
 			operation: "edit_issue",
 			identity: { kind: "issue", number: 7, url: original.url },
 			target: { kind: "artifact" },
+			fields: ["title", "body"],
+			replacements: 4,
 			verified: true,
-			diff: [
-				{ field: "title", oldText: "Parser &", newText: "Strict <parser>" },
-				{ field: "body", oldText: "alpha", newText: "beta" },
-				{ field: "body", oldText: "beta", newText: "gamma" },
-				{ field: "body", oldText: "<tag>", newText: "<node>" },
-			],
 		});
 	});
 
@@ -1144,14 +1281,14 @@ describe("registerForgeTools edit contracts", () => {
 			undefined,
 		);
 		expect(adapter.updateArtifact).not.toHaveBeenCalled();
-		expect(result.content[0].text).toContain('"field":"body"');
-		expect(result.content[0].text).toContain("<done>");
-		expect(result.content[0].text).toContain('<body mutable="true"><![CDATA[');
+		expect(result.content[0].text).toBe(current.comments[0].url);
+		expect(JSON.stringify(result)).not.toContain("<done>");
 		expect(result.details).toMatchObject({
 			operation: "edit_issue",
 			identity: { kind: "comment", id: "101" },
 			target: { kind: "comment", id: "101" },
-			diff: [{ field: "body", oldText: " & tail", newText: " <done>" }],
+			fields: ["body"],
+			replacements: 1,
 		});
 	});
 
@@ -1160,7 +1297,7 @@ describe("registerForgeTools edit contracts", () => {
 		const updateComment = vi.fn<ForgeAdapter["updateComment"]>();
 		const { bag, editIssueTool } = toolSetup(issue(), { readArtifact, updateComment });
 
-		await expect(
+		await expectForgeFailure(
 			editIssueTool.execute(
 				"invalid-comment-edit",
 				{
@@ -1172,7 +1309,9 @@ describe("registerForgeTools edit contracts", () => {
 				undefined,
 				toolContext(),
 			),
-		).rejects.toThrow(/comment edits.*body/i);
+			"FORGE_PREFLIGHT_FAILED",
+			/comment edits.*body/i,
+		);
 		expect(bag.pi.exec).not.toHaveBeenCalled();
 		expect(readArtifact).not.toHaveBeenCalled();
 		expect(updateComment).not.toHaveBeenCalled();
@@ -1207,8 +1346,13 @@ describe("registerForgeTools edit contracts", () => {
 			{ kind: "pr", number: 12, body: "After PR" },
 			undefined,
 		);
-		expect(result.details).toMatchObject({ operation: "edit_pr", identity: { kind: "pr", number: 12 } });
-		expect(result.content[0].text).toContain("After PR");
+		expect(result.details).toMatchObject({
+			operation: "edit_pr",
+			identity: { kind: "pr", number: 12 },
+			fields: ["body"],
+			replacements: 1,
+		});
+		expect(result.content[0].text).not.toContain("After PR");
 	});
 
 	it.each([
@@ -1230,7 +1374,7 @@ describe("registerForgeTools edit contracts", () => {
 			[{ id: "edit-pr", name: "edit_pr" }],
 		);
 
-		await expect(
+		await expectForgeFailure(
 			editPrTool.execute(
 				"edit-pr",
 				{
@@ -1242,7 +1386,9 @@ describe("registerForgeTools edit contracts", () => {
 				undefined,
 				toolContext(branch),
 			),
-		).rejects.toThrow(/preserve the existing draft state/i);
+			"FORGE_PREFLIGHT_FAILED",
+			/preserve the existing draft state/i,
+		);
 		expect(updateArtifact).not.toHaveBeenCalled();
 	});
 
@@ -1272,7 +1418,7 @@ describe("registerForgeTools edit contracts", () => {
 			[{ id: "edit-pr", name: "edit_pr" }],
 		);
 
-		await expect(
+		await expectForgeFailure(
 			editPrTool.execute(
 				"edit-pr",
 				{
@@ -1284,11 +1430,13 @@ describe("registerForgeTools edit contracts", () => {
 				undefined,
 				toolContext(branch),
 			),
-		).rejects.toThrow(/may have succeeded.*changed draft state/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
 		expect(updateArtifact).toHaveBeenCalledTimes(1);
 	});
 
-	it("bounds a verified fresh edit postimage without authorizing another mutation", async () => {
+	it("keeps a large verified postimage out of the mutation result", async () => {
 		const original = issue({ title: "Old title", body: "x".repeat(100_000) });
 		let current = original;
 		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => current);
@@ -1311,9 +1459,9 @@ describe("registerForgeTools edit contracts", () => {
 			undefined,
 			toolContext(branch),
 		);
-		expect(result.details.postimage.truncated).toBe(true);
-		expect(Buffer.byteLength(result.details.postimage.content, "utf8")).toBeLessThanOrEqual(42 * 1024);
-		expect(result.content[0].text).toContain("Verified postimage truncated");
+		expect(Buffer.byteLength(result.content[0].text, "utf8")).toBeLessThanOrEqual(512);
+		expect(JSON.stringify(result)).not.toContain("x".repeat(1000));
+		expect(result.details).not.toHaveProperty("postimage");
 	});
 
 	it.each([
@@ -1387,7 +1535,7 @@ describe("registerForgeTools edit contracts", () => {
 		const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>();
 		const { editIssueTool } = toolSetup(original, { readArtifact, updateArtifact });
 
-		await expect(
+		await expectForgeFailure(
 			editIssueTool.execute(
 				"edit",
 				{
@@ -1399,8 +1547,43 @@ describe("registerForgeTools edit contracts", () => {
 				undefined,
 				toolContext(branch(full, parts)),
 			),
-		).rejects.toThrow(/complete prior read_issue.*body/i);
+			"FORGE_PREFLIGHT_FAILED",
+			/complete prior read_issue.*body/i,
+		);
 		expect(readArtifact).not.toHaveBeenCalled();
+		expect(updateArtifact).not.toHaveBeenCalled();
+	});
+
+	it("classifies a queue-time refetch failure as no-write preflight", async () => {
+		const original = issue({ body: "Before" });
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => {
+			throw new ForgeCommandError("failed", {
+				command: "gh",
+				args: ["api", "repos/Acme/widget/issues/7"],
+				cwd: "/repo",
+				process: { exitCode: 1, stdout: "", stderr: "HTTP 503" },
+			});
+		});
+		const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>();
+		const { editIssueTool } = toolSetup(original, { readArtifact, updateArtifact });
+		const branch = evidenceBranch([fullReceipt(original)], "read_issue", [{ id: "edit", name: "edit_issue" }]);
+
+		const result = await expectForgeFailure(
+			editIssueTool.execute(
+				"edit",
+				{
+					number: 7,
+					target: { kind: "artifact" },
+					edits: [{ field: "body", oldText: "Before", newText: "After" }],
+				},
+				undefined,
+				undefined,
+				toolContext(branch),
+			),
+			"FORGE_PREFLIGHT_FAILED",
+			/no write was attempted/i,
+		);
+		expect(result.details).toMatchObject({ phase: "refetch", writeState: "not_attempted" });
 		expect(updateArtifact).not.toHaveBeenCalled();
 	});
 
@@ -1411,7 +1594,7 @@ describe("registerForgeTools edit contracts", () => {
 		const { editIssueTool } = toolSetup(original, { readArtifact, updateArtifact });
 		const branch = evidenceBranch([fullReceipt(original)], "read_issue", [{ id: "edit", name: "edit_issue" }]);
 
-		await expect(
+		await expectForgeFailure(
 			editIssueTool.execute(
 				"edit",
 				{
@@ -1423,7 +1606,9 @@ describe("registerForgeTools edit contracts", () => {
 				undefined,
 				toolContext(branch),
 			),
-		).rejects.toThrow(/not found exactly/i);
+			"FORGE_PREFLIGHT_FAILED",
+			/not found exactly/i,
+		);
 		expect(readArtifact).toHaveBeenCalledTimes(1);
 		expect(updateArtifact).not.toHaveBeenCalled();
 	});
@@ -1442,7 +1627,7 @@ describe("registerForgeTools edit contracts", () => {
 		const { editIssueTool } = toolSetup(original, { readArtifact, updateArtifact });
 		const branch = evidenceBranch([fullReceipt(original)], "read_issue", [{ id: "edit", name: "edit_issue" }]);
 
-		await expect(
+		await expectForgeFailure(
 			editIssueTool.execute(
 				"edit",
 				{
@@ -1454,7 +1639,9 @@ describe("registerForgeTools edit contracts", () => {
 				undefined,
 				toolContext(branch),
 			),
-		).rejects.toThrow(/may have succeeded.*reread/i);
+			"FORGE_WRITE_AMBIGUOUS",
+			/DO NOT RETRY/i,
+		);
 		expect(updateArtifact).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(2);
 	});
@@ -1506,7 +1693,7 @@ describe("registerForgeTools edit contracts", () => {
 		expect(updateArtifact).not.toHaveBeenCalled();
 
 		releaseComment();
-		await expect(comment).rejects.toThrow(/may have succeeded.*reread/i);
+		await expectForgeFailure(comment, "FORGE_WRITE_AMBIGUOUS", /DO NOT RETRY/i);
 		await expect(edit).resolves.toMatchObject({ details: { verified: true } });
 		expect(updateArtifact).toHaveBeenCalledTimes(1);
 		expect(readArtifact).toHaveBeenCalledTimes(3);

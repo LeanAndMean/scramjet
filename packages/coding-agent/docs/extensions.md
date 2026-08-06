@@ -1835,17 +1835,26 @@ pi.registerTool({
 });
 ```
 
-**Signaling errors:** To mark a tool execution as failed (sets `isError: true` on the result and reports it to the LLM), throw an error from `execute`. Returning a value never sets the error flag regardless of what properties you include in the return object.
+**Signaling errors:** To mark a tool execution as failed, throw an error from `execute`. The runtime reports the thrown message with `isError: true`, but structured details are discarded. When an expected failure needs structured details for logs or UI, return `{ content, details, isError: true }` instead.
 
 **Early termination:** Return `terminate: true` from `execute()` to hint that the automatic follow-up LLM call should be skipped after the current tool batch. This only takes effect when every finalized tool result in that batch is terminating. See [examples/extensions/structured-output.ts](../examples/extensions/structured-output.ts) for a minimal example where the agent ends on a final structured-output tool call.
 
 ```typescript
-// Correct: throw to signal an error
+// Throw when the message alone is sufficient
 async execute(toolCallId, params) {
   if (!isValid(params.input)) {
     throw new Error(`Invalid input: ${params.input}`);
   }
   return { content: [{ type: "text", text: "OK" }], details: {} };
+}
+
+// Return an error when structured details must survive
+async execute(toolCallId, params) {
+  return {
+    content: [{ type: "text", text: "Remote request failed" }],
+    details: { code: "remote_failed", requestId: params.requestId },
+    isError: true,
+  };
 }
 ```
 
@@ -2578,7 +2587,7 @@ const highlighted = highlightCode(code, lang, theme);
 
 - Extension errors are logged, agent continues
 - `tool_call` errors block the tool (fail-safe)
-- Tool `execute` errors must be signaled by throwing; the thrown error is caught, reported to the LLM with `isError: true`, and execution continues
+- Tool `execute` errors may be signaled by throwing, or by returning `isError: true` when structured `details` must be preserved; execution continues in both cases
 
 ## Mode Behavior
 
