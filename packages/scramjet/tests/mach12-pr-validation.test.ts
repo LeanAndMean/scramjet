@@ -458,11 +458,45 @@ describe("mach12 pr-validation-assessment independent-proof workflow", () => {
 		expect(cleanup).toContain("remove every member of each complete rejected ownership group");
 		expect(cleanup).toContain("no member of a surviving group");
 		expect(cleanup).toContain("surviving proof paths, nodes, assertions, and content remain unchanged");
+		expectInOrder(
+			cleanup,
+			"Reconstruct a survivor-only consolidated invocation",
+			"run every survivor plus that reconstructed invocation",
+			"explicitly skip consolidated execution when no proof survives",
+		);
+		expect(cleanup).toContain("Never rerun the pre-cleanup consolidated invocation");
 		expect(cleanup).toContain("Delegate exactly one tests-only cleanup commit and push through `/mach12:push`");
 		expect(cleanup).toContain("exact authenticated upstream ref and its remote's canonical repository identity");
 		expect(cleanup).toContain("create no cleanup commit");
 		expect(cleanup).toContain("local `HEAD`, its upstream branch, and a fresh GitHub `headRefOid`");
-		expect(cleanup).toContain("never recommit, repush, force-push, or blindly duplicate a comment");
+		expect(cleanup).toMatch(/never recommit, repush, force-push, or blindly duplicate a comment/i);
+	});
+
+	it("checkpoints cleanup dispositions before mutation and authenticates interrupted resume", () => {
+		const cleanup = section(command, "## Step 5:", "## Step 6:");
+		expectInOrder(
+			cleanup,
+			"Before any cleanup mutation",
+			"`<!-- mach12-assessment-checkpoint -->`",
+			"post the body",
+			"fetch it",
+			"verify its numeric ID",
+			"Delegate exactly one tests-only cleanup commit",
+			"On a resumed assessment",
+			"Resume final publication from the checkpoint's durable classifications",
+		);
+		for (const clause of [
+			"exact review ID and digest",
+			"every complete classification",
+			"every ownership-group disposition",
+			"exact intended transition from `V` to one tests-only cleanup successor",
+			"SHA-256 over the exact prepared checkpoint body",
+			"do not embed it in the hashed body",
+			"classifications, group dispositions, and the intended transition to agree with the authenticated checkpoint",
+			"successor to have sole parent `V`",
+			"without executing repository mutation again",
+		])
+			expect(cleanup).toContain(clause);
 	});
 
 	it("keeps zero findings commit-free and publishes authenticated current-head provenance", () => {
@@ -815,7 +849,8 @@ describe("mach12 executable validation integration", () => {
 			"### Validation-origin proof contract",
 		);
 		for (const clause of [
-			"same PR, frozen implementation parent `P`, original proof commit `V`, and current assessment head",
+			"same PR, frozen implementation parent `P`, original proof commit `V`, recorded actual merge base",
+			"Source the current assessment head exclusively from the authenticated assessment artifact",
 			"`V` to remain an ancestor of the authenticated current head",
 			"without unexpected merge commits or forks",
 			"clean index and tracked and untracked worktree",
@@ -1014,6 +1049,50 @@ describe("mach12 executable validation integration", () => {
 			"## Step 2: Commit",
 			"## Step 3: Push",
 			"## Step 4: Post progress comment",
+		);
+	});
+
+	it("pins structured validation mutation ordering before staging and commit", () => {
+		const determine = section(push, "## Step 1:", "## Step 2:");
+		const initial = section(
+			determine,
+			"For initial validation-proof mode, enforce this order:",
+			"When the caller supplies a structured validation-origin provenance payload",
+		);
+		expectInOrder(
+			initial,
+			"authenticate the payload's repository",
+			"validating the index",
+			"stage, commit, push",
+			"verify convergence",
+		);
+
+		const repair = section(
+			determine,
+			"When the caller supplies a structured validation-origin provenance payload",
+			"Recognize a distinct assessment-cleanup payload",
+		);
+		expectInOrder(
+			repair,
+			"authenticate the repository",
+			"validate the empty index",
+			"stage every and only bounded paths",
+			"commit one direct successor",
+			"verify its sole parent and exact committed diff",
+			"push the authenticated ref explicitly once",
+			"verify remote convergence",
+		);
+
+		const cleanup = section(determine, "Recognize a distinct assessment-cleanup payload", "Run `git status`");
+		expectInOrder(
+			cleanup,
+			"authenticate the repository",
+			"validate the empty index",
+			"stage only rejected-group paths",
+			"commit one cleanup successor",
+			"verify its sole parent and exact committed diff",
+			"push the authenticated ref explicitly once",
+			"verify remote convergence",
 		);
 	});
 
