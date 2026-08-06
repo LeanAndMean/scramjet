@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.78.0 — Simplify executable validation handoff
+
+Makes executable PR validation continue through a same-session independent assessment before committing accepted proofs for repair. Fixes [#472](https://github.com/LeanAndMean/scramjet/issues/472).
+
+### Changed
+
+- Keep candidate validation tests uncommitted through independent assessment, then commit and push only accepted proof tests.
+- Route accepted executable defects to production repair in a fresh session while routing clean assessments directly to pre-merge checks.
+- Simplify validation publication, repair, and push contracts around the accepted-tests-only proof commit.
+
+### Tests
+
+- Streamline semantic validation coverage around candidate assessment, accepted-proof publication, repair routing, and command wiring.
+
 ## 0.77.1 — Refocus the product vision
 
 Clarifies Scramjet's durable product direction while moving current technical contracts to focused documentation. Fixes [#466](https://github.com/LeanAndMean/scramjet/issues/466).
