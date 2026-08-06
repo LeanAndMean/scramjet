@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.78.1 — Show Scramjet's development velocity
+
+Reframes the repository landing page around the workflow friction Scramjet removes and the demonstrated pace of its own development. Fixes [#465](https://github.com/LeanAndMean/scramjet/issues/465).
+
+### Changed
+
+- Explain how reusable commands, composable subroutines, guided transitions, and durable artifacts support agentic development.
+- Show a representative issue-to-ship path and distinguish the Pi runtime, Scramjet harness, and optional Mach 12 methodology.
+- Add a dated, qualified dogfooding snapshot with inspectable repository evidence and early-development caveats.
+
 ## 0.78.0 — Simplify executable validation handoff
 
 Makes executable PR validation continue through a same-session independent assessment before committing accepted proofs for repair. Fixes [#472](https://github.com/LeanAndMean/scramjet/issues/472).
