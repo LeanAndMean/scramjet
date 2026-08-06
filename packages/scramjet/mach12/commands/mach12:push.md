@@ -11,7 +11,7 @@ allowed-tools:
 
 # Push
 
-Finalize one bounded batch of work by committing intended files, pushing once, and documenting progress when appropriate.
+Finalize one bounded batch of work by committing intended files, pushing once, and documenting progress on the associated PR or issue whenever one can be identified.
 
 <caller-context>
 $ARGUMENTS
@@ -54,7 +54,7 @@ Accepted validation-proof mode returns `P`, proof commit `V`, accepted paths and
 
 ## Step 4: Post ordinary progress
 
-For ordinary mode, determine the active PR or issue from the caller context, preferring an open PR on the current branch. If no target is supported by current evidence, skip publication and say so.
+For ordinary mode, determine the active PR or issue from the caller context, preferring an open PR on the current branch. Exhaust current session context and branch-based detection before concluding no target exists. Skip publication only when neither source supports an associated PR or issue, and say why.
 
 Prepare a concise body beginning `<!-- mach12-progress -->` with the completed change, commit, meaningful decisions, and verification. Preserve an exact originating review ID supplied by a static or executable review-fix caller. Do not include next-step suggestions.
 

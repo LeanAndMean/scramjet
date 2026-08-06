@@ -87,4 +87,4 @@ When none survive, emit exactly one entry:
 - `fresh_session`: `true`
 - `reason`: "Independent executable assessment found no retained defect."
 
-Set `recommended_next_step` to `0`. Report `blocked` or `incomplete` with no next step when assessment, proof publication, or state verification did not complete. Use `get_scramjet_user_input` when user input is required.
+Recommend the emitted route. Report `blocked` or `incomplete` with no next step when assessment, proof publication, or state verification did not complete.

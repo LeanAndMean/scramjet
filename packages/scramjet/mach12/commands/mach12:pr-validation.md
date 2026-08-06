@@ -71,4 +71,4 @@ After delivering your answer, call `report_scramjet_command_status`: summarize t
 - `fresh_session`: `false`
 - `reason`: "Independently assess the candidate tests in the current session before committing accepted proofs."
 
-Set `recommended_next_step` to `0`. If validation or publication did not complete, report `blocked` or `incomplete`; the forced assessment must not run. Use `get_scramjet_user_input` when user input is required.
+If validation or publication did not complete, report `blocked` or `incomplete`; the forced assessment must not run.

@@ -162,12 +162,10 @@ Once the fixes are complete, capture the exact pre-commit head, require the fina
 
 Pass a brief summary and the exact originating review ID so the commit and progress comment identify this fix cycle. After return, verify local `HEAD`, upstream, and fresh GitHub `headRefOid` converge at the pushed commit with a clean repository. If progress publication fails after a successful push, preserve that commit and reconcile the comment without recommitting or repushing.
 
-Each fix session should be **fresh** to maximize available context.
-
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"`. Include all three selector-visible verification paths:
 
 1. `/mach12:pr-review <pr-number>`, `fresh_session: true`, when substantive fixes warrant a complete fresh review.
 2. `/mach12:pr-validation <pr-number>`, `fresh_session: true`, when executable behavioral challenge is warranted.
 3. `/mach12:pr-pre-merge <pr-number>`, `fresh_session: true`, when fixes are narrow and evidence is strong.
 
-Give each entry a non-empty outcome-specific reason and set `recommended_next_step` to the best-supported option. If fixing, pushing, publication, or required verification did not complete, report `blocked` or `incomplete` with no next step. Use `get_scramjet_user_input` when user input is required.
+Set `recommended_next_step` to the best-supported option. If fixing, pushing, publication, or required verification did not complete, report `blocked` or `incomplete` with no next step.
