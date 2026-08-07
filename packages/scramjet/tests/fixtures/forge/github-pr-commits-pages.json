@@ -1,0 +1,50 @@
+[
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "number": 12,
+          "commits": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "commit": {
+                  "oid": "abc123",
+                  "messageHeadline": "First commit",
+                  "authoredDate": "2026-02-01T00:00:00Z",
+                  "author": { "name": "Alice" },
+                  "url": "https://github.com/Acme/widget/commit/abc123"
+                }
+              }
+            ],
+            "pageInfo": { "hasNextPage": true, "endCursor": "commit-1" }
+          }
+        }
+      }
+    }
+  },
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "number": 12,
+          "commits": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "commit": {
+                  "oid": "def456",
+                  "messageHeadline": "Second commit",
+                  "authoredDate": "2026-02-01T01:00:00Z",
+                  "author": null,
+                  "url": "https://github.com/Acme/widget/commit/def456"
+                }
+              }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "commit-2" }
+          }
+        }
+      }
+    }
+  }
+]

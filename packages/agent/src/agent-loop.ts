@@ -651,7 +651,8 @@ async function executePreparedToolCall(
 			},
 		);
 		await Promise.all(updateEvents);
-		return { result, isError: false };
+		// SCRAMJET-DIVERGENCE: Let extension tools retain structured details on expected error results.
+		return { result, isError: result.isError ?? false };
 	} catch (error) {
 		await Promise.all(updateEvents);
 		return {

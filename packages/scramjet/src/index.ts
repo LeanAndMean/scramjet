@@ -13,6 +13,7 @@ import { registerCommandStatusTool, registerDormantCommandNotice } from "./comma
 import { registerCommandLoader } from "./commands/index.js";
 import { registerDelegateTool } from "./delegate.js";
 import { packageRoot } from "./docs-registry.js";
+import { registerForgeTools } from "./forge/tools.js";
 import { registerHistory } from "./history.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createLogger } from "./logger.js";
@@ -121,6 +122,7 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 	registerModelChangeNotice(pi, state);
 	registerNextStepRecord(pi);
 	registerHistory(pi, state);
+	registerForgeTools(pi, { logger: state.logger });
 	registerPrIndicator(pi);
 	registerUpdateNotifier(pi, updateNotifierDependencies);
 	registerBaseDirectives(pi);

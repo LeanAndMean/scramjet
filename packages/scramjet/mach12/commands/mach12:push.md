@@ -6,7 +6,10 @@ allowed-tools:
   - bash
   - read
   - grep
-  - delegate
+  - read_issue
+  - read_pr
+  - add_issue_comment
+  - add_pr_comment
 ---
 
 # Push
@@ -60,7 +63,9 @@ Prepare a concise body beginning `<!-- mach12-progress -->` with the completed c
 
 Format intentional GitHub relationships consistently: same-repository issue or pull-request references use `#N`; cross-repository relationships use `owner/repo#N` or an already verified canonical URL. Artifact-local identifiers use stable labels or plain words and never bare `#N`.
 
-Delegate publication to `/mach12:gh-comment pr <number>` or `/mach12:gh-comment issue <number>` as appropriate. If publication fails after a successful push, preserve the pushed commit and return an incomplete result with enough context to reconcile the comment without another commit or push.
+Immediately before posting, completely reread the selected target in an earlier assistant tool round: use `read_pr` for a PR or `read_issue` for an issue, continuing every range with the unchanged snapshot. Pass the exact prepared body to `add_pr_comment` or `add_issue_comment` respectively and record the verified canonical URL.
+
+If publication fails after a successful push, preserve whether the result says the mutation may have succeeded and return an incomplete result with enough context to reconcile the exact body through a fresh complete parent read without another commit or push. Never repost unless that read conclusively establishes the body is absent, and never blindly retry an ambiguous write.
 
 ## Step 5: Return
 

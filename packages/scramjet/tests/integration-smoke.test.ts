@@ -28,16 +28,7 @@ const SET_NAME = "mach12";
 // file. The list lives here rather than being discovered dynamically so a
 // stray accidentally-delegate-only top-level command would fail the
 // `mach12-wiring.test.ts` count assertion before reaching this test.
-const SUBROUTINES = [
-	"push",
-	"plan-comment-contract",
-	"find-contribution-guidelines",
-	"gh-issue-read",
-	"gh-pr-read",
-	"gh-sub-issues",
-	"gh-assign",
-	"gh-comment",
-];
+const SUBROUTINES = ["push", "plan-comment-contract", "find-contribution-guidelines", "gh-assign"];
 
 function loadCommand(basename: string): CommandDef {
 	const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`);
@@ -112,11 +103,7 @@ describe("integration smoke — delegate against real mach12 subroutines", () =>
 
 describe("integration smoke — advisory warning against real subroutine scope", () => {
 	it("fires the advisory warning for a tool outside the delegated frame's allowed-tools", async () => {
-		// gh-issue-read declares allowed-tools: [bash] -- a tight scope that
-		// makes "Edit" obviously out-of-scope. Using a real subroutine confirms
-		// the allowed-tools array we author propagates from disk into the
-		// active frame's effectiveAllowedTools.
-		const def = loadCommand("gh-issue-read");
+		const def = loadCommand("gh-assign");
 		expect(def.allowedTools).toBeDefined();
 		expect(def.allowedTools).toEqual(["bash"]);
 
@@ -127,13 +114,9 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		registerToolCallAdvisor(pi, state);
 		const delegateTool = tools[0];
 
-		await delegateTool.execute(
-			"call-advisory",
-			{ command: "mach12:gh-issue-read", args: "55" },
-			undefined,
-			undefined,
-			{ cwd: "/" },
-		);
+		await delegateTool.execute("call-advisory", { command: "mach12:gh-assign", args: "55" }, undefined, undefined, {
+			cwd: "/",
+		});
 		expect(state.delegateStack).toHaveLength(1);
 		expect(state.delegateStack[0].effectiveAllowedTools).toEqual(["bash"]);
 
@@ -144,20 +127,20 @@ describe("integration smoke — advisory warning against real subroutine scope",
 		const message = logMessages(pi)[0];
 		expect(message).toContain("advisory");
 		expect(message).toContain("Edit");
-		expect(message).toContain("mach12:gh-issue-read");
+		expect(message).toContain("mach12:gh-assign");
 		expect(message).toContain("depth=1");
 		expect(message).toContain("bash");
 	});
 
 	it("does not warn when the called tool is in the delegated frame's allowed-tools", async () => {
-		const def = loadCommand("gh-issue-read");
+		const def = loadCommand("gh-assign");
 		const state = seedRegistry([def]);
 		const { pi, tools, handlers } = recordingPi();
 		state.logger = createLogger(pi);
 		registerDelegateTool(pi, state);
 		registerToolCallAdvisor(pi, state);
 
-		await tools[0].execute("call-allowed", { command: "mach12:gh-issue-read", args: "55" }, undefined, undefined, {
+		await tools[0].execute("call-allowed", { command: "mach12:gh-assign", args: "55" }, undefined, undefined, {
 			cwd: "/",
 		});
 
@@ -289,6 +272,29 @@ describe("integration smoke — next-step record tool wired into the extension f
 		const tool = tools.find((t: any) => t.name === "scramjet_next_step_selection");
 		expect(tool).toBeDefined();
 		expect(tool.activation).toBe("harness-only");
+	});
+});
+
+describe("integration smoke — forge tools wired into the extension factory", () => {
+	it("scramjet() registers all eight model-callable forge content tools", () => {
+		const { pi, tools } = recordingPi();
+		initScramjet(pi);
+
+		for (const name of [
+			"read_issue",
+			"edit_issue",
+			"create_issue",
+			"add_issue_comment",
+			"read_pr",
+			"edit_pr",
+			"create_pr",
+			"add_pr_comment",
+		]) {
+			const tool = tools.find((candidate: any) => candidate.name === name);
+			expect(tool).toBeDefined();
+			expect(tool.activation).toBeUndefined();
+			expect(tool.promptSnippet).toEqual(expect.any(String));
+		}
 	});
 });
 

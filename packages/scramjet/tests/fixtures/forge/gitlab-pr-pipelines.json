@@ -1,0 +1,16 @@
+[
+  {
+    "id": 801,
+    "project_id": 9001,
+    "name": "test",
+    "status": "running",
+    "web_url": "https://gitlab.com/Acme/platform/widget/-/pipelines/801"
+  },
+  {
+    "id": 802,
+    "project_id": 9001,
+    "name": null,
+    "status": "success",
+    "web_url": "https://gitlab.com/Acme/platform/widget/-/pipelines/802"
+  }
+]

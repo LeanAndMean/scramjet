@@ -7,8 +7,13 @@ allowed-tools:
   - grep
   - glob
   - subagent
-  - delegate
   - get_scramjet_user_input
+  - read_pr
+  - edit_pr
+  - read_issue
+  - create_issue
+  - add_issue_comment
+  - add_pr_comment
 next:
   mode: closed
   candidates:
@@ -45,21 +50,11 @@ Extract the PR number and the `--review-comment` ID if present. If the input is 
 
 ### Locate the review comment
 
-**If `--review-comment` was provided:** Fetch the specific comment by ID, then fetch the PR title, body, and all comments for context.
+Use `read_pr` and continue every returned range with the unchanged snapshot until the complete PR document is visible.
 
-```
-gh api repos/:owner/:repo/issues/comments/<review-comment-id>
-```
+**If `--review-comment` was provided:** Require the explicit comment ID to match exactly one comment in that verified stream, and use that comment's body. Do not fetch a second raw copy of content that could drift from the aggregate read.
 
-Extract the `body` field from the JSON response. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) to fetch the PR context separately.
-
-**If `--review-comment` was NOT provided:** Delegate to:
-
-```
-/mach12:gh-pr-read <pr-number> --marker mach12-review
-```
-
-The subroutine returns the PR title, body, full comments array, and the matched review comment body and numeric ID (using the most recent marker match). If no comment contains the marker, the subroutine reports that and the caller falls back to the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
+**If `--review-comment` was NOT provided:** Scan the chronological comments for `<!-- mach12-review -->` and use the last matching comment and its opaque ID. If no comment contains the marker, fall back to the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
 
 Save the review comment content and its numeric comment ID for later steps.
 
@@ -93,7 +88,7 @@ The brief should instruct the assessor to:
 
 ## Step 4: Post assessment comment
 
-For every publishable body authored in this command—including assessment comments, deferred-finding issue bodies, duplicate comments, overlap notes, patched assessment bodies, and disposition comments—format intentional GitHub relationships so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact review-comment URLs and numeric provenance fields when their stronger format is required. Apply this policy before posting or PATCHing a body.
+For every publishable body authored in this command—including assessment comments, deferred-finding issue bodies, duplicate comments, overlap notes, edited assessment bodies, and disposition comments—format intentional GitHub relationships so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Do not introduce closing keywords for ordinary references. Preserve exact review-comment URLs and numeric provenance fields when their stronger format is required. Apply this policy before posting or editing a body.
 
 Prepare the assessment body. It must include:
 - `<!-- mach12-assessment -->` as the very first line of the comment body (this invisible HTML marker enables reliable identification in future sessions).
@@ -104,13 +99,7 @@ Prepare the assessment body. It must include:
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings; reserve linkable reference syntax for intentional GitHub relationships.
 
-Post the body immediately -- do not ask the user for approval first. Delegate to:
-
-```
-/mach12:gh-comment pr <pr-number>
-```
-
-The subroutine posts the body and returns the comment URL and numeric ID. Record the numeric ID.
+Post the body immediately—do not ask the user for approval first. Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact body to `add_pr_comment`. Record the verified comment URL and opaque ID; on GitHub, retain its numeric form for downstream command wires.
 
 ## Step 5: Present CLI summary
 
@@ -159,23 +148,17 @@ If the confirmation is cancelled, Escape pauses the command before any issue mut
 
 For each item that requires a new issue:
 
-1. Preserve its existing title, body, originating `#<pr-number>` reference, F/S identifier, potentially-related references, and other relevant labels.
-2. Run `gh issue create` without coupling publication to the deferred-review label. Do not pass `--label` to `gh issue create`. If the command fails, surface the error, apply no metadata, do not retry automatically, and return a non-completed command status.
-3. If `gh issue create` succeeds, capture its output and require exactly one non-empty candidate URL. Zero or multiple non-empty output lines are ambiguous: report that creation may have succeeded, apply no metadata, do not retry creation, and return a non-completed command status.
-4. Resolve the single candidate using:
+1. Finalize its exact title and body, preserving the originating `#<pr-number>` reference, F/S identifier, potentially-related references, overlap notes, and other relevant labels.
+2. Show the user that exact final title and complete body, including every overlap note, then call `get_scramjet_user_input` with `type: "confirm"` to request publication approval. Do this after all generated content is finalized and immediately before publication. Create the issue only after explicit approval; a batch-level choice to create issues is not exact-content approval.
+3. Create the issue with `create_issue` using the approved title and body unchanged, without coupling publication to labels. If `create_issue` fails, surface the error, apply no metadata, do not retry automatically, and return a non-completed command status. If the tool says the mutation may have succeeded, preserve that ambiguity and require a later aggregate reread before recovery.
+4. Require the tool's verified canonical issue number and URL before applying metadata or recording a confirmed creation.
+5. When the batch label is usable, guard this independent operation after verified identity:
 
    ```sh
-   gh issue view "$created_issue_url" --json number,url
+   gh issue edit "$verified_issue_url" --add-label "PR review deferral"
    ```
 
-   Require a positive integer number and a non-empty canonical URL before applying metadata or recording a confirmed creation. If identity validation fails, do not label or retry creation; report that creation may have succeeded and return a non-completed command status.
-5. When the batch label is usable, guard this independent operation after identity validation:
-
-   ```sh
-   gh issue edit "$confirmed_issue_url" --add-label "PR review deferral"
-   ```
-
-   Apply any other relevant labels through separate guarded `gh issue edit --add-label` operations after the same identity validation; never couple them to `gh issue create`. If any label application fails, retain the confirmed issue, do not retry creation, continue processing later findings, and report the canonical issue number or URL with the missing label. Continue attempting `PR review deferral` for later confirmed issues because one issue-specific failure does not prove repository-wide unavailability.
+   Apply any other relevant labels through separate guarded `gh issue edit --add-label` operations after the same verified identity; never couple them to `create_issue`. If any label application fails, retain the confirmed issue, do not retry creation, continue processing later findings, and report the canonical issue number or URL with the missing label. Continue attempting `PR review deferral` for later confirmed issues because one issue-specific failure does not prove repository-wide unavailability.
 
 When lookup, authorization, or label creation leaves the batch unlabelled, emit at most one batch-level guidance note suggesting that repository guidance may document the preferred label setup. Do not edit guidance automatically. Keep label diagnostics out of the under-20-line PR decision comment, whose existing dispositions remain authoritative.
 
@@ -194,13 +177,7 @@ For each deferred item, check for existing issues before creating a new one:
    - **No results**: proceed to create the issue.
    - **Clear duplicate**: if an existing **open** issue's title is nearly identical, skip creation and post a comment on the existing issue linking the new finding. If the near-identical match is a closed issue, treat it as an ambiguous match instead (a previously-closed issue should not block creation).
 
-     Prepare a comment body of the form: `Related finding from PR #<pr-number> review: <F/S identifier and summary of the deferred finding>.` The originating same-repository PR must be linkable while the finding retains its F/S identifier. Then delegate to:
-
-     ```
-     /mach12:gh-comment issue <existing-issue-number>
-     ```
-
-     The subroutine posts the body and returns the comment URL. Use the URL in the summary block below.
+     Prepare a comment body of the form: `Related finding from PR #<pr-number> review: <F/S identifier and summary of the deferred finding>.` The originating same-repository PR must be linkable while the finding retains its F/S identifier. Immediately before posting, completely reread the existing issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Only in a later assistant tool round, pass the exact prepared body to `add_issue_comment`. Use the verified comment URL in the summary block below.
 
    - **Ambiguous match**: if results are related but not clearly duplicates, still create the issue but add a "Potentially related" note at the end of the issue body listing the matched issue numbers, titles, and states.
 
@@ -221,21 +198,13 @@ Then proceed to **Persist Deferred-Item Decisions** below.
 
 Update the assessment comment to change the classification of every deferred item from "Deferred" to "Genuine". Also update the staged implementation plan within the assessment comment to incorporate the reclassified items.
 
-1. Retrieve the current assessment comment body:
-
-   ```
-   gh api repos/:owner/:repo/issues/comments/<assessment-comment-id> --jq .body
-   ```
+1. Use `read_pr` again after posting the assessment and continue every returned range with the unchanged snapshot until the assessment comment body is completely covered.
 
 2. In the comment body, for each deferred item, change its classification from "Deferred" to "Genuine".
 
-3. Update the staged implementation plan to include the reclassified items -- add them to the appropriate existing stage if they fit, or create a new stage for them.
+3. Update the staged implementation plan to include the reclassified items—add them to the appropriate existing stage if they fit, or create a new stage for them.
 
-4. Write the updated body back:
-
-   ```
-   gh api repos/:owner/:repo/issues/comments/<assessment-comment-id> --method PATCH --raw-field body="<updated-body>"
-   ```
+4. Call `edit_pr` once with the assessment comment's opaque ID and one exact body replacement from the complete original body to the complete updated body. The tool must verify the exact postimage; do not issue a raw PATCH or retry an ambiguous mutation.
 
 After the update, display a CLI summary block listing each reclassified item by its F/S identifier:
 - **Reclassified as genuine**: item was marked as genuine and will be included in the fix handoff.
@@ -254,7 +223,7 @@ After all items are processed:
 
 1. **Issue creation**: For items marked "Create issue", first complete duplicate classification and resolve the label decision in the **Shared issue-creation batch contract**. All selected items share that one result; do not resolve or prompt per finding. Issue creation, duplicate comments, and other mutations may begin after the exact label is found or created, the user explicitly declines creation, label lookup fails or is malformed, or label creation fails. Cancellation is the sole unresolved state and pauses all mutation until a resumed user turn.
 
-2. **Reclassified items**: If any items were marked as genuine, then follow the assessment-comment update procedure described in Option 2 (retrieve, update classifications from "Deferred" to "Genuine", update the staged implementation plan, and PATCH) -- apply all reclassified items in a single PATCH call.
+2. **Reclassified items**: If any items were marked as genuine, follow the assessment-comment update procedure described in Option 2 (reread, update classifications from "Deferred" to "Genuine", update the staged implementation plan, and exact-edit)—apply all reclassified items in one `edit_pr` call.
 
 3. **Summary block**: Display a CLI summary listing each deferred item and the action taken (Reclassified as genuine / Created / Skipped (duplicate) / Created (with overlap note) / Skipped).
 
@@ -274,11 +243,7 @@ After displaying the summary block (Options 1 and 3 only, and only when at least
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) for artifact-local findings; format any intentional issue or PR relationships under Step 4’s linkable-reference policy.
 
-Then delegate to:
-
-```
-/mach12:gh-comment pr <pr-number>
-```
+Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact prepared decision body to `add_pr_comment` and record the verified comment URL.
 
 ## Step 7: Surface comment IDs for the next step
 

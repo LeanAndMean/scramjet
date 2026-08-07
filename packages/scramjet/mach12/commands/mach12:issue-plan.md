@@ -8,6 +8,9 @@ allowed-tools:
   - glob
   - subagent
   - delegate
+  - get_scramjet_user_input
+  - read_issue
+  - add_issue_comment
 next:
   mode: open
   candidates:
@@ -49,13 +52,7 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue
 
-Delegate to:
-
-```
-/mach12:gh-issue-read <issue-number>
-```
-
-The subroutine returns the issue title, body, parent `createdAt` and `updatedAt`, and the full comments stream with comment creation timestamps. Parse and understand:
+Use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Treat its artifact and comment timestamps as point-in-time evidence. Parse and understand:
 - The problem statement
 - Any constraints or requirements mentioned
 - Prior discussion or decisions in the comments
@@ -260,13 +257,7 @@ If the user requests changes, discuss the feedback. In the next drafting turn, l
 
 After the user approves the plan:
 
-1. **Post the approved plan as a reply comment on the issue.** Pass the exact approved body unchanged to the existing comment subroutine; do not regenerate, summarize, or reformat it after approval. Then delegate to:
-
-   ```
-   /mach12:gh-comment issue <issue-number>
-   ```
-
-   The subroutine posts the prepared body and returns the comment URL and numeric ID.
+1. **Post the approved plan as a reply comment on the issue.** Immediately before posting, completely reread the issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact approved body unchanged to `add_issue_comment`; do not regenerate, summarize, or reformat it after approval. Record the verified comment URL and opaque ID.
 
 2. **Create a feature branch**:
    - Derive a short slug from the issue title (lowercase, hyphens, 3-5 words max).
@@ -274,21 +265,15 @@ After the user approves the plan:
    - Example: `feature/issue-55-fix-analytics-url`.
    - Push the branch to remote with `-u` flag.
 
-3. **Detect sub-issues** for the assignment step below. Delegate to:
+3. **Detect sub-issues** for the assignment step below. From the complete `read_issue` document, collect only relationships whose `relation` is `child`. Preserve each relationship's verified `repository`, canonical `url`, and `source` (`native` or `task-list`); do not reinterpret unrelated references as sub-issues. Compare each child repository with the root artifact repository, case-insensitively for GitHub. Partition same-repository children from external children. An unsupported or empty relationship section means there are no assignable sub-issues.
 
-   ```
-   /mach12:gh-sub-issues <issue-number>
-   ```
-
-   The subroutine returns the list of sub-issue numbers (possibly empty) and which strategy produced them.
-
-4. **Assign the issue and any sub-issues** to the current user. Delegate to:
+4. **Assign the issue and same-repository sub-issues** to the current user. Delegate to:
 
    ```
    /mach12:gh-assign <issue-number> [<sub-issue-number> ...]
    ```
 
-   Pass the parent issue number followed by every sub-issue number detected in step 3. The subroutine resolves the current user, classifies each issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt at the end (Add me / Skip / Replace). Assignment failures are non-blocking.
+   Pass the parent issue number followed only by same-repository sub-issue numbers detected in step 3. Never pass an external child's bare number to this current-repository-only subroutine. Report each external child by its verified canonical URL without attempting to assign it. The subroutine resolves the current user, classifies each issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt at the end (Add me / Skip / Replace). Assignment failures are non-blocking.
 
 Apply the plan-comment contract’s reference policy: intentional same-repository issue or pull-request relationships use `#N`, cross-repository relationships use `owner/repo#N` or an already verified canonical URL, and artifact-local findings, suggestions, and stages use stable labels or plain words rather than bare `#N`. Do not introduce closing keywords for ordinary references.
 

@@ -1,0 +1,40 @@
+[
+  {
+    "data": {
+      "repository": {
+        "pullRequest": {
+          "number": 12,
+          "url": "https://github.com/Acme/widget/pull/12",
+          "state": "OPEN",
+          "author": { "login": "alice", "__typename": "User" },
+          "createdAt": "2026-02-01T00:00:00Z",
+          "updatedAt": "2026-02-02T00:00:00Z",
+          "labels": { "totalCount": 0, "nodes": [] },
+          "assignees": { "totalCount": 0, "nodes": [] },
+          "title": "Ship feature",
+          "body": "Ready without a final newline",
+          "isDraft": false,
+          "mergeable": "MERGEABLE",
+          "reviewDecision": "APPROVED",
+          "headRefName": "feature/ship",
+          "baseRefName": "main",
+          "changedFiles": 2,
+          "comments": {
+            "totalCount": 1,
+            "nodes": [
+              {
+                "databaseId": 303,
+                "url": "https://github.com/Acme/widget/pull/12#issuecomment-303",
+                "author": { "login": "reviewer", "__typename": "User" },
+                "body": "Looks good\nwith details",
+                "createdAt": "2026-02-02T00:00:00Z",
+                "updatedAt": "2026-02-02T01:00:00Z"
+              }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "pr-comment-1" }
+          }
+        }
+      }
+    }
+  }
+]

@@ -10,6 +10,8 @@ allowed-tools:
   - write
   - subagent
   - delegate
+  - get_scramjet_user_input
+  - read_issue
 next:
   mode: open
   candidates:
@@ -57,6 +59,8 @@ git branch --show-current
 gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
 ```
 
+Use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Retain this complete read for branch-name derivation, sub-issue detection, and the implementation-plan lookup in Step 3.
+
 ### If on the default branch
 
 1. Check for uncommitted changes with `git status --porcelain`. If the working tree is dirty, stop and tell the user to commit or stash their changes before proceeding.
@@ -73,7 +77,7 @@ gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
    - **Use an existing branch**: specify an existing branch to check out.
 
    If the user picks "Create a new branch":
-     - Read the issue title: `gh issue view <issue-number> --json title --jq .title`
+     - Use the issue title from the retained complete `read_issue` result.
      - Derive a slug: lowercase, replace spaces and special characters with hyphens, truncate to 3-5 words.
      - Create the branch: `git checkout -b feature/issue-<number>-<slug>`
      - Push with upstream tracking: `git push -u origin <branch-name>`
@@ -99,13 +103,7 @@ After the branch is confirmed (whether by checkout, silent match, or user confir
 
 ### Detect sub-issues
 
-After the branch is confirmed and the working tree is clean, detect any sub-issues so they can be assigned alongside the parent. Delegate to:
-
-```
-/mach12:gh-sub-issues <issue-number>
-```
-
-The subroutine returns the list of sub-issue numbers (possibly empty) and which strategy produced them.
+After the branch is confirmed and the working tree is clean, use the retained complete `read_issue` result. Collect only relationships whose `relation` is `child`; preserve each child's verified `repository`, canonical `url`, and `source` (`native` or `task-list`) and do not reinterpret unrelated references as sub-issues. Compare each child repository with the root artifact repository, case-insensitively for GitHub, and partition same-repository children from external children. An unsupported or empty relationship section means there are no assignable sub-issues.
 
 ### Assign the issue and sub-issues
 
@@ -115,19 +113,11 @@ Delegate to:
 /mach12:gh-assign <issue-number> [<sub-issue-number> ...]
 ```
 
-Pass the parent issue number followed by every sub-issue number from the previous step. The subroutine handles the three-way classification per issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt (Add me / Skip / Replace). Already-assigned is the expected case when returning for subsequent stages after `issue-plan` already assigned the user. Assignment failures are non-blocking.
+Pass the parent issue number followed only by same-repository sub-issue numbers from the previous step. Never pass an external child's bare number to this current-repository-only subroutine; report each external child by its verified canonical URL without attempting to assign it. The subroutine handles the three-way classification per issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt (Add me / Skip / Replace). Already-assigned is the expected case when returning for subsequent stages after `issue-plan` already assigned the user. Assignment failures are non-blocking.
 
 ## Step 3: Gather Context
 
-Read the issue and locate the implementation plan. Delegate to:
-
-```
-/mach12:gh-issue-read <issue-number> --marker mach12-plan
-```
-
-The subroutine returns the issue title, body, full comments stream, and the body of the comment tagged with `<!-- mach12-plan -->` (using the last match if multiple exist).
-
-If the marker comment was not found, fall back to identifying the most recent substantive comment that contains a staged implementation plan in the returned comments stream. Identify the requested stage(s).
+Use the complete `read_issue` result retained from Step 2. Scan its chronological top-level comments for `<!-- mach12-plan -->` and use the last matching comment. If the marker was not found, fall back to the most recent substantive comment that contains a staged implementation plan. Identify the requested stage(s).
 
 ## Step 4: Implement the Stage
 

@@ -1,0 +1,42 @@
+[
+  {
+    "old_path": "src/old.ts",
+    "new_path": "src/new.ts",
+    "diff": "@@ -1,2 +1,5 @@\n-old\n-old2\n+new\n+two\n+three\n+four\n+five",
+    "new_file": false,
+    "renamed_file": true,
+    "deleted_file": false,
+    "collapsed": false,
+    "too_large": false
+  },
+  {
+    "old_path": "README.md",
+    "new_path": "README.md",
+    "diff": "@@ -1 +1,2 @@\n existing\n+added",
+    "new_file": false,
+    "renamed_file": false,
+    "deleted_file": false,
+    "collapsed": false,
+    "too_large": false
+  },
+  {
+    "old_path": "src/add.ts",
+    "new_path": "src/add.ts",
+    "diff": "@@ -0,0 +1,2 @@\n+one\n+++counter",
+    "new_file": true,
+    "renamed_file": false,
+    "deleted_file": false,
+    "collapsed": false,
+    "too_large": false
+  },
+  {
+    "old_path": "src/delete.ts",
+    "new_path": "src/delete.ts",
+    "diff": "@@ -1 +0,0 @@\n---",
+    "new_file": false,
+    "renamed_file": false,
+    "deleted_file": true,
+    "collapsed": false,
+    "too_large": false
+  }
+]

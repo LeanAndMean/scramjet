@@ -62,6 +62,7 @@ describe("mach12 pr-validation candidate workflow", () => {
 			"actual merge base",
 		])
 			expect(boundary).toContain(clause);
+		expect(boundary).toContain('read_pr` with `include: ["files", "commits"]`');
 		expectInOrder(command, "## Step 1:", "## Step 2:", "## Step 3:", "Dispatch focused `mach12:test-designer`");
 	});
 
@@ -91,7 +92,8 @@ describe("mach12 pr-validation candidate workflow", () => {
 		expectInOrder(
 			publication,
 			"Prepare a review body",
-			"Post through `/mach12:gh-comment pr <pr-number>`",
+			"completely reread the PR with `read_pr`",
+			"add_pr_comment",
 			"Do not normalize tests into final suites",
 			"`message`: `/mach12:pr-validation-assessment <pr-number> --review-comment <numeric-comment-id>`",
 		);
@@ -147,6 +149,9 @@ describe("mach12 pr-validation-assessment accepted-proof workflow", () => {
 		expect(publication).toContain("`<!-- mach12-assessment -->`");
 		expect(publication).toContain("proof commit `V`, or `proof commit: none`");
 		expect(publication).toContain("final accepted test paths, node IDs, assertions, expected failures");
+		expect(publication).toContain("completely reread the PR with `read_pr`");
+		expect(publication).toContain("add_pr_comment");
+		expect(publication).toMatch(/never blindly retry/i);
 
 		const routing = section(command, "## Step 5:");
 		expect(routing).toContain("emit exactly one entry containing every accepted ID");
@@ -217,30 +222,19 @@ describe("mach12 validation simplification boundaries", () => {
 	});
 });
 
-describe("mach12 authoritative GitHub history helpers", () => {
-	it.each(["gh-pr-read", "gh-issue-read"])("%s paginates and verifies its comment stream", (basename) => {
-		const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
-		for (const clause of [
-			"gh api graphql --paginate",
-			"comments(first: 100, after: $endCursor)",
-			"totalCount",
-			"pageInfo { hasNextPage endCursor }",
-			"accumulated node count exactly equals `totalCount`",
-			"reject duplicate database IDs",
-			"do not return a partial array as complete",
-		])
-			expect(command).toContain(clause);
-	});
-
-	it.each(["gh-pr-read", "gh-issue-read"])("%s exposes timestamps with freshness guidance", (basename) => {
-		const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
-		const request = section(command, "Request parent", "The query must declare");
-		const result = section(command, "## Step 4: Return");
-		expect(request).toContain("`title`, `body`, `createdAt`, `updatedAt`");
-		expect(request).toContain("authorAssociation createdAt url");
-		expect(result).toContain("point-in-time evidence");
-		expect(result).toContain("verify potentially stale material claims against current authoritative context");
-	});
+describe("mach12 authoritative forge history", () => {
+	it.each(["pr-validation", "pr-validation-assessment"])(
+		"%s uses complete aggregate forge reads for PR and linked-issue context",
+		(basename) => {
+			const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
+			expect(command).toContain("read_pr");
+			expect(command).toContain("read_issue");
+			expect(command).toContain("complete PR document");
+			expect(command).toContain("complete body and conversation");
+			expect(command).not.toContain("mach12:gh-pr-read");
+			expect(command).not.toContain("mach12:gh-issue-read");
+		},
+	);
 
 	it("requires planning and review to reassess stale claims against current authority", () => {
 		const issuePlan = readFileSync(join(COMMANDS_DIR, "mach12:issue-plan.md"), "utf-8");
@@ -254,7 +248,7 @@ describe("mach12 authoritative GitHub history helpers", () => {
 	it("reads plausible duplicate candidates before issue classification", () => {
 		const issueCreate = readFileSync(join(COMMANDS_DIR, "mach12:issue-create.md"), "utf-8");
 		const duplicateCheck = section(issueCreate, "## Step 10:", "## Step 11:");
-		expect(duplicateCheck).toContain("/mach12:gh-issue-read <candidate-number>");
+		expect(duplicateCheck).toContain("read_issue");
 		expect(duplicateCheck).toContain("Only a successfully read candidate can be a clear duplicate");
 		expect(duplicateCheck).toContain("old age is insufficient proof that it is obsolete");
 	});
@@ -324,12 +318,17 @@ describe("mach12 executable validation integration", () => {
 		expect(push).toContain("Preserve an exact originating review ID");
 	});
 
-	it("captures the exact comment identity from the posting command", () => {
-		const ghComment = readFileSync(join(COMMANDS_DIR, "mach12:gh-comment.md"), "utf-8");
-		expect(ghComment).toContain("capture the posting command's output");
-		expect(ghComment).toContain("Use that returned URL directly");
-		expect(ghComment).toContain("do not infer identity by rereading the latest comment");
-		expect(ghComment).not.toContain(".comments[-1].url");
+	it("captures verified comment identity from forge publication", () => {
+		for (const command of [
+			prReviewFix,
+			push,
+			readCommand("pr-validation").content,
+			readCommand("pr-validation-assessment").content,
+		])
+			expect(command).not.toContain("mach12:gh-comment");
+		expect(readCommand("pr-validation").content).toContain("verified canonical URL");
+		expect(readCommand("pr-validation-assessment").content).toContain("verified canonical URL");
+		expect(push).toContain("record the verified canonical URL");
 	});
 
 	it("keeps final review, validation, and pre-merge choices after fixes", () => {

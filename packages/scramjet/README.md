@@ -139,6 +139,12 @@ The product-owned `scramjet` command set contains operational workflows for Scra
 
 The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still requires the issue-creation command's explicit approval, and troubleshooting never edits source or publishes an issue itself.
 
+## Forge content tools
+
+Scramjet provides eight independently allowlistable tools for current-repository issue and pull-request content: `read_issue`, `edit_issue`, `create_issue`, `add_issue_comment`, `read_pr`, `edit_pr`, `create_pr`, and `add_pr_comment`. Aggregate reads use compact deterministic bracket documents measured against semantically equivalent CLI JSON: ordinary Markdown and HTML remain readable, while a reserved directive alphabet keeps untrusted provider content structurally distinct and lossless. Ctrl+O displays the same representation the model receives; mutations return only the verified canonical URL. Structured failures distinguish no-write paths from ambiguous writes and support deliberate read-only `gh`/`glab` recovery without automatic fallback or unsafe retry.
+
+Canonical public GitHub and GitLab remotes select `gh` or `glab` respectively. The tools deliberately exclude search, labels, assignees, reviews, inline threads, checks/actions, merge, release, and Git operations. See [Forge Content Tools](docs/forge-tools.md) for schemas, range continuation, evidence rules, exact-edit guarantees, failure semantics, and scope boundaries.
+
 ## Mach 12
 
 Mach 12 is one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not required infrastructure for Scramjet operations.
@@ -158,7 +164,7 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus eight subroutine commands and eleven specialized agents covering code exploration, architecture, review, testing, and more. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
+Plus four subroutine commands and eleven specialized agents covering code exploration, architecture, review, testing, and more. Mach 12 uses the first-class forge tools for covered issue/PR content operations while retaining narrow GitHub CLI paths for search, assignment, labels, trust metadata, checks, merge, release, and Git operations. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
 
 ## Bundled command-set installation
 

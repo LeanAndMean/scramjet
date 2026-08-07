@@ -10,6 +10,9 @@ allowed-tools:
   - write
   - subagent
   - delegate
+  - get_scramjet_user_input
+  - read_pr
+  - add_pr_comment
 next:
   mode: open
   candidates:
@@ -51,33 +54,19 @@ For ordinary static reviews, preserve the documented bare-number fallback. For e
 
 ### Locate the review comment
 
-**If `--review-comment` was provided:** Fetch the specific comment by ID, then fetch the PR context for additional grounding.
+Use `read_pr` and continue every returned range with the unchanged snapshot until the complete PR document is visible.
 
-```
-gh api repos/:owner/:repo/issues/comments/<review-comment-id>
-```
+**If `--review-comment` was provided:** Require the explicit comment ID to match exactly one recognized review in that verified target-PR comment stream and use that comment's body before selecting findings or publishing the ID as provenance; otherwise stop. Do not fetch a second raw copy of content that could drift from the aggregate read. Validation-origin artifacts later apply the stronger authentication contract below.
 
-Extract the `body` field from the JSON response. This is the review comment content. Then delegate to `/mach12:gh-pr-read <pr-number>` (no marker) for the PR title, body, and comments. For an ordinary static review, require the explicit comment ID to match exactly one recognized review in that complete verified target-PR comment stream before selecting findings or publishing the ID as provenance; otherwise stop. Validation-origin artifacts instead use the stronger authentication contract below.
-
-**If `--review-comment` was NOT provided (fallback):** Delegate to:
-
-```
-/mach12:gh-pr-read <pr-number> --marker mach12-review
-```
-
-The subroutine returns the PR title, body, comments array, and the matched review comment body and numeric ID (most recent marker match). If no comment contains the marker, the subroutine reports that and the caller falls back to the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
+**If `--review-comment` was NOT provided (fallback):** Scan the chronological comments for `<!-- mach12-review -->` and use the last matching comment and its opaque ID. If no comment contains the marker, fall back to the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
 
 ### Locate the assessment comment (optional)
 
-**If `--assessment-comment` was provided:** Fetch it by ID:
+**If `--assessment-comment` was provided:** Require it to match exactly one comment in the same complete `read_pr` stream and use that body.
 
-```
-gh api repos/:owner/:repo/issues/comments/<assessment-comment-id>
-```
+**If not provided:** This is optional context. Do not attempt to locate the assessment heuristically—proceed without it.
 
-**If not provided:** This is optional context. Do not attempt to locate the assessment heuristically -- proceed without it.
-
-Save the review comment content for use in Step 4. Also retain the complete verified chronological top-level PR comment stream returned by `gh-pr-read` for the final retrospective.
+Save the review comment content for use in Step 4. Also retain the complete verified chronological top-level PR comment stream returned by `read_pr` for the final retrospective.
 
 ### Classify review cycles for final reporting
 

@@ -10,6 +10,10 @@ allowed-tools:
   - write
   - subagent
   - delegate
+  - get_scramjet_user_input
+  - read_pr
+  - read_issue
+  - add_pr_comment
 next:
   mode: closed
   candidates:
@@ -31,7 +35,7 @@ $ARGUMENTS
 
 Extract the required PR number and exact numeric `--review-comment` ID. Ask only when either is missing or ambiguous.
 
-Fetch that exact comment and verify its repository, PR, trusted author, and `<!-- mach12-review -->` marker. Use the current session and authoritative repository state rather than treating the review's conclusions as true. Re-read the PR, linked requirements, relevant implementation, and tests wherever needed to assess a claim.
+Use `read_pr` and continue every returned range with the unchanged snapshot until the complete PR document and top-level conversation are visible. Match the exact opaque `--review-comment` ID once in that verified stream and verify its repository, PR, trusted author, and `<!-- mach12-review -->` marker. Identify linked requirements from the complete PR evidence, use `read_issue` for each linked issue, and continue every returned range with its unchanged snapshot until its complete body and conversation are visible. Use the current session, relevant implementation, and tests rather than treating the preliminary review's conclusions as true.
 
 Require the PR to remain open, the primary repository to remain on the recorded non-detached PR head branch, local and GitHub heads to remain at implementation parent `P`, and the index to remain empty. Require all worktree changes to be the candidate test changes declared by validation, with no production or unrelated changes. If the state materially differs, stop without resetting, cleaning, stashing, or overwriting it.
 
@@ -69,7 +73,7 @@ Prepare an assessment body beginning `<!-- mach12-assessment -->` and link the e
 - confirmation that accepted tests are committed unchanged as executable criteria and must become green through production repairs without weakening, relocation, or duplication;
 - final local/upstream/GitHub convergence and clean-repository evidence when `V` exists.
 
-Post through `/mach12:gh-comment pr <pr-number>`, capture the numeric assessment ID, and verify its PR, marker, and trusted author. Present the final dispositions, proof commit or clean no-finding result, assessment URL, and recommended route.
+Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Pass the exact prepared body to `add_pr_comment` and capture its verified canonical URL and, for this GitHub-only handoff, the numeric assessment ID from that URL. Verify the exact stored comment belongs to the PR, has the expected marker and body, and was posted by the authenticated trusted user. If the tool reports an ambiguous write, use a fresh complete `read_pr` to reconcile the exact body and never blindly retry. Present the final dispositions, proof commit or clean no-finding result, assessment URL, and recommended route.
 
 ## Step 5: Route the result
 

@@ -8,6 +8,9 @@ allowed-tools:
   - glob
   - subagent
   - delegate
+  - get_scramjet_user_input
+  - read_issue
+  - add_issue_comment
 next:
   mode: open
   candidates:
@@ -38,13 +41,7 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue and locate the plan
 
-Delegate to:
-
-```
-/mach12:gh-issue-read <issue-number> --marker mach12-plan
-```
-
-The subroutine returns the issue title, body, full comments stream, and the body of the comment tagged with `<!-- mach12-plan -->` (using the last match if multiple exist).
+Use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Scan the complete chronological comment stream for `<!-- mach12-plan -->` and use the last matching comment.
 
 Understand:
 - The original problem statement and requirements.
@@ -217,11 +214,7 @@ If the user picks "Create revised plan", enter the revision loop:
 
    Only one comment is posted — the final accepted revision. Intermediate revisions are not posted, and revisions are never presented as deltas alone.
 
-6. **Post.** When the user picks "Post revised plan", pass the exact approved body unchanged to the existing comment subroutine; do not regenerate, summarize, or reformat it after approval. Then delegate to:
-
-   ```
-   /mach12:gh-comment issue <issue-number>
-   ```
+6. **Post.** When the user picks "Post revised plan", immediately before posting, completely reread the issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact approved body unchanged to `add_issue_comment`; do not regenerate, summarize, or reformat it after approval. Record the verified comment URL and opaque ID.
 
 If the user picks "Discuss findings", walk through the specific findings they want to explore, then ask again how to proceed. This step remains active across all discussion iterations until the user picks a terminal option (Create revised plan, Proceed, or Cancel).
 
@@ -233,11 +226,7 @@ If the user picks "Proceed as-is" and at least one Critical or Important finding
 - Each Critical and Important finding on its own line (one sentence each)
 - Keep the entire comment body under 15 lines
 
-Then delegate to:
-
-```
-/mach12:gh-comment issue <issue-number>
-```
+Immediately before posting, completely reread the issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact prepared decision body to `add_issue_comment` and record the verified comment URL.
 
 If the user picks "Proceed as-is" and all findings are Suggestions only, do NOT post a decision comment -- proceeding past suggestions is the expected path.
 
@@ -250,11 +239,7 @@ If the user picks "Cancel":
    - Finding counts by severity (e.g., "2 Critical, 1 Important, 3 Suggestions")
    - Keep the entire comment body to 5 lines or fewer
 
-   Then delegate to:
-
-   ```
-   /mach12:gh-comment issue <issue-number>
-   ```
+   Immediately before posting, completely reread the issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact prepared decision body to `add_issue_comment` and record the verified comment URL.
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
 

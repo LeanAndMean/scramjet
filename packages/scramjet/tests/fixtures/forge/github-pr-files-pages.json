@@ -1,0 +1,27 @@
+[
+  [
+    {
+      "sha": "aaa",
+      "filename": "src/new.ts",
+      "status": "renamed",
+      "additions": 5,
+      "deletions": 2,
+      "changes": 7,
+      "blob_url": "https://github.com/Acme/widget/blob/aaa/src/new.ts",
+      "raw_url": "https://github.com/Acme/widget/raw/aaa/src/new.ts",
+      "contents_url": "https://api.github.com/repos/Acme/widget/contents/src/new.ts?ref=aaa",
+      "previous_filename": "src/old.ts"
+    },
+    {
+      "sha": "bbb",
+      "filename": "README.md",
+      "status": "modified",
+      "additions": 1,
+      "deletions": 0,
+      "changes": 1,
+      "blob_url": "https://github.com/Acme/widget/blob/bbb/README.md",
+      "raw_url": "https://github.com/Acme/widget/raw/bbb/README.md",
+      "contents_url": "https://api.github.com/repos/Acme/widget/contents/README.md?ref=bbb"
+    }
+  ]
+]

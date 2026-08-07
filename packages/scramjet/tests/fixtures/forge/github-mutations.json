@@ -1,0 +1,26 @@
+{
+  "issue": {
+    "number": 41,
+    "html_url": "https://github.com/Acme/widget/issues/41",
+    "title": "Created issue",
+    "body": "Issue body"
+  },
+  "pr": {
+    "number": 42,
+    "html_url": "https://github.com/Acme/widget/pull/42",
+    "title": "Created PR",
+    "body": "PR body"
+  },
+  "issueComment": {
+    "id": 9876543210,
+    "html_url": "https://github.com/Acme/widget/issues/7#issuecomment-9876543210",
+    "issue_url": "https://api.github.com/repos/Acme/widget/issues/7",
+    "body": "Comment body"
+  },
+  "prComment": {
+    "id": 1234567890,
+    "html_url": "https://github.com/Acme/widget/pull/12#issuecomment-1234567890",
+    "issue_url": "https://api.github.com/repos/Acme/widget/issues/12",
+    "body": "Changed comment"
+  }
+}

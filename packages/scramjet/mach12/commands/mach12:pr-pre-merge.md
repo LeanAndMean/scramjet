@@ -9,6 +9,8 @@ allowed-tools:
   - edit
   - write
   - delegate
+  - get_scramjet_user_input
+  - read_pr
 next:
   mode: open
   candidates:
@@ -38,13 +40,7 @@ Extract the PR number from the input. If the input is ambiguous, ask the user to
 
 ## Step 2: Verify initial readiness
 
-Read ordinary GitHub readiness before changing the branch:
-
-```
-gh pr view <pr-number> --json state,isDraft,reviewDecision,mergeable,mergeStateStatus
-```
-
-Require the PR to be open, non-draft, and free of requested changes or required review, and read required checks with `gh pr checks <pr-number> --required`. If GitHub reports `CONFLICTING` or `DIRTY`, retain that conflict evidence and continue through checkout to Step 5 for guarded remediation rather than blocking immediately. This route does not bypass Step 5's Merge/Cancel choice and does not authorize an automatic merge. A behind branch continues to Step 5, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
+Use `read_pr` to read ordinary readiness and the complete top-level conversation before changing the branch, continuing every returned range with the unchanged snapshot until the full conversation is visible. Require the PR to be open, non-draft, and free of requested changes or required review. Treat `review-decision-capability="supported"` as required readiness evidence; if the capability is unsupported, use a narrow provider query only when it can conclusively establish both requested-change and required-review state, otherwise report incomplete rather than treating absence as review-clear. Retain a narrow `gh pr view <pr-number> --json mergeStateStatus` query for GitHub branch-freshness/conflict state, and read required checks with `gh pr checks <pr-number> --required`. If GitHub reports `CONFLICTING` or `DIRTY`, retain that conflict evidence and continue through checkout to Step 5 for guarded remediation rather than blocking immediately. This route does not bypass Step 5's Merge/Cancel choice and does not authorize an automatic merge. A behind branch continues to Step 5, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If mergeability remains unknown after one brief reread with `read_pr`, report incomplete rather than guessing.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness.
 
@@ -137,8 +133,8 @@ git merge origin/<default-branch>
 
 Build a picture of what the PR changed so the checklist in Step 7 can make informed decisions:
 
-1. **Changed files**: `gh pr diff <pr-number> --name-only` and `git diff origin/<default-branch>...HEAD --stat`
-2. **PR description**: `gh pr view <pr-number>`
+1. **PR content and changed-file metadata**: use `read_pr` with `include: ["files"]` and continue every range with the unchanged snapshot until complete.
+2. **Local diff summary**: `git diff origin/<default-branch>...HEAD --stat`
 3. **Commit history**: `git log origin/<default-branch>..HEAD --oneline`
 
 From these, identify what features, APIs, behaviors, or configurations were added, changed, or removed. Produce a brief change summary covering:

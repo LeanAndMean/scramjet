@@ -1,0 +1,78 @@
+[
+  {
+    "data": {
+      "repository": {
+        "issue": {
+          "number": 7,
+          "url": "https://github.com/Acme/widget/issues/7",
+          "state": "OPEN",
+          "author": { "login": "alice", "__typename": "User" },
+          "createdAt": "2026-01-01T00:00:00Z",
+          "updatedAt": "2026-01-04T00:00:00Z",
+          "labels": { "totalCount": 2, "nodes": [{ "name": "bug" }, { "name": "priority:high" }] },
+          "assignees": {
+            "totalCount": 2,
+            "nodes": [
+              { "login": "bob", "__typename": "User" },
+              { "login": "helper[bot]", "__typename": "Bot" }
+            ]
+          },
+          "title": "Parser <failure>",
+          "body": "first line\n- [ ] #8\n- [ ] Other/repository#10\n- [x] Related to #99 and #100\nlast line",
+          "comments": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "databaseId": 101,
+                "url": "https://github.com/Acme/widget/issues/7#issuecomment-101",
+                "author": { "login": "helper[bot]", "__typename": "Bot" },
+                "body": "same body",
+                "createdAt": "2026-01-02T00:00:00Z",
+                "updatedAt": "2026-01-02T00:30:00Z"
+              }
+            ],
+            "pageInfo": { "hasNextPage": true, "endCursor": "comment-1" }
+          }
+        }
+      }
+    }
+  },
+  {
+    "data": {
+      "repository": {
+        "issue": {
+          "number": 7,
+          "url": "https://github.com/Acme/widget/issues/7",
+          "state": "OPEN",
+          "author": { "login": "alice", "__typename": "User" },
+          "createdAt": "2026-01-01T00:00:00Z",
+          "updatedAt": "2026-01-04T00:00:00Z",
+          "labels": { "totalCount": 2, "nodes": [{ "name": "bug" }, { "name": "priority:high" }] },
+          "assignees": {
+            "totalCount": 2,
+            "nodes": [
+              { "login": "bob", "__typename": "User" },
+              { "login": "helper[bot]", "__typename": "Bot" }
+            ]
+          },
+          "title": "Parser <failure>",
+          "body": "first line\n- [ ] #8\n- [ ] Other/repository#10\n- [x] Related to #99 and #100\nlast line",
+          "comments": {
+            "totalCount": 2,
+            "nodes": [
+              {
+                "databaseId": 202,
+                "url": "https://github.com/Acme/widget/issues/7#issuecomment-202",
+                "author": null,
+                "body": "same body",
+                "createdAt": "2026-01-03T00:00:00Z",
+                "updatedAt": "2026-01-03T00:00:00Z"
+              }
+            ],
+            "pageInfo": { "hasNextPage": false, "endCursor": "comment-2" }
+          }
+        }
+      }
+    }
+  }
+]

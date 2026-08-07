@@ -1,0 +1,28 @@
+{
+  "issue": {
+    "id": 4101,
+    "iid": 41,
+    "project_id": 9001,
+    "web_url": "https://gitlab.com/Acme/platform/widget/-/work_items/41"
+  },
+  "pr": {
+    "id": 4201,
+    "iid": 42,
+    "project_id": 9001,
+    "web_url": "https://gitlab.com/Acme/platform/widget/-/merge_requests/42"
+  },
+  "issueComment": {
+    "id": 9876543210,
+    "project_id": 9001,
+    "noteable_id": 701,
+    "noteable_iid": 7,
+    "noteable_type": "Issue"
+  },
+  "prComment": {
+    "id": 1234567890,
+    "project_id": 9001,
+    "noteable_id": 1201,
+    "noteable_iid": 12,
+    "noteable_type": "MergeRequest"
+  }
+}
