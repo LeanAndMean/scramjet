@@ -58,6 +58,21 @@ function compareText(left: string, right: string): number {
 	return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function forgeEscape(codeUnit: number): string {
+	return `^!${codeUnit.toString(16).toUpperCase().padStart(4, "0")};`;
+}
+
+function presentationUnsafe(codeUnit: number): boolean {
+	return (
+		(codeUnit >= 0x7f && codeUnit <= 0x9f) ||
+		codeUnit === 0x061c ||
+		codeUnit === 0x200e ||
+		codeUnit === 0x200f ||
+		(codeUnit >= 0x202a && codeUnit <= 0x202e) ||
+		(codeUnit >= 0x2066 && codeUnit <= 0x2069)
+	);
+}
+
 function escapeAttribute(value: string | number | boolean): string {
 	const text = String(value);
 	let output = "";
@@ -70,55 +85,20 @@ function escapeAttribute(value: string | number | boolean): string {
 				index++;
 				continue;
 			}
-			throw new Error("Forge attribute contained an unsupported XML code unit");
 		}
 		if (
-			(codeUnit < 0x20 && codeUnit !== 0x09 && codeUnit !== 0x0a && codeUnit !== 0x0d) ||
+			codeUnit === 0x22 ||
+			codeUnit === 0x5e ||
+			codeUnit < 0x20 ||
+			presentationUnsafe(codeUnit) ||
 			codeUnit === 0xfffe ||
 			codeUnit === 0xffff ||
-			(codeUnit >= 0xdc00 && codeUnit <= 0xdfff)
+			(codeUnit >= 0xd800 && codeUnit <= 0xdfff)
 		) {
-			throw new Error("Forge attribute contained an unsupported XML code unit");
-		}
-		if (
-			(codeUnit >= 0x7f && codeUnit <= 0x9f) ||
-			codeUnit === 0x061c ||
-			codeUnit === 0x200e ||
-			codeUnit === 0x200f ||
-			(codeUnit >= 0x202a && codeUnit <= 0x202e) ||
-			(codeUnit >= 0x2066 && codeUnit <= 0x2069)
-		) {
-			output += `&#x${codeUnit.toString(16).toUpperCase().padStart(4, "0")};`;
+			output += forgeEscape(codeUnit);
 			continue;
 		}
-		switch (codeUnit) {
-			case 0x26:
-				output += "&amp;";
-				break;
-			case 0x3c:
-				output += "&lt;";
-				break;
-			case 0x3e:
-				output += "&gt;";
-				break;
-			case 0x22:
-				output += "&quot;";
-				break;
-			case 0x27:
-				output += "&apos;";
-				break;
-			case 0x09:
-				output += "&#9;";
-				break;
-			case 0x0d:
-				output += "&#13;";
-				break;
-			case 0x0a:
-				output += "&#10;";
-				break;
-			default:
-				output += text[index];
-		}
+		output += text[index];
 	}
 	return output;
 }
@@ -143,40 +123,30 @@ function actorAttributes(actor: ForgeActor, prefix = ""): Array<[string, string 
 	];
 }
 
-function attributeSafe(value: string | number | boolean | null): boolean {
-	if (value === null) return true;
-	const text = String(value);
-	for (let index = 0; index < text.length; index++) {
-		const codeUnit = text.charCodeAt(index);
-		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-			const next = text.charCodeAt(index + 1);
-			if (next >= 0xdc00 && next <= 0xdfff) {
-				index++;
-				continue;
-			}
-			return false;
-		}
-		if (
-			(codeUnit < 0x20 && codeUnit !== 0x09 && codeUnit !== 0x0a && codeUnit !== 0x0d) ||
-			codeUnit === 0xfffe ||
-			codeUnit === 0xffff ||
-			(codeUnit >= 0xdc00 && codeUnit <= 0xdfff)
-		) {
-			return false;
-		}
-	}
-	return true;
+function openDirective(
+	name: string,
+	values: Array<[string, string | number | boolean | null | undefined]> = [],
+): string {
+	return `^${name}${attributes(values)}{`;
+}
+
+function closeDirective(name: string): string {
+	return `^${name}}`;
+}
+
+function emptyDirective(
+	name: string,
+	values: Array<[string, string | number | boolean | null | undefined]> = [],
+): string {
+	return `^${name}${attributes(values)};`;
 }
 
 function compactRecord(name: string, values: Array<[string, string | number | boolean | null]>): string | null {
-	if (!values.every(([, value]) => attributeSafe(value))) return null;
-	const line = `<${name}${attributes(values)}/>`;
+	const line = emptyDirective(name, values);
 	return Buffer.byteLength(line, "utf8") <= COMPACT_RECORD_MAX_BYTES ? line : null;
 }
 
-const TAGGED_TEXT_ESCAPE = /^&(amp|lt|gt|#\d+|#x[0-9a-f]+);/i;
-
-function escapeText(value: string, following = ""): string {
+function escapeText(value: string): string {
 	let output = "";
 	for (let index = 0; index < value.length; index++) {
 		const codeUnit = value.charCodeAt(index);
@@ -188,32 +158,22 @@ function escapeText(value: string, following = ""): string {
 				continue;
 			}
 		}
-		if (codeUnit === 0x09) {
-			output += "&#9;";
-			continue;
-		}
-		if (codeUnit === 0x0d) {
-			output += "&#13;";
+		if (codeUnit === 0x0a) {
+			output += "\n";
 			continue;
 		}
 		if (
-			(codeUnit >= 0x7f && codeUnit <= 0x9f) ||
-			codeUnit === 0x061c ||
-			codeUnit === 0x200e ||
-			codeUnit === 0x200f ||
-			(codeUnit >= 0x202a && codeUnit <= 0x202e) ||
-			(codeUnit >= 0x2066 && codeUnit <= 0x2069)
+			codeUnit === 0x5e ||
+			codeUnit < 0x20 ||
+			presentationUnsafe(codeUnit) ||
+			codeUnit === 0xfffe ||
+			codeUnit === 0xffff ||
+			(codeUnit >= 0xd800 && codeUnit <= 0xdfff)
 		) {
-			output += `&#x${codeUnit.toString(16).toUpperCase().padStart(4, "0")};`;
+			output += forgeEscape(codeUnit);
 			continue;
 		}
-		if (codeUnit < 0x20 || codeUnit === 0xfffe || codeUnit === 0xffff || (codeUnit >= 0xd800 && codeUnit <= 0xdfff)) {
-			output += `&#x${codeUnit.toString(16).toUpperCase().padStart(4, "0")};`;
-			continue;
-		}
-		if (codeUnit === 0x26) output += TAGGED_TEXT_ESCAPE.test(value.slice(index) + following) ? "&amp;" : "&";
-		else if (codeUnit === 0x3c) output += "&lt;";
-		else output += value[index];
+		output += value[index];
 	}
 	return output;
 }
@@ -310,10 +270,9 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			const chunk = chunks[index];
 			const first = index === 0;
 			const last = index === chunks.length - 1;
-			const prefix = first ? `${indent}<${name}>` : "";
-			const suffix = last ? `</${name}>` : "";
-			const followingText = value.slice(chunk.start + chunk.text.length, chunk.start + chunk.text.length + 16);
-			add(`${prefix}${escapeText(chunk.text, followingText)}${suffix}`, precedingBreak !== "forced");
+			const prefix = first ? `${indent}${openDirective(name)}` : "";
+			const suffix = last ? closeDirective(name) : "";
+			add(`${prefix}${escapeText(chunk.text)}${suffix}`, precedingBreak !== "forced");
 			precedingBreak = chunk.breakAfter;
 		}
 		return chunks;
@@ -337,7 +296,9 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 	};
 
 	add(
-		`<artifact${attributes([
+		openDirective("artifact", [
+			["format", "forge-caret-1"],
+			["content-trust", "untrusted"],
 			["repository", repository.projectPath],
 			["kind", artifact.kind],
 			["number", artifact.number],
@@ -346,21 +307,21 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 			["created-at", artifact.createdAt],
 			["updated-at", artifact.updatedAt],
 			...actorAttributes(artifact.author, "author-"),
-		])}>`,
+		]),
 	);
 	for (const label of [...artifact.labels].sort(compareText)) addReadonly("  ", "label", label);
 	for (const assignee of [...artifact.assignees].sort((left, right) =>
 		compareText(left.login ?? "", right.login ?? ""),
 	)) {
-		add(`  <assignee${attributes(actorAttributes(assignee))}/>`);
+		add(`  ${emptyDirective("assignee", actorAttributes(assignee))}`);
 	}
 
 	if (artifact.kind === "issue") {
 		const capability = artifact.relationships.capability === "supported" ? null : artifact.relationships.capability;
 		if (artifact.relationships.items.length === 0) {
-			add(`  <relationships${attributes([["capability", capability]])}/>`);
+			add(`  ${emptyDirective("relationships", [["capability", capability]])}`);
 		} else {
-			add(`  <relationships${attributes([["capability", capability]])}>`);
+			add(`  ${openDirective("relationships", [["capability", capability]])}`);
 			for (const item of [...artifact.relationships.items].sort((left, right) => {
 				const relation = compareText(left.relation, right.relation);
 				return (
@@ -371,23 +332,23 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 				);
 			})) {
 				add(
-					`    <issue${attributes([
+					`    ${openDirective("issue", [
 						["relation", item.relation],
 						["source", item.source],
 						["repository", item.repository.projectPath],
 						["number", item.number],
 						["state", item.state],
 						["url", item.url],
-					])}>`,
+					])}`,
 				);
 				addReadonly("      ", "title", item.title);
-				add("    </issue>");
+				add(`    ${closeDirective("issue")}`);
 			}
-			add("  </relationships>");
+			add(`  ${closeDirective("relationships")}`);
 		}
 	} else {
 		add(
-			`  <readiness${attributes([
+			`  ${emptyDirective("readiness", [
 				["draft", artifact.readiness.draft],
 				["mergeable", artifact.readiness.mergeable],
 				["review-decision-capability", artifact.readiness.reviewDecision.capability],
@@ -399,36 +360,36 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 				],
 				["head", artifact.readiness.head],
 				["base", artifact.readiness.base],
-			])}/>`,
+			])}`,
 		);
 	}
 
 	addField("  ", "title", artifact.title, { kind: "artifact" });
 	addField("  ", "body", artifact.body, { kind: "artifact" });
-	if (artifact.comments.length > 0) add("  <comments>");
+	if (artifact.comments.length > 0) add(`  ${openDirective("comments")}`);
 	for (const comment of [...artifact.comments].sort(
 		(left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.id, right.id),
 	)) {
 		add(
-			`    <comment${attributes([
+			`    ${openDirective("comment", [
 				["id", comment.id],
 				["url", comment.url],
 				["created-at", comment.createdAt],
 				["updated-at", comment.updatedAt === comment.createdAt ? null : comment.updatedAt],
 				...actorAttributes(comment.author, "author-"),
-			])}>`,
+			])}`,
 		);
 		addField("      ", "body", comment.body, { kind: "comment", id: comment.id });
-		add("    </comment>");
+		add(`    ${closeDirective("comment")}`);
 	}
-	if (artifact.comments.length > 0) add("  </comments>");
+	if (artifact.comments.length > 0) add(`  ${closeDirective("comments")}`);
 	const coreLines = { start: 0, end: lines.length };
 	const include: ForgePrSection[] = [];
 
 	if (artifact.kind === "pr") {
 		if (artifact.sections.files !== undefined) {
 			include.push("files");
-			add("  <files>");
+			add(`  ${openDirective("files")}`);
 			for (const file of [...artifact.sections.files].sort((left, right) => compareText(left.path, right.path))) {
 				const compact = compactRecord("file", [
 					["path", file.path],
@@ -440,22 +401,22 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 				if (compact !== null) add(compact);
 				else {
 					add(
-						`    <file${attributes([
+						`    ${openDirective("file", [
 							["additions", file.additions],
 							["deletions", file.deletions],
-						])}>`,
+						])}`,
 					);
 					addReadonly("      ", "path", file.path);
 					if (file.previousPath !== null) addReadonly("      ", "previous-path", file.previousPath);
 					addReadonly("      ", "status", file.status);
-					add("    </file>");
+					add(`    ${closeDirective("file")}`);
 				}
 			}
-			add("  </files>");
+			add(`  ${closeDirective("files")}`);
 		}
 		if (artifact.sections.commits !== undefined) {
 			include.push("commits");
-			add("  <commits>");
+			add(`  ${openDirective("commits")}`);
 			for (const commit of [...artifact.sections.commits].sort(
 				(left, right) => compareText(left.createdAt, right.createdAt) || compareText(left.sha, right.sha),
 			)) {
@@ -468,20 +429,20 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 				]);
 				if (compact !== null) add(compact);
 				else {
-					add("    <commit>");
+					add(`    ${openDirective("commit")}`);
 					addReadonly("      ", "sha", commit.sha);
 					addReadonly("      ", "title", commit.title);
 					if (commit.author !== null) addReadonly("      ", "author", commit.author);
 					addReadonly("      ", "created-at", commit.createdAt);
 					if (commit.url !== null) addReadonly("      ", "url", commit.url);
-					add("    </commit>");
+					add(`    ${closeDirective("commit")}`);
 				}
 			}
-			add("  </commits>");
+			add(`  ${closeDirective("commits")}`);
 		}
 		if (artifact.sections.checks !== undefined) {
 			include.push("checks");
-			add("  <checks>");
+			add(`  ${openDirective("checks")}`);
 			for (const check of [...artifact.sections.checks].sort(
 				(left, right) => compareText(left.name, right.name) || compareText(left.id, right.id),
 			)) {
@@ -494,19 +455,19 @@ export function renderForgeDocument(repository: ForgeRepository, artifact: Forge
 				]);
 				if (compact !== null) add(compact);
 				else {
-					add("    <check>");
+					add(`    ${openDirective("check")}`);
 					addReadonly("      ", "id", check.id);
 					addReadonly("      ", "name", check.name);
 					addReadonly("      ", "status", check.status);
 					if (check.conclusion !== null) addReadonly("      ", "conclusion", check.conclusion);
 					if (check.url !== null) addReadonly("      ", "url", check.url);
-					add("    </check>");
+					add(`    ${closeDirective("check")}`);
 				}
 			}
-			add("  </checks>");
+			add(`  ${closeDirective("checks")}`);
 		}
 	}
-	add("</artifact>");
+	add(closeDirective("artifact"));
 
 	const text = lines.join("");
 	return {
@@ -588,11 +549,17 @@ export function sliceForgeDocument(rendered: RenderedForgeDocument, request: For
 		end++;
 	}
 	if (end === start) throw new Error("A forge document position exceeds the output byte limit");
-	const include = rendered.include.length === 0 ? "" : ` include=${JSON.stringify(rendered.include)}`;
+	const include = rendered.include.length === 0 ? null : rendered.include.join(",");
 	let continuation = "";
 	while (end < rendered.lines.length) {
 		const nextOffset = end + 1;
-		continuation = `[Showing positions ${start + 1}-${end} of ${rendered.lines.length}. Use offset=${nextOffset} snapshot=${rendered.snapshot}${include} to continue.]`;
+		continuation = emptyDirective("continue", [
+			["shown", `${start + 1}-${end}`],
+			["total", rendered.lines.length],
+			["next-offset", nextOffset],
+			["snapshot", rendered.snapshot],
+			["include", include],
+		]);
 		if (selectedBytes + Buffer.byteLength(`\n\n${continuation}`, "utf8") <= DEFAULT_MAX_BYTES) break;
 		end--;
 		selectedBytes -= Buffer.byteLength(rendered.lines[end], "utf8");

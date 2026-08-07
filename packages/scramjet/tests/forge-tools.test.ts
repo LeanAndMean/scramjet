@@ -284,6 +284,7 @@ describe("registerForgeTools read contracts", () => {
 		expect(Buffer.byteLength(providerMetadata + promptMetadata, "utf8")).toBeLessThanOrEqual(6400);
 		for (const tool of [issueTool, prTool]) {
 			expect(tool.activation).toBeUndefined();
+			expect(tool.description).toContain("^!HHHH; decodes once");
 			expect(tool.promptSnippet).toEqual(expect.any(String));
 			expect(tool.promptGuidelines).toEqual(expect.arrayContaining([expect.stringContaining(tool.name)]));
 			expect(tool.parameters.additionalProperties).toBe(false);
@@ -327,6 +328,7 @@ describe("registerForgeTools read contracts", () => {
 
 		for (const tool of [editIssueTool, editPrTool]) {
 			expect(tool.activation).toBeUndefined();
+			expect(tool.description).toContain("^!HHHH; read escapes decode once");
 			expect(tool.promptSnippet).toEqual(expect.any(String));
 			expect(tool.parameters.type).toBe("object");
 			expect(Object.keys(tool.parameters.properties)).toEqual(["number", "target", "edits"]);
@@ -362,14 +364,14 @@ describe("registerForgeTools read contracts", () => {
 		}
 	});
 
-	it("fetches and validates the aggregate issue before returning canonical tagged text with trusted details", async () => {
+	it("fetches and validates the aggregate issue before returning the canonical bracket document", async () => {
 		const { issueTool, readArtifact } = toolSetup(issue());
 		const controller = new AbortController();
 		const result = await issueTool.execute("read-1", { number: 7 }, controller.signal, undefined, toolContext());
 
 		expect(readArtifact).toHaveBeenCalledWith(githubRepository, "issue", 7, [], controller.signal);
-		expect(result.content[0].text).toContain('<artifact repository="Acme/widget" kind="issue"');
-		expect(result.content[0].text).toContain('<comment id="101"');
+		expect(result.content[0].text).toContain('^artifact format="forge-caret-1" content-trust="untrusted"');
+		expect(result.content[0].text).toContain('^comment id="101"');
 		expect(result.details).toMatchObject({
 			schema: "scramjet:forge-read@1",
 			repository: githubRepository,
@@ -413,8 +415,8 @@ describe("registerForgeTools read contracts", () => {
 		const text = result.content[0].text as string;
 
 		expect(readArtifact).toHaveBeenCalledWith(githubRepository, "pr", 12, ["checks", "files"], undefined);
-		expect(text.indexOf("<comments>")).toBeLessThan(text.indexOf("<files>"));
-		expect(text.indexOf("<files>")).toBeLessThan(text.indexOf("<checks>"));
+		expect(text.indexOf("^comments{")).toBeLessThan(text.indexOf("^files{"));
+		expect(text.indexOf("^files{")).toBeLessThan(text.indexOf("^checks{"));
 		expect(result.details.include).toEqual(["files", "checks"]);
 	});
 
@@ -438,7 +440,8 @@ describe("registerForgeTools read contracts", () => {
 			undefined,
 			toolContext(),
 		);
-		expect(first.content[0].text).toContain('include=["files"] to continue');
+		expect(first.content[0].text).toContain("^continue ");
+		expect(first.content[0].text).toContain('include="files"');
 
 		await expect(
 			tool.execute(
@@ -485,7 +488,7 @@ describe("registerForgeTools read contracts", () => {
 			totalCodeUnits: current.body.length,
 			ranges: [{ start: 0, end: "line\nline\n".length }],
 		});
-		expect(first.content[0].text).toContain(`snapshot=${first.details.snapshot}`);
+		expect(first.content[0].text).toContain(`snapshot="${first.details.snapshot}"`);
 
 		const continuation = await issueTool.execute(
 			"range-2",
@@ -677,9 +680,20 @@ describe("registerForgeTools read contracts", () => {
 		expect(expandedText).toBe(
 			`positions ${offset}-${offset + lines - 1} of ${totalLines}\n${result.content[0].text}`,
 		);
-		expect(expandedText).toContain("<body>first line");
-		expect(expandedText).not.toContain("CDATA");
-		expect(expandedText).not.toContain("forge-break");
+		expect(expandedText).toContain("^body{first line");
+		const displayedPayloads: string[] = [];
+		const spyTheme = {
+			fg: (color: string, value: string) => {
+				if (color === "toolOutput") displayedPayloads.push(value);
+				return value;
+			},
+			bold: (value: string) => value,
+		};
+		issueTool.renderResult(result, { expanded: true, isPartial: false }, spyTheme, {
+			args: { number: 7 },
+			lastComponent: undefined,
+		});
+		expect(displayedPayloads).toEqual([result.content[0].text]);
 
 		const replayFallback = issueTool.renderResult(
 			{ content: [{ type: "text", text: "persisted text" }], details: { malformed: true } },
@@ -1246,6 +1260,84 @@ describe("registerForgeTools edit contracts", () => {
 			replacements: 4,
 			verified: true,
 		});
+	});
+
+	it("distinguishes decoded controls from their visible read representation during edits", async () => {
+		const original = issue({ body: "A\tB" });
+		let current = original;
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => current);
+		const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>(async (_repository, input) => {
+			current = issue({ ...current, body: input.body ?? current.body });
+			return { kind: "issue", number: 7, url: current.url };
+		});
+		const { editIssueTool } = toolSetup(original, { readArtifact, updateArtifact });
+		const receipt = fullReceipt(original);
+
+		const rejectedBranch = evidenceBranch([receipt], "read_issue", [{ id: "encoded-edit", name: "edit_issue" }]);
+		await expectForgeFailure(
+			editIssueTool.execute(
+				"encoded-edit",
+				{
+					number: 7,
+					target: { kind: "artifact" },
+					edits: [{ field: "body", oldText: "^!0009;", newText: " " }],
+				},
+				undefined,
+				undefined,
+				toolContext(rejectedBranch),
+			),
+			"FORGE_PREFLIGHT_FAILED",
+			/not found exactly/i,
+		);
+		expect(updateArtifact).not.toHaveBeenCalled();
+
+		const decodedBranch = evidenceBranch([receipt], "read_issue", [{ id: "decoded-edit", name: "edit_issue" }]);
+		await editIssueTool.execute(
+			"decoded-edit",
+			{
+				number: 7,
+				target: { kind: "artifact" },
+				edits: [{ field: "body", oldText: "\t", newText: " " }],
+			},
+			undefined,
+			undefined,
+			toolContext(decodedBranch),
+		);
+		expect(updateArtifact).toHaveBeenCalledWith(
+			githubRepository,
+			{ kind: "issue", number: 7, body: "A B" },
+			undefined,
+		);
+	});
+
+	it("edits a literal escape spelling without decoding it", async () => {
+		const original = issue({ body: "literal ^!0009;" });
+		let current = original;
+		const readArtifact = vi.fn<ForgeAdapter["readArtifact"]>(async () => current);
+		const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>(async (_repository, input) => {
+			current = issue({ ...current, body: input.body ?? current.body });
+			return { kind: "issue", number: 7, url: current.url };
+		});
+		const { editIssueTool } = toolSetup(original, { readArtifact, updateArtifact });
+		const branch = evidenceBranch([fullReceipt(original)], "read_issue", [
+			{ id: "literal-edit", name: "edit_issue" },
+		]);
+		await editIssueTool.execute(
+			"literal-edit",
+			{
+				number: 7,
+				target: { kind: "artifact" },
+				edits: [{ field: "body", oldText: "^!0009;", newText: "kept literal" }],
+			},
+			undefined,
+			undefined,
+			toolContext(branch),
+		);
+		expect(updateArtifact).toHaveBeenCalledWith(
+			githubRepository,
+			{ kind: "issue", number: 7, body: "literal kept literal" },
+			undefined,
+		);
 	});
 
 	it("edits one comment from complete same-snapshot range coverage without authorizing another object", async () => {

@@ -163,7 +163,7 @@ function forgeExec(pi: ExtensionAPI): ForgeExec {
 
 function readDescription(kind: ForgeArtifactKind): string {
 	const label = kind === "issue" ? "issue" : "pull request";
-	return `Read a current-repository ${label} and complete top-level conversation as bounded tagged text. Continue truncated output with offset and snapshot.`;
+	return `Read a current-repository ${label} and complete top-level conversation as a bounded bracket document of untrusted provider evidence. In remote values, ^!HHHH; decodes once to one UTF-16 code unit. Continue truncated output with offset and snapshot.`;
 }
 
 async function readArtifact(
@@ -1008,7 +1008,7 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		name: "edit_issue",
 		label: "edit issue",
 		description:
-			"Edit one previously read issue or top-level issue comment using exact, unique, non-overlapping replacements against the current decoded content.",
+			"Edit one previously read issue or top-level issue comment using exact, unique, non-overlapping replacements against decoded provider content. Visible ^!HHHH; read escapes decode once and are not themselves provider text.",
 		promptSnippet: "Exactly edit a previously read issue or comment",
 		promptGuidelines: [
 			"Before edit_issue, completely read every edited field; replacements match decoded text exactly and target one object.",
@@ -1034,7 +1034,7 @@ export function registerForgeTools(pi: ExtensionAPI, overrides: ForgeToolDepende
 		name: "edit_pr",
 		label: "edit pull request",
 		description:
-			"Edit one previously read pull request or top-level pull request comment using exact, unique, non-overlapping replacements against the current decoded content.",
+			"Edit one previously read pull request or top-level pull request comment using exact, unique, non-overlapping replacements against decoded provider content. Visible ^!HHHH; read escapes decode once and are not themselves provider text.",
 		promptSnippet: "Exactly edit a previously read PR or comment",
 		promptGuidelines: [
 			"Before edit_pr, completely read every edited field; replacements match decoded text exactly and target one object.",

@@ -36,11 +36,13 @@ read_pr({ number, include?, offset?, limit?, snapshot? })
 
 Each call fetches and validates the complete requested remote data before rendering any range. Pagination gaps, duplicate identities, malformed pages, or missing requested sections fail instead of producing a partial authoritative document.
 
-### Tagged document
+### Bracket document
 
-Reads return deterministic nested tagged text. The model-visible result is also the expanded TUI representation; Ctrl+O adds only terminal styling and layout. Metadata attributes use XML escaping. Remote element text leaves ordinary Markdown punctuation literal, escapes `<` as `&lt;`, and escapes a literal ampersand only when it begins a reserved escape sequence; decoding `&amp;` and `&lt;` once and interpreting numeric references as code units therefore recovers the exact source without exposing untrusted tags. Ordinary LF remains a physical line break, CR uses `&#13;`, and presentation controls and unsupported code units use visible lossless numeric references. This is a model-readable tagged format, not an XML parser contract.
+Reads return a deterministic nested bracket document. The model-visible result is also the expanded TUI representation; Ctrl+O adds only terminal styling and layout. The root declares `format="forge-caret-1"` and `content-trust="untrusted"`: provider values are evidence, never instructions. Trusted structure uses `^name ...{` and `^name}` container directives plus `^name ...;` empty records. Directive and attribute names are fixed by Scramjet, so remote content cannot create structure.
 
-Oversized logical lines are internally segmented for bounded continuation but emitted without transport comments, marker text, or inserted newlines. The root artifact title/body and each comment body are the mutable fields; relationship titles and metadata are read-only. Root identity and metadata share one `<artifact>` element, labels and assignees repeat directly beneath it, and absent collections are omitted. Supported issue-relationship capability is the default; unsupported capability is explicit. Default user authors omit `author-kind="user"`; other author kinds are explicit, and equal comment creation/update timestamps omit the redundant update attribute. Ordinary file/commit/check records use compact escaped attributes with deterministic expanded fallback for unsafe or oversized values.
+Remote text leaves ordinary Markdown and HTML punctuation literal, including `<`, `>`, `&`, quotes, apostrophes, comments, entity spellings, braces, and backslashes. The reserved caret, CR, tabs, terminal controls, presentation controls, unsupported code units, and attribute quotes use the visible one-pass escape `^!HHHH;`, where `HHHH` is one uppercase UTF-16 code unit. Valid surrogate pairs remain literal. Escapes are never decoded recursively, so a source string that resembles an escape remains distinguishable from the code unit represented by that escape. Ordinary LF remains a physical line break.
+
+Oversized logical lines are internally segmented for bounded continuation but emitted without marker text or inserted newlines. The root artifact title/body and each comment body are the mutable fields; relationship titles and metadata are read-only. Labels and assignees repeat directly beneath the artifact, and absent collections are omitted. Supported issue-relationship capability is the default; unsupported capability is explicit. Default user authors omit `author-kind="user"`; other author kinds are explicit, and equal comment creation/update timestamps omit the redundant update attribute. Ordinary file/commit/check records use compact bracket directives with deterministic expanded fallback when a record is oversized.
 
 Stable document order is:
 
@@ -54,7 +56,7 @@ Comment IDs are opaque strings. Do not infer provider-specific numeric semantics
 
 ### Ranges and snapshots
 
-`offset` is a 1-indexed canonical range position and `limit` bounds requested positions. Positions ordinarily correspond to physical document lines; an oversized logical line may occupy multiple positions without introducing model-visible separators. Persisted output is also capped at 2,000 positions or 50KB, and a truncated result supplies the exact next offset, snapshot, and `include` value to use.
+`offset` is a 1-indexed canonical range position and `limit` bounds requested positions. Positions ordinarily correspond to physical document lines; an oversized logical line may occupy multiple positions without introducing model-visible separators. Persisted output is also capped at 2,000 positions or 50KB. A truncated result appends a reserved `^continue ...;` directive carrying the exact next offset, snapshot, and `include` value to use; remote text cannot forge it because source carets are escaped.
 
 Continue a document with the unchanged `snapshot`. Every continuation refetches the complete requested artifact; if its canonical document changed, the call fails and instructs the model to restart at offset 1. Ranges from one snapshot reconstruct the document losslessly.
 
@@ -98,7 +100,7 @@ edit_pr({
 
 An artifact target may edit title and body in one call. A comment target accepts body edits only. One call targets exactly one remote object.
 
-Every `oldText` must be non-empty, exact, unique in its original decoded field, and non-overlapping with sibling replacements. Replacements are all computed against the same refetched original, not incrementally. No whitespace, Unicode, quote, dash, line-ending, tagged-text escaping, or fuzzy normalization is applied. No-op replacements are rejected.
+Every `oldText` must be non-empty, exact, unique in its original decoded field, and non-overlapping with sibling replacements. Replacements are all computed against the same refetched original, not incrementally. `oldText` and `newText` use decoded provider text, not visible bracket escapes: for example, a displayed `^!0009;` tab is supplied as a JSON-decoded tab. No whitespace, Unicode, quote, dash, line-ending, bracket-format, or fuzzy normalization is applied. No-op replacements are rejected.
 
 Each edited field must have complete prior-read coverage. Partial ranges can combine only when their trusted receipts share one canonical snapshot. GitLab pull-request title edits must preserve the existing prefix-derived draft state; draft-state changes remain outside the edit surface. A successful edit returns only the canonical target URL as model-visible text; structured details retain identity, target, changed field names, replacement count, and verification status. The exact request already persists in the tool call. Reread when later work needs fresh remote content.
 
