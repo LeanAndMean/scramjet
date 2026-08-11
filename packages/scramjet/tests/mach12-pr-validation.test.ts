@@ -62,7 +62,7 @@ describe("mach12 pr-validation candidate workflow", () => {
 			"actual merge base",
 		])
 			expect(boundary).toContain(clause);
-		expect(boundary).toContain('read_pr` with `include: ["files", "commits"]`');
+		expect(boundary).toContain('read_pr` with `include: ["artifact", "comments", "files", "commits"]`');
 		expectInOrder(command, "## Step 1:", "## Step 2:", "## Step 3:", "Dispatch focused `mach12:test-designer`");
 	});
 
@@ -92,7 +92,7 @@ describe("mach12 pr-validation candidate workflow", () => {
 		expectInOrder(
 			publication,
 			"Prepare a review body",
-			"completely reread the PR with `read_pr`",
+			'call `read_pr` with `include: ["artifact", "comments"]`',
 			"add_pr_comment",
 			"Do not normalize tests into final suites",
 			"`message`: `/mach12:pr-validation-assessment <pr-number> --review-comment <numeric-comment-id>`",
@@ -149,7 +149,7 @@ describe("mach12 pr-validation-assessment accepted-proof workflow", () => {
 		expect(publication).toContain("`<!-- mach12-assessment -->`");
 		expect(publication).toContain("proof commit `V`, or `proof commit: none`");
 		expect(publication).toContain("final accepted test paths, node IDs, assertions, expected failures");
-		expect(publication).toContain("completely reread the PR with `read_pr`");
+		expect(publication).toContain('call `read_pr` with `include: ["artifact", "comments"]`');
 		expect(publication).toContain("add_pr_comment");
 		expect(publication).toMatch(/never blindly retry/i);
 
@@ -229,8 +229,8 @@ describe("mach12 authoritative forge history", () => {
 			const command = readFileSync(join(COMMANDS_DIR, `mach12:${basename}.md`), "utf-8");
 			expect(command).toContain("read_pr");
 			expect(command).toContain("read_issue");
-			expect(command).toContain("complete PR document");
-			expect(command).toContain("complete body and conversation");
+			expect(command).toContain("returned segment window");
+			expect(command).toContain("native object and comments segments");
 			expect(command).not.toContain("mach12:gh-pr-read");
 			expect(command).not.toContain("mach12:gh-issue-read");
 		},

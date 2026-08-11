@@ -50,7 +50,7 @@ Extract the PR number and the `--review-comment` ID if present. If the input is 
 
 ### Locate the review comment
 
-Use `read_pr` and continue every returned range with the unchanged snapshot until the complete PR document is visible.
+Use `read_pr` and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot until the native PR object and comments segments are complete.
 
 **If `--review-comment` was provided:** Require the explicit comment ID to match exactly one comment in that verified stream, and use that comment's body. Do not fetch a second raw copy of content that could drift from the aggregate read.
 
@@ -99,7 +99,7 @@ Prepare the assessment body. It must include:
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) when referring to findings; reserve linkable reference syntax for intentional GitHub relationships.
 
-Post the body immediately—do not ask the user for approval first. Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact body to `add_pr_comment`. Record the verified comment URL and opaque ID; on GitHub, retain its numeric form for downstream command wires.
+Post the body immediately—do not ask the user for approval first. Immediately before posting, call `read_pr` with `include: ["artifact", "comments"]` in an earlier assistant tool round and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot. Then pass the exact body to `add_pr_comment`. Record the verified comment URL and opaque ID; on GitHub, retain its numeric form for downstream command wires.
 
 ## Step 5: Present CLI summary
 
@@ -177,7 +177,7 @@ For each deferred item, check for existing issues before creating a new one:
    - **No results**: proceed to create the issue.
    - **Clear duplicate**: if an existing **open** issue's title is nearly identical, skip creation and post a comment on the existing issue linking the new finding. If the near-identical match is a closed issue, treat it as an ambiguous match instead (a previously-closed issue should not block creation).
 
-     Prepare a comment body of the form: `Related finding from PR #<pr-number> review: <F/S identifier and summary of the deferred finding>.` The originating same-repository PR must be linkable while the finding retains its F/S identifier. Immediately before posting, completely reread the existing issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Only in a later assistant tool round, pass the exact prepared body to `add_issue_comment`. Use the verified comment URL in the summary block below.
+     Prepare a comment body of the form: `Related finding from PR #<pr-number> review: <F/S identifier and summary of the deferred finding>.` The originating same-repository PR must be linkable while the finding retains its F/S identifier. Immediately before posting, call `read_issue` with `include: ["artifact", "comments"]` in an earlier assistant tool round and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot. Only in a later assistant tool round, pass the exact prepared body to `add_issue_comment`. Use the verified comment URL in the summary block below.
 
    - **Ambiguous match**: if results are related but not clearly duplicates, still create the issue but add a "Potentially related" note at the end of the issue body listing the matched issue numbers, titles, and states.
 
@@ -198,7 +198,7 @@ Then proceed to **Persist Deferred-Item Decisions** below.
 
 Update the assessment comment to change the classification of every deferred item from "Deferred" to "Genuine". Also update the staged implementation plan within the assessment comment to incorporate the reclassified items.
 
-1. Use `read_pr` again after posting the assessment and continue every returned range with the unchanged snapshot until the assessment comment body is completely covered.
+1. Use `read_pr` again after posting the assessment with `include: ["comments"]` and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot until the assessment comment body is completely covered.
 
 2. In the comment body, for each deferred item, change its classification from "Deferred" to "Genuine".
 
@@ -243,7 +243,7 @@ After displaying the summary block (Options 1 and 3 only, and only when at least
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) for artifact-local findings; format any intentional issue or PR relationships under Step 4’s linkable-reference policy.
 
-Immediately before posting, completely reread the PR with `read_pr` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact prepared decision body to `add_pr_comment` and record the verified comment URL.
+Immediately before posting, call `read_pr` with `include: ["artifact", "comments"]` in an earlier assistant tool round and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot. Then pass the exact prepared decision body to `add_pr_comment` and record the verified comment URL.
 
 ## Step 7: Surface comment IDs for the next step
 

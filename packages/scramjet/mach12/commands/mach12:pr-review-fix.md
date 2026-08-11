@@ -54,7 +54,7 @@ For ordinary static reviews, preserve the documented bare-number fallback. For e
 
 ### Locate the review comment
 
-Use `read_pr` and continue every returned range with the unchanged snapshot until the complete PR document is visible.
+Use `read_pr` and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot until the native PR object and complete top-level comments are visible.
 
 **If `--review-comment` was provided:** Require the explicit comment ID to match exactly one recognized review in that verified target-PR comment stream and use that comment's body before selecting findings or publishing the ID as provenance; otherwise stop. Do not fetch a second raw copy of content that could drift from the aggregate read. Validation-origin artifacts later apply the stronger authentication contract below.
 

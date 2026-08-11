@@ -59,7 +59,7 @@ git branch --show-current
 gh repo view --json defaultBranchRef --jq .defaultBranchRef.name
 ```
 
-Use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Retain this complete read for branch-name derivation, sub-issue detection, and the implementation-plan lookup in Step 3.
+Use `read_issue` and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot until the native issue object, comments, and relationship segments are complete. Retain those complete replies for branch-name derivation, sub-issue detection, and the implementation-plan lookup in Step 3.
 
 ### If on the default branch
 
@@ -103,7 +103,7 @@ After the branch is confirmed (whether by checkout, silent match, or user confir
 
 ### Detect sub-issues
 
-After the branch is confirmed and the working tree is clean, use the retained complete `read_issue` result. Collect only relationships whose `relation` is `child`; preserve each child's verified `repository`, canonical `url`, and `source` (`native` or `task-list`) and do not reinterpret unrelated references as sub-issues. Compare each child repository with the root artifact repository, case-insensitively for GitHub, and partition same-repository children from external children. An unsupported or empty relationship section means there are no assignable sub-issues.
+After the branch is confirmed and the working tree is clean, use the retained provider-native relationship reply. GitHub uses `sub_issues`: parse each returned object's retained `html_url` for owner/repository and number, then compare that repository with the root issue's `html_url` repository case-insensitively. GitLab uses `relationships`: use each hierarchy item's `webUrl` and `iid` with the same repository-qualified rule. Partition same-repository children from external children, and do not reinterpret task-list text or unrelated references as native sub-issues. An empty native list means there are no assignable sub-issues.
 
 ### Assign the issue and sub-issues
 
@@ -113,7 +113,7 @@ Delegate to:
 /mach12:gh-assign <issue-number> [<sub-issue-number> ...]
 ```
 
-Pass the parent issue number followed only by same-repository sub-issue numbers from the previous step. Never pass an external child's bare number to this current-repository-only subroutine; report each external child by its verified canonical URL without attempting to assign it. The subroutine handles the three-way classification per issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt (Add me / Skip / Replace). Already-assigned is the expected case when returning for subsequent stages after `issue-plan` already assigned the user. Assignment failures are non-blocking.
+Pass the parent issue number followed only by same-repository sub-issue numbers from the previous step. Never pass an external child's bare number to this current-repository-only subroutine; report each external child by its native canonical `html_url` or `webUrl` without attempting to assign it. The subroutine handles the three-way classification per issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt (Add me / Skip / Replace). Already-assigned is the expected case when returning for subsequent stages after `issue-plan` already assigned the user. Assignment failures are non-blocking.
 
 ## Step 3: Gather Context
 

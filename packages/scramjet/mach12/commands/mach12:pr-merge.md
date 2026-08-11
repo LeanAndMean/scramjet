@@ -30,15 +30,15 @@ Extract the PR number from the input. If the input is ambiguous, ask the user to
 
 ## Step 2: Verify readiness
 
-Use `read_pr` immediately before merging to read the PR's state, draft flag, mergeability, review decision, head/base branches, and complete top-level conversation, continuing every returned range with the unchanged snapshot until the full conversation is visible. Retain a narrow `gh pr view <pr-number> --json mergeStateStatus` query for GitHub branch-freshness state.
+Use `read_pr` with `include: ["artifact", "comments"]` immediately before merging and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot. Read provider-native object facts—GitHub uses `state`, `draft`, `mergeable`, `head.ref`, and `base.ref`; GitLab uses `state`, `draft`, `detailed_merge_status`, `source_branch`, and `target_branch`. Retain a narrow `gh pr view <pr-number> --json mergeStateStatus,reviewDecision` query for GitHub branch-freshness and review state.
 
-Require the PR to be open, non-draft, free of requested changes or required review, current with the default branch, conflict-free, and passing its required checks. Treat `review-decision-capability="supported"` as required readiness evidence; if the capability is unsupported, use a narrow provider query only when it can conclusively establish both requested-change and required-review state, otherwise report incomplete rather than treating absence as review-clear. Use `gh pr checks <pr-number> --required` to distinguish required checks; repositories without required checks may continue. If mergeability remains unknown after one brief reread with `read_pr`, report incomplete rather than guessing.
+Require the PR to be open, non-draft, free of requested changes or required review, current with the default branch, conflict-free, and passing its required checks. The native object does not consistently establish requested-change or required-review state, so require the narrow provider query to be conclusive; otherwise report incomplete rather than treating an absent field as review-clear. Use `gh pr checks <pr-number> --required` to distinguish required checks; repositories without required checks may continue. If mergeability remains unknown after one brief reread with `read_pr`, report incomplete rather than guessing.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness. Do not offer a force merge, force push, or readiness bypass.
 
 ## Step 3: Merge
 
-Record the feature branch name from the verified `read_pr` readiness document, then merge without a force or readiness bypass:
+Record the feature branch from the native object (`head.ref` on GitHub or `source_branch` on GitLab), then merge without a force or readiness bypass:
 
 ```
 gh pr merge <pr-number> --delete-branch
@@ -94,9 +94,9 @@ gh release view <latest-tag>
 
 If the user provided context, use it to inform the release draft (e.g., specific tag, highlighted changes, notes style).
 
-Gather the PR title, body, commits, and complete conversation with `read_pr` using `include: ["commits"]`; continue every returned range with the unchanged snapshot. Retain a narrow `gh pr view <pr-number> --json closingIssuesReferences` query because closing relationships are outside the forge-tool model.
+Gather the PR title, body, commits, and complete conversation with `read_pr` using `include: ["artifact", "comments", "commits"]`; continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot. Retain a narrow `gh pr view <pr-number> --json closingIssuesReferences` query because closing relationships are outside the forge-tool model.
 
-For each linked issue in `closingIssuesReferences`, use `read_issue` and continue every range with the unchanged snapshot. Scan the complete comments for the last `<!-- mach12-plan -->` marker. If no marker is found, use just the issue title and body. If there are no linked issues, continue without—this is not an error.
+For each linked issue in `closingIssuesReferences`, use `read_issue` and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot. Scan the complete comments for the last `<!-- mach12-plan -->` marker. If no marker is found, use just the issue title and body. If there are no linked issues, continue without—this is not an error.
 
 Draft a release using the PR title/body, linked issue context (including plans when available), and commit headlines alongside the existing style reference:
 - **Tag**: follow existing tagging convention (e.g., `v1.2.3`, `1.2.3`). If a version bump was done in pre-merge, use that version.

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { type ExecOptions, type ExecResult, truncateTail } from "@leanandmean/coding-agent";
-import { controlSafeText } from "./document.js";
+import { controlSafeText } from "./text.js";
 import type { ForgeRepository } from "./types.js";
 
 export const FORGE_EXEC_TIMEOUT_MS = 3000;
@@ -253,7 +253,7 @@ function diagnosticFor(invocation: ForgeInvocation, result?: ExecResult): ForgeI
 	};
 }
 
-export async function runForgeCommand(exec: ForgeExec, invocation: ForgeInvocation): Promise<ExecResult> {
+export async function runForgeCommandResult(exec: ForgeExec, invocation: ForgeInvocation): Promise<ExecResult> {
 	const diagnostic = diagnosticFor(invocation);
 	let result: ExecResult;
 	try {
@@ -272,7 +272,13 @@ export async function runForgeCommand(exec: ForgeExec, invocation: ForgeInvocati
 	if (result.killed && invocation.signal?.aborted) throw new ForgeCommandError("cancelled", processDiagnostic);
 	if (result.killed) throw new ForgeCommandError("timeout", processDiagnostic);
 	if (result.stdinError) throw new ForgeCommandError("stdin", processDiagnostic);
-	if (result.spawnError || result.code !== 0) throw new ForgeCommandError("failed", processDiagnostic);
+	if (result.spawnError) throw new ForgeCommandError("failed", processDiagnostic);
+	return result;
+}
+
+export async function runForgeCommand(exec: ForgeExec, invocation: ForgeInvocation): Promise<ExecResult> {
+	const result = await runForgeCommandResult(exec, invocation);
+	if (result.code !== 0) throw new ForgeCommandError("failed", diagnosticFor(invocation, result));
 	return result;
 }
 

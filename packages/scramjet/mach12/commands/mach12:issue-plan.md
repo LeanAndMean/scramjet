@@ -52,7 +52,7 @@ Extract the issue number from the input. If the input is ambiguous, ask the user
 
 ## Step 2: Read the issue
 
-Use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. Treat its artifact and comment timestamps as point-in-time evidence. Parse and understand:
+Use `read_issue` and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot until the native issue object and comments segments are complete. Treat provider timestamps in those replies as point-in-time evidence. Parse and understand:
 - The problem statement
 - Any constraints or requirements mentioned
 - Prior discussion or decisions in the comments
@@ -257,7 +257,7 @@ If the user requests changes, discuss the feedback. In the next drafting turn, l
 
 After the user approves the plan:
 
-1. **Post the approved plan as a reply comment on the issue.** Immediately before posting, completely reread the issue with `read_issue` in an earlier assistant tool round, continuing every range with the unchanged snapshot. Then pass the exact approved body unchanged to `add_issue_comment`; do not regenerate, summarize, or reformat it after approval. Record the verified comment URL and opaque ID.
+1. **Post the approved plan as a reply comment on the issue.** Immediately before posting, call `read_issue` with `include: ["artifact", "comments"]` in an earlier assistant tool round and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot. Then pass the exact approved body unchanged to `add_issue_comment`; do not regenerate, summarize, or reformat it after approval. Record the verified comment URL and opaque ID.
 
 2. **Create a feature branch**:
    - Derive a short slug from the issue title (lowercase, hyphens, 3-5 words max).
@@ -265,7 +265,7 @@ After the user approves the plan:
    - Example: `feature/issue-55-fix-analytics-url`.
    - Push the branch to remote with `-u` flag.
 
-3. **Detect sub-issues** for the assignment step below. From the complete `read_issue` document, collect only relationships whose `relation` is `child`. Preserve each relationship's verified `repository`, canonical `url`, and `source` (`native` or `task-list`); do not reinterpret unrelated references as sub-issues. Compare each child repository with the root artifact repository, case-insensitively for GitHub. Partition same-repository children from external children. An unsupported or empty relationship section means there are no assignable sub-issues.
+3. **Detect sub-issues** for the assignment step below. Read the provider-native relationship segment: GitHub uses the `sub_issues` command reply and GitLab uses `relationships`. For GitHub, collect only returned sub-issue objects, parse each retained `html_url` for its owner/repository and number, and compare that repository with the root issue's `html_url` repository case-insensitively. For GitLab, use each native hierarchy item's `webUrl` and `iid` with the same repository-qualified rule. Partition same-repository children from external children; do not reinterpret task-list text or unrelated references as native sub-issues. An empty native list means there are no assignable sub-issues.
 
 4. **Assign the issue and same-repository sub-issues** to the current user. Delegate to:
 
@@ -273,7 +273,7 @@ After the user approves the plan:
    /mach12:gh-assign <issue-number> [<sub-issue-number> ...]
    ```
 
-   Pass the parent issue number followed only by same-repository sub-issue numbers detected in step 3. Never pass an external child's bare number to this current-repository-only subroutine. Report each external child by its verified canonical URL without attempting to assign it. The subroutine resolves the current user, classifies each issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt at the end (Add me / Skip / Replace). Assignment failures are non-blocking.
+   Pass the parent issue number followed only by same-repository sub-issue numbers detected in step 3. Never pass an external child's bare number to this current-repository-only subroutine. Report each external child by its native canonical `html_url` or `webUrl` without attempting to assign it. The subroutine resolves the current user, classifies each issue (already assigned, no assignees, other assignees), auto-assigns where safe, and aggregates conflicts into a single bulk prompt at the end (Add me / Skip / Replace). Assignment failures are non-blocking.
 
 Apply the plan-comment contract’s reference policy: intentional same-repository issue or pull-request relationships use `#N`, cross-repository relationships use `owner/repo#N` or an already verified canonical URL, and artifact-local findings, suggestions, and stages use stable labels or plain words rather than bare `#N`. Do not introduce closing keywords for ordinary references.
 

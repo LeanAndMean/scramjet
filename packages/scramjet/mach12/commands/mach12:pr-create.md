@@ -43,7 +43,7 @@ Resolve issue-linkage ambiguity before constructing a draft:
 - If no issue was supplied and exactly one issue is unambiguously encoded by a branch pattern such as `feature/issue-55-*`, `fix/issue-55-*`, or `55-some-description`, use that issue.
 - If no issue was supplied and the branch yields no candidate, proceed unlinked.
 
-When one issue is selected, use `read_issue` and continue every returned range with the unchanged snapshot until the complete issue document is visible. If the read fails, report the error and stop. Issue comments may inform the summary and test plan but must not be copied verbatim. Never expand a parent issue, sub-issues, or other relationships into additional closers.
+When one issue is selected, use `read_issue` and continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot until the native issue object and comments segments are complete. If the read fails, report the error and stop. Issue comments may inform the summary and test plan but must not be copied verbatim. Never expand a parent issue, sub-issues, or other relationships into additional closers.
 
 ## Step 2: Gather branch context
 

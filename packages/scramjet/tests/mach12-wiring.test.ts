@@ -428,24 +428,27 @@ describe("mach12 wiring — bundled command set", () => {
 		const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
 		expect(content).toContain("Immediately before posting");
 		expect(content).toContain("in an earlier assistant tool round");
-		expect(content).toContain("continuing every range with the unchanged snapshot");
+		expect(content).toContain("returned segment window");
+		expect(content).toContain("optional `byte_offset`");
+		expect(content).toContain('include: ["artifact", "comments"]');
 	});
 
 	it.each(["issue-plan", "issue-implement"])(
 		"%s assigns only repository-qualified same-repository children",
 		(basename) => {
 			const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
-			expect(content).toContain("verified `repository`");
-			expect(content).toContain("case-insensitively for GitHub");
+			expect(content).toContain("`sub_issues`");
+			expect(content).toContain("`html_url`");
+			expect(content).toContain("case-insensitively");
 			expect(content).toContain("same-repository sub-issue numbers");
 			expect(content).toContain("Never pass an external child's bare number");
-			expect(content).toContain("verified canonical URL");
+			expect(content).toContain("native canonical");
 		},
 	);
 
 	it("derives the complete review diff from the authoritative PR base", () => {
 		const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review.md`), "utf-8");
-		const read = content.indexOf('Use `read_pr` with `include: ["files"]`');
+		const read = content.indexOf('Use `read_pr` with `include: ["artifact", "comments", "files"]`');
 		const diff = content.indexOf("git diff --name-only");
 		expect(read).toBeGreaterThan(-1);
 		expect(read).toBeLessThan(diff);
@@ -671,7 +674,8 @@ describe("mach12 plan-comment artifact contract", () => {
 			expect(command).toContain("exact approved body unchanged");
 			expect(command).toContain("Immediately before posting");
 			expect(command).toContain("in an earlier assistant tool round");
-			expect(command).toContain("continuing every range with the unchanged snapshot");
+			expect(command).toContain("returned segment window");
+			expect(command).toContain("optional `byte_offset`");
 		}
 	});
 });
@@ -1238,7 +1242,7 @@ describe("mach12 issue implementation context", () => {
 
 	it("completes the issue read before deriving a branch name", () => {
 		const completeInstruction =
-			"continue every returned range with the unchanged snapshot until the complete issue document is visible";
+			"continue every returned segment window with its returned `include`, `offset`, optional `byte_offset`, and unchanged snapshot";
 		const completeRead = issueImplement.indexOf(completeInstruction);
 		const branchDerivation = issueImplement.indexOf(
 			"Use the issue title from the retained complete `read_issue` result",
@@ -1246,7 +1250,7 @@ describe("mach12 issue implementation context", () => {
 		expect(completeRead).toBeGreaterThan(-1);
 		expect(branchDerivation).toBeGreaterThan(completeRead);
 		expect(issueImplement).not.toContain("artifact title is in the initial XML range");
-		expect(issueImplement).toContain("use the retained complete `read_issue` result");
+		expect(issueImplement).toContain("Retain those complete replies");
 	});
 });
 
@@ -1259,10 +1263,11 @@ describe("mach12 ordinary PR readiness", () => {
 	it.each([
 		["pr-pre-merge", preMerge],
 		["pr-merge", merge],
-	])("%s requires complete same-snapshot conversation continuation", (_name, content) => {
-		expect(readinessSection(content)).toContain(
-			"continuing every returned range with the unchanged snapshot until the full conversation is visible",
-		);
+	])("%s requires complete segment-scoped conversation continuation", (_name, content) => {
+		const readiness = readinessSection(content);
+		expect(readiness).toContain('include: ["artifact", "comments"]');
+		expect(readiness).toContain("returned segment window");
+		expect(readiness).toContain("optional `byte_offset`");
 	});
 
 	it.each([
@@ -1270,11 +1275,12 @@ describe("mach12 ordinary PR readiness", () => {
 		["pr-merge", merge],
 	])("%s states ordinary readiness before mutation", (name, content) => {
 		const readiness = readinessSection(content);
-		for (const predicate of ["open", "non-draft", "required review", "conflict", "checks"]) {
-			expect(readiness, `${name}: ${predicate}`).toContain(predicate);
+		for (const predicate of ["open", "non draft", "required review", "conflict", "checks"]) {
+			expect(readiness.replaceAll("-", " "), `${name}: ${predicate}`).toContain(predicate);
 		}
-		expect(readiness).toContain('review-decision-capability="supported"');
-		expect(readiness).toContain("otherwise report incomplete rather than treating absence as review-clear");
+		expect(readiness).toContain("provider-native object facts");
+		expect(readiness).toContain("narrow provider query");
+		expect(readiness).toContain("otherwise report incomplete rather than treating an absent field as review-clear");
 		expect(readiness).toContain("one brief reread");
 		expect(content.indexOf(name === "pr-merge" ? "gh pr merge" : "gh pr checkout <pr-number>")).toBeGreaterThan(
 			content.indexOf("## Step 3:"),
@@ -1463,7 +1469,8 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 
 		for (const tool of ["read_pr", "read_issue"]) {
 			const instruction = contextStep.split("\n").find((line) => line.includes(`Use \`${tool}\``));
-			expect(instruction).toContain("continue every returned range with the unchanged snapshot");
+			expect(instruction).toContain("continue every returned segment window");
+			expect(instruction).toContain("optional `byte_offset`");
 		}
 	});
 });

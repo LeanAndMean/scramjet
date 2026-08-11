@@ -1,6 +1,5 @@
 export type ForgeName = "github" | "gitlab";
 export type ForgeArtifactKind = "issue" | "pr";
-export type ForgePrSection = "files" | "commits" | "checks";
 
 export interface ForgeRepository {
 	forge: ForgeName;
@@ -8,105 +7,38 @@ export interface ForgeRepository {
 	projectPath: string;
 }
 
-export interface ForgeActor {
-	login: string | null;
-	kind: "user" | "bot" | "deleted" | "unknown";
+export type ForgeReadSegmentId =
+	| "artifact"
+	| "comments"
+	| "sub_issues"
+	| "parent"
+	| "relationships"
+	| "files"
+	| "commits"
+	| "check_runs"
+	| "status"
+	| "pipelines";
+
+export type ForgeReplyShape =
+	| { kind: "json" }
+	| { kind: "gh-slurp"; itemsPath?: readonly string[] }
+	| { kind: "ndjson" };
+
+export interface ForgeReadPlanSegment {
+	id: ForgeReadSegmentId;
+	command: "gh" | "glab";
+	args: string[];
+	shape: ForgeReplyShape;
+	optional?: boolean;
+	evidence?: "artifact" | "comments";
 }
 
-export interface ForgeComment {
-	id: string;
-	url: string;
-	author: ForgeActor;
-	body: string;
-	createdAt: string;
-	updatedAt: string;
-}
-
-interface ForgeArtifactBase {
-	kind: ForgeArtifactKind;
-	number: number;
-	url: string;
-	state: string;
-	author: ForgeActor;
-	createdAt: string;
-	updatedAt: string;
-	labels: string[];
-	assignees: ForgeActor[];
-	title: string;
-	body: string;
-	comments: ForgeComment[];
-}
-
-export interface ForgeIssueRelationship {
+export interface ForgeReadPlan {
 	repository: ForgeRepository;
-	relation: "parent" | "child";
-	source: "native" | "task-list";
-	number: number;
-	url: string;
-	state: string;
-	title: string;
+	artifact: { kind: ForgeArtifactKind; number: number };
+	include: ForgeReadSegmentId[];
+	segments: ForgeReadPlanSegment[];
 }
-
-export interface ForgeIssueRelationships {
-	capability: "supported" | "unsupported";
-	items: ForgeIssueRelationship[];
-}
-
-export interface ForgeIssue extends ForgeArtifactBase {
-	kind: "issue";
-	relationships: ForgeIssueRelationships;
-}
-
-export type ForgePrReviewDecisionValue = "approved" | "changes_requested" | "review_required";
-
-export type ForgePrReviewDecision =
-	| { capability: "supported"; value: ForgePrReviewDecisionValue | null }
-	| { capability: "unsupported" }
-	| { capability: "unknown"; value: string };
-
-export interface ForgePrReadiness {
-	draft: boolean;
-	mergeable: "mergeable" | "conflicting" | "unknown";
-	reviewDecision: ForgePrReviewDecision;
-	head: string;
-	base: string;
-}
-
-export interface ForgePrFile {
-	path: string;
-	status: string;
-	additions: number;
-	deletions: number;
-	previousPath: string | null;
-}
-
-export interface ForgePrCommit {
-	sha: string;
-	title: string;
-	author: string | null;
-	createdAt: string;
-	url: string | null;
-}
-
-export interface ForgePrCheck {
-	id: string;
-	name: string;
-	status: string;
-	conclusion: string | null;
-	url: string | null;
-}
-
-export interface ForgePullRequest extends ForgeArtifactBase {
-	kind: "pr";
-	readiness: ForgePrReadiness;
-	sections: {
-		files?: ForgePrFile[];
-		commits?: ForgePrCommit[];
-		checks?: ForgePrCheck[];
-	};
-}
-
-export type ForgeArtifact = ForgeIssue | ForgePullRequest;
 
 export type ForgeMutationTarget = { kind: "artifact" } | { kind: "comment"; id: string };
 
@@ -128,6 +60,34 @@ export interface ForgeCommentIdentity {
 }
 
 export type ForgeIdentity = ForgeArtifactIdentity | ForgeCommentIdentity;
+
+export type ForgeEditable =
+	| {
+			target: { kind: "artifact" };
+			kind: "issue";
+			number: number;
+			url: string;
+			title: string;
+			body: string;
+	  }
+	| {
+			target: { kind: "artifact" };
+			kind: "pr";
+			number: number;
+			url: string;
+			title: string;
+			body: string;
+			draft: boolean;
+			head: string;
+			base: string;
+	  }
+	| {
+			target: { kind: "comment"; id: string };
+			kind: ForgeArtifactKind;
+			number: number;
+			url: string;
+			body: string;
+	  };
 
 export type ForgeCreateInput =
 	| { kind: "issue"; title: string; body: string }
@@ -154,13 +114,19 @@ export interface ForgeUpdateCommentInput {
 }
 
 export interface ForgeAdapter {
-	readArtifact(
+	readPlan(
 		repository: ForgeRepository,
 		kind: ForgeArtifactKind,
 		number: number,
-		include: readonly ForgePrSection[],
+		include: readonly ForgeReadSegmentId[],
+	): ForgeReadPlan;
+	readEditable(
+		repository: ForgeRepository,
+		kind: ForgeArtifactKind,
+		number: number,
+		target: ForgeMutationTarget,
 		signal?: AbortSignal,
-	): Promise<ForgeArtifact>;
+	): Promise<ForgeEditable>;
 	createArtifact(
 		repository: ForgeRepository,
 		input: ForgeCreateInput,
@@ -188,22 +154,33 @@ export interface ForgeCoverageRange {
 	end: number;
 }
 
-interface ForgeFieldCoverageBase {
-	totalCodeUnits: number;
-	ranges: ForgeCoverageRange[];
+export type ForgeSegmentCoverage =
+	| { unit: "items"; offset: number; count: number; totalItems: number }
+	| { unit: "bytes"; item: number; offset: number; bytes: number; totalBytes: number; totalItems: number };
+
+export interface ForgePayloadRange {
+	start: number;
+	end: number;
 }
 
-export type ForgeFieldCoverage =
-	| (ForgeFieldCoverageBase & { target: { kind: "artifact" }; field: "title" | "body" })
-	| (ForgeFieldCoverageBase & { target: { kind: "comment"; id: string }; field: "body" });
+export interface ForgeReadSegmentReceipt {
+	id: ForgeReadSegmentId;
+	status: "ok" | "optional_error";
+	snapshot?: string;
+	evidence?: "artifact" | "comments";
+	coverage?: ForgeSegmentCoverage;
+	payload: {
+		segment: ForgePayloadRange;
+		command?: ForgePayloadRange;
+		output: ForgePayloadRange;
+	};
+}
 
 export interface ForgeReadDetails {
-	schema: "scramjet:forge-read@1";
+	schema: "scramjet:forge-read@2";
 	repository: ForgeRepository;
 	artifact: { kind: ForgeArtifactKind; number: number };
 	snapshot: string;
-	include: ForgePrSection[];
-	range: { offset: number; lines: number; totalLines: number };
-	fields: ForgeFieldCoverage[];
-	core: { totalLines: number; ranges: ForgeCoverageRange[] };
+	include: ForgeReadSegmentId[];
+	segments: ForgeReadSegmentReceipt[];
 }
