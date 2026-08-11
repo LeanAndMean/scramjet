@@ -1,0 +1,220 @@
+import { initTheme } from "@leanandmean/coding-agent";
+import { describe, expect, it, vi } from "vitest";
+import { projectTerminalSafe, registerForgePublication } from "../src/forge-publication.js";
+import { freshState, recordingPi } from "./helpers.js";
+
+initTheme(undefined, false);
+
+function execResult(stdout = "") {
+	return { stdout, stderr: "", code: 0, killed: false };
+}
+
+function context(custom?: (factory: any) => Promise<any>) {
+	return {
+		hasUI: Boolean(custom),
+		cwd: "/repo",
+		ui: custom ? { custom } : undefined,
+	};
+}
+
+async function registered() {
+	const bag = recordingPi();
+	bag.pi.exec = vi.fn().mockResolvedValue(execResult("https://github.com/LeanAndMean/scramjet.git\n"));
+	const state = freshState();
+	registerForgePublication(bag.pi, state);
+	return { ...bag, state, tool: bag.tools.find((candidate) => candidate.name === "create_issue") };
+}
+
+describe("terminal-safe projection", () => {
+	it("is reversible and emits no raw controls, escape sequences, bidi controls, or active Markdown links", () => {
+		const input =
+			"start\0\t\r\u001b]8;;https://evil.example\u0007link\u001b]8;;\u0007\u202e [x](https://evil.example) end";
+		const projected = projectTerminalSafe(input);
+		expect(projected.changed).toBe(true);
+		expect(projected.text).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u);
+		expect(projected.text).not.toContain("](https://");
+		expect(projected.restore()).toBe(input);
+	});
+});
+
+describe("create_issue approval", () => {
+	it("registers one sequential ordinary tool and fails headless before mutation", async () => {
+		const { tool, pi } = await registered();
+		expect(tool).toMatchObject({ name: "create_issue", executionMode: "sequential" });
+		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context());
+		expect(outcome.details).toMatchObject({
+			kind: "scramjet:forge-publication",
+			outcome: "headless",
+			writeState: "not-dispatched",
+		});
+		expect(pi.exec).not.toHaveBeenCalled();
+	});
+
+	it.each(["initial Enter", "Escape"])("defaults to Cancel and %s performs no mutation", async (mode) => {
+		const custom = async (factory: any) => {
+			let answer: unknown;
+			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+				answer = value;
+			});
+			component.handleInput(mode === "initial Enter" ? "\r" : "\u001b");
+			return answer;
+		};
+		const { tool, pi } = await registered();
+		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context(custom));
+		expect(outcome.details.outcome).toBe("cancelled");
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("publishes the frozen exact proposal only after explicit approval", async () => {
+		const custom = async (factory: any) => {
+			let answer: unknown;
+			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+				answer = value;
+			});
+			component.handleInput("\t");
+			component.handleInput("\r");
+			return answer;
+		};
+		const { tool, pi } = await registered();
+		pi.exec
+			.mockResolvedValueOnce(execResult("https://github.com/LeanAndMean/scramjet.git\n"))
+			.mockResolvedValueOnce(execResult("https://github.com/LeanAndMean/scramjet.git\n"))
+			.mockResolvedValueOnce(
+				execResult(JSON.stringify({ number: 9, html_url: "https://github.com/LeanAndMean/scramjet/issues/9" })),
+			)
+			.mockResolvedValueOnce(
+				execResult(
+					JSON.stringify({
+						number: 9,
+						title: "exact",
+						body: "body\r\n",
+						html_url: "https://github.com/LeanAndMean/scramjet/issues/9",
+					}),
+				),
+			);
+		const params = { title: "exact", body: "body\r\n" };
+		const promise = tool.execute("call", params, undefined, undefined, context(custom));
+		params.title = "mutated";
+		const outcome = await promise;
+		expect(outcome.details).toMatchObject({
+			outcome: "verified",
+			url: "https://github.com/LeanAndMean/scramjet/issues/9",
+		});
+		expect(pi.exec.mock.calls[2]?.[2]?.stdin).toBe(JSON.stringify({ title: "exact", body: "body\r\n" }));
+	});
+
+	it("rejects lifecycle, session, abort, and changed-origin staleness before mutation", async () => {
+		for (const stale of ["lifecycle", "session", "abort", "origin"] as const) {
+			const { tool, pi, state, emit } = await registered();
+			const controller = new AbortController();
+			const custom = async (factory: any) => {
+				let answer: unknown;
+				const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+					answer = value;
+				});
+				if (stale === "lifecycle") state.lifecycleGeneration++;
+				if (stale === "session") await emit("session_shutdown", {});
+				if (stale === "abort") controller.abort();
+				if (stale === "origin") pi.exec.mockResolvedValueOnce(execResult("https://github.com/other/repo.git\n"));
+				component.handleInput("\t");
+				component.handleInput("\r");
+				return answer;
+			};
+			const outcome = await tool.execute(
+				"call",
+				{ title: "t", body: "b" },
+				controller.signal,
+				undefined,
+				context(custom),
+			);
+			expect(outcome.details.outcome).toBe("stale");
+			const posts = pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"));
+			expect(posts).toHaveLength(0);
+		}
+	});
+
+	it("rechecks freshness after asynchronous origin revalidation", async () => {
+		let resolveOrigin!: (value: ReturnType<typeof execResult>) => void;
+		const pendingOrigin = new Promise<ReturnType<typeof execResult>>((resolve) => {
+			resolveOrigin = resolve;
+		});
+		const custom = async (factory: any) => {
+			let answer: unknown;
+			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+				answer = value;
+			});
+			component.handleInput("\t");
+			component.handleInput("\r");
+			return answer;
+		};
+		const { tool, pi, state } = await registered();
+		pi.exec.mockResolvedValueOnce(execResult("https://github.com/LeanAndMean/scramjet.git\n"));
+		pi.exec.mockImplementationOnce(() => pendingOrigin);
+		const publication = tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context(custom));
+		await vi.waitFor(() => expect(pi.exec).toHaveBeenCalledTimes(2));
+		state.lifecycleGeneration++;
+		resolveOrigin(execResult("https://github.com/LeanAndMean/scramjet.git\n"));
+		const outcome = await publication;
+		expect(outcome.details.outcome).toBe("stale");
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
+	it("scrolls complete projected content and never renders raw hostile sequences", async () => {
+		let component: any;
+		const custom = async (factory: any) => {
+			component = factory({ requestRender() {} }, theme(), keybindings(), () => {});
+			return "cancelled";
+		};
+		const { tool } = await registered();
+		await tool.execute(
+			"call",
+			{ title: "BEGIN", body: `${"line\n".repeat(80)}END\u001b]8;;x\u0007` },
+			undefined,
+			undefined,
+			context(custom),
+		);
+		const first = component.render(70).join("\n");
+		expect(first).toContain("BEGIN");
+		for (let index = 0; index < 100; index++) component.handleInput("\u001b[6~");
+		const last = component.render(70).join("\n");
+		expect(last).toContain("END");
+		expect(last).not.toContain("\u001b]8;;x");
+	});
+});
+
+describe("owned result hook", () => {
+	it("marks only owned failures and ambiguity as errors", async () => {
+		const { handlers } = await registered();
+		const hook = handlers.get("tool_result")?.[0] as any;
+		const owned = {
+			toolName: "create_issue",
+			details: {
+				kind: "scramjet:forge-publication",
+				operation: "create_issue",
+				outcome: "ambiguous",
+				writeState: "possible",
+			},
+			isError: false,
+		};
+		expect(await hook(owned)).toEqual({ isError: true });
+		expect(
+			await hook({ ...owned, details: { ...owned.details, outcome: "cancelled", writeState: "not-dispatched" } }),
+		).toEqual({ isError: false });
+		expect(await hook({ ...owned, toolName: "other" })).toBeUndefined();
+	});
+});
+
+function theme() {
+	return { fg: (_name: string, text: string) => text, bold: (text: string) => text };
+}
+function keybindings() {
+	return {
+		matches: (data: string, action: string) =>
+			({
+				"tui.select.confirm": data === "\r",
+				"tui.select.cancel": data === "\u001b",
+				"tui.select.up": data === "\u001b[A",
+				"tui.select.down": data === "\u001b[B",
+			})[action] ?? false,
+	};
+}
