@@ -1529,9 +1529,16 @@ if (pi.getFlag("plan")) {
 Execute a shell command.
 
 ```typescript
-const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
-// result.stdout, result.stderr, result.code, result.killed
+const result = await pi.exec("gh", ["api", "--method", "POST", "--input", "-", endpoint], {
+  signal,
+  timeout: 5000,
+  stdin: JSON.stringify(payload),
+});
+// result.stdout, result.stderr, result.code, result.killed,
+// result.spawnError, result.stdinError
 ```
+
+When `stdin` is supplied, `pi.exec` writes that exact UTF-8 string once and closes standard input without adding a newline. `spawnError` is present only when the command failed before spawning; `stdinError` reports a write or close failure. Each error contains a safe `message` and optional system `code`, never the stdin content. Once the child has spawned, callers must use command-specific semantics to decide whether a failed execution may have produced side effects.
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
