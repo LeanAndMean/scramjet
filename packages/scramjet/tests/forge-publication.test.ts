@@ -38,6 +38,59 @@ describe("terminal-safe projection", () => {
 });
 
 describe("create_issue approval", () => {
+	it("registers all four independently allowlistable prompt-visible sequential tools", async () => {
+		const { tools } = await registered();
+		expect(
+			tools
+				.map((tool) => tool.name)
+				.filter((name) => ["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"].includes(name)),
+		).toEqual(["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"]);
+		for (const tool of tools.filter(
+			(candidate) => candidate.name.includes("issue") || candidate.name.includes("pr"),
+		)) {
+			expect(tool.executionMode).toBe("sequential");
+			expect(tool.activation).toBeUndefined();
+			expect(tool.promptSnippet).toContain(tool.name);
+		}
+	});
+
+	it("preflights both PR branches before approval and rejects unprefixed GitLab drafts", async () => {
+		const bag = recordingPi();
+		bag.pi.exec = vi.fn().mockResolvedValueOnce(execResult("https://gitlab.com/group/project.git\n"));
+		registerForgePublication(bag.pi, freshState());
+		const tool = bag.tools.find((candidate) => candidate.name === "create_pr");
+		const outcome = await tool.execute(
+			"call",
+			{ title: "PR", body: "b", head: "feature", base: "main", draft: true },
+			undefined,
+			undefined,
+			context(async () => "approved"),
+		);
+		expect(outcome.details).toMatchObject({ outcome: "pre-dispatch-failure", writeState: "not-dispatched" });
+		expect(bag.pi.exec).toHaveBeenCalledTimes(1);
+
+		const githubBag = recordingPi();
+		githubBag.pi.exec = vi
+			.fn()
+			.mockResolvedValueOnce(execResult("https://github.com/a/b.git\n"))
+			.mockResolvedValueOnce(execResult())
+			.mockResolvedValueOnce(execResult());
+		registerForgePublication(githubBag.pi, freshState());
+		const githubTool = githubBag.tools.find((candidate) => candidate.name === "create_pr");
+		await githubTool.execute(
+			"call",
+			{ title: "PR", body: "b", head: "feature", base: "main", draft: false },
+			undefined,
+			undefined,
+			context(async () => "cancelled"),
+		);
+		expect(githubBag.pi.exec.mock.calls.slice(1).map((call: any[]) => call[1])).toEqual([
+			["show-ref", "--verify", "--quiet", "refs/remotes/origin/feature"],
+			["show-ref", "--verify", "--quiet", "refs/remotes/origin/main"],
+		]);
+		expect(githubBag.pi.exec.mock.calls.some((call: any[]) => call[1]?.includes("POST"))).toBe(false);
+	});
+
 	it("registers one sequential ordinary tool and fails headless before mutation", async () => {
 		const { tool, pi } = await registered();
 		expect(tool).toMatchObject({ name: "create_issue", executionMode: "sequential" });
