@@ -1,6 +1,26 @@
-import { isForgeReadPayload } from "./native-reply.js";
-import { controlSafeText } from "./text.js";
+import { getMarkdownTheme, type Theme, type ToolRenderResultOptions } from "@leanandmean/coding-agent";
+import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
+import { isForgeReadDetails, isForgeReadPayload } from "./native-reply.js";
+import { controlSafeText, losslessControlSafeText } from "./text.js";
 import type { ForgeReadDetails, ForgeReadSegmentId } from "./types.js";
+
+interface BodyBlock {
+	label: string;
+	body: string;
+}
+
+interface ReadableSegment {
+	id: ForgeReadSegmentId;
+	command?: string;
+	metadata?: string;
+	bodies: BodyBlock[];
+	error?: string;
+}
+
+interface ReadableReply {
+	segments: ReadableSegment[];
+	continuation?: string;
+}
 
 function byteSlice(value: string, start: number, end: number): string | null {
 	const buffer = Buffer.from(value, "utf8");
@@ -16,192 +36,197 @@ function record(value: unknown): Record<string, unknown> | null {
 		: null;
 }
 
-function text(value: unknown): string | null {
-	return typeof value === "string" ? value : null;
+function withoutBody(
+	value: unknown,
+	field: "body" | "description",
+	label: string,
+	bodies: BodyBlock[],
+): Record<string, unknown> {
+	const source = record(value);
+	if (source === null) throw new Error("Forge body-bearing reply was malformed");
+	const body = source[field];
+	if (body === undefined || body === null) return source;
+	if (typeof body !== "string") throw new Error("Forge body field was malformed");
+	const metadata = { ...source };
+	delete metadata[field];
+	bodies.push({ label, body });
+	return metadata;
 }
 
-function githubItems(id: ForgeReadSegmentId, output: string): unknown[] | null {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(output);
-	} catch {
-		return null;
+function githubMetadata(id: ForgeReadSegmentId, output: string, bodies: BodyBlock[]): unknown {
+	const parsed = JSON.parse(output);
+	if (id === "artifact") return withoutBody(parsed, "body", "Body", bodies);
+	if (id === "parent") {
+		if (record(parsed) === null) throw new Error("GitHub parent reply was malformed");
+		return parsed;
 	}
-	if (id === "artifact" || id === "parent") return [parsed];
-	if (!Array.isArray(parsed)) return null;
-	const items: unknown[] = [];
-	for (const page of parsed) {
-		if (Array.isArray(page)) {
-			items.push(...page);
-			continue;
+	if (!Array.isArray(parsed)) throw new Error("GitHub list reply was malformed");
+	if (id === "check_runs" || id === "status") {
+		const field = id === "check_runs" ? "check_runs" : "statuses";
+		for (const page of parsed) {
+			const envelope = record(page);
+			if (envelope === null || !Array.isArray(envelope[field])) {
+				throw new Error(`GitHub ${id} envelope was malformed`);
+			}
 		}
-		const envelope = record(page);
-		const nested = id === "check_runs" ? envelope?.check_runs : id === "status" ? envelope?.statuses : undefined;
-		if (!Array.isArray(nested)) return null;
-		items.push(...nested);
+		return parsed;
 	}
-	return items;
+	for (const page of parsed) if (!Array.isArray(page)) throw new Error("GitHub list page was malformed");
+	if (id !== "comments") return parsed;
+	let commentNumber = 0;
+	return parsed.map((page) =>
+		(page as unknown[]).map((comment) => {
+			commentNumber++;
+			return withoutBody(comment, "body", `Comment ${commentNumber} body`, bodies);
+		}),
+	);
 }
 
-function gitlabItems(id: ForgeReadSegmentId, output: string): unknown[] | null {
-	if (id === "artifact") {
-		try {
-			return [JSON.parse(output)];
-		} catch {
-			return null;
-		}
-	}
+function gitlabValues(output: string): Record<string, unknown>[] {
 	if (output === "") return [];
+	return output.split("\n").map((line) => {
+		const value = JSON.parse(line);
+		const item = record(value);
+		if (item === null) throw new Error("GitLab NDJSON record was malformed");
+		return item;
+	});
+}
+
+function gitlabMetadata(id: ForgeReadSegmentId, output: string, bodies: BodyBlock[]): unknown {
+	if (id === "artifact") return withoutBody(JSON.parse(output), "description", "Description", bodies);
+	const values = gitlabValues(output);
+	if (id !== "comments") return values;
+	return values.map((comment, index) => withoutBody(comment, "body", `Comment ${index + 1} body`, bodies));
+}
+
+function readableReply(content: string, details: ForgeReadDetails): ReadableReply | null {
+	if (!isForgeReadPayload(content, details)) return null;
+	if (details.segments.some((segment) => segment.coverage?.unit === "bytes")) return null;
 	try {
-		return output.split("\n").map((line) => JSON.parse(line));
+		const segments: ReadableSegment[] = [];
+		for (const segment of details.segments) {
+			const command =
+				segment.payload.command === undefined
+					? undefined
+					: byteSlice(content, segment.payload.command.start, segment.payload.command.end);
+			const output = byteSlice(content, segment.payload.output.start, segment.payload.output.end);
+			if (command === null || output === null) return null;
+			if (segment.status === "optional_error") {
+				segments.push({ id: segment.id, ...(command === undefined ? {} : { command }), bodies: [], error: output });
+				continue;
+			}
+			const bodies: BodyBlock[] = [];
+			const metadata =
+				details.repository.forge === "github"
+					? githubMetadata(segment.id, output, bodies)
+					: gitlabMetadata(segment.id, output, bodies);
+			segments.push({
+				id: segment.id,
+				...(command === undefined ? {} : { command }),
+				metadata: JSON.stringify(metadata, null, 2),
+				bodies,
+			});
+		}
+		const lastEnd = details.segments.at(-1)?.payload.segment.end ?? 0;
+		const continuation = byteSlice(content, lastEnd, Buffer.byteLength(content, "utf8"));
+		if (continuation === null) return null;
+		return { segments, ...(continuation.trim() === "" ? {} : { continuation }) };
 	} catch {
 		return null;
 	}
 }
 
-function actorName(value: unknown): string {
-	const actor = record(value);
-	return text(actor?.login) ?? text(actor?.username) ?? "unknown";
+function summary(details: ForgeReadDetails): string {
+	return details.segments
+		.map((segment) => {
+			const coverage = segment.coverage;
+			if (coverage?.unit === "items")
+				return `${segment.id} ${coverage.offset}-${coverage.offset + Math.max(coverage.count - 1, 0)}/${coverage.totalItems}`;
+			if (coverage?.unit === "bytes")
+				return `${segment.id} item ${coverage.item} bytes ${coverage.offset}-${coverage.offset + coverage.bytes - 1}`;
+			return `${segment.id} error`;
+		})
+		.join(", ");
 }
 
-function artifactView(value: unknown, forge: "github" | "gitlab"): string | null {
-	const artifact = record(value);
-	if (artifact === null) return null;
-	const title = text(artifact.title);
-	const body = forge === "github" ? text(artifact.body) : text(artifact.description);
-	const url = forge === "github" ? text(artifact.html_url) : text(artifact.web_url);
-	if (title === null || url === null || (body !== null && typeof body !== "string")) return null;
-	const facts = [
-		artifact.state === undefined ? null : `state: ${String(artifact.state)}`,
-		artifact.draft === undefined ? null : `draft: ${String(artifact.draft)}`,
-		url,
-	].filter((item): item is string => item !== null);
-	return `# ${title}\n\n${facts.join(" · ")}${body === null || body === "" ? "" : `\n\n${body}`}`;
-}
+export class ForgeReplyComponent extends Container {
+	private content = "";
+	private details: unknown;
+	private options: ToolRenderResultOptions = { expanded: false, isPartial: false };
+	private theme?: Theme;
 
-function commentsView(values: unknown[], forge: "github" | "gitlab"): string | null {
-	const blocks: string[] = [];
-	for (const value of values) {
-		const comment = record(value);
-		if (comment === null) return null;
-		const body = forge === "github" ? text(comment.body) : text(comment.body);
-		if (body === null) return null;
-		blocks.push(`## Comment by ${actorName(comment.user ?? comment.author)}\n\n${body}`);
+	update(content: string, details: unknown, options: ToolRenderResultOptions, theme: Theme): void {
+		this.content = content;
+		this.details = details;
+		this.options = options;
+		this.theme = theme;
+		this.rebuild();
 	}
-	return blocks.length === 0 ? "No comments." : blocks.join("\n\n");
-}
 
-function diffCounts(diff: string): { additions: number; deletions: number } {
-	let additions = 0;
-	let deletions = 0;
-	let inHunk = false;
-	for (const line of diff.split("\n")) {
-		if (line.startsWith("@@")) {
-			inHunk = true;
-			continue;
+	override invalidate(): void {
+		super.invalidate();
+		this.rebuild();
+	}
+
+	private label(value: string): Text {
+		const theme = this.theme as Theme;
+		return new Text(theme.fg("toolTitle", theme.bold(value)), 0, 0);
+	}
+
+	private output(value: string): Text {
+		const theme = this.theme as Theme;
+		return new Text(theme.fg("toolOutput", controlSafeText(value)), 0, 0);
+	}
+
+	private rebuild(): void {
+		this.clear();
+		if (this.theme === undefined) return;
+		if (this.options.isPartial) {
+			this.addChild(new Text(this.theme.fg("warning", "Reading forge artifact..."), 0, 0));
+			return;
 		}
-		if (!inHunk) continue;
-		if (line.startsWith("+")) additions++;
-		if (line.startsWith("-")) deletions++;
-	}
-	return { additions, deletions };
-}
-
-function tableView(id: ForgeReadSegmentId, values: unknown[], forge: "github" | "gitlab"): string | null {
-	const rows: string[][] = [];
-	let headers: string[];
-	switch (id) {
-		case "files":
-			headers = ["File", "Status", "+", "-"];
-			for (const value of values) {
-				const item = record(value);
-				if (item === null) return null;
-				if (forge === "github") {
-					if (typeof item.filename !== "string" || typeof item.status !== "string") return null;
-					rows.push([item.filename, item.status, String(item.additions ?? ""), String(item.deletions ?? "")]);
-					continue;
-				}
-				if (
-					typeof item.new_path !== "string" ||
-					typeof item.diff !== "string" ||
-					typeof item.new_file !== "boolean" ||
-					typeof item.renamed_file !== "boolean" ||
-					typeof item.deleted_file !== "boolean"
-				) {
-					return null;
-				}
-				const status = item.new_file
-					? "added"
-					: item.renamed_file
-						? "renamed"
-						: item.deleted_file
-							? "deleted"
-							: "modified";
-				const counts = diffCounts(item.diff);
-				rows.push([item.new_path, status, String(counts.additions), String(counts.deletions)]);
-			}
-			break;
-		case "commits":
-			headers = ["Commit", "Title", "Author"];
-			for (const value of values) {
-				const item = record(value);
-				if (item === null) return null;
-				if (forge === "github") {
-					const commit = record(item.commit);
-					const author = record(commit?.author);
-					if (typeof item.sha !== "string" || typeof commit?.message !== "string") return null;
-					rows.push([item.sha.slice(0, 12), commit.message.split("\n")[0], text(author?.name) ?? ""]);
-					continue;
-				}
-				if (typeof item.id !== "string" || typeof item.title !== "string") return null;
-				rows.push([item.id.slice(0, 12), item.title, text(item.author_name) ?? ""]);
-			}
-			break;
-		case "check_runs":
-		case "status":
-		case "pipelines":
-			headers = ["Check", "Status", "Conclusion"];
-			for (const value of values) {
-				const item = record(value);
-				if (item === null) return null;
-				rows.push([
-					String(item.name ?? item.context ?? `pipeline ${item.id ?? ""}`),
-					String(item.status ?? item.state ?? ""),
-					String(item.conclusion ?? ""),
-				]);
-			}
-			break;
-		default:
-			return JSON.stringify(values, null, 2);
-	}
-	const divider = headers.map(() => "---");
-	return [headers, divider, ...rows].map((row) => `| ${row.join(" | ")} |`).join("\n");
-}
-
-export function prettyForgeReply(content: string, details: unknown): string | null {
-	if (!isForgeReadPayload(content, details)) return null;
-	const receipt = details as ForgeReadDetails;
-	const blocks: string[] = [];
-	for (const segment of receipt.segments) {
-		if (segment.status !== "ok" || segment.coverage?.unit === "bytes") return null;
-		const output = byteSlice(content, segment.payload.output.start, segment.payload.output.end);
-		if (output === null) return null;
-		if (segment.payload.command !== undefined) {
-			const command = byteSlice(content, segment.payload.command.start, segment.payload.command.end);
-			if (command === null || !command.startsWith("$ ")) return null;
+		if (!this.options.expanded) {
+			const collapsed = isForgeReadDetails(this.details) ? summary(this.details) : "forge read result unavailable";
+			this.addChild(
+				new Text(this.theme.fg(isForgeReadDetails(this.details) ? "success" : "warning", collapsed), 0, 0),
+			);
+			return;
 		}
-		const values =
-			receipt.repository.forge === "github" ? githubItems(segment.id, output) : gitlabItems(segment.id, output);
-		if (values === null) return null;
-		let block: string | null;
-		if (segment.id === "artifact")
-			block = values.length === 1 ? artifactView(values[0], receipt.repository.forge) : null;
-		else if (segment.id === "comments") block = commentsView(values, receipt.repository.forge);
-		else block = tableView(segment.id, values, receipt.repository.forge);
-		if (block === null) return null;
-		blocks.push(block);
+		if (!isForgeReadDetails(this.details)) {
+			this.addChild(new Text(losslessControlSafeText(this.content), 0, 0));
+			return;
+		}
+
+		this.addChild(this.label("Raw transcript (scroll up; reversible escaped display)"));
+		this.addChild(new Text(this.theme.fg("toolOutput", losslessControlSafeText(this.content)), 0, 0));
+
+		const readable = readableReply(this.content, this.details);
+		if (readable === null) return;
+		this.addChild(new Spacer(1));
+		this.addChild(this.label("Readable view"));
+		for (const segment of readable.segments) {
+			this.addChild(new Spacer(1));
+			this.addChild(this.label(segment.id));
+			if (segment.command !== undefined) this.addChild(this.output(segment.command));
+			if (segment.error !== undefined) {
+				this.addChild(this.label("Provider error"));
+				this.addChild(this.output(segment.error));
+				continue;
+			}
+			this.addChild(this.label("Metadata"));
+			this.addChild(this.output(segment.metadata ?? "null"));
+			for (const body of segment.bodies) {
+				this.addChild(this.label(body.label));
+				if (body.body === "") this.addChild(new Text(this.theme.fg("muted", "(empty body)"), 0, 0));
+				else this.addChild(new Markdown(controlSafeText(body.body), 0, 0, getMarkdownTheme()));
+			}
+		}
+		if (readable.continuation !== undefined) {
+			this.addChild(new Spacer(1));
+			this.addChild(this.label("Continuation"));
+			this.addChild(this.output(readable.continuation));
+		}
 	}
-	return controlSafeText(blocks.join("\n\n"));
 }
 
 export function rawForgeReply(content: string): string {

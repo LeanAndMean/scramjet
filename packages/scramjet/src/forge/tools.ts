@@ -26,12 +26,11 @@ import { createGitlabAdapter } from "./gitlab.js";
 import {
 	executeForgeReadPlan,
 	hasCompleteSegmentCoverage,
-	isForgeReadDetails,
 	isForgeReadPayload,
 	type PreparedForgeRead,
 	windowForgeRead,
 } from "./native-reply.js";
-import { prettyForgeReply, rawForgeReply } from "./renderer.js";
+import { ForgeReplyComponent } from "./renderer.js";
 import { applyExactEdits, controlSafeText } from "./text.js";
 import type {
 	ForgeAdapter,
@@ -936,32 +935,8 @@ function renderResult(
 	theme: Theme,
 	context: ForgeRenderContext,
 ) {
-	const component = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-	if (options.isPartial) {
-		component.setText(theme.fg("warning", "Reading forge artifact..."));
-		return component;
-	}
-	const output = resultText(result);
-	if (!isForgeReadDetails(result.details)) {
-		component.setText(rawForgeReply(output));
-		return component;
-	}
-	const summary = result.details.segments
-		.map((segment) => {
-			const coverage = segment.coverage;
-			if (coverage?.unit === "items")
-				return `${segment.id} ${coverage.offset}-${coverage.offset + Math.max(coverage.count - 1, 0)}/${coverage.totalItems}`;
-			if (coverage?.unit === "bytes")
-				return `${segment.id} item ${coverage.item} bytes ${coverage.offset}-${coverage.offset + coverage.bytes - 1}`;
-			return `${segment.id} error`;
-		})
-		.join(", ");
-	let content = theme.fg("success", summary);
-	if (options.expanded) {
-		const pretty = prettyForgeReply(output, result.details);
-		content += `\n${theme.fg("toolOutput", pretty ?? rawForgeReply(output))}`;
-	}
-	component.setText(content);
+	const component = (context.lastComponent as ForgeReplyComponent | undefined) ?? new ForgeReplyComponent();
+	component.update(resultText(result), result.details, options, theme);
 	return component;
 }
 

@@ -320,8 +320,8 @@ describe("registerForgeTools native read contracts", () => {
 		);
 	});
 
-	it("passes the expected absent-parent stderr through the persisted transcript and escapes it only at render time", async () => {
-		const { readIssue } = setup(
+	it("renders without refetching or mutating persisted evidence and reuses clean component state", async () => {
+		const { readIssue, bag } = setup(
 			githubRepository,
 			{
 				readPlan(repository, kind, number) {
@@ -346,21 +346,46 @@ describe("registerForgeTools native read contracts", () => {
 			context(),
 		);
 		expect(result.content[0].text).toContain("No parent issue found");
-		const displayed: string[] = [];
-		readIssue.renderResult(
-			result,
-			{ expanded: true, isPartial: false },
-			{
-				fg(_color: string, value: string) {
-					displayed.push(value);
-					return value;
-				},
-				bold: (value: string) => value,
-			} as never,
-			{ args: { number: 7 } } as never,
-		);
-		expect(displayed.join("\n")).not.toContain("\u202E");
-		expect(displayed.join("\n")).toContain("\\u202E");
+		const beforeContent = structuredClone(result.content);
+		const beforeDetails = structuredClone(result.details);
+		const renderTheme = {
+			fg: (_color: string, value: string) => value,
+			bold: (value: string) => value,
+		} as never;
+		const expanded = readIssue.renderResult(result, { expanded: true, isPartial: false }, renderTheme, {
+			args: { number: 7 },
+		} as never);
+		const expandedText = expanded.render(80).join("\n");
+		expect(expandedText).not.toContain("\u202E");
+		expect(expandedText).toContain("\\u202E");
+		expect(expandedText).toContain("$ gh api parent");
+		expect(expandedText).toContain("Provider error");
+		const collapsed = readIssue.renderResult(result, { expanded: false, isPartial: false }, renderTheme, {
+			args: { number: 7 },
+			lastComponent: expanded,
+		} as never);
+		expect(collapsed).toBe(expanded);
+		const collapsedText = collapsed.render(80).join("\n");
+		expect(collapsedText).toContain("parent error");
+		expect(collapsedText).not.toContain("No parent issue found");
+		const partial = readIssue.renderResult(result, { expanded: false, isPartial: true }, renderTheme, {
+			args: { number: 7 },
+			lastComponent: collapsed,
+		} as never);
+		expect(partial).toBe(expanded);
+		expect(partial.render(80).join("\n").trim()).toBe("Reading forge artifact...");
+		const reexpanded = readIssue.renderResult(result, { expanded: true, isPartial: false }, renderTheme, {
+			args: { number: 7 },
+			lastComponent: partial,
+		} as never);
+		expect(reexpanded).toBe(expanded);
+		const reexpandedText = reexpanded.render(80).join("\n");
+		expect(reexpandedText).toContain("Raw transcript");
+		expect(reexpandedText).toContain("Provider error");
+		expect(reexpandedText).not.toContain("Reading forge artifact...");
+		expect(result.content).toEqual(beforeContent);
+		expect(result.details).toEqual(beforeDetails);
+		expect(bag.pi.exec).toHaveBeenCalledTimes(1);
 	});
 });
 

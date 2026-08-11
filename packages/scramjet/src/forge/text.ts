@@ -23,7 +23,9 @@ export function controlSafeText(value: string): string {
 			codeUnit === 0x200e ||
 			codeUnit === 0x200f ||
 			(codeUnit >= 0x202a && codeUnit <= 0x202e) ||
-			(codeUnit >= 0x2066 && codeUnit <= 0x2069) ||
+			(codeUnit >= 0x2066 && codeUnit <= 0x206f) ||
+			(codeUnit >= 0xfdd0 && codeUnit <= 0xfdef) ||
+			(codeUnit >= 0xfff9 && codeUnit <= 0xfffb) ||
 			codeUnit === 0xfffe ||
 			codeUnit === 0xffff ||
 			(codeUnit >= 0xd800 &&
@@ -34,7 +36,68 @@ export function controlSafeText(value: string): string {
 			continue;
 		}
 		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-			output += value.slice(index, index + 2);
+			const low = value.charCodeAt(index + 1);
+			const codePoint = ((codeUnit - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
+			if ((codePoint & 0xffff) === 0xfffe || (codePoint & 0xffff) === 0xffff) {
+				output += `\\u${codeUnit.toString(16).toUpperCase()}\\u${low.toString(16).toUpperCase()}`;
+			} else {
+				output += value.slice(index, index + 2);
+			}
+			index++;
+			continue;
+		}
+		output += value[index];
+	}
+	return output;
+}
+
+export function losslessControlSafeText(value: string): string {
+	let output = "";
+	for (let index = 0; index < value.length; index++) {
+		const codeUnit = value.charCodeAt(index);
+		if (codeUnit === 0x0a) {
+			output += "\n";
+			continue;
+		}
+		if (codeUnit === 0x5c) {
+			output += "\\\\";
+			continue;
+		}
+		if (codeUnit === 0x09) {
+			output += "\\t";
+			continue;
+		}
+		if (codeUnit === 0x0d) {
+			output += "\\r";
+			continue;
+		}
+		if (
+			codeUnit < 0x20 ||
+			(codeUnit >= 0x7f && codeUnit <= 0x9f) ||
+			codeUnit === 0x061c ||
+			codeUnit === 0x200e ||
+			codeUnit === 0x200f ||
+			(codeUnit >= 0x202a && codeUnit <= 0x202e) ||
+			(codeUnit >= 0x2066 && codeUnit <= 0x206f) ||
+			(codeUnit >= 0xfdd0 && codeUnit <= 0xfdef) ||
+			(codeUnit >= 0xfff9 && codeUnit <= 0xfffb) ||
+			codeUnit === 0xfffe ||
+			codeUnit === 0xffff ||
+			(codeUnit >= 0xd800 &&
+				codeUnit <= 0xdfff &&
+				!(codeUnit <= 0xdbff && value.charCodeAt(index + 1) >= 0xdc00 && value.charCodeAt(index + 1) <= 0xdfff))
+		) {
+			output += `\\u${codeUnit.toString(16).toUpperCase().padStart(4, "0")}`;
+			continue;
+		}
+		if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+			const low = value.charCodeAt(index + 1);
+			const codePoint = ((codeUnit - 0xd800) << 10) + (low - 0xdc00) + 0x10000;
+			if ((codePoint & 0xffff) === 0xfffe || (codePoint & 0xffff) === 0xffff) {
+				output += `\\u${codeUnit.toString(16).toUpperCase()}\\u${low.toString(16).toUpperCase()}`;
+			} else {
+				output += value.slice(index, index + 2);
+			}
 			index++;
 			continue;
 		}

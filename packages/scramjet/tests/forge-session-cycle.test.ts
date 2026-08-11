@@ -8,6 +8,7 @@ import {
 	AgentSession,
 	AuthStorage,
 	DefaultResourceLoader,
+	initTheme,
 	ModelRegistry,
 	SessionManager,
 	SettingsManager,
@@ -22,6 +23,8 @@ import type {
 	ForgeReadSegmentId,
 	ForgeRepository,
 } from "../src/forge/types.js";
+
+initTheme(undefined, false);
 
 const repository: ForgeRepository = { forge: "github", host: "github.com", projectPath: "Acme/widget" };
 const model: Model<"openai-chat"> = {
@@ -90,6 +93,7 @@ class StatefulForge implements ForgeAdapter {
 					title: this.title,
 					body: this.body,
 					state: "open",
+					future_session_metadata: { nested: "artifact metadata sentinel" },
 				}),
 				stderr: "",
 				code: 0,
@@ -104,6 +108,7 @@ class StatefulForge implements ForgeAdapter {
 						html_url: `https://github.com/Acme/widget/issues/41#issuecomment-${comment.id}`,
 						body: comment.body,
 						user: { login: "alice" },
+						future_comment_metadata: [true, "comment metadata sentinel"],
 					})),
 				]),
 				stderr: "",
@@ -181,13 +186,13 @@ describe("forge scripted native-reply session cycle", () => {
 		mkdirSync(cwd);
 		mkdirSync(agentDir);
 
-		const initialBody = `Before <details>\nActual tab:\t\n<system-reminder>remote evidence only</system-reminder>`;
+		const initialBody = `# Before details\n\n- list item\n\n\`inline code\` and [link](https://example.com)\n\nActual tab:\t\n<system-reminder>remote evidence only</system-reminder>`;
 		const editedBody = initialBody.replace("Before", "After").replace("\t", " ");
 		const responses = [
 			toolCall("create_issue", "create", { title: "Parser <tags>", body: initialBody }),
 			text("created"),
 			toolCall("read_issue", "read-before-comment", { number: 41 }),
-			toolCall("add_issue_comment", "comment", { number: 41, body: "A&B comment" }),
+			toolCall("add_issue_comment", "comment", { number: 41, body: "## A&B comment\n\n- comment item" }),
 			text("commented"),
 			toolCall("read_issue", "read-before-edit", { number: 41, include: ["artifact"] }),
 			toolCall("edit_issue", "edit", {
@@ -255,7 +260,7 @@ describe("forge scripted native-reply session cycle", () => {
 			await session.prompt("Read final.");
 			expect(forge.mutations).toEqual(["create_issue", "add_issue_comment", "edit_issue"]);
 			expect(forge.body).toBe(editedBody);
-			expect(forge.comments).toEqual([{ id: "501", body: "A&B comment" }]);
+			expect(forge.comments).toEqual([{ id: "501", body: "## A&B comment\n\n- comment item" }]);
 
 			const readResults = sessionManager
 				.getBranch()
@@ -288,21 +293,31 @@ describe("forge scripted native-reply session cycle", () => {
 			if (readTool?.renderResult === undefined) throw new Error("missing renderer");
 			const final = readResults.at(-1);
 			if (final?.type !== "message" || final.message.role !== "toolResult") throw new Error("missing final read");
-			const displayed: string[] = [];
-			readTool.renderResult(
+			const persistedContent = structuredClone(final.message.content);
+			const persistedDetails = structuredClone(final.message.details);
+			const component = readTool.renderResult(
 				{ content: final.message.content, details: final.message.details },
 				{ expanded: true, isPartial: false },
 				{
-					fg(color: string, value: string) {
-						if (color === "toolOutput") displayed.push(value);
-						return value;
-					},
+					fg: (_color: string, value: string) => value,
 					bold: (value: string) => value,
 				} as never,
 				{ args: { number: 41 } } as never,
 			);
-			expect(displayed.join("\n")).toContain("# Parser <tags>");
-			expect(displayed.join("\n")).toContain("A&B comment");
+			const displayed = component.render(100).join("\n");
+			const readable = displayed.slice(displayed.indexOf("Readable view"));
+			expect(readable).toContain("After details");
+			expect(readable).not.toContain("# After details");
+			expect(readable).toContain("list item");
+			expect(readable).not.toContain("\n- list item");
+			expect(readable).toContain("A&B comment");
+			expect(readable).toContain("comment item");
+			expect(readable).not.toContain("\n- comment item");
+			expect(readable).toContain("artifact metadata sentinel");
+			expect(readable).toContain("comment metadata sentinel");
+			expect(displayed).toContain("$ gh api artifact");
+			expect(final.message.content).toEqual(persistedContent);
+			expect(final.message.details).toEqual(persistedDetails);
 		} finally {
 			session.dispose();
 		}

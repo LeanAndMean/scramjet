@@ -79,9 +79,9 @@ The top-level snapshot hashes the complete selected transcript, including comman
 
 ## TUI rendering
 
-The persisted/model-visible payload is the native transcript. The expanded TUI derives a human-oriented view from only that payload and its receipt segment map: artifact cards, Markdown bodies/comments, and compact tables for files, commits, and checks.
+The persisted/model-visible payload is the native transcript. Collapsed TUI rows show only concise segment coverage. Expanded rows derive two views from that payload and its receipt segment map: a reversible control-safe raw transcript in scrollback, followed by a readable view that renders recognized issue/PR and top-level-comment bodies with Pi's Markdown component and displays every retained non-body provider field as indented native JSON. Provider names, nesting, page/envelope structure, scalar types, and unknown future fields remain inspectable.
 
-The renderer performs no refetch. Malformed JSON, invalid or overlapping maps, optional errors, byte fragments, and unexpected shapes fail closed to the raw persisted payload. Both pretty and raw paths visibly escape terminal-dangerous C0/C1, bidirectional, presentation, noncharacter, and malformed-surrogate code units at render time. Persisted evidence may contain raw controls; terminal safety belongs entirely to display.
+The renderer performs no refetch and never changes persisted content or receipt details. Command echoes, optional errors, and continuation notices remain visible. Malformed JSON, invalid or overlapping maps, byte fragments, and unexpected body shapes fail closed to raw-only expanded output; a valid optional error may coexist with readable successful segments. Both readable and raw paths visibly escape terminal-dangerous C0/C1, bidirectional, presentation, noncharacter, and malformed-surrogate code units at render time. The raw view also escapes backslashes so literal escape text remains distinguishable from escaped controls. Persisted evidence may contain raw controls; terminal safety belongs entirely to display.
 
 ## Creation
 
