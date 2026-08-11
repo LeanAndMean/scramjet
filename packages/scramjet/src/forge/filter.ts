@@ -117,6 +117,12 @@ export function deleteForgeReplyFields(value: unknown, forge: ForgeName, context
 	return filtered;
 }
 
+function includeGitlabNote(value: unknown): boolean {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const note = value as Record<string, unknown>;
+	return note.system === false && note.position === null && (note.type === null || note.type === undefined);
+}
+
 export function filterForgeReply(
 	stdout: string,
 	forge: ForgeName,
@@ -135,10 +141,12 @@ export function filterForgeReply(
 		.filter((line) => line !== "")
 		.map((line, index) => {
 			try {
-				return JSON.stringify(deleteForgeReplyFields(JSON.parse(line), forge, context));
+				return JSON.parse(line) as unknown;
 			} catch {
 				throw new Error(`Native NDJSON reply line ${index + 1} was malformed`);
 			}
 		})
+		.filter((value) => forge !== "gitlab" || context !== "comments" || includeGitlabNote(value))
+		.map((value) => JSON.stringify(deleteForgeReplyFields(value, forge, context)))
 		.join("\n");
 }

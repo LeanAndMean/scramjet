@@ -36,7 +36,6 @@ export interface PreparedForgeRead {
 	artifact: ForgeReadPlan["artifact"];
 	include: ForgeReadSegmentId[];
 	snapshot: string;
-	transcript: string;
 	segments: PreparedForgeSegment[];
 }
 
@@ -205,13 +204,13 @@ export async function executeForgeReadPlan(
 		}
 		segments.push({ spec, echo, output, status: "ok", snapshot: digest(output), index });
 	}
-	const transcript = segments.map((segment) => `${segment.echo}\n${segment.output}\n`).join("");
+	const transcriptHash = createHash("sha256");
+	for (const segment of segments) transcriptHash.update(`${segment.echo}\n${segment.output}\n`, "utf8");
 	return {
 		repository: plan.repository,
 		artifact: plan.artifact,
 		include: [...plan.include],
-		snapshot: digest(transcript),
-		transcript,
+		snapshot: transcriptHash.digest("hex"),
 		segments,
 	};
 }

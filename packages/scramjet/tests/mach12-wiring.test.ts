@@ -1011,19 +1011,21 @@ describe("mach12 issue creation — duplicate search and publication safety", ()
 
 	it("requires verified creation before separate metadata mutations", () => {
 		const create = creation.indexOf("create_issue");
-		const identity = creation.indexOf("verified canonical issue number and URL");
+		const identity = creation.indexOf("verified canonical URL");
 		const metadata = creation.indexOf(
 			"Apply each user-requested or repository-standard label and assignee operation",
 		);
 		expect(create).toBeGreaterThan(-1);
 		expect(identity).toBeGreaterThan(create);
 		expect(metadata).toBeGreaterThan(identity);
+		expect(creation).toContain("Derive the issue number from that URL's validated artifact path");
+		expect(creation).toContain("does not return the number separately in model-visible content");
 		expect(creation).toContain("do not retry creation");
 		expect(creation).toContain("may have succeeded");
 		expect(creation).toContain("requiring the command to succeed and return exactly one non-empty login");
-		expect(creation).toMatch(/resolution fails[^.]*verified issue number and URL[^.]*non-completed status/i);
+		expect(creation).toMatch(/resolution fails[^.]*verified issue URL and derived number[^.]*non-completed status/i);
 		expect(creation).toMatch(
-			/metadata operation fails[^.]*verified issue number and URL[^.]*exact label or assignee operation/i,
+			/metadata operation fails[^.]*verified issue URL and derived number[^.]*exact label or assignee operation/i,
 		);
 		expect(creation).toMatch(/do not retry issue creation or claim complete success[^.]*non-completed status/i);
 	});
@@ -1080,6 +1082,8 @@ describe("mach12 standard PR linkage", () => {
 		expect(prCreate).toContain("Present the validated title and complete body");
 		expect(prCreate).toContain("Approve, Modify, or Cancel");
 		expect(prCreate).toContain("exact approved title and body");
+		expect(prCreate).toContain("returns only the verified canonical PR URL in model-visible content");
+		expect(prCreate).toContain("Derive the PR number from that URL's validated artifact path");
 		expect(prCreate).toContain('Report `status: "incomplete"` if the user cancelled');
 	});
 
@@ -1199,7 +1203,9 @@ describe("mach12 deferred-review issue labels", () => {
 		expect(deferredSection.indexOf("create_issue")).toBeLessThan(
 			deferredSection.indexOf('gh issue edit "$verified_issue_url" --add-label "PR review deferral"'),
 		);
-		expect(deferredSection).toContain("verified canonical issue number and URL");
+		expect(deferredSection).toContain("verified canonical issue URL");
+		expect(deferredSection).toContain("Derive the issue number from that URL's validated artifact path");
+		expect(deferredSection).toContain("does not return the number separately in model-visible content");
 		expect(deferredSection).not.toContain("gh issue create");
 		expect(deferredSection).not.toContain("gh issue view");
 	});

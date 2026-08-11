@@ -97,7 +97,7 @@ Immediately before creation, validate the final approved body once more. If it n
 
 After approval, push the current branch with `git push -u origin <branch-name>`. If the push fails, report the error and stop; never force-push.
 
-Call `create_pr` with the exact approved title and body, the current branch as `head`, the resolved default branch as `base`, and `draft: false`. The tool never pushes or mutates Git state and returns the verified canonical PR number and URL.
+Call `create_pr` with the exact approved title and body, the current branch as `head`, the resolved default branch as `base`, and `draft: false`. The tool never pushes or mutates Git state and returns only the verified canonical PR URL in model-visible content. Derive the PR number from that URL's validated artifact path when needed.
 
 If creation fails, report the full tool error and never retry automatically. When the error says creation may have succeeded, preserve that ambiguity. For an existing PR on the branch, report its URL with the narrow current-branch lookup `gh pr view --json number,url`; for authentication errors, suggest checking the selected forge CLI's auth status.
 

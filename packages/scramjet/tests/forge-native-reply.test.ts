@@ -64,7 +64,8 @@ describe("delete-only native forge filtering", () => {
 		expect(filterForgeReply(json, "github", "artifact")).toBe(
 			JSON.stringify(deleteForgeReplyFields(JSON.parse(json), "github", "artifact")),
 		);
-		const ndjson = `${json}\n${json}\n`;
+		const note = JSON.stringify({ ...JSON.parse(json), system: false, type: null, position: null });
+		const ndjson = `${note}\n${note}\n`;
 		expect(filterForgeReply(ndjson, "gitlab", "comments", true)).toBe(
 			ndjson
 				.trim()
@@ -81,8 +82,9 @@ describe("native forge transcript composition and windows", () => {
 		const exec = vi.fn(async () => result(raw));
 		const read = await executeForgeReadPlan(plan(), exec, "/repo");
 		const filtered = filterForgeReply(raw, "github", "artifact");
-		expect(read.transcript).toBe(`$ gh api repos/Acme/widget/issues/7\n${filtered}\n`);
-		expect(read.snapshot).toBe(createHash("sha256").update(read.transcript).digest("hex"));
+		const transcript = `$ gh api repos/Acme/widget/issues/7\n${filtered}\n`;
+		expect(read).not.toHaveProperty("transcript");
+		expect(read.snapshot).toBe(createHash("sha256").update(transcript).digest("hex"));
 		expect(read.segments[0].snapshot).toBe(createHash("sha256").update(filtered).digest("hex"));
 		expect(exec).toHaveBeenCalledTimes(1);
 		expect(shellCommand("gh", ["api", "a b", "it's"])).toBe(`gh api 'a b' 'it'"'"'s'`);

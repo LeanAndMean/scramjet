@@ -125,12 +125,13 @@ function entry(message: unknown) {
 function assistantCall(id: string, name: string) {
 	return entry({ role: "assistant", content: [{ type: "toolCall", id, name, arguments: {} }] });
 }
-function toolResult(id: string, name: string, details: unknown, isError = false) {
+function toolResult(id: string, name: string, details: unknown, isError = false, content?: string) {
 	const readDetails = details as Partial<ForgeReadDetails>;
 	const text =
-		readDetails.schema === "scramjet:forge-read@2" && Array.isArray(readDetails.segments)
+		content ??
+		(readDetails.schema === "scramjet:forge-read@2" && Array.isArray(readDetails.segments)
 			? "\n".repeat(readDetails.segments.length)
-			: "read";
+			: "read");
 	return entry({
 		role: "toolResult",
 		toolCallId: id,
@@ -242,6 +243,24 @@ describe("registerForgeTools native read contracts", () => {
 			);
 		},
 	);
+
+	it("filters GitLab aggregate comments to ordinary top-level notes", async () => {
+		const raw = (JSON.parse(fixtureText("gitlab-issue-notes.json")) as unknown[])
+			.map((note) => JSON.stringify(note))
+			.join("\n");
+		const { readIssue } = setup(gitlabRepository, {}, async () => execResult(raw));
+		const result = await readIssue.execute(
+			"read",
+			{ number: 7, include: ["comments"] },
+			undefined,
+			undefined,
+			context(),
+		);
+		const output = result.content[0].text;
+		expect(output).toContain('"id":101');
+		expect(output).toContain('"id":202');
+		for (const excluded of [303, 404, 505]) expect(output).not.toContain(`"id":${excluded}`);
+	});
 
 	it("fetches once, snapshots once, and serves continuation windows from cache", async () => {
 		const comments = [Array.from({ length: 50 }, (_, index) => ({ id: index, body: "x".repeat(1800) }))];
@@ -386,6 +405,76 @@ describe("segment-scoped mutation evidence and flows", () => {
 		expect(addComment).toHaveBeenCalledTimes(1);
 		expect(readEditable).toHaveBeenCalledTimes(2);
 		expect(result.details.invalidates).toEqual(["comments"]);
+	});
+
+	it("authorizes mutation only from complete real continuation receipts under one segment snapshot", async () => {
+		const comments = [Array.from({ length: 50 }, (_, index) => ({ id: index + 1, body: "x".repeat(1800) }))];
+		let body = "comment body";
+		const readEditable = vi.fn<ForgeAdapter["readEditable"]>(async (_repository, _kind, _number, target) => ({
+			target: target.kind === "comment" ? target : { kind: "comment", id: "1" },
+			kind: "issue",
+			number: 7,
+			url: "https://github.com/Acme/widget/issues/7#issuecomment-1",
+			body,
+		}));
+		const updateComment = vi.fn<ForgeAdapter["updateComment"]>(async (_repository, input) => {
+			body = input.body;
+			return { kind: "comment", id: input.id, url: "https://github.com/Acme/widget/issues/7#issuecomment-1" };
+		});
+		const { readIssue, editIssue } = setup(githubRepository, { readEditable, updateComment }, async () =>
+			execResult(JSON.stringify(comments)),
+		);
+		const first = await readIssue.execute(
+			"read-1",
+			{ number: 7, include: ["comments"] },
+			undefined,
+			undefined,
+			context(),
+		);
+		const firstCoverage = first.details.segments[0].coverage;
+		if (firstCoverage.unit !== "items") throw new Error("expected item coverage");
+		const second = await readIssue.execute(
+			"read-2",
+			{
+				number: 7,
+				include: ["comments"],
+				offset: firstCoverage.offset + firstCoverage.count,
+				snapshot: first.details.snapshot,
+			},
+			undefined,
+			undefined,
+			context(),
+		);
+		const editArgs = {
+			number: 7,
+			target: { kind: "comment" as const, id: "1" },
+			edits: [{ field: "body" as const, oldText: "comment", newText: "review" }],
+		};
+		const branch = (secondDetails: ForgeReadDetails, currentId: string) => [
+			assistantCall("read-1", "read_issue"),
+			toolResult("read-1", "read_issue", first.details, false, first.content[0].text),
+			...(secondDetails === first.details
+				? []
+				: [
+						assistantCall("read-2", "read_issue"),
+						toolResult("read-2", "read_issue", secondDetails, false, second.content[0].text),
+					]),
+			assistantCall(currentId, "edit_issue"),
+		];
+		await expectFailure(
+			editIssue.execute("partial", editArgs, undefined, undefined, context(branch(first.details, "partial"))),
+			"FORGE_PREFLIGHT_FAILED",
+		);
+		const mismatched = structuredClone(second.details) as ForgeReadDetails;
+		mismatched.segments[0].snapshot = "f".repeat(64);
+		await expectFailure(
+			editIssue.execute("mismatch", editArgs, undefined, undefined, context(branch(mismatched, "mismatch"))),
+			"FORGE_PREFLIGHT_FAILED",
+		);
+		await expect(
+			editIssue.execute("complete", editArgs, undefined, undefined, context(branch(second.details, "complete"))),
+		).resolves.toMatchObject({ details: { verified: true } });
+		expect(body).toBe("review body");
 	});
 
 	it("edits JSON-decoded artifact text with one write and unchanged ambiguity taxonomy", async () => {
@@ -610,6 +699,52 @@ describe("segment-scoped mutation evidence and flows", () => {
 			/artifact segment evidence/,
 		);
 		expect(readEditable).not.toHaveBeenCalled();
+	});
+
+	it("ignores malformed historical invalidation identities while retaining valid read evidence", async () => {
+		const malformed = [
+			{
+				schema: "scramjet:forge-mutation@1",
+				repository: null,
+				artifact: { kind: "issue", number: 7 },
+				invalidates: ["artifact"],
+			},
+			{
+				schema: "scramjet:forge-failure@1",
+				repository: githubRepository,
+				artifact: null,
+				invalidates: ["artifact"],
+			},
+		];
+		for (const [index, details] of malformed.entries()) {
+			let current = artifactEditable();
+			const readEditable = vi.fn<ForgeAdapter["readEditable"]>(async () => current);
+			const updateArtifact = vi.fn<ForgeAdapter["updateArtifact"]>(async (_repository, input) => {
+				current = artifactEditable({ title: input.title ?? current.title });
+				return { kind: "issue", number: 7, url: current.url };
+			});
+			const branch = [
+				assistantCall(`read-${index}`, "read_issue"),
+				toolResult(`read-${index}`, "read_issue", receipt(["artifact"])),
+				assistantCall(`history-${index}`, "edit_issue"),
+				toolResult(`history-${index}`, "edit_issue", details),
+				assistantCall(`current-${index}`, "edit_issue"),
+			];
+			const { editIssue } = setup(githubRepository, { readEditable, updateArtifact });
+			await expect(
+				editIssue.execute(
+					`current-${index}`,
+					{
+						number: 7,
+						target: { kind: "artifact" },
+						edits: [{ field: "title", oldText: "Parser", newText: `Reader ${index}` }],
+					},
+					undefined,
+					undefined,
+					context(branch),
+				),
+			).resolves.toMatchObject({ details: { verified: true } });
+		}
 	});
 
 	it("creates and verifies through slim editable rereads without returning submitted content", async () => {

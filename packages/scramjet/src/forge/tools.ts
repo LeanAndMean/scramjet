@@ -263,13 +263,39 @@ interface FailureEvidenceDetails {
 	invalidates?: Array<"artifact" | "comments">;
 }
 
+function validEvidenceRepository(value: unknown): value is ForgeRepository {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const repository = value as Record<string, unknown>;
+	return (
+		(repository.forge === "github" || repository.forge === "gitlab") &&
+		(repository.host === "github.com" || repository.host === "gitlab.com") &&
+		typeof repository.projectPath === "string" &&
+		repository.projectPath !== "" &&
+		(repository.forge === "github") === (repository.host === "github.com")
+	);
+}
+
+function validEvidenceArtifact(value: unknown): value is { kind: ForgeArtifactKind; number: number } {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const artifact = value as Record<string, unknown>;
+	return (
+		(artifact.kind === "issue" || artifact.kind === "pr") &&
+		Number.isInteger(artifact.number) &&
+		(artifact.number as number) > 0
+	);
+}
+
 function mutationEvidenceDetails(value: unknown): MutationEvidenceDetails | FailureEvidenceDetails | null {
 	if (typeof value !== "object" || value === null) return null;
 	const details = value as Record<string, unknown>;
 	if (details.schema !== "scramjet:forge-mutation@1" && details.schema !== "scramjet:forge-failure@1") return null;
 	if (
 		!Array.isArray(details.invalidates) ||
-		details.invalidates.some((role: unknown) => role !== "artifact" && role !== "comments")
+		details.invalidates.some((role: unknown) => role !== "artifact" && role !== "comments") ||
+		(details.repository !== undefined && !validEvidenceRepository(details.repository)) ||
+		(details.artifact !== undefined && !validEvidenceArtifact(details.artifact)) ||
+		(details.schema === "scramjet:forge-mutation@1" &&
+			(details.repository === undefined || details.artifact === undefined))
 	) {
 		return null;
 	}

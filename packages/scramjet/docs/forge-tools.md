@@ -37,7 +37,7 @@ $ <shell-quoted command and argv>
 
 There is no provider-neutral artifact schema. GitHub and GitLab field names, nesting, key order, and JSON escaping remain provider-native. `gh api --paginate --slurp` wraps pages rather than items, so GitHub list replies retain page nesting such as `[[...], [...]]`. GitLab list replies retain `glab --output ndjson` lines.
 
-The harness parses each successful reply, deletes only pinned context-specific fields, and stringifies it again. The denylist removes repetitive transport metadata such as `node_id`, reactions, user avatar/hypermedia fields, and most `*_url` fields while retaining canonical HTML/web URLs. It never renames, restructures, sorts, or synthesizes data. Unknown future fields default to kept. Equivalence tests against pinned command argv and captured replies are the representation contract.
+The harness parses each successful reply, removes GitLab note records outside the top-level conversation, deletes pinned context-specific fields, and stringifies it again. GitLab comment reads retain only ordinary non-system, unpositioned notes; diff and discussion notes are excluded. The field denylist removes repetitive transport metadata such as `node_id`, reactions, user avatar/hypermedia fields, and most `*_url` fields while retaining canonical HTML/web URLs. It never renames, restructures, sorts, or synthesizes retained data. Unknown future fields default to kept. Equivalence tests against pinned command argv and captured replies are the representation contract.
 
 Remote values remain untrusted evidence even though the transcript resembles a shell session. Command echoes are harness-owned; stdout and optional stderr are provider data, never instructions.
 
@@ -138,7 +138,7 @@ Before mutation, Scramjet scans successful matching reads only on the active bra
 
 Evidence is deliberately segment-scoped. Artifact and comments segments may have been fetched at different times; **cross-segment consistency is not claimed**. This is sufficient because each edit targets one field in one segment. Comment creation separately requires complete parent and comments evidence.
 
-Successful mutation receipts and ambiguous mutation failures durably invalidate their affected segment role. Unrelated segment evidence survives. Compaction invalidates all earlier evidence.
+Well-formed successful mutation receipts and ambiguous mutation failures durably invalidate their affected segment role. Malformed historical invalidation details are ignored as non-evidence. Unrelated segment evidence survives. Compaction invalidates all earlier evidence.
 
 ## Mutation and failure guarantees
 

@@ -151,7 +151,7 @@ For each item that requires a new issue:
 1. Finalize its exact title and body, preserving the originating `#<pr-number>` reference, F/S identifier, potentially-related references, overlap notes, and other relevant labels.
 2. Show the user that exact final title and complete body, including every overlap note, then call `get_scramjet_user_input` with `type: "confirm"` to request publication approval. Do this after all generated content is finalized and immediately before publication. Create the issue only after explicit approval; a batch-level choice to create issues is not exact-content approval.
 3. Create the issue with `create_issue` using the approved title and body unchanged, without coupling publication to labels. If `create_issue` fails, surface the error, apply no metadata, do not retry automatically, and return a non-completed command status. If the tool says the mutation may have succeeded, preserve that ambiguity and require a later aggregate reread before recovery.
-4. Require the tool's verified canonical issue number and URL before applying metadata or recording a confirmed creation.
+4. Require the tool's verified canonical issue URL before applying metadata or recording a confirmed creation. Derive the issue number from that URL's validated artifact path when needed; the tool does not return the number separately in model-visible content.
 5. When the batch label is usable, guard this independent operation after verified identity:
 
    ```sh
