@@ -38,6 +38,56 @@ describe("terminal-safe projection", () => {
 });
 
 describe("create_issue approval", () => {
+	it("renders compact facts and reconstructs the expanded proposal from call arguments", async () => {
+		const { tools } = await registered();
+		const tool = tools.find((candidate) => candidate.name === "create_pr");
+		const args = { title: "Exact title", body: "Exact body", head: "feature", base: "main", draft: true };
+		const compact = tool.renderCall(args, theme(), { expanded: false }).render(120).join("\n");
+		const expanded = tool.renderCall(args, theme(), { expanded: true }).render(120).join("\n");
+		expect(compact).toContain("feature → main, draft");
+		expect(compact).not.toContain("Exact body");
+		const hostile = tool
+			.renderCall({ ...args, title: "unsafe\u001b]8;;x\u0007\u202e" }, theme(), { expanded: false })
+			.render(120)
+			.join("\n");
+		expect(hostile).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u);
+		expect(expanded).toContain("Exact title");
+		expect(expanded).toContain("Exact body");
+		expect(expanded).toContain("feature");
+		expect(expanded).toContain("main");
+	});
+
+	it("renders every settled certainty without proposal content in details", async () => {
+		const { tools } = await registered();
+		const tool = tools.find((candidate) => candidate.name === "create_issue");
+		const proposal = { title: "secret proposal title", body: "secret proposal body" };
+		const headless = await tool.execute("call", proposal, undefined, undefined, context());
+		expect(JSON.stringify(headless)).not.toContain(proposal.title);
+		expect(JSON.stringify(headless)).not.toContain(proposal.body);
+		for (const [outcome, writeState] of [
+			["verified", "verified"],
+			["cancelled", "not-dispatched"],
+			["pre-dispatch-failure", "not-dispatched"],
+			["stale", "not-dispatched"],
+			["headless", "not-dispatched"],
+			["ambiguous", "possible"],
+		] as const) {
+			const details = {
+				kind: "scramjet:forge-publication",
+				operation: "create_issue",
+				outcome,
+				writeState,
+				reason: "safe-reason",
+				...(outcome === "verified" ? { url: "https://github.com/a/b/issues/1" } : {}),
+			};
+			const text = tool
+				.renderResult({ content: [{ type: "text", text: "ignored" }], details }, {}, theme())
+				.render(120)
+				.join("\n");
+			expect(text.length).toBeGreaterThan(10);
+		}
+	});
+
 	it("registers all four independently allowlistable prompt-visible sequential tools", async () => {
 		const { tools } = await registered();
 		expect(

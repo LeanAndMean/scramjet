@@ -86,11 +86,19 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 	for (const definition of definitions as readonly any[]) {
 		pi.registerTool({
 			...definition,
-			promptSnippet: `${definition.name} publishes the exact supplied content only after mandatory interactive approval`,
+			promptSnippet: `${definition.name}: explain the decision context and consequences concisely, then supply the complete final content only in this tool call. Do not repeat the full payload in prose. Publication requires interactive approval and exact verification; never retry an ambiguous result automatically.`,
 			executionMode: "sequential",
-			renderCall(args: any, theme) {
+			renderCall(args: any, theme, { expanded }) {
+				const request = freezeRequest(definition.name, args);
+				if (expanded) {
+					const fields = displayFields(request).map(([label, value]) => {
+						const projected = projectTerminalSafe(value);
+						return `## ${label}\n\n${projected.text}`;
+					});
+					return new Markdown(fields.join("\n\n"), 0, 0, getMarkdownTheme());
+				}
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold(definition.name))} ${theme.fg("muted", "title" in args ? args.title : `#${args.number}`)}`,
+					`${theme.fg("toolTitle", theme.bold(definition.name))} ${theme.fg("muted", projectTerminalSafe(callSummary(request)).text)}`,
 					0,
 					0,
 				);
@@ -402,6 +410,12 @@ function displayFields(request: PublicationRequest): [string, string][] {
 		["Target", `#${request.number}`],
 		["Comment", request.body],
 	];
+}
+function callSummary(request: PublicationRequest): string {
+	if (request.operation === "create_issue") return request.title;
+	if (request.operation === "create_pr")
+		return `${request.title} (${request.head} → ${request.base}${request.draft ? ", draft" : ""})`;
+	return `#${request.number}`;
 }
 function consequence(request: PublicationRequest): string {
 	return request.operation === "create_issue"

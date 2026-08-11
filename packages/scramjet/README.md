@@ -131,6 +131,16 @@ The file is optional — without it, behavior is identical to today. Invalid com
 
 Command sets can also ship recommended settings via `autonomy-defaults.yaml` in the set directory. Recommendations are gap-fill only (never overwrite your config) and appear as an "Apply recommended settings" action in `/scramjet settings` when unapplied recommendations exist.
 
+## Forge publication tools
+
+Scramjet provides four independently allowlistable tools for the current repository: `create_issue`, `create_pr`, `add_issue_comment`, and `add_pr_comment`. They support canonical public `github.com` and `gitlab.com` origins through `gh` and `glab`; aliases, self-hosted forges, credential-bearing URLs, ports, and cross-fork pull requests are rejected.
+
+Each call contains the complete final proposal once and opens a mandatory multiline approval view that defaults to Cancel. Approve dispatches the unchanged payload and reports success only after refetching and exactly verifying the created object; Cancel or Escape performs no remote write. Headless sessions fail before mutation because interactive approval is unavailable.
+
+After mutation dispatch, an error may mean the publication occurred. Such an ambiguous result prohibits automatic retry: inspect the named repository and reconcile deliberately before making another call. GitHub behavior is validated with fixtures and live CLI checks; GitLab behavior is validated against fixtures, fake-process transport, and the released `glab v1.112.0` source contract, not a live GitLab publication.
+
+Agents should explain the decision context and consequences concisely before calling a publication tool, but put the complete final title/body only in the tool arguments rather than repeating it in prose. The normal tool call persists that exact proposal; compact and expanded history rendering derives from those arguments, while the result records only approval and write certainty.
+
 ## Scramjet operational commands
 
 The product-owned `scramjet` command set contains operational workflows for Scramjet itself. It is separate from Mach 12 and from the built-in `/scramjet settings` UI command.
