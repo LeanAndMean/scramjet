@@ -62,7 +62,7 @@ Prepare a review body beginning `<!-- mach12-review -->`. Use stable candidate I
 
 Also include removed-candidate disposition counts, unreviewed boundaries, `P`, the actual merge base, and the exact candidate test paths intentionally left uncommitted for assessment. State clearly that these are preliminary claims awaiting independent assessment and that the primary worktree contains only those candidate test changes.
 
-State the candidate count, reviewed head, dirty-worktree consequence, and publication target concisely, then call `add_pr_comment` with the PR number and complete preliminary review. After verified publication, extract the numeric GitHub comment ID and re-fetch that exact comment to verify the PR, marker, and authenticated trusted author. Cancellation leaves the candidate tests intact and reports incomplete; ambiguity prohibits automatic retry. Do not normalize tests into final suites, design production fixes, commit, or push in this command.
+State the candidate count, reviewed head, dirty-worktree consequence, and publication target concisely, then call `add_pr_comment` with the PR number and complete preliminary review. Continue only when publication is verified, then extract and retain the numeric GitHub comment ID from the verified canonical URL. If the ID cannot be extracted, block the transition without retrying publication. Cancellation leaves the candidate tests intact and reports incomplete; ambiguity prohibits automatic retry. Do not normalize tests into final suites, design production fixes, commit, or push in this command.
 
 Retain the verified review URL and numeric ID plus the current uncommitted-test state for the forced assessment handoff.
 

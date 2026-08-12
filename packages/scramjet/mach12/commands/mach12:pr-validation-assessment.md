@@ -70,7 +70,7 @@ Prepare an assessment body beginning `<!-- mach12-assessment -->` and link the e
 - confirmation that accepted tests are committed unchanged as executable criteria and must become green through production repairs without weakening, relocation, or duplication;
 - final local/upstream/GitHub convergence and clean-repository evidence when `V` exists.
 
-State the accepted/rejected counts, proof commit state, and publication consequence concisely, then call `add_pr_comment` with the PR number and complete final assessment. After verified publication, extract the numeric GitHub comment ID and re-fetch that exact comment to verify its PR, marker, and trusted author. Cancellation or ambiguity prevents routing; never retry automatically. Retain the verified assessment ID, proof commit or clean no-proof state, and accepted IDs for routing.
+State the accepted/rejected counts, proof commit state, and publication consequence concisely, then call `add_pr_comment` with the PR number and complete final assessment. Continue only when publication is verified, then extract and retain the numeric GitHub comment ID from the verified canonical URL. If the ID cannot be extracted, block routing without retrying publication. Cancellation or ambiguity prevents routing; never retry automatically. Retain the verified assessment ID, proof commit or clean no-proof state, and accepted IDs for routing.
 
 ## Step 5: Route the result
 

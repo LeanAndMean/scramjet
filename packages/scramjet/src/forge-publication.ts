@@ -15,16 +15,16 @@ const DETAILS_KIND = "scramjet:forge-publication";
 const DISPLAY_MARKER = "⟦";
 const OPERATIONS = ["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"] as const;
 type Operation = (typeof OPERATIONS)[number];
-interface PublicationDetails {
+type PublicationOutcomeDetails =
+	| { outcome: "cancelled"; writeState: "not-dispatched" }
+	| { outcome: "verified"; writeState: "verified"; url: string }
+	| { outcome: "headless" | "stale" | "pre-dispatch-failure"; writeState: "not-dispatched"; reason?: string }
+	| { outcome: "ambiguous"; writeState: "possible"; retryProhibited: true; reason?: string };
+type PublicationDetails = {
 	kind: typeof DETAILS_KIND;
 	operation: Operation;
 	repository?: string;
-	outcome: "cancelled" | "verified" | "headless" | "stale" | "pre-dispatch-failure" | "ambiguous";
-	writeState: "not-dispatched" | "possible" | "verified";
-	url?: string;
-	retryProhibited?: true;
-	reason?: string;
-}
+} & PublicationOutcomeDetails;
 type ApprovalResult = "approved" | "cancelled" | "stale";
 
 export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState): void {
@@ -439,11 +439,7 @@ function operationLabel(operation: Operation): string {
 		add_pr_comment: "Add pull/merge request comment",
 	}[operation];
 }
-function toolResult(
-	operation: Operation,
-	fields: Omit<PublicationDetails, "kind" | "operation" | "repository">,
-	repository?: ForgeRepository,
-) {
+function toolResult(operation: Operation, fields: PublicationOutcomeDetails, repository?: ForgeRepository) {
 	const details: PublicationDetails = {
 		kind: DETAILS_KIND,
 		operation,

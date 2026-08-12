@@ -828,16 +828,30 @@ describe("mach12 review-assessment publication boundary", () => {
 		expect(context).toContain("authenticated `gh api user --jq .login` identity");
 	});
 
-	it("preserves a verified assessment when later authentication fails", () => {
+	it("uses verified publication directly as the queued-mutation and routing gate", () => {
 		const publication = assessment.slice(assessment.indexOf("## Step 7:"));
+		expect(publication).toContain("Continue only when publication is verified");
+		expect(publication).toContain("verified canonical URL");
 		expect(publication).toContain("definite pre-dispatch no-write failure leaves no assessment artifact");
 		expect(publication).toContain("An ambiguous publication may have created the assessment");
-		expect(publication).toContain("do not retry automatically");
-		expect(publication).toContain("retain the canonical assessment URL");
-		expect(publication).toContain("the verified public artifact remains");
-		expect(publication).toContain("routing stays blocked until that authentication is reconciled");
-		expect(publication).not.toContain("Cancellation or failure leaves no assessment artifact");
+		expect(publication).toContain("block queued mutations and routing pending deliberate reconciliation");
+		expect(publication).toContain(
+			"Only after `add_pr_comment` returns a verified assessment publication and its numeric comment ID is retained",
+		);
+		expect(publication).not.toMatch(/re-fetch|trusted-author authentication|trusted author/);
 	});
+
+	it.each(["pr-review", "pr-validation", "pr-validation-assessment"])(
+		"trusts verified publication without re-authenticating a new comment in %s",
+		(command) => {
+			const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${command}.md`), "utf-8");
+			const publication = content.slice(content.lastIndexOf("State the"));
+			expect(publication).toContain("Continue only when publication is verified");
+			expect(publication).toContain("verified canonical URL");
+			expect(publication).toMatch(/ambiguity.*(?:automatic retry|retry automatically)/s);
+			expect(publication).not.toMatch(/re-fetch|trusted author|trusted-author/);
+		},
+	);
 });
 
 describe("mach12 deferred-review issue labels", () => {
@@ -898,7 +912,7 @@ describe("mach12 deferred-review issue labels", () => {
 	it("keeps preparation non-mutating and publishes assessment before deferred requests", () => {
 		const summary = assessment.slice(assessment.indexOf("## Step 5:"), assessment.indexOf("## Step 6:"));
 		const publish = assessment.indexOf("Call `add_pr_comment` with the PR number and complete final assessment");
-		const verified = assessment.indexOf("After verified publication", publish);
+		const verified = assessment.indexOf("Continue only when publication is verified", publish);
 		const mutations = assessment.indexOf("execute the queued deferred-item requests", verified);
 		expect(summary).not.toContain("For each finding");
 		expect(summary).not.toContain("staged implementation plan");
