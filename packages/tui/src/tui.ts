@@ -315,7 +315,7 @@ export class TUI extends Container {
 	}
 
 	// SCRAMJET-DIVERGENCE: approval context must reach terminal output before controls receive focus (#479).
-	async commitNow(): Promise<void> {
+	async commitNow(options?: { requireFlush?: boolean }): Promise<void> {
 		if (!this.liveRegionStart) throw new Error("Cannot commit without a live region");
 		if (this.stopped) throw new Error("Cannot commit a stopped TUI");
 		if (this.renderTimer) {
@@ -327,6 +327,8 @@ export class TUI extends Container {
 		this.lastRenderAt = performance.now();
 		try {
 			this.doRender();
+			if (options?.requireFlush && !this.terminal.flush)
+				throw new Error("Terminal flush is required for committed output");
 			await this.terminal.flush?.();
 		} catch (error) {
 			this.commitRequested = false;

@@ -2437,7 +2437,7 @@ export class InteractiveMode {
 					if (committedPreview) {
 						this.committedChatContainer.addChild(committedPreview);
 						try {
-							await this.ui.commitNow();
+							await this.ui.commitNow({ requireFlush: true });
 						} catch (error) {
 							this.committedChatContainer.removeChild(committedPreview);
 							this.ui.rebuild();

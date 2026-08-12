@@ -14,6 +14,23 @@ describe("execCommand", () => {
 		expect(result.stdinError).toBeUndefined();
 	});
 
+	it.skipIf(process.platform === "win32")("decodes UTF-8 sequences split across stream chunks", async () => {
+		const script = `
+			const stdout = Buffer.from("café");
+			const stderr = Buffer.from("東京");
+			process.stdout.write(stdout.subarray(0, 4));
+			process.stderr.write(stderr.subarray(0, 1));
+			setTimeout(() => {
+				process.stdout.write(stdout.subarray(4));
+				process.stderr.write(stderr.subarray(1));
+			}, 20);
+		`;
+		const result = await execCommand(process.execPath, ["-e", script], process.cwd());
+
+		expect(result).toMatchObject({ stdout: "café", stderr: "東京", code: 0 });
+		expect(result.stdout + result.stderr).not.toContain("�");
+	});
+
 	it("reports a pre-spawn failure", async () => {
 		const result = await execCommand("scramjet-command-that-does-not-exist", [], process.cwd(), {
 			stdin: "sensitive-marker",

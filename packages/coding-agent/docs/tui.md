@@ -131,7 +131,7 @@ const result = await ctx.ui.custom(
 );
 ```
 
-`committedPreview` is constructed after the live component factory resolves, rendered and committed once, and flushed to the terminal before that component receives focus. It remains in terminal history after the custom UI closes, is retained for deliberate width/theme rebuilds in the current runtime, and is not persisted to the session or sent to the model. Treat the returned component as immutable. Use this option when content must remain available through native mouse-wheel scrollback; returning oversized content from the live component does not work because mutable output is tail-windowed to terminal height.
+`committedPreview` is constructed after the live component factory resolves, rendered and committed once, and flushed to the terminal before that component receives focus. The complete preview is emitted to native terminal scrollback and retained internally for deliberate width/theme rebuilds in the current runtime. Native scrollback retention and mouse-wheel availability depend on terminal capacity and configuration. The preview is not persisted to the session or sent to the model. Treat the returned component as immutable; returning oversized content from the live component does not work because mutable output is tail-windowed to terminal height.
 
 ## Overlays
 

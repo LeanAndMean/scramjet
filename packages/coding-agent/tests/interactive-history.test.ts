@@ -384,6 +384,33 @@ describe("interactive assistant history", () => {
 	});
 
 	it.each([
+		["missing", undefined, "Terminal flush is required for committed output"],
+		["rejected", vi.fn().mockRejectedValue(new Error("flush failed")), "flush failed"],
+	])("fails closed and cleans up when terminal flush is %s", async (_state, flush, message) => {
+		const { terminal, mode, committedChatContainer, ui } = createInteractiveHarness();
+		Object.defineProperty(terminal, "flush", { value: flush, configurable: true });
+		const dispose = vi.fn();
+		const focus = vi.spyOn(ui, "setFocus");
+		focus.mockClear();
+		const pending = (
+			mode.showExtensionCustom as (
+				factory: (...args: unknown[]) => Component & { dispose(): void },
+				options: { committedPreview: () => Component },
+			) => Promise<string>
+		).call(mode, () => ({ render: () => ["LIVE"], invalidate() {}, dispose }), {
+			committedPreview: () => new Text("PREVIEW", 0, 0),
+		});
+		const rejection = expect(pending).rejects.toThrow(message);
+		await vi.runAllTimersAsync();
+		await rejection;
+		expect(dispose).toHaveBeenCalledTimes(1);
+		expect(committedChatContainer.children).toHaveLength(0);
+		expect((mode.editorContainer as Container).children).toEqual([mode.editor]);
+		expect(focus).toHaveBeenCalledTimes(1);
+		expect(focus).toHaveBeenCalledWith(mode.editor);
+	});
+
+	it.each([
 		[
 			"construction",
 			() => {

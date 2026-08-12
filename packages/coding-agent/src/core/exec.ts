@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { waitForChildProcess } from "../utils/child-process.js";
 
 /**
@@ -55,6 +56,9 @@ export async function execCommand(
 
 		let stdout = "";
 		let stderr = "";
+		// SCRAMJET-DIVERGENCE: decode process output across chunk boundaries for exact publication verification (#479).
+		const stdoutDecoder = new StringDecoder("utf8");
+		const stderrDecoder = new StringDecoder("utf8");
 		let killed = false;
 		let settled = false;
 		let spawned = false;
@@ -99,11 +103,11 @@ export async function execCommand(
 		});
 
 		proc.stdout?.on("data", (data) => {
-			stdout += data.toString();
+			stdout += stdoutDecoder.write(data);
 		});
 
 		proc.stderr?.on("data", (data) => {
-			stderr += data.toString();
+			stderr += stderrDecoder.write(data);
 		});
 
 		const errorDetails = (error: Error): ExecError => {
@@ -136,6 +140,8 @@ export async function execCommand(
 			});
 
 		Promise.all([processSettled, stdinSettled]).then(([code]) => {
+			stdout += stdoutDecoder.end();
+			stderr += stderrDecoder.end();
 			settled = true;
 			if (timeoutId) clearTimeout(timeoutId);
 			if (killTimeoutId) clearTimeout(killTimeoutId);

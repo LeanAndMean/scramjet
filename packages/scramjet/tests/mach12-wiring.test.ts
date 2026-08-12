@@ -827,6 +827,17 @@ describe("mach12 review-assessment publication boundary", () => {
 		expect(context).toContain("`<!-- mach12-review -->`");
 		expect(context).toContain("authenticated `gh api user --jq .login` identity");
 	});
+
+	it("preserves a verified assessment when later authentication fails", () => {
+		const publication = assessment.slice(assessment.indexOf("## Step 7:"));
+		expect(publication).toContain("definite pre-dispatch no-write failure leaves no assessment artifact");
+		expect(publication).toContain("An ambiguous publication may have created the assessment");
+		expect(publication).toContain("do not retry automatically");
+		expect(publication).toContain("retain the canonical assessment URL");
+		expect(publication).toContain("the verified public artifact remains");
+		expect(publication).toContain("routing stays blocked until that authentication is reconciled");
+		expect(publication).not.toContain("Cancellation or failure leaves no assessment artifact");
+	});
 });
 
 describe("mach12 deferred-review issue labels", () => {

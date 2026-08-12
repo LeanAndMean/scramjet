@@ -21,6 +21,8 @@ export type PublicationOutcome =
 	| { status: "no-write"; reason: string }
 	| { status: "ambiguous"; reason: string; retryProhibited: true };
 
+export const FORGE_EXEC_TIMEOUT_MS = 30_000;
+
 export function parseForgeOrigin(input: string): ForgeRepository {
 	if (
 		input !== input.trim() ||
@@ -99,11 +101,17 @@ async function invoke(
 	cwd: string,
 	signal?: AbortSignal,
 ) {
-	const result = await exec(cli, ["api", "--method", "POST", "--input", "-", endpoint], {
-		cwd,
-		signal,
-		stdin: JSON.stringify(payload),
-	});
+	let result: ExecResult;
+	try {
+		result = await exec(cli, ["api", "--method", "POST", "--input", "-", endpoint], {
+			cwd,
+			signal,
+			stdin: JSON.stringify(payload),
+			timeout: FORGE_EXEC_TIMEOUT_MS,
+		});
+	} catch {
+		return { outcome: ambiguous("mutation-execution-rejected") };
+	}
 	if (result.spawnError)
 		return { outcome: { status: "no-write", reason: "mutation-process-did-not-spawn" } as PublicationOutcome };
 	if (result.code !== 0 || result.killed || result.stdinError)
@@ -111,8 +119,12 @@ async function invoke(
 	return { value: parseJson(result.stdout) };
 }
 async function fetchJson(exec: ForgeExec, cli: "gh" | "glab", endpoint: string, cwd: string, signal?: AbortSignal) {
-	const result = await exec(cli, ["api", endpoint], { cwd, signal });
-	return result.spawnError || result.code !== 0 || result.killed ? undefined : parseJson(result.stdout);
+	try {
+		const result = await exec(cli, ["api", endpoint], { cwd, signal, timeout: FORGE_EXEC_TIMEOUT_MS });
+		return result.spawnError || result.code !== 0 || result.killed ? undefined : parseJson(result.stdout);
+	} catch {
+		return undefined;
+	}
 }
 
 async function publishGithub(
