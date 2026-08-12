@@ -70,21 +70,60 @@ jobs:
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/set.yaml' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/commands/scramjet:troubleshoot.md' "$TARBALL_CONTENTS"
-          XDG_DATA_HOME="$PREFIX/data" npm install --prefix "$PREFIX" -g \
+          XDG_DATA_HOME="$PREFIX/data" npm install --ignore-scripts --prefix "$PREFIX" -g \
             "$PACK_DIR"/leanandmean-tui-*.tgz \
             "$PACK_DIR"/leanandmean-ai-*.tgz \
             "$PACK_DIR"/leanandmean-agent-*.tgz \
             "$PACK_DIR"/leanandmean-coding-agent-*.tgz \
             "$SCRAMJET_TARBALL"
-          test -f "$PREFIX/data/scramjet/mach12/commands/mach12:issue-create.md"
-          test -f "$PREFIX/data/scramjet/scramjet/commands/scramjet:troubleshoot.md"
-          test -f "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
-          test -f "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
+          test ! -e "$PREFIX/data/scramjet/mach12"
+          test ! -e "$PREFIX/data/scramjet/scramjet"
+          test ! -e "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
+          test ! -e "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
           XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --help >/dev/null
-          printf '%s\n' '{"id":"commands","type":"get_commands"}' \
-            | SCRAMJET_OFFLINE=1 XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --mode rpc --no-session \
-            | jq -e 'select(.id == "commands") | any(.data.commands[]; .name == "scramjet:troubleshoot")'
-          rm -rf "$PACK_DIR" "$PREFIX" "$TARBALL_CONTENTS"
+          RPC_STDOUT=$(mktemp)
+          RPC_STDERR=$(mktemp)
+          SCRAMJET_OFFLINE=1 \
+            XDG_DATA_HOME="$PREFIX/data" \
+            PI_CODING_AGENT_DIR="$PREFIX/pi-agent" \
+            SCRAMJET_CODING_AGENT_DIR="$PREFIX/scramjet-agent" \
+            node --input-type=module - "$PREFIX/bin/scramjet" "$RPC_STDOUT" "$RPC_STDERR" <<'NODE'
+          import { openSync, writeFileSync } from "node:fs";
+          import { spawn } from "node:child_process";
+          import { createInterface } from "node:readline";
+
+          const [binary, stdoutPath, stderrPath] = process.argv.slice(2);
+          const child = spawn(binary, ["--mode", "rpc", "--no-session"], {
+            env: process.env,
+            stdio: ["pipe", "pipe", openSync(stderrPath, "w")],
+          });
+          const lines = [];
+          let received = false;
+          const timeout = setTimeout(() => child.kill(), 30_000);
+          createInterface({ input: child.stdout }).on("line", (line) => {
+            lines.push(line);
+            const response = JSON.parse(line);
+            if (response.id === "commands" && response.type === "response" && response.command === "get_commands") {
+              if (!response.success) throw new Error(response.error);
+              received = true;
+              child.stdin.end();
+            }
+          });
+          child.stdin.write(`${JSON.stringify({ id: "commands", type: "get_commands" })}\n`);
+          const [code] = await new Promise((resolve) => child.on("close", (...args) => resolve(args)));
+          clearTimeout(timeout);
+          writeFileSync(stdoutPath, `${lines.join("\n")}\n`);
+          if (!received || code !== 0) throw new Error(`RPC failed: received=${received}, status=${code}`);
+          NODE
+          jq -e 'select(.id == "commands" and .type == "response" and .command == "get_commands" and .success == true) | (.data.commands | any(.name == "mach12:issue-create") and any(.name == "scramjet:troubleshoot"))' "$RPC_STDOUT"
+          grep -qF 'using packaged mach12 command set read-only' "$RPC_STDERR"
+          grep -qF 'using packaged scramjet command set read-only' "$RPC_STDERR"
+          grep -qF 'scripts/postinstall.js' "$RPC_STDERR"
+          test ! -e "$PREFIX/data/scramjet/mach12"
+          test ! -e "$PREFIX/data/scramjet/scramjet"
+          test ! -e "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
+          test ! -e "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
+          rm -rf "$PACK_DIR" "$PREFIX" "$TARBALL_CONTENTS" "$RPC_STDOUT" "$RPC_STDERR"
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary

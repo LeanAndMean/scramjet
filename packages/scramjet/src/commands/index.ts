@@ -146,9 +146,10 @@ function globalRoot(): string {
 export function registerCommandLoader(
 	pi: ExtensionAPI,
 	state: ScramjetState,
-	dependencies: { bundledRoot?: string; inspection?: Partial<Inspection> } = {},
+	dependencies: { bundledRoot?: string; inspection?: Partial<Inspection>; interactiveOutput?: boolean } = {},
 ): void {
 	const bundledRoot = dependencies.bundledRoot ?? packageRoot();
+	const interactiveOutput = dependencies.interactiveOutput ?? Boolean(process.stdout.isTTY);
 	const inspection: Inspection = {
 		lstat: dependencies.inspection?.lstat ?? lstatSync,
 		stat: dependencies.inspection?.stat ?? statSync,
@@ -237,7 +238,9 @@ export function registerCommandLoader(
 			const visibleDiagnostics = bundled.flatMap((result) => (result.diagnostic ? [result.diagnostic] : []));
 			const signature = bundled.map((result) => result.classification).join("|");
 			if (visibleDiagnostics.length > 0 && signature !== lastNotificationSignature) {
-				ctx?.ui.notify(visibleDiagnostics.join("\n"), "warning");
+				const message = visibleDiagnostics.join("\n");
+				if (ctx?.hasUI && interactiveOutput) ctx.ui.notify(message, "warning");
+				else if (ctx?.hasUI) process.stderr.write(`[scramjet/discovery] ${message}\n`);
 			}
 			lastNotificationSignature = visibleDiagnostics.length > 0 ? signature : "";
 

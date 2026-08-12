@@ -378,10 +378,10 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const { pi, handlers, appended } = recordingPi();
 		const state = freshState({ logger: createLogger(pi) });
 		const notify = vi.fn();
-		registerCommandLoader(pi, state, { bundledRoot });
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: true });
 		const result = handlers.get("resources_discover")![0]?.(
 			{ type: "resources_discover", cwd, reason: "startup" },
-			{ ui: { notify } },
+			{ hasUI: true, ui: { notify } },
 		) as { promptPaths: string[] };
 
 		expect([...state.registry.keys()]).toEqual(["mach12:fallback", "scramjet:fallback"]);
@@ -401,6 +401,28 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(warningText).toContain("using packaged mach12 command set read-only");
 		expect(warningText).toContain(`node "${join(bundledRoot, "scripts", "postinstall.js")}"`);
 		expect(warningText).not.toContain("scramjet update");
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it("writes fallback recovery guidance to stderr when an RPC UI proxy is not interactive", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-fallback-rpc-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:fallback.md"), "---\n---\nFallback.");
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		const notify = vi.fn();
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: false });
+		handlers.get("resources_discover")![0]?.(
+			{ type: "resources_discover", cwd: join(sandbox, "project"), reason: "startup" },
+			{ hasUI: true, ui: { notify } },
+		);
+
+		expect(notify).not.toHaveBeenCalled();
+		expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("using packaged mach12 command set read-only"));
+		expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("scripts/postinstall.js"));
 		rmSync(sandbox, { recursive: true, force: true });
 	});
 
