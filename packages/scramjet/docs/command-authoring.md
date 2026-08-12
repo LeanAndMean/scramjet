@@ -663,13 +663,13 @@ Valid values are `chain`, `pause`, and `default`. The `default` value explicitly
 
 Commands that publish new forge content should use the ordinary model-callable `create_issue`, `create_pr`, `add_issue_comment`, and `add_pr_comment` tools. Each tool is independently allowlistable and targets the current canonical public GitHub or GitLab `origin` through `gh` or `glab`.
 
-Before the tool call, give the user concise decision context: repository intent, publication consequence, and any facts needed to judge the action. Put the complete final title and body/comment only in the tool arguments; do not repeat the full proposal in assistant prose. The mandatory multiline approval component is the authoritative view of the exact immutable payload and defaults to Cancel. Cancel and Escape perform no write, and headless use fails before mutation because approval cannot be obtained.
+Before the tool call, give the user concise decision context: repository intent, publication consequence, and any facts needed to judge the action. Put the complete final title and body/comment only in the tool arguments; do not repeat the full proposal in assistant prose. The mandatory approval UI commits a terminal-safe rendering of the exact immutable payload to native scrollback, then presents a vertical Cancel/Approve selector that defaults to Cancel. Users inspect long payloads through normal terminal scrolling and choose with Up/Down. Cancel and Escape perform no write, and headless use fails before mutation because approval cannot be obtained.
 
 A verified result means Scramjet correlated the direct response identity, refetched that exact object, and matched its fields exactly. An ambiguous result means mutation dispatch began but acceptance could not be proven; never retry automatically. Inspect the target repository and reconcile deliberately before another publication attempt.
 
 Supported origins are canonical public `github.com` and `gitlab.com` URLs. Self-hosted instances, aliases, credentials, ports, malformed paths, and cross-fork pull requests are unsupported. GitLab behavior is fixture- and released-source-contract validated unless separate live-validation evidence is recorded.
 
-The normal persisted tool call is the sole complete proposal artifact. Expanded history rendering reconstructs the proposal from persisted call arguments; result content and details record approval and write certainty without copying the title or body. Do not add the proposal to custom journal entries or progress prose.
+The normal persisted tool call is the sole durable complete proposal artifact. The committed approval preview is visual-only and is not persisted or sent to the model. Expanded history rendering reconstructs the proposal from persisted call arguments; result content and details record approval and write certainty without copying the title or body. Do not add the proposal to custom journal entries or progress prose.
 
 ## Command File Anatomy
 

@@ -77,15 +77,27 @@ function createInteractiveHarness(): {
 	const committedChatContainer = new Container();
 	const chatContainer = new Container();
 	const pendingMessagesContainer = new Container();
+	const editorContainer = new Container();
+	const history: string[] = [];
+	let editorText = "";
+	const editor = Object.assign(new Text("", 0, 0), {
+		borderColor: "",
+		addToHistory: (text: string) => history.push(text),
+		getText: () => editorText,
+		setText: (text: string) => {
+			editorText = text;
+		},
+	});
 	const footer = new Text("footer", 0, 0);
 	let sessionMessages: unknown[] = [];
 	let sessionEntries: unknown[] = [];
-	const history: string[] = [];
 	headerContainer.addChild(builtInHeader);
 	ui.addChild(headerContainer);
 	ui.addChild(committedChatContainer);
 	ui.addChild(chatContainer);
 	ui.setLiveRegionStart(chatContainer);
+	ui.addChild(editorContainer);
+	editorContainer.addChild(editor);
 	ui.addChild(footer);
 	ui.start();
 
@@ -100,7 +112,9 @@ function createInteractiveHarness(): {
 		pendingMessagesContainer,
 		mutableChatComponents: new Set(),
 		footer,
-		editor: { borderColor: "", addToHistory: (text: string) => history.push(text) },
+		editor,
+		editorContainer,
+		keybindings: {},
 		statusContainer: new Container(),
 		runtimeHost: {
 			session: {
@@ -252,6 +266,153 @@ describe("interactive assistant history", () => {
 		(mode.renderInitialMessages as () => void).call(mode);
 
 		expect(history).toEqual(["/mach12:issue-plan persisted exact", "/mach12:issue-plan"]);
+	});
+
+	it("commits a complete custom preview before showing live controls", async () => {
+		const { terminal, mode, ui, committedChatContainer } = createInteractiveHarness();
+		committedChatContainer.addChild(new Text("PRIOR-HISTORY", 0, 0));
+		ui.commit();
+		await render(terminal);
+		const mark = terminal.markWrites();
+		const activationOrder: string[] = [];
+		const commitNow = ui.commitNow.bind(ui);
+		vi.spyOn(ui, "commitNow").mockImplementation(async () => {
+			await commitNow();
+			activationOrder.push("committed");
+		});
+		const setFocus = ui.setFocus.bind(ui);
+		vi.spyOn(ui, "setFocus").mockImplementation((component) => {
+			activationOrder.push("focus");
+			setFocus(component);
+		});
+		let finish: ((value: string) => void) | undefined;
+		let live: Text | undefined;
+		const preview = [
+			"PREVIEW-BEGIN",
+			...Array.from({ length: 20 }, (_, index) => `PREVIEW-LINE-${index.toString().padStart(2, "0")}-END`),
+			"PREVIEW-END",
+		];
+
+		const pending = (
+			mode.showExtensionCustom as (
+				factory: (...args: unknown[]) => Component,
+				options: { committedPreview: () => Component },
+			) => Promise<string>
+		).call(
+			mode,
+			(_tui: unknown, _theme: unknown, _keybindings: unknown, done: (value: string) => void) => {
+				finish = done;
+				live = new Text("LIVE-APPROVAL", 0, 0);
+				return live;
+			},
+			{ committedPreview: () => new Text(preview.join("\n"), 0, 0) },
+		);
+		await render(terminal);
+
+		const buffer = terminal.bufferLines().join("\n");
+		for (const marker of preview) expect(buffer, marker).toContain(marker);
+		expect(buffer.match(/PREVIEW-BEGIN/g)).toHaveLength(1);
+		expect(buffer.match(/PREVIEW-END/g)).toHaveLength(1);
+		const output = terminal.writesSince(mark);
+		expect(output).toContain("PREVIEW-BEGIN");
+		expect(output).toContain("PREVIEW-END");
+		expect(output).not.toContain("PRIOR-HISTORY");
+		expect(output).not.toContain("\x1b[2J");
+		expect(output).not.toContain("\x1b[3J");
+		expect(output.indexOf("PREVIEW-END")).toBeLessThan(output.indexOf("LIVE-APPROVAL"));
+		expect(activationOrder.slice(0, 2)).toEqual(["committed", "focus"]);
+		expect(terminal.visibleLines().join("\n")).toContain("LIVE-APPROVAL");
+
+		terminal.scrollLines(-10);
+		const viewportY = terminal.viewportY;
+		const visible = terminal.visibleLines();
+		const liveUpdateMark = terminal.markWrites();
+		live?.setText("LIVE-APPROVAL-CHANGED");
+		ui.requestRender();
+		await render(terminal);
+		expect(terminal.writesSince(liveUpdateMark)).toContain("LIVE-APPROVAL-CHANGED");
+		expect(terminal.viewportY).toBe(viewportY);
+		expect(terminal.visibleLines()).toEqual(visible);
+
+		finish?.("cancelled");
+		await pending;
+		await render(terminal);
+		expect(terminal.bufferLines().join("\n")).toContain("PREVIEW-BEGIN");
+	});
+
+	it("does not focus custom controls until committed preview output flushes", async () => {
+		const { terminal, mode, ui } = createInteractiveHarness();
+		let releaseFlush: () => void = () => {};
+		const flushGate = new Promise<void>((resolve) => {
+			releaseFlush = resolve;
+		});
+		terminal.flush = vi.fn(() => flushGate);
+		let finish: ((value: string) => void) | undefined;
+		let focused: () => void = () => {};
+		const focusSettled = new Promise<void>((resolve) => {
+			focused = resolve;
+		});
+		const setFocus = ui.setFocus.bind(ui);
+		const focus = vi.spyOn(ui, "setFocus").mockImplementation((component) => {
+			setFocus(component);
+			focused();
+		});
+
+		const pending = (
+			mode.showExtensionCustom as (
+				factory: (...args: unknown[]) => Component,
+				options: { committedPreview: () => Component },
+			) => Promise<string>
+		).call(
+			mode,
+			(_tui: unknown, _theme: unknown, _keybindings: unknown, done: (value: string) => void) => {
+				finish = done;
+				return new Text("LIVE", 0, 0);
+			},
+			{ committedPreview: () => new Text("FLUSHED-PREVIEW", 0, 0) },
+		);
+		await Promise.resolve();
+		await Promise.resolve();
+		expect(focus).not.toHaveBeenCalled();
+
+		releaseFlush();
+		await focusSettled;
+		expect(terminal.writes.join("\n")).toContain("FLUSHED-PREVIEW");
+
+		finish?.("cancelled");
+		await pending;
+	});
+
+	it.each([
+		[
+			"construction",
+			() => {
+				throw new Error("preview failed");
+			},
+		],
+		[
+			"rendering",
+			() => ({
+				render: () => {
+					throw new Error("preview failed");
+				},
+				invalidate() {},
+			}),
+		],
+	])("disposes live controls and restores the editor when preview %s fails", async (_phase, previewFactory) => {
+		const { mode, committedChatContainer } = createInteractiveHarness();
+		const dispose = vi.fn();
+		const pending = (
+			mode.showExtensionCustom as (
+				factory: (...args: unknown[]) => Component & { dispose(): void },
+				options: { committedPreview: () => Component },
+			) => Promise<string>
+		).call(mode, () => ({ render: () => ["LIVE"], invalidate() {}, dispose }), { committedPreview: previewFactory });
+
+		await expect(pending).rejects.toThrow("preview failed");
+		expect(dispose).toHaveBeenCalledTimes(1);
+		expect(committedChatContainer.children).toHaveLength(0);
+		expect((mode.editorContainer as Container).children).toEqual([mode.editor]);
 	});
 
 	it("rebuilds retained headers while replacing live footers routinely", async () => {

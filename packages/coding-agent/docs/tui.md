@@ -14,7 +14,7 @@ The interactive mode separates terminal output into append-only committed histor
 
 Mutable output is tail-windowed to at most `terminal.rows - 1` rendered lines before it is written, so live content cannot push mutable rows into native scrollback. Finalization removes the mutable preview and commits the component's finalized presentation once. Pending tools form an ordering barrier, and image-backed tools commit only after their conversions settle.
 
-At the TUI API level, `setLiveRegionStart(component)` selects the first direct child in the live canvas, `commit()` atomically appends newly finalized rows, and `rebuild()` deliberately repaints retained history. Detaching the selected component safely resets committed rendering and returns the TUI to legacy full-repaint rendering. Routine updates, content shrink, temporary-UI dismissal, and height-only resize do not clear scrollback or replay committed history. Width and theme changes, session reconstruction, presentation-setting changes, reload, resume, and external-editor return use deliberate rebuilds because retained output must be reflowed or restyled; those rebuilds intentionally bottom-anchor the display.
+At the TUI API level, `setLiveRegionStart(component)` selects the first direct child in the live canvas, `commit()` schedules atomic append of newly finalized rows, `commitNow()` renders immediately and waits for terminal output to flush when controls must not receive input first, and `rebuild()` deliberately repaints retained history. Detaching the selected component safely resets committed rendering and returns the TUI to legacy full-repaint rendering. Routine updates, content shrink, temporary-UI dismissal, and height-only resize do not clear scrollback or replay committed history. Width and theme changes, session reconstruction, presentation-setting changes, reload, resume, and external-editor return use deliberate rebuilds because retained output must be reflowed or restyled; those rebuilds intentionally bottom-anchor the display.
 
 Overlays remain screen-relative and are composed over the bounded live canvas. Closing an overlay or autocomplete restores the underlying live rows without mutating committed history.
 
@@ -108,15 +108,30 @@ pi.on("session_start", async (_event, ctx) => {
 });
 ```
 
-**In custom tools** via `pi.ui.custom()`:
+**In custom tools** via `ctx.ui.custom()`:
 
 ```typescript
 async execute(toolCallId, params, onUpdate, ctx, signal) {
-  const handle = pi.ui.custom(myComponent);
+  const result = await ctx.ui.custom((_tui, _theme, _keybindings, done) => myComponent(done));
   // ...
-  handle.close();
 }
 ```
+
+### Committed previews
+
+A custom UI can pair compact live controls with immutable long-form context committed to native terminal scrollback:
+
+```typescript
+const result = await ctx.ui.custom(
+  (_tui, _theme, _keybindings, done) => new ApprovalSelector(done),
+  {
+    committedPreview: (_tui, theme) =>
+      new Markdown(completePayload, 0, 0, getMarkdownTheme()),
+  },
+);
+```
+
+`committedPreview` is constructed after the live component factory resolves, rendered and committed once, and flushed to the terminal before that component receives focus. It remains in terminal history after the custom UI closes, is retained for deliberate width/theme rebuilds in the current runtime, and is not persisted to the session or sent to the model. Treat the returned component as immutable. Use this option when content must remain available through native mouse-wheel scrollback; returning oversized content from the live component does not work because mutable output is tail-windowed to terminal height.
 
 ## Overlays
 

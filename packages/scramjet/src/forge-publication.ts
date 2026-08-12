@@ -1,5 +1,5 @@
-import { type ExtensionAPI, getMarkdownTheme } from "@leanandmean/coding-agent";
-import { Markdown, Text, truncateToWidth } from "@leanandmean/tui";
+import { type ExtensionAPI, getMarkdownTheme, getSelectListTheme } from "@leanandmean/coding-agent";
+import { type Component, Container, Markdown, SelectList, Text, truncateToWidth } from "@leanandmean/tui";
 import { Type } from "typebox";
 import {
 	type ForgeRepository,
@@ -13,7 +13,6 @@ import type { ScramjetState } from "./types.js";
 
 const DETAILS_KIND = "scramjet:forge-publication";
 const DISPLAY_MARKER = "⟦";
-const VIEWPORT_LINES = 18;
 const OPERATIONS = ["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"] as const;
 type Operation = (typeof OPERATIONS)[number];
 interface PublicationDetails {
@@ -90,13 +89,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 			executionMode: "sequential",
 			renderCall(args: any, theme, { expanded }) {
 				const request = freezeRequest(definition.name, args);
-				if (expanded) {
-					const fields = displayFields(request).map(([label, value]) => {
-						const projected = projectTerminalSafe(value);
-						return `## ${label}\n\n${projected.text}`;
-					});
-					return new Markdown(fields.join("\n\n"), 0, 0, getMarkdownTheme());
-				}
+				if (expanded) return publicationPayloadComponent(request, theme);
 				return new Text(
 					`${theme.fg("toolTitle", theme.bold(definition.name))} ${theme.fg("muted", projectTerminalSafe(callSummary(request)).text)}`,
 					0,
@@ -165,17 +158,23 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 				const expectedGeneration = state.lifecycleGeneration;
 				let approval: ApprovalResult;
 				try {
-					approval = await ctx.ui.custom<ApprovalResult>((tui, theme, keybindings, done) => {
-						let finished = false;
-						const finish = (result: ApprovalResult) => {
-							if (finished) return;
-							finished = true;
-							activeApproval = undefined;
-							done(result);
-						};
-						activeApproval = finish;
-						return new ApprovalComponent(repository, request, tui, theme, keybindings, finish);
-					});
+					approval = await ctx.ui.custom<ApprovalResult>(
+						(tui, theme, _keybindings, done) => {
+							let finished = false;
+							const finish = (result: ApprovalResult) => {
+								if (finished) return;
+								finished = true;
+								activeApproval = undefined;
+								done(result);
+							};
+							activeApproval = finish;
+							return new ApprovalComponent(repository, request, tui, theme, finish);
+						},
+						{
+							committedPreview: (_tui, previewTheme) =>
+								approvalPreviewComponent(repository, request, previewTheme),
+						},
+					);
 				} catch {
 					activeApproval = undefined;
 					return toolResult(
@@ -241,27 +240,26 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 }
 
 class ApprovalComponent {
-	private selected: "cancel" | "approve" = "cancel";
-	private offset = 0;
-	private contentLines: string[] = [];
-	private width = 0;
+	private readonly choices: SelectList;
 	constructor(
 		private readonly repository: ForgeRepository,
 		private readonly request: PublicationRequest,
 		private readonly tui: { requestRender(): void },
 		private readonly theme: any,
-		private readonly keybindings: { matches(data: string, action: string): boolean },
-		private readonly done: (result: ApprovalResult) => void,
-	) {}
+		done: (result: ApprovalResult) => void,
+	) {
+		this.choices = new SelectList(
+			[
+				{ value: "cancel", label: "Cancel" },
+				{ value: "approve", label: "Approve publication" },
+			],
+			2,
+			getSelectListTheme(),
+		);
+		this.choices.onSelect = (choice) => done(choice.value === "approve" ? "approved" : "cancelled");
+		this.choices.onCancel = () => done("cancelled");
+	}
 	render(width: number): string[] {
-		if (width !== this.width) this.buildContent(width);
-		const maxOffset = Math.max(0, this.contentLines.length - VIEWPORT_LINES);
-		this.offset = Math.min(this.offset, maxOffset);
-		const visible = this.contentLines.slice(this.offset, this.offset + VIEWPORT_LINES);
-		const belowCount = Math.max(0, this.contentLines.length - this.offset - visible.length);
-		const cancel = this.selected === "cancel" ? this.theme.fg("accent", "[ Cancel ]") : "  Cancel  ";
-		const approve =
-			this.selected === "approve" ? this.theme.fg("warning", "[ Approve publication ]") : "  Approve publication  ";
 		return [
 			truncateToWidth(
 				this.theme.fg("accent", this.theme.bold(`${operationLabel(this.request.operation)} — approval required`)),
@@ -270,62 +268,71 @@ class ApprovalComponent {
 			truncateToWidth(`Provider: ${this.repository.provider}`, width),
 			truncateToWidth(`Repository: ${repositoryName(this.repository)}`, width),
 			truncateToWidth(`Consequence: ${consequence(this.request)}`, width),
-			truncateToWidth(
-				this.theme.fg("dim", this.offset > 0 ? `${this.offset} lines above` : "Beginning of payload"),
-				width,
-			),
-			...visible.map((line) => truncateToWidth(line, width)),
-			truncateToWidth(this.theme.fg("dim", belowCount > 0 ? `${belowCount} lines below` : "End of payload"), width),
-			truncateToWidth(`${cancel}   ${approve}`, width),
-			truncateToWidth(
-				this.theme.fg("dim", "↑↓/PgUp/PgDn scroll • Tab/←→ choose • Enter confirm • Esc cancel"),
-				width,
-			),
+			...this.choices.render(width),
+			truncateToWidth(this.theme.fg("dim", "↑↓ choose • Enter confirm • Esc cancel"), width),
 		];
 	}
 	handleInput(data: string): void {
-		if (this.keybindings.matches(data, "tui.select.cancel")) {
-			this.done("cancelled");
-			return;
-		}
-		if (this.keybindings.matches(data, "tui.select.confirm")) {
-			this.done(this.selected === "approve" ? "approved" : "cancelled");
-			return;
-		}
-		if (data === "\t" || data === "\u001b[D" || data === "\u001b[C")
-			this.selected = this.selected === "cancel" ? "approve" : "cancel";
-		else if (this.keybindings.matches(data, "tui.select.up")) this.offset--;
-		else if (this.keybindings.matches(data, "tui.select.down")) this.offset++;
-		else if (data === "\u001b[5~") this.offset -= VIEWPORT_LINES;
-		else if (data === "\u001b[6~") this.offset += VIEWPORT_LINES;
-		this.offset = Math.max(0, Math.min(this.offset, Math.max(0, this.contentLines.length - VIEWPORT_LINES)));
+		this.choices.handleInput(data);
 		this.tui.requestRender();
 	}
 	invalidate(): void {
-		this.width = 0;
+		this.choices.invalidate();
 	}
 	dispose(): void {}
-	private buildContent(width: number): void {
-		this.width = width;
-		const fields = displayFields(this.request).map(([label, value]) => {
-			const projected = projectTerminalSafe(value);
-			return { label, ...projected };
-		});
-		const markdown = new Markdown(
-			fields.map((field) => `## ${field.label}\n\n${field.text}`).join("\n\n"),
-			0,
-			0,
-			getMarkdownTheme(),
-		);
-		this.contentLines = markdown.render(Math.max(1, width));
-		if (fields.some((field) => field.changed))
-			this.contentLines.push(
-				this.theme.fg(
+}
+
+function publicationPayloadComponent(request: PublicationRequest, theme: any): Container {
+	const fields = displayFields(request).map(([label, value]) => ({ label, ...projectTerminalSafe(value) }));
+	const component = new Container();
+	component.addChild(
+		new Markdown(fields.map((field) => `## ${field.label}\n\n${field.text}`).join("\n\n"), 0, 0, getMarkdownTheme()),
+	);
+	if (fields.some((field) => field.changed))
+		component.addChild(
+			new Text(
+				theme.fg(
 					"warning",
 					`${DISPLAY_MARKER}…${DISPLAY_MARKER} marks escaped terminal-unsafe or hyperlink syntax.`,
 				),
-			);
+				0,
+				0,
+			),
+		);
+	return component;
+}
+
+class ApprovalPreviewComponent implements Component {
+	constructor(
+		private readonly repository: ForgeRepository,
+		private readonly request: PublicationRequest,
+		private readonly theme: any,
+	) {}
+	render(width: number): string[] {
+		const component = new Container();
+		component.addChild(
+			new Text(
+				[
+					this.theme.fg(
+						"accent",
+						this.theme.bold(`${operationLabel(this.request.operation)} — approval required`),
+					),
+					`Provider: ${this.repository.provider}`,
+					`Repository: ${repositoryName(this.repository)}`,
+					`Consequence: ${consequence(this.request)}`,
+				].join("\n"),
+				0,
+				0,
+			),
+		);
+		component.addChild(publicationPayloadComponent(this.request, this.theme));
+		return component.render(width);
 	}
+	invalidate(): void {}
+}
+
+function approvalPreviewComponent(repository: ForgeRepository, request: PublicationRequest, theme: any): Component {
+	return new ApprovalPreviewComponent(repository, request, theme);
 }
 
 export function projectTerminalSafe(input: string): { text: string; changed: boolean; restore(): string } {

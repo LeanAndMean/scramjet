@@ -2394,6 +2394,7 @@ export class InteractiveMode {
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
 		options?: {
 			overlay?: boolean;
+			committedPreview?: (tui: TUI, theme: Theme) => Component;
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			onHandle?: (handle: OverlayHandle) => void;
 		},
@@ -2428,9 +2429,22 @@ export class InteractiveMode {
 			};
 
 			Promise.resolve(factory(this.ui, theme, this.keybindings, close))
-				.then((c) => {
+				.then(async (c) => {
 					if (closed) return;
 					component = c;
+					// SCRAMJET-DIVERGENCE: immutable custom UI context enters native scrollback before controls go live.
+					const committedPreview = options?.committedPreview?.(this.ui, theme);
+					if (committedPreview) {
+						this.committedChatContainer.addChild(committedPreview);
+						try {
+							await this.ui.commitNow();
+						} catch (error) {
+							this.committedChatContainer.removeChild(committedPreview);
+							this.ui.rebuild();
+							throw error;
+						}
+					}
+					if (closed) return;
 					if (isOverlay) {
 						// Resolve overlay options - can be static or dynamic function
 						const resolveOptions = (): OverlayOptions | undefined => {
@@ -2457,6 +2471,11 @@ export class InteractiveMode {
 				})
 				.catch((err) => {
 					if (closed) return;
+					try {
+						component?.dispose?.();
+					} catch {
+						/* ignore dispose errors */
+					}
 					if (!isOverlay) restoreEditor();
 					reject(err);
 				});

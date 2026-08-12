@@ -200,6 +200,9 @@ export interface ExtensionUIContext {
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
 		options?: {
 			overlay?: boolean;
+			// SCRAMJET-DIVERGENCE: immutable native-scrollback companion for long-form custom UI context.
+			/** Commit immutable visual context to terminal history before showing the interactive component. Not persisted. */
+			committedPreview?: (tui: TUI, theme: Theme) => Component;
 			/** Overlay positioning/sizing options. Can be static or a function for dynamic updates. */
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */

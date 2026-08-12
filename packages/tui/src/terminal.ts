@@ -30,6 +30,8 @@ export interface Terminal {
 
 	// Write output to terminal
 	write(data: string): void;
+	// Wait until previously written output has flushed, when supported.
+	flush?(): Promise<void>;
 
 	// Get terminal dimensions
 	get columns(): number;
@@ -327,6 +329,15 @@ export class ProcessTerminal implements Terminal {
 				// Ignore logging errors
 			}
 		}
+	}
+
+	flush(): Promise<void> {
+		return new Promise((resolve, reject) => {
+			process.stdout.write("", (error) => {
+				if (error) reject(error);
+				else resolve();
+			});
+		});
 	}
 
 	get columns(): number {

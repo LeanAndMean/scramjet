@@ -5,11 +5,11 @@ import { freshState, recordingPi } from "./helpers.js";
 
 initTheme(undefined, false);
 
-function execResult(stdout = "") {
-	return { stdout, stderr: "", code: 0, killed: false };
+function execResult(stdout = "", code = 0) {
+	return { stdout, stderr: "", code, killed: false };
 }
 
-function context(custom?: (factory: any) => Promise<any>) {
+function context(custom?: (factory: any, options?: any) => Promise<any>) {
 	return {
 		hasUI: Boolean(custom),
 		cwd: "/repo",
@@ -55,6 +55,106 @@ describe("create_issue approval", () => {
 		expect(expanded).toContain("Exact body");
 		expect(expanded).toContain("feature");
 		expect(expanded).toContain("main");
+	});
+
+	it("uses the complete expanded payload as the committed preview for all four operations", async () => {
+		const longBody = [
+			"BEGIN",
+			...Array.from({ length: 30 }, (_, index) => `BODY-LINE-${index.toString().padStart(2, "0")}`),
+			"END\u001b]8;;x\u0007",
+		].join("\n");
+		const cases = [
+			{
+				name: "create_issue",
+				args: { title: "Issue title", body: longBody },
+				expected: [
+					"Issue title",
+					"BEGIN",
+					...Array.from({ length: 30 }, (_, index) => `BODY-LINE-${index.toString().padStart(2, "0")}`),
+					"END",
+				],
+				order: ["Title", "Issue title", "Body", "BEGIN", "BODY-LINE-29", "END"],
+			},
+			{
+				name: "create_pr",
+				args: { title: "PR title", body: "PR body", head: "feature", base: "main", draft: true },
+				expected: ["PR title", "PR body", "feature", "main", "true"],
+				order: ["Title", "PR title", "Head", "feature", "Base", "main", "Draft", "true", "Body", "PR body"],
+			},
+			{
+				name: "add_issue_comment",
+				args: { number: 41, body: "Issue comment" },
+				expected: ["#41", "Issue comment"],
+				order: ["Target", "#41", "Comment", "Issue comment"],
+			},
+			{
+				name: "add_pr_comment",
+				args: { number: 42, body: "PR comment" },
+				expected: ["#42", "PR comment"],
+				order: ["Target", "#42", "Comment", "PR comment"],
+			},
+		] as const;
+		for (const testCase of cases) {
+			let preview = "";
+			const custom = async (factory: any, options?: any) => {
+				let answer: unknown;
+				const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+					answer = value;
+				});
+				preview = options
+					.committedPreview({ requestRender() {} }, theme())
+					.render(70)
+					.join("\n");
+				component.handleInput("\u001b");
+				return answer;
+			};
+			const { tools, pi } = await registered();
+			const tool = tools.find((candidate) => candidate.name === testCase.name);
+			const expanded = tool.renderCall(testCase.args, theme(), { expanded: true }).render(70).join("\n");
+
+			await tool.execute("call", testCase.args, undefined, undefined, context(custom));
+
+			for (const line of expanded.split("\n").filter(Boolean)) expect(preview).toContain(line);
+			for (const value of testCase.expected) expect(preview).toContain(value);
+			let previous = -1;
+			for (const value of testCase.order) {
+				const current = preview.indexOf(value, previous + 1);
+				expect(current, value).toBeGreaterThan(previous);
+				previous = current;
+			}
+			expect(preview).toContain("Provider: github");
+			expect(preview).toContain("Repository: LeanAndMean/scramjet");
+			expect(preview).toContain("Consequence:");
+			expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+			expect(preview).not.toContain("\u001b]8;;x");
+			expect(preview).not.toMatch(
+				/[\u0000-\u0008\u000b-\u001a\u001c-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u,
+			);
+		}
+	});
+
+	it("renders a vertical default-Cancel selector without payload viewport controls", async () => {
+		let rendered = "";
+		const custom = async (factory: any) => {
+			let answer: unknown;
+			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+				answer = value;
+			});
+			rendered = component.render(80).join("\n");
+			component.handleInput("\u001b");
+			return answer;
+		};
+		const { tool } = await registered();
+		await tool.execute("call", { title: "hidden title", body: "hidden body" }, undefined, undefined, context(custom));
+
+		expect(rendered).toContain("→ Cancel");
+		expect(rendered.indexOf("Cancel")).toBeLessThan(rendered.indexOf("Approve publication"));
+		expect(rendered).toContain("↑↓ choose • Enter confirm • Esc cancel");
+		expect(rendered).not.toContain("hidden title");
+		expect(rendered).not.toContain("hidden body");
+		expect(rendered).not.toMatch(
+			/lines (?:above|below)|Beginning of payload|End of payload|PgUp|PgDn|Tab|←|→ choose/,
+		);
 	});
 
 	it("renders every settled certainty without proposal content in details", async () => {
@@ -153,6 +253,25 @@ describe("create_issue approval", () => {
 		expect(pi.exec).not.toHaveBeenCalled();
 	});
 
+	it("fails closed when approval UI setup rejects", async () => {
+		const { tool, pi } = await registered();
+		const outcome = await tool.execute(
+			"call",
+			{ title: "t", body: "b" },
+			undefined,
+			undefined,
+			context(async () => {
+				throw new Error("preview failed");
+			}),
+		);
+		expect(outcome.details).toMatchObject({
+			outcome: "pre-dispatch-failure",
+			writeState: "not-dispatched",
+			reason: "approval-ui-failed",
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
 	it.each(["initial Enter", "Escape"])("defaults to Cancel and %s performs no mutation", async (mode) => {
 		const custom = async (factory: any) => {
 			let answer: unknown;
@@ -168,13 +287,16 @@ describe("create_issue approval", () => {
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
 
-	it("publishes the frozen exact proposal only after explicit approval", async () => {
+	it.each([
+		["Up", "\u001b[A"],
+		["Down", "\u001b[B"],
+	])("publishes the frozen exact proposal after explicit %s selection", async (_label, navigation) => {
 		const custom = async (factory: any) => {
 			let answer: unknown;
 			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 				answer = value;
 			});
-			component.handleInput("\t");
+			component.handleInput(navigation);
 			component.handleInput("\r");
 			return answer;
 		};
@@ -206,6 +328,84 @@ describe("create_issue approval", () => {
 		expect(pi.exec.mock.calls[2]?.[2]?.stdin).toBe(JSON.stringify({ title: "exact", body: "body\r\n" }));
 	});
 
+	it.each([
+		{
+			name: "create_issue",
+			params: { title: "issue title", body: "issue body" },
+			mutated: { title: "changed", body: "changed" },
+			payload: { title: "issue title", body: "issue body" },
+			endpoint: "repos/LeanAndMean/scramjet/issues",
+		},
+		{
+			name: "create_pr",
+			params: { title: "PR title", body: "PR body", head: "feature", base: "main", draft: true },
+			mutated: { title: "changed", body: "changed", head: "other", base: "other", draft: false },
+			payload: { title: "PR title", body: "PR body", head: "feature", base: "main", draft: true },
+			endpoint: "repos/LeanAndMean/scramjet/pulls",
+		},
+		{
+			name: "add_issue_comment",
+			params: { number: 41, body: "issue comment" },
+			mutated: { number: 99, body: "changed" },
+			payload: { body: "issue comment" },
+			endpoint: "repos/LeanAndMean/scramjet/issues/41/comments",
+		},
+		{
+			name: "add_pr_comment",
+			params: { number: 42, body: "PR comment" },
+			mutated: { number: 99, body: "changed" },
+			payload: { body: "PR comment" },
+			endpoint: "repos/LeanAndMean/scramjet/issues/42/comments",
+		},
+	])("freezes $name and maps one uncertain mutation to an ambiguous non-retriable result", async (testCase) => {
+		const custom = async (factory: any) => {
+			let answer: unknown;
+			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+				answer = value;
+			});
+			component.handleInput("\u001b[B");
+			component.handleInput("\r");
+			return answer;
+		};
+		const { tools, pi } = await registered();
+		pi.exec.mockImplementation(async (_command: string, args: string[]) =>
+			args.includes("POST") ? execResult("", 1) : execResult("https://github.com/LeanAndMean/scramjet.git\n"),
+		);
+		const tool = tools.find((candidate) => candidate.name === testCase.name);
+		const promise = tool.execute("call", testCase.params, undefined, undefined, context(custom));
+		Object.assign(testCase.params, testCase.mutated);
+
+		const outcome = await promise;
+
+		expect(outcome.details).toMatchObject({ outcome: "ambiguous", writeState: "possible", retryProhibited: true });
+		const posts = pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"));
+		expect(posts).toHaveLength(1);
+		expect(posts[0]?.[1]).toContain(testCase.endpoint);
+		expect(posts[0]?.[2]?.stdin).toBe(JSON.stringify(testCase.payload));
+	});
+
+	it.each([
+		["Left", "\u001b[D"],
+		["Right", "\u001b[C"],
+		["Tab", "\t"],
+		["Page Up", "\u001b[5~"],
+		["Page Down", "\u001b[6~"],
+	])("ignores %s for approval selection", async (_label, ignored) => {
+		const custom = async (factory: any) => {
+			let answer: unknown;
+			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+				answer = value;
+			});
+			component.handleInput(ignored);
+			component.handleInput("\r");
+			return answer;
+		};
+		const { tool, pi } = await registered();
+		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context(custom));
+		expect(outcome.details.outcome).toBe("cancelled");
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
 	it("rejects lifecycle, session, abort, and changed-origin staleness before mutation", async () => {
 		for (const stale of ["lifecycle", "session", "abort", "origin"] as const) {
 			const { tool, pi, state, emit } = await registered();
@@ -219,7 +419,7 @@ describe("create_issue approval", () => {
 				if (stale === "session") await emit("session_shutdown", {});
 				if (stale === "abort") controller.abort();
 				if (stale === "origin") pi.exec.mockResolvedValueOnce(execResult("https://github.com/other/repo.git\n"));
-				component.handleInput("\t");
+				component.handleInput("\u001b[B");
 				component.handleInput("\r");
 				return answer;
 			};
@@ -246,7 +446,7 @@ describe("create_issue approval", () => {
 			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 				answer = value;
 			});
-			component.handleInput("\t");
+			component.handleInput("\u001b[B");
 			component.handleInput("\r");
 			return answer;
 		};
@@ -260,28 +460,6 @@ describe("create_issue approval", () => {
 		const outcome = await publication;
 		expect(outcome.details.outcome).toBe("stale");
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
-	});
-
-	it("scrolls complete projected content and never renders raw hostile sequences", async () => {
-		let component: any;
-		const custom = async (factory: any) => {
-			component = factory({ requestRender() {} }, theme(), keybindings(), () => {});
-			return "cancelled";
-		};
-		const { tool } = await registered();
-		await tool.execute(
-			"call",
-			{ title: "BEGIN", body: `${"line\n".repeat(80)}END\u001b]8;;x\u0007` },
-			undefined,
-			undefined,
-			context(custom),
-		);
-		const first = component.render(70).join("\n");
-		expect(first).toContain("BEGIN");
-		for (let index = 0; index < 100; index++) component.handleInput("\u001b[6~");
-		const last = component.render(70).join("\n");
-		expect(last).toContain("END");
-		expect(last).not.toContain("\u001b]8;;x");
 	});
 });
 

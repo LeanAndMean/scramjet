@@ -2430,6 +2430,19 @@ The callback receives:
 - `keybindings` - App keybinding manager (for checking shortcuts)
 - `done(value)` - Call to close component and return value
 
+For immutable long-form context that must remain available through native terminal scrollback while compact controls stay live, pass a `committedPreview` factory:
+
+```typescript
+const result = await ctx.ui.custom(
+  (_tui, _theme, _keybindings, done) => new ApprovalSelector(done),
+  {
+    committedPreview: (_tui, theme) => new Text(theme.fg("muted", completeContext), 0, 0),
+  },
+);
+```
+
+The preview is rendered and committed once, then terminal output is flushed before the interactive component receives focus and remains in terminal history after the dialog closes. It is visual-only: Scramjet does not persist it to the session or send it to the model. Treat the component as immutable after construction. Oversized content returned by the live component is still tail-windowed to terminal height, so use `committedPreview` rather than implementing a keyboard viewport when native mouse-wheel scrolling is desired.
+
 See [tui.md](tui.md) for the full component API.
 
 #### Overlay Mode (Experimental)

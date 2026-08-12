@@ -314,6 +314,26 @@ export class TUI extends Container {
 		this.requestRender();
 	}
 
+	// SCRAMJET-DIVERGENCE: approval context must reach terminal output before controls receive focus (#479).
+	async commitNow(): Promise<void> {
+		if (!this.liveRegionStart) throw new Error("Cannot commit without a live region");
+		if (this.stopped) throw new Error("Cannot commit a stopped TUI");
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = undefined;
+		}
+		this.commitRequested = true;
+		this.renderRequested = false;
+		this.lastRenderAt = performance.now();
+		try {
+			this.doRender();
+			await this.terminal.flush?.();
+		} catch (error) {
+			this.commitRequested = false;
+			throw error;
+		}
+	}
+
 	rebuild(): void {
 		this.requestRender(true);
 	}
