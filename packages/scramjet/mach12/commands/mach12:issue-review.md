@@ -2,6 +2,7 @@
 description: Read a GitHub issue and all comments, review the implementation plan, and present findings
 argument-hint: "<issue-number> [context]"
 allowed-tools:
+  - add_issue_comment
   - bash
   - read
   - grep
@@ -192,7 +193,7 @@ If the user picks "Create revised plan", enter the revision loop:
    /mach12:plan-comment-contract revision
    ```
 
-   This loads the canonical artifact policy into the current model context; it does not run an independent formatter. Apply it to the prior plan, classified findings and deltas, architect proposal and exploration evidence, test strategy, project constraints, pitfalls, and decisions. Produce the exact, complete standalone replacement beginning with `<!-- mach12-plan -->`, and run the contract's final self-check. Resolve supported defects before presentation; surface genuinely missing or contradictory evidence instead of presenting an incomplete marker-bearing body.
+   This loads the canonical artifact policy into the current model context; it does not run an independent formatter. Apply it to the prior plan, classified findings and deltas, architect proposal and exploration evidence, test strategy, project constraints, pitfalls, and decisions. Produce the exact, complete standalone replacement beginning with `<!-- mach12-plan -->`, and run the contract's final self-check. Resolve supported defects before publication; surface genuinely missing or contradictory evidence instead of producing a publication-eligible marker-bearing body.
 
 3. **Delta assessment.** Assess the finalized candidate, not the architect's raw proposal. Perform a lightweight delta assessment (not a full 6-lens re-exploration). For each finding from the original review (referencing stable F/S identifiers) and each N-prefixed item from prior iteration deltas, classify into one of three categories:
    - **Addressed**: The revised plan resolves this finding. State how in one sentence.
@@ -203,25 +204,9 @@ If the user picks "Create revised plan", enter the revision loop:
 
    Precise criteria: A finding is "addressed" only when the revised plan's structure, staging, or approach concretely resolves the concern — not when the plan merely acknowledges it or adds a vague note. A "new issue" is a concern about the revised plan's structure, completeness, or correctness that did not exist in the original plan or any prior iteration's delta — not a restatement of an existing finding under a different framing.
 
-   If any finding is **Remaining** at Critical or Important severity, or any **New issue** is Critical or Important, treat the candidate as invalid. Do not display its marker-bearing body and do not offer **Post revised plan**. Present the delta assessment without the candidate, explain that correction and reassessment are required, and offer only **Revise again** or **Discuss findings**. On **Revise again**, return to the architect dispatch in the next revision turn with the invalid candidate and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and reassessing a corrected replacement. Repeat this gate until no Critical or Important delta remains. Suggestions stay visible but are optional and do not block publication.
+   If any finding is **Remaining** at Critical or Important severity, or any **New issue** is Critical or Important, treat the candidate as invalid and do not call `add_issue_comment`. Present the delta assessment, explain that correction and reassessment are required, and offer only **Revise again** or **Discuss findings**. On **Revise again**, return to the architect dispatch in the next revision turn with the invalid candidate and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and reassessing a corrected replacement. Repeat this gate until no Critical or Important delta remains. Suggestions stay visible but are optional and do not block publication.
 
-4. **Presentation.** Only after the Critical/Important delta gate passes, keep the assessment outside the post-ready body and present to the user:
-   1. The exact, complete marker-bearing body that will be posted.
-   2. The separate delta assessment (Addressed / Remaining / New).
-   3. A summary line: "X of Y findings addressed, Z remaining, W new issues" — where Y counts original F/S findings plus N-prefixed items carried from prior iterations.
-
-5. **Sub-options.** After the gate passes, ask the user how to proceed:
-   - **Post revised plan**: Accept this complete body and post it unchanged.
-   - **Revise again**: In the next revision turn, return to the architect dispatch with the current complete plan and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and presenting a new complete replacement.
-   - **Discuss findings**: Same behavior as the main "Discuss findings" option — walk through specific findings or new issues, then return to these three options.
-
-   Only one comment is posted — the final accepted revision. Intermediate revisions are not posted, and revisions are never presented as deltas alone.
-
-6. **Post.** When the user picks "Post revised plan", pass the exact approved body unchanged to the existing comment subroutine; do not regenerate, summarize, or reformat it after approval. Then delegate to:
-
-   ```
-   /mach12:gh-comment issue <issue-number>
-   ```
+4. **Publish the revision.** Only after the Critical/Important delta gate passes, present the delta assessment and summary outside the post-ready body. State the issue target, revision consequence, and finding-resolution counts concisely without repeating the complete replacement plan. Call `add_issue_comment` with the issue number and exact complete marker-bearing replacement. Its UI is the sole complete-plan presentation and approval. On cancellation, retain the revision in conversation for requested changes but post nothing; on ambiguity, do not retry automatically and reconcile deliberately. Only verified publication counts as an updated plan.
 
 If the user picks "Discuss findings", walk through the specific findings they want to explore, then ask again how to proceed. This step remains active across all discussion iterations until the user picks a terminal option (Create revised plan, Proceed, or Cancel).
 
@@ -233,11 +218,7 @@ If the user picks "Proceed as-is" and at least one Critical or Important finding
 - Each Critical and Important finding on its own line (one sentence each)
 - Keep the entire comment body under 15 lines
 
-Then delegate to:
-
-```
-/mach12:gh-comment issue <issue-number>
-```
+State the decision consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. The tool UI owns approval and verification.
 
 If the user picks "Proceed as-is" and all findings are Suggestions only, do NOT post a decision comment -- proceeding past suggestions is the expected path.
 
@@ -250,11 +231,7 @@ If the user picks "Cancel":
    - Finding counts by severity (e.g., "2 Critical, 1 Important, 3 Suggestions")
    - Keep the entire comment body to 5 lines or fewer
 
-   Then delegate to:
-
-   ```
-   /mach12:gh-comment issue <issue-number>
-   ```
+   State the audit consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. The tool UI owns approval and verification.
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
 

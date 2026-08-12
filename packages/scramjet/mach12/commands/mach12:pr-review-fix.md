@@ -2,6 +2,8 @@
 description: Fix specific issues identified in a PR review
 argument-hint: "<pr-number> [--review-comment <id>] [--assessment-comment <id>] [findings] [context]"
 allowed-tools:
+  - add_issue_comment
+  - add_pr_comment
   - bash
   - read
   - grep

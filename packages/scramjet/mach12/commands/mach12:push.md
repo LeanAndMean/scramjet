@@ -3,6 +3,8 @@ description: Commit, push, and post a progress comment using session context or 
 argument-hint: "[context]"
 delegate-only: true
 allowed-tools:
+  - add_issue_comment
+  - add_pr_comment
   - bash
   - read
   - grep
@@ -60,7 +62,7 @@ Prepare a concise body beginning `<!-- mach12-progress -->` with the completed c
 
 Format intentional GitHub relationships consistently: same-repository issue or pull-request references use `#N`; cross-repository relationships use `owner/repo#N` or an already verified canonical URL. Artifact-local identifiers use stable labels or plain words and never bare `#N`.
 
-Delegate publication to `/mach12:gh-comment pr <number>` or `/mach12:gh-comment issue <number>` as appropriate. If publication fails after a successful push, preserve the pushed commit and return an incomplete result with enough context to reconcile the comment without another commit or push.
+State concisely that the commit is already pushed and the proposed comment records that progress. Call `add_pr_comment` for a PR target or `add_issue_comment` for an issue target with the exact prepared body. If publication is cancelled, fails, or is ambiguous after a successful push, preserve the pushed commit and return an incomplete result with enough context to reconcile the comment without another commit or push. Never retry an ambiguous comment automatically.
 
 ## Step 5: Return
 

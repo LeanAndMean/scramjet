@@ -36,7 +36,6 @@ const SUBROUTINES = [
 	"gh-pr-read",
 	"gh-sub-issues",
 	"gh-assign",
-	"gh-comment",
 ];
 
 function loadCommand(basename: string): CommandDef {
