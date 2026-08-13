@@ -379,6 +379,12 @@ scramjet config                               # enable/disable extensions, skill
 
 Packages install to `~/.scramjet/agent/git/` (git) or global npm. Use `-l` for project-local installs (`.scramjet/git/`, `.scramjet/npm/`). Git packages install dependencies with `npm install --omit=dev` by default, so runtime deps must be listed under `dependencies`; when `npmCommand` is configured, git packages use plain `install` for compatibility with wrappers. If you use a Node version manager and want package installs to reuse a stable npm context, set `npmCommand` in `settings.json`, for example `["mise", "exec", "node@20", "--", "npm"]`.
 
+### Failure-safe npm self-updates
+
+On Linux, macOS, and WSL, same-package self-updates from qualified global npm installations preserve the previous package tree until the replacement's package, bin, launcher, and bounded fresh-process probe are verified. A returned npm or verification failure triggers attempted restoration with a failing exit status; Scramjet claims the previous launcher and package runtime were restored only after structural and fresh-process verification, otherwise it reports restoration as unverified. Cleanup failures preserve the verified canonical runtime and report any remaining backup or quarantine path.
+
+The transaction is deliberately unavailable for pnpm, Yarn, Bun, native Windows, linked/source installs, package-name migrations, configured npm wrappers, and npm layouts whose runtime cannot be proven to reside inside the product tree. Parent/host interruption is outside its scope, and postinstall-managed command data is not rolled back. See [docs/packages.md](docs/packages.md#failure-safe-npm-self-updates) for output states and recovery guidance.
+
 Create a package by adding a `pi` key to `package.json`:
 
 ```json

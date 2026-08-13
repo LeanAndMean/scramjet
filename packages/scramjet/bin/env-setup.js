@@ -6,7 +6,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8"));
+const productRoot = join(__dirname, "..");
+const pkg = JSON.parse(readFileSync(join(productRoot, "package.json"), "utf-8"));
+process.env.SCRAMJET_INTERNAL_PRODUCT_ROOT = productRoot;
 process.env.SCRAMJET_PACKAGE_NAME = pkg.name;
 process.env.SCRAMJET_VERSION = pkg.version;
 
@@ -21,7 +23,7 @@ if (process.env.PI_CODING_AGENT_SESSION_DIR && !process.env.SCRAMJET_CODING_AGEN
 }
 
 // Point the changelog at Scramjet's own CHANGELOG.md.
-process.env.SCRAMJET_CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
+process.env.SCRAMJET_CHANGELOG_PATH = join(productRoot, "CHANGELOG.md");
 
 process.env.PI_SKIP_VERSION_CHECK = "1";
 process.title = "scramjet";

@@ -39,6 +39,22 @@ Try it:
 > /mach12:issue-plan 55          # replace 55 with a GitHub issue number from your repo
 ```
 
+## Updating
+
+```sh
+scramjet update                 # update Scramjet and installed packages
+scramjet update --self          # update only Scramjet
+scramjet update --extensions    # update only installed packages
+```
+
+On Linux, macOS, and WSL, a same-package update from a qualified global npm installation uses a verified package-tree transaction. Scramjet preserves the previous launcher and package runtime, runs npm, then checks the replacement's package/bin/launcher identity and starts the canonical launcher in a bounded fresh-process probe before committing. If npm returns a failure or replacement verification fails, Scramjet attempts to restore the previous launcher and package runtime and claims restoration only after both structural and fresh-process verification; the update still exits unsuccessfully either way.
+
+This guarantee does not apply to pnpm, Yarn, Bun, native Windows, linked/source installations, package-name migrations, configured npm wrappers, or npm layouts that cannot prove the runtime is contained in the product tree. Those installations retain their existing update behavior. Parent-process termination, `SIGKILL`, and host failure while an update is in progress are also outside the guarantee.
+
+Cleanup errors never displace a verified canonical runtime. Scramjet reports the exact retained backup or quarantine path for manual inspection; network-storage open-file contention is one possible cause, but Scramjet does not identify or stop holder processes. Rollback covers only the launcher and package runtime. Postinstall-managed command-set data under `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/` may already have changed after a failed update.
+
+See the coding-agent [package management documentation](https://github.com/LeanAndMean/scramjet/blob/main/packages/coding-agent/docs/packages.md#failure-safe-npm-self-updates) for output states and recovery guidance.
+
 ## Why
 
 Working with a coding agent, you notice yourself asking for the same kind of thing repeatedly — refining the wording each time until it stabilizes. At that point it should be a *command*: something you invoke without retyping, that captures what you've learned about how to do it well.
