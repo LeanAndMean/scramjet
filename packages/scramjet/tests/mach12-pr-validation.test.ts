@@ -336,8 +336,9 @@ describe("mach12 executable validation integration", () => {
 	it("captures verified comment identity before routing", () => {
 		const validation = readFileSync(join(COMMANDS_DIR, "mach12:pr-validation.md"), "utf-8");
 		expect(validation).toContain("call `add_pr_comment`");
-		expect(validation).toContain("extract the numeric GitHub comment ID");
-		expect(validation).toContain("re-fetch that exact comment");
+		expect(validation).toContain("Continue only when publication is verified");
+		expect(validation).toContain("extract and retain the numeric GitHub comment ID from the verified canonical URL");
+		expect(validation).not.toContain("re-fetch that exact comment");
 		expect(validation).toContain("ambiguity prohibits automatic retry");
 	});
 
