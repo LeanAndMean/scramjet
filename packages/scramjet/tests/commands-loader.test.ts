@@ -410,18 +410,28 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const bundledRoot = join(sandbox, "package");
 		mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
 		writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:fallback.md"), "---\n---\nFallback.");
+		mkdirSync(join(globalDir, "scramjet"), { recursive: true });
 		process.env.SCRAMJET_CACHE = globalDir;
 		const { pi, handlers } = recordingPi();
-		const state = freshState({ logger: createLogger(pi) });
+		const state = freshState({
+			logger: { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn(), setHasUI: vi.fn() },
+		});
 		const notify = vi.fn();
 		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: false });
-		handlers.get("resources_discover")![0]?.(
-			{ type: "resources_discover", cwd: join(sandbox, "project"), reason: "startup" },
-			{ hasUI: true, ui: { notify } },
-		);
+		const discover = () =>
+			handlers.get("resources_discover")![0]?.(
+				{ type: "resources_discover", cwd: join(sandbox, "project"), reason: "startup" },
+				{ hasUI: true, ui: { notify } },
+			);
+
+		discover();
+		discover();
 
 		expect(notify).not.toHaveBeenCalled();
-		expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("using packaged mach12 command set read-only"));
+		const fallbackWrites = stderrSpy.mock.calls.filter(([message]) =>
+			String(message).includes("using packaged mach12 command set read-only"),
+		);
+		expect(fallbackWrites).toHaveLength(2);
 		expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("scripts/postinstall.js"));
 		rmSync(sandbox, { recursive: true, force: true });
 	});
