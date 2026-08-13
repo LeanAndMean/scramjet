@@ -88,7 +88,7 @@ jobs:
             PI_CODING_AGENT_DIR="$PREFIX/pi-agent" \
             SCRAMJET_CODING_AGENT_DIR="$PREFIX/scramjet-agent" \
             node --input-type=module - "$PREFIX/bin/scramjet" "$RPC_STDOUT" "$RPC_STDERR" <<'NODE'
-          import { openSync, writeFileSync } from "node:fs";
+          import { openSync, readFileSync, writeFileSync } from "node:fs";
           import { spawn } from "node:child_process";
           import { createInterface } from "node:readline";
 
@@ -99,7 +99,16 @@ jobs:
           });
           const lines = [];
           let received = false;
-          const timeout = setTimeout(() => child.kill(), 30_000);
+          let killTimeout;
+          let responseTimeout;
+          const close = new Promise((resolve) => child.on("close", (...args) => resolve(args)));
+          const timeout = new Promise((_, reject) => {
+            responseTimeout = setTimeout(() => {
+              child.kill("SIGTERM");
+              killTimeout = setTimeout(() => child.kill("SIGKILL"), 5_000);
+              reject(new Error(`RPC timed out after 30s; stderr: ${stderrPath}\n${readFileSync(stderrPath, "utf8")}`));
+            }, 30_000);
+          });
           createInterface({ input: child.stdout }).on("line", (line) => {
             lines.push(line);
             const response = JSON.parse(line);
@@ -110,10 +119,13 @@ jobs:
             }
           });
           child.stdin.write(`${JSON.stringify({ id: "commands", type: "get_commands" })}\n`);
-          const [code] = await new Promise((resolve) => child.on("close", (...args) => resolve(args)));
-          clearTimeout(timeout);
+          const [code] = await Promise.race([close, timeout]);
+          clearTimeout(responseTimeout);
+          clearTimeout(killTimeout);
           writeFileSync(stdoutPath, `${lines.join("\n")}\n`);
-          if (!received || code !== 0) throw new Error(`RPC failed: received=${received}, status=${code}`);
+          if (!received || code !== 0) {
+            throw new Error(`RPC failed: received=${received}, status=${code}; stderr: ${stderrPath}\n${readFileSync(stderrPath, "utf8")}`);
+          }
           NODE
           jq -e 'select(.id == "commands" and .type == "response" and .command == "get_commands" and .success == true) | (.data.commands | any(.name == "mach12:issue-create") and any(.name == "scramjet:troubleshoot"))' "$RPC_STDOUT"
           grep -qF 'using packaged mach12 command set read-only' "$RPC_STDERR"
