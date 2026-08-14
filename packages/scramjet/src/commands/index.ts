@@ -237,10 +237,11 @@ export function registerCommandLoader(
 
 			const visibleDiagnostics = bundled.flatMap((result) => (result.diagnostic ? [result.diagnostic] : []));
 			const signature = bundled.map((result) => result.classification).join("|");
-			if (visibleDiagnostics.length > 0 && signature !== lastNotificationSignature) {
+			if (visibleDiagnostics.length > 0) {
 				const message = visibleDiagnostics.join("\n");
-				if (ctx?.hasUI && interactiveOutput) ctx.ui.notify(message, "warning");
-				else if (ctx?.hasUI) process.stderr.write(`[scramjet/discovery] ${message}\n`);
+				if (ctx?.hasUI && interactiveOutput && signature !== lastNotificationSignature)
+					ctx.ui.notify(message, "warning");
+				else if (ctx?.hasUI && !interactiveOutput) process.stderr.write(`[scramjet/discovery] ${message}\n`);
 			}
 			lastNotificationSignature = visibleDiagnostics.length > 0 ? signature : "";
 
