@@ -7,30 +7,30 @@ edges:
 
 publications:
   mach12:issue-create:
-    create_issue: approve
-    add_issue_comment: approve
+    create_issue: auto-approve
+    add_issue_comment: auto-approve
   mach12:issue-implement:
-    add_issue_comment: approve
-    add_pr_comment: approve
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
   mach12:issue-plan:
-    add_issue_comment: approve
+    add_issue_comment: auto-approve
   mach12:issue-review:
-    add_issue_comment: approve
+    add_issue_comment: auto-approve
   mach12:pr-create:
-    create_pr: approve
+    create_pr: auto-approve
   mach12:pr-pre-merge:
-    add_issue_comment: approve
-    add_pr_comment: approve
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
   mach12:pr-review-assessment:
-    create_issue: approve
-    add_issue_comment: approve
-    add_pr_comment: approve
+    create_issue: auto-approve
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
   mach12:pr-review-fix:
-    add_issue_comment: approve
-    add_pr_comment: approve
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
   mach12:pr-review:
-    add_pr_comment: approve
+    add_pr_comment: auto-approve
   mach12:pr-validation:
-    add_pr_comment: approve
+    add_pr_comment: auto-approve
   mach12:pr-validation-assessment:
-    add_pr_comment: approve
+    add_pr_comment: auto-approve

@@ -154,7 +154,12 @@ describe("buildPublicationCommandItems", () => {
 		state.autonomyRecommendations = new Map([
 			[
 				"mach12",
-				{ edges: {}, publications: { "mach12:review": { create_issue: "approve", add_pr_comment: "approve" } } },
+				{
+					edges: {},
+					publications: {
+						"mach12:review": { create_issue: "require-approval", add_pr_comment: "auto-approve" },
+					},
+				},
 			],
 		]);
 		const config: AutonomyConfig = {
@@ -174,7 +179,13 @@ describe("buildPublicationCommandItems", () => {
 		expect(text).toContain("always-ask");
 		expect(text).toContain("add_pr_comment");
 		expect(text).toContain("follow-command");
-		expect(text).toContain("follow command (approve)");
+		expect(text).toContain("follow command (require-approval)");
+		submenu?.handleInput?.("\x1b[B");
+		submenu?.handleInput?.("\x1b[B");
+		submenu?.handleInput?.("\x1b[B");
+		const autoApproveText = renderText(submenu);
+		expect(autoApproveText).toContain("follow command (auto-approve)");
+		expect(`${text}\n${autoApproveText}`).not.toContain("follow command (approve)");
 	});
 });
 

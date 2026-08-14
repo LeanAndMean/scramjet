@@ -4,4 +4,4 @@ edges:
 
 publications:
   mach12:issue-plan:
-    add_issue_comment: approve
+    add_issue_comment: auto-approve

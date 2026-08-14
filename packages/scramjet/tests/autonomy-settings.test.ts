@@ -13,6 +13,7 @@ import {
 	parseAutonomyRecommendations,
 	resetCache,
 	resolveEdgeBehavior,
+	resolvePublicationPolicy,
 	saveAutonomyConfig,
 	validateConfig,
 	validateRecommendations,
@@ -110,11 +111,11 @@ publications:
 describe("lookupPublicationPolicy", () => {
 	const defaults = {
 		edges: {},
-		publications: { "mach12:pr-review": { add_pr_comment: "approve" as const } },
+		publications: { "mach12:pr-review": { add_pr_comment: "auto-approve" as const } },
 	};
 
 	it("layers exact user overrides over active command defaults", () => {
-		expect(lookupPublicationPolicy(null, defaults, "mach12:pr-review", "add_pr_comment")).toBe("approve");
+		expect(lookupPublicationPolicy(null, defaults, "mach12:pr-review", "add_pr_comment")).toBe("auto-approve");
 		expect(
 			lookupPublicationPolicy(
 				{ edges: {}, publications: { "mach12:pr-review": { add_pr_comment: "always-ask" } } },
@@ -122,7 +123,7 @@ describe("lookupPublicationPolicy", () => {
 				"mach12:pr-review",
 				"add_pr_comment",
 			),
-		).toBe("ask");
+		).toBe("require-approval");
 		expect(
 			lookupPublicationPolicy(
 				{ edges: {}, publications: { "mach12:other": { create_issue: "auto-approve" } } },
@@ -130,12 +131,33 @@ describe("lookupPublicationPolicy", () => {
 				"mach12:other",
 				"create_issue",
 			),
-		).toBe("approve");
+		).toBe("auto-approve");
 	});
 
-	it("asks outside an active command or without a default", () => {
-		expect(lookupPublicationPolicy(null, defaults, null, "add_pr_comment")).toBe("ask");
-		expect(lookupPublicationPolicy(null, defaults, "mach12:other", "add_pr_comment")).toBe("ask");
+	it("preserves unoverridden defaults alongside a sparse exact override", () => {
+		const mixedDefaults = {
+			edges: {},
+			publications: {
+				"mach12:review": { create_issue: "require-approval", add_pr_comment: "auto-approve" },
+			},
+		} satisfies AutonomyRecommendations;
+		const config: AutonomyConfig = {
+			edges: {},
+			publications: { "mach12:review": { create_issue: "auto-approve" } },
+		};
+		expect(resolvePublicationPolicy(config, mixedDefaults, "mach12:review", "create_issue")).toEqual({
+			policy: "auto-approve",
+			authorization: "user-override",
+		});
+		expect(resolvePublicationPolicy(config, mixedDefaults, "mach12:review", "add_pr_comment")).toEqual({
+			policy: "auto-approve",
+			authorization: "command-default",
+		});
+	});
+
+	it("requires approval outside an active command or without a default", () => {
+		expect(lookupPublicationPolicy(null, defaults, null, "add_pr_comment")).toBe("require-approval");
+		expect(lookupPublicationPolicy(null, defaults, "mach12:other", "add_pr_comment")).toBe("require-approval");
 	});
 });
 
@@ -520,6 +542,20 @@ edges:
 		expect(warnings[0]).toContain("cmd:c");
 		expect(warnings[1]).toContain('"chian"');
 		expect(warnings[1]).toContain("cmd:d");
+	});
+
+	it("accepts explicit publication defaults and rejects legacy ambiguous values", () => {
+		const warnings: string[] = [];
+		const recs = parseAutonomyRecommendations(
+			"publications:\n  cmd:a:\n    create_issue: require-approval\n    create_pr: auto-approve\n    add_issue_comment: ask\n    add_pr_comment: approve\n",
+			warnings,
+		);
+		expect(recs.publications).toEqual({
+			"cmd:a": { create_issue: "require-approval", create_pr: "auto-approve" },
+		});
+		expect(warnings).toHaveLength(2);
+		expect(warnings[0]).toContain("invalid publication setting ask");
+		expect(warnings[1]).toContain("invalid publication setting approve");
 	});
 
 	it("returns empty edges for empty YAML", () => {

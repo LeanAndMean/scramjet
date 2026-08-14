@@ -5,7 +5,13 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
 import { packageRoot } from "../docs-registry.js";
-import type { AutonomyRecommendations, CommandRegistry, PublicationTool, ScramjetState } from "../types.js";
+import type {
+	AutonomyRecommendations,
+	CommandRegistry,
+	PublicationDefault,
+	PublicationTool,
+	ScramjetState,
+} from "../types.js";
 import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
@@ -33,7 +39,7 @@ function filterPublicationDefaults(
 			);
 			continue;
 		}
-		for (const [tool, setting] of Object.entries(settings) as [PublicationTool, "ask" | "approve"][]) {
+		for (const [tool, setting] of Object.entries(settings) as [PublicationTool, PublicationDefault][]) {
 			if (!definition.allowedTools?.includes(tool)) {
 				warnings.push(`[scramjet/discovery] ignored publication default for undeclared tool ${command} → ${tool}`);
 				continue;

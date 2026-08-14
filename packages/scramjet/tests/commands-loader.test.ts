@@ -738,7 +738,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		expect(state.autonomyRecommendations.has("mach12")).toBe(true);
 		const mach12Recs = state.autonomyRecommendations.get("mach12")!;
 		expect(mach12Recs.edges["mach12:issue-plan"]?.["mach12:pr-review"]).toBe("chain");
-		expect(mach12Recs.publications?.["mach12:issue-plan"]?.add_issue_comment).toBe("approve");
+		expect(mach12Recs.publications?.["mach12:issue-plan"]?.add_issue_comment).toBe("auto-approve");
 	});
 
 	it("retains publication-only command-set defaults", () => {
@@ -749,7 +749,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		writeFileSync(join(commands, "sample:publish.md"), "---\nallowed-tools:\n  - create_issue\n---\nBody.");
 		writeFileSync(
 			join(tempGlobal, "sample", "autonomy-defaults.yaml"),
-			"publications:\n  sample:publish:\n    create_issue: approve\n",
+			"publications:\n  sample:publish:\n    create_issue: auto-approve\n",
 		);
 		process.env.SCRAMJET_CACHE = tempGlobal;
 		const { pi, handlers } = recordingPi();
@@ -761,7 +761,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 			reason: "startup",
 		});
 		expect(state.autonomyRecommendations.get("sample")?.publications?.["sample:publish"]?.create_issue).toBe(
-			"approve",
+			"auto-approve",
 		);
 		rmSync(tempGlobal, { recursive: true, force: true });
 	});
@@ -834,7 +834,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		writeFileSync(join(projMach12, "mach12:proj-cmd.md"), "---\n---\nBody.");
 		writeFileSync(
 			join(projDir, ".scramjet", "mach12", "autonomy-defaults.yaml"),
-			"edges:\n  mach12:issue-plan:\n    mach12:pr-review: pause\npublications:\n  mach12:issue-plan:\n    add_issue_comment: ask\n",
+			"edges:\n  mach12:issue-plan:\n    mach12:pr-review: pause\npublications:\n  mach12:issue-plan:\n    add_issue_comment: require-approval\n",
 		);
 
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
@@ -850,7 +850,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 
 		const mach12Recs = state.autonomyRecommendations.get("mach12")!;
 		expect(mach12Recs.edges["mach12:issue-plan"]?.["mach12:pr-review"]).toBe("pause");
-		expect(mach12Recs.publications?.["mach12:issue-plan"]?.add_issue_comment).toBe("approve");
+		expect(mach12Recs.publications?.["mach12:issue-plan"]?.add_issue_comment).toBe("auto-approve");
 
 		rmSync(projDir, { recursive: true, force: true });
 	});

@@ -253,7 +253,7 @@ export function buildPublicationCommandItems(
 					const items = PUBLICATION_TOOLS.map((tool) => {
 						const eligible = definition.allowedTools?.includes(tool) === true;
 						const override = configGetter()?.publications?.[commandName]?.[tool];
-						const commandDefault = defaults.publications?.[commandName]?.[tool] ?? "ask";
+						const commandDefault = defaults.publications?.[commandName]?.[tool] ?? "require-approval";
 						return {
 							id: `${commandName}::${tool}`,
 							label: tool,

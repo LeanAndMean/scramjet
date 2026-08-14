@@ -18,7 +18,7 @@ import { PUBLICATION_TOOLS } from "./types.js";
 const VALID_SETTINGS = new Set(["chain", "pause"]);
 const VALID_REC_SETTINGS = new Set(["chain", "pause", "default"]);
 const VALID_PUBLICATION_OVERRIDES = new Set(["always-ask", "auto-approve"]);
-const VALID_PUBLICATION_DEFAULTS = new Set(["ask", "approve"]);
+const VALID_PUBLICATION_DEFAULTS = new Set(["require-approval", "auto-approve"]);
 
 let cache: { path: string; mtimeMs: number; config?: AutonomyConfig; error?: Error } | null = null;
 
@@ -142,12 +142,12 @@ export function resolvePublicationPolicy(
 	command: string | null,
 	tool: PublicationTool,
 ): ResolvedPublicationPolicy {
-	if (!command) return { policy: "ask", authorization: "interactive" };
+	if (!command) return { policy: "require-approval", authorization: "interactive" };
 	const override = config?.publications?.[command]?.[tool];
-	if (override === "always-ask") return { policy: "ask", authorization: "interactive" };
-	if (override === "auto-approve") return { policy: "approve", authorization: "user-override" };
-	const policy = defaults.publications?.[command]?.[tool] ?? "ask";
-	return { policy, authorization: policy === "approve" ? "command-default" : "interactive" };
+	if (override === "always-ask") return { policy: "require-approval", authorization: "interactive" };
+	if (override === "auto-approve") return { policy: "auto-approve", authorization: "user-override" };
+	const policy = defaults.publications?.[command]?.[tool] ?? "require-approval";
+	return { policy, authorization: policy === "auto-approve" ? "command-default" : "interactive" };
 }
 
 export function lookupPublicationPolicy(

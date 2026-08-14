@@ -99,8 +99,8 @@ export type RecommendationSetting = "chain" | "pause" | "default";
 export const PUBLICATION_TOOLS = ["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"] as const;
 export type PublicationTool = (typeof PUBLICATION_TOOLS)[number];
 export type PublicationOverride = "always-ask" | "auto-approve";
-export type PublicationDefault = "ask" | "approve";
-export type EffectivePublicationPolicy = "ask" | "approve";
+export type PublicationDefault = "require-approval" | "auto-approve";
+export type EffectivePublicationPolicy = "require-approval" | "auto-approve";
 
 export interface AutonomyConfig {
 	edges: Record<string, Record<string, NonNullable<EdgeSetting>>>;

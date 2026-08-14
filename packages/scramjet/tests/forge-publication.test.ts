@@ -241,7 +241,7 @@ describe("create_issue approval", () => {
 		state.lifecycle.activeCommand = "mach12:issue-create";
 		allowPublication(state, "mach12:issue-create", ["create_issue"]);
 		state.autonomyRecommendations = new Map([
-			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "auto-approve" } } }],
 		]);
 		const custom = vi.fn(async () => {
 			throw new Error("approval UI must not open");
@@ -289,7 +289,7 @@ describe("create_issue approval", () => {
 		state.lifecycle.activeCommand = "mach12:publish";
 		allowPublication(state, "mach12:publish", [name]);
 		state.autonomyRecommendations = new Map([
-			["mach12", { edges: {}, publications: { "mach12:publish": { [name]: "approve" } } }],
+			["mach12", { edges: {}, publications: { "mach12:publish": { [name]: "auto-approve" } } }],
 		]);
 		pi.exec.mockImplementation(async (_command: string, args: string[]) =>
 			args.includes("POST") ? execResult("", 1) : execResult("https://github.com/LeanAndMean/scramjet.git\n"),
@@ -303,12 +303,12 @@ describe("create_issue approval", () => {
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
 	});
 
-	it("lets an exact Always ask override supersede an approving command default", async () => {
+	it("lets an exact Always ask override supersede an auto-approving command default", async () => {
 		const { tool, pi, state } = await registered();
 		state.lifecycle.activeCommand = "mach12:issue-create";
 		allowPublication(state, "mach12:issue-create", ["create_issue"]);
 		state.autonomyRecommendations = new Map([
-			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "auto-approve" } } }],
 		]);
 		state.autonomyConfigPath = join(tmpdir(), `scramjet-ask-override-${Date.now()}.yaml`);
 		writeFileSync(state.autonomyConfigPath, "publications:\n  mach12:issue-create:\n    create_issue: always-ask\n");
@@ -323,7 +323,7 @@ describe("create_issue approval", () => {
 		state.lifecycle.activeCommand = "mach12:issue-create";
 		allowPublication(state, "mach12:issue-create", ["create_issue"]);
 		state.autonomyRecommendations = new Map([
-			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "auto-approve" } } }],
 		]);
 		state.autonomyConfigPath = join(tmpdir(), `scramjet-corrupt-autonomy-${Date.now()}.yaml`);
 		writeFileSync(state.autonomyConfigPath, "{ invalid: [");
@@ -343,7 +343,7 @@ describe("create_issue approval", () => {
 				answer = value;
 			});
 			state.autonomyRecommendations = new Map([
-				["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+				["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "auto-approve" } } }],
 			]);
 			component.handleInput("\r");
 			return answer;

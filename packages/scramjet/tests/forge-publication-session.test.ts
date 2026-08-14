@@ -87,7 +87,7 @@ describe("forge publication session persistence", () => {
 					],
 				]);
 				state.autonomyRecommendations = new Map([
-					["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+					["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "auto-approve" } } }],
 				]);
 				registerForgePublication(pi, state);
 			};

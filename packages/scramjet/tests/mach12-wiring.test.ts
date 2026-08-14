@@ -274,11 +274,27 @@ describe("mach12 inline forge publication inventory", () => {
 		expect(content).not.toContain("mach12:gh-comment");
 	});
 
-	it("ships active defaults only for top-level commands that allow each publication tool", () => {
+	it("ships the exact behavior-preserving auto-approval matrix", () => {
 		const defaults = parseAutonomyRecommendations(
 			readFileSync(resolve(MACH12_COMMANDS_DIR, "..", "autonomy-defaults.yaml"), "utf-8"),
 		);
-		const defaultedTools = new Set<string>();
+		expect(defaults.publications).toEqual({
+			"mach12:issue-create": { create_issue: "auto-approve", add_issue_comment: "auto-approve" },
+			"mach12:issue-implement": { add_issue_comment: "auto-approve", add_pr_comment: "auto-approve" },
+			"mach12:issue-plan": { add_issue_comment: "auto-approve" },
+			"mach12:issue-review": { add_issue_comment: "auto-approve" },
+			"mach12:pr-create": { create_pr: "auto-approve" },
+			"mach12:pr-pre-merge": { add_issue_comment: "auto-approve", add_pr_comment: "auto-approve" },
+			"mach12:pr-review-assessment": {
+				create_issue: "auto-approve",
+				add_issue_comment: "auto-approve",
+				add_pr_comment: "auto-approve",
+			},
+			"mach12:pr-review-fix": { add_issue_comment: "auto-approve", add_pr_comment: "auto-approve" },
+			"mach12:pr-review": { add_pr_comment: "auto-approve" },
+			"mach12:pr-validation": { add_pr_comment: "auto-approve" },
+			"mach12:pr-validation-assessment": { add_pr_comment: "auto-approve" },
+		});
 		for (const [command, settings] of Object.entries(defaults.publications ?? {})) {
 			expect(command).not.toBe("mach12:push");
 			const filePath = join(MACH12_COMMANDS_DIR, `${command}.md`);
@@ -286,13 +302,8 @@ describe("mach12 inline forge publication inventory", () => {
 			expect(parsed.ok).toBe(true);
 			if (!parsed.ok) continue;
 			expect(parsed.def.delegateOnly).not.toBe(true);
-			for (const [tool, value] of Object.entries(settings)) {
-				expect(value).toBe("approve");
-				expect(parsed.def.allowedTools).toContain(tool);
-				defaultedTools.add(tool);
-			}
+			for (const tool of Object.keys(settings)) expect(parsed.def.allowedTools).toContain(tool);
 		}
-		expect(defaultedTools).toEqual(new Set(["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"]));
 	});
 
 	it("leaves no raw supported publication command or obsolete delegate", () => {

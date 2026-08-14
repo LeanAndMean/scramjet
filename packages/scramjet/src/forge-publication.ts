@@ -130,7 +130,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 				const resolveDecision = () => {
 					const command = expectedCommand ? state.registry.get(expectedCommand) : undefined;
 					if (!command || command.delegateOnly || !command.allowedTools?.includes(request.operation)) {
-						return { policy: "ask", authorization: "interactive" } as const;
+						return { policy: "require-approval", authorization: "interactive" } as const;
 					}
 					try {
 						return resolvePublicationPolicy(
@@ -141,7 +141,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 						);
 					} catch (error) {
 						state.logger.warn("scope", `publication autonomy ignored: ${safeError(error)}`);
-						return { policy: "ask", authorization: "interactive" } as const;
+						return { policy: "require-approval", authorization: "interactive" } as const;
 					}
 				};
 				const decision = resolveDecision();
@@ -152,7 +152,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 						writeState: "not-dispatched",
 						reason: "proposal-is-not-valid-utf8",
 					});
-				if (policy === "ask" && (!ctx.hasUI || !ctx.ui))
+				if (policy === "require-approval" && (!ctx.hasUI || !ctx.ui))
 					return toolResult(request.operation, {
 						outcome: "headless",
 						writeState: "not-dispatched",
@@ -194,7 +194,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 					command: expectedCommand,
 				};
 				let approval: ApprovalResult = "approved";
-				if (policy === "ask") {
+				if (policy === "require-approval") {
 					try {
 						approval = await ctx.ui!.custom<ApprovalResult>(
 							(tui, theme, _keybindings, done) => {
