@@ -274,16 +274,16 @@ describe("mach12 inline forge publication inventory", () => {
 		expect(content).not.toContain("mach12:gh-comment");
 	});
 
-	it("ships the exact behavior-preserving auto-approval matrix", () => {
+	it("ships the exact behavior-preserving publication policy matrix", () => {
 		const defaults = parseAutonomyRecommendations(
 			readFileSync(resolve(MACH12_COMMANDS_DIR, "..", "autonomy-defaults.yaml"), "utf-8"),
 		);
 		expect(defaults.publications).toEqual({
-			"mach12:issue-create": { create_issue: "auto-approve", add_issue_comment: "auto-approve" },
+			"mach12:issue-create": { create_issue: "require-approval", add_issue_comment: "auto-approve" },
 			"mach12:issue-implement": { add_issue_comment: "auto-approve", add_pr_comment: "auto-approve" },
-			"mach12:issue-plan": { add_issue_comment: "auto-approve" },
-			"mach12:issue-review": { add_issue_comment: "auto-approve" },
-			"mach12:pr-create": { create_pr: "auto-approve" },
+			"mach12:issue-plan": { add_issue_comment: "require-approval" },
+			"mach12:issue-review": { add_issue_comment: "require-approval" },
+			"mach12:pr-create": { create_pr: "require-approval" },
 			"mach12:pr-pre-merge": { add_issue_comment: "auto-approve", add_pr_comment: "auto-approve" },
 			"mach12:pr-review-assessment": {
 				create_issue: "auto-approve",

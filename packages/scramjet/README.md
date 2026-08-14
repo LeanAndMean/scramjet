@@ -153,6 +153,8 @@ The UI exposes three choices for every command/tool pair:
 
 For an active top-level command that explicitly lists the publication tool in `allowed-tools`, effective policy is the exact user override, then the command-set default, then safe fallback `require-approval`. Command-set defaults use the explicit values `require-approval` and `auto-approve`. Delegated publication uses the active top-level command. Missing, invalid, corrupt, idle, or unattributed policy always requires approval. Auto-approval bypasses only the UI: request validation, canonical-origin checks, PR preflight, stale-session checks, exact dispatch and refetch verification, and ambiguous-write no-retry handling remain unchanged.
 
+Bundled Mach 12 defaults retain approval for issue creation, plan publication, issue-review comments, and PR creation. Progress comments and automated review, assessment, and validation artifacts remain auto-approved so those workflows keep their established non-interactive publication behavior.
+
 ## Forge publication tools
 
 Scramjet provides four independently allowlistable tools for the current repository: `create_issue`, `create_pr`, `add_issue_comment`, and `add_pr_comment`. They support canonical public `github.com` and `gitlab.com` origins through `gh` and `glab`; aliases, self-hosted forges, credential-bearing URLs, ports, and cross-fork pull requests are rejected.
