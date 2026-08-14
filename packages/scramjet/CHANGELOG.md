@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.79.0 — Restore bundled commands when postinstall is skipped
+
+Makes bundled Mach 12 and Scramjet commands available from the installed package when lifecycle scripts did not seed editable copies. Fixes [#483](https://github.com/LeanAndMean/scramjet/issues/483).
+
+### Added
+
+- Fall back independently to each packaged command set when its seeded destination is entirely absent.
+- Surface read-only fallback diagnostics with recovery instructions while preserving destination and project precedence.
+- Document how to restore durable, editable command-set copies.
+
+### Tests
+
+- Add loader regression coverage and an installed-package smoke test with lifecycle scripts disabled.
+
 ## 0.78.1 — Show Scramjet's development velocity
 
 Reframes the repository landing page around the workflow friction Scramjet removes and the demonstrated pace of its own development. Fixes [#465](https://github.com/LeanAndMean/scramjet/issues/465).

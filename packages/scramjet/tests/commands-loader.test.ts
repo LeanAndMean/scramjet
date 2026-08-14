@@ -1,4 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readlinkSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -312,16 +321,19 @@ describe("command provenance", () => {
 describe("registerCommandLoader — fixture-backed integration", () => {
 	let originalCache: string | undefined;
 	let originalAgentDir: string | undefined;
+	let originalScramjetAgentDir: string | undefined;
 	let agentDirSandbox: string;
 	let stderrSpy: { mockRestore(): void };
 
 	beforeEach(() => {
 		originalCache = process.env.SCRAMJET_CACHE;
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		originalScramjetAgentDir = process.env.SCRAMJET_CODING_AGENT_DIR;
 		// Isolate the agent bridge's symlink writes into a per-test tmp dir so
 		// fixture-backed runs never touch the user's real ~/.scramjet/agent/agents/.
 		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-loader-agentdir-"));
 		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
+		process.env.SCRAMJET_CODING_AGENT_DIR = agentDirSandbox;
 		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 	});
 
@@ -330,6 +342,8 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		else process.env.SCRAMJET_CACHE = originalCache;
 		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		if (originalScramjetAgentDir === undefined) delete process.env.SCRAMJET_CODING_AGENT_DIR;
+		else process.env.SCRAMJET_CODING_AGENT_DIR = originalScramjetAgentDir;
 		rmSync(agentDirSandbox, { recursive: true, force: true });
 		stderrSpy.mockRestore();
 	});
@@ -339,6 +353,248 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		registerCommandLoader(pi, freshState());
 		expect(handlers.has("resources_discover")).toBe(true);
 		expect(handlers.size).toBe(1);
+	});
+
+	it("routes complete bundled sets from package fallback without seeding destinations", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-fallback-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		const cwd = join(sandbox, "project");
+		for (const setName of ["mach12", "scramjet"]) {
+			mkdirSync(join(bundledRoot, setName, "commands"), { recursive: true });
+			mkdirSync(join(bundledRoot, setName, "agents"), { recursive: true });
+			writeFileSync(join(bundledRoot, setName, "commands", `${setName}:fallback.md`), "---\n---\nFallback.");
+			writeFileSync(
+				join(bundledRoot, setName, "agents", `${setName}:fallback-agent.md`),
+				`---\nname: ${setName}:fallback-agent\ndescription: Package agent\n---\nAgent.`,
+			);
+			writeFileSync(
+				join(bundledRoot, setName, "autonomy-defaults.yaml"),
+				`edges:\n  ${setName}:fallback:\n    ${setName}:fallback: chain\n`,
+			);
+		}
+		mkdirSync(join(bundledRoot, "scripts"), { recursive: true });
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		const notify = vi.fn();
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: true });
+		const result = handlers.get("resources_discover")![0]?.(
+			{ type: "resources_discover", cwd, reason: "startup" },
+			{ hasUI: true, ui: { notify } },
+		) as { promptPaths: string[] };
+
+		expect([...state.registry.keys()]).toEqual(["mach12:fallback", "scramjet:fallback"]);
+		expect(result.promptPaths).toEqual([...state.registry.values()].map((def) => def.filePath));
+		expect(state.agentRegistry.has("mach12:fallback-agent")).toBe(true);
+		expect(state.agentRegistry.has("scramjet:fallback-agent")).toBe(true);
+		expect(state.autonomyRecommendations.has("mach12")).toBe(true);
+		expect(state.autonomyRecommendations.has("scramjet")).toBe(true);
+		expect(readlinkSync(join(agentDirSandbox, "agents", "mach12:fallback-agent.md"))).toContain(bundledRoot);
+		expect(existsSync(join(globalDir, "mach12"))).toBe(false);
+		expect(existsSync(join(globalDir, "scramjet"))).toBe(false);
+		expect(notify).toHaveBeenCalledTimes(1);
+		const warningText = appended
+			.filter((entry) => (entry.data as any).level === "warn")
+			.map((entry) => (entry.data as any).message)
+			.join("\n");
+		expect(warningText).toContain("using packaged mach12 command set read-only");
+		expect(warningText).toContain(`node "${join(bundledRoot, "scripts", "postinstall.js")}"`);
+		expect(warningText).not.toContain("scramjet update");
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it("writes fallback recovery guidance to stderr when an RPC UI proxy is not interactive", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-fallback-rpc-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:fallback.md"), "---\n---\nFallback.");
+		mkdirSync(join(globalDir, "scramjet"), { recursive: true });
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers } = recordingPi();
+		const state = freshState({
+			logger: { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn(), setHasUI: vi.fn() },
+		});
+		const notify = vi.fn();
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: false });
+		const discover = () =>
+			handlers.get("resources_discover")![0]?.(
+				{ type: "resources_discover", cwd: join(sandbox, "project"), reason: "startup" },
+				{ hasUI: true, ui: { notify } },
+			);
+
+		discover();
+		discover();
+
+		expect(notify).not.toHaveBeenCalled();
+		const fallbackWrites = stderrSpy.mock.calls.filter(([message]) =>
+			String(message).includes("using packaged mach12 command set read-only"),
+		);
+		expect(fallbackWrites).toHaveLength(2);
+		expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("scripts/postinstall.js"));
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it.each(["directory", "file", "healthy-symlink", "dangling-symlink"])(
+		"treats an existing bundled %s destination as authoritative",
+		(form) => {
+			const sandbox = mkdtempSync(join(tmpdir(), "scramjet-fallback-authority-"));
+			const globalDir = join(sandbox, "global");
+			const bundledRoot = join(sandbox, "package");
+			const destination = join(globalDir, "mach12");
+			mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
+			writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:package-only.md"), "---\n---\nPackage.");
+			mkdirSync(globalDir, { recursive: true });
+			if (form === "directory") mkdirSync(destination);
+			if (form === "file") writeFileSync(destination, "owned");
+			if (form === "healthy-symlink") {
+				mkdirSync(join(sandbox, "seeded"));
+				symlinkSync(join(sandbox, "seeded"), destination);
+			}
+			if (form === "dangling-symlink") symlinkSync(join(sandbox, "missing"), destination);
+			process.env.SCRAMJET_CACHE = globalDir;
+			const { pi, handlers } = recordingPi();
+			const state = freshState({ logger: createLogger(pi) });
+			registerCommandLoader(pi, state, { bundledRoot });
+			handlers.get("resources_discover")![0]?.({
+				type: "resources_discover",
+				cwd: join(sandbox, "project"),
+				reason: "startup",
+			});
+
+			expect(state.registry.has("mach12:package-only")).toBe(false);
+			rmSync(sandbox, { recursive: true, force: true });
+		},
+	);
+
+	it("does not fall back when destination inspection fails for a non-ENOENT reason", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-fallback-inspection-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:package-only.md"), "---\n---\nPackage.");
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state, {
+			bundledRoot,
+			inspection: {
+				lstat(path) {
+					if (path === join(globalDir, "mach12")) throw Object.assign(new Error("denied"), { code: "EACCES" });
+					return lstatSync(path);
+				},
+			},
+		});
+		handlers.get("resources_discover")![0]?.({
+			type: "resources_discover",
+			cwd: join(sandbox, "project"),
+			reason: "startup",
+		});
+
+		expect(state.registry.has("mach12:package-only")).toBe(false);
+		expect(JSON.stringify(appended)).toContain("EACCES");
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it.each([
+		["missing", "ENOENT"],
+		["file", "not a directory"],
+		["dangling", "ENOENT"],
+		["empty", "is empty"],
+		["inaccessible", "EACCES"],
+	] as const)("rejects a %s packaged source without disrupting sibling or project discovery", (form, diagnostic) => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-rejection-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		const cwd = join(sandbox, "project");
+		const source = join(bundledRoot, "mach12");
+		mkdirSync(join(bundledRoot, "scramjet", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "scramjet", "commands", "scramjet:fallback.md"), "---\n---\nFallback.");
+		mkdirSync(join(cwd, ".scramjet", "local", "commands"), { recursive: true });
+		writeFileSync(join(cwd, ".scramjet", "local", "commands", "local:project.md"), "---\n---\nProject.");
+		if (form === "file") {
+			mkdirSync(bundledRoot, { recursive: true });
+			writeFileSync(source, "not a set");
+		}
+		if (form === "dangling") {
+			mkdirSync(bundledRoot, { recursive: true });
+			symlinkSync(join(sandbox, "missing"), source);
+		}
+		if (form === "empty" || form === "inaccessible") mkdirSync(source, { recursive: true });
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state, {
+			bundledRoot,
+			inspection:
+				form === "inaccessible"
+					? {
+							stat(path) {
+								if (path === source) throw Object.assign(new Error("denied"), { code: "EACCES" });
+								return lstatSync(path);
+							},
+						}
+					: undefined,
+		});
+		handlers.get("resources_discover")![0]?.({ type: "resources_discover", cwd, reason: "startup" });
+
+		expect(state.registry.has("mach12:fallback")).toBe(false);
+		expect(state.registry.has("scramjet:fallback")).toBe(true);
+		expect(state.registry.has("local:project")).toBe(true);
+		expect(JSON.stringify(appended)).toContain(diagnostic);
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it("preserves whole-set authority and retargets package agents across recovery", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-recovery-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		const cwd = join(sandbox, "project");
+		mkdirSync(join(globalDir, "mach12", "commands"), { recursive: true });
+		writeFileSync(join(globalDir, "mach12", "commands", "mach12:seeded.md"), "---\n---\nSeeded.");
+		for (const setName of ["mach12", "scramjet"]) {
+			mkdirSync(join(bundledRoot, setName, "commands"), { recursive: true });
+			writeFileSync(join(bundledRoot, setName, "commands", `${setName}:package.md`), "---\n---\nPackage.");
+		}
+		mkdirSync(join(bundledRoot, "scramjet", "agents"), { recursive: true });
+		const packageAgent = join(bundledRoot, "scramjet", "agents", "scramjet:agent.md");
+		writeFileSync(packageAgent, "---\nname: scramjet:agent\ndescription: Agent\n---\nPackage.");
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		const notify = vi.fn();
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: true });
+		const discover = () =>
+			handlers.get("resources_discover")![0]?.(
+				{ type: "resources_discover", cwd, reason: "reload" },
+				{ hasUI: true, ui: { notify } },
+			);
+
+		discover();
+		expect(state.registry.has("mach12:seeded")).toBe(true);
+		expect(state.registry.has("mach12:package")).toBe(false);
+		expect(state.registry.has("scramjet:package")).toBe(true);
+		expect(readlinkSync(join(agentDirSandbox, "agents", "scramjet:agent.md"))).toBe(packageAgent);
+		expect(notify).toHaveBeenCalledTimes(1);
+
+		const destinationAgent = join(globalDir, "scramjet", "agents", "scramjet:agent.md");
+		mkdirSync(dirname(destinationAgent), { recursive: true });
+		mkdirSync(join(globalDir, "scramjet", "commands"), { recursive: true });
+		writeFileSync(join(globalDir, "scramjet", "commands", "scramjet:seeded.md"), "---\n---\nSeeded.");
+		writeFileSync(destinationAgent, "---\nname: scramjet:agent\ndescription: Agent\n---\nSeeded.");
+		discover();
+		expect(state.registry.has("scramjet:seeded")).toBe(true);
+		expect(state.registry.has("scramjet:package")).toBe(false);
+		expect(readlinkSync(join(agentDirSandbox, "agents", "scramjet:agent.md"))).toBe(destinationAgent);
+		expect(notify).toHaveBeenCalledTimes(1);
+
+		rmSync(join(globalDir, "scramjet"), { recursive: true });
+		discover();
+		expect(state.registry.has("scramjet:package")).toBe(true);
+		expect(readlinkSync(join(agentDirSandbox, "agents", "scramjet:agent.md"))).toBe(packageAgent);
+		expect(notify).toHaveBeenCalledTimes(2);
+		rmSync(sandbox, { recursive: true, force: true });
 	});
 
 	it("populates state.registry from global + project fixtures", () => {
@@ -592,14 +848,17 @@ describe("buildAgentRegistry — collision and skip semantics", () => {
 describe("registerCommandLoader — agent discovery integration", () => {
 	let originalCache: string | undefined;
 	let originalAgentDir: string | undefined;
+	let originalScramjetAgentDir: string | undefined;
 	let agentDirSandbox: string;
 	let stderrSpy: { mockRestore(): void };
 
 	beforeEach(() => {
 		originalCache = process.env.SCRAMJET_CACHE;
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		originalScramjetAgentDir = process.env.SCRAMJET_CODING_AGENT_DIR;
 		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-agent-discovery-"));
 		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
+		process.env.SCRAMJET_CODING_AGENT_DIR = agentDirSandbox;
 		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 	});
 
@@ -608,6 +867,8 @@ describe("registerCommandLoader — agent discovery integration", () => {
 		else process.env.SCRAMJET_CACHE = originalCache;
 		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		if (originalScramjetAgentDir === undefined) delete process.env.SCRAMJET_CODING_AGENT_DIR;
+		else process.env.SCRAMJET_CODING_AGENT_DIR = originalScramjetAgentDir;
 		rmSync(agentDirSandbox, { recursive: true, force: true });
 		stderrSpy.mockRestore();
 	});
@@ -689,7 +950,7 @@ describe("registerCommandLoader — agent discovery integration", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "does-not-exist");
 		const { pi, handlers } = recordingPi();
 		const state = freshState({ logger: createLogger(pi) });
-		registerCommandLoader(pi, state);
+		registerCommandLoader(pi, state, { bundledRoot: join(FIXTURES, "does-not-exist") });
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({
 			type: "resources_discover",
@@ -703,14 +964,17 @@ describe("registerCommandLoader — agent discovery integration", () => {
 describe("registerCommandLoader — autonomy recommendations discovery", () => {
 	let originalCache: string | undefined;
 	let originalAgentDir: string | undefined;
+	let originalScramjetAgentDir: string | undefined;
 	let agentDirSandbox: string;
 	let stderrSpy: { mockRestore(): void };
 
 	beforeEach(() => {
 		originalCache = process.env.SCRAMJET_CACHE;
 		originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+		originalScramjetAgentDir = process.env.SCRAMJET_CODING_AGENT_DIR;
 		agentDirSandbox = mkdtempSync(join(tmpdir(), "scramjet-rec-discovery-"));
 		process.env.PI_CODING_AGENT_DIR = agentDirSandbox;
+		process.env.SCRAMJET_CODING_AGENT_DIR = agentDirSandbox;
 		stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 	});
 
@@ -719,6 +983,8 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		else process.env.SCRAMJET_CACHE = originalCache;
 		if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+		if (originalScramjetAgentDir === undefined) delete process.env.SCRAMJET_CODING_AGENT_DIR;
+		else process.env.SCRAMJET_CODING_AGENT_DIR = originalScramjetAgentDir;
 		rmSync(agentDirSandbox, { recursive: true, force: true });
 		stderrSpy.mockRestore();
 	});
@@ -744,7 +1010,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "does-not-exist");
 		const { pi, handlers } = recordingPi();
 		const state = freshState({ logger: createLogger(pi) });
-		registerCommandLoader(pi, state);
+		registerCommandLoader(pi, state, { bundledRoot: join(FIXTURES, "does-not-exist") });
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({
 			type: "resources_discover",
