@@ -7,13 +7,20 @@ import type {
 	AutonomyRecommendations,
 	CommandRegistry,
 	EdgeSetting,
+	EffectivePublicationPolicy,
+	PublicationDefault,
+	PublicationOverride,
+	PublicationTool,
 	RecommendationSetting,
 } from "./types.js";
+import { PUBLICATION_TOOLS } from "./types.js";
 
 const VALID_SETTINGS = new Set(["chain", "pause"]);
 const VALID_REC_SETTINGS = new Set(["chain", "pause", "default"]);
+const VALID_PUBLICATION_OVERRIDES = new Set(["always-ask", "auto-approve"]);
+const VALID_PUBLICATION_DEFAULTS = new Set(["ask", "approve"]);
 
-let cache: { path: string; mtimeMs: number; config: AutonomyConfig | null } | null = null;
+let cache: { path: string; mtimeMs: number; config?: AutonomyConfig; error?: Error } | null = null;
 
 export function defaultConfigPath(): string {
 	const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
@@ -22,18 +29,11 @@ export function defaultConfigPath(): string {
 
 export function parseAutonomyConfig(raw: string): AutonomyConfig {
 	const doc = parseYaml(raw);
-	if (
-		doc == null ||
-		typeof doc !== "object" ||
-		!("edges" in doc) ||
-		doc.edges == null ||
-		typeof doc.edges !== "object"
-	) {
-		return { edges: {} };
-	}
+	if (doc == null || typeof doc !== "object" || Array.isArray(doc)) return { edges: {} };
 
+	const edgeSource = "edges" in doc && doc.edges != null && typeof doc.edges === "object" ? doc.edges : {};
 	const edges: AutonomyConfig["edges"] = {};
-	for (const [source, targets] of Object.entries(doc.edges as Record<string, unknown>)) {
+	for (const [source, targets] of Object.entries(edgeSource as Record<string, unknown>)) {
 		if (targets == null || typeof targets !== "object") continue;
 		const targetMap: Record<string, "chain" | "pause"> = {};
 		for (const [target, setting] of Object.entries(targets as Record<string, unknown>)) {
@@ -45,10 +45,50 @@ export function parseAutonomyConfig(raw: string): AutonomyConfig {
 			edges[source] = targetMap;
 		}
 	}
-	return { edges };
+	const publications = parsePublicationMap<PublicationOverride>(
+		"publications" in doc ? doc.publications : undefined,
+		VALID_PUBLICATION_OVERRIDES,
+		(message) => {
+			throw new Error(`autonomy.yaml: ${message}`);
+		},
+	);
+	return Object.keys(publications).length > 0 ? { edges, publications } : { edges };
 }
 
-export function loadAutonomyConfig(configPath: string): AutonomyConfig | null {
+function parsePublicationMap<T extends string>(
+	value: unknown,
+	valid: ReadonlySet<string>,
+	onInvalid?: (message: string) => void,
+): Record<string, Partial<Record<PublicationTool, T>>> {
+	const publications: Record<string, Partial<Record<PublicationTool, T>>> = {};
+	if (value == null) return publications;
+	if (typeof value !== "object" || Array.isArray(value)) {
+		onInvalid?.("publications must be a command map");
+		return publications;
+	}
+	for (const [command, settings] of Object.entries(value as Record<string, unknown>)) {
+		if (settings == null || typeof settings !== "object" || Array.isArray(settings)) {
+			onInvalid?.(`publication settings for ${command} must be a tool map`);
+			continue;
+		}
+		const commandSettings: Partial<Record<PublicationTool, T>> = {};
+		for (const [tool, setting] of Object.entries(settings as Record<string, unknown>)) {
+			if (!PUBLICATION_TOOLS.includes(tool as PublicationTool)) {
+				onInvalid?.(`unknown publication tool ${tool} for ${command}`);
+				continue;
+			}
+			if (typeof setting !== "string" || !valid.has(setting)) {
+				onInvalid?.(`invalid publication setting ${String(setting)} for ${command} → ${tool}`);
+				continue;
+			}
+			commandSettings[tool as PublicationTool] = setting as T;
+		}
+		if (Object.keys(commandSettings).length > 0) publications[command] = commandSettings;
+	}
+	return publications;
+}
+
+export function loadAutonomyConfig(configPath: string, fresh = false): AutonomyConfig | null {
 	let stat: fs.Stats;
 	try {
 		stat = fs.statSync(configPath);
@@ -61,8 +101,9 @@ export function loadAutonomyConfig(configPath: string): AutonomyConfig | null {
 		return null;
 	}
 
-	if (cache?.path === configPath && stat.mtimeMs === cache.mtimeMs) {
-		return cache.config;
+	if (!fresh && cache?.path === configPath && stat.mtimeMs === cache.mtimeMs) {
+		if (cache.error) throw cache.error;
+		return cache.config ?? null;
 	}
 
 	try {
@@ -71,9 +112,10 @@ export function loadAutonomyConfig(configPath: string): AutonomyConfig | null {
 		cache = { path: configPath, mtimeMs: stat.mtimeMs, config };
 		return config;
 	} catch (err: unknown) {
-		cache = { path: configPath, mtimeMs: stat.mtimeMs, config: null };
 		const msg = err instanceof Error ? err.message : String(err);
-		throw new Error(`autonomy.yaml: failed to load config: ${msg}`);
+		const error = new Error(`autonomy.yaml: failed to load config: ${msg}`);
+		cache = { path: configPath, mtimeMs: stat.mtimeMs, error };
+		throw error;
 	}
 }
 
@@ -89,8 +131,39 @@ export function resolveEdgeBehavior(configPath: string, source: string, target: 
 	return lookupEdge(config, source, target);
 }
 
+export interface ResolvedPublicationPolicy {
+	policy: EffectivePublicationPolicy;
+	authorization: "interactive" | "command-default" | "user-override";
+}
+
+export function resolvePublicationPolicy(
+	config: AutonomyConfig | null,
+	defaults: AutonomyRecommendations,
+	command: string | null,
+	tool: PublicationTool,
+): ResolvedPublicationPolicy {
+	if (!command) return { policy: "ask", authorization: "interactive" };
+	const override = config?.publications?.[command]?.[tool];
+	if (override === "always-ask") return { policy: "ask", authorization: "interactive" };
+	if (override === "auto-approve") return { policy: "approve", authorization: "user-override" };
+	const policy = defaults.publications?.[command]?.[tool] ?? "ask";
+	return { policy, authorization: policy === "approve" ? "command-default" : "interactive" };
+}
+
+export function lookupPublicationPolicy(
+	config: AutonomyConfig | null,
+	defaults: AutonomyRecommendations,
+	command: string | null,
+	tool: PublicationTool,
+): EffectivePublicationPolicy {
+	return resolvePublicationPolicy(config, defaults, command, tool).policy;
+}
+
 export function validateConfig(
-	config: { edges: Record<string, Record<string, string>> },
+	config: {
+		edges: Record<string, Record<string, string>>;
+		publications?: Record<string, Record<string, string | undefined>>;
+	},
 	registry: CommandRegistry,
 ): string[] {
 	const warnings: string[] = [];
@@ -104,6 +177,9 @@ export function validateConfig(
 			}
 		}
 	}
+	for (const command of Object.keys(config.publications ?? {})) {
+		if (!registry.has(command)) warnings.push(`unknown publication command "${command}"`);
+	}
 	return warnings;
 }
 
@@ -113,18 +189,11 @@ export function validateRecommendations(recs: AutonomyRecommendations, registry:
 
 export function parseAutonomyRecommendations(raw: string, warnings?: string[]): AutonomyRecommendations {
 	const doc = parseYaml(raw);
-	if (
-		doc == null ||
-		typeof doc !== "object" ||
-		!("edges" in doc) ||
-		doc.edges == null ||
-		typeof doc.edges !== "object"
-	) {
-		return { edges: {} };
-	}
+	if (doc == null || typeof doc !== "object" || Array.isArray(doc)) return { edges: {} };
 
+	const edgeSource = "edges" in doc && doc.edges != null && typeof doc.edges === "object" ? doc.edges : {};
 	const edges: AutonomyRecommendations["edges"] = {};
-	for (const [source, targets] of Object.entries(doc.edges as Record<string, unknown>)) {
+	for (const [source, targets] of Object.entries(edgeSource as Record<string, unknown>)) {
 		if (targets == null || typeof targets !== "object") continue;
 		const targetMap: Record<string, RecommendationSetting> = {};
 		for (const [target, setting] of Object.entries(targets as Record<string, unknown>)) {
@@ -140,7 +209,12 @@ export function parseAutonomyRecommendations(raw: string, warnings?: string[]): 
 			edges[source] = targetMap;
 		}
 	}
-	return { edges };
+	const publications = parsePublicationMap<PublicationDefault>(
+		"publications" in doc ? doc.publications : undefined,
+		VALID_PUBLICATION_DEFAULTS,
+		(message) => warnings?.push(`[scramjet/discovery] ${message}`),
+	);
+	return Object.keys(publications).length > 0 ? { edges, publications } : { edges };
 }
 
 export function applyRecommendations(
@@ -176,7 +250,7 @@ export function applyRecommendations(
 }
 
 export function mergeAllRecommendations(recs: ReadonlyMap<string, AutonomyRecommendations>): AutonomyRecommendations {
-	const merged: AutonomyRecommendations = { edges: {} };
+	const merged: AutonomyRecommendations = { edges: {}, publications: {} };
 	for (const setRecs of recs.values()) {
 		for (const [source, targets] of Object.entries(setRecs.edges)) {
 			if (!merged.edges[source]) {
@@ -188,7 +262,14 @@ export function mergeAllRecommendations(recs: ReadonlyMap<string, AutonomyRecomm
 				}
 			}
 		}
+		for (const [command, settings] of Object.entries(setRecs.publications ?? {})) {
+			if (!merged.publications![command]) merged.publications![command] = {};
+			for (const [tool, setting] of Object.entries(settings) as [PublicationTool, PublicationDefault][]) {
+				if (!(tool in merged.publications![command])) merged.publications![command][tool] = setting;
+			}
+		}
 	}
+	if (Object.keys(merged.publications!).length === 0) delete merged.publications;
 	return merged;
 }
 
@@ -198,7 +279,7 @@ export function saveAutonomyConfig(configPath: string, config: AutonomyConfig): 
 	fs.mkdirSync(dir, { recursive: true });
 	const tmpPath = `${configPath}.tmp`;
 	try {
-		if (Object.keys(cleaned.edges).length === 0) {
+		if (Object.keys(cleaned.edges).length === 0 && Object.keys(cleaned.publications ?? {}).length === 0) {
 			try {
 				fs.unlinkSync(configPath);
 			} catch (err: unknown) {
@@ -234,7 +315,8 @@ function cleanConfig(config: AutonomyConfig): AutonomyConfig {
 			edges[source] = filtered;
 		}
 	}
-	return { edges };
+	const publications = parsePublicationMap<PublicationOverride>(config.publications, VALID_PUBLICATION_OVERRIDES);
+	return Object.keys(publications).length > 0 ? { edges, publications } : { edges };
 }
 
 export function resetCache(): void {

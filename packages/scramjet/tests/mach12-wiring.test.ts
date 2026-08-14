@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFrontmatter } from "@leanandmean/coding-agent";
 import { describe, expect, it } from "vitest";
+import { parseAutonomyRecommendations } from "../src/autonomy-settings.js";
 import { parseCommandFile } from "../src/commands/loader.js";
 import type { NextStepPolicy } from "../src/types.js";
 
@@ -271,6 +272,27 @@ describe("mach12 inline forge publication inventory", () => {
 			expect(content).toContain(`\`${tool}\``);
 		}
 		expect(content).not.toContain("mach12:gh-comment");
+	});
+
+	it("ships active defaults only for top-level commands that allow each publication tool", () => {
+		const defaults = parseAutonomyRecommendations(
+			readFileSync(resolve(MACH12_COMMANDS_DIR, "..", "autonomy-defaults.yaml"), "utf-8"),
+		);
+		const defaultedTools = new Set<string>();
+		for (const [command, settings] of Object.entries(defaults.publications ?? {})) {
+			expect(command).not.toBe("mach12:push");
+			const filePath = join(MACH12_COMMANDS_DIR, `${command}.md`);
+			const parsed = parseCommandFile(filePath, readFileSync(filePath, "utf-8"), SET_NAME);
+			expect(parsed.ok).toBe(true);
+			if (!parsed.ok) continue;
+			expect(parsed.def.delegateOnly).not.toBe(true);
+			for (const [tool, value] of Object.entries(settings)) {
+				expect(value).toBe("approve");
+				expect(parsed.def.allowedTools).toContain(tool);
+				defaultedTools.add(tool);
+			}
+		}
+		expect(defaultedTools).toEqual(new Set(["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"]));
 	});
 
 	it("leaves no raw supported publication command or obsolete delegate", () => {

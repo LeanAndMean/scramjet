@@ -1,6 +1,17 @@
 import { type ExtensionAPI, getMarkdownTheme, getSelectListTheme } from "@leanandmean/coding-agent";
-import { type Component, Container, Markdown, SelectList, Text, truncateToWidth } from "@leanandmean/tui";
+import {
+	Box,
+	type Component,
+	Container,
+	Markdown,
+	SelectList,
+	Spacer,
+	sanitizeUntrustedText,
+	Text,
+	truncateToWidth,
+} from "@leanandmean/tui";
 import { Type } from "typebox";
+import { loadAutonomyConfig, mergeAllRecommendations, resolvePublicationPolicy } from "./autonomy-settings.js";
 import {
 	type ForgeRepository,
 	type PublicationRequest,
@@ -9,21 +20,23 @@ import {
 	resolveForgeOrigin,
 	sameRepository,
 } from "./forge-publication-provider.js";
-import type { ScramjetState } from "./types.js";
+import type { PublicationTool, ScramjetState } from "./types.js";
+import { PUBLICATION_TOOLS } from "./types.js";
 
 const DETAILS_KIND = "scramjet:forge-publication";
-const DISPLAY_MARKER = "⟦";
-const OPERATIONS = ["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"] as const;
-type Operation = (typeof OPERATIONS)[number];
+const OPERATIONS = PUBLICATION_TOOLS;
+type Operation = PublicationTool;
 type PublicationOutcomeDetails =
 	| { outcome: "cancelled"; writeState: "not-dispatched" }
 	| { outcome: "verified"; writeState: "verified"; url: string }
 	| { outcome: "headless" | "stale" | "pre-dispatch-failure"; writeState: "not-dispatched"; reason?: string }
 	| { outcome: "ambiguous"; writeState: "possible"; retryProhibited: true; reason?: string };
+type PublicationAuthorization = { mode: "interactive" | "command-default" | "user-override"; command: string | null };
 type PublicationDetails = {
 	kind: typeof DETAILS_KIND;
 	operation: Operation;
 	repository?: string;
+	authorization?: PublicationAuthorization;
 } & PublicationOutcomeDetails;
 type ApprovalResult = "approved" | "cancelled" | "stale";
 
@@ -51,14 +64,14 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 		{
 			name: "create_issue",
 			label: "Create Issue",
-			description: "Create an issue in the current public GitHub or GitLab repository after interactive approval.",
+			description: "Create an issue in the current public GitHub or GitLab repository under publication policy.",
 			parameters: Type.Object({ title: Type.String({ minLength: 1 }), body: Type.String() }),
 		},
 		{
 			name: "create_pr",
 			label: "Create Pull Request",
 			description:
-				"Create a pull request or merge request from current-repository branches after interactive approval.",
+				"Create a pull request or merge request from current-repository branches under publication policy.",
 			parameters: Type.Object({
 				title: Type.String({ minLength: 1 }),
 				body: Type.String(),
@@ -71,27 +84,27 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 			name: "add_issue_comment",
 			label: "Add Issue Comment",
 			description:
-				"Add a comment to an issue in the current public GitHub or GitLab repository after interactive approval.",
+				"Add a comment to an issue in the current public GitHub or GitLab repository under publication policy.",
 			parameters: Type.Object({ number: Type.Integer({ minimum: 1 }), body: Type.String() }),
 		},
 		{
 			name: "add_pr_comment",
 			label: "Add PR Comment",
 			description:
-				"Add a comment to a pull request or merge request in the current public GitHub or GitLab repository after interactive approval.",
+				"Add a comment to a pull request or merge request in the current public GitHub or GitLab repository under publication policy.",
 			parameters: Type.Object({ number: Type.Integer({ minimum: 1 }), body: Type.String() }),
 		},
 	] as const;
 	for (const definition of definitions as readonly any[]) {
 		pi.registerTool({
 			...definition,
-			promptSnippet: `${definition.name}: explain the decision context and consequences concisely, then supply the complete final content only in this tool call. Do not repeat the full payload in prose. Publication requires interactive approval and exact verification; never retry an ambiguous result automatically.`,
+			promptSnippet: `${definition.name}: explain the decision context and consequences concisely, then supply the complete final content only in this tool call. Do not repeat the full payload in prose. Publication follows user policy and always requires exact verification; never retry an ambiguous result automatically.`,
 			executionMode: "sequential",
 			renderCall(args: any, theme, { expanded }) {
 				const request = freezeRequest(definition.name, args);
 				if (expanded) return publicationPayloadComponent(request, theme);
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold(definition.name))} ${theme.fg("muted", projectTerminalSafe(callSummary(request)).text)}`,
+					`${theme.fg("toolTitle", theme.bold(definition.name))} ${theme.fg("muted", sanitizeUntrustedText(callSummary(request)))}`,
 					0,
 					0,
 				);
@@ -103,21 +116,43 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 				return new Text(
 					theme.fg(
 						details.outcome === "verified" ? "success" : details.outcome === "cancelled" ? "muted" : "error",
-						resultText(details),
+						sanitizeUntrustedText(resultText(details)),
 					),
 					0,
 					0,
 				);
 			},
-			async execute(_id, params, signal, _update, ctx) {
+			async execute(toolCallId, params, signal, _update, ctx) {
 				const request = freezeRequest(definition.name, params);
+				const expectedEpoch = sessionEpoch;
+				const expectedGeneration = state.lifecycleGeneration;
+				const expectedCommand = state.lifecycle.activeCommand;
+				const resolveDecision = () => {
+					const command = expectedCommand ? state.registry.get(expectedCommand) : undefined;
+					if (!command || command.delegateOnly || !command.allowedTools?.includes(request.operation)) {
+						return { policy: "ask", authorization: "interactive" } as const;
+					}
+					try {
+						return resolvePublicationPolicy(
+							loadAutonomyConfig(state.autonomyConfigPath, true),
+							mergeAllRecommendations(state.autonomyRecommendations),
+							expectedCommand,
+							request.operation,
+						);
+					} catch (error) {
+						state.logger.warn("scope", `publication autonomy ignored: ${safeError(error)}`);
+						return { policy: "ask", authorization: "interactive" } as const;
+					}
+				};
+				const decision = resolveDecision();
+				const policy = decision.policy;
 				if (!requestStrings(request).every(isValidUnicode))
 					return toolResult(request.operation, {
 						outcome: "pre-dispatch-failure",
 						writeState: "not-dispatched",
 						reason: "proposal-is-not-valid-utf8",
 					});
-				if (!ctx.hasUI || !ctx.ui)
+				if (policy === "ask" && (!ctx.hasUI || !ctx.ui))
 					return toolResult(request.operation, {
 						outcome: "headless",
 						writeState: "not-dispatched",
@@ -154,48 +189,73 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 						);
 					}
 				}
-				const expectedEpoch = sessionEpoch;
-				const expectedGeneration = state.lifecycleGeneration;
-				let approval: ApprovalResult;
-				try {
-					approval = await ctx.ui.custom<ApprovalResult>(
-						(tui, theme, _keybindings, done) => {
-							let finished = false;
-							const finish = (result: ApprovalResult) => {
-								if (finished) return;
-								finished = true;
-								activeApproval = undefined;
-								done(result);
-							};
-							activeApproval = finish;
-							return new ApprovalComponent(repository, request, tui, theme, finish);
-						},
-						{
-							committedPreview: (_tui, previewTheme) =>
-								approvalPreviewComponent(repository, request, previewTheme),
-						},
-					);
-				} catch {
-					activeApproval = undefined;
-					return toolResult(
-						request.operation,
-						{ outcome: "pre-dispatch-failure", writeState: "not-dispatched", reason: "approval-ui-failed" },
-						repository,
-					);
+				const authorization: PublicationAuthorization = {
+					mode: decision.authorization,
+					command: expectedCommand,
+				};
+				let approval: ApprovalResult = "approved";
+				if (policy === "ask") {
+					try {
+						approval = await ctx.ui!.custom<ApprovalResult>(
+							(tui, theme, _keybindings, done) => {
+								let finished = false;
+								const finish = (result: ApprovalResult) => {
+									if (finished) return;
+									finished = true;
+									activeApproval = undefined;
+									done(result);
+								};
+								activeApproval = finish;
+								return new ApprovalComponent(tui, theme, finish);
+							},
+							{
+								toolAttachedContext: {
+									toolCallId,
+									render: (_tui, previewTheme) => approvalPreviewComponent(repository, request, previewTheme),
+								},
+							},
+						);
+					} catch (error) {
+						activeApproval = undefined;
+						const reason = sanitizeUntrustedText(safeError(error));
+						state.logger.warn("scope", `publication approval UI failed: ${reason}`);
+						return toolResult(
+							request.operation,
+							{
+								outcome: "pre-dispatch-failure",
+								writeState: "not-dispatched",
+								reason: `approval-ui-failed: ${reason}`,
+							},
+							repository,
+						);
+					}
 				}
 				if (approval !== "approved")
 					return toolResult(
 						request.operation,
 						{ outcome: approval === "cancelled" ? "cancelled" : "stale", writeState: "not-dispatched" },
 						repository,
+						authorization,
 					);
-				const fresh = () =>
-					runtimeLive &&
-					sessionEpoch === expectedEpoch &&
-					state.lifecycleGeneration === expectedGeneration &&
-					!signal?.aborted;
+				const fresh = () => {
+					const currentDecision = resolveDecision();
+					return (
+						runtimeLive &&
+						sessionEpoch === expectedEpoch &&
+						state.lifecycleGeneration === expectedGeneration &&
+						state.lifecycle.activeCommand === expectedCommand &&
+						currentDecision.policy === decision.policy &&
+						currentDecision.authorization === decision.authorization &&
+						!signal?.aborted
+					);
+				};
 				if (!fresh())
-					return toolResult(request.operation, { outcome: "stale", writeState: "not-dispatched" }, repository);
+					return toolResult(
+						request.operation,
+						{ outcome: "stale", writeState: "not-dispatched" },
+						repository,
+						authorization,
+					);
 				let current: ForgeRepository;
 				try {
 					current = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd);
@@ -204,6 +264,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 						request.operation,
 						{ outcome: "stale", writeState: "not-dispatched", reason: "origin-could-not-be-revalidated" },
 						repository,
+						authorization,
 					);
 				}
 				if (!fresh() || !sameRepository(repository, current))
@@ -215,6 +276,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 							reason: sameRepository(repository, current) ? undefined : "origin-changed",
 						},
 						repository,
+						authorization,
 					);
 				const outcome = await publishForge(pi.exec.bind(pi), repository, request, ctx.cwd, signal);
 				if (outcome.status === "verified")
@@ -222,17 +284,20 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 						request.operation,
 						{ outcome: "verified", writeState: "verified", url: outcome.url },
 						repository,
+						authorization,
 					);
 				if (outcome.status === "no-write")
 					return toolResult(
 						request.operation,
 						{ outcome: "pre-dispatch-failure", writeState: "not-dispatched", reason: outcome.reason },
 						repository,
+						authorization,
 					);
 				return toolResult(
 					request.operation,
 					{ outcome: "ambiguous", writeState: "possible", reason: outcome.reason, retryProhibited: true },
 					repository,
+					authorization,
 				);
 			},
 		});
@@ -242,16 +307,14 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 class ApprovalComponent {
 	private readonly choices: SelectList;
 	constructor(
-		private readonly repository: ForgeRepository,
-		private readonly request: PublicationRequest,
 		private readonly tui: { requestRender(): void },
 		private readonly theme: any,
 		done: (result: ApprovalResult) => void,
 	) {
 		this.choices = new SelectList(
 			[
-				{ value: "cancel", label: "Cancel" },
 				{ value: "approve", label: "Approve publication" },
+				{ value: "cancel", label: "Cancel" },
 			],
 			2,
 			getSelectListTheme(),
@@ -261,13 +324,6 @@ class ApprovalComponent {
 	}
 	render(width: number): string[] {
 		return [
-			truncateToWidth(
-				this.theme.fg("accent", this.theme.bold(`${operationLabel(this.request.operation)} — approval required`)),
-				width,
-			),
-			truncateToWidth(`Provider: ${this.repository.provider}`, width),
-			truncateToWidth(`Repository: ${repositoryName(this.repository)}`, width),
-			truncateToWidth(`Consequence: ${consequence(this.request)}`, width),
 			...this.choices.render(width),
 			truncateToWidth(this.theme.fg("dim", "↑↓ choose • Enter confirm • Esc cancel"), width),
 		];
@@ -282,23 +338,20 @@ class ApprovalComponent {
 	dispose(): void {}
 }
 
-function publicationPayloadComponent(request: PublicationRequest, theme: any): Container {
-	const fields = displayFields(request).map(([label, value]) => ({ label, ...projectTerminalSafe(value) }));
+function publicationPayloadComponent(request: PublicationRequest, _theme: any): Container {
 	const component = new Container();
 	component.addChild(
-		new Markdown(fields.map((field) => `## ${field.label}\n\n${field.text}`).join("\n\n"), 0, 0, getMarkdownTheme()),
+		new Markdown(
+			displayFields(request)
+				.map(([label, value]) => `## ${label}\n\n${value}`)
+				.join("\n\n"),
+			0,
+			0,
+			getMarkdownTheme(),
+			undefined,
+			{ contentMode: "untrusted" },
+		),
 	);
-	if (fields.some((field) => field.changed))
-		component.addChild(
-			new Text(
-				theme.fg(
-					"warning",
-					`${DISPLAY_MARKER}…${DISPLAY_MARKER} marks escaped terminal-unsafe or hyperlink syntax.`,
-				),
-				0,
-				0,
-			),
-		);
 	return component;
 }
 
@@ -310,13 +363,12 @@ class ApprovalPreviewComponent implements Component {
 	) {}
 	render(width: number): string[] {
 		const component = new Container();
-		component.addChild(
+		component.addChild(new Spacer(1));
+		const card = new Box(1, 1, (text: string) => this.theme.bg("toolPendingBg", text));
+		card.addChild(
 			new Text(
 				[
-					this.theme.fg(
-						"accent",
-						this.theme.bold(`${operationLabel(this.request.operation)} — approval required`),
-					),
+					this.theme.fg("toolTitle", this.theme.bold(operationLabel(this.request.operation))),
 					`Provider: ${this.repository.provider}`,
 					`Repository: ${repositoryName(this.repository)}`,
 					`Consequence: ${consequence(this.request)}`,
@@ -325,7 +377,8 @@ class ApprovalPreviewComponent implements Component {
 				0,
 			),
 		);
-		component.addChild(publicationPayloadComponent(this.request, this.theme));
+		card.addChild(publicationPayloadComponent(this.request, this.theme));
+		component.addChild(card);
 		return component.render(width);
 	}
 	invalidate(): void {}
@@ -333,39 +386,6 @@ class ApprovalPreviewComponent implements Component {
 
 function approvalPreviewComponent(repository: ForgeRepository, request: PublicationRequest, theme: any): Component {
 	return new ApprovalPreviewComponent(repository, request, theme);
-}
-
-export function projectTerminalSafe(input: string): { text: string; changed: boolean; restore(): string } {
-	let changed = false;
-	let text = "";
-	for (let index = 0; index < input.length; index++) {
-		const code = input.charCodeAt(index);
-		const point = input.codePointAt(index)!;
-		if (point > 0xffff) index++;
-		const prefix = input.slice(Math.max(0, index - 8), index).toLowerCase();
-		const unsafe =
-			code === 0x3c ||
-			code === 0x5b ||
-			code === 0x5d ||
-			(code === 0x3a && /(?:https?|mailto)$/.test(prefix)) ||
-			point === DISPLAY_MARKER.codePointAt(0) ||
-			(point <= 0x1f && point !== 0x0a) ||
-			(point >= 0x7f && point <= 0x9f) ||
-			(point >= 0x202a && point <= 0x202e) ||
-			(point >= 0x2066 && point <= 0x2069) ||
-			(point & 0xffff) === 0xffff ||
-			(point & 0xffff) === 0xfffe;
-		if (unsafe) {
-			changed = true;
-			text += `${DISPLAY_MARKER}${point.toString(16).toUpperCase()}${DISPLAY_MARKER}`;
-		} else text += String.fromCodePoint(point);
-	}
-	return {
-		text,
-		changed,
-		restore: () =>
-			text.replace(/⟦([0-9A-F]+)⟦/g, (_match, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16))),
-	};
 }
 
 function isValidUnicode(value: string): boolean {
@@ -439,11 +459,17 @@ function operationLabel(operation: Operation): string {
 		add_pr_comment: "Add pull/merge request comment",
 	}[operation];
 }
-function toolResult(operation: Operation, fields: PublicationOutcomeDetails, repository?: ForgeRepository) {
+function toolResult(
+	operation: Operation,
+	fields: PublicationOutcomeDetails,
+	repository?: ForgeRepository,
+	authorization?: PublicationAuthorization,
+) {
 	const details: PublicationDetails = {
 		kind: DETAILS_KIND,
 		operation,
 		repository: repositoryName(repository),
+		authorization,
 		...fields,
 	};
 	return { content: [{ type: "text" as const, text: resultText(details) }], details };

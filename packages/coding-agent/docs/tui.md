@@ -117,21 +117,23 @@ async execute(toolCallId, params, onUpdate, ctx, signal) {
 }
 ```
 
-### Committed previews
+### Tool-attached committed context
 
-A custom UI can pair compact live controls with immutable long-form context committed to native terminal scrollback:
+A pending sequential tool can pair compact live controls with immutable long-form context committed at that tool's transcript position:
 
 ```typescript
 const result = await ctx.ui.custom(
   (_tui, _theme, _keybindings, done) => new ApprovalSelector(done),
   {
-    committedPreview: (_tui, theme) =>
-      new Markdown(completePayload, 0, 0, getMarkdownTheme()),
+    toolAttachedContext: {
+      toolCallId,
+      render: (_tui, theme) => new Markdown(completePayload, 0, 0, getMarkdownTheme()),
+    },
   },
 );
 ```
 
-`committedPreview` is constructed after the live component factory resolves, rendered and committed once, and flushed to the terminal before that component receives focus. The complete preview is emitted to native terminal scrollback and retained internally for deliberate width/theme rebuilds in the current runtime. Native scrollback retention and mouse-wheel availability depend on terminal capacity and configuration. The preview is not persisted to the session or sent to the model. Treat the returned component as immutable; returning oversized content from the live component does not work because mutable output is tail-windowed to terminal height.
+The context is constructed after the controls factory resolves, anchored to the named pending tool row, committed once, and flushed before those controls receive focus. It is retained internally for deliberate width/theme rebuilds but is not persisted or sent to the model. Native scrollback retention depends on terminal capacity and configuration. The operation fails closed when the row is missing, settled, or cannot be flushed; use it only from the sequential tool identified by `toolCallId`.
 
 ## Overlays
 

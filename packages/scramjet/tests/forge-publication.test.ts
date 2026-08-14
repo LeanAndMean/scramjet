@@ -1,6 +1,10 @@
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initTheme } from "@leanandmean/coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { projectTerminalSafe, registerForgePublication } from "../src/forge-publication.js";
+import { resetCache } from "../src/autonomy-settings.js";
+import { registerForgePublication } from "../src/forge-publication.js";
 import { freshState, recordingPi } from "./helpers.js";
 
 initTheme(undefined, false);
@@ -17,6 +21,12 @@ function context(custom?: (factory: any, options?: any) => Promise<any>) {
 	};
 }
 
+function allowPublication(state: ReturnType<typeof freshState>, command: string, tools: string[]): void {
+	state.registry = new Map([
+		[command, { name: command, filePath: `/commands/${command}.md`, body: "", allowedTools: tools }],
+	]);
+}
+
 async function registered() {
 	const bag = recordingPi();
 	bag.pi.exec = vi.fn().mockResolvedValue(execResult("https://github.com/LeanAndMean/scramjet.git\n"));
@@ -24,18 +34,6 @@ async function registered() {
 	registerForgePublication(bag.pi, state);
 	return { ...bag, state, tool: bag.tools.find((candidate) => candidate.name === "create_issue") };
 }
-
-describe("terminal-safe projection", () => {
-	it("is reversible and emits no raw controls, escape sequences, bidi controls, or active Markdown links", () => {
-		const input =
-			"start\0\t\r\u001b]8;;https://evil.example\u0007link\u001b]8;;\u0007\u202e [x](https://evil.example) end";
-		const projected = projectTerminalSafe(input);
-		expect(projected.changed).toBe(true);
-		expect(projected.text).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u);
-		expect(projected.text).not.toContain("](https://");
-		expect(projected.restore()).toBe(input);
-	});
-});
 
 describe("create_issue approval", () => {
 	it("renders compact facts and reconstructs the expanded proposal from call arguments", async () => {
@@ -101,8 +99,8 @@ describe("create_issue approval", () => {
 				const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 					answer = value;
 				});
-				preview = options
-					.committedPreview({ requestRender() {} }, theme())
+				preview = options.toolAttachedContext
+					.render({ requestRender() {} }, theme())
 					.render(70)
 					.join("\n");
 				component.handleInput("\u001b");
@@ -110,11 +108,8 @@ describe("create_issue approval", () => {
 			};
 			const { tools, pi } = await registered();
 			const tool = tools.find((candidate) => candidate.name === testCase.name);
-			const expanded = tool.renderCall(testCase.args, theme(), { expanded: true }).render(70).join("\n");
-
 			await tool.execute("call", testCase.args, undefined, undefined, context(custom));
 
-			for (const line of expanded.split("\n").filter(Boolean)) expect(preview).toContain(line);
 			for (const value of testCase.expected) expect(preview).toContain(value);
 			let previous = -1;
 			for (const value of testCase.order) {
@@ -133,7 +128,7 @@ describe("create_issue approval", () => {
 		}
 	});
 
-	it("renders a vertical default-Cancel selector without payload viewport controls", async () => {
+	it("renders a vertical default-Approve selector without duplicate context", async () => {
 		let rendered = "";
 		const custom = async (factory: any) => {
 			let answer: unknown;
@@ -147,8 +142,8 @@ describe("create_issue approval", () => {
 		const { tool } = await registered();
 		await tool.execute("call", { title: "hidden title", body: "hidden body" }, undefined, undefined, context(custom));
 
-		expect(rendered).toContain("→ Cancel");
-		expect(rendered.indexOf("Cancel")).toBeLessThan(rendered.indexOf("Approve publication"));
+		expect(rendered).toContain("→ Approve publication");
+		expect(rendered.indexOf("Approve publication")).toBeLessThan(rendered.indexOf("Cancel"));
 		expect(rendered).toContain("↑↓ choose • Enter confirm • Esc cancel");
 		expect(rendered).not.toContain("hidden title");
 		expect(rendered).not.toContain("hidden body");
@@ -241,6 +236,123 @@ describe("create_issue approval", () => {
 		expect(githubBag.pi.exec.mock.calls.some((call: any[]) => call[1]?.includes("POST"))).toBe(false);
 	});
 
+	it("uses an active command default to skip only the approval UI", async () => {
+		const { tool, pi, state } = await registered();
+		state.lifecycle.activeCommand = "mach12:issue-create";
+		allowPublication(state, "mach12:issue-create", ["create_issue"]);
+		state.autonomyRecommendations = new Map([
+			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+		]);
+		const custom = vi.fn(async () => {
+			throw new Error("approval UI must not open");
+		});
+		pi.exec
+			.mockResolvedValueOnce(execResult("https://github.com/LeanAndMean/scramjet.git\n"))
+			.mockResolvedValueOnce(execResult("https://github.com/LeanAndMean/scramjet.git\n"))
+			.mockResolvedValueOnce(
+				execResult(JSON.stringify({ number: 9, html_url: "https://github.com/LeanAndMean/scramjet/issues/9" })),
+			)
+			.mockResolvedValueOnce(
+				execResult(
+					JSON.stringify({
+						number: 9,
+						title: "exact",
+						body: "body",
+						html_url: "https://github.com/LeanAndMean/scramjet/issues/9",
+					}),
+				),
+			);
+
+		const outcome = await tool.execute(
+			"call",
+			{ title: "exact", body: "body" },
+			undefined,
+			undefined,
+			context(custom),
+		);
+
+		expect(custom).not.toHaveBeenCalled();
+		expect(outcome.details).toMatchObject({
+			outcome: "verified",
+			authorization: { mode: "command-default", command: "mach12:issue-create" },
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
+	});
+
+	it.each([
+		["create_issue", { title: "issue", body: "body" }],
+		["create_pr", { title: "pr", body: "body", head: "feature", base: "main", draft: false }],
+		["add_issue_comment", { number: 41, body: "body" }],
+		["add_pr_comment", { number: 42, body: "body" }],
+	] as const)("auto-approves %s headlessly through the shared guarded path", async (name, params) => {
+		const { tools, pi, state } = await registered();
+		state.lifecycle.activeCommand = "mach12:publish";
+		allowPublication(state, "mach12:publish", [name]);
+		state.autonomyRecommendations = new Map([
+			["mach12", { edges: {}, publications: { "mach12:publish": { [name]: "approve" } } }],
+		]);
+		pi.exec.mockImplementation(async (_command: string, args: string[]) =>
+			args.includes("POST") ? execResult("", 1) : execResult("https://github.com/LeanAndMean/scramjet.git\n"),
+		);
+		const tool = tools.find((candidate) => candidate.name === name);
+		const outcome = await tool.execute("call", params, undefined, undefined, context());
+		expect(outcome.details).toMatchObject({
+			outcome: "ambiguous",
+			authorization: { mode: "command-default", command: "mach12:publish" },
+		});
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
+	});
+
+	it("lets an exact Always ask override supersede an approving command default", async () => {
+		const { tool, pi, state } = await registered();
+		state.lifecycle.activeCommand = "mach12:issue-create";
+		allowPublication(state, "mach12:issue-create", ["create_issue"]);
+		state.autonomyRecommendations = new Map([
+			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+		]);
+		state.autonomyConfigPath = join(tmpdir(), `scramjet-ask-override-${Date.now()}.yaml`);
+		writeFileSync(state.autonomyConfigPath, "publications:\n  mach12:issue-create:\n    create_issue: always-ask\n");
+		resetCache();
+		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context());
+		expect(outcome.details).toMatchObject({ outcome: "headless", writeState: "not-dispatched" });
+		expect(pi.exec).not.toHaveBeenCalled();
+	});
+
+	it("falls back to headless no-write when user autonomy config is corrupt", async () => {
+		const { tool, pi, state } = await registered();
+		state.lifecycle.activeCommand = "mach12:issue-create";
+		allowPublication(state, "mach12:issue-create", ["create_issue"]);
+		state.autonomyRecommendations = new Map([
+			["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+		]);
+		state.autonomyConfigPath = join(tmpdir(), `scramjet-corrupt-autonomy-${Date.now()}.yaml`);
+		writeFileSync(state.autonomyConfigPath, "{ invalid: [");
+		resetCache();
+		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context());
+		expect(outcome.details).toMatchObject({ outcome: "headless", writeState: "not-dispatched" });
+		expect(pi.exec).not.toHaveBeenCalled();
+	});
+
+	it("invalidates pending approval when command defaults change", async () => {
+		const { tool, pi, state } = await registered();
+		state.lifecycle.activeCommand = "mach12:issue-create";
+		allowPublication(state, "mach12:issue-create", ["create_issue"]);
+		const custom = async (factory: any) => {
+			let answer: unknown;
+			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
+				answer = value;
+			});
+			state.autonomyRecommendations = new Map([
+				["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+			]);
+			component.handleInput("\r");
+			return answer;
+		};
+		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context(custom));
+		expect(outcome.details.outcome).toBe("stale");
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+	});
+
 	it("registers one sequential ordinary tool and fails headless before mutation", async () => {
 		const { tool, pi } = await registered();
 		expect(tool).toMatchObject({ name: "create_issue", executionMode: "sequential" });
@@ -267,18 +379,19 @@ describe("create_issue approval", () => {
 		expect(outcome.details).toMatchObject({
 			outcome: "pre-dispatch-failure",
 			writeState: "not-dispatched",
-			reason: "approval-ui-failed",
 		});
+		expect(outcome.details.reason).toContain("approval-ui-failed");
+		expect(outcome.details.reason).toContain("preview failed");
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
 
-	it.each(["initial Enter", "Escape"])("defaults to Cancel and %s performs no mutation", async (mode) => {
+	it("Escape cancels and performs no mutation", async () => {
 		const custom = async (factory: any) => {
 			let answer: unknown;
 			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 				answer = value;
 			});
-			component.handleInput(mode === "initial Enter" ? "\r" : "\u001b");
+			component.handleInput("\u001b");
 			return answer;
 		};
 		const { tool, pi } = await registered();
@@ -287,16 +400,12 @@ describe("create_issue approval", () => {
 		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
 
-	it.each([
-		["Up", "\u001b[A"],
-		["Down", "\u001b[B"],
-	])("publishes the frozen exact proposal after explicit %s selection", async (_label, navigation) => {
+	it("publishes the frozen exact proposal from the initial Approve selection", async () => {
 		const custom = async (factory: any) => {
 			let answer: unknown;
 			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 				answer = value;
 			});
-			component.handleInput(navigation);
 			component.handleInput("\r");
 			return answer;
 		};
@@ -363,7 +472,6 @@ describe("create_issue approval", () => {
 			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 				answer = value;
 			});
-			component.handleInput("\u001b[B");
 			component.handleInput("\r");
 			return answer;
 		};
@@ -402,8 +510,8 @@ describe("create_issue approval", () => {
 		};
 		const { tool, pi } = await registered();
 		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context(custom));
-		expect(outcome.details.outcome).toBe("cancelled");
-		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
+		expect(outcome.details.outcome).toBe("ambiguous");
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(1);
 	});
 
 	it("rejects lifecycle, session, abort, and changed-origin staleness before mutation", async () => {
@@ -419,7 +527,6 @@ describe("create_issue approval", () => {
 				if (stale === "session") await emit("session_shutdown", {});
 				if (stale === "abort") controller.abort();
 				if (stale === "origin") pi.exec.mockResolvedValueOnce(execResult("https://github.com/other/repo.git\n"));
-				component.handleInput("\u001b[B");
 				component.handleInput("\r");
 				return answer;
 			};
@@ -446,7 +553,6 @@ describe("create_issue approval", () => {
 			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 				answer = value;
 			});
-			component.handleInput("\u001b[B");
 			component.handleInput("\r");
 			return answer;
 		};
@@ -486,7 +592,11 @@ describe("owned result hook", () => {
 });
 
 function theme() {
-	return { fg: (_name: string, text: string) => text, bold: (text: string) => text };
+	return {
+		fg: (_name: string, text: string) => text,
+		bg: (_name: string, text: string) => text,
+		bold: (text: string) => text,
+	};
 }
 function keybindings() {
 	return {

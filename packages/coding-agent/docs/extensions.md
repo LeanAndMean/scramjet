@@ -2430,18 +2430,21 @@ The callback receives:
 - `keybindings` - App keybinding manager (for checking shortcuts)
 - `done(value)` - Call to close component and return value
 
-For immutable long-form context that should be emitted completely before compact controls become interactive, pass a `committedPreview` factory:
+A pending sequential tool can attach immutable long-form context to its own tool row before compact controls become interactive. Pass the current `toolCallId` from the tool's `execute()` method:
 
 ```typescript
 const result = await ctx.ui.custom(
   (_tui, _theme, _keybindings, done) => new ApprovalSelector(done),
   {
-    committedPreview: (_tui, theme) => new Text(theme.fg("muted", completeContext), 0, 0),
+    toolAttachedContext: {
+      toolCallId,
+      render: (_tui, theme) => new Text(theme.fg("muted", completeContext), 0, 0),
+    },
   },
 );
 ```
 
-The preview is rendered and committed once, then terminal output is flushed before the interactive component receives focus. The complete preview is emitted to native terminal scrollback; whether and how long it remains accessible depends on the terminal's scrollback capacity and configuration. It is visual-only: Scramjet does not persist it to the session or send it to the model. Treat the component as immutable after construction. Oversized content returned by the live component is still tail-windowed to terminal height, so use `committedPreview` when complete emission before interaction is required.
+The context is rendered at that pending tool's transcript position, committed once, and flushed before its controls receive focus. The complete context is emitted to native terminal scrollback; retention depends on terminal capacity and configuration. It is visual-only and is not persisted or sent to the model. The call fails closed if the named tool row is absent or no longer pending. Use this only from the sequential tool whose id is supplied; ordinary custom UIs remain live and terminal-height bounded.
 
 See [tui.md](tui.md) for the full component API.
 

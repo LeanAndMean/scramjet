@@ -648,9 +648,22 @@ edges:
     mach12:pr-review: chain
 ```
 
-Valid values are `chain`, `pause`, and `default`. The `default` value explicitly recommends no override (useful for overriding a broader wildcard recommendation in the same file).
+Transition values are `chain`, `pause`, and `default`. The `default` value explicitly recommends no override (useful for overriding a broader wildcard recommendation in the same file).
 
-**Key semantics:**
+The same file may declare active forge-publication defaults by top-level command and tool:
+
+```yaml
+publications:
+  mach12:issue-create:
+    create_issue: approve
+    add_issue_comment: approve
+  mach12:pr-review:
+    add_pr_comment: ask
+```
+
+Publication defaults use `ask` or `approve` and become effective immediately for commands owned by that command set that explicitly list the named publication tool in `allowed-tools`; cross-set, delegate-only, and undeclared-tool defaults are ignored with warnings. Users remain authoritative: **Always ask** and **Auto-approve** persist exact command/tool overrides, while **Follow command** removes the override and tracks the command-set default. New commands therefore receive author defaults automatically, but updates cannot overwrite a user's non-default choice. Missing or invalid defaults safely ask. Delegated publication resolves against the active top-level command, never a delegate-only subroutine.
+
+**Key transition-recommendation semantics:**
 
 - **Gap-fill only** — recommendations never overwrite existing user config. If the user already has a setting for an edge, the recommendation is ignored.
 - **First-write-wins across sets** — when multiple command sets ship recommendations for the same edge, the first one discovered wins. Command sets cannot override each other's recommendations.
@@ -663,13 +676,15 @@ Valid values are `chain`, `pause`, and `default`. The `default` value explicitly
 
 Commands that publish new forge content should use the ordinary model-callable `create_issue`, `create_pr`, `add_issue_comment`, and `add_pr_comment` tools. Each tool is independently allowlistable and targets the current canonical public GitHub or GitLab `origin` through `gh` or `glab`.
 
-Before the tool call, give the user concise decision context: repository intent, publication consequence, and any facts needed to judge the action. Put the complete final title and body/comment only in the tool arguments; do not repeat the full proposal in assistant prose. The mandatory approval UI emits a terminal-safe rendering of the exact immutable payload to native scrollback before presenting a vertical Cancel/Approve selector that defaults to Cancel. The complete payload is emitted, but its subsequent retention and availability through normal terminal scrolling depend on the terminal's scrollback capacity and configuration. Cancel and Escape perform no write, and headless use fails before mutation because approval cannot be obtained.
+Before the tool call, give the user concise decision context: repository intent, publication consequence, and any facts needed to judge the action. Put the complete final title and body/comment only in the tool arguments; do not repeat the full proposal in assistant prose. When effective policy asks, one tool-owned approval card emits a natural, terminal-safe Markdown rendering of the exact immutable payload to native scrollback before presenting **Approve publication** first and selected, then **Cancel**. Escape also cancels. HTML comments are hidden, unsupported HTML remains inert and readable, and actual terminal controls are neutralized without altering ordinary Markdown syntax. The complete payload is emitted, but its subsequent retention depends on terminal scrollback capacity and configuration. Cancel and Escape perform no write. Headless use fails before mutation when policy asks; an exact command/tool auto-approval skips only this UI and retains every provider safeguard.
+
+Effective publication policy is resolved from an exact user command/tool override, then the active command-set default, then safe fallback `ask`. Users configure **Always ask**, **Follow command**, or **Auto-approve** in `/scramjet settings`; command authors declare defaults in `autonomy-defaults.yaml`, not command frontmatter. Calls outside an active top-level command always ask.
 
 A verified result means Scramjet correlated the direct response identity, refetched that exact object, and matched its fields exactly. Treat that result as authoritative for the newly published artifact and derive any needed ID from its canonical URL; do not refetch it to revalidate its body, parent, marker, URL, or author. Continue authenticating pre-existing or externally selected artifacts independently. An ambiguous result means mutation dispatch began but acceptance could not be proven; never retry automatically. Inspect the target repository and reconcile deliberately before another publication attempt.
 
 Supported origins are canonical public `github.com` and `gitlab.com` URLs. Self-hosted instances, aliases, credentials, ports, malformed paths, and cross-fork pull requests are unsupported. GitLab behavior is fixture- and released-source-contract validated unless separate live-validation evidence is recorded.
 
-The normal persisted tool call is the sole durable complete proposal artifact. The committed approval preview is visual-only and is not persisted or sent to the model. Expanded history rendering reconstructs the proposal from persisted call arguments; result content and details record approval and write certainty without copying the title or body. Do not add the proposal to custom journal entries or progress prose.
+The normal persisted tool call is the sole durable complete proposal artifact. Its tool-attached committed context is visual-only and is not persisted or sent to the model. Expanded history rendering reconstructs the proposal from persisted call arguments; result content and details record authorization and write certainty without copying the title or body. Do not add the proposal to custom journal entries or progress prose.
 
 ## Command File Anatomy
 

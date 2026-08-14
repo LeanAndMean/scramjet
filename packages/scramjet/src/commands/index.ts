@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
 import { packageRoot } from "../docs-registry.js";
-import type { ScramjetState } from "../types.js";
+import type { AutonomyRecommendations, CommandRegistry, PublicationTool, ScramjetState } from "../types.js";
 import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
@@ -14,6 +14,37 @@ import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 // warnings through an out-parameter so the `resources_discover` hook can
 // surface them through the Scramjet logger. ENOENT is still treated as
 // "absent and fine" — only unexpected errors (EACCES, EIO, …) are reported.
+function filterPublicationDefaults(
+	recommendations: AutonomyRecommendations,
+	registry: CommandRegistry,
+	setRoot: string,
+	warnings: string[],
+): AutonomyRecommendations["publications"] {
+	const filtered: NonNullable<AutonomyRecommendations["publications"]> = {};
+	for (const [command, settings] of Object.entries(recommendations.publications ?? {})) {
+		const definition = registry.get(command);
+		const commandPath = definition ? resolve(definition.filePath) : "";
+		const ownerPath = resolve(setRoot);
+		const pathFromOwner = definition ? relative(ownerPath, commandPath) : "..";
+		const owned = pathFromOwner === "" || (!pathFromOwner.startsWith(`..${sep}`) && pathFromOwner !== "..");
+		if (!definition || definition.delegateOnly || !owned) {
+			warnings.push(
+				`[scramjet/discovery] ignored publication defaults for non-owned top-level command "${command}"`,
+			);
+			continue;
+		}
+		for (const [tool, setting] of Object.entries(settings) as [PublicationTool, "ask" | "approve"][]) {
+			if (!definition.allowedTools?.includes(tool)) {
+				warnings.push(`[scramjet/discovery] ignored publication default for undeclared tool ${command} → ${tool}`);
+				continue;
+			}
+			filtered[command] ??= {};
+			filtered[command][tool] = setting;
+		}
+	}
+	return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
 function safeReaddir(dir: string, warnings: string[]): { name: string; isDirectory: boolean }[] {
 	let raw: import("node:fs").Dirent[];
 	try {
@@ -155,7 +186,17 @@ export function registerCommandLoader(pi: ExtensionAPI, state: ScramjetState): v
 					}
 					try {
 						const recs = parseAutonomyRecommendations(content, discoveryWarnings);
-						if (Object.keys(recs.edges).length > 0) {
+						recs.publications = filterPublicationDefaults(
+							recs,
+							registry,
+							join(rootDir, setEntry.name),
+							discoveryWarnings,
+						);
+						const prior = recommendations.get(setEntry.name);
+						if (prior?.publications) {
+							recs.publications = { ...prior.publications, ...recs.publications };
+						}
+						if (Object.keys(recs.edges).length > 0 || Object.keys(recs.publications ?? {}).length > 0) {
 							for (const w of validateRecommendations(recs, registry)) {
 								discoveryWarnings.push(w);
 							}

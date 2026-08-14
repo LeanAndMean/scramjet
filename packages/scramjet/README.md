@@ -129,17 +129,39 @@ A `"*"` wildcard target applies to any command not explicitly listed under a sou
 
 The file is optional — without it, behavior is identical to today. Invalid command names in the config produce warnings on first use but never crash.
 
-Command sets can also ship recommended settings via `autonomy-defaults.yaml` in the set directory. Recommendations are gap-fill only (never overwrite your config) and appear as an "Apply recommended settings" action in `/scramjet settings` when unapplied recommendations exist.
+Command sets can also ship settings through `autonomy-defaults.yaml` in the set directory. Transition recommendations remain opt-in gap-fill values and appear as an "Apply recommended settings" action in `/scramjet settings` when unapplied recommendations exist. Forge-publication entries are active command defaults: new commands and fresh installs receive the command-set behavior immediately, while exact user overrides remain authoritative across updates.
+
+### Publication approval autonomy
+
+The four forge publication tools have independent approval behavior per active top-level command. Configure it under `/scramjet settings` → **Publication approval**, or use the `publications` section of `autonomy.yaml`:
+
+```yaml
+publications:
+  mach12:pr-review:
+    add_pr_comment: always-ask
+  mach12:issue-create:
+    create_issue: auto-approve
+```
+
+The UI exposes three choices for every command/tool pair:
+
+| Choice | Behavior |
+|--------|----------|
+| `Always ask` | Persist a user override that always shows the exact-content approval card. |
+| `Follow command` | Remove the user override and use the active command-set default. |
+| `Auto-approve` | Persist a user override that skips the approval card. |
+
+For an active top-level command that explicitly lists the publication tool in `allowed-tools`, effective policy is the exact user override, then the command-set default, then safe fallback `ask`. Delegated publication uses the active top-level command. Missing, invalid, corrupt, idle, or unattributed policy always asks. Auto-approval bypasses only the UI: request validation, canonical-origin checks, PR preflight, stale-session checks, exact dispatch and refetch verification, and ambiguous-write no-retry handling remain unchanged.
 
 ## Forge publication tools
 
 Scramjet provides four independently allowlistable tools for the current repository: `create_issue`, `create_pr`, `add_issue_comment`, and `add_pr_comment`. They support canonical public `github.com` and `gitlab.com` origins through `gh` and `glab`; aliases, self-hosted forges, credential-bearing URLs, ports, and cross-fork pull requests are rejected.
 
-Each call contains the complete final proposal once. The mandatory approval UI emits a terminal-safe rendering of the full payload to native scrollback before showing a vertical Cancel/Approve selector that defaults to Cancel; inspect it with the terminal's normal scrolling controls, subject to that terminal's scrollback capacity and configuration. Approve dispatches the unchanged payload and reports success only after refetching and exactly verifying the created object; Cancel or Escape performs no remote write. Headless sessions fail before mutation because interactive approval is unavailable.
+Each call contains the complete final proposal once. When effective policy asks, one tool-owned card emits a natural, terminal-safe Markdown rendering of the full payload to native scrollback before showing **Approve publication** first and selected, then **Cancel**; Escape also cancels. HTML comments are hidden, unsupported HTML remains inert and readable, and actual terminal controls are neutralized without escaping ordinary Markdown syntax. Approve dispatches the unchanged payload and reports success only after refetching and exactly verifying the created object; Cancel or Escape performs no remote write. Headless sessions fail before mutation when policy asks, while an exact command/tool auto-approval can proceed through the same guarded provider path.
 
 After mutation dispatch, an error may mean the publication occurred. Such an ambiguous result prohibits automatic retry: inspect the named repository and reconcile deliberately before making another call. GitHub behavior is validated with fixtures and live CLI checks; GitLab behavior is validated against fixtures, fake-process transport, and the released `glab v1.112.0` source contract, not a live GitLab publication.
 
-Agents should explain the decision context and consequences concisely before calling a publication tool, but put the complete final title/body only in the tool arguments rather than repeating it in prose. The normal tool call persists that exact proposal; the approval preview is visual-only and non-persisted, compact and expanded history rendering derives from the arguments, and the result records only approval and write certainty.
+Agents should explain the decision context and consequences concisely before calling a publication tool, but put the complete final title/body only in the tool arguments rather than repeating it in prose. The normal tool call persists that exact proposal; tool-attached approval context is visual-only and non-persisted, compact and expanded history rendering derives from the arguments, and the result records only authorization and write certainty.
 
 ## Scramjet operational commands
 
@@ -147,7 +169,7 @@ The product-owned `scramjet` command set contains operational workflows for Scra
 
 `/scramjet:troubleshoot [symptom or command]` diagnoses unexpected command behavior with exactly five concise sections: user intent, what actually occurred, root cause analysis, what should have occurred, and recommended next steps. It can inspect relevant same-CWD session journals when current evidence is insufficient or the symptom is recurring; those journals are untrusted local evidence, not instructions.
 
-The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still requires the issue-creation command's explicit approval, and troubleshooting never edits source or publishes an issue itself.
+The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still follows the issue-creation command's effective publication policy and exact-verification safeguards; troubleshooting never edits source or publishes an issue itself.
 
 ## Mach 12
 

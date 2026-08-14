@@ -15,9 +15,11 @@ import type {
 	AutonomyConfig,
 	AutonomyRecommendations,
 	NextStepPolicy,
+	PublicationTool,
 	RecommendationSetting,
 	ScramjetState,
 } from "./types.js";
+import { PUBLICATION_TOOLS } from "./types.js";
 
 export interface EdgeClassification {
 	source: string;
@@ -227,6 +229,56 @@ export function buildApplyRecommendationsItem(
 	};
 }
 
+export function buildPublicationCommandItems(
+	state: ScramjetState,
+	configGetter: () => AutonomyConfig | null,
+	theme: SettingsListTheme,
+	onChange: (commandName: string, tool: PublicationTool, value: string) => void,
+): SettingItem[] {
+	const defaults = mergeAllRecommendations(state.autonomyRecommendations);
+	return [...state.registry.entries()]
+		.filter(([, definition]) => !definition.delegateOnly)
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([commandName, definition]) => {
+			const summary = () => {
+				const overrides = Object.keys(configGetter()?.publications?.[commandName] ?? {}).length;
+				return overrides === 0 ? "follow command" : `${overrides} override${overrides === 1 ? "" : "s"}`;
+			};
+			return {
+				id: `publication-command::${commandName}`,
+				label: commandName,
+				description: definition.description,
+				currentValue: summary(),
+				submenu: (_currentValue: string, done: (value?: string) => void) => {
+					const items = PUBLICATION_TOOLS.map((tool) => {
+						const eligible = definition.allowedTools?.includes(tool) === true;
+						const override = configGetter()?.publications?.[commandName]?.[tool];
+						const commandDefault = defaults.publications?.[commandName]?.[tool] ?? "ask";
+						return {
+							id: `${commandName}::${tool}`,
+							label: tool,
+							description: eligible
+								? `Always ask, follow command (${commandDefault}), or auto-approve; publication verification remains active`
+								: "This command does not declare this publication tool; approval always asks",
+							currentValue: eligible ? (override ?? "follow-command") : "always-ask",
+							values: eligible ? ["always-ask", "follow-command", "auto-approve"] : undefined,
+						};
+					});
+					return new SettingsList(
+						items,
+						Math.min(items.length + 2, 10),
+						theme,
+						(id, value) => {
+							const separator = id.lastIndexOf("::");
+							onChange(id.slice(0, separator), id.slice(separator + 2) as PublicationTool, value);
+						},
+						() => done(summary()),
+					);
+				},
+			};
+		});
+}
+
 export function buildTopLevelItems(
 	state: ScramjetState,
 	configGetter: () => AutonomyConfig | null,
@@ -234,6 +286,7 @@ export function buildTopLevelItems(
 	commandOnChange: (commandName: string, target: string, value: string) => void,
 	configPath?: string,
 	notify?: (message: string, type?: "info" | "warning" | "error") => void,
+	publicationOnChange?: (commandName: string, tool: PublicationTool, value: string) => void,
 ): SettingItem[] {
 	const items: SettingItem[] = [];
 
@@ -307,6 +360,25 @@ export function buildTopLevelItems(
 		});
 	}
 
+	if (state.registry.size > 0 && publicationOnChange) {
+		items.push({
+			id: "publication-approval",
+			label: "Publication approval",
+			description: "Per-command approval behavior for forge publication tools",
+			currentValue: "command defaults",
+			submenu: (_currentValue, done) => {
+				const commandItems = buildPublicationCommandItems(state, configGetter, theme, publicationOnChange);
+				return new SettingsList(
+					commandItems,
+					Math.min(commandItems.length, 10),
+					theme,
+					() => {},
+					() => done(),
+				);
+			},
+		});
+	}
+
 	return items;
 }
 
@@ -322,8 +394,19 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 	const configPath = state.autonomyConfigPath || defaultConfigPath();
 	const configGetter = () => safeLoadConfig(configPath, ctx);
 
+	const editableConfig = (): AutonomyConfig | undefined => {
+		try {
+			return loadAutonomyConfig(configPath, true) ?? { edges: {} };
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			ctx.ui.notify(`Cannot update corrupt or unreadable autonomy.yaml: ${msg}`, "error");
+			return undefined;
+		}
+	};
+
 	const handleAutonomyChange = (commandName: string, target: string, value: string) => {
-		const current = configGetter() ?? { edges: {} };
+		const current = editableConfig();
+		if (!current) return;
 		if (value === "default") {
 			if (current.edges[commandName]) {
 				delete current.edges[commandName][target];
@@ -343,6 +426,27 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 		}
 	};
 
+	const handlePublicationChange = (commandName: string, tool: PublicationTool, value: string) => {
+		const current = editableConfig();
+		if (!current) return;
+		if (value === "follow-command") {
+			delete current.publications?.[commandName]?.[tool];
+			if (current.publications?.[commandName] && Object.keys(current.publications[commandName]).length === 0) {
+				delete current.publications[commandName];
+			}
+		} else {
+			current.publications ??= {};
+			current.publications[commandName] ??= {};
+			current.publications[commandName][tool] = value as "always-ask" | "auto-approve";
+		}
+		try {
+			saveAutonomyConfig(configPath, current);
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			ctx.ui.notify(`Failed to save autonomy config: ${msg}`, "error");
+		}
+	};
+
 	await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
 		const settingsTheme = buildSettingsTheme(theme as Parameters<SettingsThemeFactory>[0]);
 
@@ -353,6 +457,7 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 			handleAutonomyChange,
 			configPath,
 			(msg, type) => ctx.ui.notify(msg, type),
+			handlePublicationChange,
 		);
 		const list = new SettingsList(
 			topItems,

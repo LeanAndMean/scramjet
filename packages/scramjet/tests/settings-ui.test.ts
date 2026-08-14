@@ -9,6 +9,7 @@ import {
 	buildApplyRecommendationsItem,
 	buildCommandItems,
 	buildEdgeItems,
+	buildPublicationCommandItems,
 	buildTopLevelItems,
 	classifyRecommendationEdges,
 	showSettingsPage,
@@ -135,6 +136,45 @@ describe("buildEdgeItems", () => {
 		const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "mach12:x" }] };
 		const items = buildEdgeItems("mach12:cmd", policy, null);
 		expect(items[0].currentValue).toBe("default");
+	});
+});
+
+describe("buildPublicationCommandItems", () => {
+	it("shows all four tools with active defaults and exact user overrides", () => {
+		const state = freshState();
+		state.registry = new Map([
+			[
+				"mach12:review",
+				{
+					...makeCommandDef("mach12:review"),
+					allowedTools: ["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"],
+				},
+			],
+		]);
+		state.autonomyRecommendations = new Map([
+			[
+				"mach12",
+				{ edges: {}, publications: { "mach12:review": { create_issue: "approve", add_pr_comment: "approve" } } },
+			],
+		]);
+		const config: AutonomyConfig = {
+			edges: {},
+			publications: { "mach12:review": { create_issue: "always-ask" } },
+		};
+		const changes: unknown[] = [];
+		const commands = buildPublicationCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			(...change) => changes.push(change),
+		);
+		const submenu = commands[0].submenu?.(commands[0].currentValue, () => {});
+		const text = renderText(submenu);
+		expect(text).toContain("create_issue");
+		expect(text).toContain("always-ask");
+		expect(text).toContain("add_pr_comment");
+		expect(text).toContain("follow-command");
+		expect(text).toContain("follow command (approve)");
 	});
 });
 
@@ -513,6 +553,36 @@ describe("showSettingsPage", () => {
 		const prefs = loadPreferences(prefsPath);
 		expect(prefs.bell).toBe(true);
 		expect(prefs.title_indicator).toBe(true);
+	});
+
+	it("does not overwrite corrupt autonomy config from publication settings", async () => {
+		const configPath = path.join(tmpDir!, "autonomy.yaml");
+		const original = "{ invalid: [";
+		fs.writeFileSync(configPath, original);
+		resetCache();
+		const state = freshState({ autonomyConfigPath: configPath });
+		state.registry = new Map([["mach12:cmd", { ...makeCommandDef("mach12:cmd"), allowedTools: ["create_issue"] }]]);
+		const notify = vi.fn();
+		const ctx = {
+			ui: {
+				notify,
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+					for (let index = 0; index < 4; index++) component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+				},
+			},
+		};
+
+		await showSettingsPage({ appendEntry: vi.fn() } as never, ctx as never, state);
+
+		expect(fs.readFileSync(configPath, "utf-8")).toBe(original);
+		expect(notify.mock.calls.some(([message]) => String(message).includes("Cannot update corrupt"))).toBe(true);
+		expect(fs.existsSync(`${configPath}.tmp`)).toBe(false);
 	});
 
 	it("preserves fresh disk overrides when saving an autonomy toggle", async () => {

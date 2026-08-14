@@ -70,6 +70,29 @@ export interface MarkdownTheme {
 	codeBlockIndent?: string;
 }
 
+// SCRAMJET-DIVERGENCE: safe natural rendering for untrusted forge publication previews (#479).
+export interface MarkdownOptions {
+	contentMode?: "standard" | "untrusted";
+}
+
+export function sanitizeUntrustedText(input: string): string {
+	let output = "";
+	for (const character of input.replace(/\r\n?/g, "\n")) {
+		const point = character.codePointAt(0)!;
+		const unsafe =
+			(point <= 0x1f && point !== 0x09 && point !== 0x0a) ||
+			(point >= 0x7f && point <= 0x9f) ||
+			(point >= 0xd800 && point <= 0xdfff) ||
+			(point >= 0x202a && point <= 0x202e) ||
+			(point >= 0x2066 && point <= 0x2069) ||
+			(point >= 0xfdd0 && point <= 0xfdef) ||
+			(point & 0xffff) === 0xfffe ||
+			(point & 0xffff) === 0xffff;
+		output += unsafe ? "�" : character;
+	}
+	return output;
+}
+
 interface InlineStyleContext {
 	applyText: (text: string) => string;
 	stylePrefix: string;
@@ -82,6 +105,7 @@ export class Markdown implements Component {
 	private defaultTextStyle?: DefaultTextStyle;
 	private theme: MarkdownTheme;
 	private defaultStylePrefix?: string;
+	private options: MarkdownOptions;
 
 	// Cache for rendered output
 	private cachedText?: string;
@@ -94,12 +118,14 @@ export class Markdown implements Component {
 		paddingY: number,
 		theme: MarkdownTheme,
 		defaultTextStyle?: DefaultTextStyle,
+		options: MarkdownOptions = {},
 	) {
 		this.text = text;
 		this.paddingX = paddingX;
 		this.paddingY = paddingY;
 		this.theme = theme;
 		this.defaultTextStyle = defaultTextStyle;
+		this.options = options;
 	}
 
 	setText(text: string): void {
@@ -133,7 +159,8 @@ export class Markdown implements Component {
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
-		const normalizedText = this.text.replace(/\t/g, "   ");
+		const source = this.options.contentMode === "untrusted" ? sanitizeUntrustedText(this.text) : this.text;
+		const normalizedText = source.replace(/\t/g, "   ");
 
 		// Parse markdown to HTML-like tokens
 		const tokens = markdownParser.lexer(normalizedText);
@@ -432,8 +459,8 @@ export class Markdown implements Component {
 				break;
 
 			case "html":
-				// Render HTML as plain text (escaped for terminal)
 				if ("raw" in token && typeof token.raw === "string") {
+					if (this.options.contentMode === "untrusted" && token.raw.trimStart().startsWith("<!--")) break;
 					lines.push(this.applyDefaultStyle(token.raw.trim()));
 				}
 				break;
@@ -497,7 +524,13 @@ export class Markdown implements Component {
 				case "link": {
 					const linkText = this.renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					const styledLink = this.theme.link(this.theme.underline(linkText));
-					if (getCapabilities().hyperlinks) {
+					if (this.options.contentMode === "untrusted") {
+						const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
+						result +=
+							token.text === token.href || token.text === hrefForComparison
+								? styledLink + stylePrefix
+								: styledLink + this.theme.linkUrl(` (${token.href})`) + stylePrefix;
+					} else if (getCapabilities().hyperlinks) {
 						// OSC 8: render as a clickable hyperlink. The URL is not printed inline,
 						// so we always show only the link text regardless of whether it matches href.
 						result += hyperlink(styledLink, token.href) + stylePrefix;
@@ -527,8 +560,8 @@ export class Markdown implements Component {
 				}
 
 				case "html":
-					// Render inline HTML as plain text
 					if ("raw" in token && typeof token.raw === "string") {
+						if (this.options.contentMode === "untrusted" && token.raw.trimStart().startsWith("<!--")) break;
 						result += applyTextWithNewlines(token.raw);
 					}
 					break;

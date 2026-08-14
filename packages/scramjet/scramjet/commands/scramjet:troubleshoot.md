@@ -73,7 +73,7 @@ Describe the expected command, agent, harness, tool, or user-facing behavior.
 
 Recommend only actions justified by the diagnosis. When applicable, offer selector-visible routes in the terminal status report:
 
-- Use `/mach12:issue-create` with `fresh_session: false` for a product defect or durable improvement so the current diagnosis remains available while producing a reviewable draft. Before any evidence leaves the computer through GitHub, review and redact secrets, tokens, personal data, private paths, and irrelevant session material. Issue publication remains subject to that command's explicit approval gate.
+- Use `/mach12:issue-create` with `fresh_session: false` for a product defect or durable improvement so the current diagnosis remains available while producing a reviewable draft. Before any evidence leaves the computer through GitHub, review and redact secrets, tokens, personal data, private paths, and irrelevant session material. Issue publication remains subject to that command's effective publication policy and exact-verification safeguards.
 - Offer retry or continuation only as a registered top-level command with verified arguments recovered from current context. Never guess missing or sensitive arguments. If exact arguments are unavailable, offer a safe non-command follow-up asking the user to provide them.
 - Offer no route when no action is warranted or a safe route cannot be established.
 

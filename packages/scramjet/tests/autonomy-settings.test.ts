@@ -7,6 +7,7 @@ import {
 	defaultConfigPath,
 	loadAutonomyConfig,
 	lookupEdge,
+	lookupPublicationPolicy,
 	mergeAllRecommendations,
 	parseAutonomyConfig,
 	parseAutonomyRecommendations,
@@ -80,8 +81,61 @@ edges:
 		expect(config.edges["cmd:b"]).toEqual({ "cmd:c": "chain" });
 	});
 
+	it("parses publication-only user overrides", () => {
+		const config = parseAutonomyConfig(`
+publications:
+  mach12:pr-review:
+    add_pr_comment: auto-approve
+    create_issue: always-ask
+`);
+		expect(config).toEqual({
+			edges: {},
+			publications: {
+				"mach12:pr-review": { add_pr_comment: "auto-approve", create_issue: "always-ask" },
+			},
+		});
+	});
+
+	it("rejects invalid publication settings instead of silently disabling approval", () => {
+		expect(() => parseAutonomyConfig("publications:\n  mach12:review:\n    add_pr_comment: maybe\n")).toThrow(
+			/invalid publication setting/,
+		);
+	});
+
 	it("throws on malformed YAML", () => {
 		expect(() => parseAutonomyConfig("{ invalid yaml: [")).toThrow();
+	});
+});
+
+describe("lookupPublicationPolicy", () => {
+	const defaults = {
+		edges: {},
+		publications: { "mach12:pr-review": { add_pr_comment: "approve" as const } },
+	};
+
+	it("layers exact user overrides over active command defaults", () => {
+		expect(lookupPublicationPolicy(null, defaults, "mach12:pr-review", "add_pr_comment")).toBe("approve");
+		expect(
+			lookupPublicationPolicy(
+				{ edges: {}, publications: { "mach12:pr-review": { add_pr_comment: "always-ask" } } },
+				defaults,
+				"mach12:pr-review",
+				"add_pr_comment",
+			),
+		).toBe("ask");
+		expect(
+			lookupPublicationPolicy(
+				{ edges: {}, publications: { "mach12:other": { create_issue: "auto-approve" } } },
+				defaults,
+				"mach12:other",
+				"create_issue",
+			),
+		).toBe("approve");
+	});
+
+	it("asks outside an active command or without a default", () => {
+		expect(lookupPublicationPolicy(null, defaults, null, "add_pr_comment")).toBe("ask");
+		expect(lookupPublicationPolicy(null, defaults, "mach12:other", "add_pr_comment")).toBe("ask");
 	});
 });
 
@@ -187,11 +241,10 @@ edges:
 		expect(() => loadAutonomyConfig(configPath)).toThrow(/autonomy\.yaml: failed to load config/);
 	});
 
-	it("caches null after malformed YAML so repeated calls return null", () => {
+	it("keeps repeated reads of malformed YAML fail-closed", () => {
 		fs.writeFileSync(configPath, "{ invalid yaml: [");
 		expect(() => loadAutonomyConfig(configPath)).toThrow();
-		// Second call with same mtime returns cached null without re-throwing
-		expect(loadAutonomyConfig(configPath)).toBeNull();
+		expect(() => loadAutonomyConfig(configPath)).toThrow(/autonomy\.yaml: failed to load config/);
 	});
 
 	it("throws on permission errors from stat with a descriptive message", () => {

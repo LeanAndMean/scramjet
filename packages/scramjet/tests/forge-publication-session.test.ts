@@ -66,11 +66,30 @@ describe("forge publication session persistence", () => {
 		const title = "Persisted publication title";
 		const body = "PERSISTED-AMBIGUOUS-BODY-café";
 		let responseIndex = 0;
+		const custom = vi.fn(async () => {
+			throw new Error("auto-approved publication must not open UI");
+		});
 
 		const buildSession = async (sessionManager: SessionManager) => {
 			const factory = (pi: ExtensionAPI) => {
 				pi.exec = exec;
-				registerForgePublication(pi, freshState());
+				const state = freshState();
+				state.lifecycle.activeCommand = "mach12:issue-create";
+				state.registry = new Map([
+					[
+						"mach12:issue-create",
+						{
+							name: "mach12:issue-create",
+							filePath: "/commands/mach12:issue-create.md",
+							body: "",
+							allowedTools: ["create_issue"],
+						},
+					],
+				]);
+				state.autonomyRecommendations = new Map([
+					["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "approve" } } }],
+				]);
+				registerForgePublication(pi, state);
 			};
 			const resourceLoader = new DefaultResourceLoader({
 				cwd,
@@ -110,24 +129,7 @@ describe("forge publication session persistence", () => {
 
 		const sessionManager = SessionManager.create(cwd, sessionDir);
 		const session = await buildSession(sessionManager);
-		await session.bindExtensions({
-			uiContext: {
-				custom: async (factory: any) => {
-					let answer: unknown;
-					const component = await factory(
-						{ requestRender() {} },
-						{ fg: (_name: string, text: string) => text, bold: (text: string) => text },
-						{},
-						(value: unknown) => {
-							answer = value;
-						},
-					);
-					component.handleInput("\u001b[B");
-					component.handleInput("\r");
-					return answer;
-				},
-			} as never,
-		});
+		await session.bindExtensions({ uiContext: { custom } as never });
 		await session.prompt("Publish the prepared issue");
 		await (session as unknown as { _drainAgentEventQueue(): Promise<void> })._drainAgentEventQueue();
 
@@ -149,8 +151,14 @@ describe("forge publication session persistence", () => {
 		);
 		expect(toolResult).toMatchObject({
 			isError: true,
-			details: { outcome: "ambiguous", writeState: "possible", retryProhibited: true },
+			details: {
+				outcome: "ambiguous",
+				writeState: "possible",
+				retryProhibited: true,
+				authorization: { mode: "command-default", command: "mach12:issue-create" },
+			},
 		});
+		expect(custom).not.toHaveBeenCalled();
 		expect(exec.mock.calls.filter((call) => call[1]?.includes("POST"))).toHaveLength(1);
 
 		const callCount = exec.mock.calls.length;

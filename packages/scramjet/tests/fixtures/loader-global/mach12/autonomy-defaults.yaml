@@ -1,3 +1,7 @@
 edges:
   mach12:issue-plan:
     mach12:pr-review: chain
+
+publications:
+  mach12:issue-plan:
+    add_issue_comment: approve
