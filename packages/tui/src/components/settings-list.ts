@@ -1,6 +1,6 @@
 import { fuzzyFilter } from "../fuzzy.js";
 import { getKeybindings } from "../keybindings.js";
-import type { Component } from "../tui.js";
+import { type Component, type Focusable, isFocusable } from "../tui.js";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.js";
 import { Input } from "./input.js";
 
@@ -31,7 +31,7 @@ export interface SettingsListOptions {
 	enableSearch?: boolean;
 }
 
-export class SettingsList implements Component {
+export class SettingsList implements Component, Focusable {
 	private items: SettingItem[];
 	private filteredItems: SettingItem[];
 	private theme: SettingsListTheme;
@@ -41,6 +41,7 @@ export class SettingsList implements Component {
 	private onCancel: () => void;
 	private searchInput?: Input;
 	private searchEnabled: boolean;
+	private _focused = false;
 
 	// Submenu state
 	private submenuComponent: Component | null = null;
@@ -66,6 +67,16 @@ export class SettingsList implements Component {
 		}
 	}
 
+	// SCRAMJET-DIVERGENCE: Propagate focus into search/submenus so embedded inputs expose the IME cursor marker.
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+		this.syncFocus();
+	}
+
 	/** Update an item's currentValue */
 	updateValue(id: string, newValue: string): void {
 		const item = this.items.find((i) => i.id === id);
@@ -75,6 +86,7 @@ export class SettingsList implements Component {
 	}
 
 	invalidate(): void {
+		this.searchInput?.invalidate();
 		this.submenuComponent?.invalidate?.();
 	}
 
@@ -210,6 +222,7 @@ export class SettingsList implements Component {
 				}
 				this.closeSubmenu();
 			});
+			this.syncFocus();
 		} else if (item.values && item.values.length > 0) {
 			// Cycle through values
 			const currentIndex = item.values.indexOf(item.currentValue);
@@ -221,12 +234,19 @@ export class SettingsList implements Component {
 	}
 
 	private closeSubmenu(): void {
+		if (isFocusable(this.submenuComponent)) this.submenuComponent.focused = false;
 		this.submenuComponent = null;
+		this.syncFocus();
 		// Restore selection to the item that opened the submenu
 		if (this.submenuItemIndex !== null) {
 			this.selectedIndex = this.submenuItemIndex;
 			this.submenuItemIndex = null;
 		}
+	}
+
+	private syncFocus(): void {
+		if (this.searchInput) this.searchInput.focused = this._focused && this.submenuComponent === null;
+		if (isFocusable(this.submenuComponent)) this.submenuComponent.focused = this._focused;
 	}
 
 	private applyFilter(query: string): void {

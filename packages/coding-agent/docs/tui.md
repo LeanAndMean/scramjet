@@ -739,6 +739,8 @@ pi.registerCommand("settings", {
       container.addChild(settingsList);
 
       return {
+        get focused() { return settingsList.focused; },
+        set focused(value) { settingsList.focused = value; },
         render: (w) => container.render(w),
         invalidate: () => container.invalidate(),
         handleInput: (data) => settingsList.handleInput?.(data),
@@ -747,6 +749,8 @@ pi.registerCommand("settings", {
   },
 });
 ```
+
+With `enableSearch`, typing fuzzy-filters labels, Backspace edits the query, and Up/Down plus Enter/Space navigate and activate matches. `SettingsList` propagates focus to its search input and nested focusable submenus for IME cursor placement; a wrapper returned from `ctx.ui.custom()` must forward `focused` as shown above.
 
 **Examples:** [tools.ts](../examples/extensions/tools.ts)
 

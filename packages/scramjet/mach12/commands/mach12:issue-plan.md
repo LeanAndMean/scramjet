@@ -253,7 +253,7 @@ Apply the contract to the selected architecture, codebase and architect evidence
 
 After the plan passes the contract self-check, do not display the complete body in assistant prose or ask for a separate approval.
 
-1. **Publish the final plan as a reply comment on the issue.** State the selected architecture, stage count, and publication consequence concisely without repeating the complete plan. Call `add_issue_comment` with the issue number and exact final marker-bearing body. Its UI is the sole complete-plan presentation and approval. Continue only after verified publication; cancellation creates no branch or assignment side effects, and ambiguity must be reconciled without automatic retry.
+1. **Publish the final plan as a reply comment on the issue.** State the selected architecture, stage count, and publication consequence concisely without repeating the complete plan. Call `add_issue_comment` with the issue number and exact final marker-bearing body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. Continue only after verified publication; cancellation creates no branch or assignment side effects, and ambiguity must be reconciled without automatic retry.
 
 2. **Create a feature branch**:
    - Derive a short slug from the issue title (lowercase, hyphens, 3-5 words max).

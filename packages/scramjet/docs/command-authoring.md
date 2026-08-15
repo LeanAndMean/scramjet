@@ -655,13 +655,13 @@ The same file may declare active forge-publication defaults by top-level command
 ```yaml
 publications:
   mach12:issue-create:
-    create_issue: auto-approve
+    create_issue: require-approval
     add_issue_comment: auto-approve
   mach12:pr-review:
-    add_pr_comment: require-approval
+    add_pr_comment: auto-approve
 ```
 
-Publication defaults use the explicit values `require-approval` or `auto-approve` and become effective immediately for commands owned by that command set that explicitly list the named publication tool in `allowed-tools`; cross-set, delegate-only, and undeclared-tool defaults are ignored with warnings. Users remain authoritative: **Always ask** and **Auto-approve** persist exact command/tool overrides, while **Follow command** removes the override and tracks the command-set default. New commands therefore receive author defaults automatically, but updates cannot overwrite a user's non-default choice. Missing or invalid defaults safely require approval. Delegated publication resolves against the active top-level command, never a delegate-only subroutine.
+Publication defaults use the explicit values `require-approval` or `auto-approve` and become effective immediately for commands owned by that command set that explicitly list the named publication tool in `allowed-tools`; cross-set, delegate-only, and undeclared-tool defaults are ignored with warnings. Only eligible top-level command/tool pairs appear under **Publication approval** settings. Users remain authoritative: **Always ask** and **Auto-approve** persist exact command/tool overrides, while **Follow command (Always ask)** or **Follow command (Auto-approve)** removes the override and displays the command-set default it tracks. New commands therefore receive author defaults automatically, but updates cannot overwrite a user's non-default choice. Missing or invalid defaults safely require approval. Delegated publication resolves against the active top-level command, never a delegate-only subroutine.
 
 **Key transition-recommendation semantics:**
 
@@ -676,7 +676,7 @@ Publication defaults use the explicit values `require-approval` or `auto-approve
 
 Commands that publish new forge content should use the ordinary model-callable `create_issue`, `create_pr`, `add_issue_comment`, and `add_pr_comment` tools. Each tool is independently allowlistable and targets the current canonical public GitHub or GitLab `origin` through `gh` or `glab`.
 
-Before the tool call, give the user concise decision context: repository intent, publication consequence, and any facts needed to judge the action. Put the complete final title and body/comment only in the tool arguments; do not repeat the full proposal in assistant prose. When effective policy requires approval, one tool-owned approval card emits a natural, terminal-safe Markdown rendering of the exact immutable payload to native scrollback before presenting **Approve publication** first and selected, then **Cancel**. Escape also cancels. HTML comments are hidden, unsupported HTML remains inert and readable, and actual terminal controls are neutralized without altering ordinary Markdown syntax. The complete payload is emitted, but its subsequent retention depends on terminal scrollback capacity and configuration. Cancel and Escape perform no write. Headless use fails before mutation when policy requires approval; an exact command/tool auto-approval skips only this UI and retains every provider safeguard.
+Before the tool call, give the user concise decision context: repository intent, publication consequence, and any facts needed to judge the action. Put the complete final title and body/comment only in the tool arguments; do not repeat the full proposal in assistant prose. When effective policy requires approval, one tool-owned approval card emits a natural, terminal-safe Markdown rendering of the exact immutable payload to native scrollback before presenting **Approve publication** first and selected, then **Cancel**. Escape also cancels. HTML comments are hidden, unsupported HTML remains inert and readable, and actual terminal controls are neutralized without altering ordinary Markdown syntax. The complete payload is emitted, but its subsequent retention depends on terminal scrollback capacity and configuration. Cancel and Escape perform no write. Modes unable to host the custom approval UI, including RPC, fail before mutation with `interactive-approval-unavailable`; modes with no UI retain the separate headless result. An exact command/tool auto-approval skips only this UI and retains every provider safeguard.
 
 Effective publication policy is resolved from an exact user command/tool override, then the active command-set default, then safe fallback `require-approval`. Users configure **Always ask**, **Follow command**, or **Auto-approve** in `/scramjet settings`; command authors declare `require-approval` or `auto-approve` defaults in `autonomy-defaults.yaml`, not command frontmatter. Calls outside an active top-level command always require approval.
 

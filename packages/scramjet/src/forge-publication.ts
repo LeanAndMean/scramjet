@@ -229,6 +229,19 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 							repository,
 						);
 					}
+					if (approval === undefined) {
+						activeApproval = undefined;
+						return toolResult(
+							request.operation,
+							{
+								outcome: "pre-dispatch-failure",
+								writeState: "not-dispatched",
+								reason: "interactive-approval-unavailable",
+							},
+							repository,
+							authorization,
+						);
+					}
 				}
 				if (approval !== "approved")
 					return toolResult(
@@ -323,10 +336,7 @@ class ApprovalComponent {
 		this.choices.onCancel = () => done("cancelled");
 	}
 	render(width: number): string[] {
-		return [
-			...this.choices.render(width),
-			truncateToWidth(this.theme.fg("dim", "↑↓ choose • Enter confirm • Esc cancel"), width),
-		];
+		return [...this.choices.render(width), truncateToWidth(this.theme.fg("dim", "Esc cancel • ↑↓ • Enter"), width)];
 	}
 	handleInput(data: string): void {
 		this.choices.handleInput(data);

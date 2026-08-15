@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initTheme } from "@leanandmean/coding-agent";
+import { visibleWidth } from "@leanandmean/tui";
 import { describe, expect, it, vi } from "vitest";
 import { resetCache } from "../src/autonomy-settings.js";
 import { registerForgePublication } from "../src/forge-publication.js";
@@ -128,25 +129,28 @@ describe("create_issue approval", () => {
 		}
 	});
 
-	it("renders a vertical default-Approve selector without duplicate context", async () => {
-		let rendered = "";
+	it("renders complete default-Approve controls at the practical narrow width", async () => {
+		let lines: string[] = [];
 		const custom = async (factory: any) => {
 			let answer: unknown;
 			const component = factory({ requestRender() {} }, theme(), keybindings(), (value: unknown) => {
 				answer = value;
 			});
-			rendered = component.render(80).join("\n");
+			lines = component.render(23);
 			component.handleInput("\u001b");
 			return answer;
 		};
 		const { tool } = await registered();
 		await tool.execute("call", { title: "hidden title", body: "hidden body" }, undefined, undefined, context(custom));
 
+		const rendered = lines.join("\n");
 		expect(rendered).toContain("→ Approve publication");
 		expect(rendered.indexOf("Approve publication")).toBeLessThan(rendered.indexOf("Cancel"));
-		expect(rendered).toContain("↑↓ choose • Enter confirm • Esc cancel");
+		expect(rendered).toContain("Esc cancel • ↑↓ • Enter");
 		expect(rendered).not.toContain("hidden title");
 		expect(rendered).not.toContain("hidden body");
+		expect(rendered).not.toContain("...");
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(23);
 		expect(rendered).not.toMatch(
 			/lines (?:above|below)|Beginning of payload|End of payload|PgUp|PgDn|Tab|←|→ choose/,
 		);
@@ -363,6 +367,20 @@ describe("create_issue approval", () => {
 			writeState: "not-dispatched",
 		});
 		expect(pi.exec).not.toHaveBeenCalled();
+	});
+
+	it("fails explicitly when the current UI cannot host custom approval", async () => {
+		const { tool, pi } = await registered();
+		const custom = vi.fn(async () => undefined);
+		const outcome = await tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context(custom));
+		expect(custom).toHaveBeenCalledOnce();
+		expect(outcome.details).toMatchObject({
+			outcome: "pre-dispatch-failure",
+			writeState: "not-dispatched",
+			reason: "interactive-approval-unavailable",
+		});
+		expect(JSON.stringify(outcome.content)).toContain("interactive-approval-unavailable");
+		expect(pi.exec.mock.calls.filter((call: any[]) => call[1]?.includes("POST"))).toHaveLength(0);
 	});
 
 	it("fails closed when approval UI setup rejects", async () => {

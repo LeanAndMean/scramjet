@@ -192,11 +192,11 @@ Handle a successfully parsed array by similarity:
 
 For every plausible match, delegate to `/mach12:gh-issue-read <candidate-number>` and inspect its current body and complete discussion before classifying it. Only a successfully read candidate can be a clear duplicate. Unread candidates cannot be classified, referenced, or selected as comment targets. Distinguish applicable duplicates and useful relationships from superseded or ambiguous matches; Open status or recent activity is insufficient proof of applicability; closed status or old age is insufficient proof that it is obsolete.
 
-Resolve the path before opening publication approval:
+Resolve the path before invoking a publication tool:
 
 - **No relevant match / create unchanged:** retain the validated candidate.
 - **Create and mention selected matches:** add only user-selected, successfully read references, then repeat complete validation and internal review.
-- **Comment on one existing issue:** obtain an explicit target choice, prepare the final `Related context: ...` body, explain the target and public consequence concisely, then call `add_issue_comment` with that exact target and body. The tool UI is the sole complete-comment presentation and approval. On verified publication, report the issue and comment URLs and skip creation.
+- **Comment on one existing issue:** obtain an explicit target choice, prepare the final `Related context: ...` body, explain the target and public consequence concisely, then call `add_issue_comment` with that exact target and body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. On verified publication, report the issue and comment URLs and skip creation.
 - **Skip:** create nothing and post nothing.
 
 For a clear duplicate, offer comment on the inspected issue, create anyway, or skip. For ambiguous matches, also offer creating with selected references. Any payload change requires complete validation and internal review, but never a separate full-payload presentation or approval in assistant prose.
@@ -205,7 +205,7 @@ For a clear duplicate, offer comment on the inspected issue, create anyway, or s
 
 Before the tool call, state only the concise decision context and consequences needed for informed approval: repository intent, problem classification, duplicate-search disposition, and metadata operations that will be attempted after creation. Do not repeat the complete title or body in prose.
 
-Call `create_issue` once with the final internally validated title and body. Its multiline UI is the first and only complete-draft presentation and owns approval, exact mutation, and verification.
+Call `create_issue` once with the final internally validated title and body. When effective policy requires approval, the approval card is the first complete-draft presentation and presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
 
 Handle the result precisely:
 

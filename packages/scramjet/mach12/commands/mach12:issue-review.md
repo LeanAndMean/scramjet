@@ -206,7 +206,7 @@ If the user picks "Create revised plan", enter the revision loop:
 
    If any finding is **Remaining** at Critical or Important severity, or any **New issue** is Critical or Important, treat the candidate as invalid and do not call `add_issue_comment`. Present the delta assessment, explain that correction and reassessment are required, and offer only **Revise again** or **Discuss findings**. On **Revise again**, return to the architect dispatch in the next revision turn with the invalid candidate and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and reassessing a corrected replacement. Repeat this gate until no Critical or Important delta remains. Suggestions stay visible but are optional and do not block publication.
 
-4. **Publish the revision.** Only after the Critical/Important delta gate passes, present the delta assessment and summary outside the post-ready body. State the issue target, revision consequence, and finding-resolution counts concisely without repeating the complete replacement plan. Call `add_issue_comment` with the issue number and exact complete marker-bearing replacement. Its UI is the sole complete-plan presentation and approval. On cancellation, retain the revision in conversation for requested changes but post nothing; on ambiguity, do not retry automatically and reconcile deliberately. Only verified publication counts as an updated plan.
+4. **Publish the revision.** Only after the Critical/Important delta gate passes, present the delta assessment and summary outside the post-ready body. State the issue target, revision consequence, and finding-resolution counts concisely without repeating the complete replacement plan. Call `add_issue_comment` with the issue number and exact complete marker-bearing replacement. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. On cancellation, retain the revision in conversation for requested changes but post nothing; on ambiguity, do not retry automatically and reconcile deliberately. Only verified publication counts as an updated plan.
 
 If the user picks "Discuss findings", walk through the specific findings they want to explore, then ask again how to proceed. This step remains active across all discussion iterations until the user picks a terminal option (Create revised plan, Proceed, or Cancel).
 
@@ -218,7 +218,7 @@ If the user picks "Proceed as-is" and at least one Critical or Important finding
 - Each Critical and Important finding on its own line (one sentence each)
 - Keep the entire comment body under 15 lines
 
-State the decision consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. The tool UI owns approval and verification.
+State the decision consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
 
 If the user picks "Proceed as-is" and all findings are Suggestions only, do NOT post a decision comment -- proceeding past suggestions is the expected path.
 
@@ -231,7 +231,7 @@ If the user picks "Cancel":
    - Finding counts by severity (e.g., "2 Critical, 1 Important, 3 Suggestions")
    - Keep the entire comment body to 5 lines or fewer
 
-   State the audit consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. The tool UI owns approval and verification.
+   State the audit consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
 

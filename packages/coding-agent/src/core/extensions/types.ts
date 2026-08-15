@@ -329,7 +329,7 @@ export interface DispatchUserInputOptions {
 export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
-	/** Whether UI is available (false in print/RPC mode) */
+	/** Whether some UI transport is available; individual methods may still be unsupported (for example custom() in RPC). */
 	hasUI: boolean;
 	/** Current working directory */
 	cwd: string;

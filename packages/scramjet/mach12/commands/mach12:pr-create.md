@@ -84,16 +84,22 @@ For ordinary intentional relationships, same-repository issue or pull-request re
 
 Internally review the complete title/body against the branch diff, selected linkage, and user context. Correct and revalidate it without separately displaying or approving the complete payload in assistant prose.
 
-## Step 4: Push and publish
+## Step 4: Synchronize and publish
 
-Push the current branch with `git push -u origin <branch-name>` before opening publication approval because `create_pr` verifies that the current-repository head and base branches exist. If the push fails, report the error and stop; never force-push. A later cancellation may therefore leave a pushed branch but creates no PR.
+Invoking this command authorizes ensuring the branch is available on `origin`; do not ask for another push confirmation. Compare local `HEAD`, the configured upstream when present, and a fresh `origin` branch head, treating branch names as quoted data rather than shell source.
 
-Reconfirm the current head, default base, linkage, and draft state. State those facts and the public publication consequence concisely without repeating the complete title/body. Call `create_pr` once with the final title, body, current branch as `head`, default branch as `base`, and the chosen `draft` boolean.
+- If the fresh remote head equals local `HEAD`, do not push. If the configured upstream does not already name the matching `origin/<branch-name>` branch—including when it is absent or points elsewhere—set that tracking relationship without changing remote content.
+- If the remote branch is absent or strictly behind local `HEAD`, run one ordinary `git push -u origin <branch-name>`.
+- If the remote branch is ahead or diverged, or any lookup, push, or verification fails, stop and report the observed identities. Never force-push or guess which side should win.
+
+Record whether this invocation pushed the branch or found it already synchronized. Reverify that the fresh remote head equals local `HEAD` before calling `create_pr`, which requires the current-repository head and base branches to exist remotely.
+
+Reconfirm the current head, default base, linkage, and draft state. State those facts and the public publication consequence concisely without repeating the complete title/body. Call `create_pr` once with the final title, body, current branch as `head`, default branch as `base`, and the chosen `draft` boolean. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
 
 Handle the result precisely:
 
 - **Verified:** capture the canonical PR/MR URL and number and continue.
-- **Cancelled:** no PR was created; report the already-pushed branch accurately. If revisions are requested, update and revalidate the payload before a new tool call.
+- **Cancelled:** no PR was created; report whether this invocation pushed the branch or found it already synchronized. If revisions are requested, update and revalidate the payload before a new tool call.
 - **Definite no-write failure:** surface the actionable prerequisite failure and do not claim creation.
 - **Ambiguous:** creation may have occurred. Do not retry automatically; reconcile the branch's PR/MR deliberately before another publication attempt.
 
@@ -103,7 +109,7 @@ After successful creation, report the PR number, URL, and whether the published 
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`. Report `status: "incomplete"` if the user cancelled. Reserve `status: "completed"` for a successfully created PR and include these selector-visible next steps in order:
 
-1. `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`; `reason`: the PR was created with its complete tool-approved body and is ready for the recommended automated review.
+1. `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`; `reason`: the PR was created with its complete verified body and is ready for the recommended automated review.
 2. `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`; `reason`: use the slower, opt-in executable-behavior path when the PR's behavioral risk warrants test-driven regression hunting.
 
 Set `recommended_next_step` to `0`, ordinary PR review. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

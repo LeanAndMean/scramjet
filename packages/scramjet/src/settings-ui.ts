@@ -7,6 +7,7 @@ import {
 	loadAutonomyConfig,
 	lookupEdge,
 	mergeAllRecommendations,
+	resolvePublicationPolicy,
 	saveAutonomyConfig,
 } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
@@ -239,29 +240,33 @@ export function buildPublicationCommandItems(
 	return [...state.registry.entries()]
 		.filter(([, definition]) => !definition.delegateOnly)
 		.sort(([left], [right]) => left.localeCompare(right))
-		.map(([commandName, definition]) => {
-			const summary = () => {
-				const overrides = Object.keys(configGetter()?.publications?.[commandName] ?? {}).length;
-				return overrides === 0 ? "follow command" : `${overrides} override${overrides === 1 ? "" : "s"}`;
-			};
-			return {
+		.flatMap(([commandName, definition]) => {
+			const tools = PUBLICATION_TOOLS.filter((tool) => definition.allowedTools?.includes(tool) === true);
+			if (tools.length === 0) return [];
+			const summary = () => summarizePublicationPolicies(configGetter(), defaults, commandName, tools);
+			const commandItem: SettingItem = {
 				id: `publication-command::${commandName}`,
 				label: commandName,
-				description: definition.description,
+				description: publicationCommandDescription(definition.description, summary()),
 				currentValue: summary(),
 				submenu: (_currentValue: string, done: (value?: string) => void) => {
-					const items = PUBLICATION_TOOLS.map((tool) => {
-						const eligible = definition.allowedTools?.includes(tool) === true;
-						const override = configGetter()?.publications?.[commandName]?.[tool];
+					const config = configGetter();
+					const items = tools.map((tool) => {
+						const override = config?.publications?.[commandName]?.[tool];
 						const commandDefault = defaults.publications?.[commandName]?.[tool] ?? "require-approval";
+						const defaultLabel = friendlyPublicationPolicy(commandDefault);
+						const followCommand = `Follow command (${defaultLabel})`;
 						return {
 							id: `${commandName}::${tool}`,
 							label: tool,
-							description: eligible
-								? `Always ask, follow command (${commandDefault}), or auto-approve; publication verification remains active`
-								: "This command does not declare this publication tool; approval always asks",
-							currentValue: eligible ? (override ?? "follow-command") : "always-ask",
-							values: eligible ? ["always-ask", "follow-command", "auto-approve"] : undefined,
+							description: `${followCommand} uses the command-set author's setting; publication verification remains active`,
+							currentValue:
+								override === "always-ask"
+									? "Always ask"
+									: override === "auto-approve"
+										? "Auto-approve"
+										: followCommand,
+							values: ["Always ask", followCommand, "Auto-approve"],
 						};
 					});
 					return new SettingsList(
@@ -270,13 +275,44 @@ export function buildPublicationCommandItems(
 						theme,
 						(id, value) => {
 							const separator = id.lastIndexOf("::");
-							onChange(id.slice(0, separator), id.slice(separator + 2) as PublicationTool, value);
+							const tool = id.slice(separator + 2) as PublicationTool;
+							const commandDefault = defaults.publications?.[commandName]?.[tool] ?? "require-approval";
+							const followCommand = `Follow command (${friendlyPublicationPolicy(commandDefault)})`;
+							if (value === followCommand) onChange(commandName, tool, "follow-command");
+							else if (value === "Always ask") onChange(commandName, tool, "always-ask");
+							else if (value === "Auto-approve") onChange(commandName, tool, "auto-approve");
 						},
-						() => done(summary()),
+						() => {
+							const refreshed = summary();
+							commandItem.description = publicationCommandDescription(definition.description, refreshed);
+							done(refreshed);
+						},
 					);
 				},
 			};
+			return [commandItem];
 		});
+}
+
+function friendlyPublicationPolicy(policy: "require-approval" | "auto-approve"): string {
+	return policy === "require-approval" ? "Always ask" : "Auto-approve";
+}
+
+function summarizePublicationPolicies(
+	config: AutonomyConfig | null,
+	defaults: AutonomyRecommendations,
+	commandName: string,
+	tools: PublicationTool[],
+): string {
+	const policies = tools.map((tool) => resolvePublicationPolicy(config, defaults, commandName, tool).policy);
+	const alwaysAsk = policies.filter((policy) => policy === "require-approval").length;
+	if (alwaysAsk === policies.length) return "Always ask";
+	if (alwaysAsk === 0) return "Auto-approve";
+	return `${alwaysAsk} Always ask · ${policies.length - alwaysAsk} Auto-approve`;
+}
+
+function publicationCommandDescription(description: string | undefined, summary: string): string {
+	return `${description ? `${description} · ` : ""}Effective publication policy: ${summary}`;
 }
 
 export function buildTopLevelItems(
@@ -360,12 +396,15 @@ export function buildTopLevelItems(
 		});
 	}
 
-	if (state.registry.size > 0 && publicationOnChange) {
+	const publicationCommands = publicationOnChange
+		? buildPublicationCommandItems(state, configGetter, theme, publicationOnChange)
+		: [];
+	if (publicationCommands.length > 0 && publicationOnChange) {
 		items.push({
 			id: "publication-approval",
 			label: "Publication approval",
-			description: "Per-command approval behavior for forge publication tools",
-			currentValue: "command defaults",
+			description: "Per-command approval behavior for eligible forge publication tools",
+			currentValue: `${publicationCommands.length} command${publicationCommands.length === 1 ? "" : "s"}`,
 			submenu: (_currentValue, done) => {
 				const commandItems = buildPublicationCommandItems(state, configGetter, theme, publicationOnChange);
 				return new SettingsList(
@@ -374,6 +413,7 @@ export function buildTopLevelItems(
 					theme,
 					() => {},
 					() => done(),
+					{ enableSearch: commandItems.length > 10 },
 				);
 			},
 		});
@@ -484,6 +524,12 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 		);
 
 		return {
+			get focused() {
+				return list.focused;
+			},
+			set focused(value: boolean) {
+				list.focused = value;
+			},
 			render(width: number) {
 				return list.render(width);
 			},

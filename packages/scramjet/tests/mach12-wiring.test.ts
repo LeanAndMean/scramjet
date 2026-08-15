@@ -306,6 +306,25 @@ describe("mach12 inline forge publication inventory", () => {
 		}
 	});
 
+	it("avoids unconditional approval-card claims in command prose", () => {
+		const contents = readdirSync(MACH12_COMMANDS_DIR)
+			.filter((file) => file.endsWith(".md"))
+			.map((file) => readFileSync(join(MACH12_COMMANDS_DIR, file), "utf-8"))
+			.join("\n");
+		expect(contents).not.toMatch(
+			/sole .*approval|UI owns approval|multiline UI|tool-approved|opening publication approval|owns approval/i,
+		);
+	});
+
+	it.each(["plan-comment-contract", "issue-create", "issue-plan", "issue-review", "pr-create"])(
+		"%s keeps approval conditional while requiring guarded verification",
+		(basename) => {
+			const content = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+			expect(content).toContain("When effective policy requires approval, the approval card");
+			expect(content).toMatch(/Regardless\s+of policy, guarded publication and exact verification apply/);
+		},
+	);
+
 	it("leaves no raw supported publication command or obsolete delegate", () => {
 		const contents = readdirSync(MACH12_COMMANDS_DIR)
 			.filter((file) => file.endsWith(".md"))
@@ -473,7 +492,7 @@ describe("mach12 plan-comment artifact contract", () => {
 			/do not display the complete body/i,
 			/without repeating the complete plan/,
 			/call `add_issue_comment`/i,
-			/sole complete-plan presentation and approval/,
+			/When effective policy requires approval, the approval card presents the exact payload/,
 		]);
 		expectInOrder(issueReview, [
 			/\/mach12:plan-comment-contract\s+revision/,
@@ -482,7 +501,7 @@ describe("mach12 plan-comment artifact contract", () => {
 			/Only after the Critical\/Important delta gate passes/,
 			/without repeating the complete replacement plan/,
 			/Call `add_issue_comment`/,
-			/sole complete-plan presentation and approval/,
+			/When effective policy requires approval, the approval card presents the exact payload/,
 		]);
 	});
 
@@ -493,8 +512,12 @@ describe("mach12 plan-comment artifact contract", () => {
 		expect(issueReview).toContain("Suggestions stay visible but are optional and do not block publication");
 	});
 
-	it("makes the publication tool the sole complete-payload approval boundary", () => {
-		expect(contract).toContain("sole complete-payload presentation and approval");
+	it("keeps complete payloads in publication tool arguments with policy-conditional approval", () => {
+		expect(contract).toContain("pass the complete final candidate only as arguments");
+		expect(contract).toContain(
+			"When effective policy requires approval, the approval card presents the exact payload",
+		);
+		expect(contract).toContain("guarded publication and exact verification apply");
 		expect(issuePlan).not.toContain("mach12:gh-comment");
 		expect(issueReview).not.toContain("mach12:gh-comment");
 	});
@@ -729,7 +752,7 @@ describe("mach12 issue creation — duplicate search and inline publication", ()
 	it("uses one inline approval after duplicate-dependent payload shaping", () => {
 		expect(issueCreate.indexOf("## Step 9:")).toBeLessThan(issueCreate.indexOf("## Step 10:"));
 		expect(publication).toContain("Call `create_issue` once");
-		expect(publication).toContain("first and only complete-draft presentation");
+		expect(publication).toContain("approval card is the first complete-draft presentation");
 		expect(publication).toContain("Do not repeat the complete title or body in prose");
 		expect(publication).toContain("Do not retry automatically");
 		expect(publication).not.toContain("gh issue create");
@@ -794,10 +817,22 @@ describe("mach12 standard PR linkage", () => {
 		expect(prCreate).not.toContain("gh pr create");
 	});
 
-	it("re-resolves changed linkage and pushes without force", () => {
+	it("re-resolves changed linkage and synchronizes the branch without another confirmation", () => {
 		expect(prCreate).toContain("If linkage changes");
 		expect(prCreate).toContain("repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract");
+		expect(prCreate).toContain("Invoking this command authorizes ensuring the branch is available on `origin`");
+		expect(prCreate).toContain(
+			"local `HEAD`, the configured upstream when present, and a fresh `origin` branch head",
+		);
+		expect(prCreate).toContain("do not push");
+		expect(prCreate).toContain("set that tracking relationship without changing remote content");
+		expect(prCreate).toContain("when it is absent or points elsewhere");
+		expect(prCreate).toContain("remote branch is absent or strictly behind local `HEAD`");
 		expect(prCreate).toContain("git push -u origin <branch-name>");
+		expect(prCreate).toContain("remote branch is ahead or diverged");
+		expect(prCreate).toContain("Reverify that the fresh remote head equals local `HEAD`");
+		expect(prCreate).toContain("whether this invocation pushed the branch or found it already synchronized");
+		expect(prCreate).toContain("do not ask for another push confirmation");
 		expect(prCreate).not.toMatch(/git push (?:--force|-f)\b/);
 	});
 });

@@ -119,7 +119,8 @@ caller can gather evidence or ask the user.
 Do not call tools, dispatch subagents, ask the user questions, post to GitHub, report top-level command status, choose an
 architecture, classify review findings, approve the plan, or route the workflow. The calling command owns those actions
 and must provide concise decision context, then pass the complete final candidate only as arguments to the applicable
-forge publication tool. That tool's multiline UI is the sole complete-payload presentation and approval.
+forge publication tool. When effective policy requires approval, the approval card presents the exact payload. Regardless
+of policy, guarded publication and exact verification apply.
 
 Do not pass candidate Markdown through this command's arguments: argument substitution tokenizes and rejoins content and
 cannot preserve exact formatting. Invoke this contract at most once per turn because delegated frames are latched and a
