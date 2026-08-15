@@ -203,6 +203,16 @@ The npm `postinstall` script seeds both bundled sets into `${XDG_DATA_HOME:-$HOM
 
 Each tree has its own `.seed-manifest.json`. On upgrades, files that still match the previous manifest are updated, while edited and user-added files are preserved. Legacy unmanifested Mach 12 installs are backed up and migrated. By contrast, an unmanifested or invalid-manifest `scramjet/` tree, or any `scramjet/` symlink, is treated as user-owned and left unchanged; the installer warns that manual installation is required rather than adopting the tree.
 
+If a package manager skips `postinstall` and an entire seeded destination is missing, Scramjet uses that set's copy from the installed package read-only for the current session. Mach 12 and Scramjet fall back independently. Package-backed sets retain global precedence, but Scramjet never merges package files into an existing, partial, or otherwise user-owned destination. This fallback makes bundled commands immediately available; it does not create the durable, editable seeded copies or their manifests.
+
+To restore those copies, run the lifecycle script from the installed `@leanandmean/scramjet` package and restart Scramjet:
+
+```sh
+node "/path/to/node_modules/@leanandmean/scramjet/scripts/postinstall.js"
+```
+
+Use the exact installed-package path shown in Scramjet's fallback warning. Preserve any existing destination before changing it; the recovery script intentionally does not adopt every user-owned tree.
+
 For local development, symlink each source tree into the data directory so Markdown edits are live. If installation already seeded either destination as a real directory, first move it aside and preserve any edits; `ln -sfn` does not replace an existing directory.
 
 ```sh
