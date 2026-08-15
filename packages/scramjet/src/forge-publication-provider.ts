@@ -51,7 +51,7 @@ function repositoryFromPath(host: string, rawPath: string): ForgeRepository {
 	let path = rawPath.replace(/^\//, "");
 	if (path.endsWith(".git")) path = path.slice(0, -4);
 	const segments = path.split("/");
-	if (segments.some((segment) => !segment || segment === "." || segment === ".."))
+	if (segments.some((segment) => !segment || segment === "." || segment === ".." || hasUnsafePathText(segment)))
 		throw new Error("origin path is malformed");
 	if (host === "github.com") {
 		if (segments.length !== 2) throw new Error("GitHub origin must contain owner and repository");
@@ -63,22 +63,99 @@ function repositoryFromPath(host: string, rawPath: string): ForgeRepository {
 export function sameRepository(left: ForgeRepository, right: ForgeRepository): boolean {
 	return JSON.stringify(left) === JSON.stringify(right);
 }
-export async function resolveForgeOrigin(exec: ForgeExec, cwd: string): Promise<ForgeRepository> {
-	const result = await exec("git", ["remote", "get-url", "origin"], { cwd });
-	if (result.spawnError || result.code !== 0) throw new Error("Unable to read the current repository origin");
-	return parseForgeOrigin(result.stdout.trimEnd());
+export async function resolveForgeOrigin(exec: ForgeExec, cwd: string, signal?: AbortSignal): Promise<ForgeRepository> {
+	const result = await exec("git", ["remote", "get-url", "origin"], {
+		cwd,
+		signal,
+		timeout: FORGE_EXEC_TIMEOUT_MS,
+	});
+	if (readFailed(result)) throw new Error("Unable to read the current repository origin");
+	const origin = result.stdout.endsWith("\r\n")
+		? result.stdout.slice(0, -2)
+		: result.stdout.endsWith("\n")
+			? result.stdout.slice(0, -1)
+			: result.stdout;
+	return parseForgeOrigin(origin);
 }
 
 export async function preflightPullRequestBranches(
 	exec: ForgeExec,
 	request: Extract<PublicationRequest, { operation: "create_pr" }>,
 	cwd: string,
+	signal?: AbortSignal,
 ): Promise<void> {
 	for (const branch of [request.head, request.base]) {
-		if (!branch || branch.includes(":")) throw new Error("PR branches must be branches in the current repository");
-		const checked = await exec("git", ["show-ref", "--verify", "--quiet", `refs/remotes/origin/${branch}`], { cwd });
-		if (checked.spawnError || checked.code !== 0) throw new Error(`Remote branch does not exist: ${branch}`);
+		if (
+			!branch ||
+			branch === "HEAD" ||
+			branch.startsWith("origin/") ||
+			branch.startsWith("refs/") ||
+			branch.includes(":")
+		)
+			throw new Error("PR branches must be unqualified branches in the current repository");
+		const checked = await exec("git", ["check-ref-format", "--branch", branch], {
+			cwd,
+			signal,
+			timeout: FORGE_EXEC_TIMEOUT_MS,
+		});
+		if (readFailed(checked)) throw new Error(`Invalid PR branch: ${branch}`);
+		const ref = `refs/heads/${branch}`;
+		const remote = await exec("git", ["ls-remote", "--exit-code", "--refs", "--heads", "origin", ref], {
+			cwd,
+			signal,
+			timeout: FORGE_EXEC_TIMEOUT_MS,
+		});
+		if (readFailed(remote) || !remote.stdout.split("\n").some((line) => line.split("\t")[1] === ref))
+			throw new Error(`Remote branch does not exist: ${branch}`);
 	}
+}
+
+export async function preflightForgePublication(
+	exec: ForgeExec,
+	repository: ForgeRepository,
+	request: PublicationRequest,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	if (repository.provider === "github") {
+		const root = `repos/${repository.owner}/${repository.repository}`;
+		const metadata = record(await fetchJson(exec, "gh", root, cwd, signal));
+		if (
+			!metadata ||
+			typeof metadata.full_name !== "string" ||
+			metadata.full_name.toLowerCase() !== `${repository.owner}/${repository.repository}`.toLowerCase() ||
+			typeof metadata.html_url !== "string" ||
+			!exactUrl(metadata.html_url, "github.com", [repository.owner, repository.repository], true)
+		)
+			throw new Error("Repository origin is not the forge canonical identity");
+		if (request.operation === "add_issue_comment" || request.operation === "add_pr_comment") {
+			const parent = record(await fetchJson(exec, "gh", `${root}/issues/${request.number}`, cwd, signal));
+			const isPullRequest = parent !== undefined && "pull_request" in parent;
+			if (
+				!parent ||
+				parent.number !== request.number ||
+				typeof parent.html_url !== "string" ||
+				!exactUrl(
+					parent.html_url,
+					"github.com",
+					[repository.owner, repository.repository, isPullRequest ? "pull" : "issues", String(request.number)],
+					true,
+				) ||
+				isPullRequest !== (request.operation === "add_pr_comment")
+			)
+				throw new Error("Publication target does not match the requested GitHub artifact type");
+		}
+		return;
+	}
+	const project = `${repository.namespace}/${repository.repository}`;
+	const metadata = record(await fetchJson(exec, "glab", `projects/${encodeURIComponent(project)}`, cwd, signal));
+	if (
+		!metadata ||
+		metadata.path_with_namespace !== project ||
+		typeof metadata.web_url !== "string" ||
+		!exactUrl(metadata.web_url, "gitlab.com", [...repository.namespace.split("/"), repository.repository], false)
+	)
+		throw new Error("Repository origin is not the forge canonical identity");
 }
 
 export async function publishForge(
@@ -103,25 +180,33 @@ async function invoke(
 ) {
 	let result: ExecResult;
 	try {
-		result = await exec(cli, ["api", "--method", "POST", "--input", "-", endpoint], {
-			cwd,
-			signal,
-			stdin: JSON.stringify(payload),
-			timeout: FORGE_EXEC_TIMEOUT_MS,
-		});
+		result = await exec(
+			cli,
+			["api", "--hostname", forgeHostname(cli), "--method", "POST", "--input", "-", endpoint],
+			{
+				cwd,
+				signal,
+				stdin: JSON.stringify(payload),
+				timeout: FORGE_EXEC_TIMEOUT_MS,
+			},
+		);
 	} catch {
 		return { outcome: ambiguous("mutation-execution-rejected") };
 	}
 	if (result.spawnError)
 		return { outcome: { status: "no-write", reason: "mutation-process-did-not-spawn" } as PublicationOutcome };
-	if (result.code !== 0 || result.killed || result.stdinError)
+	if (result.code !== 0 || result.killed || result.stdinError || result.stdoutError || result.stderrError)
 		return { outcome: ambiguous("mutation-process-failed-after-spawn") };
 	return { value: parseJson(result.stdout) };
 }
 async function fetchJson(exec: ForgeExec, cli: "gh" | "glab", endpoint: string, cwd: string, signal?: AbortSignal) {
 	try {
-		const result = await exec(cli, ["api", endpoint], { cwd, signal, timeout: FORGE_EXEC_TIMEOUT_MS });
-		return result.spawnError || result.code !== 0 || result.killed ? undefined : parseJson(result.stdout);
+		const result = await exec(cli, ["api", "--hostname", forgeHostname(cli), endpoint], {
+			cwd,
+			signal,
+			timeout: FORGE_EXEC_TIMEOUT_MS,
+		});
+		return readFailed(result) ? undefined : parseJson(result.stdout);
 	} catch {
 		return undefined;
 	}
@@ -398,6 +483,36 @@ function exactUrlBase(url: URL, host: string, segments: string[], ci: boolean): 
 		actual.length === segments.length &&
 		actual.every((v, i) => norm(v) === norm(segments[i]!))
 	);
+}
+function forgeHostname(cli: "gh" | "glab"): "github.com" | "gitlab.com" {
+	return cli === "gh" ? "github.com" : "gitlab.com";
+}
+function readFailed(result: ExecResult): boolean {
+	return Boolean(
+		result.spawnError ||
+			result.stdinError ||
+			result.stdoutError ||
+			result.stderrError ||
+			result.code !== 0 ||
+			result.killed,
+	);
+}
+function hasUnsafePathText(value: string): boolean {
+	for (const character of value) {
+		const point = character.codePointAt(0)!;
+		if (
+			point <= 0x1f ||
+			(point >= 0x7f && point <= 0x9f) ||
+			(point >= 0xd800 && point <= 0xdfff) ||
+			(point >= 0x202a && point <= 0x202e) ||
+			(point >= 0x2066 && point <= 0x2069) ||
+			(point >= 0xfdd0 && point <= 0xfdef) ||
+			(point & 0xffff) === 0xfffe ||
+			(point & 0xffff) === 0xffff
+		)
+			return true;
+	}
+	return false;
 }
 function parseJson(text: string): unknown {
 	try {

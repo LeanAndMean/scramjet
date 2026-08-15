@@ -6,6 +6,7 @@ import {
 	applyRecommendations,
 	defaultConfigPath,
 	loadAutonomyConfig,
+	loadAutonomyConfigResult,
 	lookupEdge,
 	lookupPublicationPolicy,
 	mergeAllRecommendations,
@@ -15,6 +16,7 @@ import {
 	resolveEdgeBehavior,
 	resolvePublicationPolicy,
 	saveAutonomyConfig,
+	updateAutonomyConfig,
 	validateConfig,
 	validateRecommendations,
 } from "../src/autonomy-settings.js";
@@ -46,40 +48,20 @@ edges:
 		expect(parseAutonomyConfig("")).toEqual({ edges: {} });
 	});
 
-	it("returns empty edges for YAML without edges key", () => {
-		expect(parseAutonomyConfig("foo: bar")).toEqual({ edges: {} });
+	it("rejects unknown top-level keys and non-map roots", () => {
+		expect(() => parseAutonomyConfig("foo: bar")).toThrow("unknown top-level key foo");
+		expect(() => parseAutonomyConfig("value")).toThrow("root must be a map");
+		expect(() => parseAutonomyConfig("[]")).toThrow("root must be a map");
 	});
 
 	it("returns empty edges when edges is null", () => {
 		expect(parseAutonomyConfig("edges:")).toEqual({ edges: {} });
 	});
 
-	it("skips unknown setting values", () => {
-		const raw = `
-edges:
-  cmd:a:
-    cmd:b: chain
-    cmd:c: auto
-    cmd:d: pause
-    cmd:e: 123
-`;
-		const config = parseAutonomyConfig(raw);
-		expect(config.edges["cmd:a"]).toEqual({
-			"cmd:b": "chain",
-			"cmd:d": "pause",
-		});
-	});
-
-	it("skips source with non-object targets", () => {
-		const raw = `
-edges:
-  cmd:a: not-an-object
-  cmd:b:
-    cmd:c: chain
-`;
-		const config = parseAutonomyConfig(raw);
-		expect(config.edges["cmd:a"]).toBeUndefined();
-		expect(config.edges["cmd:b"]).toEqual({ "cmd:c": "chain" });
+	it("rejects unknown edge settings and malformed target maps", () => {
+		expect(() => parseAutonomyConfig("edges:\n  cmd:a:\n    cmd:b: auto\n")).toThrow("invalid edge setting");
+		expect(() => parseAutonomyConfig("edges:\n  cmd:a: not-an-object\n")).toThrow("must be a target map");
+		expect(() => parseAutonomyConfig("edges: []\n")).toThrow("edges must be a command map");
 	});
 
 	it("parses publication-only user overrides", () => {
@@ -212,6 +194,14 @@ describe("loadAutonomyConfig", () => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
+	it("distinguishes missing, valid, and invalid load states", () => {
+		expect(loadAutonomyConfigResult(configPath)).toEqual({ status: "missing" });
+		fs.writeFileSync(configPath, "edges: {}\n");
+		expect(loadAutonomyConfigResult(configPath, true)).toEqual({ status: "valid", config: { edges: {} } });
+		fs.writeFileSync(configPath, "publication: {}\n");
+		expect(loadAutonomyConfigResult(configPath, true)).toMatchObject({ status: "invalid" });
+	});
+
 	it("returns null for missing file", () => {
 		expect(loadAutonomyConfig(configPath)).toBeNull();
 	});
@@ -235,6 +225,19 @@ edges:
 		const first = loadAutonomyConfig(configPath);
 		const second = loadAutonomyConfig(configPath);
 		expect(first).toBe(second);
+	});
+
+	it("reloads an atomic replacement even when mtime is preserved", () => {
+		fs.writeFileSync(configPath, "edges:\n  cmd:a:\n    cmd:b: chain\n");
+		const first = loadAutonomyConfig(configPath);
+		const stat = fs.statSync(configPath);
+		const replacement = `${configPath}.replacement`;
+		fs.writeFileSync(replacement, "edges:\n  cmd:a:\n    cmd:b: pause\n");
+		fs.utimesSync(replacement, stat.atime, stat.mtime);
+		fs.renameSync(replacement, configPath);
+		const second = loadAutonomyConfig(configPath);
+		expect(second).not.toBe(first);
+		expect(second!.edges["cmd:a"]).toEqual({ "cmd:b": "pause" });
 	});
 
 	it("reloads when mtime changes", () => {
@@ -412,6 +415,71 @@ describe("saveAutonomyConfig", () => {
 		saveAutonomyConfig(configPath, config2);
 		const loaded = loadAutonomyConfig(configPath);
 		expect(loaded!.edges["cmd:a"]).toEqual({ "cmd:b": "pause" });
+	});
+
+	it("does not remove a lock owned by a live process", () => {
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(`${configPath}.lock`, JSON.stringify({ pid: process.pid, token: "active-owner" }));
+		expect(() => saveAutonomyConfig(configPath, { edges: { "cmd:a": { "cmd:b": "chain" } } })).toThrow(
+			"update lock is busy",
+		);
+		expect(JSON.parse(fs.readFileSync(`${configPath}.lock`, "utf-8"))).toEqual({
+			pid: process.pid,
+			token: "active-owner",
+		});
+		expect(fs.existsSync(configPath)).toBe(false);
+	});
+
+	it("cleans prepared owner artifacts left by dead processes", () => {
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		const lockPath = `${configPath}.lock`;
+		fs.writeFileSync(`${lockPath}.owner.99999999.dead`, JSON.stringify({ pid: 99999999, token: "dead" }));
+		fs.writeFileSync(`${lockPath}.reclaim.owner.99999999.dead`, JSON.stringify({ pid: 99999999, token: "dead" }));
+		saveAutonomyConfig(configPath, { edges: { "cmd:a": { "cmd:b": "chain" } } });
+		expect(fs.readdirSync(path.dirname(configPath)).some((name) => name.includes(".owner."))).toBe(false);
+	});
+
+	it("recovers an orphaned reclaim claim from a dead process", () => {
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		const lockPath = `${configPath}.lock`;
+		const claimToken = "dead-claim";
+		fs.writeFileSync(lockPath, "99999999");
+		fs.writeFileSync(
+			`${lockPath}.reclaim`,
+			JSON.stringify({ pid: 99999999, token: claimToken, lockToken: "legacy" }),
+		);
+		fs.linkSync(lockPath, `${lockPath}.reclaim-snapshot.${claimToken}`);
+		saveAutonomyConfig(configPath, { edges: { "cmd:a": { "cmd:b": "chain" } } });
+		expect(loadAutonomyConfig(configPath, true)?.edges["cmd:a"]?.["cmd:b"]).toBe("chain");
+		expect(fs.readdirSync(path.dirname(configPath)).some((name) => name.includes("reclaim"))).toBe(false);
+	});
+
+	it("reclaims a lock whose recorded process no longer exists", () => {
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(`${configPath}.lock`, "99999999");
+		saveAutonomyConfig(configPath, { edges: { "cmd:a": { "cmd:b": "chain" } } });
+		expect(loadAutonomyConfig(configPath, true)?.edges["cmd:a"]?.["cmd:b"]).toBe("chain");
+		expect(fs.existsSync(`${configPath}.lock`)).toBe(false);
+	});
+
+	it("preserves unrelated sparse changes through locked updates", () => {
+		saveAutonomyConfig(configPath, {
+			edges: { "cmd:a": { "cmd:b": "chain" } },
+			publications: { "cmd:a": { create_issue: "always-ask" } },
+		});
+		updateAutonomyConfig(configPath, (config) => {
+			config.publications ??= {};
+			config.publications["cmd:b"] = { add_pr_comment: "auto-approve" };
+			return true;
+		});
+		expect(loadAutonomyConfig(configPath, true)).toEqual({
+			edges: { "cmd:a": { "cmd:b": "chain" } },
+			publications: {
+				"cmd:a": { create_issue: "always-ask" },
+				"cmd:b": { add_pr_comment: "auto-approve" },
+			},
+		});
+		expect(fs.readdirSync(tmpDir).some((name) => name.endsWith(".lock") || name.endsWith(".tmp"))).toBe(false);
 	});
 
 	it("writes atomically (no .tmp file left behind)", () => {

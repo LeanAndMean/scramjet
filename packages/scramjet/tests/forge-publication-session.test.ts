@@ -58,11 +58,18 @@ describe("forge publication session persistence", () => {
 		const authStorage = AuthStorage.inMemory();
 		authStorage.setRuntimeApiKey("openai", "fake");
 		const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
-		const exec = vi
-			.fn()
-			.mockResolvedValueOnce(execResult("https://github.com/LeanAndMean/scramjet.git\n"))
-			.mockResolvedValueOnce(execResult("https://github.com/LeanAndMean/scramjet.git\n"))
-			.mockResolvedValueOnce(execResult("", 1));
+		const exec = vi.fn(async (command: string, args: string[]) => {
+			if (command === "git" && args[0] === "remote")
+				return execResult("https://github.com/LeanAndMean/scramjet.git\n");
+			if (command === "gh" && args.at(-1) === "repos/LeanAndMean/scramjet")
+				return execResult(
+					JSON.stringify({
+						full_name: "LeanAndMean/scramjet",
+						html_url: "https://github.com/LeanAndMean/scramjet",
+					}),
+				);
+			return execResult("", 1);
+		});
 		const title = "Persisted publication title";
 		const body = "PERSISTED-AMBIGUOUS-BODY-café";
 		let responseIndex = 0;

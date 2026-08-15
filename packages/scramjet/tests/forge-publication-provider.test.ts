@@ -3,7 +3,10 @@ import {
 	FORGE_EXEC_TIMEOUT_MS,
 	type ForgeExec,
 	parseForgeOrigin,
+	preflightForgePublication,
+	preflightPullRequestBranches,
 	publishForge,
+	resolveForgeOrigin,
 } from "../src/forge-publication-provider.js";
 
 const github = { provider: "github" as const, owner: "LeanAndMean", repository: "scramjet" };
@@ -39,6 +42,122 @@ describe("parseForgeOrigin", () => {
 	});
 });
 
+describe("publication preflight", () => {
+	it("removes only Git's record newline before validating an origin", async () => {
+		const exec = vi.fn<ForgeExec>().mockResolvedValue(result({ stdout: "git@github.com:owner/repo\t\n" }));
+		await expect(resolveForgeOrigin(exec, "/repo")).rejects.toThrow("origin is not canonical");
+	});
+
+	it.each(["\u001b]0;unsafe\u0007", "bad\nname", "bad\tname", "bad\u202ename", "bad\ufdd0name"])(
+		"rejects unsafe repository path text",
+		(unsafe) => {
+			expect(() => parseForgeOrigin(`git@github.com:owner/${unsafe}.git`)).toThrow("origin path is malformed");
+		},
+	);
+
+	it("pins canonical repository and comment-parent checks to GitHub", async () => {
+		const exec = vi
+			.fn<ForgeExec>()
+			.mockResolvedValueOnce(
+				result({
+					stdout: JSON.stringify({
+						full_name: "LeanAndMean/scramjet",
+						html_url: "https://github.com/LeanAndMean/scramjet",
+					}),
+				}),
+			)
+			.mockResolvedValueOnce(
+				result({
+					stdout: JSON.stringify({
+						number: 4,
+						html_url: "https://github.com/LeanAndMean/scramjet/issues/4",
+					}),
+				}),
+			);
+		await preflightForgePublication(
+			exec,
+			github,
+			{ operation: "add_issue_comment", number: 4, body: "body" },
+			"/repo",
+		);
+		expect(exec.mock.calls.map((call) => call[1])).toEqual([
+			["api", "--hostname", "github.com", "repos/LeanAndMean/scramjet"],
+			["api", "--hostname", "github.com", "repos/LeanAndMean/scramjet/issues/4"],
+		]);
+	});
+
+	it("rejects canonical repository aliases and mismatched GitHub parent types", async () => {
+		const alias = vi.fn<ForgeExec>().mockResolvedValue(
+			result({
+				stdout: JSON.stringify({
+					full_name: "other/repo",
+					html_url: "https://github.com/other/repo",
+				}),
+			}),
+		);
+		await expect(
+			preflightForgePublication(alias, github, { operation: "create_issue", title: "title", body: "body" }, "/repo"),
+		).rejects.toThrow("canonical identity");
+
+		const wrongParent = vi
+			.fn<ForgeExec>()
+			.mockResolvedValueOnce(
+				result({
+					stdout: JSON.stringify({
+						full_name: "LeanAndMean/scramjet",
+						html_url: "https://github.com/LeanAndMean/scramjet",
+					}),
+				}),
+			)
+			.mockResolvedValueOnce(
+				result({
+					stdout: JSON.stringify({
+						number: 4,
+						html_url: "https://github.com/LeanAndMean/scramjet/pull/4",
+						pull_request: {},
+					}),
+				}),
+			);
+		await expect(
+			preflightForgePublication(
+				wrongParent,
+				github,
+				{ operation: "add_issue_comment", number: 4, body: "body" },
+				"/repo",
+			),
+		).rejects.toThrow("artifact type");
+	});
+
+	it("requires unqualified concrete live remote branches", async () => {
+		const exec = vi
+			.fn<ForgeExec>()
+			.mockResolvedValueOnce(result())
+			.mockResolvedValueOnce(result({ stdout: "abc\trefs/heads/feature\n" }))
+			.mockResolvedValueOnce(result())
+			.mockResolvedValueOnce(result({ stdout: "def\trefs/heads/main\n" }));
+		await preflightPullRequestBranches(
+			exec,
+			{ operation: "create_pr", title: "PR", body: "body", head: "feature", base: "main", draft: false },
+			"/repo",
+		);
+		expect(exec.mock.calls.map((call) => call[1])).toEqual([
+			["check-ref-format", "--branch", "feature"],
+			["ls-remote", "--exit-code", "--refs", "--heads", "origin", "refs/heads/feature"],
+			["check-ref-format", "--branch", "main"],
+			["ls-remote", "--exit-code", "--refs", "--heads", "origin", "refs/heads/main"],
+		]);
+		for (const branch of ["HEAD", "origin/HEAD", "origin/main", "refs/heads/main"]) {
+			await expect(
+				preflightPullRequestBranches(
+					vi.fn<ForgeExec>(),
+					{ operation: "create_pr", title: "PR", body: "body", head: branch, base: "main", draft: false },
+					"/repo",
+				),
+			).rejects.toThrow("unqualified branches");
+		}
+	});
+});
+
 describe("publishGithubIssue", () => {
 	it("posts exact JSON once, refetches the returned number, and verifies exact fields", async () => {
 		const proposal = { title: "Unicode café", body: "line 1\r\nline 2\0" };
@@ -67,11 +186,16 @@ describe("publishGithubIssue", () => {
 		expect(exec).toHaveBeenCalledTimes(2);
 		expect(exec.mock.calls[0]?.slice(0, 2)).toEqual([
 			"gh",
-			["api", "--method", "POST", "--input", "-", "repos/LeanAndMean/scramjet/issues"],
+			["api", "--hostname", "github.com", "--method", "POST", "--input", "-", "repos/LeanAndMean/scramjet/issues"],
 		]);
 		expect(exec.mock.calls[0]?.[2]).toMatchObject({ cwd: "/repo", stdin: JSON.stringify(proposal) });
 		expect(exec.mock.calls[0]?.[2]?.stdin).not.toMatch(/\n$/);
-		expect(exec.mock.calls[1]?.[1]).toEqual(["api", "repos/LeanAndMean/scramjet/issues/479"]);
+		expect(exec.mock.calls[1]?.[1]).toEqual([
+			"api",
+			"--hostname",
+			"github.com",
+			"repos/LeanAndMean/scramjet/issues/479",
+		]);
 		expect(JSON.stringify(exec.mock.calls[0]?.[1])).not.toContain(proposal.body);
 	});
 
@@ -111,6 +235,8 @@ describe("publishGithubIssue", () => {
 		for (const mutation of [
 			result({ code: 1, stderr: proposal.body }),
 			result({ stdinError: { message: "closed" } }),
+			result({ stdoutError: { message: "stdout failed" } }),
+			result({ stderrError: { message: "stderr failed" } }),
 			result({ stdout: "not json" }),
 			result({ stdout: JSON.stringify({ number: 479, html_url: "https://evil.example/479" }) }),
 		]) {
@@ -301,12 +427,26 @@ describe("four-operation provider matrix", () => {
 			const outcome = await publishForge(exec, repo, request, "/repo");
 			expect(outcome.status).toBe("verified");
 			expect(exec).toHaveBeenCalledTimes(2);
-			expect(exec.mock.calls[0]?.[1]).toEqual(["api", "--method", "POST", "--input", "-", post]);
+			expect(exec.mock.calls[0]?.[1]).toEqual([
+				"api",
+				"--hostname",
+				repo.provider === "github" ? "github.com" : "gitlab.com",
+				"--method",
+				"POST",
+				"--input",
+				"-",
+				post,
+			]);
 			expect(exec.mock.calls[0]?.[2]).toMatchObject({
 				stdin: JSON.stringify(payload),
 				timeout: FORGE_EXEC_TIMEOUT_MS,
 			});
-			expect(exec.mock.calls[1]?.[1]).toEqual(["api", get]);
+			expect(exec.mock.calls[1]?.[1]).toEqual([
+				"api",
+				"--hostname",
+				repo.provider === "github" ? "github.com" : "gitlab.com",
+				get,
+			]);
 			expect(exec.mock.calls[1]?.[2]).toMatchObject({ timeout: FORGE_EXEC_TIMEOUT_MS });
 			expect(exec.mock.calls.filter((call) => call[1].includes("POST"))).toHaveLength(1);
 		},

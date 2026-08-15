@@ -283,7 +283,7 @@ describe("interactive assistant history", () => {
 		});
 		const setFocus = ui.setFocus.bind(ui);
 		vi.spyOn(ui, "setFocus").mockImplementation((component) => {
-			activationOrder.push("focus");
+			activationOrder.push(component === null ? "defocus" : "focus");
 			setFocus(component);
 		});
 		let finish: ((value: string) => void) | undefined;
@@ -326,7 +326,7 @@ describe("interactive assistant history", () => {
 		expect(output).not.toContain("\x1b[2J");
 		expect(output).not.toContain("\x1b[3J");
 		expect(output.indexOf("PREVIEW-END")).toBeLessThan(output.indexOf("LIVE-APPROVAL"));
-		expect(activationOrder.slice(0, 2)).toEqual(["committed", "focus"]);
+		expect(activationOrder.slice(0, 3)).toEqual(["defocus", "committed", "focus"]);
 		expect(terminal.visibleLines().join("\n")).toContain("LIVE-APPROVAL");
 
 		terminal.scrollLines(-10);
@@ -385,7 +385,8 @@ describe("interactive assistant history", () => {
 		);
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(focus).not.toHaveBeenCalled();
+		expect(focus).toHaveBeenCalledOnce();
+		expect(focus).toHaveBeenCalledWith(null);
 
 		releaseFlush();
 		await focusSettled;
@@ -448,8 +449,9 @@ describe("interactive assistant history", () => {
 		expect(dispose).toHaveBeenCalledTimes(1);
 		expect(committedChatContainer.children).toHaveLength(0);
 		expect((mode.editorContainer as Container).children).toEqual([mode.editor]);
-		expect(focus).toHaveBeenCalledTimes(1);
-		expect(focus).toHaveBeenCalledWith(mode.editor);
+		expect(focus).toHaveBeenCalledTimes(2);
+		expect(focus).toHaveBeenNthCalledWith(1, null);
+		expect(focus).toHaveBeenNthCalledWith(2, mode.editor);
 	});
 
 	it.each([

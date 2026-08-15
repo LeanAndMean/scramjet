@@ -15,6 +15,7 @@ import { loadAutonomyConfig, mergeAllRecommendations, resolvePublicationPolicy }
 import {
 	type ForgeRepository,
 	type PublicationRequest,
+	preflightForgePublication,
 	preflightPullRequestBranches,
 	publishForge,
 	resolveForgeOrigin,
@@ -152,6 +153,15 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 						writeState: "not-dispatched",
 						reason: "proposal-is-not-valid-utf8",
 					});
+				if (
+					(request.operation === "create_issue" || request.operation === "create_pr") &&
+					/[\r\n]/.test(request.title)
+				)
+					return toolResult(request.operation, {
+						outcome: "pre-dispatch-failure",
+						writeState: "not-dispatched",
+						reason: "publication titles must contain exactly one line",
+					});
 				if (policy === "require-approval" && (!ctx.hasUI || !ctx.ui))
 					return toolResult(request.operation, {
 						outcome: "headless",
@@ -160,7 +170,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 					});
 				let repository: ForgeRepository;
 				try {
-					repository = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd);
+					repository = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
 				} catch (error) {
 					return toolResult(request.operation, {
 						outcome: "pre-dispatch-failure",
@@ -168,26 +178,30 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 						reason: safeError(error),
 					});
 				}
-				if (request.operation === "create_pr") {
-					if (repository.provider === "gitlab" && request.draft && !/^(?:Draft:|WIP:)/i.test(request.title))
-						return toolResult(
-							request.operation,
-							{
-								outcome: "pre-dispatch-failure",
-								writeState: "not-dispatched",
-								reason: "GitLab draft titles must include an approved Draft: or WIP: prefix",
-							},
-							repository,
-						);
-					try {
-						await preflightPullRequestBranches(pi.exec.bind(pi), request, ctx.cwd);
-					} catch (error) {
-						return toolResult(
-							request.operation,
-							{ outcome: "pre-dispatch-failure", writeState: "not-dispatched", reason: safeError(error) },
-							repository,
-						);
-					}
+				if (
+					request.operation === "create_pr" &&
+					repository.provider === "gitlab" &&
+					/^(?:Draft:|WIP:)/i.test(request.title) !== request.draft
+				)
+					return toolResult(
+						request.operation,
+						{
+							outcome: "pre-dispatch-failure",
+							writeState: "not-dispatched",
+							reason: "GitLab draft state must match an approved Draft: or WIP: title prefix",
+						},
+						repository,
+					);
+				try {
+					await preflightForgePublication(pi.exec.bind(pi), repository, request, ctx.cwd, signal);
+					if (request.operation === "create_pr")
+						await preflightPullRequestBranches(pi.exec.bind(pi), request, ctx.cwd, signal);
+				} catch (error) {
+					return toolResult(
+						request.operation,
+						{ outcome: "pre-dispatch-failure", writeState: "not-dispatched", reason: safeError(error) },
+						repository,
+					);
 				}
 				const authorization: PublicationAuthorization = {
 					mode: decision.authorization,
@@ -195,6 +209,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 				};
 				let approval: ApprovalResult = "approved";
 				if (policy === "require-approval") {
+					let removeApprovalAbort = () => {};
 					try {
 						approval = await ctx.ui!.custom<ApprovalResult>(
 							(tui, theme, _keybindings, done) => {
@@ -202,11 +217,18 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 								const finish = (result: ApprovalResult) => {
 									if (finished) return;
 									finished = true;
-									activeApproval = undefined;
+									removeApprovalAbort();
+									if (activeApproval === finish) activeApproval = undefined;
 									done(result);
 								};
+								const abortApproval = () => finish("stale");
+								if (signal) {
+									signal.addEventListener("abort", abortApproval, { once: true });
+									removeApprovalAbort = () => signal.removeEventListener("abort", abortApproval);
+								}
 								activeApproval = finish;
-								return new ApprovalComponent(tui, theme, finish);
+								if (signal?.aborted) abortApproval();
+								return new ApprovalComponent(tui, theme, repository, request, finish);
 							},
 							{
 								toolAttachedContext: {
@@ -216,6 +238,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 							},
 						);
 					} catch (error) {
+						removeApprovalAbort();
 						activeApproval = undefined;
 						const reason = sanitizeUntrustedText(safeError(error));
 						state.logger.warn("scope", `publication approval UI failed: ${reason}`);
@@ -229,6 +252,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 							repository,
 						);
 					}
+					removeApprovalAbort();
 					if (approval === undefined) {
 						activeApproval = undefined;
 						return toolResult(
@@ -271,7 +295,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 					);
 				let current: ForgeRepository;
 				try {
-					current = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd);
+					current = await resolveForgeOrigin(pi.exec.bind(pi), ctx.cwd, signal);
 				} catch {
 					return toolResult(
 						request.operation,
@@ -288,6 +312,25 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 							writeState: "not-dispatched",
 							reason: sameRepository(repository, current) ? undefined : "origin-changed",
 						},
+						repository,
+						authorization,
+					);
+				try {
+					await preflightForgePublication(pi.exec.bind(pi), repository, request, ctx.cwd, signal);
+					if (request.operation === "create_pr")
+						await preflightPullRequestBranches(pi.exec.bind(pi), request, ctx.cwd, signal);
+				} catch (error) {
+					return toolResult(
+						request.operation,
+						{ outcome: "stale", writeState: "not-dispatched", reason: safeError(error) },
+						repository,
+						authorization,
+					);
+				}
+				if (!fresh())
+					return toolResult(
+						request.operation,
+						{ outcome: "stale", writeState: "not-dispatched" },
 						repository,
 						authorization,
 					);
@@ -322,6 +365,8 @@ class ApprovalComponent {
 	constructor(
 		private readonly tui: { requestRender(): void },
 		private readonly theme: any,
+		private readonly repository: ForgeRepository,
+		private readonly request: PublicationRequest,
 		done: (result: ApprovalResult) => void,
 	) {
 		this.choices = new SelectList(
@@ -336,7 +381,19 @@ class ApprovalComponent {
 		this.choices.onCancel = () => done("cancelled");
 	}
 	render(width: number): string[] {
-		return [...this.choices.render(width), truncateToWidth(this.theme.fg("dim", "Esc cancel • ↑↓ • Enter"), width)];
+		const context = new Text(
+			this.theme.fg(
+				"muted",
+				`${operationLabel(this.request.operation)} in ${sanitizeUntrustedText(repositoryName(this.repository) ?? "")} — ${consequence(this.request)}`,
+			),
+			0,
+			1,
+		);
+		return [
+			...context.render(width),
+			...this.choices.render(width),
+			truncateToWidth(this.theme.fg("dim", "Esc cancel • ↑↓ • Enter"), width),
+		];
 	}
 	handleInput(data: string): void {
 		this.choices.handleInput(data);
@@ -380,7 +437,7 @@ class ApprovalPreviewComponent implements Component {
 				[
 					this.theme.fg("toolTitle", this.theme.bold(operationLabel(this.request.operation))),
 					`Provider: ${this.repository.provider}`,
-					`Repository: ${repositoryName(this.repository)}`,
+					`Repository: ${sanitizeUntrustedText(repositoryName(this.repository) ?? "")}`,
 					`Consequence: ${consequence(this.request)}`,
 				].join("\n"),
 				0,

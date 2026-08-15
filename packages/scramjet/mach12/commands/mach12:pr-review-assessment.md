@@ -222,8 +222,8 @@ No issues created, no reclassification. Skip the decision comment entirely.
 For Options 1 and 3, when at least one item remains deferred, prepare and hold a decision-comment template for publication after the final assessment and queued mutations. Use this shape:
 - First line: `<!-- mach12-decisions -->`
 - A note that deferred findings were processed after the review.
-- One line per deferred item showing its disposition (Created as issue / Created as issue with overlap note / Skipped as duplicate / Skipped (not selected) / Reclassified as genuine).
-- Keep the entire comment body under 20 lines.
+- One line per originally deferred item using its actual settled outcome: `Created as #N`, `Created as #N with overlap note`, or `Related finding comment verified on #N` only after verified publication; `Cancelled — no issue or relationship comment published`; `Publication failed before dispatch — no issue or relationship comment published`; `Publication ambiguous — acceptance unknown; reconciliation required`; `Skipped (not selected)`; or `Reclassified as genuine`.
+- Keep the comment concise. Include every required disposition even when doing so exceeds 20 lines.
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) for artifact-local findings; format any intentional issue or PR relationships under Step 4’s linkable-reference policy.
 
@@ -235,9 +235,18 @@ After all deferred choices, duplicate reads, queued mutation preparation, and in
 
 Continue only when publication is verified, then extract and retain the numeric GitHub comment ID from the verified canonical URL. If the ID cannot be extracted, block queued mutations and routing without retrying publication. Cancellation or a definite pre-dispatch no-write failure leaves no assessment artifact and prevents queued mutations and routing. An ambiguous publication may have created the assessment; do not retry automatically, and block queued mutations and routing pending deliberate reconciliation.
 
-Only after `add_pr_comment` returns a verified assessment publication and its numeric comment ID is retained, execute the queued deferred-item requests from Step 6. For each request, state its target and consequence concisely, then call `create_issue` or `add_issue_comment` with the prepared final payload. Create the authorized label at most once, apply labels only after verified issue creation, and record actual outcomes. Cancellation stops that item; ambiguity prohibits automatic retry.
+Only after `add_pr_comment` returns a verified assessment publication and its numeric comment ID is retained, execute the queued deferred-item requests from Step 6. For each request, state its target and consequence concisely, then call `create_issue` or `add_issue_comment` with the prepared final payload and classify the result exhaustively:
 
-When Step 6 prepared a deferred-disposition decision-comment template, fill it from the actual outcomes, state its audit consequence concisely, and call `add_pr_comment` only after all queued mutations settle. Record its verified URL. Cancellation leaves the verified assessment intact but the audit publication incomplete; ambiguity prohibits automatic retry.
+- **Verified:** retain the canonical artifact URL and record the corresponding verified disposition. Apply labels only after verified issue creation.
+- **Cancelled:** record that no publication occurred, stop all remaining queued mutation, publish the truthful audit when one is required, and stop without routing.
+- **Definite no-write failure:** record the actionable failure and that no publication occurred, stop all remaining queued mutation, publish the truthful audit when one is required, and stop without routing.
+- **Ambiguous:** record that acceptance is unknown; preserve every earlier verified artifact, stop all remaining queued mutation and routing, and require deliberate reconciliation before resuming.
+
+Cancellation and definite no-write failure are settled no-publication outcomes but do not satisfy the requested deferred work, so they prohibit completed routing. Ambiguity halts the batch because a later mutation could duplicate or contradict an artifact whose existence is unknown. On a resumed user turn, reconcile the exact target without mutation: if the exact prepared artifact is verified, record it as verified; if authoritative evidence proves no write, record the definite no-write outcome; otherwise remain blocked. Only after reconciliation may execution resume from the first unexecuted queued request and update the held audit template. Never retry any settled or ambiguous publication automatically, and never recreate a verified issue because a later label, item, or audit publication fails.
+
+When Step 6 prepared a deferred-disposition decision-comment template, fill every line from these actual outcomes and call `add_pr_comment` only after all queued mutations have settled without unresolved ambiguity. Treat this final audit publication as required: verified publication retains its canonical URL and permits routing; cancellation or definite no-write failure preserves earlier verified artifacts but stops without routing; ambiguity preserves earlier artifacts, prohibits automatic retry, and blocks later mutation and routing pending deliberate reconciliation.
+
+Routing is eligible only when the assessment publication is verified, every requested queued publication is verified, skipped by explicit user choice, or reclassified as genuine, no publication remains cancelled, failed, or ambiguous, and any required deferred-disposition decision audit is verified.
 
 Retain the verified artifact URLs and these comment IDs for routing:
 - Review comment ID: `<review-comment-id from Step 2>`
@@ -247,7 +256,7 @@ If genuine issues remain (including any reclassified items), the natural next st
 
 If all findings are nitpicks, false positives, regressions, or deferred, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
 
-After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and populate `next_steps` based on the assessment outcome:
+After delivering your answer, call `report_scramjet_command_status` and summarize the work you performed in `summary`. Set `status: "completed"` and populate `next_steps` only when the routing eligibility gate above passes:
 
 **When genuine issues exist AND nitpicks/optional items were also found:**
 
@@ -278,5 +287,6 @@ Emit two entries:
 Set `recommended_next_step` to `0` (pre-merge).
 
 **General rules:**
+- Report `status: "completed"` and emit routing `next_steps` only when the routing eligibility gate above passes. Otherwise leave `next_steps` empty and report `status: "incomplete"` or `"blocked"` as appropriate.
 - **Regression findings never appear in any `/mach12:pr-review-fix` argument set** in any branch above -- they were rejected as harmful, not deferred for later. Count them toward the "no fixes required" condition alongside nitpicks, false positives, and deferred items.
 - Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.

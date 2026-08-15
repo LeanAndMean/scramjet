@@ -133,7 +133,7 @@ const result = await ctx.ui.custom(
 );
 ```
 
-The context is constructed after the controls factory resolves, anchored to the named pending tool row, committed once, and flushed before those controls receive focus. It is retained internally for deliberate width/theme rebuilds but is not persisted or sent to the model. Native scrollback retention depends on terminal capacity and configuration. The operation fails closed when the row is missing, settled, or cannot be flushed; use it only from the sequential tool identified by `toolCallId`.
+The context is constructed after the controls factory resolves, anchored to the named pending tool row, and committed once. The editor is defocused before terminal flushing begins; controls receive focus only after that flush settles. It is retained internally for deliberate width/theme rebuilds but is not persisted or sent to the model. Native scrollback retention depends on terminal capacity and configuration. The operation fails closed when the row is missing, settled, or cannot be flushed; use it only from the sequential tool identified by `toolCallId`.
 
 ## Overlays
 

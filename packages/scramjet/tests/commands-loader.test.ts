@@ -1032,6 +1032,35 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		rmSync(tempGlobal, { recursive: true, force: true });
 	});
 
+	it("shows one deduplicated interactive warning for rejected publication defaults", () => {
+		const tempGlobal = mkdtempSync(join(tmpdir(), "scramjet-rejected-publication-defaults-"));
+		const { mkdirSync, writeFileSync } = require("node:fs");
+		const commands = join(tempGlobal, "sample", "commands");
+		mkdirSync(commands, { recursive: true });
+		writeFileSync(join(commands, "sample:publish.md"), "---\nallowed-tools:\n  - create_issue\n---\nBody.");
+		writeFileSync(
+			join(tempGlobal, "sample", "autonomy-defaults.yaml"),
+			"publications:\n  sample:publish:\n    add_pr_comment: auto-approve\n",
+		);
+		process.env.SCRAMJET_CACHE = tempGlobal;
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state, { interactiveOutput: true });
+		const notify = vi.fn();
+		const event = {
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		};
+		handlers.get("resources_discover")![0]?.(event, { hasUI: true, ui: { notify } });
+		handlers.get("resources_discover")![0]?.(event, { hasUI: true, ui: { notify } });
+		const publicationNotices = notify.mock.calls.filter(([message]) =>
+			String(message).includes("affected publications will always ask"),
+		);
+		expect(publicationNotices).toHaveLength(1);
+		rmSync(tempGlobal, { recursive: true, force: true });
+	});
+
 	it("does not store entry when autonomy-defaults.yaml is missing", () => {
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "does-not-exist");
 		const { pi, handlers } = recordingPi();

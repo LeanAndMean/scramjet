@@ -35,6 +35,8 @@ export interface ExecResult {
 	killed: boolean;
 	spawnError?: ExecError;
 	stdinError?: ExecError;
+	stdoutError?: ExecError;
+	stderrError?: ExecError;
 }
 
 /**
@@ -65,6 +67,8 @@ export async function execCommand(
 		let terminationRequested = false;
 		let spawnError: ExecError | undefined;
 		let stdinError: ExecError | undefined;
+		let stdoutError: ExecError | undefined;
+		let stderrError: ExecError | undefined;
 		let timeoutId: NodeJS.Timeout | undefined;
 		let killTimeoutId: NodeJS.Timeout | undefined;
 
@@ -115,6 +119,15 @@ export async function execCommand(
 			return code === undefined ? { message: error.message } : { message: error.message, code };
 		};
 
+		proc.stdout?.once("error", (error: Error) => {
+			stdoutError ??= errorDetails(error);
+			killProcess();
+		});
+		proc.stderr?.once("error", (error: Error) => {
+			stderrError ??= errorDetails(error);
+			killProcess();
+		});
+
 		const stdinSettled = new Promise<void>((resolveStdin) => {
 			if (options?.stdin === undefined || proc.stdin === null) {
 				resolveStdin();
@@ -146,7 +159,7 @@ export async function execCommand(
 			if (timeoutId) clearTimeout(timeoutId);
 			if (killTimeoutId) clearTimeout(killTimeoutId);
 			if (options?.signal) options.signal.removeEventListener("abort", killProcess);
-			resolve({ stdout, stderr, code, killed, spawnError, stdinError });
+			resolve({ stdout, stderr, code, killed, spawnError, stdinError, stdoutError, stderrError });
 		});
 	});
 }

@@ -206,7 +206,14 @@ If the user picks "Create revised plan", enter the revision loop:
 
    If any finding is **Remaining** at Critical or Important severity, or any **New issue** is Critical or Important, treat the candidate as invalid and do not call `add_issue_comment`. Present the delta assessment, explain that correction and reassessment are required, and offer only **Revise again** or **Discuss findings**. On **Revise again**, return to the architect dispatch in the next revision turn with the invalid candidate and delta assessment, then load `/mach12:plan-comment-contract revision` once before producing and reassessing a corrected replacement. Repeat this gate until no Critical or Important delta remains. Suggestions stay visible but are optional and do not block publication.
 
-4. **Publish the revision.** Only after the Critical/Important delta gate passes, present the delta assessment and summary outside the post-ready body. State the issue target, revision consequence, and finding-resolution counts concisely without repeating the complete replacement plan. Call `add_issue_comment` with the issue number and exact complete marker-bearing replacement. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. On cancellation, retain the revision in conversation for requested changes but post nothing; on ambiguity, do not retry automatically and reconcile deliberately. Only verified publication counts as an updated plan.
+4. **Publish the revision.** Only after the Critical/Important delta gate passes, present the delta assessment and summary outside the post-ready body. State the issue target, revision consequence, and finding-resolution counts concisely without repeating the complete replacement plan. Call `add_issue_comment` with the issue number and exact complete marker-bearing replacement. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
+
+   - **Verified:** retain the canonical comment URL; only this result counts as an updated plan and makes implementation routing eligible.
+   - **Cancelled:** retain the candidate in conversation, report that the plan was not updated, and stop without implementation routing.
+   - **Definite no-write failure:** surface the actionable failure, report that the plan was not updated, and stop without implementation routing.
+   - **Ambiguous:** the replacement may have been posted; preserve previously verified artifacts, do not retry automatically, and block later mutation and routing pending deliberate reconciliation.
+
+   Never treat an unverified replacement as the current plan.
 
 If the user picks "Discuss findings", walk through the specific findings they want to explore, then ask again how to proceed. This step remains active across all discussion iterations until the user picks a terminal option (Create revised plan, Proceed, or Cancel).
 
@@ -218,9 +225,9 @@ If the user picks "Proceed as-is" and at least one Critical or Important finding
 - Each Critical and Important finding on its own line (one sentence each)
 - Keep the entire comment body under 15 lines
 
-State the decision consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
+State the decision consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. Treat this comment as required before implementation routing: verified publication retains the canonical decision-comment URL and permits routing; cancellation or definite no-write failure reports that the decision was not recorded and stops without routing; ambiguity blocks later mutation and routing pending deliberate reconciliation and must not be retried automatically. Preserve any already verified plan artifact; never republish it because this later decision comment failed.
 
-If the user picks "Proceed as-is" and all findings are Suggestions only, do NOT post a decision comment -- proceeding past suggestions is the expected path.
+If the user picks "Proceed as-is" and no Critical or Important finding remains—including a clean review, false positives, nitpicks, or Suggestions only—do NOT post a decision comment; proceeding is the expected path and implementation routing is eligible without publication.
 
 If the user picks "Cancel":
 
@@ -231,11 +238,11 @@ If the user picks "Cancel":
    - Finding counts by severity (e.g., "2 Critical, 1 Important, 3 Suggestions")
    - Keep the entire comment body to 5 lines or fewer
 
-   State the audit consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
+   State the audit consequence concisely, then call `add_issue_comment` with the issue number and exact decision body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. Retain its URL only when verified; report cancellation or definite no-write failure as no audit comment; and treat ambiguity as acceptance unknown, without automatic retry and pending deliberate reconciliation. The user cancelled, so no result from this branch permits workflow routing.
 
-After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include **both** declared candidates in `next_steps` so the user can see all options:
+After delivering your answer, call `report_scramjet_command_status` and summarize the work you performed in `summary`. Set `status: "completed"` and include **both** declared candidates in `next_steps` only after the selected path's routing gate passes:
 
 - Always include an entry with `message`: `/mach12:issue-review <issue-number>`, `fresh_session`: `true`, and `reason`: a brief explanation of when another review pass would be warranted.
 - Always include an entry with `message`: `/mach12:issue-implement <issue-number> 1`, `fresh_session`: `true`, and `reason`: a brief explanation that the plan is ready to implement.
-- Set `recommended_next_step` to indicate your preference: recommend `mach12:issue-review` (index 0) when the plan was revised and Critical or Important findings remain; recommend `mach12:issue-implement` (index 1) when the plan is approved (user picked "Proceed as-is" — whether or not findings remain — or the revised plan addresses all blockers).
-- Leave `next_steps` empty if the outcome is ambiguous (e.g., user cancelled, discussion is ongoing, or no clear next action). If the user cancelled, the review was not completed, or you otherwise did not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.
+- Set `recommended_next_step` only after the selected path's publication gate passes: recommend `mach12:issue-review` (index 0) when a verified revised plan still warrants another review; recommend `mach12:issue-implement` (index 1) when a revised plan was verified and addresses all blockers, when a required Proceed-as-is decision comment was verified, or when a no-Critical/Important path required no comment.
+- If a required revised-plan or Proceed-as-is publication is cancelled, definitely fails before writing, or remains ambiguous, leave `next_steps` empty and report `status: "incomplete"` or `"blocked"` rather than `"completed"`. Discussion, Cancel, unresolved user decisions, and unclear outcomes likewise emit no routing. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.

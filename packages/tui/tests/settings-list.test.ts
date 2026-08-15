@@ -98,6 +98,8 @@ describe("SettingsList search", () => {
 				description: "Effective publication policy remains visible in this wrapped description.",
 			},
 		]);
-		for (const line of settings.render(24)) expect(visibleWidth(line)).toBeLessThanOrEqual(24);
+		const lines = settings.render(24);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(24);
+		expect(lines.join(" ").replace(/\s+/g, " ")).toContain("Follow command (Auto-approve)");
 	});
 });

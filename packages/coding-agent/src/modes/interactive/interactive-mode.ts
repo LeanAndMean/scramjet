@@ -2452,6 +2452,7 @@ export class InteractiveMode {
 						committedContext = attachment.render(this.ui, theme);
 						this.committedChatContainer.addChild(committedContext);
 						tool.attachCommittedContext(component);
+						this.ui.setFocus(null);
 						this.editorContainer.clear();
 						try {
 							await this.ui.commitNow({ requireFlush: true });

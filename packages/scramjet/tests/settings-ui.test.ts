@@ -201,7 +201,73 @@ describe("buildPublicationCommandItems", () => {
 		const submenu = commands[0].submenu?.(commands[0].currentValue, () => {});
 		expect(renderText(submenu)).toContain("Follow command (Always ask)");
 		submenu?.handleInput?.("\r");
+		expect(changes).toEqual([]);
+		expect(renderText(submenu)).toContain("Keep current policy");
+		submenu?.handleInput?.("\x1b[B");
+		submenu?.handleInput?.("\r");
 		expect(changes).toEqual([["sample:publish", "create_issue", "auto-approve"]]);
+	});
+
+	it("restores the persisted policy when saving a changed value fails", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
+		]);
+		const config = { edges: {}, publications: { "sample:publish": { create_issue: "always-ask" as const } } };
+		const command = buildPublicationCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			() => false,
+		)[0]!;
+		const submenu = command.submenu?.(command.currentValue, vi.fn());
+		submenu?.handleInput?.("\r");
+		expect(renderText(submenu).split("\n")[0]).toContain("Always ask");
+	});
+
+	it("confirms Follow command when its effective default is Auto-approve", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
+		]);
+		state.autonomyRecommendations = new Map([
+			["sample", { edges: {}, publications: { "sample:publish": { create_issue: "auto-approve" } } }],
+		]);
+		const changes: unknown[] = [];
+		const command = buildPublicationCommandItems(
+			state,
+			() => ({ edges: {}, publications: { "sample:publish": { create_issue: "always-ask" } } }),
+			noopTheme,
+			(...change) => changes.push(change),
+		)[0]!;
+		const submenu = command.submenu?.(command.currentValue, vi.fn());
+		submenu?.handleInput?.("\r");
+		expect(changes).toEqual([]);
+		expect(renderText(submenu)).toContain("Keep current policy");
+		submenu?.handleInput?.("\x1b[B");
+		submenu?.handleInput?.("\r");
+		expect(changes).toEqual([["sample:publish", "create_issue", "follow-command"]]);
+	});
+
+	it("shows corrupt policy as read-only Always ask instead of an author auto-approve default", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
+		]);
+		state.autonomyRecommendations = new Map([
+			["sample", { edges: {}, publications: { "sample:publish": { create_issue: "auto-approve" } } }],
+		]);
+		const command = buildPublicationCommandItems(
+			state,
+			() => null,
+			noopTheme,
+			() => undefined,
+			() => true,
+		)[0]!;
+		expect(command.currentValue).toBe("Always ask (config error)");
+		const submenu = command.submenu?.(command.currentValue, vi.fn());
+		expect(renderText(submenu)).toContain("Always ask (config error)");
+		expect(renderText(submenu)).toContain("safely requires approval");
 	});
 });
 
@@ -402,6 +468,25 @@ describe("buildTopLevelItems", () => {
 		expect(autonomy?.currentValue).toBe("no edges");
 		expect(autonomy?.description).toContain("No commands");
 		expect(autonomy?.submenu).toBeUndefined();
+	});
+
+	it("makes command autonomy read-only when user config is invalid", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:a", makeCommandDef("mach12:a", { mode: "closed", candidates: [{ name: "mach12:b" }] })],
+		]);
+		const item = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => true,
+		).find((candidate) => candidate.id === "command-autonomy")!;
+		expect(item.currentValue).toBe("config error");
+		expect(item.submenu).toBeUndefined();
 	});
 
 	it("shows override count in command autonomy summary", () => {
@@ -693,6 +778,8 @@ describe("showSettingsPage", () => {
 					component.handleInput?.("\r");
 					component.handleInput?.("\r");
 					component.handleInput?.("\r");
+					component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
 				},
 			},
 		};
@@ -764,7 +851,7 @@ describe("showSettingsPage", () => {
 		await showSettingsPage({ appendEntry: vi.fn() } as never, ctx as never, state);
 
 		expect(fs.readFileSync(configPath, "utf-8")).toBe(original);
-		expect(notify.mock.calls.some(([message]) => String(message).includes("Cannot update corrupt"))).toBe(true);
+		expect(notify.mock.calls.some(([message]) => String(message).includes("approval is required"))).toBe(true);
 		expect(fs.existsSync(`${configPath}.tmp`)).toBe(false);
 	});
 

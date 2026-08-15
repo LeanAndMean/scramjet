@@ -1535,10 +1535,10 @@ const result = await pi.exec("gh", ["api", "--method", "POST", "--input", "-", e
   stdin: JSON.stringify(payload),
 });
 // result.stdout, result.stderr, result.code, result.killed,
-// result.spawnError, result.stdinError
+// result.spawnError, result.stdinError, result.stdoutError, result.stderrError
 ```
 
-When `stdin` is supplied, `pi.exec` writes that exact UTF-8 string once and closes standard input without adding a newline. `spawnError` is present only when the command failed before spawning; `stdinError` reports a write or close failure. Each error contains a safe `message` and optional system `code`, never the stdin content. Once the child has spawned, callers must use command-specific semantics to decide whether a failed execution may have produced side effects.
+When `stdin` is supplied, `pi.exec` writes that exact UTF-8 string once and closes standard input without adding a newline. `spawnError` is present only when the command failed before spawning; `stdinError` reports a write or close failure; `stdoutError` and `stderrError` report output-pipe failures after spawn. Each error contains a safe `message` and optional system `code`, never stdin or process output content. Once the child has spawned, callers must use command-specific semantics to decide whether a failed execution may have produced side effects.
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
@@ -2444,7 +2444,7 @@ const result = await ctx.ui.custom(
 );
 ```
 
-The context is rendered at that pending tool's transcript position, committed once, and flushed before its controls receive focus. The complete context is emitted to native terminal scrollback; retention depends on terminal capacity and configuration. It is visual-only and is not persisted or sent to the model. The call fails closed if the named tool row is absent or no longer pending. Use this only from the sequential tool whose id is supplied; ordinary custom UIs remain live and terminal-height bounded.
+The context is rendered at that pending tool's transcript position, the editor is defocused, and the context is committed once and flushed before its controls receive focus. The complete context is emitted to native terminal scrollback; retention depends on terminal capacity and configuration. It is visual-only and is not persisted or sent to the model. The call fails closed if the named tool row is absent or no longer pending. Use this only from the sequential tool whose id is supplied; ordinary custom UIs remain live and terminal-height bounded.
 
 See [tui.md](tui.md) for the full component API.
 

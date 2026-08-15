@@ -193,6 +193,7 @@ export function registerCommandLoader(
 		readdir: dependencies.inspection?.readdir ?? readdirSync,
 	};
 	let lastNotificationSignature = "";
+	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
 		const themePaths = [join(packageRoot(), "themes")];
@@ -274,6 +275,20 @@ export function registerCommandLoader(
 			for (const warning of discoveryWarnings) state.logger.warn("discovery", warning);
 			for (const warning of [...warnings, ...agentWarnings, ...bridge.warnings])
 				state.logger.warn("discovery", warning);
+
+			const publicationWarnings = discoveryWarnings.filter((warning) => /publication/i.test(warning));
+			const publicationWarningSignature = publicationWarnings.join("\0");
+			if (
+				publicationWarnings.length > 0 &&
+				ctx?.hasUI &&
+				interactiveOutput &&
+				publicationWarningSignature !== lastPublicationWarningSignature
+			)
+				ctx.ui.notify(
+					`Ignored ${publicationWarnings.length} publication default${publicationWarnings.length === 1 ? "" : "s"} from autonomy-defaults.yaml; affected publications will always ask. Review discovery warnings and reload Scramjet.`,
+					"warning",
+				);
+			lastPublicationWarningSignature = publicationWarningSignature;
 
 			const visibleDiagnostics = bundled.flatMap((result) => (result.diagnostic ? [result.diagnostic] : []));
 			const signature = bundled.map((result) => result.classification).join("|");

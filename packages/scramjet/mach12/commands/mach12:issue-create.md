@@ -196,7 +196,13 @@ Resolve the path before invoking a publication tool:
 
 - **No relevant match / create unchanged:** retain the validated candidate.
 - **Create and mention selected matches:** add only user-selected, successfully read references, then repeat complete validation and internal review.
-- **Comment on one existing issue:** obtain an explicit target choice, prepare the final `Related context: ...` body, explain the target and public consequence concisely, then call `add_issue_comment` with that exact target and body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. On verified publication, report the issue and comment URLs and skip creation.
+- **Comment on one existing issue:** obtain an explicit target choice, prepare the final `Related context: ...` body, explain the target and public consequence concisely, then call `add_issue_comment` with that exact target and body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. Treat every result as terminal for this selected branch:
+  - **Verified:** retain and report the verified issue and comment URLs.
+  - **Cancelled:** report that no comment was written.
+  - **Definite no-write failure:** surface the actionable failure and report that no comment was written.
+  - **Ambiguous:** report that comment acceptance is unknown, do not retry automatically, and require deliberate reconciliation against the selected issue.
+
+  Every outcome skips Steps 10 and 11. Never call `create_issue` as a fallback after this branch was selected. For any non-verified result, leave `next_steps` empty and report `status: "incomplete"` after the truthful user-facing result.
 - **Skip:** create nothing and post nothing.
 
 For a clear duplicate, offer comment on the inspected issue, create anyway, or skip. For ambiguous matches, also offer creating with selected references. Any payload change requires complete validation and internal review, but never a separate full-payload presentation or approval in assistant prose.
@@ -226,7 +232,7 @@ A metadata failure is partial success: report the verified issue number and URL 
 
 Report the issue number and URL, or report that creation was skipped and why.
 
-After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"` and include a selector-visible `next_steps` entry when the new issue is ready for planning:
+After delivering your answer, call `report_scramjet_command_status` and summarize the work you performed in `summary`. Use `status: "completed"` only after verified issue creation, verified publication to a selected existing issue, or an explicit Skip choice. Include a selector-visible `next_steps` entry only when the new issue is ready for planning:
 
 - `message`: `/mach12:issue-plan <new-issue-number>`
 - `fresh_session`: `true`

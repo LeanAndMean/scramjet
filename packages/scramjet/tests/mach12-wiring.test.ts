@@ -998,8 +998,8 @@ describe("mach12 deferred-review issue labels", () => {
 
 	it("builds the decision comment only from settled deferred outcomes", () => {
 		const requests = assessment.indexOf("execute the queued deferred-item requests");
-		const outcomes = assessment.indexOf("record actual outcomes", requests);
-		const decision = assessment.indexOf("fill it from the actual outcomes", outcomes);
+		const outcomes = assessment.indexOf("classify the result exhaustively", requests);
+		const decision = assessment.indexOf("fill every line from these actual outcomes", outcomes);
 		expect(requests).toBeGreaterThan(-1);
 		expect(outcomes).toBeGreaterThan(requests);
 		expect(decision).toBeGreaterThan(outcomes);
@@ -1010,8 +1010,45 @@ describe("mach12 deferred-review issue labels", () => {
 			"cancellation, definite no-write failure, or ambiguity stops that item's remaining operations",
 		);
 		const execution = assessment.slice(assessment.indexOf("execute the queued deferred-item requests"));
-		expect(execution).toContain("Cancellation stops that item");
-		expect(execution).toContain("ambiguity prohibits automatic retry");
+		expect(execution).toContain(
+			"Cancelled:** record that no publication occurred, stop all remaining queued mutation",
+		);
+		expect(execution).toContain("Ambiguity halts the batch");
+		expect(execution).toContain("Never retry any settled or ambiguous publication automatically");
+	});
+});
+
+describe("mach12 publication routing gates", () => {
+	const issueCreate = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-create.md`), "utf-8");
+	const issueReview = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-review.md`), "utf-8");
+	const assessment = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-assessment.md`), "utf-8");
+
+	it("never falls back to issue creation after the existing-issue comment branch", () => {
+		const branch = issueCreate.slice(
+			issueCreate.indexOf("Comment on one existing issue"),
+			issueCreate.indexOf("## Step 10:"),
+		);
+		expect(branch).toContain("Every outcome skips Steps 10 and 11");
+		expect(branch).toContain("Never call `create_issue` as a fallback");
+		expect(branch).toContain('status: "incomplete"');
+	});
+
+	it("requires verified revised-plan and proceed decisions before implementation routing", () => {
+		expect(issueReview).toContain(
+			"only this result counts as an updated plan and makes implementation routing eligible",
+		);
+		expect(issueReview).toContain("Treat this comment as required before implementation routing");
+		expect(issueReview).toContain("no Critical or Important finding remains");
+		expect(issueReview).toContain("include **both** declared candidates in `next_steps` only after");
+	});
+
+	it("requires verified queued work and audit publication before assessment routing", () => {
+		expect(assessment).toContain(
+			"every requested queued publication is verified, skipped by explicit user choice, or reclassified as genuine",
+		);
+		expect(assessment).toContain("any required deferred-disposition decision audit is verified");
+		expect(assessment).toContain('Set `status: "completed"` and populate `next_steps` only when');
+		expect(assessment).toContain("On a resumed user turn, reconcile the exact target without mutation");
 	});
 });
 
