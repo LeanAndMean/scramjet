@@ -18,6 +18,8 @@ export interface ExecOptions {
 	cwd?: string;
 	/** Exact UTF-8 input to write before closing stdin */
 	stdin?: string;
+	/** Execute through the platform shell */
+	shell?: boolean;
 }
 
 export interface ExecError {
@@ -52,7 +54,7 @@ export async function execCommand(
 	return new Promise((resolve) => {
 		const proc = spawn(command, args, {
 			cwd,
-			shell: false,
+			shell: options?.shell ?? false,
 			stdio: [options?.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 		});
 

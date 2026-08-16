@@ -13,6 +13,8 @@ interface RunOptions {
 	manifest?: unknown;
 	missingManifest?: boolean;
 	releaseVersion?: string;
+	releaseError?: Error;
+	npmCommand?: string[];
 	afterSpawn?: (targetManifestPath: string) => void;
 }
 
@@ -44,12 +46,20 @@ async function runSelfUpdate(options: RunOptions = {}) {
 	vi.doMock("../src/config.js", () => ({
 		APP_NAME: "scramjet",
 		getAgentDir: () => fixture,
-		getSelfUpdateCommand: () => ({
-			command: "npm",
-			args: ["install", "-g", `${PACKAGE_NAME}@${releaseVersion}`],
-			display,
-			targetManifestPath,
-		}),
+		getSelfUpdateCommand: (
+			_packageName: string,
+			_updatePackageName: string,
+			installSpec: string,
+			npmCommand?: string[],
+		) => {
+			const [command = "npm", ...prefixArgs] = npmCommand ?? [];
+			return {
+				command,
+				args: [...prefixArgs, "install", "-g", installSpec],
+				display,
+				targetManifestPath,
+			};
+		},
 		getSelfUpdateUnavailableInstruction: vi.fn(),
 		PACKAGE_NAME,
 		VERSION: CURRENT_VERSION,
@@ -58,7 +68,7 @@ async function runSelfUpdate(options: RunOptions = {}) {
 		SettingsManager: {
 			create: () => ({
 				drainErrors: () => [],
-				getGlobalSettings: () => ({}),
+				getGlobalSettings: () => ({ npmCommand: options.npmCommand }),
 			}),
 		},
 	}));
@@ -69,10 +79,14 @@ async function runSelfUpdate(options: RunOptions = {}) {
 		},
 	}));
 	vi.doMock("../src/utils/child-process.js", () => ({ shouldUseWindowsShell: () => false }));
+	const resolveCurrentRelease = vi.fn(async () => {
+		if (options.releaseError) throw options.releaseError;
+		return { packageName: PACKAGE_NAME, version: releaseVersion };
+	});
 	vi.doMock("../src/utils/version-check.js", () => ({
 		isNewerPackageVersion: (candidate: string, current: string) =>
 			candidate.localeCompare(current, undefined, { numeric: true }) > 0,
-		resolveCurrentRelease: async () => ({ packageName: PACKAGE_NAME, version: releaseVersion }),
+		resolveCurrentRelease,
 	}));
 
 	const { handlePackageCommand } = await import("../src/package-manager-cli.js");
@@ -81,6 +95,7 @@ async function runSelfUpdate(options: RunOptions = {}) {
 		display,
 		handled,
 		spawn,
+		resolveCurrentRelease,
 		stderr: stderr.mock.calls.flat().join("\n"),
 		stdout: stdout.mock.calls.flat().join("\n"),
 		targetManifestPath,
@@ -158,6 +173,40 @@ describe("managed self-update verification", () => {
 
 		expect(result.spawn).not.toHaveBeenCalled();
 		expect(result.stdout).toContain("already up to date");
+	});
+
+	it("uses the configured npm command for release lookup and installation", async () => {
+		const npmCommand = ["mise", "exec", "node@20", "--", "npm"];
+		const result = await runSelfUpdate({
+			npmCommand,
+			afterSpawn: (path) => writeFileSync(path, JSON.stringify({ name: PACKAGE_NAME, version: RELEASE_VERSION })),
+		});
+
+		expect(result.resolveCurrentRelease).toHaveBeenCalledWith(PACKAGE_NAME, undefined, undefined, npmCommand);
+		expect(result.spawn).toHaveBeenCalledWith(
+			"mise",
+			["exec", "node@20", "--", "npm", "install", "-g", `${PACKAGE_NAME}@${RELEASE_VERSION}`],
+			{ stdio: "inherit", shell: false },
+		);
+	});
+
+	it("reports release lookup failure without spawning or claiming success", async () => {
+		const result = await runSelfUpdate({ releaseError: new Error("registry unavailable") });
+
+		expect(process.exitCode).toBe(1);
+		expect(result.spawn).not.toHaveBeenCalled();
+		expect(result.stderr).toContain("registry unavailable");
+		expect(result.stdout).not.toContain("Updated scramjet");
+	});
+
+	it("does not downgrade when the registry release is older", async () => {
+		const olderVersion = "0.76.9";
+		const result = await runSelfUpdate({ releaseVersion: olderVersion });
+
+		expect(result.spawn).not.toHaveBeenCalled();
+		expect(result.stdout).toContain(`v${CURRENT_VERSION}`);
+		expect(result.stdout).toContain(`v${olderVersion}`);
+		expect(result.stdout).toContain("not downgrading");
 	});
 
 	it("updates extensions first and returns nonzero when self-update verification fails", async () => {

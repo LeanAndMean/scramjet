@@ -295,8 +295,8 @@ interface SelfUpdatePlan {
 	shouldRun: boolean;
 }
 
-async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
-	const release = await resolveCurrentRelease(PACKAGE_NAME);
+async function getSelfUpdatePlan(force: boolean, npmCommand?: string[]): Promise<SelfUpdatePlan> {
+	const release = await resolveCurrentRelease(PACKAGE_NAME, undefined, undefined, npmCommand);
 	if (isNewerPackageVersion(VERSION, release.version)) {
 		console.log(
 			chalk.yellow(
@@ -512,7 +512,7 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 					}
 				}
 				if (updateTargetIncludesSelf(target)) {
-					const selfUpdatePlan = await getSelfUpdatePlan(options.force);
+					const selfUpdatePlan = await getSelfUpdatePlan(options.force, selfUpdateNpmCommand);
 					if (!selfUpdatePlan.shouldRun) {
 						return true;
 					}

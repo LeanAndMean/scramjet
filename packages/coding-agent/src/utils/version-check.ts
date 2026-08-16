@@ -1,6 +1,7 @@
 // SCRAMJET-DIVERGENCE: Replaced pi.dev release lookup with validated npm package resolution.
 
-import { execFile } from "node:child_process";
+import { execCommand } from "../core/exec.js";
+import { shouldUseWindowsShell } from "./child-process.js";
 
 export interface CurrentRelease {
 	packageName: string;
@@ -89,25 +90,30 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	return (comparePackageVersions(candidateVersion, currentVersion) ?? 0) > 0;
 }
 
-const executeCurrentReleaseLookup: CurrentReleaseExecutor = (command, args, options) =>
-	new Promise((resolve) => {
-		execFile(command, args, { timeout: options.timeout }, (error, stdout, stderr) => {
-			const processError = error as NodeJS.ErrnoException & { code?: number | string; killed?: boolean };
-			resolve({
-				stdout,
-				stderr: stderr || error?.message || "",
-				code: error ? (typeof processError.code === "number" ? processError.code : 1) : 0,
-				killed: processError.killed === true,
-			});
-		});
+export const executeCurrentReleaseLookup: CurrentReleaseExecutor = async (command, args, options) => {
+	const result = await execCommand(command, args, process.cwd(), {
+		timeout: options.timeout,
+		shell: shouldUseWindowsShell(command),
 	});
+	return {
+		stdout: result.stdout,
+		stderr: result.stderr || result.spawnError?.message || "",
+		code: result.code,
+		killed: result.killed,
+	};
+};
 
 export async function resolveCurrentRelease(
 	packageName: string,
 	executor: CurrentReleaseExecutor = executeCurrentReleaseLookup,
 	timeoutMs = CURRENT_RELEASE_TIMEOUT_MS,
+	commandPrefix: string[] = ["npm"],
 ): Promise<CurrentRelease> {
-	const result = await executor("npm", ["view", packageName, "version", "--json"], { timeout: timeoutMs });
+	const [command, ...prefixArgs] = commandPrefix;
+	if (!command) throw new Error("npm release lookup requires a command");
+	const result = await executor(command, [...prefixArgs, "view", packageName, "version", "--json"], {
+		timeout: timeoutMs,
+	});
 	if (result.killed) throw new Error(`npm release lookup timed out after ${timeoutMs}ms`);
 	if (result.code !== 0) {
 		const detail = result.stderr.trim();
