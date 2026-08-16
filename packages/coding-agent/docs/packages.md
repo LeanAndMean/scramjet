@@ -38,6 +38,8 @@ scramjet update --extension npm:@foo/bar
 
 By default, `install` and `remove` write to global settings (`~/.scramjet/agent/settings.json`). Use `-l` to write to project settings (`.scramjet/settings.json`) instead. Project settings can be shared with your team, and scramjet installs any missing packages automatically on startup.
 
+For a globally package-manager-managed CLI, self-update resolves one current npm release, installs that exact package version with the owning package manager, and verifies the managed package metadata before reporting success. This verification does not inspect or repair duplicate installations selected through `PATH`.
+
 To try a package without installing it, use `--extension` or `-e`. This installs to a temporary directory for the current run only:
 
 ```bash
