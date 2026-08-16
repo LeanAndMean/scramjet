@@ -29,6 +29,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	vi.doUnmock("child_process");
 	vi.doUnmock("fs");
+	vi.doUnmock("os");
 	vi.resetModules();
 });
 
@@ -94,6 +95,135 @@ describe("isCurrentInstallationManaged", () => {
 		const { isCurrentInstallationManaged } = await import("../src/config.js");
 
 		expect(isCurrentInstallationManaged()).toBe(false);
+	});
+});
+
+describe("getSelfUpdateCommand", () => {
+	it.each([
+		{
+			name: "npm",
+			execPath: (fixture: string) => join(fixture, "node_modules", "npm", "bin", "node"),
+			output: (root: string) => root,
+			args: ["install", "-g", "@leanandmean/scramjet@0.78.1"],
+		},
+		{
+			name: "pnpm",
+			execPath: (fixture: string) => join(fixture, "node_modules", ".pnpm", "node"),
+			output: (root: string) => join(root, ".pnpm"),
+			args: ["install", "-g", "@leanandmean/scramjet@0.78.1"],
+		},
+		{
+			name: "yarn",
+			execPath: (fixture: string) => join(fixture, ".yarn", "bin", "node"),
+			output: (root: string) => join(root, ".."),
+			args: ["global", "add", "@leanandmean/scramjet@0.78.1"],
+		},
+	])("pins the exact release for $name and captures the lexical manifest", async ({ execPath, output, args }) => {
+		const fixture = mkdtempSync(join(tmpdir(), "scramjet-update-command-"));
+		const root = join(fixture, "global", "node_modules");
+		const packageDir = join(root, "@leanandmean", "scramjet");
+		mkdirSync(packageDir, { recursive: true });
+		writeFileSync(join(packageDir, "package.json"), JSON.stringify({ name: "@leanandmean/scramjet" }));
+		process.env.SCRAMJET_PACKAGE_DIR = packageDir;
+		vi.spyOn(process, "execPath", "get").mockReturnValue(execPath(fixture));
+		vi.doMock("child_process", () => ({
+			spawnSync: vi.fn(() => ({ status: 0, stdout: `${output(root)}\n`, stderr: "" })),
+		}));
+
+		const { getSelfUpdateCommand } = await import("../src/config.js");
+		const command = getSelfUpdateCommand(
+			"@leanandmean/coding-agent",
+			"@leanandmean/scramjet",
+			"@leanandmean/scramjet@0.78.1",
+		);
+
+		expect(command?.args).toEqual(args);
+		expect(command?.targetManifestPath).toBe(join(root, "@leanandmean", "scramjet", "package.json"));
+		expect(command?.steps?.[0].args.at(-1)).toBe("@leanandmean/coding-agent");
+	});
+
+	it("pins the exact release for Bun's lexical global root", async () => {
+		const fixture = mkdtempSync(join(tmpdir(), "scramjet-bun-command-"));
+		const root = join(fixture, ".bun", "install", "global", "node_modules");
+		const packageDir = join(root, "@leanandmean", "scramjet");
+		mkdirSync(packageDir, { recursive: true });
+		writeFileSync(join(packageDir, "package.json"), JSON.stringify({ name: "@leanandmean/scramjet" }));
+		process.env.SCRAMJET_PACKAGE_DIR = packageDir;
+		vi.spyOn(process, "execPath", "get").mockReturnValue(join(root, "bun"));
+		vi.doMock("os", async (importOriginal) => ({
+			...(await importOriginal<typeof import("os")>()),
+			homedir: () => fixture,
+		}));
+		vi.doMock("child_process", () => ({
+			spawnSync: vi.fn(() => ({ status: 1, stdout: "", stderr: "no global project" })),
+		}));
+
+		const { getSelfUpdateCommand } = await import("../src/config.js");
+		const command = getSelfUpdateCommand(
+			"@leanandmean/scramjet",
+			"@leanandmean/scramjet",
+			"@leanandmean/scramjet@0.78.1",
+		);
+
+		expect(command?.command).toBe("bun");
+		expect(command?.args).toEqual(["install", "-g", "@leanandmean/scramjet@0.78.1"]);
+		expect(command?.targetManifestPath).toBe(join(packageDir, "package.json"));
+	});
+
+	it("retains the lexical manager root when ownership resolves through a symlink", async () => {
+		const fixture = mkdtempSync(join(tmpdir(), "scramjet-lexical-root-"));
+		const realRoot = join(fixture, "real", "node_modules");
+		const lexicalRoot = join(fixture, "global", "node_modules");
+		const realPackageDir = join(realRoot, "@leanandmean", "scramjet");
+		mkdirSync(realPackageDir, { recursive: true });
+		mkdirSync(join(fixture, "global"));
+		symlinkSync(realRoot, lexicalRoot, "dir");
+		writeFileSync(join(realPackageDir, "package.json"), JSON.stringify({ name: "@leanandmean/scramjet" }));
+		process.env.SCRAMJET_PACKAGE_DIR = join(lexicalRoot, "@leanandmean", "scramjet");
+		vi.spyOn(process, "execPath", "get").mockReturnValue(join(fixture, "node_modules", "npm", "bin", "node"));
+		vi.doMock("child_process", () => ({
+			spawnSync: vi.fn(() => ({ status: 0, stdout: `${lexicalRoot}\n`, stderr: "" })),
+		}));
+
+		const { getSelfUpdateCommand } = await import("../src/config.js");
+		const command = getSelfUpdateCommand(
+			"@leanandmean/scramjet",
+			"@leanandmean/scramjet",
+			"@leanandmean/scramjet@0.78.1",
+		);
+
+		expect(command?.targetManifestPath).toBe(join(lexicalRoot, "@leanandmean", "scramjet", "package.json"));
+	});
+
+	it("preserves configured npm arguments while pinning the install spec", async () => {
+		const fixture = mkdtempSync(join(tmpdir(), "scramjet-configured-npm-"));
+		const root = join(fixture, "node_modules");
+		const packageDir = join(root, "@leanandmean", "scramjet");
+		mkdirSync(packageDir, { recursive: true });
+		writeFileSync(join(packageDir, "package.json"), JSON.stringify({ name: "@leanandmean/scramjet" }));
+		process.env.SCRAMJET_PACKAGE_DIR = packageDir;
+		vi.spyOn(process, "execPath", "get").mockReturnValue(join(fixture, "node_modules", "npm", "bin", "node"));
+		vi.doMock("child_process", () => ({
+			spawnSync: vi.fn(() => ({ status: 0, stdout: `${root}\n`, stderr: "" })),
+		}));
+
+		const { getSelfUpdateCommand } = await import("../src/config.js");
+		const command = getSelfUpdateCommand(
+			"@leanandmean/scramjet",
+			"@leanandmean/scramjet",
+			"@leanandmean/scramjet@0.78.1",
+			["sudo", "npm", "--registry", "https://registry.example.test"],
+		);
+
+		expect(command?.command).toBe("sudo");
+		expect(command?.args).toEqual([
+			"npm",
+			"--registry",
+			"https://registry.example.test",
+			"install",
+			"-g",
+			"@leanandmean/scramjet@0.78.1",
+		]);
 	});
 });
 

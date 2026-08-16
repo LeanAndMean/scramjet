@@ -34,14 +34,18 @@ interface SelfUpdateCommandStep {
 	display: string;
 }
 
-export interface SelfUpdateCommand extends SelfUpdateCommandStep {
+interface SelfUpdateCommandPlan extends SelfUpdateCommandStep {
 	steps?: SelfUpdateCommandStep[];
+}
+
+export interface SelfUpdateCommand extends SelfUpdateCommandPlan {
+	targetManifestPath: string;
 }
 
 function makeSelfUpdateCommand(
 	installStep: SelfUpdateCommandStep,
 	uninstallStep?: SelfUpdateCommandStep,
-): SelfUpdateCommand {
+): SelfUpdateCommandPlan {
 	if (!uninstallStep) return installStep;
 	return {
 		...installStep,
@@ -103,30 +107,31 @@ function getInferredNpmInstall(): { root: string; prefix: string } | undefined {
 function getSelfUpdateCommandForMethod(
 	method: InstallMethod,
 	installedPackageName: string,
-	updatePackageName = installedPackageName,
+	targetPackageName = installedPackageName,
+	installSpec = targetPackageName,
 	npmCommand?: string[],
-): SelfUpdateCommand | undefined {
+): SelfUpdateCommandPlan | undefined {
 	switch (method) {
 		case "bun-binary":
 			return undefined;
 		case "pnpm":
 			return makeSelfUpdateCommand(
-				makeSelfUpdateCommandStep("pnpm", ["install", "-g", updatePackageName]),
-				updatePackageName === installedPackageName
+				makeSelfUpdateCommandStep("pnpm", ["install", "-g", installSpec]),
+				targetPackageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep("pnpm", ["remove", "-g", installedPackageName]),
 			);
 		case "yarn":
 			return makeSelfUpdateCommand(
-				makeSelfUpdateCommandStep("yarn", ["global", "add", updatePackageName]),
-				updatePackageName === installedPackageName
+				makeSelfUpdateCommandStep("yarn", ["global", "add", installSpec]),
+				targetPackageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep("yarn", ["global", "remove", installedPackageName]),
 			);
 		case "bun":
 			return makeSelfUpdateCommand(
-				makeSelfUpdateCommandStep("bun", ["install", "-g", updatePackageName]),
-				updatePackageName === installedPackageName
+				makeSelfUpdateCommandStep("bun", ["install", "-g", installSpec]),
+				targetPackageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep("bun", ["uninstall", "-g", installedPackageName]),
 			);
@@ -134,9 +139,9 @@ function getSelfUpdateCommandForMethod(
 			const [command = "npm", ...npmArgs] = npmCommand ?? [];
 			const inferred = npmCommand?.length ? undefined : getInferredNpmInstall();
 			const prefixArgs = [...npmArgs, ...(inferred ? ["--prefix", inferred.prefix] : [])];
-			const installStep = makeSelfUpdateCommandStep(command, [...prefixArgs, "install", "-g", updatePackageName]);
+			const installStep = makeSelfUpdateCommandStep(command, [...prefixArgs, "install", "-g", installSpec]);
 			const uninstallStep =
-				updatePackageName === installedPackageName
+				targetPackageName === installedPackageName
 					? undefined
 					: makeSelfUpdateCommandStep(command, [...prefixArgs, "uninstall", "-g", installedPackageName]);
 			return makeSelfUpdateCommand(installStep, uninstallStep);
@@ -235,19 +240,24 @@ function isSelfUpdatePathWritable(): boolean {
 	}
 }
 
+function getManagedGlobalPackageRoot(method: InstallMethod, npmCommand?: string[]): string | undefined {
+	const packageDir = normalizeExistingPathForComparison(getPackageDir());
+	if (!packageDir) return undefined;
+	return getGlobalPackageRoots(method, npmCommand)
+		.map((root) => ({ root, normalizedRoot: normalizeExistingPathForComparison(root) }))
+		.filter(
+			(candidate): candidate is { root: string; normalizedRoot: string } =>
+				!!candidate.normalizedRoot &&
+				packageDir.startsWith(
+					candidate.normalizedRoot.endsWith(sep) ? candidate.normalizedRoot : `${candidate.normalizedRoot}${sep}`,
+				),
+		)
+		.sort((a, b) => b.normalizedRoot.length - a.normalizedRoot.length)[0]?.root;
+}
+
 // SCRAMJET-DIVERGENCE: managed-install ownership is exposed independently of update writability (#432).
 function isManagedByGlobalPackageManager(method: InstallMethod, npmCommand?: string[]): boolean {
-	const packageDir = normalizeExistingPathForComparison(getPackageDir());
-	return (
-		!!packageDir &&
-		getGlobalPackageRoots(method, npmCommand).some((root) => {
-			const normalizedRoot = normalizeExistingPathForComparison(root);
-			return (
-				!!normalizedRoot &&
-				packageDir.startsWith(normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`)
-			);
-		})
-	);
+	return getManagedGlobalPackageRoot(method, npmCommand) !== undefined;
 }
 
 export function isCurrentInstallationManaged(npmCommand?: string[]): boolean {
@@ -255,16 +265,25 @@ export function isCurrentInstallationManaged(npmCommand?: string[]): boolean {
 }
 
 export function getSelfUpdateCommand(
-	packageName: string,
+	installedPackageName: string,
+	targetPackageName: string,
+	installSpec: string,
 	npmCommand?: string[],
-	updatePackageName = packageName,
 ): SelfUpdateCommand | undefined {
 	const method = detectInstallMethod();
-	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
-	if (!command || !isManagedByGlobalPackageManager(method, npmCommand) || !isSelfUpdatePathWritable()) {
-		return undefined;
-	}
-	return command;
+	const command = getSelfUpdateCommandForMethod(
+		method,
+		installedPackageName,
+		targetPackageName,
+		installSpec,
+		npmCommand,
+	);
+	const root = getManagedGlobalPackageRoot(method, npmCommand);
+	if (!command || !root || !isSelfUpdatePathWritable()) return undefined;
+	return {
+		...command,
+		targetManifestPath: join(root, ...targetPackageName.split("/"), "package.json"),
+	};
 }
 
 export function getSelfUpdateUnavailableInstruction(
@@ -277,7 +296,7 @@ export function getSelfUpdateUnavailableInstruction(
 		// SCRAMJET-DIVERGENCE: point to Scramjet releases, not upstream Pi.
 		return `Download from: https://github.com/LeanAndMean/scramjet/releases/latest`;
 	}
-	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
+	const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, updatePackageName, npmCommand);
 	if (command) {
 		if (isManagedByGlobalPackageManager(method, npmCommand) && !isSelfUpdatePathWritable()) {
 			return `This installation is managed by a global ${method} install, but the install path is not writable. Update it yourself with: ${command.display}`;

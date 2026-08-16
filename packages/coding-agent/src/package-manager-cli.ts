@@ -290,17 +290,18 @@ function printSelfUpdateFallback(command: SelfUpdateCommand): void {
 
 interface SelfUpdatePlan {
 	packageName: string;
+	version: string;
 	shouldRun: boolean;
 }
 
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	const release = await resolveCurrentRelease(PACKAGE_NAME);
 	if (force || isNewerPackageVersion(release.version, VERSION)) {
-		return { packageName: release.packageName, shouldRun: true };
+		return { ...release, shouldRun: true };
 	}
 
 	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
-	return { packageName: release.packageName, shouldRun: false };
+	return { ...release, shouldRun: false };
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
@@ -483,8 +484,9 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 					}
 					const selfUpdateCommand = getSelfUpdateCommand(
 						PACKAGE_NAME,
-						selfUpdateNpmCommand,
 						selfUpdatePlan.packageName,
+						`${selfUpdatePlan.packageName}@${selfUpdatePlan.version}`,
+						selfUpdateNpmCommand,
 					);
 					if (!selfUpdateCommand) {
 						printSelfUpdateUnavailable(selfUpdateNpmCommand, selfUpdatePlan.packageName);
