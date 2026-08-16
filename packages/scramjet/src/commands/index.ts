@@ -1,11 +1,17 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
 import { packageRoot } from "../docs-registry.js";
-import type { ScramjetState } from "../types.js";
+import type {
+	AutonomyRecommendations,
+	CommandRegistry,
+	PublicationDefault,
+	PublicationTool,
+	ScramjetState,
+} from "../types.js";
 import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
@@ -18,6 +24,37 @@ type Inspection = {
 };
 
 const BUNDLED_SETS = ["mach12", "scramjet"] as const;
+
+function filterPublicationDefaults(
+	recommendations: AutonomyRecommendations,
+	registry: CommandRegistry,
+	setRoot: string,
+	warnings: string[],
+): AutonomyRecommendations["publications"] {
+	const filtered: NonNullable<AutonomyRecommendations["publications"]> = {};
+	for (const [command, settings] of Object.entries(recommendations.publications ?? {})) {
+		const definition = registry.get(command);
+		const commandPath = definition ? resolve(definition.filePath) : "";
+		const ownerPath = resolve(setRoot);
+		const pathFromOwner = definition ? relative(ownerPath, commandPath) : "..";
+		const owned = pathFromOwner === "" || (!pathFromOwner.startsWith(`..${sep}`) && pathFromOwner !== "..");
+		if (!definition || definition.delegateOnly || !owned) {
+			warnings.push(
+				`[scramjet/discovery] ignored publication defaults for non-owned top-level command "${command}"`,
+			);
+			continue;
+		}
+		for (const [tool, setting] of Object.entries(settings) as [PublicationTool, PublicationDefault][]) {
+			if (!definition.allowedTools?.includes(tool)) {
+				warnings.push(`[scramjet/discovery] ignored publication default for undeclared tool ${command} → ${tool}`);
+				continue;
+			}
+			filtered[command] ??= {};
+			filtered[command][tool] = setting;
+		}
+	}
+	return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
 
 function safeReaddir(dir: string, warnings: string[]): { name: string; isDirectory: boolean }[] {
 	let raw: import("node:fs").Dirent[];
@@ -156,6 +193,7 @@ export function registerCommandLoader(
 		readdir: dependencies.inspection?.readdir ?? readdirSync,
 	};
 	let lastNotificationSignature = "";
+	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
 		const themePaths = [join(packageRoot(), "themes")];
@@ -208,7 +246,10 @@ export function registerCommandLoader(
 				}
 				try {
 					const recs = parseAutonomyRecommendations(content, discoveryWarnings);
-					if (Object.keys(recs.edges).length > 0) {
+					recs.publications = filterPublicationDefaults(recs, registry, set.dir, discoveryWarnings);
+					const prior = recommendations.get(set.name);
+					if (prior?.publications) recs.publications = { ...prior.publications, ...recs.publications };
+					if (Object.keys(recs.edges).length > 0 || Object.keys(recs.publications ?? {}).length > 0) {
 						for (const warning of validateRecommendations(recs, registry)) discoveryWarnings.push(warning);
 						recommendations.set(set.name, recs);
 					}
@@ -234,6 +275,20 @@ export function registerCommandLoader(
 			for (const warning of discoveryWarnings) state.logger.warn("discovery", warning);
 			for (const warning of [...warnings, ...agentWarnings, ...bridge.warnings])
 				state.logger.warn("discovery", warning);
+
+			const publicationWarnings = discoveryWarnings.filter((warning) => /publication/i.test(warning));
+			const publicationWarningSignature = publicationWarnings.join("\0");
+			if (
+				publicationWarnings.length > 0 &&
+				ctx?.hasUI &&
+				interactiveOutput &&
+				publicationWarningSignature !== lastPublicationWarningSignature
+			)
+				ctx.ui.notify(
+					`Ignored ${publicationWarnings.length} publication default${publicationWarnings.length === 1 ? "" : "s"} from autonomy-defaults.yaml; affected publications will always ask. Review discovery warnings and reload Scramjet.`,
+					"warning",
+				);
+			lastPublicationWarningSignature = publicationWarningSignature;
 
 			const visibleDiagnostics = bundled.flatMap((result) => (result.diagnostic ? [result.diagnostic] : []));
 			const signature = bundled.map((result) => result.classification).join("|");

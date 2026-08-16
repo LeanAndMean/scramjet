@@ -1,6 +1,6 @@
 import { fuzzyFilter } from "../fuzzy.js";
 import { getKeybindings } from "../keybindings.js";
-import type { Component } from "../tui.js";
+import { type Component, type Focusable, isFocusable } from "../tui.js";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.js";
 import { Input } from "./input.js";
 
@@ -15,6 +15,8 @@ export interface SettingItem {
 	currentValue: string;
 	/** If provided, Enter/Space cycles through these values */
 	values?: string[];
+	/** Confirm a value before applying it. */
+	confirmValue?: (value: string, done: (confirmed: boolean) => void) => Component | undefined;
 	/** If provided, Enter opens this submenu. Receives current value and done callback. */
 	submenu?: (currentValue: string, done: (selectedValue?: string) => void) => Component;
 }
@@ -31,7 +33,7 @@ export interface SettingsListOptions {
 	enableSearch?: boolean;
 }
 
-export class SettingsList implements Component {
+export class SettingsList implements Component, Focusable {
 	private items: SettingItem[];
 	private filteredItems: SettingItem[];
 	private theme: SettingsListTheme;
@@ -41,6 +43,7 @@ export class SettingsList implements Component {
 	private onCancel: () => void;
 	private searchInput?: Input;
 	private searchEnabled: boolean;
+	private _focused = false;
 
 	// Submenu state
 	private submenuComponent: Component | null = null;
@@ -66,6 +69,16 @@ export class SettingsList implements Component {
 		}
 	}
 
+	// SCRAMJET-DIVERGENCE: Propagate focus into search/submenus so embedded inputs expose the IME cursor marker.
+	get focused(): boolean {
+		return this._focused;
+	}
+
+	set focused(value: boolean) {
+		this._focused = value;
+		this.syncFocus();
+	}
+
 	/** Update an item's currentValue */
 	updateValue(id: string, newValue: string): void {
 		const item = this.items.find((i) => i.id === id);
@@ -75,6 +88,7 @@ export class SettingsList implements Component {
 	}
 
 	invalidate(): void {
+		this.searchInput?.invalidate();
 		this.submenuComponent?.invalidate?.();
 	}
 
@@ -138,9 +152,14 @@ export class SettingsList implements Component {
 			const usedWidth = prefixWidth + maxLabelWidth + visibleWidth(separator);
 			const valueMaxWidth = width - usedWidth - 2;
 
-			const valueText = this.theme.value(truncateToWidth(item.currentValue, valueMaxWidth, ""), isSelected);
-
-			lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
+			if (valueMaxWidth >= Math.min(12, visibleWidth(item.currentValue))) {
+				const valueText = this.theme.value(truncateToWidth(item.currentValue, valueMaxWidth, ""), isSelected);
+				lines.push(truncateToWidth(prefix + labelText + separator + valueText, width));
+			} else {
+				lines.push(truncateToWidth(prefix + this.theme.label(item.label, isSelected), width));
+				for (const valueLine of wrapTextWithAnsi(item.currentValue, Math.max(1, width - 4)))
+					lines.push(truncateToWidth(`    ${this.theme.value(valueLine, isSelected)}`, width));
+			}
 		}
 
 		// Add scroll indicator if needed
@@ -210,23 +229,43 @@ export class SettingsList implements Component {
 				}
 				this.closeSubmenu();
 			});
+			this.syncFocus();
 		} else if (item.values && item.values.length > 0) {
-			// Cycle through values
 			const currentIndex = item.values.indexOf(item.currentValue);
 			const nextIndex = (currentIndex + 1) % item.values.length;
 			const newValue = item.values[nextIndex];
-			item.currentValue = newValue;
-			this.onChange(item.id, newValue);
+			const confirmation = item.confirmValue?.(newValue, (confirmed) => {
+				if (confirmed) {
+					item.currentValue = newValue;
+					this.onChange(item.id, newValue);
+				}
+				this.closeSubmenu();
+			});
+			if (confirmation) {
+				this.submenuItemIndex = this.selectedIndex;
+				this.submenuComponent = confirmation;
+				this.syncFocus();
+			} else {
+				item.currentValue = newValue;
+				this.onChange(item.id, newValue);
+			}
 		}
 	}
 
 	private closeSubmenu(): void {
+		if (isFocusable(this.submenuComponent)) this.submenuComponent.focused = false;
 		this.submenuComponent = null;
+		this.syncFocus();
 		// Restore selection to the item that opened the submenu
 		if (this.submenuItemIndex !== null) {
 			this.selectedIndex = this.submenuItemIndex;
 			this.submenuItemIndex = null;
 		}
+	}
+
+	private syncFocus(): void {
+		if (this.searchInput) this.searchInput.focused = this._focused && this.submenuComponent === null;
+		if (isFocusable(this.submenuComponent)) this.submenuComponent.focused = this._focused;
 	}
 
 	private applyFilter(query: string): void {

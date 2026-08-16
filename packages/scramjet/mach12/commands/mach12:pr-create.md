@@ -2,6 +2,7 @@
 description: Create a pull request for the current branch with structured description
 argument-hint: "[issue-number] [context]"
 allowed-tools:
+  - create_pr
   - bash
   - read
   - grep
@@ -63,9 +64,9 @@ git diff <default-branch>...HEAD --stat
 
 If both are empty, stop and explain that the branch has no changes relative to the default branch. Suggest checking `git status` for uncommitted work. For complex changes, read enough modified files to draft an accurate summary.
 
-## Step 3: Draft PR and get approval
+## Step 3: Draft and validate the PR payload
 
-Compose a title under 70 characters in imperative form and this standard GitHub body:
+Compose an imperative title under 70 characters and this body:
 
 ```text
 ## Summary
@@ -77,42 +78,38 @@ Compose a title under 70 characters in imperative form and this standard GitHub 
 Fixes #<issue-number>
 ```
 
-For a linked PR, include exactly one standalone `Fixes #N` line for the selected issue. For an unlinked PR, omit that line: Zero closing-keyword lines is the valid result when no issue was supplied and none was inferred, or when the user explicitly declined linkage while resolving ambiguity. The initial proposal always has at most one proposed closer.
+For a linked PR, include exactly one standalone `Fixes #N` line for the selected issue. Zero closing-keyword lines is valid for an unlinked PR. The proposal always has at most one closer. Validate that the body contains zero or one closing-keyword occurrence and that any closer is a standalone line with exactly one canonical issue target. If linkage changes, repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract before finalizing the replacement payload.
 
-Format ordinary intentional GitHub relationships so they remain discoverable: same-repository issue or pull-request references use `#N`; cross-repository references use `owner/repo#N` or a canonical URL already obtained from verified GitHub evidence. Artifact-local identifiers use stable labels or plain words—such as `F1`, `S2`, “finding 1,” or “stage 2”—never bare `#N`. Ordinary references must not add closing keywords; exactly one optional standalone `Fixes #N` line remains the only authorized closer. Preserve exact comment URLs and numeric provenance fields when their stronger format is required. Incorporate additional user context into the summary or test plan when relevant.
+For ordinary intentional relationships, same-repository issue or pull-request references use `#N`; cross-repository relationships use `owner/repo#N` or an already verified canonical URL. Artifact-local identifiers use stable labels or plain words rather than bare `#N`. Ordinary references must not add closing keywords.
 
-Before presenting any initial or modified complete body, validate that it contains zero or one closing-keyword occurrence (`Fixes`, `Closes`, or `Resolves`, including accepted GitHub variants). When present, the closer must be a standalone line containing exactly one issue target; reject a line with multiple targets, multiple closing keywords, or any additional closer elsewhere in the body. If invalid, do not present it for approval; explain the invariant and ask the user to choose exactly one linked issue or no linkage.
+Internally review the complete title/body against the branch diff, selected linkage, and user context. Correct and revalidate it without separately displaying or approving the complete payload in assistant prose.
 
-Present the validated title and complete body, then ask the user to Approve, Modify, or Cancel.
+## Step 4: Synchronize and publish
 
-- **Approve:** revalidate the displayed complete body, then continue.
-- **Modify:** ask what to change and apply it. If the closing reference was added or changed, treat its canonical positive issue number as a newly selected issue and repeat Step 1's canonical-number validation and `/mach12:gh-issue-read` contract before using it. If that read fails, report the error and do not present or create the revised draft. Then validate the complete body again and only present the complete draft after its selected linkage has been resolved and read. The user may remove linkage without an issue read.
-- **Cancel:** stop without creating a PR.
+Invoking this command authorizes ensuring the branch is available on `origin`; do not ask for another push confirmation. Compare local `HEAD`, the configured upstream when present, and a fresh `origin` branch head, treating branch names as quoted data rather than shell source.
 
-Immediately before creation, validate the final approved body once more. If it no longer contains zero or one valid closing reference, stop and return to complete-body review. Create only the exact validated title and body the user approves.
+- If the fresh remote head equals local `HEAD`, do not push. If the configured upstream does not already name the matching `origin/<branch-name>` branch—including when it is absent or points elsewhere—set that tracking relationship without changing remote content.
+- If the remote branch is absent or strictly behind local `HEAD`, run one ordinary `git push -u origin <branch-name>`.
+- If the remote branch is ahead or diverged, or any lookup, push, or verification fails, stop and report the observed identities. Never force-push or guess which side should win.
 
-## Step 4: Push and create
+Record whether this invocation pushed the branch or found it already synchronized. Reverify that the fresh remote head equals local `HEAD` before calling `create_pr`, which requires the current-repository head and base branches to exist remotely.
 
-After approval, push the current branch with `git push -u origin <branch-name>`. If the push fails, report the error and stop; never force-push.
+Reconfirm the current head, default base, linkage, and draft state. State those facts and the public publication consequence concisely without repeating the complete title/body. Call `create_pr` once with the final title, body, current branch as `head`, default branch as `base`, and the chosen `draft` boolean. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply.
 
-Create the PR using a HEREDOC so the complete approved body is preserved exactly:
+Handle the result precisely:
 
-```text
-gh pr create --title "<approved-title>" --body "$(cat <<'EOF'
-<approved-body>
-EOF
-)"
-```
-
-If creation fails, report the full error. For an existing PR on the branch, report its URL with `gh pr view`; for authentication errors, suggest `gh auth status`.
+- **Verified:** capture the canonical PR/MR URL and number and continue.
+- **Cancelled:** no PR was created; report whether this invocation pushed the branch or found it already synchronized. If revisions are requested, update and revalidate the payload before a new tool call.
+- **Definite no-write failure:** surface the actionable prerequisite failure and do not claim creation.
+- **Ambiguous:** creation may have occurred. Do not retry automatically; reconcile the branch's PR/MR deliberately before another publication attempt.
 
 ## Step 5: Confirm
 
-After successful creation, report the PR number, URL, and whether the approved body links one issue or is unlinked.
+After successful creation, report the PR number, URL, and whether the published body links one issue or is unlinked.
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`. Report `status: "incomplete"` if the user cancelled. Reserve `status: "completed"` for a successfully created PR and include these selector-visible next steps in order:
 
-1. `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`; `reason`: the PR was created with its complete approved body and is ready for the recommended automated review.
+1. `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`; `reason`: the PR was created with its complete verified body and is ready for the recommended automated review.
 2. `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`; `reason`: use the slower, opt-in executable-behavior path when the PR's behavioral risk warrants test-driven regression hunting.
 
 Set `recommended_next_step` to `0`, ordinary PR review. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

@@ -625,7 +625,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 				{ name: "mach12:issue-implement", hint: "Use when the plan is small and uncontroversial." },
 			],
 		});
-		expect(globalIssuePlan?.allowedTools).toEqual(["Read", "Bash"]);
+		expect(globalIssuePlan?.allowedTools).toEqual(["Read", "Bash", "add_issue_comment"]);
 
 		expect(result.promptPaths).toEqual([...state.registry.values()].map((d) => d.filePath));
 		for (const p of result.promptPaths) {
@@ -1004,6 +1004,61 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		expect(state.autonomyRecommendations.has("mach12")).toBe(true);
 		const mach12Recs = state.autonomyRecommendations.get("mach12")!;
 		expect(mach12Recs.edges["mach12:issue-plan"]?.["mach12:pr-review"]).toBe("chain");
+		expect(mach12Recs.publications?.["mach12:issue-plan"]?.add_issue_comment).toBe("auto-approve");
+	});
+
+	it("retains publication-only command-set defaults", () => {
+		const tempGlobal = mkdtempSync(join(tmpdir(), "scramjet-publication-defaults-"));
+		const { mkdirSync, writeFileSync } = require("node:fs");
+		const commands = join(tempGlobal, "sample", "commands");
+		mkdirSync(commands, { recursive: true });
+		writeFileSync(join(commands, "sample:publish.md"), "---\nallowed-tools:\n  - create_issue\n---\nBody.");
+		writeFileSync(
+			join(tempGlobal, "sample", "autonomy-defaults.yaml"),
+			"publications:\n  sample:publish:\n    create_issue: auto-approve\n",
+		);
+		process.env.SCRAMJET_CACHE = tempGlobal;
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state);
+		handlers.get("resources_discover")![0]?.({
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		});
+		expect(state.autonomyRecommendations.get("sample")?.publications?.["sample:publish"]?.create_issue).toBe(
+			"auto-approve",
+		);
+		rmSync(tempGlobal, { recursive: true, force: true });
+	});
+
+	it("shows one deduplicated interactive warning for rejected publication defaults", () => {
+		const tempGlobal = mkdtempSync(join(tmpdir(), "scramjet-rejected-publication-defaults-"));
+		const { mkdirSync, writeFileSync } = require("node:fs");
+		const commands = join(tempGlobal, "sample", "commands");
+		mkdirSync(commands, { recursive: true });
+		writeFileSync(join(commands, "sample:publish.md"), "---\nallowed-tools:\n  - create_issue\n---\nBody.");
+		writeFileSync(
+			join(tempGlobal, "sample", "autonomy-defaults.yaml"),
+			"publications:\n  sample:publish:\n    add_pr_comment: auto-approve\n",
+		);
+		process.env.SCRAMJET_CACHE = tempGlobal;
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		registerCommandLoader(pi, state, { interactiveOutput: true });
+		const notify = vi.fn();
+		const event = {
+			type: "resources_discover",
+			cwd: join(FIXTURES, "does-not-exist"),
+			reason: "startup",
+		};
+		handlers.get("resources_discover")![0]?.(event, { hasUI: true, ui: { notify } });
+		handlers.get("resources_discover")![0]?.(event, { hasUI: true, ui: { notify } });
+		const publicationNotices = notify.mock.calls.filter(([message]) =>
+			String(message).includes("affected publications will always ask"),
+		);
+		expect(publicationNotices).toHaveLength(1);
+		rmSync(tempGlobal, { recursive: true, force: true });
 	});
 
 	it("does not store entry when autonomy-defaults.yaml is missing", () => {
@@ -1074,7 +1129,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 		writeFileSync(join(projMach12, "mach12:proj-cmd.md"), "---\n---\nBody.");
 		writeFileSync(
 			join(projDir, ".scramjet", "mach12", "autonomy-defaults.yaml"),
-			"edges:\n  mach12:issue-plan:\n    mach12:pr-review: pause\n",
+			"edges:\n  mach12:issue-plan:\n    mach12:pr-review: pause\npublications:\n  mach12:issue-plan:\n    add_issue_comment: require-approval\n",
 		);
 
 		process.env.SCRAMJET_CACHE = join(FIXTURES, "loader-global");
@@ -1090,6 +1145,7 @@ describe("registerCommandLoader — autonomy recommendations discovery", () => {
 
 		const mach12Recs = state.autonomyRecommendations.get("mach12")!;
 		expect(mach12Recs.edges["mach12:issue-plan"]?.["mach12:pr-review"]).toBe("pause");
+		expect(mach12Recs.publications?.["mach12:issue-plan"]?.add_issue_comment).toBe("auto-approve");
 
 		rmSync(projDir, { recursive: true, force: true });
 	});

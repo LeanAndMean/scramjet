@@ -1,13 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
 import type { Component } from "@leanandmean/tui";
-import { type SettingItem, SettingsList, type SettingsListTheme } from "@leanandmean/tui";
+import { Container, type SettingItem, SettingsList, type SettingsListTheme, Text } from "@leanandmean/tui";
 import {
 	applyRecommendations,
 	defaultConfigPath,
-	loadAutonomyConfig,
+	loadAutonomyConfigResult,
 	lookupEdge,
 	mergeAllRecommendations,
-	saveAutonomyConfig,
+	resolvePublicationPolicy,
+	updateAutonomyConfig,
 } from "./autonomy-settings.js";
 import { ENABLED_TOGGLE_TYPE, type EnabledToggleData } from "./history.js";
 import { DEFAULT_PREFERENCES, loadPreferences, type Preferences, savePreferences } from "./preferences.js";
@@ -15,9 +16,11 @@ import type {
 	AutonomyConfig,
 	AutonomyRecommendations,
 	NextStepPolicy,
+	PublicationTool,
 	RecommendationSetting,
 	ScramjetState,
 } from "./types.js";
+import { PUBLICATION_TOOLS } from "./types.js";
 
 export interface EdgeClassification {
 	source: string;
@@ -102,7 +105,7 @@ export function buildCommandItems(
 	state: ScramjetState,
 	configGetter: () => AutonomyConfig | null,
 	theme: SettingsListTheme,
-	onChange: (commandName: string, target: string, value: string) => void,
+	onChange: (commandName: string, target: string, value: string) => boolean | undefined,
 ): SettingItem[] {
 	const items: SettingItem[] = [];
 	const sorted = [...state.registry.entries()]
@@ -147,7 +150,7 @@ function buildEdgeSubmenu(
 	policy: NextStepPolicy,
 	configGetter: () => AutonomyConfig | null,
 	theme: SettingsListTheme,
-	onChange: (commandName: string, target: string, value: string) => void,
+	onChange: (commandName: string, target: string, value: string) => boolean | undefined,
 	onCancel: () => void,
 ): Component {
 	const edgeItems = buildEdgeItems(commandName, policy, configGetter());
@@ -157,7 +160,8 @@ function buildEdgeSubmenu(
 		theme,
 		(id, newValue) => {
 			const target = id.split("::")[1];
-			onChange(commandName, target, newValue);
+			if (onChange(commandName, target, newValue) === false)
+				list.updateValue(id, lookupEdge(configGetter(), commandName, target) ?? "default");
 		},
 		onCancel,
 	);
@@ -227,13 +231,167 @@ export function buildApplyRecommendationsItem(
 	};
 }
 
+export function buildPublicationCommandItems(
+	state: ScramjetState,
+	configGetter: () => AutonomyConfig | null,
+	theme: SettingsListTheme,
+	onChange: (commandName: string, tool: PublicationTool, value: string) => boolean | undefined,
+	configInvalid: () => boolean = () => false,
+): SettingItem[] {
+	const defaults = mergeAllRecommendations(state.autonomyRecommendations);
+	return [...state.registry.entries()]
+		.filter(([, definition]) => !definition.delegateOnly)
+		.sort(([left], [right]) => left.localeCompare(right))
+		.flatMap(([commandName, definition]) => {
+			const tools = PUBLICATION_TOOLS.filter((tool) => definition.allowedTools?.includes(tool) === true);
+			if (tools.length === 0) return [];
+			const summary = () => {
+				const config = configGetter();
+				return configInvalid()
+					? "Always ask (config error)"
+					: summarizePublicationPolicies(config, defaults, commandName, tools);
+			};
+			const commandItem: SettingItem = {
+				id: `publication-command::${commandName}`,
+				label: commandName,
+				description: publicationCommandDescription(definition.description, summary()),
+				currentValue: summary(),
+				submenu: (_currentValue: string, done: (value?: string) => void) => {
+					const config = configGetter();
+					const invalid = configInvalid();
+					const items = tools.map((tool) => {
+						const override = config?.publications?.[commandName]?.[tool];
+						const commandDefault = defaults.publications?.[commandName]?.[tool] ?? "require-approval";
+						const defaultLabel = friendlyPublicationPolicy(commandDefault);
+						const followCommand = `Follow command (${defaultLabel})`;
+						return {
+							id: `${commandName}::${tool}`,
+							label: tool,
+							description: invalid
+								? "autonomy.yaml is invalid; publication safely requires approval until the file is fixed"
+								: `${followCommand} uses the command-set author's setting; publication verification remains active`,
+							currentValue: invalid
+								? "Always ask (config error)"
+								: override === "always-ask"
+									? "Always ask"
+									: override === "auto-approve"
+										? "Auto-approve"
+										: followCommand,
+							values: invalid ? undefined : ["Always ask", followCommand, "Auto-approve"],
+							confirmValue: invalid
+								? undefined
+								: (value: string, confirm: (confirmed: boolean) => void) =>
+										value === "Auto-approve" || (value === followCommand && commandDefault === "auto-approve")
+											? publicationAutoApproveConfirmation(commandName, tool, confirm, theme)
+											: undefined,
+						};
+					});
+					const list = new SettingsList(
+						items,
+						Math.min(items.length + 2, 10),
+						theme,
+						(id, value) => {
+							const separator = id.lastIndexOf("::");
+							const tool = id.slice(separator + 2) as PublicationTool;
+							const commandDefault = defaults.publications?.[commandName]?.[tool] ?? "require-approval";
+							const followCommand = `Follow command (${friendlyPublicationPolicy(commandDefault)})`;
+							const stored =
+								value === followCommand
+									? onChange(commandName, tool, "follow-command")
+									: value === "Always ask"
+										? onChange(commandName, tool, "always-ask")
+										: value === "Auto-approve"
+											? onChange(commandName, tool, "auto-approve")
+											: undefined;
+							if (stored === false) {
+								const freshOverride = configGetter()?.publications?.[commandName]?.[tool];
+								list.updateValue(
+									id,
+									configInvalid()
+										? "Always ask (config error)"
+										: freshOverride === "always-ask"
+											? "Always ask"
+											: freshOverride === "auto-approve"
+												? "Auto-approve"
+												: followCommand,
+								);
+							}
+						},
+						() => {
+							const refreshed = summary();
+							commandItem.description = publicationCommandDescription(definition.description, refreshed);
+							done(refreshed);
+						},
+					);
+					return list;
+				},
+			};
+			return [commandItem];
+		});
+}
+
+function publicationAutoApproveConfirmation(
+	commandName: string,
+	tool: PublicationTool,
+	done: (confirmed: boolean) => void,
+	theme: SettingsListTheme,
+): Component {
+	const container = new Container();
+	container.addChild(
+		new Text(
+			`Future ${tool} publications for ${commandName} will skip the approval card. Validation and exact verification remain active.`,
+			0,
+			1,
+		),
+	);
+	const choices = new SettingsList(
+		[
+			{ id: "keep", label: "Keep current policy", currentValue: "", values: ["select"] },
+			{ id: "enable", label: "Enable Auto-approve", currentValue: "", values: ["select"] },
+		],
+		2,
+		theme,
+		(id) => done(id === "enable"),
+		() => done(false),
+	);
+	container.addChild(choices);
+	return {
+		render: (width: number) => container.render(width),
+		invalidate: () => container.invalidate(),
+		handleInput: (data: string) => choices.handleInput(data),
+	};
+}
+
+function friendlyPublicationPolicy(policy: "require-approval" | "auto-approve"): string {
+	return policy === "require-approval" ? "Always ask" : "Auto-approve";
+}
+
+function summarizePublicationPolicies(
+	config: AutonomyConfig | null,
+	defaults: AutonomyRecommendations,
+	commandName: string,
+	tools: PublicationTool[],
+): string {
+	const policies = tools.map((tool) => resolvePublicationPolicy(config, defaults, commandName, tool).policy);
+	const alwaysAsk = policies.filter((policy) => policy === "require-approval").length;
+	if (alwaysAsk === policies.length) return "Always ask";
+	if (alwaysAsk === 0) return "Auto-approve";
+	return `${alwaysAsk} Always ask · ${policies.length - alwaysAsk} Auto-approve`;
+}
+
+function publicationCommandDescription(description: string | undefined, summary: string): string {
+	return `${description ? `${description} · ` : ""}Effective publication policy: ${summary}`;
+}
+
 export function buildTopLevelItems(
 	state: ScramjetState,
 	configGetter: () => AutonomyConfig | null,
 	theme: SettingsListTheme,
-	commandOnChange: (commandName: string, target: string, value: string) => void,
+	commandOnChange: (commandName: string, target: string, value: string) => boolean | undefined,
 	configPath?: string,
 	notify?: (message: string, type?: "info" | "warning" | "error") => void,
+	publicationOnChange?: (commandName: string, tool: PublicationTool, value: string) => boolean | undefined,
+	configInvalid: () => boolean = () => false,
 ): SettingItem[] {
 	const items: SettingItem[] = [];
 
@@ -269,34 +427,39 @@ export function buildTopLevelItems(
 	const commandsWithEdges = [...state.registry.values()].filter((def) => def.next != null);
 	if (commandsWithEdges.length > 0) {
 		const edgeSummary = buildRegistrySummary(configGetter());
+		const invalid = configInvalid();
 		items.push({
 			id: "command-autonomy",
 			label: "Command autonomy",
-			description: "Per-edge overrides for command chaining behavior",
-			currentValue: edgeSummary,
-			submenu: (_currentValue, done) => {
-				const closeSummary = () => done(buildRegistrySummary(configGetter()));
-				const commandItems = buildCommandItems(state, configGetter, theme, commandOnChange);
-				const applyItem =
-					configPath && notify
-						? buildApplyRecommendationsItem(
-								state.autonomyRecommendations,
-								configGetter,
-								configPath,
-								closeSummary,
-								notify,
-								theme,
-							)
-						: null;
-				const allItems = applyItem ? [applyItem, ...commandItems] : commandItems;
-				return new SettingsList(
-					allItems,
-					Math.min(allItems.length, 10),
-					theme,
-					(_id, _newValue) => {},
-					closeSummary,
-				);
-			},
+			description: invalid
+				? "autonomy.yaml is invalid; fix it before editing command autonomy"
+				: "Per-edge overrides for command chaining behavior",
+			currentValue: invalid ? "config error" : edgeSummary,
+			submenu: invalid
+				? undefined
+				: (_currentValue, done) => {
+						const closeSummary = () => done(buildRegistrySummary(configGetter()));
+						const commandItems = buildCommandItems(state, configGetter, theme, commandOnChange);
+						const applyItem =
+							configPath && notify
+								? buildApplyRecommendationsItem(
+										state.autonomyRecommendations,
+										configGetter,
+										configPath,
+										closeSummary,
+										notify,
+										theme,
+									)
+								: null;
+						const allItems = applyItem ? [applyItem, ...commandItems] : commandItems;
+						return new SettingsList(
+							allItems,
+							Math.min(allItems.length, 10),
+							theme,
+							(_id, _newValue) => {},
+							closeSummary,
+						);
+					},
 		});
 	} else {
 		items.push({
@@ -304,6 +467,35 @@ export function buildTopLevelItems(
 			label: "Command autonomy",
 			description: "No commands with next-step policies registered — load a command set to configure edges",
 			currentValue: "no edges",
+		});
+	}
+
+	const publicationCommands = publicationOnChange
+		? buildPublicationCommandItems(state, configGetter, theme, publicationOnChange, configInvalid)
+		: [];
+	if (publicationCommands.length > 0 && publicationOnChange) {
+		items.push({
+			id: "publication-approval",
+			label: "Publication approval",
+			description: "Per-command approval behavior for eligible forge publication tools",
+			currentValue: `${publicationCommands.length} command${publicationCommands.length === 1 ? "" : "s"}`,
+			submenu: (_currentValue, done) => {
+				const commandItems = buildPublicationCommandItems(
+					state,
+					configGetter,
+					theme,
+					publicationOnChange,
+					configInvalid,
+				);
+				return new SettingsList(
+					commandItems,
+					Math.min(commandItems.length, 10),
+					theme,
+					() => {},
+					() => done(),
+					{ enableSearch: commandItems.length > 10 },
+				);
+			},
 		});
 	}
 
@@ -320,26 +512,68 @@ function buildRegistrySummary(config: AutonomyConfig | null): string {
 
 export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, state: ScramjetState): Promise<void> {
 	const configPath = state.autonomyConfigPath || defaultConfigPath();
-	const configGetter = () => safeLoadConfig(configPath, ctx);
-
-	const handleAutonomyChange = (commandName: string, target: string, value: string) => {
-		const current = configGetter() ?? { edges: {} };
-		if (value === "default") {
-			if (current.edges[commandName]) {
-				delete current.edges[commandName][target];
-				if (Object.keys(current.edges[commandName]).length === 0) {
-					delete current.edges[commandName];
-				}
+	let configInvalid = false;
+	let lastConfigError = "";
+	const configGetter = () => {
+		const result = loadAutonomyConfigResult(configPath);
+		configInvalid = result.status === "invalid";
+		if (result.status === "invalid") {
+			if (result.error.message !== lastConfigError) {
+				lastConfigError = result.error.message;
+				ctx.ui.notify(
+					`autonomy.yaml is corrupt or unreadable — approval is required: ${result.error.message}`,
+					"warning",
+				);
 			}
-		} else {
-			if (!current.edges[commandName]) current.edges[commandName] = {};
-			current.edges[commandName][target] = value as "chain" | "pause";
+			return null;
 		}
+		lastConfigError = "";
+		return result.status === "valid" ? result.config : null;
+	};
+
+	const handleAutonomyChange = (commandName: string, target: string, value: string): boolean => {
 		try {
-			saveAutonomyConfig(configPath, current);
+			updateAutonomyConfig(configPath, (current) => {
+				if (value === "default") {
+					if (!current.edges[commandName]?.[target]) return false;
+					delete current.edges[commandName][target];
+					if (Object.keys(current.edges[commandName]).length === 0) delete current.edges[commandName];
+				} else {
+					current.edges[commandName] ??= {};
+					if (current.edges[commandName][target] === value) return false;
+					current.edges[commandName][target] = value as "chain" | "pause";
+				}
+				return true;
+			});
+			return true;
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
 			ctx.ui.notify(`Failed to save autonomy config: ${msg}`, "error");
+			return false;
+		}
+	};
+
+	const handlePublicationChange = (commandName: string, tool: PublicationTool, value: string): boolean => {
+		try {
+			updateAutonomyConfig(configPath, (current) => {
+				if (value === "follow-command") {
+					if (!current.publications?.[commandName]?.[tool]) return false;
+					delete current.publications[commandName][tool];
+					if (Object.keys(current.publications[commandName]).length === 0)
+						delete current.publications[commandName];
+				} else {
+					current.publications ??= {};
+					current.publications[commandName] ??= {};
+					if (current.publications[commandName][tool] === value) return false;
+					current.publications[commandName][tool] = value as "always-ask" | "auto-approve";
+				}
+				return true;
+			});
+			return true;
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			ctx.ui.notify(`Failed to save autonomy config: ${msg}`, "error");
+			return false;
 		}
 	};
 
@@ -353,6 +587,8 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 			handleAutonomyChange,
 			configPath,
 			(msg, type) => ctx.ui.notify(msg, type),
+			handlePublicationChange,
+			() => configInvalid,
 		);
 		const list = new SettingsList(
 			topItems,
@@ -379,6 +615,12 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 		);
 
 		return {
+			get focused() {
+				return list.focused;
+			},
+			set focused(value: boolean) {
+				list.focused = value;
+			},
 			render(width: number) {
 				return list.render(width);
 			},
@@ -392,14 +634,4 @@ export async function showSettingsPage(pi: ExtensionAPI, ctx: ExtensionContext, 
 			dispose() {},
 		};
 	});
-}
-
-function safeLoadConfig(configPath: string, ctx: ExtensionContext): AutonomyConfig | null {
-	try {
-		return loadAutonomyConfig(configPath);
-	} catch (err: unknown) {
-		const msg = err instanceof Error ? err.message : String(err);
-		ctx.ui.notify(`autonomy.yaml is corrupt or unreadable — starting with defaults: ${msg}`, "warning");
-		return null;
-	}
 }

@@ -2,6 +2,7 @@
 description: Read a GitHub issue, analyze the codebase, and create a staged implementation plan
 argument-hint: "<issue-number> [context]"
 allowed-tools:
+  - add_issue_comment
   - bash
   - read
   - grep
@@ -246,27 +247,13 @@ Immediately before drafting the durable artifact, delegate once in this turn to:
 
 This loads the canonical artifact policy into the current model context; it does not run an independent formatter. Do not pass candidate Markdown through the delegation arguments.
 
-Apply the contract to the selected architecture, codebase and architect evidence, test strategy, project planning requirements, and user decisions from the preceding steps. Draft the exact, complete post-ready body beginning with `<!-- mach12-plan -->`, then run the contract's final self-check. Resolve defects supported by the available evidence before presentation; if evidence is genuinely missing or contradictory, gather it or ask the user rather than presenting an incomplete marker-bearing body.
+Apply the contract to the selected architecture, codebase and architect evidence, test strategy, project planning requirements, and user decisions from the preceding steps. Draft the exact, complete post-ready body beginning with `<!-- mach12-plan -->`, then run the contract's final self-check. Resolve defects supported by the available evidence before publication; if evidence is genuinely missing or contradictory, gather it or ask the user rather than finalizing an incomplete marker-bearing body.
 
 ## Step 10: Post plan and create branch
 
-Display the exact, complete marker-bearing body that will be posted, then ask:
+After the plan passes the contract self-check, do not display the complete body in assistant prose or ask for a separate approval.
 
-- **Approve**: post that body unchanged and create the feature branch
-- **Request changes**: suggest changes before posting
-- **Cancel**: abort without posting the plan or creating a branch
-
-If the user requests changes, discuss the feedback. In the next drafting turn, load `/mach12:plan-comment-contract initial` once, revise and self-check the complete body, and display the entire replacement for approval again. Never present only a delta. If the user cancels, stop and confirm that the plan was not posted and no branch was created.
-
-After the user approves the plan:
-
-1. **Post the approved plan as a reply comment on the issue.** Pass the exact approved body unchanged to the existing comment subroutine; do not regenerate, summarize, or reformat it after approval. Then delegate to:
-
-   ```
-   /mach12:gh-comment issue <issue-number>
-   ```
-
-   The subroutine posts the prepared body and returns the comment URL and numeric ID.
+1. **Publish the final plan as a reply comment on the issue.** State the selected architecture, stage count, and publication consequence concisely without repeating the complete plan. Call `add_issue_comment` with the issue number and exact final marker-bearing body. When effective policy requires approval, the approval card presents the exact payload. Regardless of policy, guarded publication and exact verification apply. Continue only after verified publication; cancellation creates no branch or assignment side effects, and ambiguity must be reconciled without automatic retry.
 
 2. **Create a feature branch**:
    - Derive a short slug from the issue title (lowercase, hyphens, 3-5 words max).

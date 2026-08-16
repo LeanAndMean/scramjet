@@ -96,7 +96,7 @@ attribution through revisions.
 
 ## Step 6: Run the final self-check
 
-Before the caller presents the artifact, check it against the issue requirements, selected design, relevant architect
+Before the caller passes the artifact to the publication tool, check it against the issue requirements, selected design, relevant architect
 evidence, test strategy, user decisions, project constraints, and, in revision mode, the prior plan plus classified
 deltas.
 
@@ -110,7 +110,7 @@ Check specifically for:
 - a body that is not complete, standalone, or post-ready;
 - intentional GitHub relationships that are not linkable, or artifact-local identifiers written as bare `#N`.
 
-Revise every defect that the available evidence can resolve before presentation. If evidence is genuinely missing or
+Revise every defect that the available evidence can resolve before publication. If evidence is genuinely missing or
 contradictory, do not emit a marker-bearing candidate; instead surface only a concise list of the unresolved items so the
 caller can gather evidence or ask the user.
 
@@ -118,8 +118,9 @@ caller can gather evidence or ask the user.
 
 Do not call tools, dispatch subagents, ask the user questions, post to GitHub, report top-level command status, choose an
 architecture, classify review findings, approve the plan, or route the workflow. The calling command owns those actions
-and must display the exact complete candidate for approval, then pass the approved body unchanged to its existing GitHub
-comment subroutine.
+and must provide concise decision context, then pass the complete final candidate only as arguments to the applicable
+forge publication tool. When effective policy requires approval, the approval card presents the exact payload. Regardless
+of policy, guarded publication and exact verification apply.
 
 Do not pass candidate Markdown through this command's arguments: argument substitution tokenizes and rejoins content and
 cannot preserve exact formatting. Invoke this contract at most once per turn because delegated frames are latched and a

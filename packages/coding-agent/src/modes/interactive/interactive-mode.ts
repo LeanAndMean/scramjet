@@ -2394,6 +2394,10 @@ export class InteractiveMode {
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
 		options?: {
 			overlay?: boolean;
+			toolAttachedContext?: {
+				toolCallId: string;
+				render: (tui: TUI, theme: Theme) => Component;
+			};
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			onHandle?: (handle: OverlayHandle) => void;
 		},
@@ -2411,11 +2415,14 @@ export class InteractiveMode {
 
 		return new Promise((resolve, reject) => {
 			let component: Component & { dispose?(): void };
+			let attachedTool: ToolExecutionComponent | undefined;
+			let committedContext: Component | undefined;
 			let closed = false;
 
 			const close = (result: T) => {
 				if (closed) return;
 				closed = true;
+				attachedTool?.detachCommittedContext();
 				if (isOverlay) this.ui.hideOverlay();
 				else restoreEditor();
 				// Note: both branches above already call requestRender
@@ -2428,9 +2435,39 @@ export class InteractiveMode {
 			};
 
 			Promise.resolve(factory(this.ui, theme, this.keybindings, close))
-				.then((c) => {
+				.then(async (c) => {
 					if (closed) return;
 					component = c;
+					const attachment = options?.toolAttachedContext;
+					if (attachment) {
+						if (isOverlay) throw new Error("Tool-attached context cannot be shown as an overlay");
+						const tool = this.pendingTools.get(attachment.toolCallId);
+						const orderingBarrier = this.chatContainer.children.find((child) =>
+							this.mutableChatComponents.has(child),
+						);
+						if (!tool || !this.chatContainer.children.includes(tool) || orderingBarrier !== tool) {
+							throw new Error("Tool-attached context requires the current pending tool row");
+						}
+						attachedTool = tool;
+						committedContext = attachment.render(this.ui, theme);
+						this.committedChatContainer.addChild(committedContext);
+						tool.attachCommittedContext(component);
+						this.ui.setFocus(null);
+						this.editorContainer.clear();
+						try {
+							await this.ui.commitNow({ requireFlush: true });
+						} catch (error) {
+							tool.cancelCommittedContext();
+							this.committedChatContainer.removeChild(committedContext);
+							committedContext = undefined;
+							this.ui.rebuild();
+							throw error;
+						}
+						if (closed) return;
+						this.ui.setFocus(tool);
+						this.ui.requestRender();
+						return;
+					}
 					if (isOverlay) {
 						// Resolve overlay options - can be static or dynamic function
 						const resolveOptions = (): OverlayOptions | undefined => {
@@ -2457,6 +2494,16 @@ export class InteractiveMode {
 				})
 				.catch((err) => {
 					if (closed) return;
+					attachedTool?.cancelCommittedContext();
+					if (committedContext) {
+						this.committedChatContainer.removeChild(committedContext);
+						this.ui.rebuild();
+					}
+					try {
+						component?.dispose?.();
+					} catch {
+						/* ignore dispose errors */
+					}
 					if (!isOverlay) restoreEditor();
 					reject(err);
 				});

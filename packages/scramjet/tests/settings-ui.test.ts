@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Component } from "@leanandmean/tui";
+import { type Component, CURSOR_MARKER } from "@leanandmean/tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAutonomyConfig, resetCache, saveAutonomyConfig } from "../src/autonomy-settings.js";
 import { loadPreferences, resetCache as resetPrefsCache, savePreferences } from "../src/preferences.js";
@@ -9,6 +9,7 @@ import {
 	buildApplyRecommendationsItem,
 	buildCommandItems,
 	buildEdgeItems,
+	buildPublicationCommandItems,
 	buildTopLevelItems,
 	classifyRecommendationEdges,
 	showSettingsPage,
@@ -135,6 +136,138 @@ describe("buildEdgeItems", () => {
 		const policy: NextStepPolicy = { mode: "closed", candidates: [{ name: "mach12:x" }] };
 		const items = buildEdgeItems("mach12:cmd", policy, null);
 		expect(items[0].currentValue).toBe("default");
+	});
+});
+
+describe("buildPublicationCommandItems", () => {
+	it("shows only eligible commands and tools with friendly effective policies", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:review", { ...makeCommandDef("mach12:review"), allowedTools: ["create_issue", "add_pr_comment"] }],
+			["mach12:none", makeCommandDef("mach12:none")],
+			["mach12:delegate", { ...makeCommandDef("mach12:delegate"), delegateOnly: true, allowedTools: ["create_pr"] }],
+		]);
+		state.autonomyRecommendations = new Map([
+			[
+				"mach12",
+				{
+					edges: {},
+					publications: {
+						"mach12:review": { create_issue: "require-approval", add_pr_comment: "auto-approve" },
+					},
+				},
+			],
+		]);
+		const config: AutonomyConfig = {
+			edges: {},
+			publications: { "mach12:review": { create_issue: "always-ask", create_pr: "auto-approve" } },
+		};
+		const changes: unknown[] = [];
+		const commands = buildPublicationCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			(...change) => changes.push(change),
+		);
+		expect(commands.map((item) => item.label)).toEqual(["mach12:review"]);
+		expect(commands[0].currentValue).toBe("1 Always ask · 1 Auto-approve");
+		const submenu = commands[0].submenu?.(commands[0].currentValue, () => {});
+		const askText = renderText(submenu);
+		expect(askText).toContain("create_issue");
+		expect(askText).toContain("Always ask");
+		expect(askText).toContain("Follow command (Always ask)");
+		expect(askText).not.toContain("create_pr");
+		expect(askText).not.toContain("add_issue_comment");
+		submenu?.handleInput?.("\x1b[B");
+		const autoApproveText = renderText(submenu);
+		expect(autoApproveText).toContain("add_pr_comment");
+		expect(autoApproveText).toContain("Follow command (Auto-approve)");
+		expect(`${askText}\n${autoApproveText}`).not.toMatch(/follow-command|require-approval|always-ask/);
+	});
+
+	it("uses Always ask for a missing command default and translates friendly choices", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
+		]);
+		const changes: unknown[] = [];
+		const commands = buildPublicationCommandItems(
+			state,
+			() => null,
+			noopTheme,
+			(...change) => changes.push(change),
+		);
+		expect(commands[0].currentValue).toBe("Always ask");
+		const submenu = commands[0].submenu?.(commands[0].currentValue, () => {});
+		expect(renderText(submenu)).toContain("Follow command (Always ask)");
+		submenu?.handleInput?.("\r");
+		expect(changes).toEqual([]);
+		expect(renderText(submenu)).toContain("Keep current policy");
+		submenu?.handleInput?.("\x1b[B");
+		submenu?.handleInput?.("\r");
+		expect(changes).toEqual([["sample:publish", "create_issue", "auto-approve"]]);
+	});
+
+	it("restores the persisted policy when saving a changed value fails", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
+		]);
+		const config = { edges: {}, publications: { "sample:publish": { create_issue: "always-ask" as const } } };
+		const command = buildPublicationCommandItems(
+			state,
+			() => config,
+			noopTheme,
+			() => false,
+		)[0]!;
+		const submenu = command.submenu?.(command.currentValue, vi.fn());
+		submenu?.handleInput?.("\r");
+		expect(renderText(submenu).split("\n")[0]).toContain("Always ask");
+	});
+
+	it("confirms Follow command when its effective default is Auto-approve", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
+		]);
+		state.autonomyRecommendations = new Map([
+			["sample", { edges: {}, publications: { "sample:publish": { create_issue: "auto-approve" } } }],
+		]);
+		const changes: unknown[] = [];
+		const command = buildPublicationCommandItems(
+			state,
+			() => ({ edges: {}, publications: { "sample:publish": { create_issue: "always-ask" } } }),
+			noopTheme,
+			(...change) => changes.push(change),
+		)[0]!;
+		const submenu = command.submenu?.(command.currentValue, vi.fn());
+		submenu?.handleInput?.("\r");
+		expect(changes).toEqual([]);
+		expect(renderText(submenu)).toContain("Keep current policy");
+		submenu?.handleInput?.("\x1b[B");
+		submenu?.handleInput?.("\r");
+		expect(changes).toEqual([["sample:publish", "create_issue", "follow-command"]]);
+	});
+
+	it("shows corrupt policy as read-only Always ask instead of an author auto-approve default", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["sample:publish", { ...makeCommandDef("sample:publish"), allowedTools: ["create_issue"] }],
+		]);
+		state.autonomyRecommendations = new Map([
+			["sample", { edges: {}, publications: { "sample:publish": { create_issue: "auto-approve" } } }],
+		]);
+		const command = buildPublicationCommandItems(
+			state,
+			() => null,
+			noopTheme,
+			() => undefined,
+			() => true,
+		)[0]!;
+		expect(command.currentValue).toBe("Always ask (config error)");
+		const submenu = command.submenu?.(command.currentValue, vi.fn());
+		expect(renderText(submenu)).toContain("Always ask (config error)");
+		expect(renderText(submenu)).toContain("safely requires approval");
 	});
 });
 
@@ -337,6 +470,25 @@ describe("buildTopLevelItems", () => {
 		expect(autonomy?.submenu).toBeUndefined();
 	});
 
+	it("makes command autonomy read-only when user config is invalid", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:a", makeCommandDef("mach12:a", { mode: "closed", candidates: [{ name: "mach12:b" }] })],
+		]);
+		const item = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => true,
+		).find((candidate) => candidate.id === "command-autonomy")!;
+		expect(item.currentValue).toBe("config error");
+		expect(item.submenu).toBeUndefined();
+	});
+
 	it("shows override count in command autonomy summary", () => {
 		const state = freshState();
 		state.registry = new Map([
@@ -410,6 +562,52 @@ describe("buildTopLevelItems", () => {
 		submenu?.handleInput?.("\x1b");
 
 		expect(selectedValue).toBe("1 override");
+	});
+
+	it("omits publication approval when no top-level command allows a publication tool", () => {
+		const state = freshState();
+		state.registry = new Map([
+			["mach12:none", makeCommandDef("mach12:none")],
+			[
+				"mach12:delegate",
+				{ ...makeCommandDef("mach12:delegate"), delegateOnly: true, allowedTools: ["create_issue"] },
+			],
+		]);
+		const items = buildTopLevelItems(
+			state,
+			() => null,
+			noopTheme,
+			() => {},
+			undefined,
+			undefined,
+			() => {},
+		);
+		expect(items.some((item) => item.id === "publication-approval")).toBe(false);
+	});
+
+	it("enables search only for long publication command lists", () => {
+		const build = (count: number) => {
+			const state = freshState();
+			state.registry = new Map(
+				Array.from({ length: count }, (_, index) => [
+					`mach12:publish-${index}`,
+					{ ...makeCommandDef(`mach12:publish-${index}`), allowedTools: ["add_pr_comment"] },
+				]),
+			);
+			const items = buildTopLevelItems(
+				state,
+				() => null,
+				noopTheme,
+				() => {},
+				undefined,
+				undefined,
+				() => {},
+			);
+			const publication = items.find((item) => item.id === "publication-approval");
+			return renderText(publication?.submenu?.("command defaults", () => {}));
+		};
+		expect(build(10)).not.toContain("Type to search");
+		expect(build(11)).toContain("Type to search");
 	});
 });
 
@@ -513,6 +711,148 @@ describe("showSettingsPage", () => {
 		const prefs = loadPreferences(prefsPath);
 		expect(prefs.bell).toBe(true);
 		expect(prefs.title_indicator).toBe(true);
+	});
+
+	it("friendly Follow command removes only the selected publication override", async () => {
+		const configPath = path.join(tmpDir!, "autonomy.yaml");
+		saveAutonomyConfig(configPath, {
+			edges: {},
+			publications: {
+				"mach12:publish": { create_issue: "always-ask", add_pr_comment: "auto-approve" },
+			},
+		});
+		const state = freshState({ autonomyConfigPath: configPath });
+		state.registry = new Map([
+			["mach12:publish", { ...makeCommandDef("mach12:publish"), allowedTools: ["create_issue", "add_pr_comment"] }],
+		]);
+		state.autonomyRecommendations = new Map([
+			[
+				"mach12",
+				{
+					edges: {},
+					publications: { "mach12:publish": { create_issue: "require-approval" } },
+				},
+			],
+		]);
+		const ctx = {
+			ui: {
+				notify: vi.fn(),
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+					for (let index = 0; index < 4; index++) component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+				},
+			},
+		};
+
+		await showSettingsPage({ appendEntry: vi.fn() } as never, ctx as never, state);
+
+		expect(loadAutonomyConfig(configPath)).toEqual({
+			edges: {},
+			publications: { "mach12:publish": { add_pr_comment: "auto-approve" } },
+		});
+	});
+
+	it("persists an explicit friendly policy without disturbing sibling settings", async () => {
+		const configPath = path.join(tmpDir!, "autonomy.yaml");
+		saveAutonomyConfig(configPath, {
+			edges: { "mach12:publish": { next: "pause" } },
+			publications: { "mach12:publish": { add_pr_comment: "always-ask" } },
+		});
+		const state = freshState({ autonomyConfigPath: configPath });
+		state.registry = new Map([
+			["mach12:publish", { ...makeCommandDef("mach12:publish"), allowedTools: ["create_issue", "add_pr_comment"] }],
+		]);
+		const ctx = {
+			ui: {
+				notify: vi.fn(),
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+					for (let index = 0; index < 4; index++) component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+					component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
+				},
+			},
+		};
+
+		await showSettingsPage({ appendEntry: vi.fn() } as never, ctx as never, state);
+
+		expect(loadAutonomyConfig(configPath)).toEqual({
+			edges: { "mach12:publish": { next: "pause" } },
+			publications: {
+				"mach12:publish": { create_issue: "auto-approve", add_pr_comment: "always-ask" },
+			},
+		});
+	});
+
+	it("forwards settings-page focus to the searchable publication list", async () => {
+		const state = freshState();
+		state.registry = new Map(
+			Array.from({ length: 11 }, (_, index) => [
+				`mach12:publish-${index}`,
+				{ ...makeCommandDef(`mach12:publish-${index}`), allowedTools: ["add_pr_comment"] },
+			]),
+		);
+		let rendered = "";
+		const ctx = {
+			ui: {
+				notify: vi.fn(),
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn()) as Component & {
+						focused: boolean;
+					};
+					for (let index = 0; index < 4; index++) component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
+					component.focused = true;
+					rendered = component.render(80).join("\n");
+				},
+			},
+		};
+
+		await showSettingsPage({ appendEntry: vi.fn() } as never, ctx as never, state);
+
+		expect(rendered).toContain(CURSOR_MARKER);
+	});
+
+	it("does not overwrite corrupt autonomy config from publication settings", async () => {
+		const configPath = path.join(tmpDir!, "autonomy.yaml");
+		const original = "{ invalid: [";
+		fs.writeFileSync(configPath, original);
+		resetCache();
+		const state = freshState({ autonomyConfigPath: configPath });
+		state.registry = new Map([["mach12:cmd", { ...makeCommandDef("mach12:cmd"), allowedTools: ["create_issue"] }]]);
+		const notify = vi.fn();
+		const ctx = {
+			ui: {
+				notify,
+				custom: async (
+					factory: (tui: unknown, theme: typeof tuiTheme, keybindings: unknown, done: () => void) => Component,
+				) => {
+					const component = factory({ requestRender: vi.fn() }, tuiTheme, {}, vi.fn());
+					for (let index = 0; index < 4; index++) component.handleInput?.("\x1b[B");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+					component.handleInput?.("\r");
+				},
+			},
+		};
+
+		await showSettingsPage({ appendEntry: vi.fn() } as never, ctx as never, state);
+
+		expect(fs.readFileSync(configPath, "utf-8")).toBe(original);
+		expect(notify.mock.calls.some(([message]) => String(message).includes("approval is required"))).toBe(true);
+		expect(fs.existsSync(`${configPath}.tmp`)).toBe(false);
 	});
 
 	it("preserves fresh disk overrides when saving an autonomy toggle", async () => {

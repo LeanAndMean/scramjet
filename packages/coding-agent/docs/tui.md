@@ -14,7 +14,7 @@ The interactive mode separates terminal output into append-only committed histor
 
 Mutable output is tail-windowed to at most `terminal.rows - 1` rendered lines before it is written, so live content cannot push mutable rows into native scrollback. Finalization removes the mutable preview and commits the component's finalized presentation once. Pending tools form an ordering barrier, and image-backed tools commit only after their conversions settle.
 
-At the TUI API level, `setLiveRegionStart(component)` selects the first direct child in the live canvas, `commit()` atomically appends newly finalized rows, and `rebuild()` deliberately repaints retained history. Detaching the selected component safely resets committed rendering and returns the TUI to legacy full-repaint rendering. Routine updates, content shrink, temporary-UI dismissal, and height-only resize do not clear scrollback or replay committed history. Width and theme changes, session reconstruction, presentation-setting changes, reload, resume, and external-editor return use deliberate rebuilds because retained output must be reflowed or restyled; those rebuilds intentionally bottom-anchor the display.
+At the TUI API level, `setLiveRegionStart(component)` selects the first direct child in the live canvas, `commit()` schedules atomic append of newly finalized rows, `commitNow()` renders immediately and waits for terminal output to flush when controls must not receive input first, and `rebuild()` deliberately repaints retained history. Detaching the selected component safely resets committed rendering and returns the TUI to legacy full-repaint rendering. Routine updates, content shrink, temporary-UI dismissal, and height-only resize do not clear scrollback or replay committed history. Width and theme changes, session reconstruction, presentation-setting changes, reload, resume, and external-editor return use deliberate rebuilds because retained output must be reflowed or restyled; those rebuilds intentionally bottom-anchor the display.
 
 Overlays remain screen-relative and are composed over the bounded live canvas. Closing an overlay or autocomplete restores the underlying live rows without mutating committed history.
 
@@ -108,15 +108,32 @@ pi.on("session_start", async (_event, ctx) => {
 });
 ```
 
-**In custom tools** via `pi.ui.custom()`:
+**In custom tools** via `ctx.ui.custom()`:
 
 ```typescript
 async execute(toolCallId, params, onUpdate, ctx, signal) {
-  const handle = pi.ui.custom(myComponent);
+  const result = await ctx.ui.custom((_tui, _theme, _keybindings, done) => myComponent(done));
   // ...
-  handle.close();
 }
 ```
+
+### Tool-attached committed context
+
+A pending sequential tool can pair compact live controls with immutable long-form context committed at that tool's transcript position:
+
+```typescript
+const result = await ctx.ui.custom(
+  (_tui, _theme, _keybindings, done) => new ApprovalSelector(done),
+  {
+    toolAttachedContext: {
+      toolCallId,
+      render: (_tui, theme) => new Markdown(completePayload, 0, 0, getMarkdownTheme()),
+    },
+  },
+);
+```
+
+The context is constructed after the controls factory resolves, anchored to the named pending tool row, and committed once. The editor is defocused before terminal flushing begins; controls receive focus only after that flush settles. It is retained internally for deliberate width/theme rebuilds but is not persisted or sent to the model. Native scrollback retention depends on terminal capacity and configuration. The operation fails closed when the row is missing, settled, or cannot be flushed; use it only from the sequential tool identified by `toolCallId`.
 
 ## Overlays
 
@@ -722,6 +739,8 @@ pi.registerCommand("settings", {
       container.addChild(settingsList);
 
       return {
+        get focused() { return settingsList.focused; },
+        set focused(value) { settingsList.focused = value; },
         render: (w) => container.render(w),
         invalidate: () => container.invalidate(),
         handleInput: (data) => settingsList.handleInput?.(data),
@@ -730,6 +749,8 @@ pi.registerCommand("settings", {
   },
 });
 ```
+
+With `enableSearch`, typing fuzzy-filters labels, Backspace edits the query, and Up/Down plus Enter/Space navigate and activate matches. `SettingsList` propagates focus to its search input and nested focusable submenus for IME cursor placement; a wrapper returned from `ctx.ui.custom()` must forward `focused` as shown above.
 
 **Examples:** [tools.ts](../examples/extensions/tools.ts)
 

@@ -91,11 +91,13 @@ describe("mach12 pr-validation candidate workflow", () => {
 		expectInOrder(
 			publication,
 			"Prepare a review body",
-			"Post through `/mach12:gh-comment pr <pr-number>`",
+			"call `add_pr_comment`",
 			"Do not normalize tests into final suites",
 			"`message`: `/mach12:pr-validation-assessment <pr-number> --review-comment <numeric-comment-id>`",
 		);
 		expect(publication).toContain("preliminary claims awaiting independent assessment");
+		expect(publication).not.toContain("Present the candidate results");
+		expect(publication).toContain("Retain the verified review URL and numeric ID");
 		expect(publication).toContain("`fresh_session`: `false`");
 		expect(publication).not.toContain("/mach12:push");
 	});
@@ -132,6 +134,13 @@ describe("mach12 pr-validation-assessment accepted-proof workflow", () => {
 		);
 		expect(command).toContain("do not retain optional red proofs");
 		expect(command).toContain("Do not repair production code");
+	});
+
+	it("does not repeat final candidate dispositions after assessment publication", () => {
+		const publication = section(command, "## Step 4:", "## Step 5:");
+		expect(publication).not.toContain("Present the final dispositions");
+		expect(publication).toContain("Retain the verified assessment ID");
+		expect(publication).toContain("accepted IDs for routing");
 	});
 
 	it("creates one accepted-only proof commit or no commit when nothing survives", () => {
@@ -253,7 +262,7 @@ describe("mach12 authoritative GitHub history helpers", () => {
 
 	it("reads plausible duplicate candidates before issue classification", () => {
 		const issueCreate = readFileSync(join(COMMANDS_DIR, "mach12:issue-create.md"), "utf-8");
-		const duplicateCheck = section(issueCreate, "## Step 10:", "## Step 11:");
+		const duplicateCheck = section(issueCreate, "## Step 9:", "## Step 10:");
 		expect(duplicateCheck).toContain("/mach12:gh-issue-read <candidate-number>");
 		expect(duplicateCheck).toContain("Only a successfully read candidate can be a clear duplicate");
 		expect(duplicateCheck).toContain("old age is insufficient proof that it is obsolete");
@@ -324,12 +333,13 @@ describe("mach12 executable validation integration", () => {
 		expect(push).toContain("Preserve an exact originating review ID");
 	});
 
-	it("captures the exact comment identity from the posting command", () => {
-		const ghComment = readFileSync(join(COMMANDS_DIR, "mach12:gh-comment.md"), "utf-8");
-		expect(ghComment).toContain("capture the posting command's output");
-		expect(ghComment).toContain("Use that returned URL directly");
-		expect(ghComment).toContain("do not infer identity by rereading the latest comment");
-		expect(ghComment).not.toContain(".comments[-1].url");
+	it("captures verified comment identity before routing", () => {
+		const validation = readFileSync(join(COMMANDS_DIR, "mach12:pr-validation.md"), "utf-8");
+		expect(validation).toContain("call `add_pr_comment`");
+		expect(validation).toContain("Continue only when publication is verified");
+		expect(validation).toContain("extract and retain the numeric GitHub comment ID from the verified canonical URL");
+		expect(validation).not.toContain("re-fetch that exact comment");
+		expect(validation).toContain("ambiguity prohibits automatic retry");
 	});
 
 	it("keeps final review, validation, and pre-merge choices after fixes", () => {

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.80.0 — Add guarded inline forge publication
+
+Adds exact, independently allowlistable GitHub and GitLab publication tools with inline approval and per-command autonomy. Fixes [#479](https://github.com/LeanAndMean/scramjet/issues/479) and [#480](https://github.com/LeanAndMean/scramjet/issues/480).
+
+### Added
+
+- Add issue, pull-request, and comment publication tools with canonical-origin checks, immutable payload transport, exact-ID refetch verification, and ambiguous-write no-retry behavior.
+- Add terminal-safe, tool-owned approval cards and per-command publication policy defaults and user overrides.
+- Expose publication policy controls in `/scramjet settings` and migrate supported Mach 12 publication flows.
+
+### Changed
+
+- Extend coding-agent tool rendering and execution contracts for attached approval context and exact stdin transport.
+- Extend TUI Markdown, settings, terminal flush, and scrollback primitives for publication approval and searchable policy controls.
+
+### Tests
+
+- Add provider, policy, session, terminal rendering, settings, command wiring, and untrusted-Markdown coverage.
+
 ## 0.79.0 — Restore bundled commands when postinstall is skipped
 
 Makes bundled Mach 12 and Scramjet commands available from the installed package when lifecycle scripts did not seed editable copies. Fixes [#483](https://github.com/LeanAndMean/scramjet/issues/483).

@@ -891,7 +891,7 @@ UI methods for user interaction. See [Custom UI](#custom-ui) for full details.
 
 ### ctx.hasUI
 
-`false` in print mode (`-p`) and JSON mode. `true` in interactive and RPC mode. In RPC mode, dialog methods (`select`, `confirm`, `input`, `editor`) work via the extension UI sub-protocol, and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) emit requests to the client. Some TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)).
+`false` in print mode (`-p`) and JSON mode. `true` in interactive and RPC mode. This is a transport-level signal, not a guarantee that every UI method is supported. In RPC mode, dialog methods (`select`, `confirm`, `input`, `editor`) work via the extension UI sub-protocol, and fire-and-forget methods (`notify`, `setStatus`, `setWidget`, `setTitle`, `setEditorText`) emit requests to the client, but TUI-only `custom()` resolves `undefined`. Other TUI-specific methods are no-ops or return defaults (see [rpc.md](rpc.md#extension-ui-protocol)). Extensions that require a specific UI method must handle that method's documented unsupported result.
 
 ### ctx.cwd
 
@@ -1529,9 +1529,16 @@ if (pi.getFlag("plan")) {
 Execute a shell command.
 
 ```typescript
-const result = await pi.exec("git", ["status"], { signal, timeout: 5000 });
-// result.stdout, result.stderr, result.code, result.killed
+const result = await pi.exec("gh", ["api", "--method", "POST", "--input", "-", endpoint], {
+  signal,
+  timeout: 5000,
+  stdin: JSON.stringify(payload),
+});
+// result.stdout, result.stderr, result.code, result.killed,
+// result.spawnError, result.stdinError, result.stdoutError, result.stderrError
 ```
+
+When `stdin` is supplied, `pi.exec` writes that exact UTF-8 string once and closes standard input without adding a newline. `spawnError` is present only when the command failed before spawning; `stdinError` reports a write or close failure; `stdoutError` and `stderrError` report output-pipe failures after spawn. Each error contains a safe `message` and optional system `code`, never stdin or process output content. Once the child has spawned, callers must use command-specific semantics to decide whether a failed execution may have produced side effects.
 
 ### pi.getActiveTools() / pi.getAllTools() / pi.setActiveTools(names)
 
@@ -2423,6 +2430,22 @@ The callback receives:
 - `keybindings` - App keybinding manager (for checking shortcuts)
 - `done(value)` - Call to close component and return value
 
+A pending sequential tool can attach immutable long-form context to its own tool row before compact controls become interactive. Pass the current `toolCallId` from the tool's `execute()` method:
+
+```typescript
+const result = await ctx.ui.custom(
+  (_tui, _theme, _keybindings, done) => new ApprovalSelector(done),
+  {
+    toolAttachedContext: {
+      toolCallId,
+      render: (_tui, theme) => new Text(theme.fg("muted", completeContext), 0, 0),
+    },
+  },
+);
+```
+
+The context is rendered at that pending tool's transcript position, the editor is defocused, and the context is committed once and flushed before its controls receive focus. The complete context is emitted to native terminal scrollback; retention depends on terminal capacity and configuration. It is visual-only and is not persisted or sent to the model. The call fails closed if the named tool row is absent or no longer pending. Use this only from the sequential tool whose id is supplied; ordinary custom UIs remain live and terminal-height bounded.
+
 See [tui.md](tui.md) for the full component API.
 
 #### Overlay Mode (Experimental)
@@ -2577,7 +2600,7 @@ const highlighted = highlightCode(code, lang, theme);
 | Mode | UI Methods | Notes |
 |------|-----------|-------|
 | Interactive | Full TUI | Normal operation |
-| RPC (`--mode rpc`) | JSON protocol | Host handles UI, see [rpc.md](rpc.md) |
+| RPC (`--mode rpc`) | JSON protocol | Host handles supported UI methods; TUI-only `custom()` resolves `undefined`, see [rpc.md](rpc.md) |
 | JSON (`--mode json`) | No-op | Event stream to stdout, see [json.md](json.md) |
 | Print (`-p`) | No-op | Extensions run but can't prompt |
 

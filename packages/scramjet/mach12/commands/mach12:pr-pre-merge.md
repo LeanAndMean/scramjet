@@ -2,6 +2,8 @@
 description: Run the pre-merge checklist - branch freshness, docs, version, CHANGELOG, tests, CI
 argument-hint: "<pr-number> [context]"
 allowed-tools:
+  - add_issue_comment
+  - add_pr_comment
   - bash
   - read
   - grep

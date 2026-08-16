@@ -36,7 +36,6 @@ const SUBROUTINES = [
 	"gh-pr-read",
 	"gh-sub-issues",
 	"gh-assign",
-	"gh-comment",
 ];
 
 function loadCommand(basename: string): CommandDef {
@@ -289,6 +288,20 @@ describe("integration smoke — next-step record tool wired into the extension f
 		const tool = tools.find((t: any) => t.name === "scramjet_next_step_selection");
 		expect(tool).toBeDefined();
 		expect(tool.activation).toBe("harness-only");
+	});
+});
+
+describe("integration smoke — forge publication tools wired into the extension factory", () => {
+	it("registers all four publication tools", () => {
+		const { pi, tools } = recordingPi();
+		initScramjet(pi);
+		expect(
+			tools
+				.map((tool: any) => tool.name)
+				.filter((name: string) =>
+					["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"].includes(name),
+				),
+		).toEqual(["create_issue", "create_pr", "add_issue_comment", "add_pr_comment"]);
 	});
 });
 

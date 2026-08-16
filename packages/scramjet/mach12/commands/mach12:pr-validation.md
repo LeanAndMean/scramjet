@@ -2,6 +2,7 @@
 description: Challenge a PR through independently assessed executable tests
 argument-hint: "<pr-number> [context]"
 allowed-tools:
+  - add_pr_comment
   - bash
   - read
   - grep
@@ -61,9 +62,9 @@ Prepare a review body beginning `<!-- mach12-review -->`. Use stable candidate I
 
 Also include removed-candidate disposition counts, unreviewed boundaries, `P`, the actual merge base, and the exact candidate test paths intentionally left uncommitted for assessment. State clearly that these are preliminary claims awaiting independent assessment and that the primary worktree contains only those candidate test changes.
 
-Post through `/mach12:gh-comment pr <pr-number>`, capture the numeric comment ID, and verify the stored comment belongs to the PR, has the expected marker, and was posted by the authenticated trusted user. Do not normalize tests into final suites, design production fixes, commit, or push in this command.
+State the candidate count, reviewed head, dirty-worktree consequence, and publication target concisely, then call `add_pr_comment` with the PR number and complete preliminary review. Continue only when publication is verified, then extract and retain the numeric GitHub comment ID from the verified canonical URL. If the ID cannot be extracted, block the transition without retrying publication. Cancellation leaves the candidate tests intact and reports incomplete; ambiguity prohibits automatic retry. Do not normalize tests into final suites, design production fixes, commit, or push in this command.
 
-Present the candidate results, removed dispositions, unreviewed boundaries, review URL, and current uncommitted test state to the user.
+Retain the verified review URL and numeric ID plus the current uncommitted-test state for the forced assessment handoff.
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`, then set `status: "completed"`. This command has a forced next step; include exactly one entry:
 

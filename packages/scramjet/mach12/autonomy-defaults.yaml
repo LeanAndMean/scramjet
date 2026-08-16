@@ -4,3 +4,33 @@ edges:
     mach12:pr-create: chain
   mach12:pr-create:
     mach12:pr-review: chain
+
+publications:
+  mach12:issue-create:
+    create_issue: require-approval
+    add_issue_comment: auto-approve
+  mach12:issue-implement:
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
+  mach12:issue-plan:
+    add_issue_comment: require-approval
+  mach12:issue-review:
+    add_issue_comment: require-approval
+  mach12:pr-create:
+    create_pr: require-approval
+  mach12:pr-pre-merge:
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
+  mach12:pr-review-assessment:
+    create_issue: auto-approve
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
+  mach12:pr-review-fix:
+    add_issue_comment: auto-approve
+    add_pr_comment: auto-approve
+  mach12:pr-review:
+    add_pr_comment: auto-approve
+  mach12:pr-validation:
+    add_pr_comment: auto-approve
+  mach12:pr-validation-assessment:
+    add_pr_comment: auto-approve

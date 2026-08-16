@@ -2,6 +2,7 @@
 description: Independently assess executable PR candidates and commit accepted proofs
 argument-hint: "<pr-number> --review-comment <id> [context]"
 allowed-tools:
+  - add_pr_comment
   - bash
   - read
   - grep
@@ -69,7 +70,7 @@ Prepare an assessment body beginning `<!-- mach12-assessment -->` and link the e
 - confirmation that accepted tests are committed unchanged as executable criteria and must become green through production repairs without weakening, relocation, or duplication;
 - final local/upstream/GitHub convergence and clean-repository evidence when `V` exists.
 
-Post through `/mach12:gh-comment pr <pr-number>`, capture the numeric assessment ID, and verify its PR, marker, and trusted author. Present the final dispositions, proof commit or clean no-finding result, assessment URL, and recommended route.
+State the accepted/rejected counts, proof commit state, and publication consequence concisely, then call `add_pr_comment` with the PR number and complete final assessment. Continue only when publication is verified, then extract and retain the numeric GitHub comment ID from the verified canonical URL. If the ID cannot be extracted, block routing without retrying publication. Cancellation or ambiguity prevents routing; never retry automatically. Retain the verified assessment ID, proof commit or clean no-proof state, and accepted IDs for routing.
 
 ## Step 5: Route the result
 

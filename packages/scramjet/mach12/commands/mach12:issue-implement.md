@@ -2,6 +2,8 @@
 description: Implement a specific stage of an issue's implementation plan
 argument-hint: "<issue-number> <stage(s)> [context]"
 allowed-tools:
+  - add_issue_comment
+  - add_pr_comment
   - bash
   - read
   - grep

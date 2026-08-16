@@ -200,6 +200,12 @@ export interface ExtensionUIContext {
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
 		options?: {
 			overlay?: boolean;
+			// SCRAMJET-DIVERGENCE: immutable context anchored to its pending tool presentation.
+			/** Commit immutable visual context at a pending tool's transcript position before focusing controls. Not persisted. */
+			toolAttachedContext?: {
+				toolCallId: string;
+				render: (tui: TUI, theme: Theme) => Component;
+			};
 			/** Overlay positioning/sizing options. Can be static or a function for dynamic updates. */
 			overlayOptions?: OverlayOptions | (() => OverlayOptions);
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
@@ -323,7 +329,7 @@ export interface DispatchUserInputOptions {
 export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
-	/** Whether UI is available (false in print/RPC mode) */
+	/** Whether some UI transport is available; individual methods may still be unsupported (for example custom() in RPC). */
 	hasUI: boolean;
 	/** Current working directory */
 	cwd: string;

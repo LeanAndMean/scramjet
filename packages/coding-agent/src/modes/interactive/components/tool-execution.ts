@@ -21,6 +21,7 @@ export interface ToolExecutionOptions {
 }
 
 export class ToolExecutionComponent extends Container {
+	private topSpacer: Spacer;
 	private contentBox: Box;
 	private contentText: Text;
 	private selfRenderContainer: Container;
@@ -55,6 +56,8 @@ export class ToolExecutionComponent extends Container {
 	private rendererGeneration = 0;
 	private committed = false;
 	private detached = false;
+	private callPresentationCommitted = false;
+	private attachedControls?: Component;
 
 	constructor(
 		toolName: string,
@@ -76,7 +79,8 @@ export class ToolExecutionComponent extends Container {
 		this.ui = ui;
 		this.cwd = cwd;
 
-		this.addChild(new Spacer(1));
+		this.topSpacer = new Spacer(1);
+		this.addChild(this.topSpacer);
 
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
@@ -257,6 +261,32 @@ export class ToolExecutionComponent extends Container {
 		this.updateDisplay();
 	}
 
+	attachCommittedContext(controls: Component): void {
+		this.callPresentationCommitted = true;
+		this.attachedControls = controls;
+		this.removeChild(this.topSpacer);
+		if (!this.hasRendererDefinition()) this.addChild(controls);
+		this.updateDisplay();
+	}
+
+	detachCommittedContext(): void {
+		if (this.attachedControls && !this.hasRendererDefinition()) this.removeChild(this.attachedControls);
+		this.attachedControls = undefined;
+		this.updateDisplay();
+	}
+
+	cancelCommittedContext(): void {
+		if (this.attachedControls && !this.hasRendererDefinition()) this.removeChild(this.attachedControls);
+		this.callPresentationCommitted = false;
+		this.attachedControls = undefined;
+		if (!this.children.includes(this.topSpacer)) this.children.unshift(this.topSpacer);
+		this.updateDisplay();
+	}
+
+	handleInput(data: string): void {
+		this.attachedControls?.handleInput?.(data);
+	}
+
 	setShowImages(show: boolean): void {
 		this.showImages = show;
 		this.updateDisplay();
@@ -269,6 +299,7 @@ export class ToolExecutionComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.attachedControls?.invalidate();
 		this.updateDisplay();
 	}
 
@@ -295,21 +326,28 @@ export class ToolExecutionComponent extends Container {
 			}
 			renderContainer.clear();
 
-			const callRenderer = this.getCallRenderer();
-			if (!callRenderer) {
-				renderContainer.addChild(this.createCallFallback());
-				hasContent = true;
-			} else {
-				try {
-					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
-					this.callRendererComponent = component;
-					renderContainer.addChild(component);
-					hasContent = true;
-				} catch {
-					this.callRendererComponent = undefined;
+			if (!this.callPresentationCommitted) {
+				const callRenderer = this.getCallRenderer();
+				if (!callRenderer) {
 					renderContainer.addChild(this.createCallFallback());
 					hasContent = true;
+				} else {
+					try {
+						const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
+						this.callRendererComponent = component;
+						renderContainer.addChild(component);
+						hasContent = true;
+					} catch {
+						this.callRendererComponent = undefined;
+						renderContainer.addChild(this.createCallFallback());
+						hasContent = true;
+					}
 				}
+			}
+
+			if (this.attachedControls) {
+				renderContainer.addChild(this.attachedControls);
+				hasContent = true;
 			}
 
 			if (this.result) {
@@ -343,8 +381,8 @@ export class ToolExecutionComponent extends Container {
 			}
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
-			this.contentText.setText(this.formatToolExecution());
-			hasContent = true;
+			this.contentText.setText(this.callPresentationCommitted ? "" : this.formatToolExecution());
+			hasContent = !this.callPresentationCommitted || this.attachedControls !== undefined;
 		}
 
 		for (const img of this.imageComponents) {

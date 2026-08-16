@@ -84,6 +84,8 @@ If the user picks "Create release", proceed to Step 5. If "Skip release", skip t
 
 ## Step 5: Create a release (if requested)
 
+Release publication is not supported by `create_issue`, `create_pr`, `add_issue_comment`, or `add_pr_comment`. This separate draft approval and `gh release create` path remains an explicit exception to inline forge publication until a release-publication tool exists.
+
 Read recent releases for style consistency:
 
 ```
