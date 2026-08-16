@@ -356,4 +356,11 @@ export { copyToClipboard } from "./utils/clipboard.js";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.js";
 // Shell utilities
 export { getShellConfig } from "./utils/shell.js";
-export { isNewerPackageVersion } from "./utils/version-check.js";
+export {
+	CURRENT_RELEASE_TIMEOUT_MS,
+	type CurrentRelease,
+	type CurrentReleaseExecution,
+	type CurrentReleaseExecutor,
+	isNewerPackageVersion,
+	resolveCurrentRelease,
+} from "./utils/version-check.js";

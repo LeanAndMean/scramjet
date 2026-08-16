@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
-import { type ExtensionAPI, isCurrentInstallationManaged, isNewerPackageVersion } from "@leanandmean/coding-agent";
+import {
+	CURRENT_RELEASE_TIMEOUT_MS,
+	type ExtensionAPI,
+	isCurrentInstallationManaged,
+	isNewerPackageVersion,
+	resolveCurrentRelease,
+} from "@leanandmean/coding-agent";
 import { packageRoot } from "./docs-registry.js";
 
 const PACKAGE_NAME = "@leanandmean/scramjet";
-const LOOKUP_ARGS = ["view", PACKAGE_NAME, "version", "--json"];
-export const UPDATE_CHECK_TIMEOUT_MS = 5000;
+export const UPDATE_CHECK_TIMEOUT_MS = CURRENT_RELEASE_TIMEOUT_MS;
 
 export interface UpdateNotifierDependencies {
 	installedVersion: () => string;
@@ -50,17 +55,14 @@ export function registerUpdateNotifier(
 
 		void (async () => {
 			try {
-				const result = await pi.exec("npm", LOOKUP_ARGS, { timeout: UPDATE_CHECK_TIMEOUT_MS });
-				if (result.code !== 0 || result.killed) return;
-				const remoteVersion: unknown = JSON.parse(result.stdout);
-				if (typeof remoteVersion !== "string") return;
+				const release = await resolveCurrentRelease(PACKAGE_NAME, pi.exec, UPDATE_CHECK_TIMEOUT_MS);
 				const currentVersion = dependencies.installedVersion();
-				if (!isNewerPackageVersion(remoteVersion, currentVersion)) return;
+				if (!isNewerPackageVersion(release.version, currentVersion)) return;
 
 				const guidance = dependencies.isManagedInstallation()
 					? "Run `scramjet update` to update."
 					: "Pull the latest source and reinstall from that checkout.";
-				ctx.ui.notify(`Scramjet ${remoteVersion} is available. ${guidance}`, "info");
+				ctx.ui.notify(`Scramjet ${release.version} is available. ${guidance}`, "info");
 			} catch {
 				return;
 			}

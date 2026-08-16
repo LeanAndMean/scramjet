@@ -13,7 +13,7 @@ import {
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { shouldUseWindowsShell } from "./utils/child-process.js";
-import { getLatestRelease, isNewerPackageVersion } from "./utils/version-check.js";
+import { isNewerPackageVersion, resolveCurrentRelease } from "./utils/version-check.js";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
 
@@ -294,22 +294,13 @@ interface SelfUpdatePlan {
 }
 
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
-	if (force) {
-		return { packageName: PACKAGE_NAME, shouldRun: true };
-	}
-
-	try {
-		const latestRelease = await getLatestRelease(VERSION);
-		const packageName = latestRelease?.packageName ?? PACKAGE_NAME;
-		if (!latestRelease || packageName !== PACKAGE_NAME || isNewerPackageVersion(latestRelease.version, VERSION)) {
-			return { packageName, shouldRun: true };
-		}
-	} catch {
-		return { packageName: PACKAGE_NAME, shouldRun: true };
+	const release = await resolveCurrentRelease(PACKAGE_NAME);
+	if (force || isNewerPackageVersion(release.version, VERSION)) {
+		return { packageName: release.packageName, shouldRun: true };
 	}
 
 	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
-	return { packageName: PACKAGE_NAME, shouldRun: false };
+	return { packageName: release.packageName, shouldRun: false };
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
