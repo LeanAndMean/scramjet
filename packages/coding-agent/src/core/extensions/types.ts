@@ -667,17 +667,25 @@ export interface ContextEvent {
 	messages: AgentMessage[];
 }
 
+export type DeepReadonly<T> = T extends (...args: any[]) => any
+	? T
+	: T extends object
+		? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+		: T;
+
+export type RoutedModelSnapshot = DeepReadonly<Model<any>>;
+
 /** Fired after context transformation and before provider serialization. Can replace the request-local system prompt. */
 export interface BeforeProviderCallEvent {
 	type: "before_provider_call";
-	model: Model<any>;
+	model: RoutedModelSnapshot;
 	systemPrompt: Context["systemPrompt"];
 }
 
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
-	model: Model<any>;
+	model: RoutedModelSnapshot;
 	payload: unknown;
 }
 

@@ -53,7 +53,7 @@ const baseSections: SystemPromptSection[] = [
 	{ id: "volatile", text: "\nvolatile", cacheRetention: "none" },
 ];
 
-const model = { provider: "test", id: "model-b" } as Model<any>;
+const model = { provider: "test", id: "model-b", headers: { token: "original" } } as Model<any>;
 
 describe("ExtensionRunner before_provider_call", () => {
 	it("chains request-local prompt replacements without mutating shared context", async () => {
@@ -81,6 +81,27 @@ describe("ExtensionRunner before_provider_call", () => {
 		expect(result.systemPrompt).toBe("base\nfirst\nsecond");
 		expect(context.systemPrompt).toBe("base");
 		expect(result).not.toBe(context);
+	});
+
+	it("isolates the routed model snapshot from handlers and transport", async () => {
+		const observed: string[] = [];
+		const mutating = makeExtension("mutating", (event: any) => {
+			expect(Object.isFrozen(event.model)).toBe(true);
+			expect(Object.isFrozen(event.model.headers)).toBe(true);
+			Reflect.set(event.model.headers, "token", "mutated");
+		});
+		mutating.handlers = new Map([["before_provider_call", [...mutating.handlers.get("before_agent_start")!]]]);
+		const observing = makeExtension("observing", (event: any) => {
+			observed.push(event.model.headers.token);
+		});
+		observing.handlers = new Map([["before_provider_call", [...observing.handlers.get("before_agent_start")!]]]);
+		const { runner, errors } = makeRunner([mutating, observing]);
+
+		await runner.emitBeforeProviderCall({ systemPrompt: "base", messages: [], tools: [] }, model);
+
+		expect(errors).toEqual([]);
+		expect(observed).toEqual(["original"]);
+		expect(model.headers?.token).toBe("original");
 	});
 
 	it("isolates handler errors and continues chaining", async () => {
@@ -119,6 +140,27 @@ describe("ExtensionRunner before_provider_request", () => {
 		expect(errors).toEqual([]);
 		expect(observed).toEqual([model, model]);
 		expect(result).toEqual({ base: true, first: true, second: true });
+	});
+
+	it("isolates the routed model snapshot from handlers and transport", async () => {
+		const observed: string[] = [];
+		const mutating = makeExtension("mutating", (event: any) => {
+			expect(Object.isFrozen(event.model)).toBe(true);
+			expect(Object.isFrozen(event.model.headers)).toBe(true);
+			Reflect.set(event.model.headers, "token", "mutated");
+		});
+		mutating.handlers = new Map([["before_provider_request", [...mutating.handlers.get("before_agent_start")!]]]);
+		const observing = makeExtension("observing", (event: any) => {
+			observed.push(event.model.headers.token);
+		});
+		observing.handlers = new Map([["before_provider_request", [...observing.handlers.get("before_agent_start")!]]]);
+		const { runner, errors } = makeRunner([mutating, observing]);
+
+		await runner.emitBeforeProviderRequest({}, model);
+
+		expect(errors).toEqual([]);
+		expect(observed).toEqual(["original"]);
+		expect(model.headers?.token).toBe("original");
 	});
 });
 

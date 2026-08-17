@@ -27,7 +27,7 @@ When posting to GitHub, use honest contribution-aware attribution:
 - Multiple credited models: describe each model's contribution (e.g., "Reviewed by X (analysis) and Y (posting)")`;
 }
 
-export function modelRecord(model: ActiveModel, fromTurnIndex: number): ModelRecord {
+export function modelRecord(model: Pick<ActiveModel, "name" | "id" | "provider">, fromTurnIndex: number): ModelRecord {
 	return { name: model.name, id: model.id, provider: model.provider, fromTurnIndex };
 }
 
@@ -123,6 +123,8 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		pending = null;
 		frozenIdentity = null;
 		state.identityEpochFrozen = false;
+		state.identityEpochModel = null;
+		state.pendingOpenEpochNotifyModel = null;
 	};
 
 	const rebuild = (ctx: ExtensionContext) => {
@@ -163,6 +165,7 @@ export function registerModelIdentity(pi: ExtensionAPI, state: ScramjetState): v
 		if (!frozenIdentity && pending && sameModel(pending.model, event.model)) {
 			frozenIdentity = pending.identity;
 			state.identityEpochFrozen = true;
+			state.identityEpochModel = pending.model;
 		}
 	});
 

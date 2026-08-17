@@ -17,6 +17,8 @@ export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetStat
 		modelHistory: [],
 		modelContributors: [],
 		identityEpochFrozen: false,
+		identityEpochModel: null,
+		pendingOpenEpochNotifyModel: null,
 		pendingNotifyModel: null,
 		suppressNextModelNotify: false,
 		suspendProbeWatchdog: undefined,

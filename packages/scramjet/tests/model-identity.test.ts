@@ -69,6 +69,7 @@ describe("request-bound identity epochs", () => {
 		expect(state.identityEpochFrozen).toBe(false);
 		await dispatch({ model: modelB, payload: {} });
 		expect(state.identityEpochFrozen).toBe(true);
+		expect(state.identityEpochModel).toMatchObject({ provider: "provider-b", id: "model-b" });
 
 		const frozen = (await prepare({ model: fakeModel(), systemPrompt: "CHANGED" })) as any;
 		expect(frozen.systemPrompt).toContain("CHANGED");
@@ -107,6 +108,7 @@ describe("request-bound identity epochs", () => {
 
 		await emit("session_compact", { type: "session_compact" });
 		expect(state.identityEpochFrozen).toBe(false);
+		expect(state.identityEpochModel).toBeNull();
 		expect(state.pendingNotifyModel).toBeNull();
 		const result = (await prepare({
 			model: fakeModel({ id: "model-b", name: "Model B", provider: "provider-b" }),

@@ -636,7 +636,7 @@ pi.on("context", async (event, ctx) => {
 
 #### before_provider_call
 
-Fired after request routing and message-context transformation, immediately before provider serialization. `event.model` is the exact model routed for this call, and `event.systemPrompt` is its request-local provider-neutral prompt (`string` or `SystemPromptSection[]`). Return `{ systemPrompt }` to replace only this call's prompt. Replacements chain in extension load order and never accumulate in session state.
+Fired after request routing and message-context transformation, immediately before provider serialization. `event.model` is an immutable, handler-isolated snapshot of the exact model routed for this call, and `event.systemPrompt` is its request-local provider-neutral prompt (`string` or `SystemPromptSection[]`). Return `{ systemPrompt }` to replace only this call's prompt. Replacements chain in extension load order and never accumulate in session state.
 
 ```typescript
 pi.on("before_provider_call", (event) => {
@@ -650,7 +650,7 @@ pi.on("before_provider_call", (event) => {
 
 #### before_provider_request
 
-Fired after the provider-specific payload is built, right before transport. `event.model` is the same exact routed model exposed by `before_provider_call`. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
+Fired after the provider-specific payload is built, right before transport. `event.model` is a fresh immutable snapshot of the same exact routed model exposed by `before_provider_call`; mutating one handler's snapshot cannot affect later handlers or transport routing. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
 
 This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Scramjet's stored system prompt string rather than request-local `before_provider_call` changes or the final serialized provider payload.
 

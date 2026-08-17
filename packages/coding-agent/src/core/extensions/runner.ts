@@ -22,6 +22,7 @@ import type {
 	ContextEvent,
 	ContextEventResult,
 	ContextUsage,
+	DeepReadonly,
 	DispatchUserInputHandler,
 	Extension,
 	ExtensionActions,
@@ -85,6 +86,14 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 ] as const;
 
 type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
+
+function deepFreeze<T extends object>(value: T): DeepReadonly<T> {
+	Object.freeze(value);
+	for (const nested of Object.values(value)) {
+		if (nested && typeof nested === "object" && !Object.isFrozen(nested)) deepFreeze(nested);
+	}
+	return value as DeepReadonly<T>;
+}
 
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
 	const builtinKeybindings = {} as BuiltInKeyBindings;
@@ -998,7 +1007,13 @@ export class ExtensionRunner {
 			for (const handler of handlers) {
 				if (this.skipStale("before_provider_call")) return { ...context, systemPrompt };
 				try {
-					const event: BeforeProviderCallEvent = { type: "before_provider_call", model, systemPrompt };
+					// SCRAMJET-DIVERGENCE: isolate exact routed identity from extension mutation (#491).
+					const modelSnapshot = deepFreeze(structuredClone(model));
+					const event: BeforeProviderCallEvent = {
+						type: "before_provider_call",
+						model: modelSnapshot,
+						systemPrompt,
+					};
 					const handlerResult = (await handler(event, ctx)) as BeforeProviderCallEventResult | undefined;
 					if (handlerResult?.systemPrompt !== undefined) systemPrompt = handlerResult.systemPrompt;
 				} catch (err) {
@@ -1027,9 +1042,11 @@ export class ExtensionRunner {
 			for (const handler of handlers) {
 				if (this.skipStale("before_provider_request")) return currentPayload;
 				try {
+					// SCRAMJET-DIVERGENCE: isolate exact routed identity from extension mutation (#491).
+					const modelSnapshot = deepFreeze(structuredClone(model));
 					const event: BeforeProviderRequestEvent = {
 						type: "before_provider_request",
-						model,
+						model: modelSnapshot,
 						payload: currentPayload,
 					};
 					const handlerResult = await handler(event, ctx);

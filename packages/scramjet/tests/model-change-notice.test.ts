@@ -141,6 +141,37 @@ describe("open epoch model changes", () => {
 		expect(state.currentModel).toMatchObject({ provider: "openai", id: "gpt-5-5" });
 		vi.advanceTimersByTime(500);
 		expect(pi.harnessToolCalls).toHaveLength(0);
+		expect(state.pendingOpenEpochNotifyModel?.id).toBe("gpt-5-5");
+	});
+
+	it("delivers a retained selection when an older prepared request freezes", async () => {
+		const state = seededState({ identityEpochFrozen: false });
+		const { emit, handlers, pi } = setup(state, { withIdentity: true });
+		const prepare = handlers.get("before_provider_call")![0];
+
+		await prepare({ model: fakeModel(), systemPrompt: "BASE" });
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+		await emit("before_provider_request", { model: fakeModel(), payload: {} });
+
+		expect(state.identityEpochModel).toMatchObject({ provider: "anthropic", id: "claude-opus-4-6" });
+		expect(pi.harnessToolCalls).toHaveLength(1);
+		expect(pi.harnessToolCalls[0].args).toMatchObject({ provider: "openai", model: "gpt-5-5" });
+	});
+
+	it("suppresses a retained selection when the dispatched request uses it", async () => {
+		const state = seededState({ identityEpochFrozen: false });
+		const { emit, handlers, pi } = setup(state, { withIdentity: true });
+		const prepare = handlers.get("before_provider_call")![0];
+
+		await emit("model_select", selectEvent(GPT));
+		await prepare({ model: GPT, systemPrompt: "BASE" });
+		vi.advanceTimersByTime(500);
+		await emit("before_provider_request", { model: GPT, payload: {} });
+
+		expect(state.identityEpochModel).toMatchObject({ provider: "openai", id: "gpt-5-5" });
+		expect(state.pendingOpenEpochNotifyModel).toBeNull();
+		expect(pi.harnessToolCalls).toHaveLength(0);
 	});
 });
 
@@ -181,6 +212,32 @@ describe("probe safety (req 7)", () => {
 
 		expect(pi.harnessToolCalls).toHaveLength(0);
 		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+	});
+
+	it("drops a probe-deferred notice when selection returns to the frozen epoch model", async () => {
+		const state = seededState({
+			lifecycle: lifecycleFor("probing"),
+			identityEpochModel: {
+				name: "Claude Opus 4.6",
+				id: "claude-opus-4-6",
+				provider: "anthropic",
+				fromTurnIndex: 0,
+			},
+		});
+		const { emit, pi } = setup(state);
+
+		await emit("model_select", selectEvent(GPT));
+		vi.advanceTimersByTime(500);
+		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+
+		await emit("model_select", selectEvent(fakeModel()));
+		expect(state.pendingNotifyModel).toBeNull();
+		vi.advanceTimersByTime(500);
+		state.lifecycle = lifecycleFor("idle");
+		await emit("agent_end", { messages: [] });
+		vi.runAllTimers();
+
+		expect(pi.harnessToolCalls).toHaveLength(0);
 	});
 
 	it("coalesces a superseding change while gated to the latest model only", async () => {

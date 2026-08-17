@@ -92,6 +92,8 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 		modelHistory: [],
 		modelContributors: [],
 		identityEpochFrozen: false,
+		identityEpochModel: null,
+		pendingOpenEpochNotifyModel: null,
 		pendingNotifyModel: null,
 		autonomyConfigPath: defaultConfigPath(),
 		autonomyRecommendations: new Map(),

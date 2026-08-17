@@ -19,8 +19,9 @@
  *   tool's own row is the transcript record. The flag is read/cleared synchronously here.
  * - **Debounce + coalescing:** rapid user cycling within 500ms collapses to one settle
  *   for the final model; intermediate models never reach a delivery attempt.
- * - **Open identity epoch:** selections update `state.currentModel` synchronously and
- *   emit no notice because the next provider request identifies its exact routed model.
+ * - **Open identity epoch:** selections update `state.currentModel` synchronously. A
+ *   selection is suppressed when the first dispatched request uses it, but retained for
+ *   normal notice delivery when an older prepared request freezes a different model.
  * - **Probe safety:** if a probe is armed/in-flight at settle, delivery is deferred
  *   (`state.pendingNotifyModel`) and drained on the next non-probe `agent_end` — the
  *   notice never appears in a probe provider call.
@@ -28,8 +29,9 @@
  *   idle-immediate or queues mid-run transparently, and `prepareNextTurn` routes the
  *   next intra-run LLM call to the newly-selected model.
  *
- * `state.modelHistory`/`currentModel` are committed at settle regardless of delivery
- * gating, so attribution stays accurate while narration defers.
+ * Routing state (`state.currentModel` and `state.modelHistory`) commits synchronously
+ * on selection. Debounce controls only notice delivery, while contributor attribution
+ * is derived separately from material provider-origin responses.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@leanandmean/coding-agent";
@@ -40,6 +42,10 @@ import { MODEL_CHANGE_NOTICE_TOOL, type ModelRecord, type ScramjetState } from "
 type ActiveModel = NonNullable<ExtensionContext["model"]>;
 
 const DEBOUNCE_MS = 500;
+
+function sameModel(a: Pick<ModelRecord, "provider" | "id">, b: Pick<ModelRecord, "provider" | "id">): boolean {
+	return a.provider === b.provider && a.id === b.id;
+}
 
 export { MODEL_CHANGE_NOTICE_TOOL };
 
@@ -88,6 +94,7 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 		}
 		pendingRecord = null;
 		debounceOrigin = null;
+		state.pendingOpenEpochNotifyModel = null;
 	}
 
 	function commitModel(model: ActiveModel): ModelRecord | null {
@@ -143,14 +150,8 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 		}
 		if (!record) return;
 
-		// An open epoch will identify the exact routed model on its first provider call,
-		// so a transcript correction would be redundant.
-		if (!state.identityEpochFrozen) {
-			clearDebounce();
-			state.pendingNotifyModel = null;
-			return;
-		}
-
+		state.pendingNotifyModel = null;
+		state.pendingOpenEpochNotifyModel = null;
 		if (debounceTimer !== null) {
 			clearTimeout(debounceTimer);
 		} else {
@@ -164,8 +165,20 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 			const returnedToOrigin =
 				latest && debounceOrigin && latest.provider === debounceOrigin.provider && latest.id === debounceOrigin.id;
 			debounceOrigin = null;
-			if (latest && !returnedToOrigin) settle(latest);
+			if (!latest || returnedToOrigin) return;
+			if (!state.identityEpochFrozen) {
+				state.pendingOpenEpochNotifyModel = latest;
+				return;
+			}
+			if (!state.identityEpochModel || !sameModel(latest, state.identityEpochModel)) settle(latest);
 		}, DEBOUNCE_MS);
+	});
+
+	pi.on("before_provider_request", (event) => {
+		const record = state.pendingOpenEpochNotifyModel;
+		if (!record || !state.identityEpochFrozen || !state.identityEpochModel) return;
+		state.pendingOpenEpochNotifyModel = null;
+		if (!sameModel(record, event.model)) settle(record);
 	});
 
 	// Drain a probe-deferred notice once the probe clears. Deferred on a setTimeout(0)
