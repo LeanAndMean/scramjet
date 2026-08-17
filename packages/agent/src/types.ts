@@ -193,6 +193,16 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 
 	/**
+	 * Prepares request-local context after message transformation and immediately before the provider call.
+	 * Return a replacement context to affect only this request.
+	 */
+	beforeProviderCall?: (
+		context: AgentContext,
+		model: Model<any>,
+		signal?: AbortSignal,
+	) => AgentContext | undefined | Promise<AgentContext | undefined>;
+
+	/**
 	 * Resolves an API key dynamically for each LLM call.
 	 *
 	 * Useful for short-lived OAuth tokens (e.g., GitHub Copilot) that may expire
