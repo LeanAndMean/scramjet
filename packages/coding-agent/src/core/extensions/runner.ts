@@ -2,7 +2,7 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
-import type { AgentMessage, ThinkingLevel } from "@leanandmean/agent";
+import type { AgentContext, AgentMessage, ThinkingLevel } from "@leanandmean/agent";
 import type { ImageContent, Model, SystemPromptSection } from "@leanandmean/ai";
 import { flattenSystemPrompt } from "@leanandmean/ai";
 import type { KeyId } from "@leanandmean/tui";
@@ -15,11 +15,14 @@ import type { BuildSystemPromptOptions } from "../system-prompt.js";
 import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
+	BeforeProviderCallEvent,
+	BeforeProviderCallEventResult,
 	BeforeProviderRequestEvent,
 	CompactOptions,
 	ContextEvent,
 	ContextEventResult,
 	ContextUsage,
+	DeepReadonly,
 	DispatchUserInputHandler,
 	Extension,
 	ExtensionActions,
@@ -84,6 +87,14 @@ const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
 
 type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
 
+function deepFreeze<T extends object>(value: T): DeepReadonly<T> {
+	Object.freeze(value);
+	for (const nested of Object.values(value)) {
+		if (nested && typeof nested === "object" && !Object.isFrozen(nested)) deepFreeze(nested);
+	}
+	return value as DeepReadonly<T>;
+}
+
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
 	const builtinKeybindings = {} as BuiltInKeyBindings;
 	for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
@@ -123,6 +134,7 @@ type RunnerEmitEvent = Exclude<
 	| ToolResultEvent
 	| UserBashEvent
 	| ContextEvent
+	| BeforeProviderCallEvent
 	| BeforeProviderRequestEvent
 	| BeforeAgentStartEvent
 	| MessageEndEvent
@@ -983,7 +995,42 @@ export class ExtensionRunner {
 		return currentMessages;
 	}
 
-	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {
+	async emitBeforeProviderCall(context: AgentContext, model: Model<any>): Promise<AgentContext> {
+		if (this.skipStale("before_provider_call")) return context;
+		const ctx = this.createContext();
+		let systemPrompt = context.systemPrompt;
+
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("before_provider_call");
+			if (!handlers || handlers.length === 0) continue;
+
+			for (const handler of handlers) {
+				if (this.skipStale("before_provider_call")) return { ...context, systemPrompt };
+				try {
+					// SCRAMJET-DIVERGENCE: isolate exact routed identity from extension mutation (#491).
+					const modelSnapshot = deepFreeze(structuredClone(model));
+					const event: BeforeProviderCallEvent = {
+						type: "before_provider_call",
+						model: modelSnapshot,
+						systemPrompt,
+					};
+					const handlerResult = (await handler(event, ctx)) as BeforeProviderCallEventResult | undefined;
+					if (handlerResult?.systemPrompt !== undefined) systemPrompt = handlerResult.systemPrompt;
+				} catch (err) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: "before_provider_call",
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+				}
+			}
+		}
+
+		return systemPrompt === context.systemPrompt ? context : { ...context, systemPrompt };
+	}
+
+	async emitBeforeProviderRequest(payload: unknown, model: Model<any>): Promise<unknown> {
 		if (this.skipStale("before_provider_request")) return payload;
 		const ctx = this.createContext();
 		let currentPayload = payload;
@@ -995,8 +1042,11 @@ export class ExtensionRunner {
 			for (const handler of handlers) {
 				if (this.skipStale("before_provider_request")) return currentPayload;
 				try {
+					// SCRAMJET-DIVERGENCE: isolate exact routed identity from extension mutation (#491).
+					const modelSnapshot = deepFreeze(structuredClone(model));
 					const event: BeforeProviderRequestEvent = {
 						type: "before_provider_request",
+						model: modelSnapshot,
 						payload: currentPayload,
 					};
 					const handlerResult = await handler(event, ctx);

@@ -33,12 +33,11 @@ function fakeModelRegistry(models: FakeModel[]) {
 
 function integrationSetup() {
 	const rec = recordingPi();
-	// Seeded past the first user message so notices actually deliver (not pre-first-turn),
-	// with the attribution ledger sitting on the initial model.
+	// Seed a frozen identity epoch so user selections use notice delivery.
 	const state = freshState({
 		currentModel: record(INITIAL),
 		modelHistory: [record(INITIAL)],
-		hasUserMessage: true,
+		identityEpochFrozen: true,
 	});
 	registerModelChangeNotice(rec.pi, state);
 	registerModelSwitchTool(rec.pi, state);
@@ -78,17 +77,13 @@ describe("switch tool + model_select handler integration (S12 / F1)", () => {
 		const { state, pi, uiSwitch, agentSwitch } = integrationSetup();
 		const deliveredModels = () => pi.harnessToolCalls.map((c: any) => c.args.model);
 
-		// 1. User switches to X via the UI. agent.state.model becomes X immediately; the notice
-		//    debounce arms but state.currentModel (the ledger) still lags at INITIAL for up to 500ms.
+		// 1. User selection updates current routing synchronously while notice delivery debounces.
 		await uiSwitch(X);
-		expect(state.currentModel?.id).toBe(INITIAL.id);
+		expect(state.currentModel?.id).toBe(X.id);
 
-		// 2. Within that window, the agent calls switch_scramjet_model(X). The same-model guard
-		//    compares the lagging ledger (INITIAL), so it does not treat this as a no-op and
-		//    proceeds; setModel(X) is a live no-op that emits no model_select, so the handler
-		//    never runs and cannot clear the flag it set. The success-path clear must.
+		// 2. An agent request for the same target is now recognized as a no-op and cannot strand suppression.
 		const result = await agentSwitch(X);
-		expect(result.details).toMatchObject({ switched: true });
+		expect(result.details).toMatchObject({ switched: false, reason: "already-active" });
 		expect(state.suppressNextModelNotify).toBe(false);
 
 		// 3. The user's X switch settles and delivers its notice.

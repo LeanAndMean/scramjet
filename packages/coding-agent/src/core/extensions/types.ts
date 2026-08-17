@@ -667,9 +667,25 @@ export interface ContextEvent {
 	messages: AgentMessage[];
 }
 
+export type DeepReadonly<T> = T extends (...args: any[]) => any
+	? T
+	: T extends object
+		? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+		: T;
+
+export type RoutedModelSnapshot = DeepReadonly<Model<any>>;
+
+/** Fired after context transformation and before provider serialization. Can replace the request-local system prompt. */
+export interface BeforeProviderCallEvent {
+	type: "before_provider_call";
+	model: RoutedModelSnapshot;
+	systemPrompt: Context["systemPrompt"];
+}
+
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
+	model: RoutedModelSnapshot;
 	payload: unknown;
 }
 
@@ -1030,6 +1046,7 @@ export type ExtensionEvent =
 	| ResourcesDiscoverEvent
 	| SessionEvent
 	| ContextEvent
+	| BeforeProviderCallEvent
 	| BeforeProviderRequestEvent
 	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
@@ -1056,6 +1073,10 @@ export type ExtensionEvent =
 
 export interface ContextEventResult {
 	messages?: AgentMessage[];
+}
+
+export interface BeforeProviderCallEventResult {
+	systemPrompt?: Context["systemPrompt"];
 }
 
 export type BeforeProviderRequestEventResult = unknown;
@@ -1183,6 +1204,10 @@ export interface ExtensionAPI {
 	on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
 	on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
 	on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
+	on(
+		event: "before_provider_call",
+		handler: ExtensionHandler<BeforeProviderCallEvent, BeforeProviderCallEventResult>,
+	): void;
 	on(
 		event: "before_provider_request",
 		handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,

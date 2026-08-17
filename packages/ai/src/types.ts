@@ -276,6 +276,8 @@ export interface UserMessage {
 
 export interface AssistantMessage {
 	role: "assistant";
+	// SCRAMJET-DIVERGENCE: distinguish provider output from harness synthesis (#491).
+	origin?: "provider" | "harness";
 	content: (TextContent | ThinkingContent | ToolCall)[];
 	api: Api;
 	provider: Provider;

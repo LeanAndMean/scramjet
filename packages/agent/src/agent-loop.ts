@@ -289,14 +289,22 @@ async function streamAssistantResponse(
 		messages = await config.transformContext(messages, signal);
 	}
 
+	// SCRAMJET-DIVERGENCE: request-local context preparation with the exact routed model (#491).
+	const requestSnapshot: AgentContext = {
+		systemPrompt: Array.isArray(context.systemPrompt) ? context.systemPrompt.slice() : context.systemPrompt,
+		messages: messages.slice(),
+		tools: context.tools?.slice(),
+	};
+	const requestContext = (await config.beforeProviderCall?.(requestSnapshot, config.model, signal)) ?? requestSnapshot;
+
 	// Convert to LLM-compatible messages (AgentMessage[] → Message[])
-	const llmMessages = await config.convertToLlm(messages);
+	const llmMessages = await config.convertToLlm(requestContext.messages);
 
 	// Build LLM context
 	const llmContext: Context = {
-		systemPrompt: context.systemPrompt,
+		systemPrompt: requestContext.systemPrompt,
 		messages: llmMessages,
-		tools: context.tools,
+		tools: requestContext.tools,
 	};
 
 	const streamFunction = streamFn || streamSimple;
@@ -317,7 +325,8 @@ async function streamAssistantResponse(
 	for await (const event of response) {
 		switch (event.type) {
 			case "start":
-				partialMessage = event.partial;
+				// SCRAMJET-DIVERGENCE: persist provider provenance for attribution reconstruction (#491).
+				partialMessage = { ...event.partial, origin: "provider" };
 				context.messages.push(partialMessage);
 				addedPartial = true;
 				await emit({ type: "message_start", message: { ...partialMessage } });
@@ -333,7 +342,7 @@ async function streamAssistantResponse(
 			case "toolcall_delta":
 			case "toolcall_end":
 				if (partialMessage) {
-					partialMessage = event.partial;
+					partialMessage = { ...event.partial, origin: "provider" };
 					context.messages[context.messages.length - 1] = partialMessage;
 					await emit({
 						type: "message_update",
@@ -345,7 +354,7 @@ async function streamAssistantResponse(
 
 			case "done":
 			case "error": {
-				const finalMessage = await response.result();
+				const finalMessage = { ...(await response.result()), origin: "provider" as const };
 				if (addedPartial) {
 					context.messages[context.messages.length - 1] = finalMessage;
 				} else {
@@ -360,7 +369,7 @@ async function streamAssistantResponse(
 		}
 	}
 
-	const finalMessage = await response.result();
+	const finalMessage = { ...(await response.result()), origin: "provider" as const };
 	if (addedPartial) {
 		context.messages[context.messages.length - 1] = finalMessage;
 	} else {

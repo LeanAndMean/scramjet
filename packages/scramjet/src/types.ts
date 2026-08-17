@@ -150,6 +150,10 @@ export interface ScramjetState extends LifecycleHolder {
 	pendingForcedDispatch: string | null;
 	currentModel: ModelRecord | null;
 	modelHistory: ModelRecord[];
+	modelContributors: ModelRecord[];
+	identityEpochFrozen: boolean;
+	identityEpochModel: ModelRecord | null;
+	pendingOpenEpochNotifyModel: ModelRecord | null;
 	// Set by switch_scramjet_model just before pi.setModel (issue 244, Stage 4) so
 	// the model_select handler (Stage 5) can skip emitting a user-change notice for
 	// an agent-initiated switch. Read and cleared synchronously inside setModel's
@@ -160,14 +164,6 @@ export interface ScramjetState extends LifecycleHolder {
 	// pending model (structural coalescing: intermediate models never reach delivery)
 	// and is drained on the next non-probe agent_end. Owned by model-change-notice.ts.
 	pendingNotifyModel: ModelRecord | null;
-	// True once the first user message exists this session (issue 244). Gates the
-	// pre-first-turn boundary: before the first user message a model change updates the
-	// system prompt's # Model Identity section directly and fires no notice tool; after
-	// it, changes deliver via scramjet_model_change_notice. Latched live by
-	// model-change-notice.ts's `input` observer, and re-derived from the branch on
-	// resume/fork/session-tree by model-identity.ts's rebuild (Stage 6), so a resumed
-	// session past its first user message stays past the boundary.
-	hasUserMessage: boolean;
 	lifecycleTimers?: LifecycleTimerAccessors;
 	suspendProbeWatchdog?: () => void;
 	rearmProbeWatchdog?: () => void;

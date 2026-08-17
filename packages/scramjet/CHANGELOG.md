@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.82.0 — Preserve model attribution across compaction
+
+Binds model identity to the exact routed provider request and preserves attribution through compaction and reconstruction. Fixes [#491](https://github.com/LeanAndMean/scramjet/issues/491).
+
+### Added
+
+- Expose request-local provider hooks with immutable routed-model context.
+- Persist provider-versus-harness assistant provenance for contributor reconstruction.
+
+### Changed
+
+- Freeze model identity at provider dispatch and reopen attribution epochs after compaction or branch reconstruction.
+- Preserve ordered material model contributors while excluding harness-generated responses.
+
+### Tests
+
+- Add provider-boundary, compaction, reconstruction, failure, probe, and model-switch regression coverage.
+
 ## 0.81.0 — Install the advertised release during self-update
 
 Makes `scramjet update` resolve, install, and verify one exact current npm release. Fixes [#482](https://github.com/LeanAndMean/scramjet/issues/482).

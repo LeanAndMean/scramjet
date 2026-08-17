@@ -113,6 +113,7 @@ export interface AgentOptions {
 	initialState?: Partial<Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">>;
 	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+	beforeProviderCall?: AgentLoopConfig["beforeProviderCall"];
 	streamFn?: StreamFn;
 	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 	onPayload?: SimpleStreamOptions["onPayload"];
@@ -203,6 +204,7 @@ export class Agent {
 
 	public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+	public beforeProviderCall?: AgentLoopConfig["beforeProviderCall"];
 	public streamFn: StreamFn;
 	public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
 	public onPayload?: SimpleStreamOptions["onPayload"];
@@ -255,6 +257,7 @@ export class Agent {
 		this._state = createMutableAgentState(options.initialState);
 		this.convertToLlm = options.convertToLlm ?? defaultConvertToLlm;
 		this.transformContext = options.transformContext;
+		this.beforeProviderCall = options.beforeProviderCall;
 		this.streamFn = options.streamFn ?? streamSimple;
 		this.getApiKey = options.getApiKey;
 		this.onPayload = options.onPayload;
@@ -515,6 +518,7 @@ export class Agent {
 			},
 			convertToLlm: this.convertToLlm,
 			transformContext: this.transformContext,
+			beforeProviderCall: this.beforeProviderCall,
 			getApiKey: this.getApiKey,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {
@@ -582,6 +586,7 @@ export class Agent {
 	private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
 		const failureMessage = {
 			role: "assistant",
+			origin: "harness",
 			content: [{ type: "text", text: "" }],
 			api: this._state.model.api,
 			provider: this._state.model.provider,
@@ -838,6 +843,7 @@ export class Agent {
 	private createHarnessAssistantMessage(toolCall: AgentToolCall): AssistantMessage {
 		return {
 			role: "assistant",
+			origin: "harness",
 			content: [toolCall],
 			api: this._state.model.api,
 			provider: this._state.model.provider,
