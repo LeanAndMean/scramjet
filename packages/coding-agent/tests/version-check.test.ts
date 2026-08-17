@@ -1,5 +1,83 @@
-import { describe, expect, it } from "vitest";
-import { isNewerPackageVersion } from "../src/utils/version-check.js";
+import { describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+	execCommand: vi.fn(),
+	shouldUseWindowsShell: vi.fn(),
+}));
+
+vi.mock("../src/core/exec.js", () => ({ execCommand: mocks.execCommand }));
+vi.mock("../src/utils/child-process.js", () => ({ shouldUseWindowsShell: mocks.shouldUseWindowsShell }));
+
+import { isNewerPackageVersion, resolveCurrentRelease } from "../src/utils/version-check.js";
+
+const success = (stdout: string) => ({ stdout, stderr: "", code: 0, killed: false });
+
+describe("resolveCurrentRelease", () => {
+	it("resolves one validated release with exact bounded npm arguments", async () => {
+		const executor = vi.fn(async () => success('"0.78.1"'));
+
+		await expect(resolveCurrentRelease("@leanandmean/scramjet", executor, 5000)).resolves.toEqual({
+			packageName: "@leanandmean/scramjet",
+			version: "0.78.1",
+		});
+		expect(executor).toHaveBeenCalledWith("npm", ["view", "@leanandmean/scramjet", "version", "--json"], {
+			timeout: 5000,
+		});
+	});
+
+	it("appends release lookup arguments to a configured npm command prefix", async () => {
+		const executor = vi.fn(async () => success('"0.78.1"'));
+
+		await resolveCurrentRelease("@leanandmean/scramjet", executor, undefined, [
+			"mise",
+			"exec",
+			"node@20",
+			"--",
+			"npm",
+		]);
+
+		expect(executor).toHaveBeenCalledWith(
+			"mise",
+			["exec", "node@20", "--", "npm", "view", "@leanandmean/scramjet", "version", "--json"],
+			{ timeout: 5000 },
+		);
+	});
+
+	it("uses the Windows shell policy with bounded command execution", async () => {
+		mocks.shouldUseWindowsShell.mockReturnValueOnce(true);
+		mocks.execCommand.mockResolvedValueOnce(success('"0.78.1"'));
+
+		await resolveCurrentRelease("@leanandmean/scramjet");
+
+		expect(mocks.shouldUseWindowsShell).toHaveBeenCalledWith("npm");
+		expect(mocks.execCommand).toHaveBeenCalledWith(
+			"npm",
+			["view", "@leanandmean/scramjet", "version", "--json"],
+			process.cwd(),
+			{ timeout: 5000, shell: true },
+		);
+	});
+
+	it.each([
+		["nonzero exit", { ...success('"0.78.1"'), stderr: "registry unavailable", code: 1 }, "registry unavailable"],
+		[
+			"stdout stream failure",
+			{ ...success('"0.78.1"'), code: 1, killed: true, stdoutError: { message: "read failed" } },
+			"stdout failed: read failed",
+		],
+		[
+			"stderr stream failure",
+			{ ...success('"0.78.1"'), code: 1, killed: true, stderrError: { message: "read failed" } },
+			"stderr failed: read failed",
+		],
+		["killed process", { ...success('"0.78.1"'), code: 1, killed: true }, "timed out after 5000ms"],
+		["malformed JSON", success("{"), "malformed JSON"],
+		["non-string JSON", success('["0.78.1"]'), "invalid package version"],
+		["invalid version", success('"latest"'), "invalid package version"],
+	])("rejects %s", async (_label, result, message) => {
+		await expect(resolveCurrentRelease("@leanandmean/scramjet", async () => result, 5000)).rejects.toThrow(message);
+	});
+});
 
 describe("isNewerPackageVersion", () => {
 	it.each([

@@ -1,10 +1,29 @@
-// SCRAMJET-DIVERGENCE: Removed pi.dev network code (LATEST_VERSION_URL, fetch calls);
-// renamed Pi-prefixed identifiers; network functions gutted to return undefined.
+// SCRAMJET-DIVERGENCE: Replaced pi.dev release lookup with validated npm package resolution.
 
-export interface LatestRelease {
+import { type ExecError, execCommand } from "../core/exec.js";
+import { shouldUseWindowsShell } from "./child-process.js";
+
+export interface CurrentRelease {
+	packageName: string;
 	version: string;
-	packageName?: string;
 }
+
+export interface CurrentReleaseExecution {
+	stdout: string;
+	stderr: string;
+	code: number;
+	killed: boolean;
+	stdoutError?: ExecError;
+	stderrError?: ExecError;
+}
+
+export type CurrentReleaseExecutor = (
+	command: string,
+	args: string[],
+	options: { timeout: number },
+) => Promise<CurrentReleaseExecution>;
+
+export const CURRENT_RELEASE_TIMEOUT_MS = 5000;
 
 interface ParsedVersion {
 	major: string;
@@ -73,9 +92,48 @@ export function isNewerPackageVersion(candidateVersion: string, currentVersion: 
 	return (comparePackageVersions(candidateVersion, currentVersion) ?? 0) > 0;
 }
 
-export async function getLatestRelease(
-	_currentVersion: string,
-	_options: { timeoutMs?: number } = {},
-): Promise<LatestRelease | undefined> {
-	return undefined;
+export const executeCurrentReleaseLookup: CurrentReleaseExecutor = async (command, args, options) => {
+	const result = await execCommand(command, args, process.cwd(), {
+		timeout: options.timeout,
+		shell: shouldUseWindowsShell(command),
+	});
+	return {
+		stdout: result.stdout,
+		stderr: result.stderr || result.spawnError?.message || "",
+		code: result.code,
+		killed: result.killed,
+		stdoutError: result.stdoutError,
+		stderrError: result.stderrError,
+	};
+};
+
+export async function resolveCurrentRelease(
+	packageName: string,
+	executor: CurrentReleaseExecutor = executeCurrentReleaseLookup,
+	timeoutMs = CURRENT_RELEASE_TIMEOUT_MS,
+	commandPrefix: string[] = ["npm"],
+): Promise<CurrentRelease> {
+	const [command, ...prefixArgs] = commandPrefix;
+	if (!command) throw new Error("npm release lookup requires a command");
+	const result = await executor(command, [...prefixArgs, "view", packageName, "version", "--json"], {
+		timeout: timeoutMs,
+	});
+	if (result.stdoutError) throw new Error(`npm release lookup stdout failed: ${result.stdoutError.message}`);
+	if (result.stderrError) throw new Error(`npm release lookup stderr failed: ${result.stderrError.message}`);
+	if (result.killed) throw new Error(`npm release lookup timed out after ${timeoutMs}ms`);
+	if (result.code !== 0) {
+		const detail = result.stderr.trim();
+		throw new Error(`npm release lookup failed with exit code ${result.code}${detail ? `: ${detail}` : ""}`);
+	}
+
+	let version: unknown;
+	try {
+		version = JSON.parse(result.stdout);
+	} catch {
+		throw new Error("npm release lookup returned malformed JSON");
+	}
+	if (typeof version !== "string" || !parsePackageVersion(version)) {
+		throw new Error("npm release lookup returned an invalid package version");
+	}
+	return { packageName, version };
 }

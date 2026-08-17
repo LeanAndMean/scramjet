@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { spawn } from "child_process";
+import { readFileSync } from "fs";
 import { selectConfig } from "./cli/config-selector.js";
 import {
 	APP_NAME,
@@ -13,7 +14,7 @@ import {
 import { DefaultPackageManager } from "./core/package-manager.js";
 import { SettingsManager } from "./core/settings-manager.js";
 import { shouldUseWindowsShell } from "./utils/child-process.js";
-import { getLatestRelease, isNewerPackageVersion } from "./utils/version-check.js";
+import { isNewerPackageVersion, resolveCurrentRelease } from "./utils/version-check.js";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
 
@@ -290,26 +291,51 @@ function printSelfUpdateFallback(command: SelfUpdateCommand): void {
 
 interface SelfUpdatePlan {
 	packageName: string;
+	version: string;
 	shouldRun: boolean;
 }
 
-async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
-	if (force) {
-		return { packageName: PACKAGE_NAME, shouldRun: true };
+async function getSelfUpdatePlan(force: boolean, npmCommand?: string[]): Promise<SelfUpdatePlan> {
+	const release = await resolveCurrentRelease(PACKAGE_NAME, undefined, undefined, npmCommand);
+	if (isNewerPackageVersion(VERSION, release.version)) {
+		console.log(
+			chalk.yellow(
+				`${APP_NAME} v${VERSION} is newer than the current npm release (v${release.version}); not downgrading.`,
+			),
+		);
+		return { ...release, shouldRun: false };
 	}
-
-	try {
-		const latestRelease = await getLatestRelease(VERSION);
-		const packageName = latestRelease?.packageName ?? PACKAGE_NAME;
-		if (!latestRelease || packageName !== PACKAGE_NAME || isNewerPackageVersion(latestRelease.version, VERSION)) {
-			return { packageName, shouldRun: true };
-		}
-	} catch {
-		return { packageName: PACKAGE_NAME, shouldRun: true };
+	if (force || isNewerPackageVersion(release.version, VERSION)) {
+		return { ...release, shouldRun: true };
 	}
 
 	console.log(chalk.green(`${APP_NAME} is already up to date (v${VERSION})`));
-	return { packageName: PACKAGE_NAME, shouldRun: false };
+	return { ...release, shouldRun: false };
+}
+
+function verifySelfUpdate(command: SelfUpdateCommand, expected: { packageName: string; version: string }): void {
+	let observedName: unknown;
+	let observedVersion: unknown;
+	let detail: string;
+	try {
+		const manifest: unknown = JSON.parse(readFileSync(command.targetManifestPath, "utf-8"));
+		if (typeof manifest !== "object" || manifest === null || Array.isArray(manifest)) {
+			throw new Error("manifest is not a JSON object");
+		}
+		observedName = (manifest as Record<string, unknown>).name;
+		observedVersion = (manifest as Record<string, unknown>).version;
+		detail = `observed name ${JSON.stringify(observedName)} and version ${JSON.stringify(observedVersion)}`;
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : "unknown metadata error";
+		throw new Error(
+			`Self-update verification failed: expected ${expected.packageName}@${expected.version} at ${command.targetManifestPath}; could not read valid package metadata (${message})`,
+		);
+	}
+	if (observedName !== expected.packageName || observedVersion !== expected.version) {
+		throw new Error(
+			`Self-update verification failed: expected ${expected.packageName}@${expected.version} at ${command.targetManifestPath}; ${detail}`,
+		);
+	}
 }
 
 async function runSelfUpdate(command: SelfUpdateCommand): Promise<void> {
@@ -486,15 +512,11 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 					}
 				}
 				if (updateTargetIncludesSelf(target)) {
-					const selfUpdatePlan = await getSelfUpdatePlan(options.force);
+					const selfUpdatePlan = await getSelfUpdatePlan(options.force, selfUpdateNpmCommand);
 					if (!selfUpdatePlan.shouldRun) {
 						return true;
 					}
-					const selfUpdateCommand = getSelfUpdateCommand(
-						PACKAGE_NAME,
-						selfUpdateNpmCommand,
-						selfUpdatePlan.packageName,
-					);
+					const selfUpdateCommand = getSelfUpdateCommand(PACKAGE_NAME, selfUpdatePlan, selfUpdateNpmCommand);
 					if (!selfUpdateCommand) {
 						printSelfUpdateUnavailable(selfUpdateNpmCommand, selfUpdatePlan.packageName);
 						process.exitCode = 1;
@@ -502,6 +524,8 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 					}
 					try {
 						await runSelfUpdate(selfUpdateCommand);
+						// SCRAMJET-DIVERGENCE: package-manager exit zero is not success until the managed target matches.
+						verifySelfUpdate(selfUpdateCommand, selfUpdatePlan);
 					} catch (error: unknown) {
 						const message = error instanceof Error ? error.message : "Unknown package command error";
 						console.error(chalk.red(`Error: ${message}`));

@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Resolve, target, and verify one exact current npm release for package-manager self-updates. ([#490](https://github.com/LeanAndMean/scramjet/pull/490))
 - Default fresh settings-backed sessions to deliver all queued steering messages while preserving explicit steering choices and the one-at-a-time follow-up default. ([#461](https://github.com/LeanAndMean/scramjet/pull/461))
 
 ### Fixed

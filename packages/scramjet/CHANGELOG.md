@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.81.0 — Install the advertised release during self-update
+
+Makes `scramjet update` resolve, install, and verify one exact current npm release. Fixes [#482](https://github.com/LeanAndMean/scramjet/issues/482).
+
+### Changed
+
+- Resolve one validated current npm release for startup notifications and explicit self-updates.
+- Pin npm, pnpm, Yarn, and Bun updates to the exact resolved package version.
+- Verify the managed package manifest after installation before reporting success.
+
+### Tests
+
+- Add regression coverage for release resolution, package-manager targeting, and post-install semantic verification.
+
 ## 0.80.0 — Add guarded inline forge publication
 
 Adds exact, independently allowlistable GitHub and GitLab publication tools with inline approval and per-command autonomy. Fixes [#479](https://github.com/LeanAndMean/scramjet/issues/479) and [#480](https://github.com/LeanAndMean/scramjet/issues/480).
