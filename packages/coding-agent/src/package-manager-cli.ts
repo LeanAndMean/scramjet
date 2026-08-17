@@ -516,12 +516,7 @@ export async function handlePackageCommand(args: string[]): Promise<boolean> {
 					if (!selfUpdatePlan.shouldRun) {
 						return true;
 					}
-					const selfUpdateCommand = getSelfUpdateCommand(
-						PACKAGE_NAME,
-						selfUpdatePlan.packageName,
-						`${selfUpdatePlan.packageName}@${selfUpdatePlan.version}`,
-						selfUpdateNpmCommand,
-					);
+					const selfUpdateCommand = getSelfUpdateCommand(PACKAGE_NAME, selfUpdatePlan, selfUpdateNpmCommand);
 					if (!selfUpdateCommand) {
 						printSelfUpdateUnavailable(selfUpdateNpmCommand, selfUpdatePlan.packageName);
 						process.exitCode = 1;

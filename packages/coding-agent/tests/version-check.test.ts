@@ -60,6 +60,16 @@ describe("resolveCurrentRelease", () => {
 
 	it.each([
 		["nonzero exit", { ...success('"0.78.1"'), stderr: "registry unavailable", code: 1 }, "registry unavailable"],
+		[
+			"stdout stream failure",
+			{ ...success('"0.78.1"'), code: 1, killed: true, stdoutError: { message: "read failed" } },
+			"stdout failed: read failed",
+		],
+		[
+			"stderr stream failure",
+			{ ...success('"0.78.1"'), code: 1, killed: true, stderrError: { message: "read failed" } },
+			"stderr failed: read failed",
+		],
 		["killed process", { ...success('"0.78.1"'), code: 1, killed: true }, "timed out after 5000ms"],
 		["malformed JSON", success("{"), "malformed JSON"],
 		["non-string JSON", success('["0.78.1"]'), "invalid package version"],

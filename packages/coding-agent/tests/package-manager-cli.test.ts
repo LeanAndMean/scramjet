@@ -48,14 +48,13 @@ async function runSelfUpdate(options: RunOptions = {}) {
 		getAgentDir: () => fixture,
 		getSelfUpdateCommand: (
 			_packageName: string,
-			_updatePackageName: string,
-			installSpec: string,
+			targetRelease: { packageName: string; version: string },
 			npmCommand?: string[],
 		) => {
 			const [command = "npm", ...prefixArgs] = npmCommand ?? [];
 			return {
 				command,
-				args: [...prefixArgs, "install", "-g", installSpec],
+				args: [...prefixArgs, "install", "-g", `${targetRelease.packageName}@${targetRelease.version}`],
 				display,
 				targetManifestPath,
 			};

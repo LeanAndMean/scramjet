@@ -131,11 +131,10 @@ describe("getSelfUpdateCommand", () => {
 		}));
 
 		const { getSelfUpdateCommand } = await import("../src/config.js");
-		const command = getSelfUpdateCommand(
-			"@leanandmean/coding-agent",
-			"@leanandmean/scramjet",
-			"@leanandmean/scramjet@0.78.1",
-		);
+		const command = getSelfUpdateCommand("@leanandmean/coding-agent", {
+			packageName: "@leanandmean/scramjet",
+			version: "0.78.1",
+		});
 
 		expect(command?.args).toEqual(args);
 		expect(command?.targetManifestPath).toBe(join(root, "@leanandmean", "scramjet", "package.json"));
@@ -159,11 +158,10 @@ describe("getSelfUpdateCommand", () => {
 		}));
 
 		const { getSelfUpdateCommand } = await import("../src/config.js");
-		const command = getSelfUpdateCommand(
-			"@leanandmean/scramjet",
-			"@leanandmean/scramjet",
-			"@leanandmean/scramjet@0.78.1",
-		);
+		const command = getSelfUpdateCommand("@leanandmean/scramjet", {
+			packageName: "@leanandmean/scramjet",
+			version: "0.78.1",
+		});
 
 		expect(command?.command).toBe("bun");
 		expect(command?.args).toEqual(["install", "-g", "@leanandmean/scramjet@0.78.1"]);
@@ -186,11 +184,10 @@ describe("getSelfUpdateCommand", () => {
 		}));
 
 		const { getSelfUpdateCommand } = await import("../src/config.js");
-		const command = getSelfUpdateCommand(
-			"@leanandmean/scramjet",
-			"@leanandmean/scramjet",
-			"@leanandmean/scramjet@0.78.1",
-		);
+		const command = getSelfUpdateCommand("@leanandmean/scramjet", {
+			packageName: "@leanandmean/scramjet",
+			version: "0.78.1",
+		});
 
 		expect(command?.targetManifestPath).toBe(join(lexicalRoot, "@leanandmean", "scramjet", "package.json"));
 	});
@@ -210,8 +207,7 @@ describe("getSelfUpdateCommand", () => {
 		const { getSelfUpdateCommand } = await import("../src/config.js");
 		const command = getSelfUpdateCommand(
 			"@leanandmean/scramjet",
-			"@leanandmean/scramjet",
-			"@leanandmean/scramjet@0.78.1",
+			{ packageName: "@leanandmean/scramjet", version: "0.78.1" },
 			["sudo", "npm", "--registry", "https://registry.example.test"],
 		);
 

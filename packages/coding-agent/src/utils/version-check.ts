@@ -1,6 +1,6 @@
 // SCRAMJET-DIVERGENCE: Replaced pi.dev release lookup with validated npm package resolution.
 
-import { execCommand } from "../core/exec.js";
+import { type ExecError, execCommand } from "../core/exec.js";
 import { shouldUseWindowsShell } from "./child-process.js";
 
 export interface CurrentRelease {
@@ -13,6 +13,8 @@ export interface CurrentReleaseExecution {
 	stderr: string;
 	code: number;
 	killed: boolean;
+	stdoutError?: ExecError;
+	stderrError?: ExecError;
 }
 
 export type CurrentReleaseExecutor = (
@@ -100,6 +102,8 @@ export const executeCurrentReleaseLookup: CurrentReleaseExecutor = async (comman
 		stderr: result.stderr || result.spawnError?.message || "",
 		code: result.code,
 		killed: result.killed,
+		stdoutError: result.stdoutError,
+		stderrError: result.stderrError,
 	};
 };
 
@@ -114,6 +118,8 @@ export async function resolveCurrentRelease(
 	const result = await executor(command, [...prefixArgs, "view", packageName, "version", "--json"], {
 		timeout: timeoutMs,
 	});
+	if (result.stdoutError) throw new Error(`npm release lookup stdout failed: ${result.stdoutError.message}`);
+	if (result.stderrError) throw new Error(`npm release lookup stderr failed: ${result.stderrError.message}`);
 	if (result.killed) throw new Error(`npm release lookup timed out after ${timeoutMs}ms`);
 	if (result.code !== 0) {
 		const detail = result.stderr.trim();

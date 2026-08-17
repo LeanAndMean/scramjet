@@ -266,23 +266,22 @@ export function isCurrentInstallationManaged(npmCommand?: string[]): boolean {
 
 export function getSelfUpdateCommand(
 	installedPackageName: string,
-	targetPackageName: string,
-	installSpec: string,
+	targetRelease: { packageName: string; version: string },
 	npmCommand?: string[],
 ): SelfUpdateCommand | undefined {
 	const method = detectInstallMethod();
 	const command = getSelfUpdateCommandForMethod(
 		method,
 		installedPackageName,
-		targetPackageName,
-		installSpec,
+		targetRelease.packageName,
+		`${targetRelease.packageName}@${targetRelease.version}`,
 		npmCommand,
 	);
 	const root = getManagedGlobalPackageRoot(method, npmCommand);
 	if (!command || !root || !isSelfUpdatePathWritable()) return undefined;
 	return {
 		...command,
-		targetManifestPath: join(root, ...targetPackageName.split("/"), "package.json"),
+		targetManifestPath: join(root, ...targetRelease.packageName.split("/"), "package.json"),
 	};
 }
 
