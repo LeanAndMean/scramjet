@@ -2,7 +2,7 @@
  * Extension runner - executes extensions and manages their lifecycle.
  */
 
-import type { AgentMessage, ThinkingLevel } from "@leanandmean/agent";
+import type { AgentContext, AgentMessage, ThinkingLevel } from "@leanandmean/agent";
 import type { ImageContent, Model, SystemPromptSection } from "@leanandmean/ai";
 import { flattenSystemPrompt } from "@leanandmean/ai";
 import type { KeyId } from "@leanandmean/tui";
@@ -15,6 +15,8 @@ import type { BuildSystemPromptOptions } from "../system-prompt.js";
 import type {
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
+	BeforeProviderCallEvent,
+	BeforeProviderCallEventResult,
 	BeforeProviderRequestEvent,
 	CompactOptions,
 	ContextEvent,
@@ -123,6 +125,7 @@ type RunnerEmitEvent = Exclude<
 	| ToolResultEvent
 	| UserBashEvent
 	| ContextEvent
+	| BeforeProviderCallEvent
 	| BeforeProviderRequestEvent
 	| BeforeAgentStartEvent
 	| MessageEndEvent
@@ -983,7 +986,36 @@ export class ExtensionRunner {
 		return currentMessages;
 	}
 
-	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {
+	async emitBeforeProviderCall(context: AgentContext, model: Model<any>): Promise<AgentContext> {
+		if (this.skipStale("before_provider_call")) return context;
+		const ctx = this.createContext();
+		let systemPrompt = context.systemPrompt;
+
+		for (const ext of this.extensions) {
+			const handlers = ext.handlers.get("before_provider_call");
+			if (!handlers || handlers.length === 0) continue;
+
+			for (const handler of handlers) {
+				if (this.skipStale("before_provider_call")) return { ...context, systemPrompt };
+				try {
+					const event: BeforeProviderCallEvent = { type: "before_provider_call", model, systemPrompt };
+					const handlerResult = (await handler(event, ctx)) as BeforeProviderCallEventResult | undefined;
+					if (handlerResult?.systemPrompt !== undefined) systemPrompt = handlerResult.systemPrompt;
+				} catch (err) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: "before_provider_call",
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+				}
+			}
+		}
+
+		return systemPrompt === context.systemPrompt ? context : { ...context, systemPrompt };
+	}
+
+	async emitBeforeProviderRequest(payload: unknown, model: Model<any>): Promise<unknown> {
 		if (this.skipStale("before_provider_request")) return payload;
 		const ctx = this.createContext();
 		let currentPayload = payload;
@@ -997,6 +1029,7 @@ export class ExtensionRunner {
 				try {
 					const event: BeforeProviderRequestEvent = {
 						type: "before_provider_request",
+						model,
 						payload: currentPayload,
 					};
 					const handlerResult = await handler(event, ctx);

@@ -1,3 +1,4 @@
+import type { Model } from "@leanandmean/ai";
 import { describe, expect, it } from "vitest";
 import { ExtensionRunner } from "../src/core/extensions/runner.js";
 import type { Extension, ExtensionError, HandlerFn } from "../src/core/extensions/types.js";
@@ -118,8 +119,18 @@ describe("ExtensionRunner stale short-circuit", () => {
 			},
 			{ eventType: "context", invoke: (r) => r.emitContext(contextMessages), expected: contextMessages },
 			{
+				eventType: "before_provider_call",
+				invoke: (r) =>
+					r.emitBeforeProviderCall({ systemPrompt: "prompt", messages: [], tools: [] }, {
+						provider: "test",
+						id: "model",
+					} as Model<any>),
+				expected: { systemPrompt: "prompt", messages: [], tools: [] },
+			},
+			{
 				eventType: "before_provider_request",
-				invoke: (r) => r.emitBeforeProviderRequest(providerPayload),
+				invoke: (r) =>
+					r.emitBeforeProviderRequest(providerPayload, { provider: "test", id: "model" } as Model<any>),
 				expected: providerPayload,
 			},
 			{

@@ -1,4 +1,4 @@
-import type { SystemPromptSection } from "@leanandmean/ai";
+import type { Context, Model, SystemPromptSection } from "@leanandmean/ai";
 import { describe, expect, it } from "vitest";
 import { ExtensionRunner, spliceContributedSections } from "../src/core/extensions/runner.js";
 import type { Extension, ExtensionError, HandlerFn } from "../src/core/extensions/types.js";
@@ -52,6 +52,75 @@ const baseSections: SystemPromptSection[] = [
 	{ id: "base", text: "base prompt" },
 	{ id: "volatile", text: "\nvolatile", cacheRetention: "none" },
 ];
+
+const model = { provider: "test", id: "model-b" } as Model<any>;
+
+describe("ExtensionRunner before_provider_call", () => {
+	it("chains request-local prompt replacements without mutating shared context", async () => {
+		const observed: Array<{ model: Model<any>; systemPrompt: Context["systemPrompt"] }> = [];
+		const first = makeExtension("first", (event: any) => {
+			observed.push({ model: event.model, systemPrompt: event.systemPrompt });
+			return { systemPrompt: `${event.systemPrompt}\nfirst` };
+		});
+		first.handlers = new Map([["before_provider_call", [...first.handlers.get("before_agent_start")!]]]);
+		const second = makeExtension("second", (event: any) => {
+			observed.push({ model: event.model, systemPrompt: event.systemPrompt });
+			return { systemPrompt: `${event.systemPrompt}\nsecond` };
+		});
+		second.handlers = new Map([["before_provider_call", [...second.handlers.get("before_agent_start")!]]]);
+		const { runner, errors } = makeRunner([first, second]);
+		const context = { systemPrompt: "base", messages: [], tools: [] } satisfies Context;
+
+		const result = await runner.emitBeforeProviderCall(context, model);
+
+		expect(errors).toEqual([]);
+		expect(observed).toEqual([
+			{ model, systemPrompt: "base" },
+			{ model, systemPrompt: "base\nfirst" },
+		]);
+		expect(result.systemPrompt).toBe("base\nfirst\nsecond");
+		expect(context.systemPrompt).toBe("base");
+		expect(result).not.toBe(context);
+	});
+
+	it("isolates handler errors and continues chaining", async () => {
+		const failing = makeExtension("failing", () => {
+			throw new Error("broken");
+		});
+		failing.handlers = new Map([["before_provider_call", [...failing.handlers.get("before_agent_start")!]]]);
+		const succeeding = makeExtension("succeeding", (event: any) => ({ systemPrompt: `${event.systemPrompt}\nok` }));
+		succeeding.handlers = new Map([["before_provider_call", [...succeeding.handlers.get("before_agent_start")!]]]);
+		const { runner, errors } = makeRunner([failing, succeeding]);
+
+		const result = await runner.emitBeforeProviderCall({ systemPrompt: "base", messages: [], tools: [] }, model);
+
+		expect(result.systemPrompt).toBe("base\nok");
+		expect(errors).toMatchObject([{ extensionPath: "failing", event: "before_provider_call", error: "broken" }]);
+	});
+});
+
+describe("ExtensionRunner before_provider_request", () => {
+	it("exposes the exact model while preserving payload chaining", async () => {
+		const observed: Model<any>[] = [];
+		const first = makeExtension("first", (event: any) => {
+			observed.push(event.model);
+			return { ...event.payload, first: true };
+		});
+		first.handlers = new Map([["before_provider_request", [...first.handlers.get("before_agent_start")!]]]);
+		const second = makeExtension("second", (event: any) => {
+			observed.push(event.model);
+			return { ...event.payload, second: true };
+		});
+		second.handlers = new Map([["before_provider_request", [...second.handlers.get("before_agent_start")!]]]);
+		const { runner, errors } = makeRunner([first, second]);
+
+		const result = await runner.emitBeforeProviderRequest({ base: true }, model);
+
+		expect(errors).toEqual([]);
+		expect(observed).toEqual([model, model]);
+		expect(result).toEqual({ base: true, first: true, second: true });
+	});
+});
 
 describe("ExtensionRunner systemPromptSection validation", () => {
 	it("accepts valid section with id, text, and cacheRetention 'none'", async () => {
