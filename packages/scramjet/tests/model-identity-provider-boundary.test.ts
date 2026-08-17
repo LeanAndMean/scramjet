@@ -252,9 +252,11 @@ describe("model identity at real provider and compaction boundaries", () => {
 		await prompt(fx, "C contributes");
 		await fx.session.compact();
 		const capture = await prompt(fx, "C continues");
+		const frozenCapture = await prompt(fx, "C continues again");
 		const identity = identityText(capture);
 
 		expect(capture.model.id).toBe("model-c");
+		expect(identityText(frozenCapture)).toBe(identity);
 		expect(identity.indexOf("model-a (ID: model-a")).toBeLessThan(identity.indexOf("model-b (ID: model-b"));
 		expect(identity.indexOf("model-b (ID: model-b")).toBeLessThan(identity.indexOf("model-c (ID: model-c"));
 		expect(identity.match(/^- model-[abc] \(ID:/gm)).toHaveLength(3);
