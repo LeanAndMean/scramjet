@@ -17,7 +17,7 @@ function seededState(overrides: Partial<ScramjetState> = {}): ScramjetState {
 	return freshState({
 		currentModel: { name: initial.name, id: initial.id, provider: initial.provider, fromTurnIndex: 0 },
 		modelHistory: [{ name: initial.name, id: initial.id, provider: initial.provider, fromTurnIndex: 0 }],
-		hasUserMessage: true,
+		identityEpochFrozen: true,
 		...overrides,
 	});
 }
@@ -60,19 +60,6 @@ describe("scramjet_model_change_notice tool", () => {
 	});
 });
 
-describe("hasUserMessage tracking", () => {
-	it("marks hasUserMessage on the first input event and never transforms it", async () => {
-		const { state, handlers } = setup();
-		expect(state.hasUserMessage).toBe(false);
-
-		const input = handlers.get("input")![0];
-		const result = await input({ type: "input", text: "hello", source: "interactive" });
-
-		expect(result).toBeUndefined();
-		expect(state.hasUserMessage).toBe(true);
-	});
-});
-
 describe("model_select delivery", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
@@ -91,8 +78,8 @@ describe("model_select delivery", () => {
 		expect(pi.harnessToolCalls[0].name).toBe(MODEL_CHANGE_NOTICE_TOOL);
 		expect(pi.harnessToolCalls[0].args).toEqual({ provider: "openai", model: "gpt-5-5", name: "GPT 5.5" });
 		expect(state.currentModel?.id).toBe("gpt-5-5");
-		// Seeded initial + final only; intermediates never settled.
-		expect(state.modelHistory).toHaveLength(2);
+		// Routing history records every synchronous selection; notice delivery still coalesces.
+		expect(state.modelHistory).toHaveLength(4);
 	});
 
 	it("suppresses a no-op cycle back to the current model", async () => {
@@ -105,7 +92,7 @@ describe("model_select delivery", () => {
 
 		expect(pi.harnessToolCalls).toHaveLength(0);
 		expect(state.currentModel?.id).toBe("claude-opus-4-6");
-		expect(state.modelHistory).toHaveLength(1);
+		expect(state.modelHistory).toHaveLength(3);
 	});
 
 	it("ignores source === 'restore' events", async () => {
@@ -142,63 +129,18 @@ describe("model_select delivery", () => {
 		expect(pi.harnessToolCalls).toHaveLength(1);
 		expect(state.pendingNotifyModel).toBeNull();
 	});
-
-	it("never delivers via user messages or input transforms (req 9)", async () => {
-		const { emit, pi, handlers } = setup(seededState());
-
-		await emit("model_select", selectEvent(GPT));
-		vi.advanceTimersByTime(500);
-
-		const input = handlers.get("input")![0];
-		const result = await input({ type: "input", text: "hello", source: "interactive" });
-
-		expect(result).toBeUndefined();
-		expect(pi.sent).toHaveLength(0);
-		expect(pi.harnessToolCalls).toHaveLength(1);
-	});
 });
 
-describe("pre-first-turn model change (req 6)", () => {
+describe("open epoch model changes", () => {
 	beforeEach(() => vi.useFakeTimers());
 	afterEach(() => vi.useRealTimers());
 
-	it("updates the system prompt but fires no notice before the first user message", async () => {
-		const { emit, state, pi, handlers } = setup(freshState(), { withIdentity: true });
-		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
-
-		// No input event → hasUserMessage stays false → pre-first-turn.
+	it("updates current routing synchronously and emits no redundant notice", async () => {
+		const { emit, state, pi } = setup(seededState({ identityEpochFrozen: false }));
 		await emit("model_select", selectEvent(GPT));
+		expect(state.currentModel).toMatchObject({ provider: "openai", id: "gpt-5-5" });
 		vi.advanceTimersByTime(500);
-
 		expect(pi.harnessToolCalls).toHaveLength(0);
-		expect(state.currentModel?.id).toBe("gpt-5-5");
-
-		const bas = handlers.get("before_agent_start")![0];
-		const result = (await bas({ systemPrompt: "BASE" })) as any;
-		expect(result.systemPromptSection.text).toContain("GPT 5.5");
-		expect(result.systemPromptSection.text).toContain("gpt-5-5");
-	});
-
-	it("freezes the system prompt and switches to notice delivery after the first user message", async () => {
-		const { emit, pi, handlers } = setup(freshState(), { withIdentity: true });
-		await emit("session_start", { type: "session_start", reason: "startup" }, { model: fakeModel() });
-
-		// First user message + first turn latch the identity section.
-		const input = handlers.get("input")![0];
-		await input({ type: "input", text: "hello", source: "interactive" });
-		await emit("turn_start", { type: "turn_start", turnIndex: 0, timestamp: 0 });
-		const bas = handlers.get("before_agent_start")![0];
-		const frozen = (await bas({ systemPrompt: "BASE" })) as any;
-
-		await emit("model_select", selectEvent(GPT));
-		vi.advanceTimersByTime(500);
-
-		// Now a notice fires and the system prompt stays on the initial model.
-		expect(pi.harnessToolCalls).toHaveLength(1);
-		const after = (await bas({ systemPrompt: "BASE" })) as any;
-		expect(after.systemPromptSection.text).toBe(frozen.systemPromptSection.text);
-		expect(after.systemPromptSection.text).toContain("Claude Opus 4.6");
-		expect(after.systemPromptSection.text).not.toContain("GPT 5.5");
 	});
 });
 
@@ -323,16 +265,21 @@ describe("lifecycle reset handlers", () => {
 		expect(pi.harnessToolCalls).toHaveLength(0);
 	});
 
-	it("does NOT clear on session_start reason 'reload'", async () => {
+	it("clears deferred and debounced notices on reload", async () => {
 		const state = seededState({ lifecycle: lifecycleFor("probing") });
-		const { emit } = setup(state);
+		const { emit, pi } = setup(state);
 
 		await emit("model_select", selectEvent(GPT));
 		vi.advanceTimersByTime(500);
 		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
-
 		await emit("session_start", { type: "session_start", reason: "reload" });
-		expect(state.pendingNotifyModel?.id).toBe("gpt-5-5");
+		expect(state.pendingNotifyModel).toBeNull();
+
+		state.lifecycle = lifecycleFor("idle");
+		await emit("model_select", selectEvent(fakeModel({ id: "next", name: "Next", provider: "p" })));
+		await emit("session_start", { type: "session_start", reason: "reload" });
+		vi.advanceTimersByTime(500);
+		expect(pi.harnessToolCalls).toHaveLength(0);
 	});
 
 	it("clears the debounce timer on session_shutdown", async () => {

@@ -19,9 +19,8 @@
  *   tool's own row is the transcript record. The flag is read/cleared synchronously here.
  * - **Debounce + coalescing:** rapid user cycling within 500ms collapses to one settle
  *   for the final model; intermediate models never reach a delivery attempt.
- * - **Pre-first-turn:** before the first user message (`state.hasUserMessage`), a change
- *   only updates `state.currentModel`; model-identity.ts reflects it in the system prompt
- *   with no tool call (Scenario 1).
+ * - **Open identity epoch:** selections update `state.currentModel` synchronously and
+ *   emit no notice because the next provider request identifies its exact routed model.
  * - **Probe safety:** if a probe is armed/in-flight at settle, delivery is deferred
  *   (`state.pendingNotifyModel`) and drained on the next non-probe `agent_end` — the
  *   notice never appears in a probe provider call.
@@ -79,20 +78,22 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 
 	let latestTurnIndex = 0;
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-	let pendingModel: ActiveModel | null = null;
+	let pendingRecord: ModelRecord | null = null;
+	let debounceOrigin: ModelRecord | null = null;
 
 	function clearDebounce() {
 		if (debounceTimer !== null) {
 			clearTimeout(debounceTimer);
 			debounceTimer = null;
 		}
-		pendingModel = null;
+		pendingRecord = null;
+		debounceOrigin = null;
 	}
 
-	// Commit a change to the attribution ledger. Returns the new record, or null when
-	// the target equals the current model (a no-op cycle contributes no history entry).
 	function commitModel(model: ActiveModel): ModelRecord | null {
-		if (state.currentModel && model.id === state.currentModel.id) return null;
+		if (state.currentModel && model.provider === state.currentModel.provider && model.id === state.currentModel.id) {
+			return null;
+		}
 		const record = modelRecord(model, latestTurnIndex);
 		state.currentModel = record;
 		state.modelHistory.push(record);
@@ -115,17 +116,7 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 			});
 	}
 
-	function settle(model: ActiveModel): void {
-		const record = commitModel(model);
-		if (!record) return;
-
-		// Pre-first-turn: the system prompt reflects the change directly (model-identity.ts
-		// reads state.currentModel while the identity section is still live). No tool call.
-		if (!state.hasUserMessage) {
-			state.pendingNotifyModel = null;
-			return;
-		}
-
+	function settle(record: ModelRecord): void {
 		// Probe-gated: defer past the probe so the notice never lands in a probe provider
 		// call. Store only the latest (structural coalescing); drained on agent_end.
 		if (state.lifecycle.probeArmed || state.lifecycle.probeInFlight) {
@@ -141,33 +132,40 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 
 	pi.on("model_select", (event) => {
 		if (event.source === "restore") return;
+		const previous = state.currentModel;
+		const record = commitModel(event.model);
 
-		// Agent-initiated switch: record for attribution, emit no notice. Also drop any
-		// earlier probe-deferred user notice — the model has moved on again, so a queued
-		// notice about the prior model is now stale and must not fire.
 		if (state.suppressNextModelNotify) {
 			state.suppressNextModelNotify = false;
 			clearDebounce();
 			state.pendingNotifyModel = null;
-			commitModel(event.model);
+			return;
+		}
+		if (!record) return;
+
+		// An open epoch will identify the exact routed model on its first provider call,
+		// so a transcript correction would be redundant.
+		if (!state.identityEpochFrozen) {
+			clearDebounce();
+			state.pendingNotifyModel = null;
 			return;
 		}
 
-		if (debounceTimer !== null) clearTimeout(debounceTimer);
-		pendingModel = event.model;
+		if (debounceTimer !== null) {
+			clearTimeout(debounceTimer);
+		} else {
+			debounceOrigin = previous;
+		}
+		pendingRecord = record;
 		debounceTimer = setTimeout(() => {
 			debounceTimer = null;
-			const model = pendingModel;
-			pendingModel = null;
-			if (model) settle(model);
+			const latest = pendingRecord;
+			pendingRecord = null;
+			const returnedToOrigin =
+				latest && debounceOrigin && latest.provider === debounceOrigin.provider && latest.id === debounceOrigin.id;
+			debounceOrigin = null;
+			if (latest && !returnedToOrigin) settle(latest);
 		}, DEBOUNCE_MS);
-	});
-
-	// Observe (never transform) user input to mark that the first user message exists.
-	// Harness sendMessage traffic (probes, notices) never emits `input`, so this stays
-	// user-originated.
-	pi.on("input", () => {
-		if (!state.hasUserMessage) state.hasUserMessage = true;
 	});
 
 	// Drain a probe-deferred notice once the probe clears. Deferred on a setTimeout(0)
@@ -192,12 +190,9 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 		latestTurnIndex = event.turnIndex;
 	});
 
-	// Transient delivery state is cleared across rebuilds. state.hasUserMessage is NOT
-	// reset here — it is a shared fact reconstructed from the branch by model-identity.ts's
-	// rebuild (which runs on these same events, registered first), so a resumed session
-	// past its first user message stays past the pre-first-turn boundary (issue 244, Stage 6).
-	pi.on("session_start", (event) => {
-		if (event.reason === "reload") return;
+	// Rebuilds clear transient notice state; model-identity.ts independently reconstructs
+	// routing and contributors and opens a new request-bound identity epoch.
+	pi.on("session_start", () => {
 		clearDebounce();
 		state.pendingNotifyModel = null;
 		latestTurnIndex = 0;
@@ -207,6 +202,11 @@ export function registerModelChangeNotice(pi: ExtensionAPI, state: ScramjetState
 		clearDebounce();
 		state.pendingNotifyModel = null;
 		latestTurnIndex = 0;
+	});
+
+	pi.on("session_compact", () => {
+		clearDebounce();
+		state.pendingNotifyModel = null;
 	});
 
 	pi.on("session_shutdown", () => {
