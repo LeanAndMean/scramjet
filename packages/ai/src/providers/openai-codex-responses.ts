@@ -530,7 +530,9 @@ async function* mapCodexEvents(events: AsyncIterable<Record<string, unknown>>): 
 			const response = (event as { response?: { error?: { code?: string; message?: string } } }).response;
 			const code = response?.error?.code;
 			const message = response?.error?.message;
-			throw new CodexApiError(message || "Codex response failed", { code, payload: event });
+			// SCRAMJET-DIVERGENCE: Preserve provider codes so runtime recovery can classify generic failure messages.
+			const detail = code ? `${message || "Codex response failed"} (${code})` : message || "Codex response failed";
+			throw new CodexApiError(detail, { code, payload: event });
 		}
 
 		if (type === "response.done" || type === "response.completed" || type === "response.incomplete") {
