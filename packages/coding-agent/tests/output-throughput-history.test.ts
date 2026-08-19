@@ -62,6 +62,20 @@ describe("OutputThroughputHistoryStore", () => {
 		expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ version: 1, samples: [sample("model", 1)] });
 	});
 
+	it("flushes pending submissions and isolates them from caller mutation", async () => {
+		const path = await temporaryPath();
+		const store = new OutputThroughputHistoryStore(path);
+		const submitted = sample("original", 1);
+
+		store.submit(submitted);
+		submitted.model = "mutated";
+		await store.flush();
+
+		const history = await new OutputThroughputHistoryStore(path).refresh();
+		expect(history.samples("test-provider", "original")).toEqual([sample("original", 1)]);
+		expect(history.samples("test-provider", "mutated")).toEqual([]);
+	});
+
 	it("merges independent writers and bounds each requested model to its latest 20 samples", async () => {
 		const path = await temporaryPath();
 		const first = new OutputThroughputHistoryStore(path);

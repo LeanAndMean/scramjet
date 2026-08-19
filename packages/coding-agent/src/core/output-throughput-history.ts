@@ -13,7 +13,7 @@ const MAX_STRING_LENGTH = 512;
 const queues = new Map<string, Promise<void>>();
 
 export interface OutputThroughputHistoryDiagnostic {
-	operation: "refresh" | "lock" | "read" | "validate" | "write" | "rename";
+	operation: "refresh" | "lock" | "read" | "validate" | "write" | "rename" | "unlink" | "unlock";
 	path: string;
 	message: string;
 	cause?: unknown;
@@ -27,6 +27,7 @@ interface HistoryDocument {
 export class OutputThroughputHistoryStore {
 	private history = new OutputThroughputHistory();
 	private queueKey?: Promise<string>;
+	private pending: Promise<void> = Promise.resolve();
 	private readonly reportedDiagnostics = new Set<string>();
 
 	constructor(
@@ -51,7 +52,12 @@ export class OutputThroughputHistoryStore {
 			this.report("validate", "Invalid output-throughput sample was not persisted; existing history was preserved");
 			return;
 		}
-		void this.enqueue(() => this.update(sample));
+		const normalized = normalizeSample(sample);
+		this.pending = this.enqueue(() => this.update(normalized));
+	}
+
+	async flush(): Promise<void> {
+		await this.pending;
 	}
 
 	private async update(sample: OutputThroughputSample): Promise<void> {
@@ -92,12 +98,18 @@ export class OutputThroughputHistoryStore {
 			} catch (cause) {
 				this.report("write", "Could not commit output-throughput history; existing history was preserved", cause);
 			} finally {
-				if (temporaryCreated) await unlink(temporaryPath).catch(() => undefined);
+				if (temporaryCreated) {
+					await unlink(temporaryPath).catch((cause) => {
+						this.report("unlink", "Could not remove the temporary output-throughput history file", cause);
+					});
+				}
 			}
 		} catch (cause) {
 			this.report("lock", "Could not lock output-throughput history; existing history was preserved", cause);
 		} finally {
-			await release?.().catch(() => undefined);
+			await release?.().catch((cause) => {
+				this.report("unlock", "Could not release the output-throughput history lock", cause);
+			});
 		}
 	}
 

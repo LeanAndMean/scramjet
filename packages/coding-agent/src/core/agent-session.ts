@@ -1037,6 +1037,10 @@ export class AgentSession {
 		return this._outputThroughputHistory.refresh();
 	}
 
+	flushOutputThroughputHistory() {
+		return this._outputThroughputHistory.flush();
+	}
+
 	/** Current retry attempt (0 if not retrying) */
 	get retryAttempt(): number {
 		return this._retryAttempt;

@@ -13,7 +13,7 @@ The interface has four main areas:
 - **Editor** - where you type; border color indicates the current thinking level
 - **Footer** - working directory, session name, token/cache usage, cost, context usage, current model, and output speed when valid data exists
 
-The footer, `/model`, and `/scoped-models` show the current model's recent median output-rate estimate when valid history exists. Completed and historical estimates use normalized final output usage over the interval from the first to last generated output; they exclude time to first token and trailing completion latency.
+The footer shows the current model's recent median output-rate estimate beside a nonzero session output total when valid history exists. The `/model` and `/scoped-models` selectors annotate every model row that has valid history. Completed and historical estimates use normalized final output usage over the interval from the first to last generated output; they exclude time to first token and trailing completion latency.
 
 The editor can be replaced temporarily by built-in UI such as `/settings` or by custom extension UI.
 

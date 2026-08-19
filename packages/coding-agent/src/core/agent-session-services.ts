@@ -67,6 +67,7 @@ export interface CreateAgentSessionFromServicesOptions {
 export interface AgentSessionServices {
 	cwd: string;
 	agentDir: string;
+	// SCRAMJET-DIVERGENCE: resolve persisted output-throughput history from the effective profile (#476).
 	outputThroughputHistoryPath: string;
 	authStorage: AuthStorage;
 	settingsManager: SettingsManager;
