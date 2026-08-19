@@ -1,5 +1,7 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@leanandmean/ai";
 
+// SCRAMJET-DIVERGENCE: Measure and aggregate qualified provider output throughput by requested model (#476).
+
 const LIVE_WINDOW_MS = 2000;
 const BYTES_PER_TOKEN = 4;
 const MAX_SAMPLES_PER_MODEL = 20;

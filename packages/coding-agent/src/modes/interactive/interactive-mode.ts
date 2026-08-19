@@ -4314,13 +4314,19 @@ export class InteractiveMode {
 		}
 	}
 
+	private selectorPreparationIsCurrent(session: AgentSession, generation: number): boolean {
+		const current = this.isInitialized && this.session === session && this.selectorOpenGeneration === generation;
+		if (!current && this.pendingSelectorOpenGeneration === generation) this.pendingSelectorOpenGeneration = undefined;
+		return current;
+	}
+
 	// SCRAMJET-DIVERGENCE: Refresh profile-scoped output-rate history before opening model selectors (issue 476).
 	private async showModelSelector(initialSearchInput?: string): Promise<void> {
 		const session = this.session;
 		const generation = ++this.selectorOpenGeneration;
 		this.pendingSelectorOpenGeneration = generation;
-		await session.refreshOutputThroughputHistory();
-		if (!this.isInitialized || this.session !== session || this.selectorOpenGeneration !== generation) return;
+		await session.refreshOutputThroughputHistory().catch(() => undefined);
+		if (!this.selectorPreparationIsCurrent(session, generation)) return;
 		this.pendingSelectorOpenGeneration = undefined;
 		const outputThroughputHistory = session.outputThroughputHistory;
 
@@ -4360,8 +4366,8 @@ export class InteractiveMode {
 		const session = this.session;
 		const generation = ++this.selectorOpenGeneration;
 		this.pendingSelectorOpenGeneration = generation;
-		await session.refreshOutputThroughputHistory();
-		if (!this.isInitialized || this.session !== session || this.selectorOpenGeneration !== generation) return;
+		await session.refreshOutputThroughputHistory().catch(() => undefined);
+		if (!this.selectorPreparationIsCurrent(session, generation)) return;
 		const outputThroughputHistory = session.outputThroughputHistory;
 
 		// Get all available models
@@ -4393,7 +4399,7 @@ export class InteractiveMode {
 			}
 		}
 
-		if (!this.isInitialized || this.session !== session || this.selectorOpenGeneration !== generation) return;
+		if (!this.selectorPreparationIsCurrent(session, generation)) return;
 		this.pendingSelectorOpenGeneration = undefined;
 
 		// Helper to update session's scoped models (session-only, no persist)

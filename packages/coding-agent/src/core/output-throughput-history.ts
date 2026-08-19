@@ -4,6 +4,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 import { OutputThroughputHistory, type OutputThroughputSample } from "./output-throughput.js";
 
+// SCRAMJET-DIVERGENCE: Persist bounded, profile-scoped provider throughput across concurrent processes (#476).
+
 const HISTORY_VERSION = 1;
 const MAX_SAMPLES_PER_MODEL = 20;
 const MAX_HISTORY_SAMPLES = 20000;
@@ -115,7 +117,7 @@ export class OutputThroughputHistoryStore {
 		try {
 			const value: unknown = JSON.parse(raw);
 			if (!isHistoryDocument(value)) throw new Error("unsupported version or invalid schema");
-			return { version: HISTORY_VERSION, samples: value.samples.map((sample) => ({ ...sample })) };
+			return { version: HISTORY_VERSION, samples: value.samples.map(normalizeSample) };
 		} catch (cause) {
 			this.report(
 				"validate",
@@ -127,17 +129,26 @@ export class OutputThroughputHistoryStore {
 	}
 
 	private async enqueue(operation: () => Promise<void>): Promise<void> {
-		this.queueKey ??= canonicalPath(this.path);
-		const key = await this.queueKey;
-		const previous = queues.get(key) ?? Promise.resolve();
-		const current = previous.catch(() => undefined).then(operation);
-		queues.set(key, current);
 		try {
-			await current;
+			if (!this.queueKey) this.queueKey = canonicalPath(this.path);
+			const queueKey = this.queueKey;
+			let key: string;
+			try {
+				key = await queueKey;
+			} catch (cause) {
+				if (this.queueKey === queueKey) this.queueKey = undefined;
+				throw cause;
+			}
+			const previous = queues.get(key) ?? Promise.resolve();
+			const current = previous.catch(() => undefined).then(operation);
+			queues.set(key, current);
+			try {
+				await current;
+			} finally {
+				if (queues.get(key) === current) queues.delete(key);
+			}
 		} catch (cause) {
 			this.report("write", "Output-throughput history operation failed; existing history was preserved", cause);
-		} finally {
-			if (queues.get(key) === current) queues.delete(key);
 		}
 	}
 
@@ -181,6 +192,17 @@ function isValidSample(value: unknown): value is OutputThroughputSample {
 	);
 }
 
+function normalizeSample(sample: OutputThroughputSample): OutputThroughputSample {
+	return {
+		provider: sample.provider,
+		model: sample.model,
+		...(sample.responseModel === undefined ? {} : { responseModel: sample.responseModel }),
+		outputTokens: sample.outputTokens,
+		durationMs: sample.durationMs,
+		observedAt: sample.observedAt,
+	};
+}
+
 function isBoundedString(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= MAX_STRING_LENGTH;
 }
@@ -194,7 +216,7 @@ function mergeSamples(
 	added: OutputThroughputSample,
 ): OutputThroughputSample[] {
 	const unique = new Map<string, OutputThroughputSample>();
-	for (const sample of [...samples, added]) unique.set(sampleIdentity(sample), { ...sample });
+	for (const sample of [...samples, added]) unique.set(sampleIdentity(sample), normalizeSample(sample));
 	const byModel = new Map<string, OutputThroughputSample[]>();
 	for (const sample of unique.values()) {
 		const key = `${sample.provider.length}:${sample.provider}${sample.model}`;

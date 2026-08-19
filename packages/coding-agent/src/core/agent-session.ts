@@ -541,6 +541,7 @@ export class AgentSession {
 		this._agentEventQueue.catch(() => {});
 	};
 
+	// SCRAMJET-DIVERGENCE: Capture provider events synchronously and reset stale throughput lifecycles (#476).
 	private _captureOutputThroughput(event: AgentEvent): void {
 		if (event.type === "message_start" && event.message.role === "assistant" && event.message.origin === "provider") {
 			this._outputThroughputGeneration = this._outputThroughputTracker.start({
