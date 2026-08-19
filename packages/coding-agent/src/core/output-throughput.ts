@@ -131,6 +131,10 @@ export class OutputThroughputHistory {
 		return (this.samplesByModel.get(modelKey(provider, model)) ?? []).map((sample) => ({ ...sample }));
 	}
 
+	allSamples(): readonly OutputThroughputSample[] {
+		return [...this.samplesByModel.values()].flat().map((sample) => ({ ...sample }));
+	}
+
 	median(provider: string, model: string): number | undefined {
 		const rates = this.samples(provider, model)
 			.map((sample) => (sample.outputTokens * 1000) / sample.durationMs)
