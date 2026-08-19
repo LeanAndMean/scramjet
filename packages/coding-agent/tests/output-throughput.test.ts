@@ -50,6 +50,18 @@ describe("OutputThroughputTracker", () => {
 		expect(tracker.liveRate()).toBeCloseTo(1);
 	});
 
+	it("reports output active only after a counted delta and clears it on reset", () => {
+		const tracker = new OutputThroughputTracker();
+		const generation = tracker.start(identity);
+		expect(tracker.outputActive).toBe(false);
+
+		tracker.observe(generation, delta("text_delta", "a"));
+		expect(tracker.outputActive).toBe(true);
+
+		tracker.reset();
+		expect(tracker.outputActive).toBe(false);
+	});
+
 	it("uses a two-second rolling window and decays fully during a stall", () => {
 		let now = 0;
 		const tracker = new OutputThroughputTracker({ monotonicNow: () => now });

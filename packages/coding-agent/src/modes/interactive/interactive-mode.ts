@@ -280,6 +280,7 @@ export class InteractiveMode {
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 	private pendingToolFinalizations = new Set<Promise<void>>();
 	private agentRunGeneration = 0;
+	private outputThroughputInterval: ReturnType<typeof setInterval> | undefined;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -362,6 +363,7 @@ export class InteractiveMode {
 	) {
 		this.runtimeHost = runtimeHost;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
+			this.stopOutputThroughputRepaint();
 			this.resetExtensionUI();
 		});
 		this.runtimeHost.setRebindSession(async () => {
@@ -1669,6 +1671,7 @@ export class InteractiveMode {
 	}
 
 	private async rebindCurrentSession(): Promise<void> {
+		this.stopOutputThroughputRepaint();
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -2805,6 +2808,30 @@ export class InteractiveMode {
 		});
 	}
 
+	private startOutputThroughputRepaint(): void {
+		if (this.outputThroughputInterval || !this.session.outputThroughputActive) return;
+		const session = this.session;
+		const generation = session.outputThroughputGeneration;
+		this.outputThroughputInterval = setInterval(() => {
+			if (
+				this.session !== session ||
+				session.outputThroughputGeneration !== generation ||
+				!session.outputThroughputActive
+			) {
+				this.stopOutputThroughputRepaint();
+				return;
+			}
+			this.footer.invalidate();
+			this.ui.requestRender();
+		}, 250);
+	}
+
+	private stopOutputThroughputRepaint(): void {
+		if (!this.outputThroughputInterval) return;
+		clearInterval(this.outputThroughputInterval);
+		this.outputThroughputInterval = undefined;
+	}
+
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -2859,6 +2886,9 @@ export class InteractiveMode {
 				break;
 
 			case "message_start":
+				if (event.message.role === "assistant" && event.message.origin === "provider") {
+					this.stopOutputThroughputRepaint();
+				}
 				this.sealStatus();
 				if (event.message.role === "custom") {
 					this.addMessageToChat(event.message);
@@ -2884,6 +2914,7 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
+				if (event.message.role === "assistant") this.startOutputThroughputRepaint();
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage);
@@ -2920,6 +2951,7 @@ export class InteractiveMode {
 				break;
 
 			case "message_end":
+				if (event.message.role === "assistant") this.stopOutputThroughputRepaint();
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
@@ -3025,6 +3057,7 @@ export class InteractiveMode {
 			}
 
 			case "agent_end": {
+				this.stopOutputThroughputRepaint();
 				const runGeneration = this.agentRunGeneration;
 				const pendingToolFinalizations = this.pendingToolFinalizations;
 				await Promise.all(pendingToolFinalizations);
@@ -3058,6 +3091,7 @@ export class InteractiveMode {
 			}
 
 			case "compaction_start": {
+				this.stopOutputThroughputRepaint();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -5692,6 +5726,7 @@ export class InteractiveMode {
 	}
 
 	stop(): void {
+		this.stopOutputThroughputRepaint();
 		this.unregisterSignalHandlers();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);

@@ -47,6 +47,10 @@ export class OutputThroughputTracker {
 		return this.nextGeneration;
 	}
 
+	get outputActive(): boolean {
+		return (this.active?.observations.length ?? 0) > 0;
+	}
+
 	start(identity: OutputThroughputIdentity): number {
 		const generation = ++this.nextGeneration;
 		this.active = { ...identity, generation, observations: [] };
