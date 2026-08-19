@@ -140,7 +140,11 @@ export class FooterComponent implements Component {
 		// Build stats line
 		const statsParts = [];
 		if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
-		if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
+		if (totalOutput) {
+			// SCRAMJET-DIVERGENCE: Pair output totals with their stable historical throughput median (issue 476).
+			const outputRate = formatCompletedOutputRate(this.session.medianOutputRate ?? 0);
+			statsParts.push(`↓${formatTokens(totalOutput)}${outputRate ? ` (${outputRate})` : ""}`);
+		}
 		if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
 		if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
 
@@ -158,10 +162,6 @@ export class FooterComponent implements Component {
 			contextDisplay = theme.fg("warning", contextDisplay);
 		}
 		statsParts.push(contextDisplay);
-
-		// SCRAMJET-DIVERGENCE: Show compact live or latest completed output-generation speed (issue 476).
-		const outputRate = formatCompletedOutputRate(this.session.medianOutputRate ?? 0);
-		if (outputRate) statsParts.push(outputRate);
 
 		let statsLeft = statsParts.join(" ");
 

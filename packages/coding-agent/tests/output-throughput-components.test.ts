@@ -33,7 +33,21 @@ function footerSession(liveOutputRate: number | undefined, medianOutputRate?: nu
 		liveOutputRate,
 		medianOutputRate,
 		sessionManager: {
-			getEntries: () => [],
+			getEntries: () => [
+				{
+					type: "message",
+					message: {
+						role: "assistant",
+						usage: {
+							input: 0,
+							output: 10,
+							cacheRead: 0,
+							cacheWrite: 0,
+							cost: { total: 0 },
+						},
+					},
+				},
+			],
 			getCwd: () => "/tmp/project",
 			getSessionName: () => undefined,
 		},
@@ -56,7 +70,7 @@ describe("output throughput components", () => {
 		const narrow = new FooterComponent(footerSession(42), footerData).render(8);
 
 		expect(active).not.toContain("42tok/s");
-		expect(active).toMatch(/10\/1\.0k \(1\.0%, auto\) 30tok\/s/);
+		expect(active).toContain("↓10 (30tok/s)");
 		expect(completed).toContain("30tok/s");
 		expect(empty).not.toContain("tok/s");
 		expect(narrow.every((line) => stripAnsi(line).length <= 8)).toBe(true);
