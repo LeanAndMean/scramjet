@@ -81,7 +81,7 @@ import {
 import { emitSessionShutdownEvent, spliceContributedSections } from "./extensions/runner.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { OutputThroughputTracker } from "./output-throughput.js";
+import { type OutputThroughputSample, OutputThroughputTracker } from "./output-throughput.js";
 import { OutputThroughputHistoryStore } from "./output-throughput-history.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
@@ -288,6 +288,7 @@ export class AgentSession {
 	private readonly _outputThroughputTracker = new OutputThroughputTracker();
 	private readonly _outputThroughputHistory: OutputThroughputHistoryStore;
 	private _outputThroughputGeneration: number | undefined;
+	private _latestOutputThroughputSample: OutputThroughputSample | undefined;
 
 	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement state (#341). `_disposed` gates post-
 	// teardown invocations; the map keys each in-flight invocation's tool-call id to its persistence
@@ -555,7 +556,10 @@ export class AgentSession {
 		} else if (event.type === "message_end" && event.message.role === "assistant") {
 			const sample = this._outputThroughputTracker.finalize(generation, event.message);
 			this._outputThroughputGeneration = undefined;
-			if (sample) this._outputThroughputHistory.submit(sample);
+			if (sample) {
+				this._latestOutputThroughputSample = sample;
+				this._outputThroughputHistory.submit(sample);
+			}
 		}
 	}
 
@@ -985,6 +989,9 @@ export class AgentSession {
 	}
 
 	get liveOutputRate(): number | undefined {
+		const model = this.state.model;
+		const identity = this._outputThroughputTracker.activeIdentity;
+		if (!model || identity?.provider !== model.provider || identity.model !== model.id) return undefined;
 		return this._outputThroughputTracker.liveRate();
 	}
 
@@ -994,6 +1001,31 @@ export class AgentSession {
 
 	get outputThroughputGeneration(): number {
 		return this._outputThroughputTracker.generation;
+	}
+
+	get medianOutputRate(): number | undefined {
+		const model = this.state.model;
+		if (!model) return undefined;
+		const history = this._outputThroughputHistory.snapshot();
+		const local = this._latestOutputThroughputSample;
+		if (
+			local?.provider === model.provider &&
+			local.model === model.id &&
+			!history
+				.samples(model.provider, model.id)
+				.some(
+					(sample) =>
+						sample.provider === local.provider &&
+						sample.model === local.model &&
+						sample.responseModel === local.responseModel &&
+						sample.outputTokens === local.outputTokens &&
+						sample.durationMs === local.durationMs &&
+						sample.observedAt === local.observedAt,
+				)
+		) {
+			history.add(local);
+		}
+		return history.median(model.provider, model.id);
 	}
 
 	get outputThroughputHistory() {

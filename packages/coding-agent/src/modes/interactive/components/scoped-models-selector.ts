@@ -10,6 +10,7 @@ import {
 	Spacer,
 	Text,
 } from "@leanandmean/tui";
+import { formatHistoricalOutputRate, OutputThroughputHistory } from "../../../core/output-throughput.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyText } from "./keybinding-hints.js";
@@ -109,10 +110,16 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	private callbacks: ModelsCallbacks;
 	private maxVisible = 8;
 	private isDirty = false;
+	private outputThroughputHistory: OutputThroughputHistory;
 
-	constructor(config: ModelsConfig, callbacks: ModelsCallbacks) {
+	constructor(
+		config: ModelsConfig,
+		callbacks: ModelsCallbacks,
+		outputThroughputHistory: OutputThroughputHistory = new OutputThroughputHistory(),
+	) {
 		super();
 		this.callbacks = callbacks;
+		this.outputThroughputHistory = outputThroughputHistory;
 
 		for (const model of config.allModels) {
 			const fullId = `${model.provider}/${model.id}`;
@@ -213,8 +220,15 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 			const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
 			const modelText = isSelected ? theme.fg("accent", item.model.id) : item.model.id;
 			const providerBadge = theme.fg("muted", ` [${item.model.provider}]`);
+			// SCRAMJET-DIVERGENCE: Annotate requested models with observed output-rate estimates (issue 476).
+			const historicalRate = formatHistoricalOutputRate(
+				this.outputThroughputHistory.median(item.model.provider, item.model.id) ?? 0,
+			);
+			const historicalSuffix = historicalRate ? theme.fg("muted", ` ${historicalRate}`) : "";
 			const status = allEnabled ? "" : item.enabled ? theme.fg("success", " ✓") : theme.fg("dim", " ✗");
-			this.listContainer.addChild(new Text(`${prefix}${modelText}${providerBadge}${status}`, 0, 0));
+			this.listContainer.addChild(
+				new Text(`${prefix}${modelText}${providerBadge}${historicalSuffix}${status}`, 0, 0),
+			);
 		}
 
 		// Add scroll indicator if needed

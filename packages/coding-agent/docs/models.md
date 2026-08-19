@@ -91,6 +91,8 @@ Override defaults when you need specific values:
 
 The file reloads each time you open `/model`. Edit during session; no restart needed.
 
+When valid history exists, `/model` and `/scoped-models` append a recent median output-rate estimate to the requested provider/model row. The estimate uses normalized final output usage over first-to-last generated output, excluding time to first token and trailing completion latency; no placeholder is shown for models without history.
+
 ## Google AI Studio Example
 
 Use `google-generative-ai` with a `baseUrl` to add models from Google AI Studio, including custom Gemma 4 entries:

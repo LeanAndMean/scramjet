@@ -51,6 +51,10 @@ export class OutputThroughputTracker {
 		return (this.active?.observations.length ?? 0) > 0;
 	}
 
+	get activeIdentity(): OutputThroughputIdentity | undefined {
+		return this.active ? { provider: this.active.provider, model: this.active.model } : undefined;
+	}
+
 	start(identity: OutputThroughputIdentity): number {
 		const generation = ++this.nextGeneration;
 		this.active = { ...identity, generation, observations: [] };
@@ -139,6 +143,17 @@ export class OutputThroughputHistory {
 		return [...this.samplesByModel.values()].flat().map((sample) => ({ ...sample }));
 	}
 
+	latestSample(provider: string, model: string): OutputThroughputSample | undefined {
+		return this.samples(provider, model).at(-1);
+	}
+
+	latestRate(provider: string, model: string): number | undefined {
+		const sample = this.latestSample(provider, model);
+		if (!sample) return undefined;
+		const rate = (sample.outputTokens * 1000) / sample.durationMs;
+		return Number.isFinite(rate) && rate > 0 ? rate : undefined;
+	}
+
 	median(provider: string, model: string): number | undefined {
 		const rates = this.samples(provider, model)
 			.map((sample) => (sample.outputTokens * 1000) / sample.durationMs)
@@ -151,17 +166,16 @@ export class OutputThroughputHistory {
 }
 
 export function formatLiveOutputRate(rate: number): string | undefined {
-	return formatRate(rate, true);
+	return formatCompletedOutputRate(rate);
+}
+
+export function formatCompletedOutputRate(rate: number): string | undefined {
+	if (!Number.isFinite(rate) || rate <= 0) return undefined;
+	return `${Math.round(rate)}tok/s`;
 }
 
 export function formatHistoricalOutputRate(rate: number): string | undefined {
-	return formatRate(rate, false);
-}
-
-function formatRate(rate: number, approximate: boolean): string | undefined {
-	if (!Number.isFinite(rate) || rate <= 0) return undefined;
-	const rounded = Math.round(rate);
-	return approximate ? `~${rounded} tok/s` : `${rounded} tok/s est.`;
+	return formatCompletedOutputRate(rate);
 }
 
 function isGeneratedDelta(

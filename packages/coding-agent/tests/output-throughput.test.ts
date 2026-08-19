@@ -1,6 +1,7 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@leanandmean/ai";
 import { describe, expect, it } from "vitest";
 import {
+	formatCompletedOutputRate,
 	formatHistoricalOutputRate,
 	formatLiveOutputRate,
 	OutputThroughputHistory,
@@ -53,12 +54,14 @@ describe("OutputThroughputTracker", () => {
 	it("reports output active only after a counted delta and clears it on reset", () => {
 		const tracker = new OutputThroughputTracker();
 		const generation = tracker.start(identity);
+		expect(tracker.activeIdentity).toEqual(identity);
 		expect(tracker.outputActive).toBe(false);
 
 		tracker.observe(generation, delta("text_delta", "a"));
 		expect(tracker.outputActive).toBe(true);
 
 		tracker.reset();
+		expect(tracker.activeIdentity).toBeUndefined();
 		expect(tracker.outputActive).toBe(false);
 	});
 
@@ -200,6 +203,8 @@ describe("OutputThroughputHistory", () => {
 		expect(history.median(identity.provider, identity.model)).toBe(25);
 		history.add({ ...identity, outputTokens: 50, durationMs: 1000, observedAt: 50 });
 		expect(history.median(identity.provider, identity.model)).toBe(30);
+		expect(history.latestRate(identity.provider, identity.model)).toBe(50);
+		expect(history.latestSample(identity.provider, identity.model)?.observedAt).toBe(50);
 	});
 
 	it("retains only the latest 20 samples per requested key", () => {
@@ -213,10 +218,12 @@ describe("OutputThroughputHistory", () => {
 });
 
 describe("output throughput formatting", () => {
-	it("distinguishes approximate live rates from historical estimates", () => {
-		expect(formatLiveOutputRate(41.6)).toBe("~42 tok/s");
-		expect(formatHistoricalOutputRate(41.6)).toBe("42 tok/s est.");
+	it("formats compact footer rates and explicit historical estimates", () => {
+		expect(formatLiveOutputRate(41.6)).toBe("42tok/s");
+		expect(formatCompletedOutputRate(41.6)).toBe("42tok/s");
+		expect(formatHistoricalOutputRate(41.6)).toBe("42tok/s");
 		expect(formatLiveOutputRate(0)).toBeUndefined();
+		expect(formatCompletedOutputRate(Number.NaN)).toBeUndefined();
 		expect(formatHistoricalOutputRate(Number.NaN)).toBeUndefined();
 	});
 });

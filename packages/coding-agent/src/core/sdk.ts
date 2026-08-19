@@ -457,6 +457,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 	});
+	await session.refreshOutputThroughputHistory();
 	const extensionsResult = resourceLoader.getExtensions();
 
 	return {

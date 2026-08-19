@@ -2,6 +2,7 @@ import { getContextWindowBudget } from "@leanandmean/ai";
 import { type Component, truncateToWidth, visibleWidth } from "@leanandmean/tui";
 import type { AgentSession } from "../../../core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
+import { formatCompletedOutputRate } from "../../../core/output-throughput.js";
 import { theme } from "../theme/theme.js";
 
 /**
@@ -157,6 +158,10 @@ export class FooterComponent implements Component {
 			contextDisplay = theme.fg("warning", contextDisplay);
 		}
 		statsParts.push(contextDisplay);
+
+		// SCRAMJET-DIVERGENCE: Show compact live or latest completed output-generation speed (issue 476).
+		const outputRate = formatCompletedOutputRate(this.session.medianOutputRate ?? 0);
+		if (outputRate) statsParts.push(outputRate);
 
 		let statsLeft = statsParts.join(" ");
 

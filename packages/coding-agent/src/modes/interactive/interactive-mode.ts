@@ -280,7 +280,8 @@ export class InteractiveMode {
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 	private pendingToolFinalizations = new Set<Promise<void>>();
 	private agentRunGeneration = 0;
-	private outputThroughputInterval: ReturnType<typeof setInterval> | undefined;
+	private selectorOpenGeneration = 0;
+	private pendingSelectorOpenGeneration: number | undefined;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -363,7 +364,6 @@ export class InteractiveMode {
 	) {
 		this.runtimeHost = runtimeHost;
 		this.runtimeHost.setBeforeSessionInvalidate(() => {
-			this.stopOutputThroughputRepaint();
 			this.resetExtensionUI();
 		});
 		this.runtimeHost.setRebindSession(async () => {
@@ -1671,7 +1671,6 @@ export class InteractiveMode {
 	}
 
 	private async rebindCurrentSession(): Promise<void> {
-		this.stopOutputThroughputRepaint();
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		this.applyRuntimeSettings();
@@ -2542,6 +2541,11 @@ export class InteractiveMode {
 		// Set up handlers on defaultEditor - they use this.editor for text access
 		// so they work correctly regardless of which editor is active
 		this.defaultEditor.onEscape = () => {
+			if (this.pendingSelectorOpenGeneration !== undefined) {
+				this.selectorOpenGeneration++;
+				this.pendingSelectorOpenGeneration = undefined;
+				return;
+			}
 			if (this.session.isStreaming) {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			} else if (this.session.isBashRunning) {
@@ -2808,30 +2812,6 @@ export class InteractiveMode {
 		});
 	}
 
-	private startOutputThroughputRepaint(): void {
-		if (this.outputThroughputInterval || !this.session.outputThroughputActive) return;
-		const session = this.session;
-		const generation = session.outputThroughputGeneration;
-		this.outputThroughputInterval = setInterval(() => {
-			if (
-				this.session !== session ||
-				session.outputThroughputGeneration !== generation ||
-				!session.outputThroughputActive
-			) {
-				this.stopOutputThroughputRepaint();
-				return;
-			}
-			this.footer.invalidate();
-			this.ui.requestRender();
-		}, 250);
-	}
-
-	private stopOutputThroughputRepaint(): void {
-		if (!this.outputThroughputInterval) return;
-		clearInterval(this.outputThroughputInterval);
-		this.outputThroughputInterval = undefined;
-	}
-
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -2886,9 +2866,6 @@ export class InteractiveMode {
 				break;
 
 			case "message_start":
-				if (event.message.role === "assistant" && event.message.origin === "provider") {
-					this.stopOutputThroughputRepaint();
-				}
 				this.sealStatus();
 				if (event.message.role === "custom") {
 					this.addMessageToChat(event.message);
@@ -2914,7 +2891,6 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
-				if (event.message.role === "assistant") this.startOutputThroughputRepaint();
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					this.streamingComponent.updateContent(this.streamingMessage);
@@ -2951,7 +2927,6 @@ export class InteractiveMode {
 				break;
 
 			case "message_end":
-				if (event.message.role === "assistant") this.stopOutputThroughputRepaint();
 				if (event.message.role === "user") break;
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
@@ -3057,7 +3032,6 @@ export class InteractiveMode {
 			}
 
 			case "agent_end": {
-				this.stopOutputThroughputRepaint();
 				const runGeneration = this.agentRunGeneration;
 				const pendingToolFinalizations = this.pendingToolFinalizations;
 				await Promise.all(pendingToolFinalizations);
@@ -3091,7 +3065,6 @@ export class InteractiveMode {
 			}
 
 			case "compaction_start": {
-				this.stopOutputThroughputRepaint();
 				if (this.settingsManager.getShowTerminalProgress()) {
 					this.ui.terminal.setProgress(true);
 				}
@@ -4100,7 +4073,10 @@ export class InteractiveMode {
 	 * @param create Factory that receives a `done` callback and returns the component and focus target
 	 */
 	private showSelector(create: (done: () => void) => { component: Component; focus: Component }): void {
+		this.selectorOpenGeneration++;
+		this.pendingSelectorOpenGeneration = undefined;
 		const done = () => {
+			this.selectorOpenGeneration++;
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.ui.setFocus(this.editor);
@@ -4338,7 +4314,16 @@ export class InteractiveMode {
 		}
 	}
 
-	private showModelSelector(initialSearchInput?: string): void {
+	// SCRAMJET-DIVERGENCE: Refresh profile-scoped output-rate history before opening model selectors (issue 476).
+	private async showModelSelector(initialSearchInput?: string): Promise<void> {
+		const session = this.session;
+		const generation = ++this.selectorOpenGeneration;
+		this.pendingSelectorOpenGeneration = generation;
+		await session.refreshOutputThroughputHistory();
+		if (!this.isInitialized || this.session !== session || this.selectorOpenGeneration !== generation) return;
+		this.pendingSelectorOpenGeneration = undefined;
+		const outputThroughputHistory = session.outputThroughputHistory;
+
 		this.showSelector((done) => {
 			const selector = new ModelSelectorComponent(
 				this.ui,
@@ -4365,23 +4350,32 @@ export class InteractiveMode {
 					this.ui.requestRender();
 				},
 				initialSearchInput,
+				outputThroughputHistory,
 			);
 			return { component: selector, focus: selector };
 		});
 	}
 
 	private async showModelsSelector(): Promise<void> {
+		const session = this.session;
+		const generation = ++this.selectorOpenGeneration;
+		this.pendingSelectorOpenGeneration = generation;
+		await session.refreshOutputThroughputHistory();
+		if (!this.isInitialized || this.session !== session || this.selectorOpenGeneration !== generation) return;
+		const outputThroughputHistory = session.outputThroughputHistory;
+
 		// Get all available models
-		this.session.modelRegistry.refresh();
-		const allModels = this.session.modelRegistry.getAvailable();
+		session.modelRegistry.refresh();
+		const allModels = session.modelRegistry.getAvailable();
 
 		if (allModels.length === 0) {
+			this.pendingSelectorOpenGeneration = undefined;
 			this.showStatus("No models available");
 			return;
 		}
 
 		// Check if session has scoped models (from previous session-only changes or CLI --models)
-		const sessionScopedModels = this.session.scopedModels;
+		const sessionScopedModels = session.scopedModels;
 		const hasSessionScope = sessionScopedModels.length > 0;
 
 		// Build enabled model IDs from session state or settings
@@ -4394,10 +4388,13 @@ export class InteractiveMode {
 			// Fall back to settings
 			const patterns = this.settingsManager.getEnabledModels();
 			if (patterns !== undefined && patterns.length > 0) {
-				const scopedModels = await resolveModelScope(patterns, this.session.modelRegistry);
+				const scopedModels = await resolveModelScope(patterns, session.modelRegistry);
 				currentEnabledIds = scopedModels.map((scoped) => `${scoped.model.provider}/${scoped.model.id}`);
 			}
 		}
+
+		if (!this.isInitialized || this.session !== session || this.selectorOpenGeneration !== generation) return;
+		this.pendingSelectorOpenGeneration = undefined;
 
 		// Helper to update session's scoped models (session-only, no persist)
 		const updateSessionModels = async (enabledIds: string[] | null) => {
@@ -4442,6 +4439,7 @@ export class InteractiveMode {
 						this.ui.requestRender();
 					},
 				},
+				outputThroughputHistory,
 			);
 			return { component: selector, focus: selector };
 		});
@@ -5726,7 +5724,8 @@ export class InteractiveMode {
 	}
 
 	stop(): void {
-		this.stopOutputThroughputRepaint();
+		this.selectorOpenGeneration++;
+		this.pendingSelectorOpenGeneration = undefined;
 		this.unregisterSignalHandlers();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
