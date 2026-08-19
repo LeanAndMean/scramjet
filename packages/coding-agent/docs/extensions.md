@@ -288,8 +288,12 @@ user sends prompt ────────────────────�
   │   ┌─── turn (repeats while LLM calls tools) ───┐       │
   │   │                                            │       │
   │   ├─► turn_start                               │       │
+  │   ├─► routing refresh                          │       │
   │   ├─► context (can modify messages)            │       │
+  │   ├─► before_provider_call (can replace request-local system prompt)
+  │   ├─► provider serialization                   │       │
   │   ├─► before_provider_request (can inspect or replace payload)
+  │   ├─► transport                                │       │
   │   ├─► after_provider_response (status + headers, before stream consume)
   │   │                                            │       │
   │   │   LLM responds, may call tools:            │       │
@@ -630,14 +634,29 @@ pi.on("context", async (event, ctx) => {
 });
 ```
 
-#### before_provider_request
+#### before_provider_call
 
-Fired after the provider-specific payload is built, right before the request is sent. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
-
-This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Scramjet's system prompt string rather than the final serialized provider payload.
+Fired after request routing and message-context transformation, immediately before provider serialization. `event.model` is an immutable, handler-isolated snapshot of the exact model routed for this call, and `event.systemPrompt` is its request-local provider-neutral prompt (`string` or `SystemPromptSection[]`). Return `{ systemPrompt }` to replace only this call's prompt. Replacements chain in extension load order and never accumulate in session state.
 
 ```typescript
-pi.on("before_provider_request", (event, ctx) => {
+pi.on("before_provider_call", (event) => {
+  return {
+    systemPrompt: typeof event.systemPrompt === "string"
+      ? `${event.systemPrompt}\n\nRequest routed to ${event.model.provider}/${event.model.id}`
+      : [...event.systemPrompt, { id: "routed-model", text: `\n\nRequest routed to ${event.model.provider}/${event.model.id}` }],
+  };
+});
+```
+
+#### before_provider_request
+
+Fired after the provider-specific payload is built, right before transport. `event.model` is a fresh immutable snapshot of the same exact routed model exposed by `before_provider_call`; mutating one handler's snapshot cannot affect later handlers or transport routing. Handlers run in extension load order. Returning `undefined` keeps the payload unchanged. Returning any other value replaces the payload for later handlers and for the actual request.
+
+This hook can rewrite provider-level system instructions or remove them entirely. Those payload-level changes are not reflected by `ctx.getSystemPrompt()`, which reports Scramjet's stored system prompt string rather than request-local `before_provider_call` changes or the final serialized provider payload.
+
+```typescript
+pi.on("before_provider_request", (event) => {
+  console.log(`${event.model.provider}/${event.model.id}`);
   console.log(JSON.stringify(event.payload, null, 2));
 
   // Optional: replace payload
@@ -645,7 +664,7 @@ pi.on("before_provider_request", (event, ctx) => {
 });
 ```
 
-This is mainly useful for debugging provider serialization and cache behavior.
+The complete request order is routing refresh → `context` transformation → `before_provider_call` → provider serialization → `before_provider_request` → transport. This is mainly useful for request-local prompt preparation and debugging provider serialization or cache behavior.
 
 #### after_provider_response
 
@@ -995,6 +1014,7 @@ Returns Scramjet's current system prompt string.
 
 - During `before_agent_start`, this reflects chained system-prompt changes made so far for the current turn.
 - It does not include later `context` message mutations.
+- It does not include request-local `before_provider_call` prompt replacements.
 - It does not include `before_provider_request` payload rewrites.
 - If later-loaded extensions run after yours, they can still change what is ultimately sent.
 

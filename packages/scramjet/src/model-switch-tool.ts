@@ -97,7 +97,11 @@ export function registerModelSwitchTool(pi: ExtensionAPI, state: ScramjetState) 
 			// switch entirely. Without this, setModel's modelsAreEqual early-return
 			// skips the model_select emission but the suppression flag would be
 			// stranded true, swallowing the next user-initiated model-change notice.
-			if (state.currentModel && state.currentModel.id === resolved.id) {
+			if (
+				state.currentModel &&
+				state.currentModel.provider === resolved.provider &&
+				state.currentModel.id === resolved.id
+			) {
 				state.logger.debug("model-switch", "model already active, no-op", {
 					provider: resolved.provider,
 					model: resolved.id,

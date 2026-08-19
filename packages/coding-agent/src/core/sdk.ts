@@ -388,12 +388,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						: undefined,
 			});
 		},
-		onPayload: async (payload, _model) => {
+		beforeProviderCall: async (context, model) => {
+			const runner = extensionRunnerRef.current;
+			if (!runner?.hasHandlers("before_provider_call")) return context;
+			return runner.emitBeforeProviderCall(context, model);
+		},
+		onPayload: async (payload, model) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {
 				return payload;
 			}
-			return runner.emitBeforeProviderRequest(payload);
+			return runner.emitBeforeProviderRequest(payload, model);
 		},
 		onResponse: async (response, _model) => {
 			const runner = extensionRunnerRef.current;
