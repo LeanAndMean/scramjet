@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Measure qualified output-generation throughput, persist bounded per-model history, and display stable rates in the footer and model selectors. ([#498](https://github.com/LeanAndMean/scramjet/pull/498))
+
 ### Changed
 
 - Resolve, target, and verify one exact current npm release for package-manager self-updates. ([#490](https://github.com/LeanAndMean/scramjet/pull/490))
