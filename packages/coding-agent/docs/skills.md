@@ -141,7 +141,7 @@ Per the [Agent Skills specification](https://agentskills.io/specification#frontm
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Max 64 chars. Lowercase a-z, 0-9, hyphens. Unlike the standard, Scramjet does not require this to match the parent directory because that standard requirement is suboptimal for shared skill directories. |
-| `description` | Yes | Max 1024 chars. What the skill does and when to use it. |
+| `description` | Yes | The Agent Skills specification maximum is 1024 chars. Scramjet warns above this limit but retains the complete description in the generated model-visible skills list unless model invocation is disabled. |
 | `license` | No | License name or reference to bundled file. |
 | `compatibility` | No | Max 500 chars. Environment requirements. |
 | `metadata` | No | Arbitrary key-value mapping. |
@@ -179,7 +179,7 @@ Scramjet validates skills against the Agent Skills standard. Most issues produce
 
 - Name exceeds 64 characters or contains invalid characters
 - Name starts/ends with hyphen or has consecutive hyphens
-- Description exceeds 1024 characters
+- Description exceeds the Agent Skills specification maximum of 1024 characters. This warning is advisory: Scramjet retains the complete description in the generated model-visible skills list unless `disable-model-invocation` is `true`.
 
 Unknown frontmatter fields are ignored.
 
