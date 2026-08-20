@@ -121,7 +121,10 @@ function validateDescription(description: string | undefined): string[] {
 	if (!description || description.trim() === "") {
 		errors.push("description is required");
 	} else if (description.length > MAX_DESCRIPTION_LENGTH) {
-		errors.push(`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`);
+		// SCRAMJET-DIVERGENCE: clarify that over-limit descriptions remain intact (issue 500)
+		errors.push(
+			`description exceeds Agent Skills specification limit of ${MAX_DESCRIPTION_LENGTH} characters (${description.length}); advisory only, full description is retained`,
+		);
 	}
 
 	return errors;
