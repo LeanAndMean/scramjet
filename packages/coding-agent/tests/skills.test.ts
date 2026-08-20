@@ -41,4 +41,31 @@ describe("skills", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("counts description length by Unicode code points", () => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-skill-"));
+
+		try {
+			for (const [name, description] of [
+				["at-limit", "😀".repeat(1024)],
+				["over-limit", "😀".repeat(1025)],
+			] as const) {
+				const skillDir = join(root, name);
+				mkdirSync(skillDir);
+				writeFileSync(join(skillDir, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n`);
+			}
+
+			const result = loadSkillsFromDir({ dir: root, source: "path" });
+			expect(result.skills).toHaveLength(2);
+			expect(result.diagnostics).toEqual([
+				expect.objectContaining({
+					type: "warning",
+					message:
+						"description exceeds Agent Skills specification limit of 1024 characters (1025); advisory only, full description is retained",
+				}),
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
