@@ -10,6 +10,7 @@ import {
 	type TUI,
 } from "@leanandmean/tui";
 import type { ModelRegistry } from "../../../core/model-registry.js";
+import { formatHistoricalOutputRate, OutputThroughputHistory } from "../../../core/output-throughput.js";
 import type { SettingsManager } from "../../../core/settings-manager.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
@@ -60,6 +61,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private scope: ModelScope = "all";
 	private scopeText?: Text;
 	private scopeHintText?: Text;
+	private outputThroughputHistory: OutputThroughputHistory;
 
 	constructor(
 		tui: TUI,
@@ -70,6 +72,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		onSelect: (model: Model<any>) => void,
 		onCancel: () => void,
 		initialSearchInput?: string,
+		outputThroughputHistory: OutputThroughputHistory = new OutputThroughputHistory(),
 	) {
 		super();
 
@@ -81,6 +84,7 @@ export class ModelSelectorComponent extends Container implements Focusable {
 		this.scope = scopedModels.length > 0 ? "scoped" : "all";
 		this.onSelectCallback = onSelect;
 		this.onCancelCallback = onCancel;
+		this.outputThroughputHistory = outputThroughputHistory;
 
 		// Add top border
 		this.addChild(new DynamicBorder());
@@ -244,6 +248,11 @@ export class ModelSelectorComponent extends Container implements Focusable {
 
 			const isSelected = i === this.selectedIndex;
 			const isCurrent = modelsAreEqual(this.currentModel, item.model);
+			// SCRAMJET-DIVERGENCE: Annotate requested models with observed output-rate estimates (issue 476).
+			const historicalRate = formatHistoricalOutputRate(
+				this.outputThroughputHistory.median(item.provider, item.id) ?? 0,
+			);
+			const historicalSuffix = historicalRate ? theme.fg("muted", ` ${historicalRate}`) : "";
 
 			let line = "";
 			if (isSelected) {
@@ -251,12 +260,12 @@ export class ModelSelectorComponent extends Container implements Focusable {
 				const modelText = `${item.id}`;
 				const providerBadge = theme.fg("muted", `[${item.provider}]`);
 				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${prefix + theme.fg("accent", modelText)} ${providerBadge}${checkmark}`;
+				line = `${prefix + theme.fg("accent", modelText)} ${providerBadge}${historicalSuffix}${checkmark}`;
 			} else {
 				const modelText = `  ${item.id}`;
 				const providerBadge = theme.fg("muted", `[${item.provider}]`);
 				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${modelText} ${providerBadge}${checkmark}`;
+				line = `${modelText} ${providerBadge}${historicalSuffix}${checkmark}`;
 			}
 
 			this.listContainer.addChild(new Text(line, 0, 0));

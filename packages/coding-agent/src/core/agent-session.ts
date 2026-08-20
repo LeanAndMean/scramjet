@@ -81,6 +81,8 @@ import {
 import { emitSessionShutdownEvent, spliceContributedSections } from "./extensions/runner.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import type { ModelRegistry } from "./model-registry.js";
+import { type OutputThroughputSample, OutputThroughputTracker } from "./output-throughput.js";
+import { OutputThroughputHistoryStore } from "./output-throughput-history.js";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.js";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.js";
 import { indexScramjetCommandStarts, restoreScramjetCommandInvocation } from "./scramjet-command-parser.js";
@@ -162,6 +164,7 @@ export interface AgentSessionConfig {
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
 	cwd: string;
+	outputThroughputHistoryPath: string;
 	/** Models to cycle through with Ctrl+P (from --models flag) */
 	scopedModels?: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 	/** Resource loader for skills, prompts, themes, context files, system prompt */
@@ -274,6 +277,7 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
+	readonly outputThroughputHistoryPath: string;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -281,6 +285,10 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _agentEventQueue: Promise<void> = Promise.resolve();
+	private readonly _outputThroughputTracker = new OutputThroughputTracker();
+	private readonly _outputThroughputHistory: OutputThroughputHistoryStore;
+	private _outputThroughputGeneration: number | undefined;
+	private _latestOutputThroughputSample: OutputThroughputSample | undefined;
 
 	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement state (#341). `_disposed` gates post-
 	// teardown invocations; the map keys each in-flight invocation's tool-call id to its persistence
@@ -353,6 +361,18 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		this.outputThroughputHistoryPath = config.outputThroughputHistoryPath;
+		this._outputThroughputHistory = new OutputThroughputHistoryStore(
+			this.outputThroughputHistoryPath,
+			(diagnostic) => {
+				this._extensionRunner.emitError({
+					extensionPath: "output-throughput-history",
+					event: diagnostic.operation,
+					error: `${diagnostic.message} (${diagnostic.path})`,
+					stack: diagnostic.cause instanceof Error ? diagnostic.cause.stack : undefined,
+				});
+			},
+		);
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -503,6 +523,8 @@ export class AgentSession {
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent): void => {
+		this._captureOutputThroughput(event);
+
 		// Create retry promise synchronously before queueing async processing.
 		// Agent.emit() calls this handler synchronously, and prompt() calls waitForRetry()
 		// as soon as agent.prompt() resolves. If _retryPromise is created only inside
@@ -518,6 +540,34 @@ export class AgentSession {
 		// Keep queue alive if an event handler fails
 		this._agentEventQueue.catch(() => {});
 	};
+
+	// SCRAMJET-DIVERGENCE: Capture provider events synchronously and reset stale throughput lifecycles (#476).
+	private _captureOutputThroughput(event: AgentEvent): void {
+		if (event.type === "message_start" && event.message.role === "assistant" && event.message.origin === "provider") {
+			this._outputThroughputGeneration = this._outputThroughputTracker.start({
+				provider: event.message.provider,
+				model: event.message.model,
+			});
+			return;
+		}
+		const generation = this._outputThroughputGeneration;
+		if (generation === undefined) return;
+		if (event.type === "message_update" && event.message.role === "assistant") {
+			this._outputThroughputTracker.observe(generation, event.assistantMessageEvent);
+		} else if (event.type === "message_end" && event.message.role === "assistant") {
+			const sample = this._outputThroughputTracker.finalize(generation, event.message);
+			this._outputThroughputGeneration = undefined;
+			if (sample) {
+				this._latestOutputThroughputSample = sample;
+				this._outputThroughputHistory.submit(sample);
+			}
+		}
+	}
+
+	private _resetOutputThroughput(): void {
+		this._outputThroughputTracker.reset();
+		this._outputThroughputGeneration = undefined;
+	}
 
 	private _createRetryPromiseForAgentEnd(event: AgentEvent): void {
 		if (event.type !== "agent_end" || this._retryPromise) {
@@ -891,6 +941,7 @@ export class AgentSession {
 		// A second call must not re-reject already-settled acknowledgements or re-run teardown.
 		if (this._disposed) return;
 		this._disposed = true;
+		this._resetOutputThroughput();
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
@@ -936,6 +987,58 @@ export class AgentSession {
 	/** Current effective system prompt (includes any per-turn extension modifications), flattened to a string */
 	get systemPrompt(): string {
 		return flattenSystemPrompt(this.agent.state.systemPrompt);
+	}
+
+	get liveOutputRate(): number | undefined {
+		const model = this.state.model;
+		const identity = this._outputThroughputTracker.activeIdentity;
+		if (!model || identity?.provider !== model.provider || identity.model !== model.id) return undefined;
+		return this._outputThroughputTracker.liveRate();
+	}
+
+	get outputThroughputActive(): boolean {
+		return this._outputThroughputTracker.outputActive;
+	}
+
+	get outputThroughputGeneration(): number {
+		return this._outputThroughputTracker.generation;
+	}
+
+	get medianOutputRate(): number | undefined {
+		const model = this.state.model;
+		if (!model) return undefined;
+		const history = this._outputThroughputHistory.snapshot();
+		const local = this._latestOutputThroughputSample;
+		if (
+			local?.provider === model.provider &&
+			local.model === model.id &&
+			!history
+				.samples(model.provider, model.id)
+				.some(
+					(sample) =>
+						sample.provider === local.provider &&
+						sample.model === local.model &&
+						sample.responseModel === local.responseModel &&
+						sample.outputTokens === local.outputTokens &&
+						sample.durationMs === local.durationMs &&
+						sample.observedAt === local.observedAt,
+				)
+		) {
+			history.add(local);
+		}
+		return history.median(model.provider, model.id);
+	}
+
+	get outputThroughputHistory() {
+		return this._outputThroughputHistory.snapshot();
+	}
+
+	refreshOutputThroughputHistory() {
+		return this._outputThroughputHistory.refresh();
+	}
+
+	flushOutputThroughputHistory() {
+		return this._outputThroughputHistory.flush();
 	}
 
 	/** Current retry attempt (0 if not retrying) */
@@ -1700,6 +1803,7 @@ export class AgentSession {
 	 */
 	async abort(): Promise<void> {
 		this.abortRetry();
+		this._resetOutputThroughput();
 		this.agent.abort();
 		await this.agent.waitForIdle();
 	}
@@ -1922,6 +2026,7 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
+		this._resetOutputThroughput();
 		this._disconnectFromAgent();
 		await this.abort();
 		this._compactionAbortController = new AbortController();

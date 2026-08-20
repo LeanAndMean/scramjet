@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.83.0 — Show output throughput in model UI
+
+Measures qualified output-generation throughput, persists bounded per-model history, and displays stable rates in the footer and model selectors. Fixes [#476](https://github.com/LeanAndMean/scramjet/issues/476).
+
+### Added
+
+- Track output throughput from provider usage and generated-delta timing.
+- Persist concurrency-safe, profile-local per-model throughput history.
+- Show stable median rates beside footer output totals and in model selectors.
+
+### Tests
+
+- Add measurement, persistence, lifecycle, selector-refresh, and rendering coverage.
+
 ## 0.82.1 — Preserve Codex overflow recovery
 
 Preserves Codex provider error codes when surfacing failed responses so runtime context-overflow recovery can classify generic failure messages. Fixes [#494](https://github.com/LeanAndMean/scramjet/issues/494).

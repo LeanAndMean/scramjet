@@ -67,6 +67,8 @@ export interface CreateAgentSessionFromServicesOptions {
 export interface AgentSessionServices {
 	cwd: string;
 	agentDir: string;
+	// SCRAMJET-DIVERGENCE: resolve persisted output-throughput history from the effective profile (#476).
+	outputThroughputHistoryPath: string;
 	authStorage: AuthStorage;
 	settingsManager: SettingsManager;
 	modelRegistry: ModelRegistry;
@@ -162,6 +164,7 @@ export async function createAgentSessionServices(
 	return {
 		cwd,
 		agentDir,
+		outputThroughputHistoryPath: join(agentDir, "output-throughput-history.json"),
 		authStorage,
 		settingsManager,
 		modelRegistry,
@@ -183,6 +186,7 @@ export async function createAgentSessionFromServices(
 	return createAgentSession({
 		cwd: options.services.cwd,
 		agentDir: options.services.agentDir,
+		outputThroughputHistoryPath: options.services.outputThroughputHistoryPath,
 		authStorage: options.services.authStorage,
 		settingsManager: options.services.settingsManager,
 		modelRegistry: options.services.modelRegistry,

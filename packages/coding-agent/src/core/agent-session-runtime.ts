@@ -148,6 +148,7 @@ export class AgentSessionRuntime {
 			reason,
 			targetSessionFile,
 		});
+		await this.session.flushOutputThroughputHistory();
 		this.beforeSessionInvalidate?.();
 		this.session.dispose();
 	}

@@ -35,6 +35,8 @@ export interface CreateAgentSessionOptions {
 	cwd?: string;
 	/** Global config directory. Default: ~/.scramjet/agent */
 	agentDir?: string;
+	/** Output-throughput history path resolved by runtime services. */
+	outputThroughputHistoryPath?: string;
 
 	/** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
 	authStorage?: AuthStorage;
@@ -235,6 +237,8 @@ function getAttributionHeaders(
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
 	const agentDir = options.agentDir ?? getDefaultAgentDir();
+	const outputThroughputHistoryPath =
+		options.outputThroughputHistoryPath ?? join(agentDir, "output-throughput-history.json");
 	const cacheRetention = resolveCacheRetention(options.cacheRetention);
 	let resourceLoader = options.resourceLoader;
 
@@ -443,6 +447,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		sessionManager,
 		settingsManager,
 		cwd,
+		outputThroughputHistoryPath,
 		scopedModels: options.scopedModels,
 		resourceLoader,
 		customTools: options.customTools,
@@ -452,6 +457,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
 	});
+	await session.refreshOutputThroughputHistory();
 	const extensionsResult = resourceLoader.getExtensions();
 
 	return {

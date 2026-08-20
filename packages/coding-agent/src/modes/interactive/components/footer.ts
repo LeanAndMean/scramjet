@@ -2,6 +2,7 @@ import { getContextWindowBudget } from "@leanandmean/ai";
 import { type Component, truncateToWidth, visibleWidth } from "@leanandmean/tui";
 import type { AgentSession } from "../../../core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
+import { formatCompletedOutputRate } from "../../../core/output-throughput.js";
 import { theme } from "../theme/theme.js";
 
 /**
@@ -139,7 +140,11 @@ export class FooterComponent implements Component {
 		// Build stats line
 		const statsParts = [];
 		if (totalInput) statsParts.push(`↑${formatTokens(totalInput)}`);
-		if (totalOutput) statsParts.push(`↓${formatTokens(totalOutput)}`);
+		if (totalOutput) {
+			// SCRAMJET-DIVERGENCE: Pair output totals with their stable historical throughput median (issue 476).
+			const outputRate = formatCompletedOutputRate(this.session.medianOutputRate ?? 0);
+			statsParts.push(`↓${formatTokens(totalOutput)}${outputRate ? ` (${outputRate})` : ""}`);
+		}
 		if (totalCacheRead) statsParts.push(`R${formatTokens(totalCacheRead)}`);
 		if (totalCacheWrite) statsParts.push(`W${formatTokens(totalCacheWrite)}`);
 
