@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.82.1 — Preserve Codex overflow recovery
+
+Preserves Codex provider error codes when surfacing failed responses so runtime context-overflow recovery can classify generic failure messages. Fixes [#494](https://github.com/LeanAndMean/scramjet/issues/494).
+
+### Fixed
+
+- Include present Codex `response.failed.error.code` values in surfaced errors without dropping provider messages.
+- Recognize generic-message `context_length_exceeded` failures through the shared overflow classifier.
+
+### Tests
+
+- Add Codex SSE-stream regression coverage for overflow, missing-code, and non-overflow failures.
+
 ## 0.82.0 — Preserve model attribution across compaction
 
 Binds model identity to the exact routed provider request and preserves attribution through compaction and reconstruction. Fixes [#491](https://github.com/LeanAndMean/scramjet/issues/491).
