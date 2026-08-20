@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.83.1 — Clarify long skill description warnings
+
+Clarifies that the Agent Skills description-length warning is advisory while preserving complete descriptions for model-visible skill content. Fixes [#500](https://github.com/LeanAndMean/scramjet/issues/500).
+
+### Fixed
+
+- Count skill description lengths by Unicode code points and retain complete over-limit descriptions.
+- Explain the advisory warning and model-invocation exception in skills documentation.
+
+### Tests
+
+- Add filesystem-backed coverage for description retention, generated prompt content, and Unicode boundaries.
+
 ## 0.83.0 — Show output throughput in model UI
 
 Measures qualified output-generation throughput, persists bounded per-model history, and displays stable rates in the footer and model selectors. Fixes [#476](https://github.com/LeanAndMean/scramjet/issues/476).

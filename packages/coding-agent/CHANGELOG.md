@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Clarify that over-limit Agent Skills descriptions remain intact and count the advisory 1024-character threshold by Unicode code points. ([#501](https://github.com/LeanAndMean/scramjet/pull/501))
 - Preserve Codex provider error codes so context-overflow recovery can classify generic failure messages. ([#495](https://github.com/LeanAndMean/scramjet/pull/495))
 - Preserve terminal-configured foreground color for misspelled text in the built-in `pi-light` theme while retaining the spell-check underline. ([#435](https://github.com/LeanAndMean/scramjet/pull/435))
 
