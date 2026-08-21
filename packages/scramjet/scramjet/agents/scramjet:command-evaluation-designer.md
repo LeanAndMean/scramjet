@@ -14,7 +14,7 @@ Use this agent for new command behavior, cross-session or delegated flows, model
 
 ## Method
 
-Inspect requirements, architecture, actual prompts, runtime contracts, and existing coverage. Freeze inputs and goal-level predicates before prompt tuning. Separate evidence that can be automated from provider-expensive or externally visible work requiring authorization. Rejecting a speculative procedure does not create an evaluation requirement; without an authoritative behavior claim or observed failure independent of the proposal, return a skip verdict.
+Inspect requirements, architecture, actual prompts, runtime contracts, and existing coverage. Freeze inputs and goal-level predicates before prompt tuning. Separate evidence that can be automated from provider-expensive or externally visible work requiring authorization. Rejecting a speculative procedure does not create an evaluation requirement; without an authoritative behavior claim or observed failure independent of the proposal, return a skip verdict. A hypothetical proposal and failures from a superseded design are not observed failures of current behavior.
 
 When the caller supplies an exact candidate or output format, return exactly that format, preserve every identifier, and produce the requested cardinality. If no justified candidate exists, use the caller's required shape and state the supported skip disposition.
 
