@@ -81,7 +81,11 @@ Read any templates and select the one supported by the issue classification and 
 
 ## Step 4: Explore current behavior
 
-For a bug, vague problem, refactor, code-linked feature, error report, or current-behavior complaint, reuse relevant current-session observations first. Then verify only material factual premises using the minimum authoritative evidence needed to describe the anchored problem accurately. Use `read`, `grep`, and `glob`; dispatch `mach12:code-explorer` only when the relevant behavior or affected surfaces are non-trivial.
+For a bug, vague problem, refactor, code-linked feature, error report, or current-behavior complaint, reuse relevant current-session observations first. Then verify only material factual premises using the minimum authoritative evidence needed to describe the anchored problem accurately. Use `read`, `grep`, and `glob`; dispatch a subagent only when the relevant behavior or affected surfaces are non-trivial.
+
+Classify the affected surface before dispatch. For runtime code, use `mach12:code-explorer`. For a non-trivial command surface, use `scramjet:command-set-explorer` to map current behavior, or `scramjet:command-failure-analyst` when a concrete observed failure needs causal tracing; use both only when the failure cannot be accurately anchored without the broader command map. For mixed work, give the selected agents disjoint command and runtime briefs. A better-fit installed agent may replace one of these advisory roles only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with its responsibility, read-only posture, context needs, and required evidence shape. A catalog-only name or description match is supplementary and cannot displace the applicable named agent.
+
+Record each selected agent and the evidence-based reason in its dispatch brief and synthesis. Missing, failed, or malformed required output remains visible as incomplete evidence; do not silently substitute another agent or broaden to every available specialist.
 
 Maintain a cited evidence log while exploring. Each entry records a file and line, command output, or reproduced behavior plus the direct observation. Keep observations separate from analysis. Do not let implementation details replace or broaden the problem anchor.
 

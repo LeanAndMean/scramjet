@@ -68,20 +68,17 @@ Record these as **project review criteria** -- they serve as benchmarks when ass
 
 ## Step 4: Explore the codebase
 
-Dispatch parallel exploration tasks to specialized subagents (one per lens). All lenses are required -- Step 5 always evaluates risks, testing, and alternatives, so their corresponding evidence-gathering lenses must always run:
+Classify the plan as command-only, code-only, or mixed before dispatching review evidence:
 
-- **Files referenced in the plan**: Trace through each file referenced in the plan, confirming they exist, checking their current state, and verifying the plan's characterization of their structure, responsibilities, and integration points is accurate.
-- **Architecture and patterns**: Trace through the relevant architecture comprehensively, validating that the plan aligns with existing codebase conventions, abstractions, data flow, and design decisions.
-- **Gaps**: Trace through code adjacent to the plan's scope, looking for constraints, dependencies, cross-cutting concerns, or affected areas the plan may have missed.
-- **Risks and pitfalls**: Investigate what could go wrong with the plan's proposed approach. Look for failure modes, boundary conditions, implicit assumptions, or architectural concerns in the areas the plan modifies.
-- **Alternative approaches**: Look for codebase evidence that a different approach could achieve the same goals. Identify existing patterns, abstractions, or design decisions that suggest a simpler, more idiomatic, or more robust solution than what the plan proposes.
-- **Test infrastructure**: Examine the project's test suite -- frameworks, patterns, test organization, coverage approach, and any test utilities or fixtures relevant to the areas the plan modifies.
+- **Command-only** plans change executable natural-language surfaces: command or agent Markdown, frontmatter, next-step or delegation contracts, tool scopes, prompt artifacts, command-facing documentation, or tests whose subject is model interpretation. Replace the six mandatory code-oriented evidence lenses with `scramjet:instruction-semantics-analyzer`, `scramjet:command-operability-reviewer`, and `scramjet:command-simplifier`. Add the command-set explorer, architect, context-flow, authority/state, trust, evaluation, failure, or completeness specialist only when a concrete changed surface or requirement makes that responsibility relevant.
+- **Code-only** plans retain the six existing Mach 12 exploration lenses: files referenced in the plan, architecture and patterns, gaps, risks and pitfalls, alternative approaches, and test infrastructure.
+- **Mixed** plans use both families with disjoint briefs and file/claim partitions; command specialists replace analogous code lenses rather than being added beside the full code suite.
 
-For parallel execution, dispatch all exploration tasks in a single batch rather than sequentially.
+The review evidence plus assessment pass is capped at seven subagent calls across both families. Reserve one assessment call for command-only or code-only work; for mixed work, reserve two when both finding families are materially plausible, leaving at most five evidence calls. Select proportionally rather than using every available specialist. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
 
-If the user provided context, include it in each exploration brief to focus review on the user's areas of concern. If project review criteria were recorded in Step 3, include them so exploration can verify whether the plan covers the relevant project layers and testing infrastructure.
+Record each selected agent and its evidence-based reason in the dispatch brief and synthesis. Missing, failed, or malformed required output remains visible and narrows the conclusion; never silently substitute another agent or broaden to all specialists. Mention omitted roles only when omission materially limits confidence.
 
-Each exploration should return a list of key files and observations. After exploration completes, read all identified files.
+For parallel execution, dispatch all selected evidence tasks in one batch. Include user context and project review criteria in each relevant brief. Each task should return key files and cited observations; after it completes, read every identified file needed for the review.
 
 ## Step 5: Review the plan
 
@@ -124,15 +121,19 @@ Create an initial findings list with stable identifiers:
 
 ## Step 6: Independently assess the findings
 
-Before presenting findings to the user, run an independent assessment pass. Dispatch it to the `mach12:independent-assessor` subagent. The subagent owns the classification: do **not** pre-classify findings, pre-judge their validity, or run the classification yourself after dispatch. Provide it with:
+Before presenting findings to the user, run an independent assessment pass. Give every finding exactly one verdict owner: command-surface findings go to `scramjet:independent-command-assessor`, runtime-code findings go to `mach12:independent-assessor`, and cross-boundary findings go to one explicitly selected owner based on the alleged behavior and controlling responsibility. Use at most two assessors, within the seven-call review evidence plus assessment cap. For mixed work, partition findings by identifier into disjoint briefs and have the parent merge a complete result. Do not ask both assessors to classify the same item.
+
+A replacement assessor must be explicitly compatible with the caller's exact identifiers, taxonomy, output shape, evidence needs, and workflow handoff; catalog-only similarity is supplementary. Missing or malformed required assessment remains visible and blocks a complete classification rather than triggering silent substitution.
+
+The selected assessor owns classification: do **not** pre-classify its assigned findings, pre-judge their validity, or run the classification yourself after dispatch. Provide each assessor with:
 
 - The issue title/body and full comment stream.
 - The current implementation plan.
 - The project review criteria from Step 3.
-- The key codebase evidence from Step 4.
-- The initial F/S findings from Step 5.
+- The key codebase evidence relevant to its assigned surface from Step 4.
+- Its assigned initial F/S findings from Step 5.
 
-The brief should instruct the assessor to, for each F/S item, verify against the issue, plan, comments, and relevant code, then classify it as one of:
+Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, and classify it as one of:
 
 - **Genuine blocker** -- the plan is likely to fail or produce incorrect results unless this is fixed.
 - **Genuine issue** -- the plan has a significant gap or risk that should be addressed before implementation.
@@ -176,7 +177,9 @@ If the user picks "Create revised plan", enter the revision loop:
 
 ### Revision loop
 
-1. **Architect dispatch.** Use the `subagent` tool to dispatch `mach12:code-architect` with a brief containing:
+1. **Architect dispatch.** This single revision-architect call is a separate decision branch and does not count against the completed seven-call review/assessment pass. Use `scramjet:command-architect` for command-only revisions and `mach12:code-architect` for code-only revisions. For mixed revisions, select one explicit aggregate owner based on the findings' controlling responsibility and pass the disjoint command/code evidence needed to preserve both surfaces; do not dispatch both or broaden the branch. A replacement installed architect requires established compatibility with the complete revised-plan contract below; catalog-only similarity is supplementary.
+
+   Dispatch the selected architect with a brief containing:
    - The issue title, body, and requirements from Step 2.
    - The current implementation plan being revised (original plan on first iteration, or most recent revision on subsequent iterations).
    - The full findings list from Step 5 (with F/S identifiers and current classifications from Step 6), identifying which are Critical, Important, and Suggestions.

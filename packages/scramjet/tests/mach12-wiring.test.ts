@@ -9,6 +9,7 @@ import type { NextStepPolicy } from "../src/types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
+const SCRAMJET_AGENTS_DIR = resolve(HERE, "..", "scramjet", "agents");
 const SET_NAME = "mach12";
 
 interface WiringRow {
@@ -344,6 +345,92 @@ describe("mach12 inline forge publication inventory", () => {
 			expect(parsed.def.allowedTools).toEqual(expect.arrayContaining(["add_issue_comment", "add_pr_comment"]));
 		},
 	);
+});
+
+describe("mach12 command-surface issue routing", () => {
+	const command = (basename: string) => readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+	const section = (content: string, start: string, end: string) =>
+		content.slice(content.indexOf(start), content.indexOf(end));
+	const referencedScramjetAgents = (content: string) =>
+		[...content.matchAll(/scramjet:[a-z][a-z-]+/g)].map((match) => match[0]);
+
+	it.each(["issue-create", "issue-plan", "issue-review"])(
+		"%s routes advisory work without dangling Scramjet references or catalog-wide fallback",
+		(basename) => {
+			const content = command(basename);
+			const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), content, SET_NAME);
+			expect(parsed.ok).toBe(true);
+			if (!parsed.ok) return;
+			expect(parsed.def.allowedTools).toContain("subagent");
+
+			const references = [...new Set(referencedScramjetAgents(content))];
+			expect(references.length).toBeGreaterThan(0);
+			for (const name of references) {
+				expect(existsSync(join(SCRAMJET_AGENTS_DIR, `${name}.md`)), name).toBe(true);
+			}
+			expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
+		},
+	);
+
+	it("preserves issue creation's proportional exploration threshold", () => {
+		const exploration = section(command("issue-create"), "## Step 4:", "## Step 5:");
+		expect(exploration).toContain("scramjet:command-set-explorer");
+		expect(exploration).toContain("scramjet:command-failure-analyst");
+		expect(exploration).toMatch(/non-trivial command surface/i);
+		expect(exploration).toMatch(/use both only when/i);
+		expect(exploration).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
+		expect(exploration).toMatch(/catalog-only[^.]*supplementary/i);
+	});
+
+	it("substitutes command planning specialists within one eight-call initial pass", () => {
+		const content = command("issue-plan");
+		const exploration = section(content, "## Step 4:", "## Step 5:");
+		const architecture = section(content, "## Step 6:", "## Step 7:");
+		const evaluation = section(content, "## Step 8:", "## Step 9:");
+
+		expect(exploration).toContain("scramjet:command-set-explorer");
+		expect(exploration).toContain("mach12:code-explorer");
+		expect(exploration).toMatch(/command-only[\s\S]{0,400}replace/i);
+		expect(exploration).toMatch(/mixed[\s\S]{0,200}disjoint briefs/i);
+		expect(exploration).toMatch(/initial[^.]*maximum of eight/i);
+		expect(exploration).toMatch(/targeted architecture reruns[^.]*separate decision branch/i);
+		expect(exploration).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
+
+		for (const agent of ["scramjet:command-architect", "mach12:code-architect"]) {
+			expect(architecture).toContain(agent);
+		}
+		expect(architecture).toMatch(/three `scramjet:command-architect` calls/i);
+		expect(architecture).toMatch(/command-architect`[^.]*aggregate/i);
+
+		for (const agent of ["scramjet:command-evaluation-designer", "mach12:test-designer"]) {
+			expect(evaluation).toContain(agent);
+		}
+		expect(evaluation).toMatch(/non-executable documentation/i);
+		expect(evaluation).toMatch(/command edit is trivial/i);
+	});
+
+	it("substitutes command plan-review lenses and gives each finding one assessor family", () => {
+		const content = command("issue-review");
+		const evidence = section(content, "## Step 4:", "## Step 5:");
+		const assessment = section(content, "## Step 6:", "## Step 7:");
+
+		for (const agent of [
+			"scramjet:instruction-semantics-analyzer",
+			"scramjet:command-operability-reviewer",
+			"scramjet:command-simplifier",
+		]) {
+			expect(evidence).toContain(agent);
+		}
+		expect(evidence).toMatch(/command-only[\s\S]{0,400}replace/i);
+		expect(evidence).toMatch(/review evidence plus assessment[^.]*seven/i);
+		expect(evidence).toMatch(/mixed[\s\S]{0,200}disjoint briefs/i);
+		expect(evidence).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
+
+		expect(assessment).toContain("scramjet:independent-command-assessor");
+		expect(assessment).toContain("mach12:independent-assessor");
+		expect(assessment).toMatch(/every finding exactly one verdict owner/i);
+		expect(content).toMatch(/revision-architect[^.]*separate/i);
+	});
 });
 
 describe("mach12 issue planning — architecture choice contract", () => {

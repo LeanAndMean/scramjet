@@ -76,22 +76,21 @@ Record these as **project planning requirements** -- they inform both the explor
 
 ## Step 4: Explore the codebase
 
-Dispatch parallel exploration tasks to specialized subagents (one per lens). All four lenses are required -- they feed into Steps 5 through 7, and omitting any risks blind spots in scope clarification and architecture design.
+Classify the affected work before dispatching advisory subagents:
 
-- **Similar features**: Find existing code that solves related problems. Trace through their implementation comprehensively, identifying patterns and conventions the new work should follow.
-- **Architecture**: Map the architecture and abstractions for the relevant area, tracing through the code to understand the layers, data flow, and design decisions.
-- **Integration points**: Identify where new code would connect to existing systems, including extension surfaces, testing infrastructure, and cross-cutting concerns.
-- **Constraints and edge cases**: Investigate constraints and edge cases that the issue does not mention but the codebase reveals. Look for boundary conditions, implicit assumptions, error paths, or environmental requirements in the affected areas.
+- **Command-only** work changes executable natural-language surfaces: command or agent Markdown, frontmatter, next-step or delegation contracts, tool scopes, prompt artifacts, command-facing documentation, or tests whose subject is model interpretation. Replace the analogous code exploration with `scramjet:command-set-explorer` to map commands, edges, context boundaries, artifacts, side-effect owners, and complete journeys.
+- **Code-only** work changes runtime source or executable implementation tests. Retain `mach12:code-explorer` and dispatch the existing four lenses: similar features, architecture, integration points, and constraints or edge cases.
+- **Mixed** work uses both families with disjoint briefs and file/claim partitions. Do not ask either family to review the other's surface.
 
-For parallel execution, dispatch all exploration tasks in a single batch rather than sequentially.
+Across the initial exploration, architecture, and test-design pass in Steps 4, 6, and 8, use a maximum of eight subagent calls across both families. User-requested targeted architecture reruns after rejecting the initial options are a separate decision branch and do not count against the completed initial pass. Record every selected agent and its evidence-based reason in the dispatch brief and synthesis. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
 
-If the user provided context, include it in each exploration brief to guide focus. If project planning requirements were identified in Step 3, include them so exploration covers the relevant project layers and testing infrastructure.
+For command work, add `scramjet:context-flow-analyzer`, `scramjet:authority-state-analyzer`, `scramjet:command-trust-reviewer`, `scramjet:command-failure-analyst`, or `scramjet:command-completeness-checker` only when delegation or fresh-session flow, duplicated authority or partial state, a concrete trust boundary, an observed failure, or explicit requirement coverage makes that responsibility relevant. Never broaden to every specialist. Reserve enough of the eight-call budget for the architecture calls and, when Step 8's dispatch criteria apply, the evaluation or test designer. Missing, failed, or malformed required output remains visible as incomplete evidence rather than triggering silent substitution.
 
-Each exploration should return a list of 5-10 key files. After exploration completes, read all identified files to build deep understanding.
+For parallel execution, dispatch all selected exploration tasks in a single batch. Include user context and project planning requirements in each relevant brief. Each exploration should return key files and cited observations; after it completes, read every identified file needed to build deep understanding.
 
 Use the issue and comment timestamps to identify potentially stale factual premises that materially affect the plan, including claimed behavior, file locations, architecture, APIs, constraints, and gaps. Verify those claims against current repository authority before relying on them. Surface material drift and plan from current evidence without discarding historical requirements or decisions that remain supported; age alone does not make them invalid.
 
-Present a comprehensive summary of findings and patterns discovered.
+Present a comprehensive summary of findings, selection reasons, and patterns discovered. Mention an omitted role only when its omission materially limits confidence.
 
 ## Step 5: Clarify scope and requirements
 
@@ -144,17 +143,21 @@ If the user says "whatever you think is best", provide your recommendation with 
 
 ## Step 6: Design architecture
 
-Based on the codebase findings and clarified requirements, dispatch parallel architecture tasks to specialized subagents under three different lenses:
+Based on the codebase findings and clarified requirements, route architecture by the Step 4 classification while staying within the shared maximum of eight calls:
+
+- For command-only work, replace the three code architects with three `scramjet:command-architect` calls, one for each alternative below. Each brief asks for one complete selected design under that lens, including rejected additive alternatives, while owning command purpose, responsibility boundaries, side effects, fact authority, partial-state elimination, and total command-set complexity.
+- For code-only work, retain three `mach12:code-architect` calls, one for each alternative below.
+- For mixed work, give prompt and code architects disjoint briefs, reserve at least one `scramjet:command-architect` as aggregate owner for the command design, and have the parent synthesize three coherent system-level options. All calls count against the same eight-call budget.
+
+A replacement installed agent must satisfy the selected lens's exact blueprint contract; catalog-only similarity is insufficient. Dispatch the selected architecture tasks in one parallel batch. If the user provided context, include it in each brief.
+
+The three alternatives are:
 
 - **Smallest sufficient change**: Design the implementation that satisfies the requirements with the smallest change surface. Walk the minimum-sufficient solution ladder before proposing any new abstractions, files, or dependencies. Maximize reuse of existing patterns.
 - **Strongest structural design**: Design the implementation prioritizing clear separation of concerns, maintainability, and well-defined abstractions. Still walk the ladder — justify each new component against a lower rung.
 - **Alternative trade-off design**: Design an implementation that optimizes for a different axis (such as performance, extensibility, or a constraint the other lenses deprioritized). Walk the ladder and state what this lens deliberately trades away.
 
-For parallel execution, dispatch all architecture tasks in a single batch rather than sequentially.
-
-If the user provided context, include it in each brief so architecture designs account for the user's constraints or preferences.
-
-Each lens should produce a full implementation blueprint: files to create or modify, component responsibilities, data flow, and a phased build sequence.
+Each option should produce a full implementation blueprint: files to create or modify, component responsibilities, data flow, and a phased build sequence.
 
 Each lens must also assess the technical debt the option it proposes introduces, retains, reduces, or avoids. An evidence-based “none identified” is valid; do not invent debt. Keep this assessment concise and separate from broader risks and trade-offs: technical debt means likely future maintenance, migration, coupling, testing, or operational cost.
 
@@ -208,19 +211,21 @@ Use the architect lens outputs to resolve questions before escalating. When one 
 
 Before drafting the plan, decide whether the issue needs a deliberate test strategy.
 
-**Dispatch the `mach12:test-designer` subagent** when the issue is:
+**Dispatch a test or evaluation designer** when the issue is:
 - A bug fix (test-first is particularly valuable here)
 - A non-trivial feature (new behavior that needs confidence verification)
 - A refactor touching critical paths
 
+For command-only work, replace `mach12:test-designer` with `scramjet:command-evaluation-designer`; require the same plan-facing classification, test-first recommendation, proposed-tests table, cost/benefit assessment, and stage directives, while distinguishing structural evidence from provider-expensive or operational evidence. For code-only work, retain `mach12:test-designer`. For mixed work, use disjoint command and runtime briefs when both are justified, and count both against the shared eight-call maximum. A catalog-only match cannot replace either exact role.
+
 **Write a lightweight inline test note instead** when:
-- The change is documentation-only, config, or prose
-- The test need is obvious and can be stated in one sentence (e.g., "add to EXPECTED_AGENTS in wiring test")
-- There is no testable runtime code
+- The change is non-executable documentation, configuration, or mechanical metadata
+- A command edit is trivial and its test need is obvious enough to state in one sentence (e.g., "update the wiring assertion")
+- There is no testable runtime or model-interpreted behavior
 
 ### Dispatching the subagent
 
-Pass a synthesized brief containing:
+Pass the selected designer a synthesized brief containing:
 - Issue classification (bug fix / feature / refactor) and problem statement
 - The selected architecture from Step 6
 - Relevant codebase findings: existing test patterns, related test files, and coverage landscape from Step 4
