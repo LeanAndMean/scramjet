@@ -129,6 +129,35 @@ describe("discoverAgents — empty directory", () => {
 	});
 });
 
+describe("discoverAgents — bundled command specialists", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-agent-test-"));
+		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		const sourceDir = path.join(__dirname, "../scramjet/agents");
+		for (const file of fs.readdirSync(sourceDir)) {
+			if (file.endsWith(".md")) fs.copyFileSync(path.join(sourceDir, file), path.join(agentsDir, file));
+		}
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("loads every provider through production discovery with the exact read-only tool posture", () => {
+		const result = discoverAgents(tmpDir, "project");
+
+		expect(result.diagnostics).toEqual([]);
+		expect(result.agents).toHaveLength(12);
+		for (const agent of result.agents) {
+			expect(agent.tools).toEqual(["read", "grep", "find", "ls"]);
+			expect(agent.systemPrompt.trim()).not.toBe("");
+		}
+	});
+});
+
 describe("discoverAgents — happy path with valid agent file", () => {
 	let tmpDir: string;
 
