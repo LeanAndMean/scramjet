@@ -433,6 +433,85 @@ describe("mach12 command-surface issue routing", () => {
 	});
 });
 
+describe("mach12 command-surface implementation and PR review routing", () => {
+	const command = (basename: string) => readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+	const section = (content: string, start: string, end?: string) => {
+		const startIndex = content.indexOf(start);
+		return content.slice(startIndex, end === undefined ? undefined : content.indexOf(end, startIndex));
+	};
+
+	it.each(["issue-implement", "pr-review", "pr-review-assessment", "pr-review-fix"])(
+		"%s allows command-specialist dispatch and references only shipped specialists",
+		(basename) => {
+			const content = command(basename);
+			const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), content, SET_NAME);
+			expect(parsed.ok).toBe(true);
+			if (!parsed.ok) return;
+			expect(parsed.def.allowedTools).toContain("subagent");
+			for (const name of new Set(content.match(/scramjet:[a-z][a-z-]+/g) ?? [])) {
+				expect(existsSync(join(SCRAMJET_AGENTS_DIR, `${name}.md`)), name).toBe(true);
+			}
+			expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
+		},
+	);
+
+	it.each(["issue-implement", "pr-review-fix"])(
+		"%s substitutes prompt reviewers within its existing shared cap",
+		(basename) => {
+			const quality = section(command(basename), "6. **Quality review**", "7. **Summary**");
+			for (const agent of [
+				"scramjet:instruction-semantics-analyzer",
+				"scramjet:command-operability-reviewer",
+				"scramjet:command-simplifier",
+				"mach12:code-reviewer",
+			]) {
+				expect(quality).toContain(agent);
+			}
+			expect(quality).toMatch(/command-only[^.]*instead of code reviewers/i);
+			expect(quality).toMatch(/mixed[^.]*shared[^.]*three/i);
+			expect(quality).toMatch(/parent[^.]*mutation[^.]*test execution/i);
+			expect(quality).toMatch(/single pass/i);
+			expect(quality).toMatch(/trivial[^.]*skip/i);
+			expect(quality).toMatch(/re-review[^.]*within the three-subagent cap/i);
+		},
+	);
+
+	it("selects all applicable PR review lenses under one seven-reviewer cap", () => {
+		const review = section(command("pr-review"), "## Step 3:", "## Step 4:");
+		expect(review).not.toContain("Default to `all`");
+		for (const agent of [
+			"scramjet:instruction-semantics-analyzer",
+			"scramjet:command-operability-reviewer",
+			"scramjet:command-simplifier",
+			"mach12:code-reviewer",
+		]) {
+			expect(review).toContain(agent);
+		}
+		expect(review).toMatch(/command-only[^.]*replace/i);
+		expect(review).toMatch(/mixed[^.]*disjoint briefs/i);
+		expect(review).toMatch(/maximum of seven/i);
+		expect(review).toMatch(/catalog-only[^.]*supplementary/i);
+		expect(review).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
+		expect(review).toMatch(
+			/parent exclusively owns repository mutation, test execution, user interaction, and publication/i,
+		);
+	});
+
+	it("assigns every PR review finding to exactly one compatible assessor", () => {
+		const assessment = section(command("pr-review-assessment"), "## Step 3:", "## Step 4:");
+		expect(assessment).toContain("scramjet:independent-command-assessor");
+		expect(assessment).toContain("mach12:independent-assessor");
+		expect(assessment).toMatch(/every finding exactly one verdict owner/i);
+		expect(assessment).toMatch(/cross-boundary[^.]*one[^.]*owner/i);
+		expect(assessment).toMatch(/at most two assessors/i);
+		expect(assessment).toMatch(/F\/S identifiers[^.]*caller[^.]*taxonomy/i);
+		expect(assessment).toMatch(/actual referenced artifact[^.]*command prose[^.]*runtime source/i);
+		expect(assessment).toMatch(
+			/exclusively owning repository mutation, test execution, user interaction, and publication/i,
+		);
+	});
+});
+
 describe("mach12 issue planning — architecture choice contract", () => {
 	const issuePlan = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-plan.md`), "utf-8");
 	const step6Start = issuePlan.indexOf("## Step 6:");

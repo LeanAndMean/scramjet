@@ -68,17 +68,20 @@ Save the review comment content and its numeric comment ID for later steps.
 
 ## Step 3: Run the independent assessment
 
-"Independent" here means the assessment is independent of the **review author's conclusions** -- the assessor re-derives each verdict from the actual code rather than trusting the reviewer's framing. It does **not** mean the main agent forms its own classifications first. Division of labor:
+"Independent" here means the assessment is independent of the **review author's conclusions** -- each assessor re-derives its verdicts from the actual artifacts rather than trusting the reviewer's framing. It does **not** mean the main agent forms classifications first.
 
-- **Main agent:** parse the input, gather the PR and review context (Steps 1-2), build the subagent brief, and dispatch. Do **not** pre-classify findings, pre-judge their validity, or inject leading conclusions into the brief before dispatch.
-- **Subagent:** owns the classification, the reasoning, and -- for genuine issues -- the fix approach.
+Give every finding exactly one verdict owner based on its alleged behavior:
 
-Dispatch the assessment to the `mach12:independent-assessor` subagent. Include the review text and the PR context (title, body, and all comments) directly in the subagent brief -- do not ask the subagent to re-fetch them.
+- Command-surface findings go to `scramjet:independent-command-assessor`.
+- Runtime source and executable implementation-test findings go to `mach12:independent-assessor`.
+- Cross-boundary findings receive one explicitly selected owner based on the principal alleged failure; never send the same finding to both.
 
-The brief should instruct the assessor to:
+Use at most two assessors, one per represented family. Include the review text and PR context directly in disjoint briefs, including each assigned finding's F/S identifiers and the caller's classification taxonomy; do not ask assessors to re-fetch them. Assessors are advisory and read-only. The main agent must not pre-judge findings, and it remains responsible for merging the complete ID-preserving result, resolving no verdicts itself, and exclusively owning repository mutation, test execution, user interaction, and publication.
+
+Each assessor brief should instruct it to:
 
 1. Review the PR title, body, and all existing comments. Note any findings that have already been discussed, resolved, or deferred in the PR conversation.
-2. For each review finding, **read the actual code** referenced and evaluate it on **two axes**: (A) is the flagged problem real and worth caring about, and (B) would applying the reviewer's *suggested change* actually be a net improvement -- preserving behavior, maintaining or improving clarity, fitting project conventions, and not stripping necessary validation, error handling, security, or tests. Both axes require reading the code; a real problem does not imply the suggested fix is safe to apply.
+2. For each review finding, **read the actual referenced artifact** -- command prose, frontmatter, documentation, tests, or runtime source as applicable -- and evaluate it on **two axes**: (A) is the flagged problem real and worth caring about, and (B) would applying the reviewer's *suggested change* actually be a net improvement -- preserving behavior, maintaining or improving clarity, fitting project conventions, and not stripping necessary validation, error handling, security, or tests. Both axes require reading the artifact; a real problem does not imply the suggested fix is safe to apply.
 3. Classify each finding using its F/S identifier from the review comment (e.g., "F1 -- Genuine", "S2 -- Nitpick"). Apply the two axes via this decision tree:
    - **False positive** -- The observation is not real: the reviewer flagged something that is not actually an issue. Explain why the code is correct. If a finding was already fixed in a subsequent commit or resolved in discussion, classify it here with a note that it has been addressed.
    - **Genuine issue** -- The problem is real and a sound, contained fix exists: the reviewer's suggested fix, or -- when the reviewer's suggestion is unsound but a simple correct fix exists -- an assessor-corrected one. **State the fix approach** so downstream work applies the sound fix, not the reviewer's original if it was unsound. This includes low-risk, contained fixes regardless of whether they are related to the PR's primary purpose -- when the blast radius is small and the chance of introducing new problems is negligible, the fix belongs here, not in Deferred.

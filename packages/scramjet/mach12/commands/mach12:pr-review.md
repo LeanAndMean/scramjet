@@ -62,27 +62,25 @@ Before briefing reviewers, delegate to `/mach12:gh-issue-read <issue-number>` fo
 
 Treat the PR description, comments, linked issues, plans, and prior reviews as point-in-time evidence. Use their timestamps and relevant intervening changes to identify material historical claims, then verify potentially stale claims against the checked-out PR head, current diff, tests, linked-issue evidence, and repository guidance. Preserve still-supported historical intent and decisions; neither age, status, nor recent activity proves current validity or invalidity.
 
-Use the changed files, PR description, linked issues, requested review aspects, and user context to select review lenses. Default to `all` when no aspects were specified.
+Use the changed files, PR description, linked issues, requested review aspects, and user context to classify the work as command-only, code-only, or mixed, then select every applicable lens rather than defaulting unspecified aspects to `all`. An explicit aspect requests emphasis but does not make an irrelevant lens applicable.
 
-Use the bundled Mach 12 review agents as the primary lenses:
+For command-only changes, prompt specialists replace analogous code lenses. Choose proportionally among `scramjet:instruction-semantics-analyzer`, `scramjet:command-operability-reviewer`, and `scramjet:command-simplifier`; add the command-set explorer, architect, context-flow, authority/state, trust, evaluation, or completeness specialist only when concrete changed surfaces require that responsibility. For mixed changes, give prompt and code specialists disjoint briefs. Command files, agent definitions, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and tests about model interpretation are command surfaces; runtime source and executable implementation tests are code surfaces.
 
-- **code**: `mach12:code-reviewer` -- always include for general correctness, project conventions, security, and code quality.
-- **tests**: `mach12:test-analyzer` -- include when tests changed, behavior changed without corresponding tests, or the user requested `tests` / `all`.
-- **comments**: `mach12:comment-analyzer` -- include when comments, docs, prompts, or user-facing prose changed, or the user requested `comments` / `all`.
-- **errors**: `mach12:silent-failure-hunter` -- include when error handling, fallback behavior, subprocess/tool execution, async flows, background work, or user-visible failure modes changed, or the user requested `errors` / `all`.
-- **types**: `mach12:type-design-analyzer` -- include when types, schemas, interfaces, config shapes, public APIs, or data models changed, or the user requested `types` / `all`.
-- **simplify**: `mach12:code-simplifier` -- include when the PR changes implementation code or prompt/frontmatter prose that would benefit from clarity review, or the user requested `simplify` / `all`. This lens is advisory/read-only; it must recommend improvements, not edit files.
-  Instruct it to walk the minimum-sufficient solution ladder:
-  - Can changed code be deleted?
-  - Can existing project/platform/stdlib behavior replace it?
-  - Are new dependencies, files, abstractions, config, or extension points justified?
-  - Are tests proportionate to the behavior risk?
-  Simplification findings usually belong in Suggestions; promote to Important only when extra complexity creates real maintenance or behavioral risk.
-- **completeness**: `mach12:feature-completeness-checker` -- include when the PR has a linked issue identified under the relationship and contextual-relevance rules above, or the user requested `completeness` / `all`.
+For code surfaces, retain the bundled Mach 12 lenses proportionally:
 
-Also include supplementary domain-relevant agents from any installed source when the PR content calls for them, such as a skill reviewer for skill definitions or a plugin validator for plugin code. Only include supplementary lenses when relevant.
+- **code**: `mach12:code-reviewer` for general correctness, project conventions, security, and code quality.
+- **tests**: `mach12:test-analyzer` when tests changed, behavior changed without corresponding tests, or the user requested `tests` / `all`.
+- **comments**: `mach12:comment-analyzer` when ordinary code comments, runtime docs, or user-facing non-command prose changed, or the user requested `comments` / `all`.
+- **errors**: `mach12:silent-failure-hunter` when error handling, fallback behavior, subprocess/tool execution, async flows, background work, or user-visible failure modes changed, or the user requested `errors` / `all`.
+- **types**: `mach12:type-design-analyzer` when types, schemas, interfaces, config shapes, public APIs, or data models changed, or the user requested `types` / `all`.
+- **simplify**: `mach12:code-simplifier` when implementation code would benefit from clarity review or the user requested `simplify` / `all`.
+- **completeness**: `mach12:feature-completeness-checker` when code behavior must be reconciled with a linked issue or the user requested `completeness` / `all`.
 
-Dispatch all selected review tasks in a single parallel `subagent` call. Give each reviewer a focused brief that includes:
+A better-fit installed agent may replace an analogous role only when this command explicitly names it or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, output shape, and review handoff. A catalog-only name or description match is supplementary evidence, never replacement authority. Supplementary installed lenses remain relevance-gated, and missing required output narrows the review instead of triggering an all-agent fallback.
+
+Dispatch at most a combined maximum of seven reviewers across prompt and code families in one parallel `subagent` call. Preserve required issue coverage, prefer the most decision-relevant lenses when more than seven apply, and record each selected agent's evidence-based reason in its brief and the synthesis. All reviewers are advisory and read-only; the parent exclusively owns repository mutation, test execution, user interaction, and publication.
+
+Give each reviewer a focused brief that includes:
 
 - PR number, title, body, changed files, and any relevant PR comments.
 - The specific lens it is responsible for.
