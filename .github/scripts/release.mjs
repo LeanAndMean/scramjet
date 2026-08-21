@@ -10,10 +10,13 @@ const REGISTRY_URL = "https://registry.npmjs.org/";
 const WORKFLOW_REPOSITORY = "https://github.com/LeanAndMean/scramjet";
 const WORKFLOW_PATH = ".github/workflows/release.yml";
 const SLSA_PREDICATE = "https://slsa.dev/provenance/v1";
-const READ_TIMEOUT_MS = 60_000;
-const PUBLISH_TIMEOUT_MS = 10 * 60_000;
-const POST_PUBLISH_ATTEMPTS = 6;
-const POST_PUBLISH_DELAY_MS = 10_000;
+const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
+const CERTIFICATE_IDENTITY =
+	"^https://github\\.com/LeanAndMean/scramjet/\\.github/workflows/release\\.yml@refs/tags/v\\d+\\.\\d+\\.\\d+$";
+export const READ_TIMEOUT_MS = 60_000;
+export const PUBLISH_TIMEOUT_MS = 10 * 60_000;
+export const POST_PUBLISH_ATTEMPTS = 6;
+export const POST_PUBLISH_DELAY_MS = 10_000;
 const INVENTORY = [
 	["packages/tui", "@leanandmean/tui"],
 	["packages/ai", "@leanandmean/ai"],
@@ -22,6 +25,25 @@ const INVENTORY = [
 	["packages/scramjet", "@leanandmean/scramjet"],
 ];
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const PREFLIGHT_READS_PER_PACKAGE = 2;
+const PRESENT_PACKAGE_READS = 3;
+const PRE_PUBLISH_READS = 2;
+const POST_PUBLISH_READS_PER_ATTEMPT = 4;
+const SIGSTORE_TRUST_READ_WINDOWS = 10;
+const MAX_READ_WINDOWS =
+	INVENTORY.length *
+		(PREFLIGHT_READS_PER_PACKAGE +
+			PRESENT_PACKAGE_READS +
+			PRE_PUBLISH_READS +
+			POST_PUBLISH_ATTEMPTS * POST_PUBLISH_READS_PER_ATTEMPT) +
+	SIGSTORE_TRUST_READ_WINDOWS;
+export const RELEASE_HELPER_MAX_MINUTES = Math.ceil(
+	(MAX_READ_WINDOWS * READ_TIMEOUT_MS +
+		INVENTORY.length * PUBLISH_TIMEOUT_MS +
+		INVENTORY.length * 2 * (POST_PUBLISH_ATTEMPTS - 1) * POST_PUBLISH_DELAY_MS) /
+		60_000,
+);
+let defaultProvenanceVerifier;
 
 function fail(message) {
 	throw new Error(message);
@@ -165,6 +187,37 @@ export async function fetchAttestationJson(url, fetchImpl = fetch, timeoutMs = R
 	return response.json();
 }
 
+export async function createProvenanceVerifier(createVerifier) {
+	let verifier;
+	try {
+		createVerifier ??= (await import("sigstore")).createVerifier;
+		verifier = await createVerifier({
+			certificateIssuer: GITHUB_OIDC_ISSUER,
+			certificateIdentityURI: CERTIFICATE_IDENTITY,
+			ctLogThreshold: 1,
+			tlogThreshold: 1,
+			timeout: READ_TIMEOUT_MS,
+			retry: 0,
+		});
+	} catch (error) {
+		fail(`Sigstore trust initialization failed: ${error?.message ?? String(error)}`);
+	}
+	return (bundle) => verifier.verify(bundle);
+}
+
+async function getProvenanceVerifier() {
+	defaultProvenanceVerifier ??= createProvenanceVerifier();
+	return defaultProvenanceVerifier;
+}
+
+async function authenticateProvenance(bundle, verifyBundle) {
+	try {
+		await verifyBundle(bundle);
+	} catch (error) {
+		fail(`Sigstore provenance authentication failed: ${error?.message ?? String(error)}`);
+	}
+}
+
 export async function reconcilePackage(pkg, identity, dependencies = {}) {
 	const registry = dependencies.registry ?? ((args, description) => npmJson(args, description));
 	const fetchJson = dependencies.fetchJson ?? fetchAttestationJson;
@@ -181,6 +234,7 @@ export async function reconcilePackage(pkg, identity, dependencies = {}) {
 	const candidates = response.attestations.filter((entry) => entry?.predicateType === SLSA_PREDICATE);
 	if (candidates.length === 0) fail("attestation response must contain an SLSA provenance statement");
 	if (candidates.length > 1) fail("attestation response must contain exactly one SLSA provenance statement");
+	await authenticateProvenance(candidates[0]?.bundle, dependencies.verifyBundle ?? (await getProvenanceVerifier()));
 	const envelope = candidates[0]?.bundle?.dsseEnvelope;
 	if (envelope?.payloadType !== "application/vnd.in-toto+json" || typeof envelope.payload !== "string") {
 		fail("SLSA provenance must contain an in-toto DSSE payload");
@@ -279,22 +333,24 @@ export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_M
 	}
 }
 
-export async function reconcile(inventory, identity) {
+export async function reconcile(inventory, identity, dependencies = {}) {
+	const verifyBundle = dependencies.verifyBundle ?? (await getProvenanceVerifier());
 	const plan = preflight(inventory);
 	for (const pkg of plan) {
 		if (!pkg.present) {
 			console.log(`Not yet published ${pkg.name}@${pkg.version}`);
 			continue;
 		}
-		await reconcilePackage(pkg, identity, { allowPriorRelease: true });
+		await reconcilePackage(pkg, identity, { ...dependencies, allowPriorRelease: true, verifyBundle });
 		console.log(`Reconciled ${pkg.name}@${pkg.version}`);
 	}
 }
 
-export async function publish(inventory, identity) {
+export async function publish(inventory, identity, dependencies = {}) {
+	const verifyBundle = dependencies.verifyBundle ?? (await getProvenanceVerifier());
 	const plan = preflight(inventory);
 	for (const pkg of plan.filter(({ present }) => present)) {
-		await reconcilePackage(pkg, identity, { allowPriorRelease: true });
+		await reconcilePackage(pkg, identity, { ...dependencies, allowPriorRelease: true, verifyBundle });
 		const currentTags = requireDistTags(
 			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after reconciliation`),
 			pkg.name,
@@ -320,27 +376,33 @@ export async function publish(inventory, identity) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
 		}
 		publishPackage(pkg);
-		const publishedTags = await pollRead(`${pkg.name}@${pkg.version} registry visibility`, async () => {
-			const publishedVersions = requireVersions(
-				npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
-				pkg.name,
-			);
-			if (!publishedVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} was not visible after publish`);
-			const tags = requireDistTags(
-				npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
-				pkg.name,
-			);
-			if (tags.latest !== pkg.version) fail(`${pkg.name} latest did not move to ${pkg.version}`);
-			return tags;
-		});
+		const publishedTags = await pollRead(
+			`${pkg.name}@${pkg.version} registry visibility`,
+			async () => {
+				const publishedVersions = requireVersions(
+					npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
+					pkg.name,
+				);
+				if (!publishedVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} was not visible after publish`);
+				const tags = requireDistTags(
+					npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
+					pkg.name,
+				);
+				if (tags.latest !== pkg.version) fail(`${pkg.name} latest did not move to ${pkg.version}`);
+				return tags;
+			},
+			dependencies.pollDependencies,
+		);
 		const beforeNonLatest = { ...pkg.distTags };
 		const afterNonLatest = { ...publishedTags };
 		delete beforeNonLatest.latest;
 		delete afterNonLatest.latest;
 		if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
-		await pollRead(`${pkg.name}@${pkg.version} provenance`, () => reconcilePackage(pkg, identity), {
-			retryIf: isTransientReadError,
-		});
+		await pollRead(
+			`${pkg.name}@${pkg.version} provenance`,
+			() => reconcilePackage(pkg, identity, { ...dependencies, verifyBundle }),
+			{ ...dependencies.pollDependencies, retryIf: isTransientReadError },
+		);
 	}
 }
 

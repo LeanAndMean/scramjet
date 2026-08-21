@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { RELEASE_HELPER_MAX_MINUTES } from "../../../.github/scripts/release.mjs";
 
 const WORKFLOW_PATH = resolve(import.meta.dirname, "../../../.github/workflows/release.yml");
 const source = readFileSync(WORKFLOW_PATH, "utf8");
@@ -61,7 +62,8 @@ describe("release workflow", () => {
 	it("uses exact least privilege, an event-ref checkout, and a bounded job", () => {
 		expect(workflow.permissions).toEqual({ contents: "read", "id-token": "write" });
 		expect(workflow.jobs.publish.permissions).toBeUndefined();
-		expect(workflow.jobs.publish["timeout-minutes"]).toBe(30);
+		expect(workflow.jobs.publish["timeout-minutes"]).toBe(360);
+		expect(workflow.jobs.publish["timeout-minutes"]).toBeGreaterThanOrEqual(RELEASE_HELPER_MAX_MINUTES + 60);
 		const checkout = steps.find((candidate) => candidate.uses === "actions/checkout@v4")!;
 		expect(checkout.with?.ref).toBeUndefined();
 	});

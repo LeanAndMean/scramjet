@@ -22,7 +22,7 @@ The workflow uses Node 22.14.0 or newer and npm 11.5.1, grants only `contents: r
 
 `.github/scripts/release.mjs publish` forces the public npm registry, performs a complete five-package registry preflight before mutation, then publishes in dependency order with explicit `--tag latest --access public --provenance`. It rejects a `latest` regression, requires every present target to be the package's current `latest`, snapshots and audits every dist-tag, and preserves all non-`latest` tags, including Coding Agent's `scramjet` tag. Registry lookup failure is not evidence that a version is absent, and every publish failure is fatal. An already-published unchanged package is accepted only when its provenance proves a supported prior version-tag release from this repository and workflow; a partial rerun's newly present artifact must prove the current event identity.
 
-Registry reads, attestation fetches, and the workflow job have explicit time bounds. Post-publish visibility and provenance reads use bounded, logged polling to tolerate propagation delay; `npm publish` itself runs once and is never retried. A publish timeout or interruption leaves publication state ambiguous and requires read-only reconciliation before any authorized rerun.
+Registry reads and attestation fetches are bounded, and the workflow's six-hour job budget covers the helper's complete supported sequence plus installation and build time. Post-publish visibility and provenance reads use bounded, logged polling to tolerate propagation delay; `npm publish` itself runs once and is never retried. A publish timeout or interruption leaves publication state ambiguous and requires read-only reconciliation before any authorized rerun.
 
 The repository-wide concurrency group prevents overlapping publication, with cancellation disabled. GitHub retains at most one pending run for a concurrency group, so this is serialization, not a durable release queue; do not queue multiple releases.
 
@@ -44,4 +44,31 @@ Perform the cutover in this order, with explicit authorization for every externa
 
 Publication is irreversible and nontransactional. Do not create another tag, move the existing tag, restore token auth, or retry a publish blindly. An OIDC failure may surface as `ENEEDAUTH`; diagnose it with verbose OIDC logs and correct the trusted-publisher record or workflow cause.
 
-Use `.github/scripts/release.mjs reconcile` for read-only reconciliation against the same event tag and SHA. It preflights all five packages, reports missing targets without failing solely because they are absent, and reconciles each present target under the same provenance policy as publication. A partial rerun may skip a newly present version only when its attestation proves the exact expected package, digest, workflow, ref, and commit; prior-release provenance is only for package versions that were already immutable before this release began. Fix only the diagnosed cause, then rerun the existing workflow event with explicit authorization. Preserve and re-audit every non-`latest` dist-tag throughout recovery.
+Use `.github/scripts/release.mjs reconcile` for read-only reconciliation against the same event tag and SHA. From a clean clone, set `TAG` to the existing release tag and run this complete procedure; it verifies the remote tag, uses a detached worktree at its exact commit, and supplies the same constrained identity shape as the tag-push event:
+
+```bash
+set -euo pipefail
+TAG=v0.0.0 # replace with the existing release tag
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag: $TAG" >&2; exit 1; }
+REMOTE_TAG=$(git ls-remote --exit-code --refs origin "refs/tags/$TAG")
+test "$(printf '%s\n' "$REMOTE_TAG" | wc -l)" -eq 1
+TAG_SHA=${REMOTE_TAG%%[[:space:]]*}
+[[ "$TAG_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid remote tag SHA" >&2; exit 1; }
+git fetch --no-tags origin "refs/tags/$TAG"
+test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$TAG_SHA"
+WORKTREE=$(mktemp -d)
+trap 'git worktree remove --force "$WORKTREE" 2>/dev/null || true' EXIT
+git worktree add --detach "$WORKTREE" "$TAG_SHA"
+(
+  cd "$WORKTREE"
+  test "v$(node -p 'require("./packages/scramjet/package.json").version')" = "$TAG"
+  npm ci --ignore-scripts
+  GITHUB_EVENT_NAME=push \
+  GITHUB_REF="refs/tags/$TAG" \
+  GITHUB_SHA="$TAG_SHA" \
+  GITHUB_WORKFLOW_REF="LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/$TAG" \
+    node .github/scripts/release.mjs reconcile
+)
+```
+
+Reconciliation preflights all five packages, reports missing targets without failing solely because they are absent, and cryptographically authenticates each present package's Sigstore bundle before checking its exact package, digest, workflow, ref, and commit claims. A partial rerun may skip a newly present version only when its attestation proves the current event identity; prior-release provenance is only for package versions that were already immutable before this release began. Fix only the diagnosed cause, then rerun the existing workflow event with explicit authorization. Preserve and re-audit every non-`latest` dist-tag throughout recovery.

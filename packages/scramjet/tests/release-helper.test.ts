@@ -3,10 +3,11 @@ import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	compareVersions,
+	createProvenanceVerifier,
 	fetchAttestationJson,
 	isTransientReadError,
 	loadInventory,
@@ -20,6 +21,7 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../../..");
 const HELPER = join(REPO_ROOT, ".github", "scripts", "release.mjs");
+const RELEASE_GUIDE = readFileSync(join(REPO_ROOT, ".github", "RELEASING.md"), "utf8");
 const SHA = execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
 const INVENTORY = loadInventory(REPO_ROOT);
 const SCRAMJET_VERSION = INVENTORY.find(({ name }) => name === "@leanandmean/scramjet")!.version;
@@ -41,6 +43,11 @@ interface FakeState {
 	badAttestation?: string;
 	priorAttestation?: string;
 	versionQueries?: Record<string, number>;
+	publicationCounts?: Record<string, number>;
+	prePublishLatest?: Record<string, string>;
+	visibilityDelays?: Record<string, number>;
+	tagVisibilityDelays?: Record<string, number>;
+	attestationDelays?: Record<string, number>;
 }
 
 const FAKE_NPM = `#!/usr/bin/env node
@@ -77,10 +84,21 @@ if (args[0] === "view") {
   if (field === "versions") {
     state.versionQueries ??= {};
     state.versionQueries[name] = (state.versionQueries[name] ?? 0) + 1;
-    if (state.race === name && state.versionQueries[name] === 2) pkg.versions.push(state.targets[Object.keys(state.targets).find((key) => state.targets[key].name === name)].version);
+    const target = Object.values(state.targets).find((entry) => entry.name === name);
+    if (state.race === name && state.versionQueries[name] === 2) pkg.versions.push(target.version);
+    if ((state.publicationCounts?.[name] ?? 0) > 0 && (state.visibilityDelays?.[name] ?? 0) > 0) {
+      state.visibilityDelays[name] -= 1;
+      save(); process.stdout.write(JSON.stringify(pkg.versions.filter((version) => version !== target.version))); process.exit(0);
+    }
     save(); process.stdout.write(JSON.stringify(pkg.versions)); process.exit(0);
   }
-  if (field === "dist-tags") { save(); process.stdout.write(JSON.stringify(pkg.distTags)); process.exit(0); }
+  if (field === "dist-tags") {
+    if ((state.publicationCounts?.[name] ?? 0) > 0 && (state.tagVisibilityDelays?.[name] ?? 0) > 0) {
+      state.tagVisibilityDelays[name] -= 1;
+      save(); process.stdout.write(JSON.stringify({ ...pkg.distTags, latest: state.prePublishLatest[name] })); process.exit(0);
+    }
+    save(); process.stdout.write(JSON.stringify(pkg.distTags)); process.exit(0);
+  }
   stop("unexpected view");
 }
 if (args[0] === "publish") {
@@ -89,6 +107,10 @@ if (args[0] === "publish") {
   if (!target) stop("unknown workspace");
   if (state.publishFailure === target.name) stop("publish failed");
   const pkg = state.packages[target.name];
+  state.publicationCounts ??= {};
+  state.prePublishLatest ??= {};
+  state.publicationCounts[target.name] = (state.publicationCounts[target.name] ?? 0) + 1;
+  state.prePublishLatest[target.name] = pkg.distTags.latest;
   pkg.versions.push(target.version);
   pkg.distTags.latest = target.version;
   if (state.unexpectedTagChange === target.name) pkg.distTags.scramjet = target.version;
@@ -99,13 +121,18 @@ stop("unexpected command");
 
 const FAKE_FETCH = `
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-globalThis.fetch = async (input) => {
+import { readFileSync, writeFileSync } from "node:fs";
+export async function fetchJson(input) {
   const url = new URL(input);
   const parts = url.pathname.slice("/fake/".length).split("/");
   const name = decodeURIComponent(parts[0]);
   const version = parts[1];
   const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+  if ((state.attestationDelays?.[name] ?? 0) > 0) {
+    state.attestationDelays[name] -= 1;
+    writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+    return { attestations: [] };
+  }
   const digest = createHash("sha512").update(name + "@" + version).digest("hex");
   const ref = state.priorAttestation === name ? "refs/tags/v0.80.0" : process.env.GITHUB_REF;
   const sha = state.priorAttestation === name ? "b".repeat(40) : process.env.GITHUB_SHA;
@@ -125,15 +152,20 @@ globalThis.fetch = async (input) => {
       }]
     } }
   };
-  const response = { attestations: [{
+  return { attestations: [{
     predicateType: "https://slsa.dev/provenance/v1",
-    bundle: { dsseEnvelope: {
-      payloadType: "application/vnd.in-toto+json",
-      payload: Buffer.from(JSON.stringify(statement)).toString("base64")
-    } }
+    bundle: {
+      verificationMaterial: { testAuthenticated: true },
+      dsseEnvelope: {
+        payloadType: "application/vnd.in-toto+json",
+        payload: Buffer.from(JSON.stringify(statement)).toString("base64")
+      }
+    }
   }] };
-  return { ok: true, status: 200, json: async () => response };
-};
+}
+export async function verifyBundle(bundle) {
+  if (bundle?.verificationMaterial?.testAuthenticated !== true) throw new Error("test bundle was not authenticated");
+}
 `;
 
 function previousVersion(version: string): string {
@@ -157,7 +189,8 @@ function initialState(): FakeState {
 }
 
 function runHelper(mode: string, statePath: string) {
-	return spawnSync(process.execPath, [HELPER, mode], {
+	const script = ["publish", "reconcile"].includes(mode) ? join(dirname(statePath), "runner.mjs") : HELPER;
+	return spawnSync(process.execPath, [script, mode], {
 		cwd: REPO_ROOT,
 		encoding: "utf8",
 		env: {
@@ -165,7 +198,6 @@ function runHelper(mode: string, statePath: string) {
 			...RELEASE_ENV,
 			PATH: `${dirname(statePath)}:${process.env.PATH}`,
 			FAKE_NPM_STATE: statePath,
-			NODE_OPTIONS: `--import=${join(dirname(statePath), "fake-fetch.mjs")}`,
 		},
 	});
 }
@@ -233,6 +265,86 @@ describe("release helper package and event validation", () => {
 		expect(validateIdentity(INVENTORY, RELEASE_ENV, () => SHA)).toEqual({ ref: RELEASE_ENV.GITHUB_REF, sha: SHA });
 	});
 
+	it("validates a clean checkout before dependencies are installed", () => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-validate-"));
+		try {
+			mkdirSync(join(root, ".github", "scripts"), { recursive: true });
+			writeFileSync(join(root, ".github", "scripts", "release.mjs"), readFileSync(HELPER));
+			for (const { workspace } of INVENTORY) {
+				mkdirSync(join(root, workspace), { recursive: true });
+				writeFileSync(
+					join(root, workspace, "package.json"),
+					readFileSync(join(REPO_ROOT, workspace, "package.json")),
+				);
+			}
+			const bin = join(root, "bin");
+			mkdirSync(bin);
+			writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' '${SHA}'\n`);
+			chmodSync(join(bin, "git"), 0o755);
+			const result = spawnSync(process.execPath, [join(root, ".github", "scripts", "release.mjs"), "validate"], {
+				cwd: root,
+				encoding: "utf8",
+				env: { ...process.env, ...RELEASE_ENV, PATH: `${bin}:${process.env.PATH}` },
+			});
+			expect(result.stderr).toBe("");
+			expect(result.status).toBe(0);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("executes the documented local reconciliation procedure read-only", () => {
+		const block = RELEASE_GUIDE.match(/```bash\n(set -euo pipefail[\s\S]*?)\n```/)?.[1];
+		expect(block).toBeDefined();
+		expect(block).not.toMatch(/release\.mjs publish|gh release create|git (?:push|tag)/);
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-recovery-"));
+		try {
+			const remote = join(root, "remote.git");
+			const source = join(root, "source");
+			const checkout = join(root, "checkout");
+			mkdirSync(source);
+			const git = (cwd: string, args: string[]) =>
+				spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
+			expect(git(root, ["init", "--bare", "--quiet", remote]).status).toBe(0);
+			expect(git(source, ["init", "--quiet"]).status).toBe(0);
+			expect(git(source, ["config", "user.name", "Release Test"]).status).toBe(0);
+			expect(git(source, ["config", "user.email", "release-test@example.test"]).status).toBe(0);
+			mkdirSync(join(source, "packages", "scramjet"), { recursive: true });
+			writeFileSync(join(source, "packages", "scramjet", "package.json"), '{"version":"1.2.3"}\n');
+			expect(git(source, ["add", "."]).status).toBe(0);
+			expect(git(source, ["commit", "--quiet", "-m", "release fixture"]).status).toBe(0);
+			expect(git(source, ["tag", "v1.2.3"]).status).toBe(0);
+			expect(git(source, ["remote", "add", "origin", remote]).status).toBe(0);
+			expect(git(source, ["push", "--quiet", "origin", "HEAD", "refs/tags/v1.2.3"]).status).toBe(0);
+			expect(git(root, ["clone", "--quiet", remote, checkout]).status).toBe(0);
+			const tagSha = git(source, ["rev-parse", "v1.2.3"]).stdout.trim();
+			const bin = join(root, "bin");
+			const record = join(root, "record");
+			mkdirSync(bin);
+			writeFileSync(
+				join(bin, "node"),
+				`#!/bin/sh
+if test "$1" = "-p"; then printf '1.2.3\\n'; exit 0; fi
+printf 'node|%s|%s|%s|%s|%s\\n' "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA" "$GITHUB_WORKFLOW_REF" "$*" >> "$RECOVERY_RECORD"
+`,
+			);
+			writeFileSync(join(bin, "npm"), `#!/bin/sh\nprintf 'npm|%s\\n' "$*" >> "$RECOVERY_RECORD"\n`);
+			chmodSync(join(bin, "node"), 0o755);
+			chmodSync(join(bin, "npm"), 0o755);
+			const result = spawnSync("bash", ["-c", block!.replace("TAG=v0.0.0", "TAG=v1.2.3")], {
+				cwd: checkout,
+				encoding: "utf8",
+				env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RECOVERY_RECORD: record },
+			});
+			expect(result.status).toBe(0);
+			expect(readFileSync(record, "utf8")).toBe(
+				`npm|ci --ignore-scripts\nnode|push|refs/tags/v1.2.3|${tagSha}|LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/v1.2.3|.github/scripts/release.mjs reconcile\n`,
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it.each([
 		["manual event", { GITHUB_EVENT_NAME: "workflow_dispatch" }],
 		["branch ref", { GITHUB_REF: "refs/heads/main" }],
@@ -276,6 +388,25 @@ describe("release helper registry preflight and publication", () => {
 		writeFileSync(join(workDir, "npm"), FAKE_NPM);
 		chmodSync(join(workDir, "npm"), 0o755);
 		writeFileSync(join(workDir, "fake-fetch.mjs"), FAKE_FETCH);
+		writeFileSync(
+			join(workDir, "runner.mjs"),
+			`import { loadInventory, publish, reconcile, validateIdentity } from ${JSON.stringify(pathToFileURL(HELPER).href)};
+import { fetchJson, verifyBundle } from "./fake-fetch.mjs";
+try {
+  const inventory = loadInventory();
+  const identity = validateIdentity(inventory);
+  const operation = process.argv[2] === "publish" ? publish : reconcile;
+  await operation(inventory, identity, {
+    fetchJson,
+    verifyBundle,
+    pollDependencies: { delayMs: 0, sleep: async () => {} }
+  });
+} catch (error) {
+  console.error("release: " + error.message);
+  process.exitCode = 1;
+}
+`,
+		);
 		statePath = join(workDir, "state.json");
 		writeFileSync(statePath, JSON.stringify(initialState()));
 	});
@@ -286,6 +417,13 @@ describe("release helper registry preflight and publication", () => {
 		const result = runHelper("preflight", statePath);
 		expect(result.status).toBe(0);
 		expect(result.stdout.match(/: missing;/g)).toHaveLength(5);
+		expect(publishCalls(readState(statePath))).toHaveLength(0);
+	});
+
+	it("runs local event-shaped reconciliation without publishing missing packages", () => {
+		const result = runHelper("reconcile", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout.match(/^Not yet published /gm)).toHaveLength(5);
 		expect(publishCalls(readState(statePath))).toHaveLength(0);
 	});
 
@@ -450,6 +588,52 @@ describe("release helper registry preflight and publication", () => {
 		expect(result.stderr).toContain("non-latest dist-tags changed");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
+
+	it("polls delayed version, tag, and attestation visibility through publication", () => {
+		const state = initialState();
+		const first = INVENTORY[0].name;
+		state.visibilityDelays = { [first]: 1 };
+		state.tagVisibilityDelays = { [first]: 1 };
+		state.attestationDelays = { [first]: 1 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} provenance not ready`);
+		const finalState = readState(statePath);
+		expect(finalState.publicationCounts?.[first]).toBe(1);
+		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
+	});
+
+	it("stops after registry visibility polling is exhausted without republishing or continuing", () => {
+		const state = initialState();
+		state.visibilityDelays = { [INVENTORY[0].name]: 6 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("registry visibility did not converge after 6 attempts");
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	it("stops after latest-tag polling is exhausted without republishing or continuing", () => {
+		const state = initialState();
+		state.tagVisibilityDelays = { [INVENTORY[0].name]: 6 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("registry visibility did not converge after 6 attempts");
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	it("stops after provenance polling is exhausted without republishing or continuing", () => {
+		const state = initialState();
+		state.attestationDelays = { [INVENTORY[0].name]: 6 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("provenance did not converge after 6 attempts");
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
 });
 
 function provenanceFixture() {
@@ -511,15 +695,55 @@ function updatePayload(fixture: ReturnType<typeof provenanceFixture>) {
 	).toString("base64");
 }
 
+function reconcileFixture(fixture: ReturnType<typeof provenanceFixture>, dependencies = {}) {
+	return reconcilePackage(fixture.pkg, fixture.identity, {
+		registry: () => fixture.metadata,
+		fetchJson: async () => fixture.response,
+		verifyBundle: async () => {},
+		...dependencies,
+	});
+}
+
 describe("release helper provenance reconciliation", () => {
-	it("accepts exact package, digest, workflow, tag, source, and commit evidence", async () => {
+	it("configures Sigstore for the exact GitHub Actions trust boundary", async () => {
+		const verify = vi.fn();
+		const createVerifier = vi.fn(async () => ({ verify }));
+		const authenticate = await createProvenanceVerifier(createVerifier);
+		const bundle = { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json" };
+		await authenticate(bundle);
+		expect(createVerifier).toHaveBeenCalledWith({
+			certificateIssuer: "https://token.actions.githubusercontent.com",
+			certificateIdentityURI:
+				"^https://github\\.com/LeanAndMean/scramjet/\\.github/workflows/release\\.yml@refs/tags/v\\d+\\.\\d+\\.\\d+$",
+			ctLogThreshold: 1,
+			tlogThreshold: 1,
+			timeout: 60_000,
+			retry: 0,
+		});
+		expect(verify).toHaveBeenCalledWith(bundle);
+	});
+
+	it.each([
+		["an unsigned bundle", "no signatures"],
+		["an invalid signature", "signature verification failed"],
+		["the wrong certificate identity", "certificate identity mismatch"],
+		["missing transparency evidence", "transparency log threshold not met"],
+	])("rejects %s before parsing claims", async (_label, message) => {
 		const fixture = provenanceFixture();
-		await expect(
-			reconcilePackage(fixture.pkg, fixture.identity, {
-				registry: () => fixture.metadata,
-				fetchJson: async () => fixture.response,
-			}),
-		).resolves.toBe(true);
+		fixture.response.attestations[0].bundle.dsseEnvelope.payload = "not-json";
+		const authenticate = await createProvenanceVerifier(async () => ({
+			verify: async () => {
+				throw new Error(message);
+			},
+		}));
+		await expect(reconcileFixture(fixture, { verifyBundle: authenticate })).rejects.toThrow(
+			`Sigstore provenance authentication failed: ${message}`,
+		);
+	});
+
+	it("accepts authenticated exact package, digest, workflow, tag, source, and commit evidence", async () => {
+		const fixture = provenanceFixture();
+		await expect(reconcileFixture(fixture)).resolves.toBe(true);
 	});
 
 	it.each([
@@ -572,23 +796,13 @@ describe("release helper provenance reconciliation", () => {
 		const fixture = provenanceFixture();
 		mutate(fixture);
 		updatePayload(fixture);
-		await expect(
-			reconcilePackage(fixture.pkg, fixture.identity, {
-				registry: () => fixture.metadata,
-				fetchJson: async () => fixture.response,
-			}),
-		).rejects.toThrow();
+		await expect(reconcileFixture(fixture)).rejects.toThrow();
 	});
 
 	it("rejects an empty SLSA provenance response", async () => {
 		const fixture = provenanceFixture();
 		fixture.response.attestations = [];
-		await expect(
-			reconcilePackage(fixture.pkg, fixture.identity, {
-				registry: () => fixture.metadata,
-				fetchJson: async () => fixture.response,
-			}),
-		).rejects.toThrow(/an SLSA provenance statement/);
+		await expect(reconcileFixture(fixture)).rejects.toThrow(/an SLSA provenance statement/);
 	});
 
 	it("rejects multiple SLSA provenance statements without retrying", async () => {
@@ -600,10 +814,7 @@ describe("release helper provenance reconciliation", () => {
 				"provenance",
 				async () => {
 					attempts += 1;
-					return reconcilePackage(fixture.pkg, fixture.identity, {
-						registry: () => fixture.metadata,
-						fetchJson: async () => fixture.response,
-					});
+					return reconcileFixture(fixture);
 				},
 				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
 			),
@@ -615,12 +826,7 @@ describe("release helper provenance reconciliation", () => {
 		const fixture = provenanceFixture();
 		fixture.statement.subject.push(structuredClone(fixture.statement.subject[0]));
 		updatePayload(fixture);
-		await expect(
-			reconcilePackage(fixture.pkg, fixture.identity, {
-				registry: () => fixture.metadata,
-				fetchJson: async () => fixture.response,
-			}),
-		).rejects.toThrow(/exactly one subject/);
+		await expect(reconcileFixture(fixture)).rejects.toThrow(/exactly one subject/);
 	});
 
 	it.each([
@@ -630,12 +836,7 @@ describe("release helper provenance reconciliation", () => {
 	])("rejects %s in registry integrity", async (_label, integrity) => {
 		const fixture = provenanceFixture();
 		fixture.metadata["dist.integrity"] = integrity;
-		await expect(
-			reconcilePackage(fixture.pkg, fixture.identity, {
-				registry: () => fixture.metadata,
-				fetchJson: async () => fixture.response,
-			}),
-		).rejects.toThrow(/integrity|SHA-512/);
+		await expect(reconcileFixture(fixture)).rejects.toThrow(/integrity|SHA-512/);
 	});
 
 	it("rejects an off-registry attestation URL before fetching", async () => {
@@ -656,13 +857,7 @@ describe("release helper provenance reconciliation", () => {
 		fixture.statement.predicate.buildDefinition.resolvedDependencies[0].uri = `git+https://github.com/LeanAndMean/scramjet@${ref}`;
 		fixture.statement.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit = sha;
 		updatePayload(fixture);
-		await expect(
-			reconcilePackage(fixture.pkg, fixture.identity, {
-				registry: () => fixture.metadata,
-				fetchJson: async () => fixture.response,
-				allowPriorRelease: true,
-			}),
-		).rejects.toThrow();
+		await expect(reconcileFixture(fixture, { allowPriorRelease: true })).rejects.toThrow();
 	});
 });
 
