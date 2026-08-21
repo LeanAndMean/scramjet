@@ -6,6 +6,10 @@
 	},
 	"description": "General-purpose agent with transport abstraction, state management, and attachment support",
 	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/LeanAndMean/scramjet.git"
+	},
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
