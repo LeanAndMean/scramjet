@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/LeanAndMean/scramjet.git";
@@ -25,24 +27,6 @@ const INVENTORY = [
 	["packages/scramjet", "@leanandmean/scramjet"],
 ];
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PREFLIGHT_READS_PER_PACKAGE = 2;
-const PRESENT_PACKAGE_READS = 3;
-const PRE_PUBLISH_READS = 2;
-const POST_PUBLISH_READS_PER_ATTEMPT = 4;
-const SIGSTORE_TRUST_READ_WINDOWS = 10;
-const MAX_READ_WINDOWS =
-	INVENTORY.length *
-		(PREFLIGHT_READS_PER_PACKAGE +
-			PRESENT_PACKAGE_READS +
-			PRE_PUBLISH_READS +
-			POST_PUBLISH_ATTEMPTS * POST_PUBLISH_READS_PER_ATTEMPT) +
-	SIGSTORE_TRUST_READ_WINDOWS;
-export const RELEASE_HELPER_MAX_MINUTES = Math.ceil(
-	(MAX_READ_WINDOWS * READ_TIMEOUT_MS +
-		INVENTORY.length * PUBLISH_TIMEOUT_MS +
-		INVENTORY.length * 2 * (POST_PUBLISH_ATTEMPTS - 1) * POST_PUBLISH_DELAY_MS) /
-		60_000,
-);
 let defaultProvenanceVerifier;
 
 function fail(message) {
@@ -69,7 +53,8 @@ export function run(command, args, options = {}) {
 }
 
 export function loadInventory(root = REPO_ROOT) {
-	return INVENTORY.map(([workspace, expectedName]) => {
+	const manifests = new Map();
+	const inventory = INVENTORY.map(([workspace, expectedName]) => {
 		const manifest = parseJson(readFileSync(join(root, workspace, "package.json"), "utf8"), `${workspace}/package.json`);
 		if (manifest.name !== expectedName) fail(`${workspace} must be named ${expectedName}`);
 		if (typeof manifest.version !== "string" || manifest.version.length === 0) fail(`${expectedName} has no version`);
@@ -86,8 +71,18 @@ export function loadInventory(root = REPO_ROOT) {
 		) {
 			fail(`${expectedName} publishConfig must contain only public access`);
 		}
+		manifests.set(expectedName, manifest);
 		return { workspace, name: expectedName, version: manifest.version };
 	});
+	const scramjet = inventory.at(-1);
+	if (!/^\d+\.\d+\.\d+$/.test(scramjet.version)) fail("@leanandmean/scramjet must use a stable X.Y.Z version");
+	const dependencies = manifests.get(scramjet.name).dependencies;
+	for (const runtime of inventory.slice(0, -1)) {
+		if (dependencies?.[runtime.name] !== runtime.version) {
+			fail(`${scramjet.name} must depend on exact ${runtime.name}@${runtime.version}`);
+		}
+	}
+	return inventory;
 }
 
 export function validateIdentity(inventory, env = process.env, git = (args) => run("git", args)) {
@@ -177,6 +172,24 @@ function integrityHex(integrity) {
 	return digest.toString("hex");
 }
 
+export function localPackageIntegrity(pkg, command = run) {
+	const packDirectory = mkdtempSync(join(tmpdir(), "scramjet-release-pack-"));
+	try {
+		const result = parseJson(
+			command("npm", ["pack", "-w", pkg.workspace, "--json", "--pack-destination", packDirectory]),
+			`${pkg.name} npm pack output`,
+		);
+		const filename = result?.[0]?.filename;
+		if (!Array.isArray(result) || result.length !== 1 || typeof filename !== "string" || filename !== basename(filename)) {
+			fail(`${pkg.name} npm pack must report exactly one archive filename`);
+		}
+		const digest = createHash("sha512").update(readFileSync(join(packDirectory, filename))).digest("base64");
+		return `sha512-${digest}`;
+	} finally {
+		rmSync(packDirectory, { recursive: true, force: true });
+	}
+}
+
 export async function fetchAttestationJson(url, fetchImpl = fetch, timeoutMs = READ_TIMEOUT_MS) {
 	const parsed = new URL(url);
 	if (parsed.protocol !== "https:" || parsed.hostname !== "registry.npmjs.org") {
@@ -240,6 +253,7 @@ export async function reconcilePackage(pkg, identity, dependencies = {}) {
 		fail("SLSA provenance must contain an in-toto DSSE payload");
 	}
 	const statement = parseJson(Buffer.from(envelope.payload, "base64").toString("utf8"), "SLSA provenance payload");
+	if (statement._type !== "https://in-toto.io/Statement/v1") fail("SLSA payload has the wrong statement type");
 	if (statement.predicateType !== SLSA_PREDICATE) fail("SLSA payload has the wrong predicate type");
 	if (!Array.isArray(statement.subject) || statement.subject.length !== 1) fail("SLSA payload must have exactly one subject");
 	const subject = statement.subject[0];
@@ -266,6 +280,12 @@ export async function reconcilePackage(pkg, identity, dependencies = {}) {
 			: !allowPriorRelease || !/^[0-9a-f]{40}$/.test(provenanceSha)
 	) {
 		fail("SLSA resolved commit does not match GITHUB_SHA");
+	}
+	if (provenanceRef !== identity.ref) {
+		const localIntegrity = await (dependencies.localIntegrity ?? localPackageIntegrity)(pkg);
+		if (localIntegrity !== metadata["dist.integrity"]) {
+			fail(`${pkg.name}@${pkg.version} prior-release artifact does not match the current workspace package`);
+		}
 	}
 	return true;
 }
@@ -326,10 +346,16 @@ export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_M
 			{ stdio: "inherit", timeout: timeoutMs },
 		);
 	} catch (error) {
-		if (error?.code === "ETIMEDOUT" || error?.signal) {
-			fail(`npm publish for ${pkg.name}@${pkg.version} was interrupted; publication state is ambiguous and requires reconciliation`);
-		}
-		throw error;
+		const output = [error?.stderr, error?.stdout]
+			.map((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
+			.filter((value) => typeof value === "string" && value.trim().length > 0)
+			.map((value) => value.trim())
+			.join("\n");
+		const detail = output || error?.message;
+		throw new Error(
+			`npm publish for ${pkg.name}@${pkg.version} failed after publication began; publication state is ambiguous. Do not retry publication; run read-only reconciliation.${detail ? ` Cause: ${detail}` : ""}`,
+			{ cause: error },
+		);
 	}
 }
 

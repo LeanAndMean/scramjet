@@ -42,6 +42,7 @@ interface FakeState {
 	unexpectedTagChange?: string;
 	badAttestation?: string;
 	priorAttestation?: string;
+	localPackMismatch?: string;
 	versionQueries?: Record<string, number>;
 	publicationCounts?: Record<string, number>;
 	prePublishLatest?: Record<string, string>;
@@ -100,6 +101,16 @@ if (args[0] === "view") {
     save(); process.stdout.write(JSON.stringify(pkg.distTags)); process.exit(0);
   }
   stop("unexpected view");
+}
+if (args[0] === "pack") {
+  const workspace = args[args.indexOf("-w") + 1];
+  const target = state.targets[workspace];
+  if (!target) stop("unknown workspace");
+  const packDirectory = args[args.indexOf("--pack-destination") + 1];
+  const filename = "package.tgz";
+  const content = state.localPackMismatch === target.name ? "different package bytes" : target.name + "@" + target.version;
+  fs.writeFileSync(require("node:path").join(packDirectory, filename), content);
+  save(); process.stdout.write(JSON.stringify([{ filename }])); process.exit(0);
 }
 if (args[0] === "publish") {
   const workspace = args[args.indexOf("-w") + 1];
@@ -224,35 +235,56 @@ describe("release helper package and event validation", () => {
 	it.each([
 		[
 			"package identity",
-			(manifest: Record<string, unknown>) => {
+			"packages/agent",
+			(manifest: Record<string, any>) => {
 				manifest.name = "@leanandmean/ai";
 			},
 		],
 		[
 			"repository metadata",
-			(manifest: Record<string, unknown>) => {
+			"packages/agent",
+			(manifest: Record<string, any>) => {
 				manifest.repository = "github:LeanAndMean/scramjet";
 			},
 		],
 		[
 			"publish registry",
-			(manifest: Record<string, unknown>) => {
+			"packages/agent",
+			(manifest: Record<string, any>) => {
 				manifest.publishConfig = { access: "public", registry: "https://example.test/" };
 			},
 		],
 		[
 			"scoped publish registry",
-			(manifest: Record<string, unknown>) => {
+			"packages/agent",
+			(manifest: Record<string, any>) => {
 				manifest.publishConfig = { access: "public", "@leanandmean:registry": "https://example.test/" };
 			},
 		],
-	])("rejects incorrect %s", (_label, mutate) => {
+		[
+			"Scramjet prerelease version",
+			"packages/scramjet",
+			(manifest: Record<string, any>) => {
+				manifest.version = "1.2.3-scramjet.1";
+			},
+		],
+		...INVENTORY.slice(0, -1).flatMap(({ name }) =>
+			([undefined, "^0.0.0", "0.0.0"] as Array<string | undefined>).map((value) => [
+				`${value === undefined ? "missing" : value.startsWith("^") ? "ranged" : "mismatched"} ${name} dependency`,
+				"packages/scramjet",
+				(manifest: Record<string, any>) => {
+					if (value === undefined) delete manifest.dependencies[name];
+					else manifest.dependencies[name] = value;
+				},
+			]),
+		),
+	])("rejects incorrect %s", (_label, targetWorkspace, mutate) => {
 		const root = mkdtempSync(join(tmpdir(), "scramjet-release-manifests-"));
 		try {
 			for (const { workspace } of INVENTORY) {
 				mkdirSync(join(root, workspace), { recursive: true });
 				const manifest = JSON.parse(readFileSync(join(REPO_ROOT, workspace, "package.json"), "utf8"));
-				if (workspace === "packages/agent") mutate(manifest);
+				if (workspace === targetWorkspace) mutate(manifest);
 				writeFileSync(join(root, workspace, "package.json"), JSON.stringify(manifest));
 			}
 			expect(() => loadInventory(root)).toThrow();
@@ -338,7 +370,7 @@ printf 'node|%s|%s|%s|%s|%s\\n' "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA"
 			});
 			expect(result.status).toBe(0);
 			expect(readFileSync(record, "utf8")).toBe(
-				`npm|ci --ignore-scripts\nnode|push|refs/tags/v1.2.3|${tagSha}|LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/v1.2.3|.github/scripts/release.mjs reconcile\n`,
+				`npm|ci --ignore-scripts\nnpm|run build\nnode|push|refs/tags/v1.2.3|${tagSha}|LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/v1.2.3|.github/scripts/release.mjs reconcile\n`,
 			);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
@@ -483,6 +515,20 @@ try {
 		);
 	});
 
+	it("rejects prior provenance when current packed bytes differ from the registry artifact", () => {
+		const state = initialState();
+		const present = INVENTORY[0];
+		state.packages[present.name].versions.push(present.version);
+		state.packages[present.name].distTags.latest = present.version;
+		state.priorAttestation = present.name;
+		state.localPackMismatch = present.name;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("prior-release artifact does not match");
+		expect(publishCalls(readState(statePath))).toHaveLength(0);
+	});
+
 	it("reconciles a mixed partial release without requiring missing packages", () => {
 		const state = initialState();
 		for (const present of INVENTORY.slice(0, 2)) {
@@ -567,12 +613,15 @@ try {
 		expect(publishCalls(readState(statePath))).toHaveLength(0);
 	});
 
-	it("treats a publish failure as fatal without retrying", () => {
+	it("treats every publish failure as ambiguous without retrying", () => {
 		const state = initialState();
 		state.publishFailure = INVENTORY[1].name;
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
+		expect(result.stderr).toContain("publish failed");
 		const calls = publishCalls(readState(statePath));
 		expect(calls.map((args) => args[args.indexOf("-w") + 1])).toEqual(
 			INVENTORY.slice(0, 2).map(({ workspace }) => workspace),
@@ -748,6 +797,18 @@ describe("release helper provenance reconciliation", () => {
 
 	it.each([
 		[
+			"missing statement type",
+			(fixture: ReturnType<typeof provenanceFixture>) => {
+				delete (fixture.statement as { _type?: string })._type;
+			},
+		],
+		[
+			"wrong statement type",
+			(fixture: ReturnType<typeof provenanceFixture>) => {
+				fixture.statement._type = "https://in-toto.io/Statement/v0.1";
+			},
+		],
+		[
 			"package subject",
 			(fixture: ReturnType<typeof provenanceFixture>) => {
 				fixture.statement.subject[0].name = "pkg:npm/other@1.2.3";
@@ -883,19 +944,26 @@ describe("release operation bounds and post-publish polling", () => {
 		expect(signal?.aborted).toBe(true);
 	});
 
-	it("reports a timed-out publish as ambiguous without retrying", () => {
+	it.each([
+		["timed-out", Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })],
+		["ordinary nonzero", Object.assign(new Error("command failed"), { stderr: "network reset after upload" })],
+	])("reports a %s publish failure as ambiguous without retrying", (_label, failure) => {
 		const calls: any[][] = [];
-		const timeout = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
-		expect(() =>
+		let thrown: Error | undefined;
+		try {
 			publishPackage(
 				INVENTORY[0],
 				(...args: any[]) => {
 					calls.push(args);
-					throw timeout;
+					throw failure;
 				},
 				25,
-			),
-		).toThrow(/state is ambiguous and requires reconciliation/);
+			);
+		} catch (error) {
+			thrown = error as Error;
+		}
+		expect(thrown?.message).toMatch(/state is ambiguous.*Do not retry publication.*read-only reconciliation/);
+		expect((thrown as Error & { cause?: unknown }).cause).toBe(failure);
 		expect(calls).toHaveLength(1);
 		expect(calls[0][2]).toMatchObject({ timeout: 25 });
 	});
