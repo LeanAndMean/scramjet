@@ -6,6 +6,10 @@
   },
   "description": "Coding agent CLI with read, bash, edit, write tools and session management",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LeanAndMean/scramjet.git"
+  },
   "type": "module",
   "piConfig": {
     "name": "scramjet",
