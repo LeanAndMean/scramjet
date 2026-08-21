@@ -10,6 +10,10 @@ const REGISTRY_URL = "https://registry.npmjs.org/";
 const WORKFLOW_REPOSITORY = "https://github.com/LeanAndMean/scramjet";
 const WORKFLOW_PATH = ".github/workflows/release.yml";
 const SLSA_PREDICATE = "https://slsa.dev/provenance/v1";
+const READ_TIMEOUT_MS = 60_000;
+const PUBLISH_TIMEOUT_MS = 10 * 60_000;
+const POST_PUBLISH_ATTEMPTS = 6;
+const POST_PUBLISH_DELAY_MS = 10_000;
 const INVENTORY = [
 	["packages/tui", "@leanandmean/tui"],
 	["packages/ai", "@leanandmean/ai"],
@@ -31,11 +35,12 @@ function parseJson(value, description) {
 	}
 }
 
-function run(command, args, options = {}) {
+export function run(command, args, options = {}) {
 	const output = execFileSync(command, args, {
 		cwd: REPO_ROOT,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
+		timeout: READ_TIMEOUT_MS,
 		...options,
 	});
 	return typeof output === "string" ? output.trim() : "";
@@ -121,11 +126,12 @@ export function preflight(inventory) {
 		const versions = requireVersions(npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions`), pkg.name);
 		const distTags = requireDistTags(npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags`), pkg.name);
 		const present = versions.includes(pkg.version);
-		if (!present) {
-			if (typeof distTags.latest !== "string") fail(`${pkg.name} has no string-valued latest dist-tag`);
-			if (compareVersions(pkg.version, distTags.latest) <= 0) {
-				fail(`${pkg.name}@${pkg.version} is not newer than latest ${distTags.latest}`);
-			}
+		if (typeof distTags.latest !== "string") fail(`${pkg.name} has no string-valued latest dist-tag`);
+		if (present && distTags.latest !== pkg.version) {
+			fail(`${pkg.name}@${pkg.version} is present but is not current latest ${distTags.latest}`);
+		}
+		if (!present && compareVersions(pkg.version, distTags.latest) <= 0) {
+			fail(`${pkg.name}@${pkg.version} is not newer than latest ${distTags.latest}`);
 		}
 		return { ...pkg, present, distTags };
 	});
@@ -142,20 +148,26 @@ function expectedPurl(name, version) {
 function integrityHex(integrity) {
 	const match = /^sha512-([A-Za-z0-9+/]+={0,2})$/.exec(integrity);
 	if (!match) fail("registry integrity must be an sha512 SRI value");
-	return Buffer.from(match[1], "base64").toString("hex");
+	const digest = Buffer.from(match[1], "base64");
+	if (digest.length !== 64 || digest.toString("base64") !== match[1]) {
+		fail("registry integrity must contain one canonical 64-byte SHA-512 digest");
+	}
+	return digest.toString("hex");
+}
+
+export async function fetchAttestationJson(url, fetchImpl = fetch, timeoutMs = READ_TIMEOUT_MS) {
+	const parsed = new URL(url);
+	if (parsed.protocol !== "https:" || parsed.hostname !== "registry.npmjs.org") {
+		fail("attestation URL must use the npm registry over HTTPS");
+	}
+	const response = await fetchImpl(parsed, { signal: AbortSignal.timeout(timeoutMs) });
+	if (!response.ok) fail(`attestation request failed with HTTP ${response.status}`);
+	return response.json();
 }
 
 export async function reconcilePackage(pkg, identity, dependencies = {}) {
 	const registry = dependencies.registry ?? ((args, description) => npmJson(args, description));
-	const fetchJson = dependencies.fetchJson ?? (async (url) => {
-		const parsed = new URL(url);
-		if (parsed.protocol !== "https:" || parsed.hostname !== "registry.npmjs.org") {
-			fail("attestation URL must use the npm registry over HTTPS");
-		}
-		const response = await fetch(parsed);
-		if (!response.ok) fail(`attestation request failed with HTTP ${response.status}`);
-		return response.json();
-	});
+	const fetchJson = dependencies.fetchJson ?? fetchAttestationJson;
 	const metadata = registry(
 		["view", `${pkg.name}@${pkg.version}`, "dist.integrity", "dist.attestations.url", "--json"],
 		`${pkg.name}@${pkg.version} provenance metadata`,
@@ -167,7 +179,8 @@ export async function reconcilePackage(pkg, identity, dependencies = {}) {
 	const response = await fetchJson(metadata["dist.attestations.url"]);
 	if (!Array.isArray(response?.attestations)) fail("attestation response must contain an attestations array");
 	const candidates = response.attestations.filter((entry) => entry?.predicateType === SLSA_PREDICATE);
-	if (candidates.length !== 1) fail("attestation response must contain exactly one SLSA provenance statement");
+	if (candidates.length === 0) fail("attestation response must contain an SLSA provenance statement");
+	if (candidates.length > 1) fail("attestation response must contain exactly one SLSA provenance statement");
 	const envelope = candidates[0]?.bundle?.dsseEnvelope;
 	if (envelope?.payloadType !== "application/vnd.in-toto+json" || typeof envelope.payload !== "string") {
 		fail("SLSA provenance must contain an in-toto DSSE payload");
@@ -184,7 +197,7 @@ export async function reconcilePackage(pkg, identity, dependencies = {}) {
 	if (workflow?.path !== WORKFLOW_PATH) fail("SLSA workflow path does not match");
 	const allowPriorRelease = dependencies.allowPriorRelease ?? false;
 	const provenanceRef = workflow?.ref;
-	if (provenanceRef !== identity.ref && (!allowPriorRelease || !/^refs\/tags\/v[0-9].*$/.test(provenanceRef))) {
+	if (provenanceRef !== identity.ref && (!allowPriorRelease || !/^refs\/tags\/v\d+\.\d+\.\d+$/.test(provenanceRef))) {
 		fail("SLSA workflow ref does not match");
 	}
 	const expectedUri = `git+${WORKFLOW_REPOSITORY}@${provenanceRef}`;
@@ -207,6 +220,75 @@ function tagsEqual(left, right) {
 	const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
 	const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
 	return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
+}
+
+export async function pollRead(description, operation, dependencies = {}) {
+	const attempts = dependencies.attempts ?? POST_PUBLISH_ATTEMPTS;
+	const delayMs = dependencies.delayMs ?? POST_PUBLISH_DELAY_MS;
+	const sleep = dependencies.sleep ?? ((duration) => new Promise((resolveSleep) => setTimeout(resolveSleep, duration)));
+	const retryIf = dependencies.retryIf ?? (() => true);
+	let lastError;
+	for (let attempt = 1; attempt <= attempts; attempt += 1) {
+		try {
+			return await operation();
+		} catch (error) {
+			if (!retryIf(error)) throw error;
+			lastError = error;
+			if (attempt === attempts) break;
+			console.log(`${description} not ready (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms`);
+			await sleep(delayMs);
+		}
+	}
+	fail(`${description} did not converge after ${attempts} attempts: ${lastError?.message ?? String(lastError)}`);
+}
+
+export function isTransientReadError(error) {
+	return (
+		["AbortError", "TimeoutError"].includes(error?.name) ||
+		["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENETUNREACH"].includes(error?.code) ||
+		typeof error?.status === "number" ||
+		/fetch failed|attestation request failed|provenance metadata must be an object|must have integrity and an attestation URL|must contain an SLSA provenance statement/.test(
+			error?.message ?? "",
+		)
+	);
+}
+
+export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_MS) {
+	try {
+		command(
+			"npm",
+			[
+				"publish",
+				"-w",
+				pkg.workspace,
+				"--access",
+				"public",
+				"--provenance",
+				"--tag",
+				"latest",
+				"--registry",
+				REGISTRY_URL,
+			],
+			{ stdio: "inherit", timeout: timeoutMs },
+		);
+	} catch (error) {
+		if (error?.code === "ETIMEDOUT" || error?.signal) {
+			fail(`npm publish for ${pkg.name}@${pkg.version} was interrupted; publication state is ambiguous and requires reconciliation`);
+		}
+		throw error;
+	}
+}
+
+export async function reconcile(inventory, identity) {
+	const plan = preflight(inventory);
+	for (const pkg of plan) {
+		if (!pkg.present) {
+			console.log(`Not yet published ${pkg.name}@${pkg.version}`);
+			continue;
+		}
+		await reconcilePackage(pkg, identity, { allowPriorRelease: true });
+		console.log(`Reconciled ${pkg.name}@${pkg.version}`);
+	}
 }
 
 export async function publish(inventory, identity) {
@@ -237,38 +319,28 @@ export async function publish(inventory, identity) {
 		if (typeof currentTags.latest !== "string" || compareVersions(pkg.version, currentTags.latest) <= 0) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
 		}
-		run(
-			"npm",
-			[
-				"publish",
-				"-w",
-				pkg.workspace,
-				"--access",
-				"public",
-				"--provenance",
-				"--tag",
-				"latest",
-				"--registry",
-				REGISTRY_URL,
-			],
-			{ stdio: "inherit" },
-		);
-		const publishedVersions = requireVersions(
-			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
-			pkg.name,
-		);
-		if (!publishedVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} was not visible after publish`);
-		const publishedTags = requireDistTags(
-			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
-			pkg.name,
-		);
-		if (publishedTags.latest !== pkg.version) fail(`${pkg.name} latest did not move to ${pkg.version}`);
+		publishPackage(pkg);
+		const publishedTags = await pollRead(`${pkg.name}@${pkg.version} registry visibility`, async () => {
+			const publishedVersions = requireVersions(
+				npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
+				pkg.name,
+			);
+			if (!publishedVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} was not visible after publish`);
+			const tags = requireDistTags(
+				npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
+				pkg.name,
+			);
+			if (tags.latest !== pkg.version) fail(`${pkg.name} latest did not move to ${pkg.version}`);
+			return tags;
+		});
 		const beforeNonLatest = { ...pkg.distTags };
 		const afterNonLatest = { ...publishedTags };
 		delete beforeNonLatest.latest;
 		delete afterNonLatest.latest;
 		if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
-		await reconcilePackage(pkg, identity);
+		await pollRead(`${pkg.name}@${pkg.version} provenance`, () => reconcilePackage(pkg, identity), {
+			retryIf: isTransientReadError,
+		});
 	}
 }
 
@@ -288,7 +360,7 @@ async function main() {
 		await publish(inventory, identity);
 		return;
 	}
-	for (const pkg of inventory) await reconcilePackage(pkg, identity);
+	await reconcile(inventory, identity);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

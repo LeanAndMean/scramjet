@@ -7,8 +7,13 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	compareVersions,
+	fetchAttestationJson,
+	isTransientReadError,
 	loadInventory,
+	pollRead,
+	publishPackage,
 	reconcilePackage,
+	run,
 	validateIdentity,
 } from "../../../.github/scripts/release.mjs";
 
@@ -340,6 +345,33 @@ describe("release helper registry preflight and publication", () => {
 		);
 	});
 
+	it("reconciles a mixed partial release without requiring missing packages", () => {
+		const state = initialState();
+		for (const present of INVENTORY.slice(0, 2)) {
+			state.packages[present.name].versions.push(present.version);
+			state.packages[present.name].distTags.latest = present.version;
+		}
+		state.priorAttestation = INVENTORY[1].name;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("reconcile", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout.match(/^Reconciled /gm)).toHaveLength(2);
+		expect(result.stdout.match(/^Not yet published /gm)).toHaveLength(3);
+		expect(publishCalls(readState(statePath))).toHaveLength(0);
+	});
+
+	it("rejects a present target that is not current latest", () => {
+		const state = initialState();
+		const present = INVENTORY[0];
+		state.packages[present.name].versions.push(present.version, "999.0.0");
+		state.packages[present.name].distTags.latest = "999.0.0";
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("is present but is not current latest");
+		expect(publishCalls(readState(statePath))).toHaveLength(0);
+	});
+
 	it("reconciles every present version before the first publication", () => {
 		const state = initialState();
 		const present = INVENTORY.at(-1)!;
@@ -548,7 +580,38 @@ describe("release helper provenance reconciliation", () => {
 		).rejects.toThrow();
 	});
 
-	it("requires exactly one package subject and one SLSA statement", async () => {
+	it("rejects an empty SLSA provenance response", async () => {
+		const fixture = provenanceFixture();
+		fixture.response.attestations = [];
+		await expect(
+			reconcilePackage(fixture.pkg, fixture.identity, {
+				registry: () => fixture.metadata,
+				fetchJson: async () => fixture.response,
+			}),
+		).rejects.toThrow(/an SLSA provenance statement/);
+	});
+
+	it("rejects multiple SLSA provenance statements without retrying", async () => {
+		const fixture = provenanceFixture();
+		fixture.response.attestations.push(structuredClone(fixture.response.attestations[0]));
+		let attempts = 0;
+		await expect(
+			pollRead(
+				"provenance",
+				async () => {
+					attempts += 1;
+					return reconcilePackage(fixture.pkg, fixture.identity, {
+						registry: () => fixture.metadata,
+						fetchJson: async () => fixture.response,
+					});
+				},
+				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+			),
+		).rejects.toThrow(/exactly one SLSA provenance statement/);
+		expect(attempts).toBe(1);
+	});
+
+	it("requires exactly one package subject", async () => {
 		const fixture = provenanceFixture();
 		fixture.statement.subject.push(structuredClone(fixture.statement.subject[0]));
 		updatePayload(fixture);
@@ -558,5 +621,118 @@ describe("release helper provenance reconciliation", () => {
 				fetchJson: async () => fixture.response,
 			}),
 		).rejects.toThrow(/exactly one subject/);
+	});
+
+	it.each([
+		["invalid alphabet", "sha512-!"],
+		["short digest", "sha512-QQ=="],
+		["noncanonical padding", `sha512-${Buffer.alloc(64).toString("base64").replace(/==$/, "")}`],
+	])("rejects %s in registry integrity", async (_label, integrity) => {
+		const fixture = provenanceFixture();
+		fixture.metadata["dist.integrity"] = integrity;
+		await expect(
+			reconcilePackage(fixture.pkg, fixture.identity, {
+				registry: () => fixture.metadata,
+				fetchJson: async () => fixture.response,
+			}),
+		).rejects.toThrow(/integrity|SHA-512/);
+	});
+
+	it("rejects an off-registry attestation URL before fetching", async () => {
+		const fixture = provenanceFixture();
+		fixture.metadata["dist.attestations.url"] = "https://example.test/attestations";
+		await expect(
+			reconcilePackage(fixture.pkg, fixture.identity, { registry: () => fixture.metadata }),
+		).rejects.toThrow(/npm registry over HTTPS/);
+	});
+
+	it.each([
+		["malformed prior tag", "refs/tags/v1.2", "b".repeat(40)],
+		["non-release prior ref", "refs/heads/main", "b".repeat(40)],
+		["malformed prior SHA", "refs/tags/v1.2.2", "not-a-sha"],
+	])("rejects a prior release with a %s", async (_label, ref, sha) => {
+		const fixture = provenanceFixture();
+		fixture.statement.predicate.buildDefinition.externalParameters.workflow.ref = ref;
+		fixture.statement.predicate.buildDefinition.resolvedDependencies[0].uri = `git+https://github.com/LeanAndMean/scramjet@${ref}`;
+		fixture.statement.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit = sha;
+		updatePayload(fixture);
+		await expect(
+			reconcilePackage(fixture.pkg, fixture.identity, {
+				registry: () => fixture.metadata,
+				fetchJson: async () => fixture.response,
+				allowPriorRelease: true,
+			}),
+		).rejects.toThrow();
+	});
+});
+
+describe("release operation bounds and post-publish polling", () => {
+	it("terminates a bounded external read", () => {
+		expect(() => run(process.execPath, ["-e", "setTimeout(() => {}, 1000)"], { timeout: 10 })).toThrow();
+	});
+
+	it("aborts a bounded attestation fetch", async () => {
+		let signal: AbortSignal | undefined;
+		await expect(
+			fetchAttestationJson(
+				"https://registry.npmjs.org/fixture",
+				async (_url: URL, options: { signal: AbortSignal }) => {
+					signal = options.signal;
+					return new Promise((_resolve, reject) => {
+						options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+					});
+				},
+				10,
+			),
+		).rejects.toThrow();
+		expect(signal?.aborted).toBe(true);
+	});
+
+	it("reports a timed-out publish as ambiguous without retrying", () => {
+		const calls: any[][] = [];
+		const timeout = Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+		expect(() =>
+			publishPackage(
+				INVENTORY[0],
+				(...args: any[]) => {
+					calls.push(args);
+					throw timeout;
+				},
+				25,
+			),
+		).toThrow(/state is ambiguous and requires reconciliation/);
+		expect(calls).toHaveLength(1);
+		expect(calls[0][2]).toMatchObject({ timeout: 25 });
+	});
+
+	it("tolerates delayed registry and attestation visibility", async () => {
+		let attempts = 0;
+		const result = await pollRead(
+			"published package",
+			async () => {
+				attempts += 1;
+				if (attempts === 1) throw Object.assign(new Error("timed out"), { code: "ETIMEDOUT" });
+				if (attempts === 2) throw new DOMException("fetch timed out", "TimeoutError");
+				return "verified";
+			},
+			{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+		);
+		expect(result).toBe("verified");
+		expect(attempts).toBe(3);
+	});
+
+	it("fails after the bounded read attempts are exhausted", async () => {
+		let attempts = 0;
+		await expect(
+			pollRead(
+				"published package",
+				async () => {
+					attempts += 1;
+					throw new DOMException("still missing", "TimeoutError");
+				},
+				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+			),
+		).rejects.toThrow(/did not converge after 3 attempts: still missing/);
+		expect(attempts).toBe(3);
 	});
 });

@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -12,15 +14,54 @@ function step(name: string) {
 	return steps.find((candidate) => candidate.name === name)!;
 }
 
+function runRegistryValidation(overrides: Record<string, string> = {}) {
+	const workDir = mkdtempSync(join(tmpdir(), "scramjet-registry-validation-"));
+	try {
+		writeFileSync(
+			join(workDir, "npm"),
+			`#!/bin/sh
+case "$*" in
+  "config get registry") echo "\${FAKE_REGISTRY:-https://registry.npmjs.org/}" ;;
+  "config get @leanandmean:registry") echo "\${FAKE_SCOPE_REGISTRY:-undefined}" ;;
+  "config get userconfig") echo "$HOME/user.npmrc" ;;
+  "config get globalconfig") echo "$HOME/global.npmrc" ;;
+  *) exit 2 ;;
+esac
+`,
+		);
+		chmodSync(join(workDir, "npm"), 0o755);
+		const cleanEnv = Object.fromEntries(
+			Object.entries(process.env).filter(
+				([name, value]) =>
+					value !== undefined &&
+					!(/^(?:NPM|NODE).*TOKEN$/i.test(name) || /^NPM_CONFIG_.*(?:AUTH|PASSWORD|USERNAME)/i.test(name)),
+			),
+		);
+		return spawnSync("bash", ["-euo", "pipefail", "-c", step("Validate registry configuration").run], {
+			cwd: workDir,
+			encoding: "utf8",
+			env: {
+				...cleanEnv,
+				HOME: workDir,
+				PATH: `${workDir}:${dirname(process.execPath)}:/usr/bin:/bin`,
+				...overrides,
+			},
+		});
+	} finally {
+		rmSync(workDir, { recursive: true, force: true });
+	}
+}
+
 describe("release workflow", () => {
 	it("runs only for normal version tag pushes with global non-cancelling serialization", () => {
 		expect(workflow.on).toEqual({ push: { tags: ["v[0-9]*"] } });
 		expect(workflow.concurrency).toEqual({ group: "npm-publication", "cancel-in-progress": false });
 	});
 
-	it("uses exact least privilege and an event-ref checkout", () => {
+	it("uses exact least privilege, an event-ref checkout, and a bounded job", () => {
 		expect(workflow.permissions).toEqual({ contents: "read", "id-token": "write" });
 		expect(workflow.jobs.publish.permissions).toBeUndefined();
+		expect(workflow.jobs.publish["timeout-minutes"]).toBe(30);
 		const checkout = steps.find((candidate) => candidate.uses === "actions/checkout@v4")!;
 		expect(checkout.with?.ref).toBeUndefined();
 	});
@@ -51,8 +92,15 @@ describe("release workflow", () => {
 		expect(source.match(/npm publish/g)).toBeNull();
 	});
 
+	it("executes registry and credential validation fail-closed", () => {
+		expect(runRegistryValidation().status).toBe(0);
+		expect(runRegistryValidation({ FAKE_REGISTRY: "https://example.test/" }).status).not.toBe(0);
+		const credentials = runRegistryValidation({ NPM_TOKEN: "must-be-rejected" });
+		expect(credentials.status).not.toBe(0);
+		expect(credentials.stderr).toContain("npm credentials are present");
+	});
+
 	it("contains no token fallback or alternate dispatch path", () => {
 		expect(source).not.toMatch(/NPM_TOKEN|NODE_AUTH_TOKEN|workflow_dispatch|npm@latest/);
-		expect(source).not.toContain("ref:");
 	});
 });
