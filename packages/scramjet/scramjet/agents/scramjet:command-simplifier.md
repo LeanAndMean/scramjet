@@ -29,6 +29,7 @@ Return prioritized opportunities with:
 - user-visible outcome and boundary to preserve;
 - deletion, reassignment, consolidation, native behavior, or reordering proposal;
 - net complexity change and trade-off;
+- concrete redundancy evidence for any recommendation to remove an explicit condition or communication requirement; otherwise preserve it;
 - evidence and confidence.
 
 State when the current design is already minimum-sufficient.

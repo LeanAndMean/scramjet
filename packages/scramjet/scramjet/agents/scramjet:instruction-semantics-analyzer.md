@@ -29,6 +29,7 @@ For each material finding return:
 - conflicting or plausible interpretations;
 - reachable user-visible consequence;
 - evidence and confidence;
+- concrete redundancy evidence for any recommendation to remove an explicit condition or communication requirement; otherwise preserve it;
 - smallest semantic correction.
 
 State when no material semantic defect is supported.

@@ -29,5 +29,6 @@ Return:
 - completion blockers or disproportionate ceremony;
 - first observable divergence and user impact;
 - existing recovery that already suffices;
+- concrete redundancy evidence for any recommendation to remove an explicit condition or communication requirement; otherwise preserve it;
 - smallest outcome-preserving correction;
 - confidence limits and needed operational evidence.
