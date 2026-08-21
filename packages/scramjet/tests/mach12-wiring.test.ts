@@ -440,20 +440,24 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		return content.slice(startIndex, end === undefined ? undefined : content.indexOf(end, startIndex));
 	};
 
-	it.each(["issue-implement", "pr-review", "pr-review-assessment", "pr-review-fix"])(
-		"%s allows command-specialist dispatch and references only shipped specialists",
-		(basename) => {
-			const content = command(basename);
-			const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), content, SET_NAME);
-			expect(parsed.ok).toBe(true);
-			if (!parsed.ok) return;
-			expect(parsed.def.allowedTools).toContain("subagent");
-			for (const name of new Set(content.match(/scramjet:[a-z][a-z-]+/g) ?? [])) {
-				expect(existsSync(join(SCRAMJET_AGENTS_DIR, `${name}.md`)), name).toBe(true);
-			}
-			expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
-		},
-	);
+	it.each([
+		"issue-implement",
+		"pr-review",
+		"pr-review-assessment",
+		"pr-review-fix",
+		"pr-validation",
+		"pr-validation-assessment",
+	])("%s allows command-specialist dispatch and references only shipped specialists", (basename) => {
+		const content = command(basename);
+		const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), content, SET_NAME);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.def.allowedTools).toContain("subagent");
+		for (const name of new Set(content.match(/scramjet:[a-z][a-z-]+/g) ?? [])) {
+			expect(existsSync(join(SCRAMJET_AGENTS_DIR, `${name}.md`)), name).toBe(true);
+		}
+		expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
+	});
 
 	it.each(["issue-implement", "pr-review-fix"])(
 		"%s substitutes prompt reviewers within its existing shared cap",

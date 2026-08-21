@@ -412,6 +412,29 @@ Command frontmatter `allowed-tools` and subagent frontmatter `tools:` have diffe
 - Read-only agents must declare an explicit non-empty allowlist that omits every mutation-capable tool, including `bash`, `edit`, and `write`. Omitting only `edit` and `write` is insufficient because shell commands can still mutate the shared working tree.
 - A writable parent command may own sequential repository mutation while read-only subagents return analysis, fixture guidance, or other non-mutating recommendations.
 
+### Specialist selection for command surfaces
+
+Treat command and agent Markdown, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and tests of model interpretation as **command surfaces**. Runtime source and executable implementation tests remain **code surfaces**. Partition mixed work into disjoint briefs rather than asking either family to review the other domain.
+
+The consuming command owns relevance-based selection from the installed agent catalog. Give the agent discretion to choose only specialists supported by the concrete surfaces, record each selection and its evidence-based reason, and mention omitted roles only when omission materially limits confidence. Never use every available specialist as an implicit fallback. All agent families count against one call-site budget; command specialists replace analogous code lenses for command-only work rather than adding a second suite.
+
+Use these compatibility levels:
+
+1. A specialist explicitly named by the consuming command with a matching output contract may fill or replace that role.
+2. Another installed specialist may replace it only when authoritative repository or command guidance establishes the same responsibility, capability posture, context needs, output shape, and workflow handoff.
+3. A catalog-only name and description match may provide a supplementary relevant lens, but cannot replace a required specialist or exact procedural role.
+
+Keep missing, failed, or malformed required output visible as incomplete evidence. Do not silently substitute an unrelated specialist or broaden the review. The parent command remains the sole owner of repository mutation, test execution, user interaction, and publication unless its contract explicitly assigns one of those effects elsewhere.
+
+Design command responsibilities before adding procedure:
+
+- Give each durable fact one authority; derive other views instead of synchronizing copies.
+- Give each side effect one owner.
+- Eliminate partial states through deletion, consolidation, responsibility movement, native behavior, or operation reordering before adding recovery machinery.
+- Add procedure only for an observed inference failure, exact consumer contract, demonstrated trust boundary, or explicit user requirement.
+
+Static tests can protect rosters, tool allowlists, references, budgets, and exact handoffs. Phrase-presence assertions and model-output snapshots do not prove relevance, interpretation, context sufficiency, or operability. Claims about command behavior need proportional operational evidence, such as frozen transcript scenarios, repeated identical model runs, fresh-session or delegation exercises, disposable repository probes, recovery cases, or separately authorized forge pilots.
+
 ### Don't
 
 - Don't omit `delegate` from `allowed-tools` if the command body instructs delegation.

@@ -173,6 +173,8 @@ The product-owned `scramjet` command set contains operational workflows for Scra
 
 The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still follows the issue-creation command's effective publication policy and exact-verification safeguards; troubleshooting never edits source or publishes an issue itself.
 
+The set also ships twelve independently selectable, read-only specialists for command-set exploration, architecture, instruction semantics, context flow, authority and state, operability, trust boundaries, evaluation, simplification, failure analysis, completeness, and independent assessment. Consuming commands select relevant specialists from all installed command sets; the catalog is descriptive rather than a mandatory suite or routing registry.
+
 ## Mach 12
 
 Mach 12 is one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not required infrastructure for Scramjet operations.
@@ -192,7 +194,7 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus eight subroutine commands and eleven specialized agents covering code exploration, architecture, review, testing, and more. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
+Plus seven subroutine commands and eleven specialized code agents covering exploration, architecture, review, testing, and more. Mach 12 substitutes compatible Scramjet command specialists when executable command behavior is the subject, retains code specialists for runtime work, and partitions mixed work under one shared review budget. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
 
 ## Bundled command-set installation
 
