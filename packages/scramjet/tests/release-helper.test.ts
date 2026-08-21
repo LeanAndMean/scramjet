@@ -34,6 +34,7 @@ interface FakeState {
 	race?: string;
 	unexpectedTagChange?: string;
 	badAttestation?: string;
+	priorAttestation?: string;
 	versionQueries?: Record<string, number>;
 }
 
@@ -101,19 +102,21 @@ globalThis.fetch = async (input) => {
   const version = parts[1];
   const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
   const digest = createHash("sha512").update(name + "@" + version).digest("hex");
+  const ref = state.priorAttestation === name ? "refs/tags/v0.80.0" : process.env.GITHUB_REF;
+  const sha = state.priorAttestation === name ? "b".repeat(40) : process.env.GITHUB_SHA;
   const statement = {
     _type: "https://in-toto.io/Statement/v1",
     subject: [{ name: "pkg:npm/" + name.replace("@", "%40") + "@" + version, digest: { sha512: state.badAttestation === name ? "00" : digest } }],
     predicateType: "https://slsa.dev/provenance/v1",
     predicate: { buildDefinition: {
       externalParameters: { workflow: {
-        ref: process.env.GITHUB_REF,
+        ref,
         repository: "https://github.com/LeanAndMean/scramjet",
         path: ".github/workflows/release.yml"
       } },
       resolvedDependencies: [{
-        uri: "git+https://github.com/LeanAndMean/scramjet@" + process.env.GITHUB_REF,
-        digest: { gitCommit: process.env.GITHUB_SHA }
+        uri: "git+https://github.com/LeanAndMean/scramjet@" + ref,
+        digest: { gitCommit: sha }
       }]
     } }
   };
@@ -192,6 +195,18 @@ describe("release helper package and event validation", () => {
 			"repository metadata",
 			(manifest: Record<string, unknown>) => {
 				manifest.repository = "github:LeanAndMean/scramjet";
+			},
+		],
+		[
+			"publish registry",
+			(manifest: Record<string, unknown>) => {
+				manifest.publishConfig = { access: "public", registry: "https://example.test/" };
+			},
+		],
+		[
+			"scoped publish registry",
+			(manifest: Record<string, unknown>) => {
+				manifest.publishConfig = { access: "public", "@leanandmean:registry": "https://example.test/" };
 			},
 		],
 	])("rejects incorrect %s", (_label, mutate) => {
@@ -286,6 +301,8 @@ describe("release helper registry preflight and publication", () => {
 				"--provenance",
 				"--tag",
 				"latest",
+				"--registry",
+				"https://registry.npmjs.org/",
 			]);
 		}
 		for (const { name, version } of INVENTORY) {
@@ -299,6 +316,21 @@ describe("release helper registry preflight and publication", () => {
 		const present = INVENTORY[0];
 		state.packages[present.name].versions.push(present.version);
 		state.packages[present.name].distTags.latest = present.version;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`Skipping reconciled ${present.name}@${present.version}`);
+		expect(publishCalls(readState(statePath)).map((args) => args[args.indexOf("-w") + 1])).toEqual(
+			INVENTORY.slice(1).map(({ workspace }) => workspace),
+		);
+	});
+
+	it("accepts an unchanged package from a prior trusted Scramjet release", () => {
+		const state = initialState();
+		const present = INVENTORY[0];
+		state.packages[present.name].versions.push(present.version);
+		state.packages[present.name].distTags.latest = present.version;
+		state.priorAttestation = present.name;
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);

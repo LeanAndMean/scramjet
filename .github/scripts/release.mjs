@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/LeanAndMean/scramjet.git";
+const REGISTRY_URL = "https://registry.npmjs.org/";
 const WORKFLOW_REPOSITORY = "https://github.com/LeanAndMean/scramjet";
 const WORKFLOW_PATH = ".github/workflows/release.yml";
 const SLSA_PREDICATE = "https://slsa.dev/provenance/v1";
@@ -52,6 +53,12 @@ export function loadInventory(root = REPO_ROOT) {
 		) {
 			fail(`${expectedName} must declare the canonical repository metadata`);
 		}
+		if (
+			manifest.publishConfig?.access !== "public" ||
+			Object.keys(manifest.publishConfig).length !== 1
+		) {
+			fail(`${expectedName} publishConfig must contain only public access`);
+		}
 		return { workspace, name: expectedName, version: manifest.version };
 	});
 }
@@ -70,7 +77,7 @@ export function validateIdentity(inventory, env = process.env, git = (args) => r
 }
 
 function npmJson(args, description) {
-	return parseJson(run("npm", args), description);
+	return parseJson(run("npm", [...args, "--registry", REGISTRY_URL]), description);
 }
 
 function requireVersions(value, name) {
@@ -175,13 +182,24 @@ export async function reconcilePackage(pkg, identity, dependencies = {}) {
 	const workflow = build?.externalParameters?.workflow;
 	if (workflow?.repository !== WORKFLOW_REPOSITORY) fail("SLSA workflow repository does not match");
 	if (workflow?.path !== WORKFLOW_PATH) fail("SLSA workflow path does not match");
-	if (workflow?.ref !== identity.ref) fail("SLSA workflow ref does not match");
-	const expectedUri = `git+${WORKFLOW_REPOSITORY}@${identity.ref}`;
+	const allowPriorRelease = dependencies.allowPriorRelease ?? false;
+	const provenanceRef = workflow?.ref;
+	if (provenanceRef !== identity.ref && (!allowPriorRelease || !/^refs\/tags\/v[0-9].*$/.test(provenanceRef))) {
+		fail("SLSA workflow ref does not match");
+	}
+	const expectedUri = `git+${WORKFLOW_REPOSITORY}@${provenanceRef}`;
 	const sources = build?.resolvedDependencies;
 	if (!Array.isArray(sources) || sources.length !== 1 || sources[0]?.uri !== expectedUri) {
 		fail("SLSA resolved source does not match the release tag");
 	}
-	if (sources[0]?.digest?.gitCommit !== identity.sha) fail("SLSA resolved commit does not match GITHUB_SHA");
+	const provenanceSha = sources[0]?.digest?.gitCommit;
+	if (
+		provenanceRef === identity.ref
+			? provenanceSha !== identity.sha
+			: !allowPriorRelease || !/^[0-9a-f]{40}$/.test(provenanceSha)
+	) {
+		fail("SLSA resolved commit does not match GITHUB_SHA");
+	}
 	return true;
 }
 
@@ -194,7 +212,7 @@ function tagsEqual(left, right) {
 export async function publish(inventory, identity) {
 	const plan = preflight(inventory);
 	for (const pkg of plan.filter(({ present }) => present)) {
-		await reconcilePackage(pkg, identity);
+		await reconcilePackage(pkg, identity, { allowPriorRelease: true });
 		const currentTags = requireDistTags(
 			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after reconciliation`),
 			pkg.name,
@@ -219,9 +237,22 @@ export async function publish(inventory, identity) {
 		if (typeof currentTags.latest !== "string" || compareVersions(pkg.version, currentTags.latest) <= 0) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
 		}
-		run("npm", ["publish", "-w", pkg.workspace, "--access", "public", "--provenance", "--tag", "latest"], {
-			stdio: "inherit",
-		});
+		run(
+			"npm",
+			[
+				"publish",
+				"-w",
+				pkg.workspace,
+				"--access",
+				"public",
+				"--provenance",
+				"--tag",
+				"latest",
+				"--registry",
+				REGISTRY_URL,
+			],
+			{ stdio: "inherit" },
+		);
 		const publishedVersions = requireVersions(
 			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
 			pkg.name,

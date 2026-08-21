@@ -212,7 +212,7 @@ intended path — not something to work around.
 
 ## Release process
 
-Every merge to `main` must carry a version bump in `packages/scramjet/package.json`. The release workflow (`release.yml`) publishes all five packages to npm when a version tag is pushed, and `mach12:pr-merge` creates that tag. Without a bump, no tag is created, no publish happens, and users never receive the changes.
+Every merge to `main` must carry a version bump in `packages/scramjet/package.json`. The release workflow (`release.yml`) publishes all five packages to npm only from a `v<packages/scramjet version>` tag push, and `mach12:pr-merge` creates that tag. Without a bump, no tag is created, no publish happens, and users never receive the changes. Follow `.github/RELEASING.md` for the repository-specific trusted-publishing contract and release operations.
 
 - **Every PR gets a version bump** — including pure refactors, test-only changes, and documentation updates. If it merges to main, it needs a new version.
 - **Bump level**: patch for bug fixes, refactors, docs, and test changes; minor for new features or non-breaking behavioral changes; major for breaking changes.
