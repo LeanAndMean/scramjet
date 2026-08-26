@@ -17,7 +17,7 @@ const CERTIFICATE_IDENTITY =
 	"^https://github\\.com/LeanAndMean/scramjet/\\.github/workflows/release\\.yml@refs/tags/v\\d+\\.\\d+\\.\\d+$";
 export const READ_TIMEOUT_MS = 60_000;
 export const PUBLISH_TIMEOUT_MS = 10 * 60_000;
-export const POST_PUBLISH_ATTEMPTS = 6;
+export const POST_PUBLISH_ATTEMPTS = 31;
 export const POST_PUBLISH_DELAY_MS = 10_000;
 const INVENTORY = [
 	["packages/tui", "@leanandmean/tui"],

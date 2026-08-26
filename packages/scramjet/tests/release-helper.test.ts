@@ -691,12 +691,11 @@ try {
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
-	it("polls delayed version, tag, and attestation visibility through publication", () => {
+	it("polls multi-minute version and attestation visibility through publication", () => {
 		const state = initialState();
 		const first = INVENTORY[0].name;
-		state.visibilityDelays = { [first]: 1 };
-		state.tagVisibilityDelays = { [first]: 1 };
-		state.attestationDelays = { [first]: 1 };
+		state.visibilityDelays = { [first]: 18 };
+		state.attestationDelays = { [first]: 18 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
@@ -706,6 +705,19 @@ try {
 		expect(finalState.publicationCounts?.[first]).toBe(1);
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
 	});
+
+	it("polls multi-minute latest-tag visibility through publication", () => {
+		const state = initialState();
+		const first = INVENTORY[0].name;
+		state.tagVisibilityDelays = { [first]: 18 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
+		const finalState = readState(statePath);
+		expect(finalState.publicationCounts?.[first]).toBe(1);
+		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
+	}, 10_000);
 
 	it.each([
 		["malformed JSON", "versions", "not-json"],
@@ -803,11 +815,11 @@ try {
 
 	it("stops after registry visibility polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.visibilityDelays = { [INVENTORY[0].name]: 6 };
+		state.visibilityDelays = { [INVENTORY[0].name]: 31 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("registry visibility did not converge after 6 attempts");
+		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
@@ -815,23 +827,23 @@ try {
 
 	it("stops after latest-tag polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.tagVisibilityDelays = { [INVENTORY[0].name]: 6 };
+		state.tagVisibilityDelays = { [INVENTORY[0].name]: 31 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("registry visibility did not converge after 6 attempts");
+		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
-	});
+	}, 10_000);
 
 	it("stops after provenance polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.attestationDelays = { [INVENTORY[0].name]: 6 };
+		state.attestationDelays = { [INVENTORY[0].name]: 31 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("provenance did not converge after 6 attempts");
+		expect(result.stderr).toContain("provenance did not converge after 31 attempts");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
@@ -1158,6 +1170,21 @@ describe("release operation bounds and post-publish polling", () => {
 		expect((thrown as Error & { cause?: unknown }).cause).toBe(failure);
 		expect(calls).toHaveLength(1);
 		expect(calls[0][2]).toMatchObject({ timeout: 25 });
+	});
+
+	it("uses the production polling interval by default", async () => {
+		let attempts = 0;
+		const sleep = vi.fn(async () => {});
+		await pollRead(
+			"published package",
+			async () => {
+				attempts += 1;
+				if (attempts === 1) throw new Error("not ready");
+			},
+			{ sleep },
+		);
+		expect(sleep).toHaveBeenCalledOnce();
+		expect(sleep).toHaveBeenCalledWith(10_000);
 	});
 
 	it("tolerates delayed registry and attestation visibility", async () => {
