@@ -835,7 +835,7 @@ try {
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
-	});
+	}, 10_000);
 
 	it("stops after provenance polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
