@@ -26,6 +26,11 @@ const INVENTORY = [
 	["packages/coding-agent", "@leanandmean/coding-agent"],
 	["packages/scramjet", "@leanandmean/scramjet"],
 ];
+const INTERNAL_DEPENDENCIES = new Map([
+	["@leanandmean/agent", ["@leanandmean/ai"]],
+	["@leanandmean/coding-agent", ["@leanandmean/agent", "@leanandmean/ai", "@leanandmean/tui"]],
+	["@leanandmean/scramjet", INVENTORY.slice(0, -1).map(([, name]) => name)],
+]);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 let defaultProvenanceVerifier;
 
@@ -76,10 +81,14 @@ export function loadInventory(root = REPO_ROOT) {
 	});
 	const scramjet = inventory.at(-1);
 	if (!/^\d+\.\d+\.\d+$/.test(scramjet.version)) fail("@leanandmean/scramjet must use a stable X.Y.Z version");
-	const dependencies = manifests.get(scramjet.name).dependencies;
-	for (const runtime of inventory.slice(0, -1)) {
-		if (dependencies?.[runtime.name] !== runtime.version) {
-			fail(`${scramjet.name} must depend on exact ${runtime.name}@${runtime.version}`);
+	const versions = new Map(inventory.map(({ name, version }) => [name, version]));
+	for (const [name, dependencyNames] of INTERNAL_DEPENDENCIES) {
+		const dependencies = manifests.get(name).dependencies;
+		for (const dependencyName of dependencyNames) {
+			const version = versions.get(dependencyName);
+			if (dependencies?.[dependencyName] !== version) {
+				fail(`${name} must depend on exact ${dependencyName}@${version}`);
+			}
 		}
 	}
 	return inventory;
@@ -196,7 +205,11 @@ export async function fetchAttestationJson(url, fetchImpl = fetch, timeoutMs = R
 		fail("attestation URL must use the npm registry over HTTPS");
 	}
 	const response = await fetchImpl(parsed, { signal: AbortSignal.timeout(timeoutMs) });
-	if (!response.ok) fail(`attestation request failed with HTTP ${response.status}`);
+	if (!response.ok) {
+		const error = new Error(`attestation request failed with HTTP ${response.status} for ${parsed.href}`);
+		error.status = response.status;
+		throw error;
+	}
 	return response.json();
 }
 
@@ -320,8 +333,11 @@ export function isTransientReadError(error) {
 	return (
 		["AbortError", "TimeoutError"].includes(error?.name) ||
 		["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENETUNREACH"].includes(error?.code) ||
-		typeof error?.status === "number" ||
-		/fetch failed|attestation request failed|provenance metadata must be an object|must have integrity and an attestation URL|must contain an SLSA provenance statement/.test(
+		error?.status === 404 ||
+		error?.status === 408 ||
+		error?.status === 429 ||
+		(typeof error?.status === "number" && error.status >= 500 && error.status <= 599) ||
+		/fetch failed|provenance metadata must be an object|must have integrity and an attestation URL|must contain an SLSA provenance statement/.test(
 			error?.message ?? "",
 		)
 	);

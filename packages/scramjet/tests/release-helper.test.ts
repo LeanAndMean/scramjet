@@ -268,15 +268,21 @@ describe("release helper package and event validation", () => {
 				manifest.version = "1.2.3-scramjet.1";
 			},
 		],
-		...INVENTORY.slice(0, -1).flatMap(({ name }) =>
-			([undefined, "^0.0.0", "0.0.0"] as Array<string | undefined>).map((value) => [
-				`${value === undefined ? "missing" : value.startsWith("^") ? "ranged" : "mismatched"} ${name} dependency`,
-				"packages/scramjet",
-				(manifest: Record<string, any>) => {
-					if (value === undefined) delete manifest.dependencies[name];
-					else manifest.dependencies[name] = value;
-				},
-			]),
+		...[
+			["packages/agent", ["@leanandmean/ai"]],
+			["packages/coding-agent", ["@leanandmean/agent", "@leanandmean/ai", "@leanandmean/tui"]],
+			["packages/scramjet", INVENTORY.slice(0, -1).map(({ name }) => name)],
+		].flatMap(([workspace, dependencyNames]) =>
+			(dependencyNames as string[]).flatMap((name) =>
+				([undefined, "^0.0.0", "0.0.0"] as Array<string | undefined>).map((value) => [
+					`${value === undefined ? "missing" : value.startsWith("^") ? "ranged" : "mismatched"} ${name} dependency in ${workspace}`,
+					workspace,
+					(manifest: Record<string, any>) => {
+						if (value === undefined) delete manifest.dependencies[name];
+						else manifest.dependencies[name] = value;
+					},
+				]),
+			),
 		),
 	])("rejects incorrect %s", (_label, targetWorkspace, mutate) => {
 		const root = mkdtempSync(join(tmpdir(), "scramjet-release-manifests-"));
@@ -942,6 +948,45 @@ describe("release operation bounds and post-publish polling", () => {
 			),
 		).rejects.toThrow();
 		expect(signal?.aborted).toBe(true);
+	});
+
+	it.each([400, 401, 403])("fails immediately for permanent attestation HTTP %s", async (status) => {
+		let fetchAttempts = 0;
+		let pollAttempts = 0;
+		await expect(
+			pollRead(
+				"provenance",
+				async () => {
+					pollAttempts += 1;
+					return fetchAttestationJson("https://registry.npmjs.org/fixture", async () => {
+						fetchAttempts += 1;
+						return { ok: false, status } as Response;
+					});
+				},
+				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+			),
+		).rejects.toThrow(`attestation request failed with HTTP ${status} for https://registry.npmjs.org/fixture`);
+		expect(fetchAttempts).toBe(1);
+		expect(pollAttempts).toBe(1);
+	});
+
+	it.each([404, 408, 429, 500, 503])("retries transient attestation HTTP %s within the bound", async (status) => {
+		let attempts = 0;
+		await expect(
+			pollRead(
+				"provenance",
+				async () => {
+					attempts += 1;
+					return fetchAttestationJson("https://registry.npmjs.org/fixture", async () =>
+						attempts < 3
+							? ({ ok: false, status } as Response)
+							: ({ ok: true, json: async () => ({}) } as Response),
+					);
+				},
+				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+			),
+		).resolves.toEqual({});
+		expect(attempts).toBe(3);
 	});
 
 	it.each([
