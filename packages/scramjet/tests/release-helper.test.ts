@@ -36,8 +36,15 @@ interface FakeState {
 	packages: Record<string, { versions: string[]; distTags: Record<string, string> }>;
 	targets: Record<string, { name: string; version: string }>;
 	calls: string[][];
-	failure?: { name: string; field: string; output?: string; status?: number };
-	failureAfterPublish?: { name: string; field: string; output?: string; status?: number; remaining?: number };
+	failure?: { name: string; field: string; output?: string; stderrOutput?: string; status?: number };
+	failureAfterPublish?: {
+		name: string;
+		field: string;
+		output?: string;
+		stderrOutput?: string;
+		status?: number;
+		remaining?: number;
+	};
 	publishFailure?: string;
 	race?: string;
 	unexpectedTagChange?: string;
@@ -68,14 +75,14 @@ if (args[0] === "view") {
   const field = args[2];
   if (state.failure?.name === name && state.failure?.field === field) {
     save();
-    if (state.failure.status) { console.error(state.failure.output ?? "registry failed"); process.exit(state.failure.status); }
+    if (state.failure.status) { process.stdout.write(state.failure.output ?? ""); console.error(state.failure.stderrOutput ?? "npm registry request failed"); process.exit(state.failure.status); }
     process.stdout.write(state.failure.output ?? "not json"); process.exit(0);
   }
   const postPublishFailure = state.failureAfterPublish;
   if ((state.publicationCounts?.[name] ?? 0) > 0 && postPublishFailure?.name === name && postPublishFailure?.field === field && (postPublishFailure.remaining ?? 1) > 0) {
     if (postPublishFailure.remaining !== undefined) postPublishFailure.remaining -= 1;
     save();
-    if (postPublishFailure.status) { console.error(postPublishFailure.output ?? "registry failed"); process.exit(postPublishFailure.status); }
+    if (postPublishFailure.status) { process.stdout.write(postPublishFailure.output ?? ""); console.error(postPublishFailure.stderrOutput ?? "npm registry request failed"); process.exit(postPublishFailure.status); }
     process.stdout.write(postPublishFailure.output ?? "not json"); process.exit(0);
   }
   const pkg = state.packages[name];
@@ -283,6 +290,20 @@ describe("release helper package and event validation", () => {
 				manifest.version = version;
 			},
 		]),
+		...["01.2.3", "1.02.3", "1.2.03"].map((version) => [
+			`noncanonical Scramjet version ${version}`,
+			"packages/scramjet",
+			(manifest: Record<string, any>) => {
+				manifest.version = version;
+			},
+		]),
+		...["01.2.3-scramjet.1", "1.02.3-scramjet.1", "1.2.03-scramjet.1", "1.2.3-scramjet.01"].map((version) => [
+			`noncanonical runtime version ${version}`,
+			"packages/tui",
+			(manifest: Record<string, any>) => {
+				manifest.version = version;
+			},
+		]),
 		...[
 			["packages/agent", ["@leanandmean/ai"]],
 			["packages/coding-agent", ["@leanandmean/agent", "@leanandmean/ai", "@leanandmean/tui"]],
@@ -421,15 +442,20 @@ printf 'node|%s|%s|%s|%s|%s\\n' "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA"
 });
 
 describe("release helper version policy", () => {
-	it("orders stable and Scramjet runtime versions", () => {
+	it("orders stable and Scramjet runtime versions without numeric precision loss", () => {
 		expect(compareVersions("1.2.3", "1.2.2")).toBe(1);
 		expect(compareVersions("0.74.1-scramjet.18", "0.74.1-scramjet.17")).toBe(1);
 		expect(compareVersions("0.74.1", "0.74.1-scramjet.18")).toBe(1);
+		expect(compareVersions("9007199254740993.0.0", "9007199254740992.0.0")).toBe(1);
+		expect(compareVersions("1.0.0-scramjet.9007199254740993", "1.0.0-scramjet.9007199254740992")).toBe(1);
 	});
 
-	it.each(["1.2", "1.2.3-beta.1", "v1.2.3", "0.74.1-scramjet.x"])("rejects unknown version form %s", (version) => {
-		expect(() => compareVersions(version, "1.2.3")).toThrow(/unsupported version/);
-	});
+	it.each(["1.2", "1.2.3-beta.1", "v1.2.3", "0.74.1-scramjet.x", "01.2.3", "1.2.3-scramjet.01"])(
+		"rejects unknown version form %s",
+		(version) => {
+			expect(() => compareVersions(version, "1.2.3")).toThrow(/unsupported version/);
+		},
+	);
 });
 
 describe("release helper registry preflight and publication", () => {
@@ -713,6 +739,44 @@ try {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain(`${first.name}@${first.version} registry visibility not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
+	});
+
+	it("falls back to a structured transient npm error on stderr", () => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = {
+			name: first.name,
+			field: "versions",
+			status: 1,
+			output: "not json",
+			stderrOutput: JSON.stringify({ error: { code: "E429", summary: "Too Many Requests" } }),
+			remaining: 1,
+		};
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${first.name}@${first.version} registry visibility not ready`);
+		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
+	});
+
+	it("uses a validated stdout error before a conflicting stderr error", () => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = {
+			name: first.name,
+			field: "versions",
+			status: 1,
+			output: JSON.stringify({ error: { code: "E401", summary: "Unauthorized" } }),
+			stderrOutput: JSON.stringify({ error: { code: "E429", summary: "Too Many Requests" } }),
+		};
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		const calls = readState(statePath).calls.filter(
+			(args) => args[0] === "view" && args[1] === first.name && args[2] === "versions",
+		);
+		expect(calls).toHaveLength(3);
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
 	it("fails an unrecognized npm registry error once after publication", () => {

@@ -80,12 +80,14 @@ export function loadInventory(root = REPO_ROOT) {
 		return { workspace, name: expectedName, version: manifest.version };
 	});
 	for (const pkg of inventory.slice(0, -1)) {
-		if (!/^\d+\.\d+\.\d+-scramjet\.\d+$/.test(pkg.version)) {
+		if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)-scramjet\.(?:0|[1-9]\d*)$/.test(pkg.version)) {
 			fail(`${pkg.name} must use an X.Y.Z-scramjet.N runtime version`);
 		}
 	}
 	const scramjet = inventory.at(-1);
-	if (!/^\d+\.\d+\.\d+$/.test(scramjet.version)) fail("@leanandmean/scramjet must use a stable X.Y.Z version");
+	if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(scramjet.version)) {
+		fail("@leanandmean/scramjet must use a stable X.Y.Z version");
+	}
 	const versions = new Map(inventory.map(({ name, version }) => [name, version]));
 	for (const [name, dependencyNames] of INTERNAL_DEPENDENCIES) {
 		const dependencies = manifests.get(name).dependencies;
@@ -132,11 +134,11 @@ function requireDistTags(value, name) {
 }
 
 function parseVersion(version) {
-	const match = /^(\d+)\.(\d+)\.(\d+)(?:-scramjet\.(\d+))?$/.exec(version);
+	const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-scramjet\.(0|[1-9]\d*))?$/.exec(version);
 	if (!match) fail(`unsupported version format: ${version}`);
 	return {
-		core: match.slice(1, 4).map(Number),
-		prerelease: match[4] === undefined ? null : Number(match[4]),
+		core: match.slice(1, 4).map(BigInt),
+		prerelease: match[4] === undefined ? null : BigInt(match[4]),
 	};
 }
 
@@ -335,13 +337,17 @@ export async function pollRead(description, operation, dependencies = {}) {
 }
 
 function npmErrorCode(error) {
-	const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString("utf8") : error?.stderr;
-	if (typeof stderr !== "string") return undefined;
-	try {
-		return JSON.parse(stderr)?.error?.code;
-	} catch {
-		return undefined;
+	for (const output of [error?.stdout, error?.stderr]) {
+		const text = Buffer.isBuffer(output) ? output.toString("utf8") : output;
+		if (typeof text !== "string") continue;
+		try {
+			const parsed = JSON.parse(text);
+			if (parsed !== null && !Array.isArray(parsed) && typeof parsed === "object" && typeof parsed.error?.code === "string") {
+				return parsed.error.code;
+			}
+		} catch {}
 	}
+	return undefined;
 }
 
 function isTransientTransportError(error) {
