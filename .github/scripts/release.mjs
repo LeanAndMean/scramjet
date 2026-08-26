@@ -79,6 +79,11 @@ export function loadInventory(root = REPO_ROOT) {
 		manifests.set(expectedName, manifest);
 		return { workspace, name: expectedName, version: manifest.version };
 	});
+	for (const pkg of inventory.slice(0, -1)) {
+		if (!/^\d+\.\d+\.\d+-scramjet\.\d+$/.test(pkg.version)) {
+			fail(`${pkg.name} must use an X.Y.Z-scramjet.N runtime version`);
+		}
+	}
 	const scramjet = inventory.at(-1);
 	if (!/^\d+\.\d+\.\d+$/.test(scramjet.version)) fail("@leanandmean/scramjet must use a stable X.Y.Z version");
 	const versions = new Map(inventory.map(({ name, version }) => [name, version]));
@@ -329,15 +334,45 @@ export async function pollRead(description, operation, dependencies = {}) {
 	fail(`${description} did not converge after ${attempts} attempts: ${lastError?.message ?? String(lastError)}`);
 }
 
-export function isTransientReadError(error) {
+function npmErrorCode(error) {
+	const stderr = Buffer.isBuffer(error?.stderr) ? error.stderr.toString("utf8") : error?.stderr;
+	if (typeof stderr !== "string") return undefined;
+	try {
+		return JSON.parse(stderr)?.error?.code;
+	} catch {
+		return undefined;
+	}
+}
+
+function isTransientTransportError(error) {
+	const npmCode = npmErrorCode(error);
 	return (
 		["AbortError", "TimeoutError"].includes(error?.name) ||
 		["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENETUNREACH"].includes(error?.code) ||
+		["E404", "E408", "E429"].includes(npmCode) ||
+		/^E5\d\d$/.test(npmCode ?? "") ||
 		error?.status === 404 ||
 		error?.status === 408 ||
 		error?.status === 429 ||
 		(typeof error?.status === "number" && error.status >= 500 && error.status <= 599) ||
-		/fetch failed|provenance metadata must be an object|must have integrity and an attestation URL|must contain an SLSA provenance statement/.test(
+		/fetch failed/.test(error?.message ?? "")
+	);
+}
+
+function registryPropagationError(message) {
+	const error = new Error(message);
+	error.code = "REGISTRY_PROPAGATION";
+	return error;
+}
+
+function isRegistryVisibilityRetryError(error) {
+	return error?.code === "REGISTRY_PROPAGATION" || isTransientTransportError(error);
+}
+
+export function isTransientReadError(error) {
+	return (
+		isTransientTransportError(error) ||
+		/provenance metadata must be an object|must have integrity and an attestation URL|must contain an SLSA provenance statement/.test(
 			error?.message ?? "",
 		)
 	);
@@ -418,33 +453,44 @@ export async function publish(inventory, identity, dependencies = {}) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
 		}
 		publishPackage(pkg);
-		const publishedTags = await pollRead(
-			`${pkg.name}@${pkg.version} registry visibility`,
-			async () => {
-				const publishedVersions = requireVersions(
-					npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
-					pkg.name,
-				);
-				if (!publishedVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} was not visible after publish`);
-				const tags = requireDistTags(
-					npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
-					pkg.name,
-				);
-				if (tags.latest !== pkg.version) fail(`${pkg.name} latest did not move to ${pkg.version}`);
-				return tags;
-			},
-			dependencies.pollDependencies,
-		);
-		const beforeNonLatest = { ...pkg.distTags };
-		const afterNonLatest = { ...publishedTags };
-		delete beforeNonLatest.latest;
-		delete afterNonLatest.latest;
-		if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
-		await pollRead(
-			`${pkg.name}@${pkg.version} provenance`,
-			() => reconcilePackage(pkg, identity, { ...dependencies, verifyBundle }),
-			{ ...dependencies.pollDependencies, retryIf: isTransientReadError },
-		);
+		try {
+			const publishedTags = await pollRead(
+				`${pkg.name}@${pkg.version} registry visibility`,
+				async () => {
+					const publishedVersions = requireVersions(
+						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
+						pkg.name,
+					);
+					if (!publishedVersions.includes(pkg.version)) {
+						throw registryPropagationError(`${pkg.name}@${pkg.version} was not visible after publish`);
+					}
+					const tags = requireDistTags(
+						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
+						pkg.name,
+					);
+					if (tags.latest !== pkg.version) {
+						throw registryPropagationError(`${pkg.name} latest did not move to ${pkg.version}`);
+					}
+					return tags;
+				},
+				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
+			);
+			const beforeNonLatest = { ...pkg.distTags };
+			const afterNonLatest = { ...publishedTags };
+			delete beforeNonLatest.latest;
+			delete afterNonLatest.latest;
+			if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
+			await pollRead(
+				`${pkg.name}@${pkg.version} provenance`,
+				() => reconcilePackage(pkg, identity, { ...dependencies, verifyBundle }),
+				{ ...dependencies.pollDependencies, retryIf: isTransientReadError },
+			);
+		} catch (error) {
+			throw new Error(
+				`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; run read-only reconciliation. Cause: ${error?.message ?? String(error)}`,
+				{ cause: error },
+			);
+		}
 	}
 }
 

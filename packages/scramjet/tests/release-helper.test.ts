@@ -37,6 +37,7 @@ interface FakeState {
 	targets: Record<string, { name: string; version: string }>;
 	calls: string[][];
 	failure?: { name: string; field: string; output?: string; status?: number };
+	failureAfterPublish?: { name: string; field: string; output?: string; status?: number; remaining?: number };
 	publishFailure?: string;
 	race?: string;
 	unexpectedTagChange?: string;
@@ -69,6 +70,13 @@ if (args[0] === "view") {
     save();
     if (state.failure.status) { console.error(state.failure.output ?? "registry failed"); process.exit(state.failure.status); }
     process.stdout.write(state.failure.output ?? "not json"); process.exit(0);
+  }
+  const postPublishFailure = state.failureAfterPublish;
+  if ((state.publicationCounts?.[name] ?? 0) > 0 && postPublishFailure?.name === name && postPublishFailure?.field === field && (postPublishFailure.remaining ?? 1) > 0) {
+    if (postPublishFailure.remaining !== undefined) postPublishFailure.remaining -= 1;
+    save();
+    if (postPublishFailure.status) { console.error(postPublishFailure.output ?? "registry failed"); process.exit(postPublishFailure.status); }
+    process.stdout.write(postPublishFailure.output ?? "not json"); process.exit(0);
   }
   const pkg = state.packages[name];
   if (!pkg) stop("unknown package");
@@ -268,6 +276,13 @@ describe("release helper package and event validation", () => {
 				manifest.version = "1.2.3-scramjet.1";
 			},
 		],
+		...["1.2.3", "1.2.3-beta.1", "1.2.3-scramjet", "1.2.3-scramjet.x"].map((version) => [
+			`runtime version ${version}`,
+			"packages/tui",
+			(manifest: Record<string, any>) => {
+				manifest.version = version;
+			},
+		]),
 		...[
 			["packages/agent", ["@leanandmean/ai"]],
 			["packages/coding-agent", ["@leanandmean/agent", "@leanandmean/ai", "@leanandmean/tui"]],
@@ -582,6 +597,8 @@ try {
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("digest does not match");
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -641,6 +658,8 @@ try {
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("non-latest dist-tags changed");
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -660,6 +679,62 @@ try {
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
 	});
 
+	it.each([
+		["malformed JSON", "versions", "not-json"],
+		["malformed versions", "versions", "{}"],
+		["malformed dist-tags", "dist-tags", "[]"],
+	])("fails permanent post-publish visibility errors once: %s", (_label, field, output) => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = { name: first.name, field, output };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("publication state is ambiguous");
+		const calls = readState(statePath).calls.filter(
+			(args) => args[0] === "view" && args[1] === first.name && args[2] === field,
+		);
+		expect(calls).toHaveLength(3);
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	it("retries a structured transient npm registry failure after publication", () => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = {
+			name: first.name,
+			field: "versions",
+			status: 1,
+			output: JSON.stringify({ error: { code: "E429", summary: "Too Many Requests" } }),
+			remaining: 1,
+		};
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${first.name}@${first.version} registry visibility not ready`);
+		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
+	});
+
+	it("fails an unrecognized npm registry error once after publication", () => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = {
+			name: first.name,
+			field: "versions",
+			status: 1,
+			output: JSON.stringify({ error: { code: "E401", summary: "Unauthorized" } }),
+		};
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("publication state is ambiguous");
+		const calls = readState(statePath).calls.filter(
+			(args) => args[0] === "view" && args[1] === first.name && args[2] === "versions",
+		);
+		expect(calls).toHaveLength(3);
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
 	it("stops after registry visibility polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
 		state.visibilityDelays = { [INVENTORY[0].name]: 6 };
@@ -667,6 +742,8 @@ try {
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("registry visibility did not converge after 6 attempts");
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -677,6 +754,8 @@ try {
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("registry visibility did not converge after 6 attempts");
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -687,6 +766,8 @@ try {
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("provenance did not converge after 6 attempts");
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 });
