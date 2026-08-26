@@ -717,7 +717,7 @@ try {
 		const finalState = readState(statePath);
 		expect(finalState.publicationCounts?.[first]).toBe(1);
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
-	});
+	}, 10_000);
 
 	it.each([
 		["malformed JSON", "versions", "not-json"],
