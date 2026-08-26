@@ -198,7 +198,9 @@ function previousVersion(version: string): string {
 	const runtime = /^(\d+\.\d+\.\d+-scramjet\.)(\d+)$/.exec(version);
 	if (runtime) return `${runtime[1]}${Number(runtime[2]) - 1}`;
 	const stable = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)!;
-	return `${stable[1]}.${stable[2]}.${Number(stable[3]) - 1}`;
+	const patch = Number(stable[3]);
+	if (patch > 0) return `${stable[1]}.${stable[2]}.${patch - 1}`;
+	return `${stable[1]}.${Number(stable[2]) - 1}.0`;
 }
 
 function initialState(): FakeState {
