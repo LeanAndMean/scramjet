@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.84.0 — Publish npm packages with trusted OIDC
+
+Replaces stored npm publishing credentials with a fail-closed trusted-publishing workflow using GitHub Actions OIDC. Fixes [#162](https://github.com/LeanAndMean/scramjet/issues/162).
+
+### Added
+
+- Add a release helper that validates release identity, preflights registry state, publishes packages in dependency order, preserves dist-tags, and verifies provenance.
+- Add a maintainer runbook for trusted-publisher setup, release verification, and partial-publication recovery.
+
+### Changed
+
+- Publish all five packages from version tags through repository-wide serialized OIDC releases without stored npm credentials.
+- Add canonical repository metadata to every publishable package.
+
+### Tests
+
+- Add release-helper and workflow-contract coverage for validation, publication, provenance, and recovery behavior.
+
 ## 0.83.1 — Clarify long skill description warnings
 
 Clarifies that the Agent Skills description-length warning is advisory while preserving complete descriptions for model-visible skill content. Fixes [#500](https://github.com/LeanAndMean/scramjet/issues/500).
