@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.84.1 — Tolerate npm publication propagation
+
+Extends post-publish verification for normal multi-minute npm registry and provenance delays. Fixes [#503](https://github.com/LeanAndMean/scramjet/issues/503).
+
+### Fixed
+
+- Poll registry visibility, latest tags, and provenance for up to 31 attempts at ten-second intervals without republishing.
+- Clarify forward-release recovery after the partial `v0.84.0` publication.
+
+### Tests
+
+- Add multi-minute registry, tag, provenance, and polling-exhaustion coverage.
+
 ## 0.84.0 — Publish npm packages with trusted OIDC
 
 Replaces stored npm publishing credentials with a fail-closed trusted-publishing workflow using GitHub Actions OIDC. Fixes [#162](https://github.com/LeanAndMean/scramjet/issues/162).
