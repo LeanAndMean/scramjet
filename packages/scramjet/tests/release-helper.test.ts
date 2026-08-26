@@ -706,6 +706,19 @@ try {
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
 	});
 
+	it("polls multi-minute latest-tag visibility through publication", () => {
+		const state = initialState();
+		const first = INVENTORY[0].name;
+		state.tagVisibilityDelays = { [first]: 18 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
+		const finalState = readState(statePath);
+		expect(finalState.publicationCounts?.[first]).toBe(1);
+		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
+	});
+
 	it.each([
 		["malformed JSON", "versions", "not-json"],
 		["malformed versions", "versions", "{}"],
@@ -1157,6 +1170,21 @@ describe("release operation bounds and post-publish polling", () => {
 		expect((thrown as Error & { cause?: unknown }).cause).toBe(failure);
 		expect(calls).toHaveLength(1);
 		expect(calls[0][2]).toMatchObject({ timeout: 25 });
+	});
+
+	it("uses the production polling interval by default", async () => {
+		let attempts = 0;
+		const sleep = vi.fn(async () => {});
+		await pollRead(
+			"published package",
+			async () => {
+				attempts += 1;
+				if (attempts === 1) throw new Error("not ready");
+			},
+			{ sleep },
+		);
+		expect(sleep).toHaveBeenCalledOnce();
+		expect(sleep).toHaveBeenCalledWith(10_000);
 	});
 
 	it("tolerates delayed registry and attestation visibility", async () => {
