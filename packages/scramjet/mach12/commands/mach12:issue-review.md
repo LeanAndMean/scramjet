@@ -78,7 +78,7 @@ The review evidence plus assessment pass is capped at seven subagent calls acros
 
 Record each selected agent and its evidence-based reason in the dispatch brief and synthesis. Missing, failed, or malformed required output remains visible and narrows the conclusion; never silently substitute another agent or broaden to all specialists. Mention omitted roles only when omission materially limits confidence.
 
-For parallel execution, dispatch all selected evidence tasks in one batch. Include user context and project review criteria in each relevant brief. Each task should return key files and cited observations; after it completes, read every identified file needed for the review.
+For parallel execution, dispatch all selected evidence tasks in one batch. Every brief must include the task-relevant issue title, body, discussion, requirements, and decisions; the current plan; user context and project review criteria; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected cited output. Pass concise excerpts or summaries rather than an indiscriminate transcript. After the tasks complete, read every identified file needed for the review.
 
 ## Step 5: Review the plan
 
@@ -121,7 +121,9 @@ Create an initial findings list with stable identifiers:
 
 ## Step 6: Independently assess the findings
 
-Before presenting findings to the user, run an independent assessment pass. Give every finding exactly one verdict owner: command-surface findings go to `scramjet:independent-command-assessor`, runtime-code findings go to `mach12:independent-assessor`, and cross-boundary findings go to one explicitly selected owner based on the alleged behavior and controlling responsibility. Use at most two assessors, within the seven-call review evidence plus assessment cap. For mixed work, partition findings by identifier into disjoint briefs and have the parent merge a complete result. Do not ask both assessors to classify the same item.
+Before presenting findings to the user, run an independent assessment pass. Give every finding exactly one verdict owner: command-surface findings go to `scramjet:independent-command-assessor`, runtime-code findings go to `mach12:independent-assessor`, and cross-boundary findings go to one explicitly selected owner based on the alleged behavior and controlling responsibility. Use at most two assessors, within the seven-call review evidence plus assessment cap. Do not ask both assessors to classify the same item.
+
+For mixed work, obtain the runtime assessor's verdicts and unnumbered per-finding plan fragments first. Give the command assessor those accepted results only as non-verdict aggregate context; it must not reclassify them or change their fix approaches. The command assessor classifies only its disjoint command findings and owns one combined-system judgment across the merged accepted set. The parent validates identifiers and mechanically orders the accepted fragments into one downstream plan when revision is chosen, preserving every assessor-owned classification and fix approach.
 
 A replacement assessor must be explicitly compatible with the caller's exact identifiers, taxonomy, output shape, evidence needs, and workflow handoff; catalog-only similarity is supplementary. Missing or malformed required assessment remains visible and blocks a complete classification rather than triggering silent substitution.
 
@@ -131,9 +133,9 @@ The selected assessor owns classification: do **not** pre-classify its assigned 
 - The current implementation plan.
 - The project review criteria from Step 3.
 - The key codebase evidence relevant to its assigned surface from Step 4.
-- Its assigned initial F/S findings from Step 5.
+- Its assigned initial F/S findings from Step 5, exact command/runtime partition, and evidence-based selection reason.
 
-Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, and classify it as one of:
+Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, classify it using the taxonomy below, and return an unnumbered implementation fragment for each finding it accepts:
 
 - **Genuine blocker** -- the plan is likely to fail or produce incorrect results unless this is fixed.
 - **Genuine issue** -- the plan has a significant gap or risk that should be addressed before implementation.
@@ -177,10 +179,11 @@ If the user picks "Create revised plan", enter the revision loop:
 
 ### Revision loop
 
-1. **Architect dispatch.** This single revision-architect call is a separate decision branch and does not count against the completed seven-call review/assessment pass. Use `scramjet:command-architect` for command-only revisions and `mach12:code-architect` for code-only revisions. For mixed revisions, select one explicit aggregate owner based on the findings' controlling responsibility and pass the disjoint command/code evidence needed to preserve both surfaces; do not dispatch both or broaden the branch. A replacement installed architect requires established compatibility with the complete revised-plan contract below; catalog-only similarity is supplementary.
+1. **Architect dispatch.** This single revision-architect call is a separate decision branch and does not count against the completed seven-call review/assessment pass. Use `scramjet:command-architect` for command-only revisions and `mach12:code-architect` for code-only revisions. For mixed revisions, select one architect from the findings' controlling domain and scope its advice to that domain; do not ask it to design the other domain or dispatch a second architect. The parent retains the other-domain evidence and assessed fix approaches for later integration. A replacement installed architect requires established compatibility with the selected domain's revision-advice contract; catalog-only similarity is supplementary.
 
    Dispatch the selected architect with a brief containing:
-   - The issue title, body, and requirements from Step 2.
+   - The issue title, body, requirements, and authoritative decisions from Step 2.
+   - The controlling-domain partition and evidence-based reason for selecting this architect.
    - The current implementation plan being revised (original plan on first iteration, or most recent revision on subsequent iterations).
    - The full findings list from Step 5 (with F/S identifiers and current classifications from Step 6), identifying which are Critical, Important, and Suggestions.
    - The raw exploration context from Step 4 — key files, observations, and codebase patterns discovered by the exploration subagents.
@@ -188,7 +191,7 @@ If the user picks "Create revised plan", enter the revision loop:
    - The existing plan's `## Pitfalls and Gotchas` section (if present). Instruct the architect to preserve existing pitfalls unless the revision makes them irrelevant, and to add any new pitfalls discovered during review.
    - If this is a subsequent revision iteration, include the prior revised plan and the delta assessment that prompted re-revision.
 
-   Instruct the architect to propose a complete revised implementation plan that addresses the Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally. Treat the proposal as architect evidence, not yet as the post-ready artifact.
+   Instruct the architect to propose revision advice for its controlling domain that addresses the applicable Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally. Treat the proposal as architect evidence, not yet as the post-ready artifact. The parent must integrate that advice with preserved other-domain evidence, assessor-owned fix approaches, and prior decisions into the complete replacement through the plan-comment contract in the next step.
 
 2. **Load and apply the plan-comment contract.** After the architect returns and immediately before producing the final revised artifact, delegate once in this turn to:
 

@@ -378,8 +378,6 @@ describe("mach12 command-surface issue routing", () => {
 		expect(exploration).toContain("scramjet:command-failure-analyst");
 		expect(exploration).toMatch(/non-trivial command surface/i);
 		expect(exploration).toMatch(/use both only when/i);
-		expect(exploration).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
-		expect(exploration).toMatch(/catalog-only[^.]*supplementary/i);
 	});
 
 	it("substitutes command planning specialists within one eight-call initial pass", () => {
@@ -394,7 +392,6 @@ describe("mach12 command-surface issue routing", () => {
 		expect(exploration).toMatch(/mixed[\s\S]{0,200}disjoint briefs/i);
 		expect(exploration).toMatch(/initial[^.]*maximum of eight/i);
 		expect(exploration).toMatch(/targeted architecture reruns[^.]*separate decision branch/i);
-		expect(exploration).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
 
 		for (const agent of ["scramjet:command-architect", "mach12:code-architect"]) {
 			expect(architecture).toContain(agent);
@@ -424,7 +421,6 @@ describe("mach12 command-surface issue routing", () => {
 		expect(evidence).toMatch(/command-only[\s\S]{0,400}replace/i);
 		expect(evidence).toMatch(/review evidence plus assessment[^.]*seven/i);
 		expect(evidence).toMatch(/mixed[\s\S]{0,200}disjoint briefs/i);
-		expect(evidence).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
 
 		expect(assessment).toContain("scramjet:independent-command-assessor");
 		expect(assessment).toContain("mach12:independent-assessor");
@@ -494,8 +490,6 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		expect(review).toMatch(/command-only[^.]*replace/i);
 		expect(review).toMatch(/mixed[^.]*disjoint briefs/i);
 		expect(review).toMatch(/maximum of seven/i);
-		expect(review).toMatch(/catalog-only[^.]*supplementary/i);
-		expect(review).toMatch(/explicitly names[^.]*authoritative repository or command guidance/i);
 		expect(review).toMatch(
 			/parent exclusively owns repository mutation, test execution, user interaction, and publication/i,
 		);

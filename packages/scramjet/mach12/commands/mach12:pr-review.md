@@ -83,10 +83,11 @@ Dispatch at most a combined maximum of seven reviewers across prompt and code fa
 Give each reviewer a focused brief that includes:
 
 - PR number, title, body, changed files, and any relevant PR comments.
-- The specific lens it is responsible for.
+- The task-relevant linked-issue body, discussion, acceptance criteria, latest plan, and authoritative decisions already fetched by the parent; never pass only an issue number to an isolated reviewer.
+- The specific lens, exact command/runtime surface partition, and evidence-based selection reason it is responsible for.
+- Relevant parent-established observations and the expected cited output.
 - The user context from Step 1, if provided: `> **User context:** <context>`
 - Relevant artifact timestamps, identified freshness caveats, and which claims were checked against current authority.
-- For the completeness lens, the linked issue number(s) and instruction to read the issue body, comments, acceptance criteria, and latest implementation plan.
 - For all lenses: if a version bump or changelog entry is present in the diff but was not introduced by a pre-merge commit, flag it as premature.
 
 After the reviewers return, merge their findings into a single structured review. De-duplicate overlapping findings and preserve inline source attribution when a finding comes from a specialized lens, e.g. "per `mach12:test-analyzer`".

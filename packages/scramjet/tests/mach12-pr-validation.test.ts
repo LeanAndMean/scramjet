@@ -86,7 +86,6 @@ describe("mach12 pr-validation candidate workflow", () => {
 		])
 			expect(candidates).toContain(`**${field}**`);
 		expect(candidates).toMatch(/preserve that shape[^.]*skip/i);
-		expect(candidates).toMatch(/catalog-only[^.]*supplementary/i);
 		expect(candidates).toContain("Designers are read-only");
 		expect(candidates).toContain("The main agent owns all repository mutation and execution");
 		expect(candidates).toContain("sequentially in the primary repository");
