@@ -78,6 +78,8 @@ The review evidence plus assessment pass is capped at seven subagent calls acros
 
 Record each selected agent and its evidence-based reason in the dispatch brief and synthesis. Missing, failed, or malformed required output remains visible and narrows the conclusion; never silently substitute another agent or broaden to all specialists. Mention omitted roles only when omission materially limits confidence.
 
+For command-plan evidence, treat commands as goal-oriented instructions for common cases. A capable agent should first resolve unexpected cases safely from current context and ask only when resolution needs missing information or user judgment. Do not propose procedure without recurring observed user friction where the same unresolved question repeatedly reaches users, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence.
+
 For parallel execution, dispatch all selected evidence tasks in one batch. Every brief must include the task-relevant issue title, body, discussion, requirements, and decisions; the current plan; user context and project review criteria; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected cited output. Pass concise excerpts or summaries rather than an indiscriminate transcript. After the tasks complete, read every identified file needed for the review.
 
 ## Step 5: Review the plan
@@ -104,6 +106,8 @@ For each stage in the plan, assess:
    - Testing plans broader than the risk requires.
    Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden. Do not apply this axis to `[user-decided]` Decision Log entries -- see "Respect user-attributed decisions" above.
 8. **Release-preparation exclusion**: Does the plan include version bumps, changelog entries, or release-preparation as implementation stages? Flag as a defect (severity: Important). Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
+
+For every command-procedure finding, identify the qualifying evidence category and compare no change, deletion, capable-agent judgment, and one outcome-level invariant before proposing detailed instructions. Count instruction volume, context pressure, branches, calls, and tests in the plan's complexity. Omit unsupported procedural findings rather than demoting them to Suggestions.
 
 Also assess the plan holistically:
 - Does it address all requirements and acceptance criteria from the issue?
@@ -135,7 +139,7 @@ The selected assessor owns classification: do **not** pre-classify its assigned 
 - The key codebase evidence relevant to its assigned surface from Step 4.
 - Its assigned initial F/S findings from Step 5, exact command/runtime partition, and evidence-based selection reason.
 
-Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, classify it using the taxonomy below, and return an unnumbered implementation fragment for each finding it accepts:
+Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, classify it using the taxonomy below, and return an unnumbered implementation fragment for each finding it accepts. For command findings, a contained or low-risk edit is not sufficient evidence of net improvement: reject proposed procedure that lacks recurring observed user friction, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement, and assess the merged instruction, context, branch, call, and test burden before finalizing item verdicts:
 
 - **Genuine blocker** -- the plan is likely to fail or produce incorrect results unless this is fixed.
 - **Genuine issue** -- the plan has a significant gap or risk that should be addressed before implementation.

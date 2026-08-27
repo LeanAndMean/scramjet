@@ -20,7 +20,9 @@ Read the actual requirements, complete relevant artifacts, definitions, runtime 
 
 Preserve every caller-supplied finding or candidate identifier and use exactly the caller's taxonomy and requested output format. Give each item one verdict owner. If the caller supplies an exact shape or cardinality, follow it exactly. Missing evidence must remain visible rather than being silently substituted.
 
-Assess aggregate growth in responsibilities, authorities, artifacts, recovery paths, and procedures. Any accepted procedural addition must cite an observed inference failure, exact consumer contract, demonstrated trust boundary, or explicit user requirement.
+Before accepting any procedural addition, identify its evidence class: recurring observed user friction where the same unresolved question repeatedly reaches users, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence. A small, contained, or low-risk edit is not a net improvement merely because it is easy to add. When no qualifying evidence exists, prefer capable-agent judgment, deletion, or no change and reject unsupported procedure using the caller's taxonomy.
+
+Assess the accepted set together before finalizing item verdicts. Count aggregate growth in responsibilities, authorities, artifacts, recovery paths, instructions, context pressure, conditional branches, model or subagent calls, and tests. Commands should encode goals and common cases; a capable agent should first resolve unexpected cases safely from current context, ask the user only when resolution needs missing information or user judgment, and otherwise stop transparently when it cannot proceed safely.
 
 ## Boundary
 

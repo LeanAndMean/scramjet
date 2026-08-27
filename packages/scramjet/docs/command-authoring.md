@@ -432,10 +432,14 @@ Keep missing, failed, or malformed required output visible as incomplete evidenc
 
 Design command responsibilities before adding procedure:
 
-- Give each durable fact one authority; derive other views instead of synchronizing copies.
-- Give each side effect one owner.
+- Encode the goal, common paths, user-visible outcomes, authorities, and exact trust or consumer boundaries. Do not pre-author every unusual branch.
+- Let a capable agent first resolve an unexpected case safely from current context. Ask the user only when resolution requires missing information or user judgment; otherwise stop transparently when safe progress is impossible.
+- Give each durable fact one authority and each side effect one owner. Derive other views instead of synchronizing copies.
 - Eliminate partial states through deletion, consolidation, responsibility movement, native behavior, or operation reordering before adding recovery machinery.
-- Add procedure only for an observed inference failure, exact consumer contract, demonstrated trust boundary, or explicit user requirement.
+- For ordinary command behavior, add procedure only when recurring evidence shows that the same unresolved question repeatedly reaches users. Exact consumer contracts, demonstrated trust boundaries, and explicit user-required procedures remain independent justifications.
+- A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence. A small or low-risk edit is not justified merely because it is easy to add.
+
+When reviewing a proposed procedural change, identify its qualifying evidence and compare it with no change, deletion, and one outcome-level invariant. Count instruction volume, context pressure, conditional branches, model or subagent calls, and test burden as complexity alongside schemas, state, artifacts, and recovery paths.
 
 Static tests can protect rosters, tool allowlists, references, budgets, and exact handoffs. Phrase-presence assertions and model-output snapshots do not prove relevance, interpretation, context sufficiency, or operability. Claims about command behavior need proportional operational evidence, such as frozen transcript scenarios, repeated identical model runs, fresh-session or delegation exercises, disposable repository probes, recovery cases, or separately authorized forge pilots.
 
