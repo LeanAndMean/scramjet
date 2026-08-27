@@ -508,6 +508,16 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 			/exclusively owning repository mutation, test execution, user interaction, and publication/i,
 		);
 	});
+
+	it.each(["pr-review-assessment", "pr-review-fix"])(
+		"reacquires linked-issue authority before downstream work in %s",
+		(basename) => {
+			const context = section(command(basename), "## Step 2:", "## Step 3:");
+			expect(context).toContain("/mach12:gh-issue-read <issue-number>");
+			expect(context).toContain("complete discussion, plans, decisions, and timestamps");
+			expect(context).toMatch(/stop before (?:assessment|implementation)/i);
+		},
+	);
 });
 
 describe("mach12 issue planning — architecture choice contract", () => {
@@ -1213,6 +1223,20 @@ describe("mach12 publication routing gates", () => {
 		expect(assessment).toContain("any required deferred-disposition decision audit is verified");
 		expect(assessment).toContain('Set `status: "completed"` and populate `next_steps` only when');
 		expect(assessment).toContain("On a resumed user turn, reconcile the exact target without mutation");
+	});
+
+	it("omits the optional fix route when no nitpicks exist", () => {
+		const optionalStart = assessment.indexOf(
+			"**When no genuine issues exist AND nitpicks/optional items were found:**",
+		);
+		const emptyStart = assessment.indexOf("**When no genuine issues or nitpicks/optional items exist:**");
+		const emptyEnd = assessment.indexOf("**General rules:**", emptyStart);
+		const optionalRoute = assessment.slice(optionalStart, emptyStart);
+		const emptyRoute = assessment.slice(emptyStart, emptyEnd);
+
+		expect(optionalRoute).toContain("/mach12:pr-review-fix");
+		expect(emptyRoute).toContain("/mach12:pr-pre-merge");
+		expect(emptyRoute).not.toContain("/mach12:pr-review-fix");
 	});
 });
 

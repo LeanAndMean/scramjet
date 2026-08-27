@@ -123,12 +123,12 @@ next:
   candidates:
     - name: mach12:pr-review-fix
       hint: |
-        Pick when at least one finding was classified as a genuine issue
-        that should be fixed before merge.
+        Pick when at least one genuine issue requires a fix or optional
+        nitpicks were selected for a fix pass.
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when all findings are nitpicks, false positives, or
-        explicitly deferred -- no fixes are required.
+        Pick when no genuine issue remains; optional nitpicks may be
+        skipped before the merge checklist.
 ```
 
 **Fields:**
@@ -245,8 +245,12 @@ Set `recommended_next_step` to `0`.
 Emit two entries — one fix command plus skip-to-merge.
 Set `recommended_next_step` to `0`.
 
-**When all findings are nitpicks/false positives:**
+**When no genuine issues exist AND nitpicks were found:**
 Emit two entries — skip-to-merge plus a fix command for optional items.
+Set `recommended_next_step` to `0`.
+
+**When no genuine issues or nitpicks exist:**
+Emit one entry — skip-to-merge only.
 Set `recommended_next_step` to `0`.
 ```
 

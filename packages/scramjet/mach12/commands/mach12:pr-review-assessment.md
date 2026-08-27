@@ -19,12 +19,12 @@ next:
       hint: |
         Pick when at least one finding was classified as a genuine issue
         that should be fixed before merge (including any reclassified
-        deferred items).
+        deferred items), or when optional nitpicks were selected for a
+        fix pass.
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when all findings are nitpicks, false positives,
-        regressions, or explicitly deferred -- no fixes are required and
-        the PR is ready for the merge checklist.
+        Pick when no genuine issue remains; optional nitpicks may be
+        skipped before the merge checklist.
 ---
 
 # PR Review Assessment
@@ -65,6 +65,10 @@ Extract the `body`, numeric ID, author login, and URL from the JSON response. Th
 The subroutine returns the PR title, body, full comments array, and the matched review comment body and numeric ID (using the most recent marker match). If no comment contains the marker, the subroutine reports that and the caller falls back to the last comment with the structured review format (Critical/Important/Suggestions sections and model attribution).
 
 Save the review comment content and its numeric comment ID for later steps.
+
+Identify task-relevant linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the verified PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
+
+For each linked issue, delegate to `/mach12:gh-issue-read <issue-number>` so its current body, complete discussion, plans, decisions, and timestamps are available for assessment briefs. If any task-relevant linked issue cannot be read completely, surface the failed issue and error, stop before assessment or assessor dispatch, and report the assessment blocked or incomplete; do not silently continue with reduced authoritative context.
 
 ## Step 3: Run the independent assessment
 
@@ -277,12 +281,20 @@ Emit two entries — one `/mach12:pr-review-fix` and one `/mach12:pr-pre-merge`:
 
 Set `recommended_next_step` to `0` (fix pass).
 
-**When all findings are nitpicks, false positives, regressions, or explicitly deferred:**
+**When no genuine issues exist AND nitpicks/optional items were found:**
 
 Emit two entries:
 
 1. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "No genuine issues found — proceed to the merge checklist."
 2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <nitpick-findings>`, `fresh_session`: `true`, `reason`: "Optionally address nitpicks before merging."
+
+Set `recommended_next_step` to `0` (pre-merge).
+
+**When no genuine issues or nitpicks/optional items exist:**
+
+Emit one entry:
+
+1. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "No findings require a fix — proceed to the merge checklist."
 
 Set `recommended_next_step` to `0` (pre-merge).
 

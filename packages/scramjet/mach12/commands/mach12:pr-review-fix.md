@@ -81,6 +81,10 @@ gh api repos/:owner/:repo/issues/comments/<assessment-comment-id>
 
 Save the review comment content for use in Step 4. Also retain the complete verified chronological top-level PR comment stream returned by `gh-pr-read` for the final retrospective.
 
+Identify task-relevant linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the verified PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
+
+For each linked issue, delegate to `/mach12:gh-issue-read <issue-number>` so its current body, complete discussion, plans, decisions, and timestamps are available before implementation and quality-review dispatch. If any task-relevant linked issue cannot be read completely, surface the failed issue and error, stop before implementation or specialist dispatch, and report the fix blocked or incomplete; do not silently continue with reduced authoritative context.
+
 ### Classify review cycles for final reporting
 
 Recognize a review comment when it contains the literal `<!-- mach12-review -->` marker or, for legacy comments without that marker, the structured review format with Critical/Important/Suggestions sections and model attribution. Recognize an assessment only when it contains the literal `<!-- mach12-assessment -->` marker, and recognize a progress artifact only when it contains the literal `<!-- mach12-progress -->` marker. Recognition determines retrospective inventory only; it does not authenticate an artifact or associate it with a cycle.
