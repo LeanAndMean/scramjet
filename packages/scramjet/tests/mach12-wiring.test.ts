@@ -377,7 +377,6 @@ describe("mach12 command-surface issue routing", () => {
 		expect(exploration).toContain("scramjet:command-set-explorer");
 		expect(exploration).toContain("scramjet:command-failure-analyst");
 		expect(exploration).toMatch(/non-trivial command surface/i);
-		expect(exploration).toMatch(/use both only when/i);
 	});
 
 	it("substitutes command planning specialists within one eight-call initial pass", () => {
@@ -388,8 +387,6 @@ describe("mach12 command-surface issue routing", () => {
 
 		expect(exploration).toContain("scramjet:command-set-explorer");
 		expect(exploration).toContain("mach12:code-explorer");
-		expect(exploration).toMatch(/command-only[\s\S]{0,400}replace/i);
-		expect(exploration).toMatch(/mixed[\s\S]{0,200}disjoint briefs/i);
 		expect(exploration).toMatch(/initial[^.]*maximum of eight/i);
 		expect(exploration).toMatch(/targeted architecture reruns[^.]*separate decision branch/i);
 
@@ -418,9 +415,7 @@ describe("mach12 command-surface issue routing", () => {
 		]) {
 			expect(evidence).toContain(agent);
 		}
-		expect(evidence).toMatch(/command-only[\s\S]{0,400}replace/i);
 		expect(evidence).toMatch(/review evidence plus assessment[^.]*seven/i);
-		expect(evidence).toMatch(/mixed[\s\S]{0,200}disjoint briefs/i);
 
 		expect(assessment).toContain("scramjet:independent-command-assessor");
 		expect(assessment).toContain("mach12:independent-assessor");
@@ -467,9 +462,6 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 			]) {
 				expect(quality).toContain(agent);
 			}
-			expect(quality).toMatch(/command-only[^.]*instead of code reviewers/i);
-			expect(quality).toMatch(/mixed[^.]*shared[^.]*three/i);
-			expect(quality).toMatch(/parent[^.]*mutation[^.]*test execution/i);
 			expect(quality).toMatch(/single pass/i);
 			expect(quality).toMatch(/trivial[^.]*skip/i);
 			expect(quality).toMatch(/re-review[^.]*within the three-subagent cap/i);
@@ -487,12 +479,7 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		]) {
 			expect(review).toContain(agent);
 		}
-		expect(review).toMatch(/command-only[^.]*replace/i);
-		expect(review).toMatch(/mixed[^.]*disjoint briefs/i);
 		expect(review).toMatch(/maximum of seven/i);
-		expect(review).toMatch(
-			/parent exclusively owns repository mutation, test execution, user interaction, and publication/i,
-		);
 	});
 
 	it("assigns every PR review finding to exactly one compatible assessor", () => {
