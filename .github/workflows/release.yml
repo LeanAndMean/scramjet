@@ -1,46 +1,58 @@
 name: Release
 
-# Publishes all packages to npm when a version tag is pushed.
-# The release ritual (mach12:pr-merge Step 5) already runs `gh release create v<x>`,
-# which pushes the tag — that tag push is what triggers this job.
 on:
   push:
-    # v[0-9]* (not v*) so only version tags fire this, never stray `v...` tags.
     tags: ["v[0-9]*"]
 
-# Least privilege: publish auth is the NPM_TOKEN secret, so the job needs no
-# write scope on GITHUB_TOKEN. Read-only contents is all the checkout requires.
 permissions:
   contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publication
+  cancel-in-progress: false
 
 jobs:
   publish:
     name: publish to npm
     runs-on: ubuntu-latest
-    # Never run two publishes for the same tag concurrently; never cancel a
-    # publish mid-flight (a half-published version is the one thing to avoid).
-    concurrency:
-      group: release-${{ github.ref }}
-      cancel-in-progress: false
+    timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
-          registry-url: "https://registry.npmjs.org"
 
-      - name: Verify tag matches package.json version
+      - name: Validate release identity
+        run: node .github/scripts/release.mjs validate
+
+      - name: Validate registry configuration
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG=$(jq -r '.version' packages/scramjet/package.json)
-          if [ "$TAG" != "$PKG" ]; then
-            echo "Error: git tag v$TAG does not match packages/scramjet/package.json version $PKG." >&2
-            echo "Bump packages/scramjet/package.json to match the release tag before tagging." >&2
-            exit 1
-          fi
-          echo "OK: tag and package.json agree on $PKG."
+          REGISTRY="https://registry.npmjs.org/"
+          test "$(npm config get registry)" = "$REGISTRY"
+          SCOPE_REGISTRY=$(npm config get @leanandmean:registry)
+          test "$SCOPE_REGISTRY" = "undefined" || test "$SCOPE_REGISTRY" = "$REGISTRY"
+          node --input-type=module <<'NODE'
+          const credentials = Object.keys(process.env).filter(
+            (name) => /^(?:NPM|NODE).*TOKEN$/i.test(name) || /^NPM_CONFIG_.*(?:AUTH|PASSWORD|USERNAME)/i.test(name),
+          );
+          if (credentials.length > 0) throw new Error(`npm credentials are present in: ${credentials.join(", ")}`);
+          NODE
+          for config in .npmrc "$(npm config get userconfig)" "$(npm config get globalconfig)"; do
+            if test -f "$config" && grep -Eq '(^|[/:])(_auth(Token)?|_password|username)[[:space:]]*=' "$config"; then
+              echo "Error: npm credentials are present in $config." >&2
+              exit 1
+            fi
+          done
+
+      - name: Pin release tooling
+        run: |
+          node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 14)) throw new Error("Node 22.14.0 or newer is required")'
+          npm install --global npm@11.5.1 --registry https://registry.npmjs.org/
+          node --version
+          npm --version
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -48,27 +60,5 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish runtime packages
-        # Publish workspace packages first (order matters: tui, ai, agent,
-        # coding-agent). These are dependencies of @leanandmean/scramjet.
-        # Tolerate "already published" (version exists) but fail on real errors.
-        run: |
-          for pkg in tui ai agent coding-agent; do
-            echo "Publishing @leanandmean/$pkg..."
-            OUTPUT=$(npm publish -w "packages/$pkg" --access public 2>&1) && continue
-            if echo "$OUTPUT" | grep -qiE "previously published|EPUBLISHCONFLICT|code E409|already exists"; then
-              echo "Already published: @leanandmean/$pkg (skipping)"
-            else
-              echo "$OUTPUT" >&2
-              echo "Error: failed to publish @leanandmean/$pkg" >&2
-              exit 1
-            fi
-          done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish @leanandmean/scramjet
-        working-directory: packages/scramjet
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish packages
+        run: node .github/scripts/release.mjs publish

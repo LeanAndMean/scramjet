@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.84.1 — Tolerate npm publication propagation
+
+Extends post-publish verification for normal multi-minute npm registry and provenance delays. Fixes [#503](https://github.com/LeanAndMean/scramjet/issues/503).
+
+### Fixed
+
+- Poll registry visibility, latest tags, and provenance for up to 31 attempts at ten-second intervals without republishing.
+- Clarify forward-release recovery after the partial `v0.84.0` publication.
+
+### Tests
+
+- Add multi-minute registry, tag, provenance, and polling-exhaustion coverage.
+
+## 0.84.0 — Publish npm packages with trusted OIDC
+
+Replaces stored npm publishing credentials with a fail-closed trusted-publishing workflow using GitHub Actions OIDC. Fixes [#162](https://github.com/LeanAndMean/scramjet/issues/162).
+
+### Added
+
+- Add a release helper that validates release identity, preflights registry state, publishes packages in dependency order, preserves dist-tags, and verifies provenance.
+- Add a maintainer runbook for trusted-publisher setup, release verification, and partial-publication recovery.
+
+### Changed
+
+- Publish all five packages from version tags through repository-wide serialized OIDC releases without stored npm credentials.
+- Add canonical repository metadata to every publishable package.
+
+### Tests
+
+- Add release-helper and workflow-contract coverage for validation, publication, provenance, and recovery behavior.
+
+## 0.83.1 — Clarify long skill description warnings
+
+Clarifies that the Agent Skills description-length warning is advisory while preserving complete descriptions for model-visible skill content. Fixes [#500](https://github.com/LeanAndMean/scramjet/issues/500).
+
+### Fixed
+
+- Count skill description lengths by Unicode code points and retain complete over-limit descriptions.
+- Explain the advisory warning and model-invocation exception in skills documentation.
+
+### Tests
+
+- Add filesystem-backed coverage for description retention, generated prompt content, and Unicode boundaries.
+
 ## 0.83.0 — Show output throughput in model UI
 
 Measures qualified output-generation throughput, persists bounded per-model history, and displays stable rates in the footer and model selectors. Fixes [#476](https://github.com/LeanAndMean/scramjet/issues/476).
