@@ -430,16 +430,19 @@ Use these compatibility levels:
 
 Keep missing, failed, or malformed required output visible as incomplete evidence. Do not silently substitute an unrelated specialist or broaden the review. The parent command remains the sole owner of repository mutation, test execution, user interaction, and publication unless its contract explicitly assigns one of those effects elsewhere.
 
-Design command responsibilities before adding procedure:
+Design commands around durable goals and adaptable process:
 
-- Encode the goal, common paths, user-visible outcomes, authorities, and exact trust or consumer boundaries. Do not pre-author every unusual branch.
-- Let a capable agent first resolve an unexpected case safely from current context. Ask the user only when resolution requires missing information or user judgment; otherwise stop transparently when safe progress is impossible.
-- Give each durable fact one authority and each side effect one owner. Derive other views instead of synchronizing copies.
-- Eliminate partial states through deletion, consolidation, responsibility movement, native behavior, or operation reordering before adding recovery machinery.
-- For ordinary command behavior, add procedure only when recurring evidence shows that the same unresolved question repeatedly reaches users. Exact consumer contracts, demonstrated trust boundaries, and explicit user-required procedures remain independent justifications.
+- Treat goals, user-visible outcomes, user decisions, authorities, required artifacts, and exact trust or consumer boundaries as durable. A prescribed method is durable only when one of those authorities makes the method itself part of the requirement.
+- Treat plans, checklists, tactics, and internal procedures as provisional guides for the expected path. Follow known-effective process while its assumptions hold, but do not mistake plan compliance for the outcome.
+- Include the minimum process and context an imperfect isolated agent should not have to rediscover: known-effective due diligence, effective delegation, ordering needed for correctness or collaboration, unavailable environmental facts, exact contracts, required durable artifacts and publication ownership, and pitfalls demonstrated repeatedly in practice.
+- When evidence invalidates a plan assumption, let the agent choose the smallest safe route that preserves the durable goal and boundaries. Ask the user only when adaptation requires missing information or user judgment; otherwise proceed safely or stop transparently when no safe route remains.
+- Give each durable fact one authority and each side effect one owner. Derive other views instead of synchronizing copies, and eliminate partial states through deletion, consolidation, responsibility movement, native behavior, or operation reordering before adding recovery machinery.
+- Require recurring evidence before adding exception-specific branches, guards, checkpoints, recovery protocols, or other handling for imagined failure cases. Exact consumer contracts, demonstrated trust boundaries, and explicit user requirements remain independent justifications.
 - A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence. A small or low-risk edit is not justified merely because it is easy to add.
 
-When reviewing a proposed procedural change, identify its qualifying evidence and compare it with no change, deletion, and one outcome-level invariant. Count instruction volume, context pressure, conditional branches, model or subagent calls, and test burden as complexity alongside schemas, state, artifacts, and recovery paths.
+Every instruction should earn its place by serving a durable goal, a known-effective process an imperfect agent may omit, an unavailable environmental fact, an exact consumer or trust contract, an explicit user requirement, or a recurring observed pitfall. `Goal` and `Actions` sections can make those responsibilities clear, but no particular headings or template are required.
+
+When reviewing a proposed process change, identify the outcome it serves and whether it is a common-path guide or exception machinery. Compare it with no change, deletion, and one outcome-level invariant. Count instruction volume, context pressure, conditional branches, model or subagent calls, and test burden as complexity alongside schemas, state, artifacts, and recovery paths.
 
 Static tests can protect rosters, tool allowlists, references, budgets, and exact handoffs. Phrase-presence assertions and model-output snapshots do not prove relevance, interpretation, context sufficiency, or operability. Claims about command behavior need proportional operational evidence, such as frozen transcript scenarios, repeated identical model runs, fresh-session or delegation exercises, disposable repository probes, recovery cases, or separately authorized forge pilots.
 
@@ -719,7 +722,7 @@ The normal persisted tool call is the sole durable complete proposal artifact. I
 
 ## Command File Anatomy
 
-Putting it all together — a complete command file has this structure:
+Putting it all together, the following is one complete example rather than a required Markdown template. Preserve the runtime contracts documented above, but organize goals and actions in the clearest form for the task.
 
 ```markdown
 ---
@@ -772,8 +775,7 @@ instructions for this command's reporting>.
   - `<caller-context>$ARGUMENTS</caller-context>` — delegate-only subroutines (arguments come from the calling command).
   - Omit the context block entirely for commands that accept no arguments (e.g., `mach12:find-contribution-guidelines`).
 - **Single substitution rule** — `$ARGUMENTS` (or positional placeholders like `$1`, `$@`) appears exactly once in the command body, inside the context tags. Subsequent references use prose (e.g., "the user context above", "the arguments provided above") rather than re-substituting the full content. This prevents argument duplication in the expanded prompt.
-- **Title** uses `# Heading` (H1). Matches the command's purpose.
-- **Steps** are numbered `## Step N:` headings.
+- **Title and steps** — headings are optional style, not schema. When useful, use an H1 matching the command's purpose and numbered `## Step N:` headings for actions; another structure is valid when it keeps responsibilities and execution clear.
 - **Delegation** uses a fenced code block with the slash-command invocation.
 - **Status reporting** goes at the end of the last substantive step in a top-level command. It does not need its own dedicated step — most commands embed reporting instructions in the final step that also handles the last action (posting a comment, pushing code, etc.).
 - **Imperative voice** throughout: "You are doing X", "Read the issue", "Delegate to".
