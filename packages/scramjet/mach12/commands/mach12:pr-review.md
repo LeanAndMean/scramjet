@@ -66,7 +66,7 @@ Use the changed files, PR description, linked issues, requested review aspects, 
 
 For command-only changes, prompt specialists replace analogous code lenses. Choose proportionally among `scramjet:instruction-semantics-analyzer`, `scramjet:command-operability-reviewer`, and `scramjet:command-simplifier`; add the command-set explorer, architect, context-flow, authority/state, trust, evaluation, or completeness specialist only when concrete changed surfaces require that responsibility. For mixed changes, give prompt and code specialists disjoint briefs. Command files, agent definitions, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and tests about model interpretation are command surfaces; runtime source and executable implementation tests are code surfaces.
 
-Review command prose as instructions for goals and common cases, not an exhaustive program. A capable agent should first resolve an unexpected case safely from current context, ask only when resolution requires missing information or user judgment, and otherwise stop transparently when safe progress is impossible. Do not report a procedural finding unless it is justified by recurring observed user friction where the same unresolved question repeatedly reaches users, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence.
+Review command prose as goal-oriented instructions whose known-effective common-path process can be legitimate value, not as an exhaustive program. Treat plans and procedures as provisional: when an assumption fails, permit the smallest safe adaptation that preserves the goal and durable boundaries, asking only when missing information or user judgment prevents progress. Require recurring observed user friction where the same unresolved question repeatedly reaches users before proposing speculative exception branches, guards, checkpoints, or recovery protocols; exact consumer contracts, demonstrated trust boundaries, and explicit user requirements remain independent justifications. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence.
 
 For code surfaces, retain the bundled Mach 12 lenses proportionally:
 
@@ -90,7 +90,7 @@ Give each reviewer a focused brief that includes:
 - Relevant parent-established observations and the expected cited output.
 - The user context from Step 1, if provided: `> **User context:** <context>`
 - Relevant artifact timestamps, identified freshness caveats, and which claims were checked against current authority.
-- For any proposed command procedure: the qualifying evidence category and comparison with capable-agent judgment, no change, deletion, and one outcome-level invariant.
+- For proposed command process: the outcome it serves, whether it is known-effective common-path guidance or speculative exception machinery, and any safe goal-preserving adaptation when assumptions fail. For speculative exception machinery, include the qualifying evidence category and compare capable-agent judgment, no change, deletion, and one outcome-level invariant.
 - For all lenses: if a version bump or changelog entry is present in the diff but was not introduced by a pre-merge commit, flag it as premature.
 
 After the reviewers return, merge their findings into a single structured review. De-duplicate overlapping findings and preserve inline source attribution when a finding comes from a specialized lens, e.g. "per `mach12:test-analyzer`".
@@ -98,7 +98,7 @@ After the reviewers return, merge their findings into a single structured review
 Apply these aggregation rules:
 
 - Report only actionable findings with clear evidence from the changed code, prompt, frontmatter, tests, docs, or linked issue context.
-- Reject command-procedure findings that lack qualifying evidence; do not preserve them as Suggestions merely because the proposed edit is small.
+- Reject speculative command exception machinery that lacks qualifying evidence; do not preserve it as a Suggestion merely because the proposed edit is small.
 - When synthesizing command findings, count added instructions, context pressure, branches, calls, and tests as aggregate complexity.
 - Group findings into Critical, Important, Suggestions, and Strengths.
 - Label each Critical and Important finding with a sequential F-prefixed identifier (F1, F2, F3, ...) numbered continuously across both sections.

@@ -78,7 +78,7 @@ The review evidence plus assessment pass is capped at seven subagent calls acros
 
 Record each selected agent and its evidence-based reason in the dispatch brief and synthesis. Missing, failed, or malformed required output remains visible and narrows the conclusion; never silently substitute another agent or broaden to all specialists. Mention omitted roles only when omission materially limits confidence.
 
-For command-plan evidence, treat commands as goal-oriented instructions for common cases. A capable agent should first resolve unexpected cases safely from current context and ask only when resolution needs missing information or user judgment. Do not propose procedure without recurring observed user friction where the same unresolved question repeatedly reaches users, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence.
+For command-plan evidence, treat commands as goal-oriented instructions whose known-effective common-path process can be legitimate value. Treat plans and procedures as provisional: when an assumption fails, permit the smallest safe adaptation that preserves the goal and durable boundaries, asking only when missing information or user judgment prevents progress. Require recurring observed user friction where the same unresolved question repeatedly reaches users before proposing speculative exception branches, guards, checkpoints, or recovery protocols; exact consumer contracts, demonstrated trust boundaries, and explicit user requirements remain independent justifications. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence.
 
 For parallel execution, dispatch all selected evidence tasks in one batch. Every brief must include the task-relevant issue title, body, discussion, requirements, and decisions; the current plan; user context and project review criteria; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected cited output. Pass concise excerpts or summaries rather than an indiscriminate transcript. After the tasks complete, read every identified file needed for the review.
 
@@ -107,7 +107,7 @@ For each stage in the plan, assess:
    Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden. Do not apply this axis to `[user-decided]` Decision Log entries -- see "Respect user-attributed decisions" above.
 8. **Release-preparation exclusion**: Does the plan include version bumps, changelog entries, or release-preparation as implementation stages? Flag as a defect (severity: Important). Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
 
-For every command-procedure finding, identify the qualifying evidence category and compare no change, deletion, capable-agent judgment, and one outcome-level invariant before proposing detailed instructions. Count instruction volume, context pressure, branches, calls, and tests in the plan's complexity. Omit unsupported procedural findings rather than demoting them to Suggestions.
+For every command-process finding, identify the outcome served and whether the process is known-effective common-path guidance or speculative exception machinery. For speculative exception machinery, identify the qualifying evidence category and compare no change, deletion, capable-agent judgment, and one outcome-level invariant before proposing detailed instructions. Count instruction volume, context pressure, branches, calls, and tests in the plan's complexity. Omit unsupported speculative machinery rather than demoting it to Suggestions.
 
 Also assess the plan holistically:
 - Does it address all requirements and acceptance criteria from the issue?
@@ -127,7 +127,7 @@ Create an initial findings list with stable identifiers:
 
 Before presenting findings to the user, run an independent assessment pass. Give every finding exactly one verdict owner: command-surface findings go to `scramjet:independent-command-assessor`, runtime-code findings go to `mach12:independent-assessor`, and cross-boundary findings go to one explicitly selected owner based on the alleged behavior and controlling responsibility. Use at most two assessors, within the seven-call review evidence plus assessment cap. Do not ask both assessors to classify the same item.
 
-For mixed work, obtain the runtime assessor's verdicts and unnumbered per-finding plan fragments first. Give the command assessor those accepted results only as non-verdict aggregate context; it must not reclassify them or change their fix approaches. The command assessor classifies only its disjoint command findings and owns one combined-system judgment across the merged accepted set. The parent validates identifiers and mechanically orders the accepted fragments into one downstream plan when revision is chosen, preserving every assessor-owned classification and fix approach.
+For mixed work, obtain the runtime assessor's verdicts and unnumbered per-finding plan fragments first. Give the command assessor those accepted results only as non-verdict aggregate context; it must not reclassify them or change their fix approaches. The command assessor classifies only its disjoint command findings and owns one combined-system judgment across the merged accepted set. When accepted runtime results exist but no command findings remain, invoke it in aggregate-only mode: it classifies nothing, preserves every runtime classification, fix approach, and fragment, and returns only the combined-system judgment. The parent validates identifiers and mechanically orders the accepted fragments into one downstream plan when revision is chosen, preserving every assessor-owned classification and fix approach.
 
 A replacement assessor must be explicitly compatible with the caller's exact identifiers, taxonomy, output shape, evidence needs, and workflow handoff; catalog-only similarity is supplementary. Missing or malformed required assessment remains visible and blocks a complete classification rather than triggering silent substitution.
 
@@ -139,7 +139,7 @@ The selected assessor owns classification: do **not** pre-classify its assigned 
 - The key codebase evidence relevant to its assigned surface from Step 4.
 - Its assigned initial F/S findings from Step 5, exact command/runtime partition, and evidence-based selection reason.
 
-Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, classify it using the taxonomy below, and return an unnumbered implementation fragment for each finding it accepts. For command findings, a contained or low-risk edit is not sufficient evidence of net improvement: reject proposed procedure that lacks recurring observed user friction, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement, and assess the merged instruction, context, branch, call, and test burden before finalizing item verdicts:
+Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, and classify it using the taxonomy below. Require an unnumbered implementation fragment for every Genuine blocker and Genuine issue; allow an optional fragment for each Useful suggestion; and require no fragment for Nitpick, False positive, or Deferred/out of scope. For command findings, treat known-effective common-path process as legitimate value and plans as provisional, permitting safe goal-preserving adaptation when assumptions fail. A contained or low-risk edit is not sufficient evidence of net improvement: reject speculative exception branches, guards, checkpoints, or recovery protocols that lack recurring observed user friction, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement, and assess the merged instruction, context, branch, call, and test burden before finalizing item verdicts:
 
 - **Genuine blocker** -- the plan is likely to fail or produce incorrect results unless this is fixed.
 - **Genuine issue** -- the plan has a significant gap or risk that should be addressed before implementation.
@@ -164,13 +164,14 @@ Present your review to the user, organized as:
 1. **Plan summary**: Brief restatement of what the plan proposes.
 2. **Strengths**: What the plan gets right.
 3. **Assessment summary**: Counts by classification (e.g., genuine blockers, genuine issues, useful suggestions, nitpicks, false positives, deferred/out-of-scope).
-4. **Issues**: Problems found, classified by severity and labeled with stable identifiers:
+4. **Selection and aggregate evidence**: Selected specialists and evidence-based reasons, material omissions only, the aggregate owner, and the net change in responsibilities, artifacts, and recovery paths.
+5. **Issues**: Problems found, classified by severity and labeled with stable identifiers:
    - **Critical**: Genuine blockers that will cause the implementation to fail or produce incorrect results.
    - **Important**: Genuine issues or significant risks that should be addressed before implementation.
    - **Suggestions**: Useful improvements or explicitly deferred/out-of-scope concerns that are not blockers.
-5. **Questions**: Any clarifying questions that came up during your review.
-6. **Pitfalls for implementation**: Consolidate risk findings from Steps 4 and 5 into concrete, actionable warnings for the implementation session. Draw from the "Risks and pitfalls" exploration lens and the "Risks" assessment axis. Each item should be specific enough that an implementation session can act on it without re-exploring.
-7. **Recommendation**: State whether the plan should be approved, revised, discussed further, or abandoned.
+6. **Questions**: Any clarifying questions that came up during your review.
+7. **Pitfalls for implementation**: Consolidate risk findings from Steps 4 and 5 into concrete, actionable warnings for the implementation session. Draw from the "Risks and pitfalls" exploration lens and the "Risks" assessment axis. Each item should be specific enough that an implementation session can act on it without re-exploring.
+8. **Recommendation**: State whether the plan should be approved, revised, discussed further, or abandoned.
 
 Ask the user how they want to proceed:
 

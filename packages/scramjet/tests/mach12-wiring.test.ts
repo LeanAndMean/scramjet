@@ -505,6 +505,15 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 			expect(context).toMatch(/stop before (?:assessment|implementation)/i);
 		},
 	);
+
+	it("authenticates an explicit fix assessment from the verified PR comment stream", () => {
+		const context = section(command("pr-review-fix"), "## Step 2:", "## Step 3:");
+		expect(context).toContain("<!-- mach12-assessment -->");
+		expect(context).toContain("gh api user --jq .login");
+		expect(context).toMatch(/exact numeric ID[^.]*complete verified target-PR comment stream/i);
+		expect(context).toMatch(/explicit reference[^.]*review comment ID or URL/i);
+		expect(context).not.toContain("issues/comments/<assessment-comment-id>");
+	});
 });
 
 describe("mach12 issue planning — architecture choice contract", () => {
