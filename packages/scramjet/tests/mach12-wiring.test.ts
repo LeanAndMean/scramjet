@@ -250,75 +250,31 @@ describe("mach12 wiring — bundled command set", () => {
 
 describe("mach12 PR review fix — proportional architecture contract", () => {
 	const prReviewFix = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-fix.md`), "utf-8");
-	const step4Start = prReviewFix.indexOf("## Step 4:");
-	const step4End = prReviewFix.indexOf("## Step 5:");
-	const step4 = prReviewFix.slice(step4Start, step4End);
+	const step4 = prReviewFix.slice(prReviewFix.indexOf("## Step 4:"), prReviewFix.indexOf("## Step 5:"));
 
-	const expectInOrder = (patterns: RegExp[]) => {
+	it("locks one evidence-informed scope before proportional architecture", () => {
+		const phases = [
+			"1. **Codebase exploration**",
+			"2. **Lock scope and requirements**",
+			"3. **Proportional architecture analysis**",
+			"4. **Implementation**",
+		];
 		let offset = 0;
-		for (const pattern of patterns) {
-			const match = step4.slice(offset).search(pattern);
-			expect(match, pattern.source).toBeGreaterThan(-1);
-			offset += match + 1;
+		for (const phase of phases) {
+			const index = step4.indexOf(phase, offset);
+			expect(index, phase).toBeGreaterThan(-1);
+			offset = index + phase.length;
 		}
-	};
 
-	it("fixes the selected finding set before requirement and architecture decisions", () => {
-		expect(step4Start).toBeGreaterThan(-1);
-		expect(step4End).toBeGreaterThan(step4Start);
-		expect(step4).toMatch(/selected finding set[^.]*fixed[^.]*unless the user explicitly revises it/i);
-		for (const forbiddenChange of ["add", "remove", "merge", "defer", "reclassify"]) {
-			expect(step4).toMatch(new RegExp(`must not silently[^.]*${forbiddenChange}`, "i"));
-		}
-		expectInOrder([/scope and requirements/i, /architecture analysis/i]);
-		for (const requirement of ["required behavior", "bounded scope", "compatibility", "acceptance", "edge cases"]) {
-			expect(step4).toContain(requirement);
-		}
-	});
-
-	it("uses a decision-boundary gate for proportional architect dispatch", () => {
-		expect(step4).toMatch(/trivial[^.]*bypass[^.]*architect/i);
-		expect(step4).toMatch(/authoritatively settled[^.]*without[^.]*architect/i);
-		expect(step4).toMatch(/unresolved non-trivial[^.]*requires?[^.]*mach12:code-architect/i);
-		for (const materialChoice of ["responsibility", "interfaces", "state", "ordering", "data flow", "dependencies"]) {
-			expect(step4).toContain(materialChoice);
-		}
-		expect(step4).toMatch(/independent architectural decision boundaries/i);
-		for (const invalidThreshold of ["finding count", "file count", "line count"]) {
-			expect(step4).toMatch(new RegExp(`(?:do not|not)[^.]*${invalidThreshold}`, "i"));
-		}
-		expect(step4).toMatch(/one parallel batch/i);
-	});
-
-	it("gives architects complete bounded context while retaining parent authority", () => {
-		const briefStart = step4.search(/every architect brief/i);
-		const briefEnd = step4.indexOf("Treat architect recommendations", briefStart);
-		expect(briefStart).toBeGreaterThan(-1);
-		expect(briefEnd).toBeGreaterThan(briefStart);
-		const briefContract = step4.slice(briefStart, briefEnd);
-		for (const context of [
-			"authoritative review",
-			"optional assessment",
-			"exact selected findings",
-			"current code observations",
-			"applicable user decisions",
-			"repository constraints",
-			"validation-proof restrictions",
-			"explicit non-goals",
-		]) {
-			expect(briefContract).toContain(context);
-		}
-		expect(step4).toMatch(/architect[^.]*must not[^.]*expand or reinterpret[^.]*selected findings/i);
-		expect(step4).toMatch(/architect[^.]*must not[^.]*choose[^.]*final design/i);
-		expect(step4).toMatch(/architect[^.]*must not[^.]*mutate[^.]*publish[^.]*push/i);
+		expect(step4).toMatch(/selected findings[^.]*fixed goal[^.]*user explicitly revises/i);
+		expect(step4).toMatch(/ask only unresolved scope or requirement questions here/i);
+		expect(step4).toMatch(/skip architect ceremony[^.]*trivial/i);
+		expect(step4).toMatch(/unresolved non-trivial architecture requires one or more `mach12:code-architect`/i);
+		expect(step4).toMatch(/every architect[^.]*same locked scope/i);
+		expect(step4).toMatch(/neither reduce nor expand the locked outcomes/i);
+		expect(step4).toMatch(/ask separate architecture questions only after synthesis/i);
 		expect(step4).toMatch(/parent[^.]*selects or synthesizes[^.]*smallest supported design/i);
-	});
-
-	it("asks architecture questions only after evidence and only for unresolved consequential trade-offs", () => {
-		expectInOrder([/codebase exploration/i, /mach12:code-architect/i, /architecture questions/i]);
-		expect(step4).toMatch(/repository evidence cannot safely select an approach/i);
-		expect(step4).toMatch(/consequential preference-dependent trade-off/i);
-		expect(step4).toMatch(/do not ask ceremonial questions/i);
+		expect(step4).toMatch(/parent owns the final design, repository mutation, and testing/i);
 	});
 });
 
