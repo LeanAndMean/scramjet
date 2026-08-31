@@ -1082,6 +1082,44 @@ describe("mach12 publication routing gates", () => {
 	});
 });
 
+describe("mach12 pre-merge version propagation contract", () => {
+	const guidelines = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:find-contribution-guidelines.md`), "utf-8");
+	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
+	const version = preMerge.slice(preMerge.indexOf("### 7b."), preMerge.indexOf("### 7c."));
+	const commit = preMerge.slice(preMerge.indexOf("## Step 8:"), preMerge.indexOf("## Step 9:"));
+
+	it("consults all applicable contribution and release guidance before fallback investigation", () => {
+		expect(guidelines).toMatch(/all applicable[^.]*contribution[^.]*release instructions/i);
+		expect(guidelines).toMatch(/release[^.]*directly referenced/i);
+		expect(guidelines).toMatch(/source paths/i);
+		expect(guidelines).toMatch(/conflicts|missing details/i);
+		expect(guidelines.indexOf("contribution and release guidance")).toBeLessThan(
+			guidelines.indexOf("project scripts"),
+		);
+	});
+
+	it("runs applicable version generation or synchronization before commit", () => {
+		expect(version).toMatch(/every applicable[^.]*generation or synchronization/i);
+		expect(version).toMatch(/before (?:the )?commit/i);
+		expect(preMerge.indexOf("generation or synchronization")).toBeLessThan(preMerge.indexOf("## Step 8:"));
+	});
+
+	it("verifies and commits the complete version change together", () => {
+		expect(version).toMatch(/canonical version[^.]*required mirrors[^.]*tracked generated metadata/i);
+		expect(version).toMatch(/repository-defined consistency checks/i);
+		expect(commit).toMatch(/canonical version[^.]*required mirrors[^.]*tracked generated metadata/i);
+		expect(commit).toMatch(/same (?:bounded )?(?:pre-merge )?commit|commit[^.]*together/i);
+	});
+
+	it("investigates incomplete authority and asks rather than guessing", () => {
+		expect(version).toMatch(/guidance[^.]*absent|guidance[^.]*incomplete/i);
+		expect(version).toMatch(/tracked files[^.]*project (?:scripts|commands)/i);
+		expect(version).toMatch(/ask the user/i);
+		expect(version).toMatch(/incomplete/i);
+		expect(version).toMatch(/do not guess|rather than guessing|never infer/i);
+	});
+});
+
 describe("mach12 ordinary PR readiness", () => {
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
 	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
