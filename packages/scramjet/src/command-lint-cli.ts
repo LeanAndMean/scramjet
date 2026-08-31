@@ -52,11 +52,13 @@ function commandFileEntry(filePath: string, setName: string): FileEntry {
 }
 
 function entriesFromCommandsDirectory(commandsDir: string, setName: string): FileEntry[] {
-	return readdirSync(commandsDir, { withFileTypes: true })
+	const entries = readdirSync(commandsDir, { withFileTypes: true })
 		.map((entry) => entry.name)
 		.filter((name) => extname(name) === ".md")
 		.sort()
 		.map((name) => commandFileEntry(join(commandsDir, name), setName));
+	if (entries.length === 0) throw new Error("commands directory contains no direct command Markdown files");
+	return entries;
 }
 
 function entriesFromTarget(target: string): FileEntry[] {

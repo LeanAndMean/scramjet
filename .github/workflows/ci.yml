@@ -89,7 +89,10 @@ jobs:
           printf '%s\n' '---' '---' '# Smoke' '' '## Goals' '' '- Verify the installed executable.' > "$LINT_FIXTURE/sample/commands/sample:smoke.md"
           "$PREFIX/bin/scramjet-command-lint" --strict --json "$LINT_FIXTURE/sample" | node -e '
             const report = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
-            if (report.summary.files !== 1 || report.summary.errors !== 0 || report.summary.warnings !== 0) process.exit(1);
+            const expected = { files: 1, errors: 0, warnings: 0 };
+            if (report.summary.files !== expected.files || report.summary.errors !== expected.errors || report.summary.warnings !== expected.warnings) {
+              throw new Error(`Expected lint summary ${JSON.stringify(expected)}, observed report ${JSON.stringify(report)}`);
+            }
           '
           RPC_STDOUT=$(mktemp)
           RPC_STDERR=$(mktemp)

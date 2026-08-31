@@ -97,7 +97,7 @@ When creating or editing command files, the running agent proactively uses the s
 scramjet-command-lint --strict <command-set-root>
 ```
 
-If the executable is unavailable, it should report the missing verification rather than install anything or silently claim success. The checker also accepts one or more explicit `commands/` directories or qualified `<set>:<command>.md` files. It scans sorted direct `.md` children only, performs no implicit global/project discovery, and never writes source.
+If the executable is unavailable, it should report the missing verification rather than install anything or silently claim success. The checker also accepts one or more explicit `commands/` directories or qualified `<set>:<command>.md` files. It scans sorted direct `.md` children only, performs no implicit global/project discovery, and never writes source. An explicitly targeted command-set root or `commands/` directory with no direct command Markdown is an incomplete scan and exits with status 2.
 
 Human diagnostics use `path:line: severity code: message`. `--json` emits one report containing `checkedFiles`, ordered `diagnostics`, and error/warning summary counts.
 

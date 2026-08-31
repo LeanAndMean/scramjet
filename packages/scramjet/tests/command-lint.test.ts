@@ -257,6 +257,19 @@ describe("runCommandLint — targets, output, and exit policy", () => {
 		expect(rootReport.summary).toEqual({ files: 2, errors: 0, warnings: 0 });
 	});
 
+	it("rejects empty directory targets as incomplete scans", () => {
+		const emptySet = commandSet("empty");
+
+		const rootResult = invokeCommandLint([emptySet.setRoot]);
+		const directoryResult = invokeCommandLint(["--strict", emptySet.commandsDir]);
+
+		for (const result of [rootResult, directoryResult]) {
+			expect(result.status).toBe(2);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("commands directory contains no direct command Markdown files");
+		}
+	});
+
 	it("keeps warning strictness and runtime errors in the CLI exit policy", () => {
 		const warningSet = commandSet("warning");
 		writeCommand(warningSet.commandsDir, "warning:missing.md", "# Command\n\nWork.");

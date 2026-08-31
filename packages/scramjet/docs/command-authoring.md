@@ -54,7 +54,7 @@ The executable accepts one or more explicit targets:
 - a `commands/` directory;
 - a qualified `<set>:<command>.md` file whose set identity is unambiguous.
 
-Directory targets scan sorted direct `.md` children only. The checker does not implicitly discover global or project roots and never writes source. Human output is `path:line: severity code: message` followed by counts. `--json` emits one report with `checkedFiles`, ordered `diagnostics`, and `summary` counts. `--strict` changes only the warning exit policy; it never changes parsing or registry results.
+Directory targets scan sorted direct `.md` children only. An explicitly targeted command-set root or `commands/` directory with no direct command Markdown is an incomplete scan and exits with status 2. The checker does not implicitly discover global or project roots and never writes source. Human output is `path:line: severity code: message` followed by counts. `--json` emits one report with `checkedFiles`, ordered `diagnostics`, and `summary` counts. `--strict` changes only the warning exit policy; it never changes parsing or registry results.
 
 | Result | Default exit | `--strict` exit |
 |---|---:|---:|

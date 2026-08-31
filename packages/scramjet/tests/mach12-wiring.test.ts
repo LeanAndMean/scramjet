@@ -387,6 +387,7 @@ describe("mach12 command-surface issue routing", () => {
 
 		expect(exploration).toContain("scramjet:command-set-explorer");
 		expect(exploration).toContain("mach12:code-explorer");
+		expect(exploration).toMatch(/runtime exploration lenses[^.]*no more than three runtime exploration calls/i);
 		expect(exploration).toMatch(/initial[^.]*maximum of eight/i);
 		expect(exploration).toMatch(/targeted architecture reruns[^.]*separate decision branch/i);
 
