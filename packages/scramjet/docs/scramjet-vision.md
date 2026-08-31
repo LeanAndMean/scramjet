@@ -23,6 +23,8 @@ A **command set** codifies a particular domain or team's way of working. Users c
 
 **Mach 12** is one command set: it expresses a software-development methodology spanning issue definition, planning, implementation, review, validation, and delivery. It demonstrates reusable process fragments, guided continuation, independent assessment, and controlled automation. Mach 12 is an example of what Scramjet enables, not infrastructure every Scramjet user must adopt or imitate.
 
+A Scramjet command is an actively invoked task with outcomes the agent is expected to complete. Skills and prompt templates are supporting resources: they can supply capabilities, guidance, or ordinary prompt text, but do not carry the command's execution guarantee or control an active command's outcomes.
+
 ## Durable principles
 
 ### Emergent workflows
@@ -36,6 +38,10 @@ Users should be able to add, edit, remove, share, and organize commands as ordin
 ### Composability
 
 A recurring process fragment should have one maintained definition that other commands can reuse. Composition should preserve enough context for the fragment to be useful while keeping the caller responsible for the larger task.
+
+### Goal-directed, adaptable execution
+
+Commands should make durable outcomes clear while leaving tactics adaptable. Plans and procedures serve those outcomes; they should not displace user decisions, trust boundaries, exact consumer contracts, required artifacts, or consequential side effects. Older commands without an explicit goal section remain usable so authoring improvements do not become runtime lock-in.
 
 ### User control and easy disengagement
 
@@ -68,6 +74,10 @@ Users can make multiple command sets available to Scramjet and invoke their comm
 ### Reusable command composition
 
 Commands can reuse other commands as process fragments. Authors can maintain shared due-diligence steps in one place, and users can understand when a larger command relied on those fragments.
+
+### Command authoring feedback
+
+Authors and agents can check command structure before installation or interactive use. Deterministic feedback should reuse runtime recognition and registration authority without making runtime loading stricter, while semantic specialists and operational evidence remain responsible for judging whether goals and behavior are actually sound. Current checker behavior and scope are governed by the command-authoring guide rather than this vision.
 
 ### Guided continuation
 

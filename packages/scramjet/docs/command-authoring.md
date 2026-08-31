@@ -4,6 +4,76 @@ This document covers the patterns and conventions for authoring Scramjet command
 
 A command file is a Markdown file with YAML frontmatter. It lives in a command-set directory (e.g., `mach12/commands/`) and is named `<set-name>:<command-name>.md`. The filename determines the slash-command name: `mach12/commands/mach12:issue-plan.md` becomes `/mach12:issue-plan`.
 
+## Command semantics and Goals
+
+A harness-delivered Scramjet command is an actively invoked executable task. The harness wraps it in `<scramjet-command>` framing, associates it with command lifecycle and continuation behavior, and expects the agent to complete its controlling outcomes. This guarantee does not apply to supporting resources:
+
+- A **skill** is an on-demand capability package containing workflows, setup guidance, scripts, or reference material. Even when loaded through `/skill:name`, it does not receive Scramjet command framing or command lifecycle semantics.
+- A **prompt template** expands into an ordinary user prompt. It does not receive the command guarantee, lifecycle association, delegation contract, or declared next-step policy.
+
+An active command may use skills or material originating from prompt templates, but those resources support the command; they do not replace its authority.
+
+### Explicit Goals
+
+New and bundled commands should place one early `## Goals` section before procedural H2 sections and express its durable user- or caller-visible outcomes as Markdown list items:
+
+```markdown
+# Publish Review
+
+## Goals
+
+- Give the user a complete, evidence-backed review of the selected change.
+- Publish exactly one verified review artifact when publication is authorized.
+
+<user-context>
+$ARGUMENTS
+</user-context>
+
+## Step 1: Read the change
+```
+
+Goals are controlling outcomes. Actions, plans, checklists, and tactics serve those Goals and remain provisional unless an authority requires an exact method. User decisions, trust boundaries, consumer contracts, required durable artifacts, and owned side effects remain controlling constraints. Delegate-only commands should state the result their caller can consume; top-level commands should state user-visible outcomes and material consequential effects.
+
+Goals remain ordinary portable Markdown. There is no `goals:` frontmatter field or `CommandDef.goals` representation. Runtime loading remains permissive: an existing command without `## Goals` still loads and executes, and the agent infers its intended outcomes from the complete command and invocation. Missing or malformed Goals are authoring warnings, never runtime rejection or runtime warnings.
+
+The checker validates deterministic structure, not semantic quality. A structurally clean Goals section does not prove that the outcomes are useful, complete, consistent with the command's actions, or operationally achievable. Use relevant command specialists and proportional operational evidence for those judgments.
+
+### Authoring check
+
+When creating or editing command files, proactively run the authoritative command-authoring check without waiting for the user to request it:
+
+```sh
+scramjet-command-lint --strict <command-set-root>
+```
+
+Resolve errors. Address warnings or explain intentional legacy exceptions. If the executable is unavailable, report the missing verification rather than installing a replacement or claiming success.
+
+The executable accepts one or more explicit targets:
+
+- a command-set root containing `commands/`;
+- a `commands/` directory;
+- a qualified `<set>:<command>.md` file whose set identity is unambiguous.
+
+Directory targets scan sorted direct `.md` children only. The checker does not implicitly discover global or project roots and never writes source. Human output is `path:line: severity code: message` followed by counts. `--json` emits one report with `checkedFiles`, ordered `diagnostics`, and `summary` counts. `--strict` changes only the warning exit policy; it never changes parsing or registry results.
+
+| Result | Default exit | `--strict` exit |
+|---|---:|---:|
+| Clean | 0 | 0 |
+| Warnings only | 0 | 1 |
+| Runtime-derived recognition or shadowing errors | 1 | 1 |
+| Invalid arguments, inaccessible target, or incomplete scan | 2 | 2 |
+
+Current diagnostic groups are:
+
+- runtime-derived errors for unrecognized files and commands shadowed by an earlier winner;
+- tolerated runtime notices as warnings;
+- authoring warnings for missing, duplicate, empty, late, non-list, or context-bearing Goals;
+- authoring warnings for invalid top-level `<user-context>` or delegate-only `<caller-context>` framing.
+
+`parseCommandFile()` remains authoritative for command-file recognition, and `buildRegistry()` remains authoritative for registration order, collisions, and winners. The optional checker calls that runtime-owned path once and derives diagnostics downstream; runtime modules do not import lint or CLI modules. Removing the checker must not change command discovery, registry membership, expansion, delegation, lifecycle, or dispatch.
+
+The current checker is limited to command Markdown and the runtime-recognizable relationships among the explicitly supplied files, including ordering and collisions. It does not validate agent definitions, autonomy defaults, semantic goal quality, operational behavior, every installed discovery relationship, or a complete future plugin format.
+
 ---
 
 ## 1. Frontmatter Schema
@@ -440,7 +510,7 @@ Design commands around durable goals and adaptable process:
 - Require recurring evidence before adding exception-specific branches, guards, checkpoints, recovery protocols, or other handling for imagined failure cases. Exact consumer contracts, demonstrated trust boundaries, and explicit user requirements remain independent justifications.
 - A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence. A small or low-risk edit is not justified merely because it is easy to add.
 
-Every instruction should earn its place by serving a durable goal, a known-effective process an imperfect agent may omit, an unavailable environmental fact, an exact consumer or trust contract, an explicit user requirement, or a recurring observed pitfall. `Goal` and `Actions` sections can make those responsibilities clear, but no particular headings or template are required.
+Every instruction should earn its place by serving a durable goal, a known-effective process an imperfect agent may omit, an unavailable environmental fact, an exact consumer or trust contract, an explicit user requirement, or a recurring observed pitfall. Use one early `## Goals` section for lint-clean new authoring; no fixed heading or template is required for the remaining process.
 
 When reviewing a proposed process change, identify the outcome it serves and whether it is a common-path guide or exception machinery. Compare it with no change, deletion, and one outcome-level invariant. Count instruction volume, context pressure, conditional branches, model or subagent calls, and test burden as complexity alongside schemas, state, artifacts, and recovery paths.
 
@@ -738,7 +808,10 @@ next:
 
 # Command Title
 
-<Brief statement of what the agent is doing.>
+## Goals
+
+- <Durable user-visible outcome.>
+- <Required artifact or material consequential effect.>
 
 <user-context>
 $ARGUMENTS
@@ -775,7 +848,7 @@ instructions for this command's reporting>.
   - `<caller-context>$ARGUMENTS</caller-context>` — delegate-only subroutines (arguments come from the calling command).
   - Omit the context block entirely for commands that accept no arguments (e.g., `mach12:find-contribution-guidelines`).
 - **Single substitution rule** — `$ARGUMENTS` (or positional placeholders like `$1`, `$@`) appears exactly once in the command body, inside the context tags. Subsequent references use prose (e.g., "the user context above", "the arguments provided above") rather than re-substituting the full content. This prevents argument duplication in the expanded prompt.
-- **Title and steps** — headings are optional style, not schema. When useful, use an H1 matching the command's purpose and numbered `## Step N:` headings for actions; another structure is valid when it keeps responsibilities and execution clear.
+- **Goals, title, and steps** — use one early `## Goals` section with Markdown list items for lint-clean new authoring. An H1 matching the command's purpose and numbered `## Step N:` action headings are optional style, not schema; another process structure is valid when it keeps responsibilities and execution clear.
 - **Delegation** uses a fenced code block with the slash-command invocation.
 - **Status reporting** goes at the end of the last substantive step in a top-level command. It does not need its own dedicated step — most commands embed reporting instructions in the final step that also handles the last action (posting a comment, pushing code, etc.).
 - **Imperative voice** throughout: "You are doing X", "Read the issue", "Delegate to".
