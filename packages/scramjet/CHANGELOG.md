@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.85.0 — Add proportional architecture analysis to PR fixes
+
+Improves PR review fixes by separating requirements clarification from proportional architecture analysis. Fixes [#506](https://github.com/LeanAndMean/scramjet/issues/506).
+
+### Changed
+
+- Dispatch focused architecture analysis only for unresolved non-trivial decision boundaries while preserving parent authority and bounded finding scope.
+- Separate scope and requirements clarification from later architecture questions.
+
+### Tests
+
+- Add command-contract coverage for decision-boundary classification, architect context, parent authority, and clarification ordering.
+
 ## 0.84.1 — Tolerate npm publication propagation
 
 Extends post-publish verification for normal multi-minute npm registry and provenance delays. Fixes [#503](https://github.com/LeanAndMean/scramjet/issues/503).

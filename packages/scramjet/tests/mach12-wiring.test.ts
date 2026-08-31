@@ -248,6 +248,36 @@ describe("mach12 wiring — bundled command set", () => {
 	);
 });
 
+describe("mach12 PR review fix — proportional architecture contract", () => {
+	const prReviewFix = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-fix.md`), "utf-8");
+	const step4 = prReviewFix.slice(prReviewFix.indexOf("## Step 4:"), prReviewFix.indexOf("## Step 5:"));
+
+	it("locks one evidence-informed scope before proportional architecture", () => {
+		const phases = [
+			"1. **Codebase exploration**",
+			"2. **Lock scope and requirements**",
+			"3. **Proportional architecture analysis**",
+			"4. **Implementation**",
+		];
+		let offset = 0;
+		for (const phase of phases) {
+			const index = step4.indexOf(phase, offset);
+			expect(index, phase).toBeGreaterThan(-1);
+			offset = index + phase.length;
+		}
+
+		expect(step4).toMatch(/selected findings[^.]*fixed goal[^.]*user explicitly revises/i);
+		expect(step4).toMatch(/ask only unresolved scope or requirement questions here/i);
+		expect(step4).toMatch(/skip architect ceremony[^.]*trivial/i);
+		expect(step4).toMatch(/unresolved non-trivial architecture requires one or more `mach12:code-architect`/i);
+		expect(step4).toMatch(/every architect[^.]*same locked scope/i);
+		expect(step4).toMatch(/neither reduce nor expand the locked outcomes/i);
+		expect(step4).toMatch(/ask separate architecture questions only after synthesis/i);
+		expect(step4).toMatch(/parent[^.]*selects or synthesizes[^.]*smallest supported design/i);
+		expect(step4).toMatch(/parent owns the final design, repository mutation, and testing/i);
+	});
+});
+
 describe("mach12 inline forge publication inventory", () => {
 	const expected = new Map<string, string[]>([
 		["issue-create", ["create_issue", "add_issue_comment"]],
