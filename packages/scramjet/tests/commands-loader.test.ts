@@ -17,6 +17,7 @@ import {
 	type AgentFileEntry,
 	buildAgentRegistry,
 	buildRegistry,
+	type CommandRegistryOutcome,
 	type FileEntry,
 	parseAgentFile,
 	parseAllowedTools,
@@ -294,6 +295,104 @@ describe("buildRegistry — collision and skip semantics", () => {
 		]);
 		expect(out.registry.size).toBe(1);
 		expect(out.warnings).toHaveLength(2);
+	});
+});
+
+describe("buildRegistry — structured outcomes", () => {
+	function entry(setName: string, file: string, content: string, scope: "global" | "project" = "global"): FileEntry {
+		return { filePath: `/fake/${setName}/${file}`, content, setName, scope };
+	}
+
+	const minimal = "---\n---\nBody.";
+
+	it("returns one registered outcome for a valid entry", () => {
+		const input = entry("mach12", "mach12:valid.md", minimal);
+		const out = buildRegistry([input]);
+
+		expect(out.outcomes).toEqual<CommandRegistryOutcome[]>([
+			{
+				kind: "registered",
+				entry: input,
+				def: out.registry.get("mach12:valid")!,
+				notices: [],
+			},
+		]);
+		expect(out.warnings).toEqual([]);
+	});
+
+	it.each([
+		["malformed frontmatter", "mach12:malformed.md", "---\ninvalid: [\n---\nBody.", "malformed frontmatter"],
+		["invalid next", "mach12:invalid-next.md", "---\nnext:\n  mode: bogus\n---\nBody.", "invalid next block"],
+	] as const)("returns an unrecognized outcome for %s", (_case, file, content, expectedError) => {
+		const input = entry("mach12", file, content);
+		const out = buildRegistry([input]);
+
+		expect(out.outcomes).toEqual<CommandRegistryOutcome[]>([
+			{
+				kind: "unrecognized",
+				entry: input,
+				error: expect.stringContaining(expectedError),
+			},
+		]);
+		expect(out.registry.size).toBe(0);
+		expect(out.warnings).toEqual([`skipping ${input.filePath}: ${(out.outcomes[0] as { error: string }).error}`]);
+	});
+
+	it("retains tolerated parser notices on registered outcomes", () => {
+		const input = entry(
+			"mach12",
+			"mach12:notices.md",
+			"---\ndelegate-only: false\nallowed-tools: [Read, 42]\n---\nBody.",
+		);
+		const out = buildRegistry([input]);
+		const outcome = out.outcomes[0];
+
+		expect(outcome).toMatchObject({ kind: "registered", entry: input });
+		if (outcome?.kind !== "registered") return;
+		expect(outcome.notices).toHaveLength(2);
+		expect(outcome.notices[0]).toContain("delegate-only");
+		expect(outcome.notices[1]).toContain("allowed-tools");
+		expect(out.warnings).toEqual(outcome.notices);
+		expect(out.registry.get("mach12:notices")).toBe(outcome.def);
+	});
+
+	it("reports collisions as shadowed with the exact first winner", () => {
+		const winner = entry("mach12", "mach12:same.md", minimal, "global");
+		const shadowed = entry("mach12", "mach12:same.md", "---\ndelegate-only: false\n---\nProject body.", "project");
+		const out = buildRegistry([winner, shadowed]);
+		const registered = out.outcomes[0];
+		const collision = out.outcomes[1];
+
+		expect(registered?.kind).toBe("registered");
+		expect(collision).toMatchObject({ kind: "shadowed", entry: shadowed });
+		if (registered?.kind !== "registered" || collision?.kind !== "shadowed") return;
+		expect(collision.registeredFrom).toBe(registered.def);
+		expect(collision.def.filePath).toBe(shadowed.filePath);
+		expect(collision.notices).toHaveLength(1);
+		expect(out.registry.get("mach12:same")).toBe(registered.def);
+		expect(out.warnings[0]).toBe(collision.notices[0]);
+		expect(out.warnings[1]).toBe(
+			`skipping project command mach12:same at ${shadowed.filePath}: name already registered from ${winner.filePath}`,
+		);
+	});
+
+	it("preserves one outcome per entry in input order for mixed batches", () => {
+		const inputs = [
+			entry("mach12", "mach12:first.md", minimal),
+			entry("mach12", "wrong.md", minimal),
+			entry("infra", "infra:last.md", minimal),
+			entry("mach12", "mach12:first.md", minimal, "project"),
+		];
+		const out = buildRegistry(inputs);
+
+		expect(out.outcomes.map((outcome) => outcome.kind)).toEqual([
+			"registered",
+			"unrecognized",
+			"registered",
+			"shadowed",
+		]);
+		expect(out.outcomes.map((outcome) => outcome.entry)).toEqual(inputs);
+		expect([...out.registry.keys()]).toEqual(["mach12:first", "infra:last"]);
 	});
 });
 

@@ -17,9 +17,21 @@ export interface FileEntry {
 
 export type LoadResult = { ok: true; def: CommandDef; warnings?: string[] } | { ok: false; error: string };
 
+export type CommandRegistryOutcome =
+	| { kind: "registered"; entry: FileEntry; def: CommandDef; notices: string[] }
+	| { kind: "unrecognized"; entry: FileEntry; error: string }
+	| {
+			kind: "shadowed";
+			entry: FileEntry;
+			def: CommandDef;
+			registeredFrom: CommandDef;
+			notices: string[];
+	  };
+
 interface RegistryBuildResult {
 	registry: CommandRegistry;
 	warnings: string[];
+	outcomes: CommandRegistryOutcome[];
 }
 
 export function parseAllowedTools(raw: unknown): string[] | undefined {
@@ -96,25 +108,28 @@ export function parseCommandFile(filePath: string, content: string, setName: str
 export function buildRegistry(entries: FileEntry[]): RegistryBuildResult {
 	const registry = new Map<string, CommandDef>();
 	const warnings: string[] = [];
+	const outcomes: CommandRegistryOutcome[] = [];
 	for (const entry of entries) {
 		const result = parseCommandFile(entry.filePath, entry.content, entry.setName);
 		if (!result.ok) {
 			warnings.push(`skipping ${entry.filePath}: ${result.error}`);
+			outcomes.push({ kind: "unrecognized", entry, error: result.error });
 			continue;
 		}
-		if (result.warnings) {
-			for (const w of result.warnings) warnings.push(w);
-		}
+		const notices = result.warnings ?? [];
+		for (const notice of notices) warnings.push(notice);
 		const existing = registry.get(result.def.name);
 		if (existing) {
 			warnings.push(
 				`skipping ${entry.scope} command ${result.def.name} at ${entry.filePath}: name already registered from ${existing.filePath}`,
 			);
+			outcomes.push({ kind: "shadowed", entry, def: result.def, registeredFrom: existing, notices });
 			continue;
 		}
 		registry.set(result.def.name, result.def);
+		outcomes.push({ kind: "registered", entry, def: result.def, notices });
 	}
-	return { registry, warnings };
+	return { registry, warnings, outcomes };
 }
 
 export type AgentFileEntry = FileEntry;
