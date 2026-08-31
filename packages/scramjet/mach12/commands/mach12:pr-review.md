@@ -60,6 +60,8 @@ git diff --name-only origin/main...HEAD
 gh pr view <pr-number> --json title,body,createdAt,updatedAt,comments,files
 ```
 
+Collect current CI/check evidence. Identify project-provided tools relevant to the changed artifacts from repository guidance, manifests, adjacent scripts, CI configuration, and established usage; establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. When current CI evidence is unavailable or insufficient, safely run applicable non-mutating checks. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization. Record exact commands, outputs, and limitations. Treat failures as evidence rather than automatic root causes, warnings as bounded diagnostics rather than expanded review scope, and clean output as insufficient behavioral proof.
+
 Identify linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
 
 Before briefing reviewers, delegate to `/mach12:gh-issue-read <issue-number>` for each linked issue so its current body, complete discussion, and timestamps are available alongside plans and prior reviews in the PR comments. If any linked issue cannot be read completely, surface the failed issue and error, stop before reviewer dispatch, and report the review blocked or incomplete; do not silently continue with reduced authoritative context.
@@ -91,7 +93,7 @@ Give each reviewer a focused brief that includes:
 - PR number, title, body, changed files, and any relevant PR comments.
 - The task-relevant linked-issue body, discussion, acceptance criteria, latest plan, and authoritative decisions already fetched by the parent; never pass only an issue number to an isolated reviewer.
 - The specific lens, exact command/runtime surface partition, and evidence-based selection reason it is responsible for.
-- Relevant parent-established observations and the expected cited output.
+- Relevant parent-established observations, verified CI/project-tool commands, deterministic diagnostics, unavailable evidence, and the expected cited output. Reviewers consume this evidence and do not independently rerun project tooling.
 - The user context from Step 1, if provided: `> **User context:** <context>`
 - Relevant artifact timestamps, identified freshness caveats, and which claims were checked against current authority.
 - For proposed command process: the outcome it serves, whether it is known-effective common-path guidance or speculative exception machinery, and any safe goal-preserving adaptation when assumptions fail. For speculative exception machinery, include the qualifying evidence category and compare capable-agent judgment, no change, deletion, and one outcome-level invariant.

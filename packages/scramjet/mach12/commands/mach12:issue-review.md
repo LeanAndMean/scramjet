@@ -66,7 +66,7 @@ Delegate to:
 /mach12:find-contribution-guidelines
 ```
 
-The subroutine returns any planning-relevant guidance found in `CONTRIBUTING.md`, `DEVELOPMENT.md`, or `.github/CONTRIBUTING.md`: expected project layers, testing expectations, and any other requirements that a complete plan should satisfy.
+The subroutine returns any planning-relevant guidance found in `CONTRIBUTING.md`, `DEVELOPMENT.md`, or `.github/CONTRIBUTING.md`: expected project layers, testing expectations, documented development tools, and any other requirements that a complete plan should satisfy.
 
 Record these as **project review criteria** -- they serve as benchmarks when assessing the plan in Step 5.
 
@@ -78,13 +78,15 @@ Classify the plan as command-only, code-only, or mixed before dispatching review
 - **Code-only** plans retain the six existing Mach 12 exploration lenses: files referenced in the plan, architecture and patterns, gaps, risks and pitfalls, alternative approaches, and test infrastructure.
 - **Mixed** plans use both families with disjoint briefs and file/claim partitions; command specialists replace analogous code lenses rather than being added beside the full code suite.
 
+During parent-owned exploration, identify project-provided tools relevant to the plan's affected artifacts from repository guidance, manifests, adjacent scripts, CI configuration, and established usage. Establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization. Run applicable non-mutating checks when their current evidence is needed for the review, and record exact commands, outputs, and limitations. Treat failures as evidence rather than automatic root-cause findings, warnings as bounded diagnostics rather than new scope, and clean output as insufficient behavioral proof.
+
 The review evidence plus assessment pass is capped at seven subagent calls across both families. Reserve one assessment call for command-only or code-only work; for mixed work, reserve two when both finding families are materially plausible, leaving at most five evidence calls. Select proportionally rather than using every available specialist. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
 
 Record each selected agent and its evidence-based reason in the dispatch brief and synthesis. Missing, failed, or malformed required output remains visible and narrows the conclusion; never silently substitute another agent or broaden to all specialists. Mention omitted roles only when omission materially limits confidence.
 
 For command-plan evidence, treat commands as goal-oriented instructions whose known-effective common-path process can be legitimate value. Treat plans and procedures as provisional: when an assumption fails, permit the smallest safe adaptation that preserves the goal and durable boundaries, asking only when missing information or user judgment prevents progress. Require recurring observed user friction where the same unresolved question repeatedly reaches users before proposing speculative exception branches, guards, checkpoints, or recovery protocols; exact consumer contracts, demonstrated trust boundaries, and explicit user requirements remain independent justifications. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence.
 
-For parallel execution, dispatch all selected evidence tasks in one batch. Every brief must include the task-relevant issue title, body, discussion, requirements, and decisions; the current plan; user context and project review criteria; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected cited output. Pass concise excerpts or summaries rather than an indiscriminate transcript. After the tasks complete, read every identified file needed for the review.
+For parallel execution, dispatch all selected evidence tasks in one batch. Every brief must include the task-relevant issue title, body, discussion, requirements, and decisions; the current plan; user context, project review criteria, and relevant verified project-tool commands, outputs, and limitations; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected cited output. Pass concise excerpts or summaries rather than an indiscriminate transcript. After the tasks complete, read every identified file needed for the review.
 
 ## Step 5: Review the plan
 
@@ -119,6 +121,7 @@ Also assess the plan holistically:
 - Are there alternative approaches worth considering?
 - **Project-layer coverage**: Does the plan address all project layers discovered during codebase exploration or specified in the project review criteria recorded in Step 3? Flag any affected layer that no stage covers.
 - **Test coverage planning**: If the project has an existing test suite or the project review criteria specify testing expectations, does each stage that introduces or modifies behavior include adequate test planning (what to test, test types, behaviors to cover)? If the project has no testable runtime code, verify the plan notes this rather than omitting test planning silently.
+- **Project-native tooling**: Does the plan place applicable authoritative checks at the stage where their evidence is needed, distinguish required/advisory and read-only/mutating tools, and preserve missing evidence or unrelated baseline diagnostics without mistaking tool output for behavioral proof?
 
 Create an initial findings list with stable identifiers:
 

@@ -74,7 +74,7 @@ Before exploring the code, delegate to:
 /mach12:find-contribution-guidelines
 ```
 
-The subroutine returns any planning-relevant guidance found in `CONTRIBUTING.md`, `DEVELOPMENT.md`, or `.github/CONTRIBUTING.md`: expected project layers (e.g., models, migrations, API routes, services, UI, documentation), testing expectations (test frameworks, coverage requirements, test types), and any other requirements that should inform the implementation plan.
+The subroutine returns any planning-relevant guidance found in `CONTRIBUTING.md`, `DEVELOPMENT.md`, or `.github/CONTRIBUTING.md`: expected project layers (e.g., models, migrations, API routes, services, UI, documentation), testing expectations (test frameworks, coverage requirements, test types), documented development tools, and any other requirements that should inform the implementation plan.
 
 Record these as **project planning requirements** -- they inform both the exploration focus and the plan drafting in Step 9.
 
@@ -86,7 +86,9 @@ Classify the affected work before dispatching advisory subagents:
 - **Code-only** work changes runtime source or executable implementation tests. Retain `mach12:code-explorer` and dispatch the existing four lenses: similar features, architecture, integration points, and constraints or edge cases.
 - **Mixed** work uses both families with disjoint briefs and file/claim partitions. Do not ask either family to review the other's surface.
 
-Across the initial exploration, architecture, and test-design pass in Steps 4, 6, and 8, use a maximum of eight subagent calls across both families. User-requested targeted architecture reruns after rejecting the initial options are a separate decision branch and do not count against the completed initial pass. Every brief must carry the task-relevant issue title, body, discussion, requirements, and decisions from Step 2; user context and project planning requirements; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected output. Pass concise excerpts or summaries rather than an indiscriminate transcript. Record every selected agent and its evidence-based reason in the synthesis. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
+As part of parent-owned exploration, identify project-provided development tools relevant to the affected artifacts from repository guidance, manifests, adjacent scripts, CI configuration, and established project usage. Establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization covering their effects. Record exact verified commands, sources, classifications, availability, outputs, and limitations. Treat diagnostics as evidence rather than automatic root-cause or scope decisions, and never treat clean tooling output as behavioral proof.
+
+Across the initial exploration, architecture, and test-design pass in Steps 4, 6, and 8, use a maximum of eight subagent calls across both families. User-requested targeted architecture reruns after rejecting the initial options are a separate decision branch and do not count against the completed initial pass. Every brief must carry the task-relevant issue title, body, discussion, requirements, and decisions from Step 2; user context, project planning requirements, and verified project-tool commands, outputs, and limitations relevant to the specialist; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected output. Pass concise excerpts or summaries rather than an indiscriminate transcript. Record every selected agent and its evidence-based reason in the synthesis. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
 
 For command work, add `scramjet:context-flow-analyzer`, `scramjet:authority-state-analyzer`, `scramjet:command-trust-reviewer`, `scramjet:command-failure-analyst`, or `scramjet:command-completeness-checker` only when delegation or fresh-session flow, duplicated authority or partial state, a concrete trust boundary, an observed failure, or explicit requirement coverage makes that responsibility relevant. Never broaden to every specialist. Reserve enough of the eight-call budget for the architecture calls and, when Step 8's dispatch criteria apply, the evaluation or test designer. Missing, failed, or malformed required output remains visible as incomplete evidence rather than triggering silent substitution.
 
@@ -232,9 +234,9 @@ For command-only work, replace `mach12:test-designer` with `scramjet:command-eva
 Pass the selected designer a synthesized brief containing:
 - Issue classification (bug fix / feature / refactor) and problem statement
 - The selected architecture from Step 6
-- Relevant codebase findings: existing test patterns, related test files, and coverage landscape from Step 4
+- Relevant codebase findings: existing test patterns, related test files, coverage landscape, and verified project-native checks from Step 4
 
-The subagent returns a test strategy with per-test cost/benefit assessments, coverage intent categorization, and -- for bug fixes -- a test-first recommendation.
+The subagent treats parent-supplied tool evidence as input rather than independently rerunning project tooling. The subagent returns a test strategy with per-test cost/benefit assessments, coverage intent categorization, and -- for bug fixes -- a test-first recommendation.
 
 ### Incorporating the output
 
@@ -245,6 +247,8 @@ The subagent returns a test strategy with per-test cost/benefit assessments, cov
 ### Lightweight path
 
 When skipping the subagent, state the test approach inline in the plan (e.g., "Update wiring test; no behavioral tests needed -- prose-only change"). This satisfies the test coverage planning requirement in Step 9 without a full dispatch.
+
+Place applicable project-native checks in the implementation stages where their evidence is needed. Prefer established checks over improvised substitutes, preserve authorization for mutating generators or formatters, and make unavailable required evidence explicit rather than silently replacing it.
 
 ## Step 9: Load the plan-comment contract and draft the plan
 

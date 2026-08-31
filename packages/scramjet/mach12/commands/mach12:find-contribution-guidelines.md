@@ -32,6 +32,7 @@ Read the located file. Identify and surface:
 - **Project layers**: what conceptual layers the codebase is organized into (e.g., models, migrations, API routes, services, UI, documentation). The plan-shaped lens cares about coverage across these layers.
 - **Testing expectations**: test frameworks, coverage requirements, test types (unit / integration / end-to-end), and any testing-related rules.
 - **Pre-merge requirements**: version bumps, changelog entries, documentation updates, lint/format gates, anything the project expects before a PR can merge.
+- **Development tooling**: documented build, lint, format, schema or artifact validation, generation, compiler/typecheck, and repository-specific verification commands. When the guidance establishes it, report whether each command is required or optional and whether it is read-only or mutating.
 - **Issue conventions**: issue templates, label taxonomy, required fields, any other shaping rules for new issues.
 - **Other guidance**: anything else relevant to planning, implementation, or PR shaping that the caller should know about.
 
