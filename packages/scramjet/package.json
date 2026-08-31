@@ -6,7 +6,8 @@
   "repository": "github:LeanAndMean/scramjet",
   "type": "module",
   "bin": {
-    "scramjet": "./bin/scramjet.js"
+    "scramjet": "./bin/scramjet.js",
+    "scramjet-command-lint": "./bin/scramjet-command-lint.js"
   },
   "exports": {
     ".": {
