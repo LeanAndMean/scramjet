@@ -109,8 +109,16 @@ function reportFor(entries: FileEntry[]): CommandLintReport {
 	};
 }
 
+function unicodeEscape(character: string): string {
+	return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+}
+
 function terminalSafe(value: string): string {
-	return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, (character) => JSON.stringify(character).slice(1, -1));
+	return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, unicodeEscape);
+}
+
+function renderJson(report: CommandLintReport): string {
+	return JSON.stringify(report, null, 2).replace(/[\u007f-\u009f]/g, unicodeEscape);
 }
 
 function renderHuman(report: CommandLintReport): string {
@@ -144,7 +152,7 @@ export function runCommandLint(args: string[]): number {
 	}
 
 	const report = reportFor(entries);
-	process.stdout.write(parsed.json ? `${JSON.stringify(report, null, 2)}\n` : `${renderHuman(report)}\n`);
+	process.stdout.write(parsed.json ? `${renderJson(report)}\n` : `${renderHuman(report)}\n`);
 	if (report.summary.errors > 0) return 1;
 	if (parsed.strict && report.summary.warnings > 0) return 1;
 	return 0;

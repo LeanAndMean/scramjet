@@ -77,9 +77,10 @@ describe("scramjet:troubleshoot", () => {
 		});
 	});
 
-	it("requires exactly the five concise visible sections", () => {
+	it("requires exactly the five concise visible answer sections", () => {
 		const headings = body().match(/^## .+$/gm) ?? [];
-		expect(headings).toEqual([
+		expect(headings[0]).toBe("## Goals");
+		expect(headings.slice(1)).toEqual([
 			"## User intent",
 			"## What actually occurred",
 			"## Root cause analysis",
