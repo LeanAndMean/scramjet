@@ -16,11 +16,15 @@ next:
 
 # Review PR
 
-You are running a comprehensive review of a pull request and posting the results as a structured comment. The post-turn forced next-step runs `/mach12:pr-review-assessment`, which independently assesses each finding before any fixes happen. Review and assessment are deliberately split: this command performs only the review.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Produce a comprehensive, evidence-grounded review of every relevant command and runtime surface without modifying the pull request.
+- Publish one verified structured review whose actionable findings, strengths, scope, and stable identifiers are consumable by independent assessment.
+- Hand the exact review artifact to the forced assessment step so no finding is treated as fix authority before independent classification.
 
 ## Step 1: Parse input
 

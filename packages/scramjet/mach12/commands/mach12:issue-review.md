@@ -23,11 +23,15 @@ next:
 
 # Issue Plan Review
 
-You are reviewing the implementation plan for a GitHub issue. Your goal is to read the issue and all comments, independently assess the plan, and present your findings.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Independently determine whether the current implementation plan is correct, complete, minimal, testable, and executable from the issue's authoritative context.
+- Give every finding an evidence-grounded classification and preserve one aggregate judgment across command and runtime responsibilities.
+- Leave a verified replacement plan or required decision record when the user chooses one, and route implementation only after the applicable publication gate passes.
 
 ## Step 1: Parse input
 

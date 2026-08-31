@@ -23,11 +23,15 @@ next:
 
 # Create Pull Request
 
-You are creating a pull request for the current branch, with a structured description that includes a summary, test plan, and optional issue linkage.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Publish one verified pull request whose title, summary, test plan, draft state, base, and optional single-issue linkage accurately represent the current branch.
+- Ensure the branch is safely synchronized to its intended remote without overwriting divergent work.
+- Return the verified pull-request identity and offer review paths only after creation succeeds.
 
 ## Step 1: Parse input and resolve linkage
 

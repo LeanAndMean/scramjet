@@ -29,11 +29,16 @@ next:
 
 # PR Review Assessment
 
-You are running an independent assessment of each finding produced by `/mach12:pr-review`, separating genuine issues from nitpicks, false positives, and suggested changes that would themselves regress the code. Each finding is judged on two axes -- whether the flagged problem is real, and whether applying the reviewer's suggested fix would actually improve things. This is the due-diligence step before any code changes happen.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Independently classify every review finding by whether the problem is real and whether a sound correction would improve the combined system.
+- Publish one complete, verified assessment with safe fix approaches, rejected regressions, and aggregate-complexity evidence.
+- After verified assessment publication, carry out only user-authorized deferred-item publications or metadata changes and durably record their actual outcomes.
+- Route only authenticated findings that remain worth fixing, or proceed to pre-merge when no required correction remains.
 
 ## Step 1: Parse input
 

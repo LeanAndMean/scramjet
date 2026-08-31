@@ -32,11 +32,15 @@ next:
 
 # Fix Review Issues
 
-You are fixing specific issues identified in a PR review. This command gathers context from the PR and its review comments, then walks through the implementation under the structured development workflow.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Apply the smallest sound corrections for exactly the authenticated, selected review findings without expanding into unrelated review or cleanup work.
+- Preserve accepted executable proofs where applicable, verify the repaired behavior, and leave the fixes committed, pushed, and durably documented.
+- Give the user an evidence-based review-cycle retrospective and recommend the next verification path from the PR's current trajectory.
 
 ## Step 1: Parse input
 

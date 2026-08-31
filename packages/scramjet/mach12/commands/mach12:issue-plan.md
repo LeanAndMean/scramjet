@@ -25,11 +25,15 @@ next:
 
 # Issue Plan
 
-You are creating a staged implementation plan for a GitHub issue. Your goal is to deeply understand the issue, explore the relevant codebase, and produce a plan where each stage can be implemented within a single session.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Produce one durable, standalone implementation plan grounded in the complete issue history, current codebase, project guidance, and explicit user decisions.
+- Select a minimum-sufficient architecture and proportionate test strategy, divided into dependency-aware stages that each fit one implementation session.
+- Publish the verified plan, create its feature branch, and report assignment outcomes before offering next-step routing.
 
 ## Guardrails
 

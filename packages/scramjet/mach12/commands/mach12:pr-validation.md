@@ -18,11 +18,15 @@ next:
 
 # Validate PR Behavior
 
-Challenge a pull request through executable tests. Discover credible regression candidates, leave only candidate test changes for independent assessment, and do not modify production code.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Challenge the pull request's changed behavior with the smallest set of credible, production-reachable executable test candidates.
+- Leave only supported candidate test changes in a precisely bounded worktree and publish their evidence as one verified preliminary review.
+- Hand the exact candidate state to independent assessment without modifying production code, committing tests, or claiming final defects.
 
 ## Step 1: Establish the review boundary
 

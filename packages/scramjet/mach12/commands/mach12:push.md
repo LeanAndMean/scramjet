@@ -13,11 +13,15 @@ allowed-tools:
 
 # Push
 
-Finalize one bounded batch of work by committing intended files, pushing once, and documenting progress on the associated PR or issue whenever one can be identified.
-
 <caller-context>
 $ARGUMENTS
 </caller-context>
+
+## Goals
+
+- Commit and push exactly one caller-bounded batch without including unrelated work or likely secrets.
+- Verify local, upstream, and forge identities converge after the push, preserving exact proof provenance in validation mode.
+- Return a durable progress artifact for ordinary work whenever an associated pull request or issue can be established.
 
 This command is delegate-only. Routing belongs to the caller.
 

@@ -24,11 +24,15 @@ next:
 
 # Pre-Merge Checklist
 
-You are running the pre-merge checklist for a PR that has passed review. Walk through each checklist item, perform the necessary updates, and commit the results.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Bring the pull-request branch to a current state with applicable policy, test, and CI outcomes authoritatively recorded, including user-authorized skips.
+- Complete and publish any required documentation, version, changelog, conflict-resolution, or CI-fix changes without absorbing unrelated work.
+- Report a determinate readiness result and offer merge only when every required gate succeeds.
 
 ## Step 1: Parse input
 

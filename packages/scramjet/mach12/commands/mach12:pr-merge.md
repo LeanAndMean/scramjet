@@ -11,11 +11,15 @@ allowed-tools:
 
 # Merge and Release
 
-You are merging a PR that has passed review and the pre-merge checklist, then optionally creating a release.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Merge only a pull request that authoritative readiness evidence shows is safe to merge, without bypassing required checks or review.
+- Bring the local default branch and feature-branch cleanup to a truthful final state after the merge.
+- Create a release only when explicitly approved, and report merge, cleanup, and release outcomes independently.
 
 This command intentionally declares no next-step policy. Merge is the natural terminus of a feature lifecycle, so Scramjet pauses after a successful merge. If your process has a post-merge follow-up (e.g., a `release:announce` step), add an explicit next-step policy in your local command set.
 

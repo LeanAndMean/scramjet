@@ -8,11 +8,15 @@ allowed-tools:
 
 # Read GitHub Pull Request
 
-You are reading a GitHub pull request and optionally locating a specific HTML-marker comment within its thread.
-
 <caller-context>
 $ARGUMENTS
 </caller-context>
+
+## Goals
+
+- Return the caller an authoritative pull-request snapshot containing the parent metadata and complete chronological top-level conversation.
+- When requested, identify the most recent matching marker comment and its numeric ID without weakening completeness checks.
+- Make incomplete or malformed history explicit rather than presenting partial evidence as authoritative.
 
 This subroutine is `gh`-specific. A future forge-agnostic command set would substitute an equivalent `glab-pr-read` (or similar); the marker-hunt logic stays the same.
 

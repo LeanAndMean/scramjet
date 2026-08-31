@@ -22,11 +22,15 @@ next:
 
 # Assess PR Validation
 
-Independently assess the candidate tests produced by `/mach12:pr-validation`, retain only meaningful PR defects, commit those accepted tests as executable evidence, and route the result. Do not repair production code.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Independently accept or reject every executable candidate against authoritative requirements, realistic production reachability, and practical impact.
+- Preserve accepted defects as normalized, committed red tests and publish one verified assessment with exact proof provenance.
+- Route every accepted defect to production repair, or proceed to pre-merge when no candidate survives. Do not repair production code.
 
 ## Step 1: Authenticate the preliminary review and current state
 

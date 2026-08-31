@@ -10,7 +10,10 @@ allowed-tools:
 
 # Find Contribution Guidelines
 
-You are locating the project's contribution guidelines and surfacing planning-relevant guidance to the caller.
+## Goals
+
+- Give the caller a concise, source-grounded summary of project guidance relevant to planning, implementation, review, and pre-merge work.
+- Preserve documented requirements and meaningful omissions without inventing project guidance.
 
 ## Step 1: Locate the guidelines file
 

@@ -9,13 +9,16 @@ allowed-tools:
 
 # Detect Sub-Issues
 
-You are detecting the sub-issues of a GitHub issue. Two strategies, used in order: the API call first, the body-parse fallback only when the API call fails.
-
-This subroutine is advisory and may fail open through body parsing. Callers must not use it to expand PR closing linkage automatically.
-
 <caller-context>
 $ARGUMENTS
 </caller-context>
+
+## Goals
+
+- Return the caller the best-supported sub-issue list, including state when requested and the strategy used.
+- Preserve the API's authoritative empty result and clearly distinguish the advisory body-parse fallback.
+
+This subroutine is advisory and may fail open through body parsing. Callers must not use it to expand PR closing linkage automatically.
 
 This subroutine is `gh`-specific. A future forge-agnostic command set would substitute an equivalent `glab-sub-issues` (or similar); Strategy B is forge-neutral and would survive a swap.
 

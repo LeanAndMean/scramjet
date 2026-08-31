@@ -28,11 +28,15 @@ next:
 
 # Implement Stage
 
-You are implementing a specific stage of a staged implementation plan. This command gathers context from a GitHub issue, then walks through the implementation under the structured development workflow.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Complete exactly the requested implementation-plan stage or range with the smallest sound change that preserves the issue's requirements and approved architecture.
+- Leave the requested scope's intended files verified, committed, pushed, and documented in a durable progress artifact.
+- Report remaining work accurately and offer only the next planned stage or PR creation when its prerequisites are satisfied.
 
 ## Step 1: Parse Input
 

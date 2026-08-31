@@ -8,11 +8,14 @@ allowed-tools:
 
 # Assign GitHub Issues
 
-You are assigning the current user to one or more GitHub issues. The subroutine handles three assignment states per issue (already assigned, no assignees, other assignees) and aggregates conflicts into a single bulk prompt at the end.
-
 <caller-context>
 $ARGUMENTS
 </caller-context>
+
+## Goals
+
+- Give every requested issue an explicit assignment resolution while preserving existing assignees unless the user chooses otherwise.
+- Return a caller-consumable per-issue resolution summary.
 
 This subroutine is `gh`-specific. A future forge-agnostic command set would substitute an equivalent `glab-assign` (or similar); the three-way decision logic stays the same.
 

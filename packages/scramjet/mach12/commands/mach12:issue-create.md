@@ -22,11 +22,16 @@ next:
 
 # Create Issue
 
-You are identifying and accurately capturing the problem that motivated this command, then creating a structured GitHub issue after explicit user approval.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Capture the user's supported problem, constraints, evidence, and observable desired outcome in one accurate, implementation-neutral issue artifact.
+- Publish only a complete, internally reviewed issue or selected related-context comment through the guarded approval and exact-verification boundary.
+- Apply requested or repository-standard metadata only after verified issue creation, and report each outcome without recreating the issue.
+- When an artifact is published, return its verified identity; offer planning only when a newly created issue is ready.
 
 ## Step 1: Identify the problem
 
