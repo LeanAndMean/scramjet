@@ -36,7 +36,7 @@ Goals are controlling outcomes. Actions, plans, checklists, and tactics serve th
 
 Goals remain ordinary portable Markdown. There is no `goals:` frontmatter field or `CommandDef.goals` representation. Runtime loading remains permissive: an existing command without `## Goals` still loads and executes, and the agent infers its intended outcomes from the complete command and invocation. Missing or malformed Goals are authoring warnings, never runtime rejection or runtime warnings.
 
-The checker validates deterministic structure, not semantic quality. A structurally clean Goals section does not prove that the outcomes are useful, complete, consistent with the command's actions, or operationally achievable. Use relevant command specialists and proportional operational evidence for those judgments.
+The checker validates deterministic structure, not semantic quality. A structurally clean Goals section does not prove that the outcomes are useful, complete, consistent with the command's actions, or operationally achievable. Load the packaged `writing-scramjet-commands` skill when authoring or reviewing commands, and judge effectiveness from actual use.
 
 ### Authoring check
 
@@ -486,35 +486,26 @@ Command frontmatter `allowed-tools` and subagent frontmatter `tools:` have diffe
 - Read-only agents must declare an explicit non-empty allowlist that omits every mutation-capable tool, including `bash`, `edit`, and `write`. Omitting only `edit` and `write` is insufficient because shell commands can still mutate the shared working tree.
 - A writable parent command may own sequential repository mutation while read-only subagents return analysis, fixture guidance, or other non-mutating recommendations.
 
-### Specialist selection for command surfaces
+### Command authoring skill and specialist roles
 
-Treat command and agent Markdown, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and tests of model interpretation as **command surfaces**. Runtime source and executable implementation tests remain **code surfaces**. Partition mixed work into disjoint briefs rather than asking either family to review the other domain.
+Treat command and agent Markdown, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and model-interpreted behavior as **command surfaces**. Runtime source and executable implementation tests remain **code surfaces**. Partition mixed work into disjoint briefs.
 
-The consuming command owns relevance-based selection from the installed agent catalog. Give the agent discretion to choose only specialists supported by the concrete surfaces, record each selection and its evidence-based reason, and mention omitted roles only when omission materially limits confidence. Never use every available specialist as an implicit fallback. All agent families count against one call-site budget; command specialists replace analogous code lenses for command-only work rather than adding a second suite.
+The packaged `writing-scramjet-commands` skill is the shared authoring authority. It describes commands as light-touch generalized plans, appropriate degrees of freedom, context and handoff design, project-native tools, and when subagent isolation is justified. Load it on demand instead of copying those principles into every command and agent.
 
-Use these compatibility levels:
+Scramjet ships six read-only command agents:
 
-1. A specialist explicitly named by the consuming command with a matching output contract may fill or replace that role.
-2. Another installed specialist may replace it only when authoritative repository or command guidance establishes the same responsibility, capability posture, context needs, output shape, and workflow handoff.
-3. A catalog-only name and description match may provide a supplementary relevant lens, but cannot replace a required specialist or exact procedural role.
+- `scramjet:command-set-explorer` compresses large multi-command definitions into a map of edges, context, artifacts, and owners.
+- `scramjet:command-architect` designs or substantially revises the minimum generalized plan.
+- `scramjet:instruction-semantics-analyzer` handles narrow contradictions, ambiguity, impossible ordering, and authority conflicts.
+- `scramjet:command-failure-analyst` traces one concrete observed failure through Scramjet execution.
+- `scramjet:command-reviewer` provides one independent holistic review after authoring.
+- `scramjet:independent-command-assessor` adjudicates another review's supplied findings without designing fixes.
 
-Keep missing, failed, or malformed required output visible as incomplete evidence. Do not silently substitute an unrelated specialist or broaden the review. The parent command remains the sole owner of repository mutation, test execution, user interaction, and publication unless its contract explicitly assigns one of those effects elsewhere.
+Use the minimum role that benefits from isolation. A command-only review uses one finding reviewer: the holistic reviewer for broad behavior, or the semantics analyzer for a narrow wording contract. Add the explorer only when context compression is necessary, and run it before the reviewer. Do not dispatch overlapping agents to union findings.
 
-Design commands around durable goals and adaptable process:
+A replacement installed agent requires authoritative evidence of compatible responsibility, read-only posture, context needs, output, and workflow handoff. A catalog description alone is insufficient. Missing required output narrows the conclusion rather than triggering substitution. The parent command owns orchestration, synthesis, project-tool execution, user interaction, mutation, and publication.
 
-- Treat goals, user-visible outcomes, user decisions, authorities, required artifacts, and exact trust or consumer boundaries as durable. A prescribed method is durable only when one of those authorities makes the method itself part of the requirement.
-- Treat plans, checklists, tactics, and internal procedures as provisional guides for the expected path. Follow known-effective process while its assumptions hold, but do not mistake plan compliance for the outcome.
-- Include the minimum process and context an imperfect isolated agent should not have to rediscover: known-effective due diligence, effective delegation, ordering needed for correctness or collaboration, unavailable environmental facts, exact contracts, required durable artifacts and publication ownership, and pitfalls demonstrated repeatedly in practice.
-- When evidence invalidates a plan assumption, let the agent choose the smallest safe route that preserves the durable goal and boundaries. Ask the user only when adaptation requires missing information or user judgment; otherwise proceed safely or stop transparently when no safe route remains.
-- Give each durable fact one authority and each side effect one owner. Derive other views instead of synchronizing copies, and eliminate partial states through deletion, consolidation, responsibility movement, native behavior, or operation reordering before adding recovery machinery.
-- Require recurring evidence before adding exception-specific branches, guards, checkpoints, recovery protocols, or other handling for imagined failure cases. Exact consumer contracts, demonstrated trust boundaries, and explicit user requirements remain independent justifications.
-- A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence. A small or low-risk edit is not justified merely because it is easy to add.
-
-Every instruction should earn its place by serving a durable goal, a known-effective process an imperfect agent may omit, an unavailable environmental fact, an exact consumer or trust contract, an explicit user requirement, or a recurring observed pitfall. Use one early `## Goals` section for lint-clean new authoring; no fixed heading or template is required for the remaining process.
-
-When reviewing a proposed process change, identify the outcome it serves and whether it is a common-path guide or exception machinery. Compare it with no change, deletion, and one outcome-level invariant. Count instruction volume, context pressure, conditional branches, model or subagent calls, and test burden as complexity alongside schemas, state, artifacts, and recovery paths.
-
-Static tests can protect rosters, tool allowlists, references, budgets, and exact handoffs. Phrase-presence assertions and model-output snapshots do not prove relevance, interpretation, context sufficiency, or operability. Claims about command behavior need proportional operational evidence, such as frozen transcript scenarios, repeated identical model runs, fresh-session or delegation exercises, disposable repository probes, recovery cases, or separately authorized forge pilots.
+Static tests can protect parsing, discovery, tool posture, references, and exact trust handoffs. They do not establish that an agent, command, or routing policy improves decisions. Synthetic model scenarios may expose possible interpretations but do not establish product value or merge readiness; effectiveness claims come from actual use.
 
 ### Don't
 

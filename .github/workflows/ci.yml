@@ -70,6 +70,7 @@ jobs:
           grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/commands/mach12:issue-create.md' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
+          grep -qxF 'package/skills/writing-scramjet-commands/SKILL.md' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/set.yaml' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/commands/scramjet:troubleshoot.md' "$TARBALL_CONTENTS"
           XDG_DATA_HOME="$PREFIX/data" npm install --ignore-scripts --prefix "$PREFIX" -g \

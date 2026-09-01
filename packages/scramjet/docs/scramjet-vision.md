@@ -77,7 +77,7 @@ Commands can reuse other commands as process fragments. Authors can maintain sha
 
 ### Command authoring feedback
 
-Authors and agents can check command structure before installation or interactive use. Deterministic feedback should reuse runtime recognition and registration authority without making runtime loading stricter, while semantic specialists and operational evidence remain responsible for judging whether goals and behavior are actually sound. Current checker behavior and scope are governed by the command-authoring guide rather than this vision.
+Authors and agents can check command structure before installation or interactive use. Deterministic feedback should reuse runtime recognition and registration authority without making runtime loading stricter. It cannot establish whether a command is useful or well interpreted; those judgments come from independent review and actual use. Current checker behavior and scope are governed by the command-authoring guide rather than this vision.
 
 ### Guided continuation
 

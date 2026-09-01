@@ -108,7 +108,9 @@ Human diagnostics use `path:line: severity code: message`. `--json` emits one re
 | Runtime-derived recognition or shadowing errors | 1 | 1 |
 | Invalid arguments, inaccessible target, or incomplete scan | 2 | 2 |
 
-The checker reuses `parseCommandFile()` and `buildRegistry()`, which remain authoritative for runtime recognition, registration order, and collision winners. Lint and CLI code depend one way on those runtime-owned outcomes; runtime never imports or invokes optional lint tooling. Structural success proves only deterministic authoring conventions—not semantic goal quality or operational correctness, which still require relevant specialist review and proportional behavioral evidence.
+The checker reuses `parseCommandFile()` and `buildRegistry()`, which remain authoritative for runtime recognition, registration order, and collision winners. Lint and CLI code depend one way on those runtime-owned outcomes; runtime never imports or invokes optional lint tooling. Structural success proves only deterministic authoring conventions—not semantic quality or operational value.
+
+Scramjet also packages the `writing-scramjet-commands` skill. Agents load it on demand when creating, revising, reviewing, or diagnosing commands; it keeps command-authoring principles out of the always-loaded prompt and out of individual specialist definitions.
 
 The current checker covers command Markdown and runtime-recognizable ordering/collision relationships among explicitly supplied files. It does not validate agents, autonomy defaults, every installed discovery relationship, or a complete future command-set/plugin format. See [`docs/command-authoring.md`](docs/command-authoring.md) for the complete authoring contract and diagnostic groups.
 
@@ -205,7 +207,7 @@ The product-owned `scramjet` command set contains operational workflows for Scra
 
 The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still follows the issue-creation command's effective publication policy and exact-verification safeguards; troubleshooting never edits source or publishes an issue itself.
 
-The set also ships twelve independently selectable, read-only specialists for command-set exploration, architecture, instruction semantics, context flow, authority and state, operability, trust boundaries, evaluation, simplification, failure analysis, completeness, and independent assessment. Consuming commands select relevant specialists from all installed command sets; the catalog is descriptive rather than a mandatory suite or routing registry.
+The set also ships six read-only command agents: a command-set explorer for context compression, command architect, instruction-semantics analyzer, concrete failure analyst, holistic command reviewer, and independent finding assessor. The main agent remains the user's orchestrator and owns synthesis, mutation, and publication; command review uses one finding reviewer rather than a union of lenses.
 
 ## Mach 12
 
@@ -219,14 +221,14 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:issue-implement` | Implement a planned stage |
 | `mach12:pr-create` | Create a pull request |
 | `mach12:pr-review` | Review a PR |
-| `mach12:pr-review-assessment` | Detailed multi-lens PR assessment |
+| `mach12:pr-review-assessment` | Independent PR finding assessment |
 | `mach12:pr-validation` | Challenge a PR through independently validated executable tests |
 | `mach12:pr-validation-assessment` | Reassess executable findings and route validated outcomes |
 | `mach12:pr-review-fix` | Fix issues flagged in review |
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus seven subroutine commands and eleven specialized code agents covering exploration, architecture, review, testing, and more. Mach 12 substitutes compatible Scramjet command specialists when executable command behavior is the subject, retains code specialists for runtime work, and partitions mixed work under one shared review budget. Across projects it discovers authoritative development tools from repository guidance, manifests, adjacent scripts, CI, and established usage; it classifies their relevance and mutation effects, runs applicable non-mutating checks, and reports missing evidence without installing tools or treating clean output as behavioral proof. This is generic behavior—Mach 12 does not hard-code Scramjet's command checker. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
+Plus seven subroutine commands and eleven specialized code agents covering exploration, architecture, review, testing, and more. For command work, Mach 12 uses the minimum relevant Scramjet role: exploration for context compression, one architect for design, one reviewer for broad review or the semantics analyzer for a narrow wording question, and a fresh assessor for published findings. Runtime work retains code specialists, and mixed work uses disjoint briefs. Across projects Mach 12 discovers authoritative development tools from repository guidance, manifests, adjacent scripts, CI, and established usage; it classifies their relevance and mutation effects, runs applicable non-mutating checks, and reports missing evidence without installing tools or treating clean output as behavioral proof. This is generic behavior—Mach 12 does not hard-code Scramjet's command checker. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
 
 ## Bundled command-set installation
 

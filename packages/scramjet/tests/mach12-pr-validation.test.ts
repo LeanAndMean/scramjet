@@ -62,36 +62,17 @@ describe("mach12 pr-validation candidate workflow", () => {
 			"actual merge base",
 		])
 			expect(boundary).toContain(clause);
-		expectInOrder(command, "## Step 1:", "## Step 2:", "## Step 3:", "Dispatch one focused designer");
+		expectInOrder(command, "## Step 1:", "## Step 2:", "## Step 3:", "For runtime clusters");
 	});
 
-	it("routes each behavioral cluster to one compatible read-only designer", () => {
+	it("uses runtime test designers and keeps command candidate design with the parent", () => {
 		const candidates = section(command, "## Step 3:", "## Step 4:");
 		expect(candidates).toContain('agentScope: "user"');
-		expect(candidates).toContain("scramjet:command-evaluation-designer");
 		expect(candidates).toContain("mach12:test-designer");
-		expect(candidates).toMatch(/command-only[^.]*command-evaluation-designer/i);
-		expect(candidates).toMatch(/runtime[^.]*test-designer/i);
-		expect(candidates).toMatch(/one focused designer per behavioral cluster/i);
-		for (const field of [
-			"Cluster ID",
-			"Challenged behavior",
-			"Authority",
-			"Coverage gap",
-			"Fixture and assertion",
-			"Expected behavior",
-			"Production path",
-			"Permanent suite",
-			"Assessment",
-		])
-			expect(candidates).toContain(`**${field}**`);
-		expect(candidates).toMatch(/preserve that shape[^.]*skip/i);
-		expect(candidates).toContain("Designers are read-only");
+		expect(candidates).toMatch(/command-only behavior[^.]*parent/i);
+		expect(candidates).toContain("Do not turn prompt wording or synthetic model output into an executable proof");
 		expect(candidates).toContain("The main agent owns all repository mutation and execution");
-		expect(candidates).toContain("sequentially in the primary repository");
-		expect(candidates).toContain("ordinary uncommitted test changes");
 		expect(candidates).toContain("Do not modify production code");
-		expect(candidates).toContain("Remove passing, invalid, duplicate, pre-existing, environmental");
 	});
 
 	it("allows useful baseline comparison without linked worktrees or primary-head changes", () => {
@@ -138,19 +119,12 @@ describe("mach12 pr-validation-assessment accepted-proof workflow", () => {
 			expect(state).toContain(clause);
 	});
 
-	it("gives each candidate one compatible assessor before finalizing accepted proofs", () => {
+	it("gives each candidate one read-only assessor before finalizing accepted proofs", () => {
 		const assessment = section(command, "## Step 2:", "## Step 3:");
 		expect(assessment).toContain("scramjet:independent-command-assessor");
 		expect(assessment).toContain("mach12:independent-assessor");
-		expect(assessment).toMatch(/command candidates[^.]*independent-command-assessor/i);
-		expect(assessment).toMatch(/runtime candidates[^.]*independent-assessor/i);
 		expect(assessment).toMatch(/each candidate gets exactly one verdict owner/i);
-		expect(assessment).toMatch(/at most two assessors/i);
-		expect(assessment).toMatch(/exact candidate identifiers[^.]*classification/i);
-		expect(assessment).toMatch(/assigned assessor must classify each candidate/i);
-		expect(assessment).toMatch(
-			/parent validates completeness and identifiers[^.]*merges complete verdicts unchanged/i,
-		);
+		expect(assessment).toContain("writing-scramjet-commands");
 		expect(assessment).toMatch(/parent exclusively owns mutation and test execution/i);
 		expectInOrder(
 			command,

@@ -481,9 +481,10 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		const result = handlers.get("resources_discover")![0]?.(
 			{ type: "resources_discover", cwd, reason: "startup" },
 			{ hasUI: true, ui: { notify } },
-		) as { promptPaths: string[] };
+		) as { skillPaths: string[]; promptPaths: string[] };
 
 		expect([...state.registry.keys()]).toEqual(["mach12:fallback", "scramjet:fallback"]);
+		expect(result.skillPaths).toEqual([join(bundledRoot, "skills")]);
 		expect(result.promptPaths).toEqual([...state.registry.values()].map((def) => def.filePath));
 		expect(state.agentRegistry.has("mach12:fallback-agent")).toBe(true);
 		expect(state.agentRegistry.has("scramjet:fallback-agent")).toBe(true);

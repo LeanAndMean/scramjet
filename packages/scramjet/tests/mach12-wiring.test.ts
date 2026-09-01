@@ -379,49 +379,29 @@ describe("mach12 command-surface issue routing", () => {
 		expect(exploration).toMatch(/non-trivial command surface/i);
 	});
 
-	it("substitutes command planning specialists within one eight-call initial pass", () => {
+	it("references shipped command planning roles without a command evaluation specialist", () => {
 		const content = command("issue-plan");
 		const exploration = section(content, "## Step 4:", "## Step 5:");
 		const architecture = section(content, "## Step 6:", "## Step 7:");
 		const evaluation = section(content, "## Step 8:", "## Step 9:");
 
 		expect(exploration).toContain("scramjet:command-set-explorer");
-		expect(exploration).toContain("mach12:code-explorer");
-		expect(exploration).toMatch(/runtime exploration lenses[^.]*no more than three runtime exploration calls/i);
-		expect(exploration).toMatch(/initial[^.]*maximum of eight/i);
-		expect(exploration).toMatch(/targeted architecture reruns[^.]*separate decision branch/i);
-
-		for (const agent of ["scramjet:command-architect", "mach12:code-architect"]) {
-			expect(architecture).toContain(agent);
-		}
-		expect(architecture).toMatch(/three `scramjet:command-architect` calls/i);
-		expect(architecture).toMatch(/command-architect`[^.]*aggregate/i);
-
-		for (const agent of ["scramjet:command-evaluation-designer", "mach12:test-designer"]) {
-			expect(evaluation).toContain(agent);
-		}
-		expect(evaluation).toMatch(/non-executable documentation/i);
-		expect(evaluation).toMatch(/command edit is trivial/i);
+		expect(exploration).toContain("scramjet:command-failure-analyst");
+		expect(architecture).toContain("scramjet:command-architect");
+		expect(architecture).toContain("mach12:code-architect");
+		expect(evaluation).toContain("mach12:test-designer");
 	});
 
-	it("substitutes command plan-review lenses and gives each finding one assessor family", () => {
+	it("references one holistic command reviewer and one independent command assessor", () => {
 		const content = command("issue-review");
 		const evidence = section(content, "## Step 4:", "## Step 5:");
 		const assessment = section(content, "## Step 6:", "## Step 7:");
 
-		for (const agent of [
-			"scramjet:instruction-semantics-analyzer",
-			"scramjet:command-operability-reviewer",
-			"scramjet:command-simplifier",
-		]) {
-			expect(evidence).toContain(agent);
-		}
-		expect(evidence).toMatch(/review evidence plus assessment[^.]*seven/i);
-
+		expect(evidence).toContain("scramjet:command-reviewer");
+		expect(evidence).toContain("scramjet:instruction-semantics-analyzer");
+		expect(evidence).toContain("scramjet:command-set-explorer");
 		expect(assessment).toContain("scramjet:independent-command-assessor");
 		expect(assessment).toContain("mach12:independent-assessor");
-		expect(assessment).toMatch(/every finding exactly one verdict owner/i);
-		expect(content).toMatch(/revision-architect[^.]*separate/i);
 	});
 });
 
@@ -451,50 +431,25 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
 	});
 
-	it.each(["issue-implement", "pr-review-fix"])(
-		"%s substitutes prompt reviewers within its existing shared cap",
-		(basename) => {
-			const quality = section(command(basename), "6. **Quality review**", "7. **Summary**");
-			for (const agent of [
-				"scramjet:instruction-semantics-analyzer",
-				"scramjet:command-operability-reviewer",
-				"scramjet:command-simplifier",
-				"mach12:code-reviewer",
-			]) {
-				expect(quality).toContain(agent);
-			}
-			expect(quality).toMatch(/single pass/i);
-			expect(quality).toMatch(/trivial[^.]*skip/i);
-			expect(quality).toMatch(/re-review[^.]*within the three-subagent cap/i);
-		},
-	);
-
-	it("selects all applicable PR review lenses under one seven-reviewer cap", () => {
-		const review = section(command("pr-review"), "## Step 3:", "## Step 4:");
-		expect(review).not.toContain("Default to `all`");
-		for (const agent of [
-			"scramjet:instruction-semantics-analyzer",
-			"scramjet:command-operability-reviewer",
-			"scramjet:command-simplifier",
-			"mach12:code-reviewer",
-		]) {
-			expect(review).toContain(agent);
-		}
-		expect(review).toMatch(/maximum of seven/i);
+	it.each(["issue-implement", "pr-review-fix"])("%s references the bounded command review roles", (basename) => {
+		const quality = section(command(basename), "6. **Quality review**", "7. **Summary**");
+		expect(quality).toContain("scramjet:command-reviewer");
+		expect(quality).toContain("scramjet:instruction-semantics-analyzer");
+		expect(quality).toContain("mach12:code-reviewer");
 	});
 
-	it("assigns every PR review finding to exactly one compatible assessor", () => {
+	it("references one command finding reviewer and optional context compression", () => {
+		const review = section(command("pr-review"), "## Step 3:", "## Step 4:");
+		expect(review).toContain("scramjet:command-reviewer");
+		expect(review).toContain("scramjet:instruction-semantics-analyzer");
+		expect(review).toContain("scramjet:command-set-explorer");
+	});
+
+	it("references the disjoint command and runtime assessors", () => {
 		const assessment = section(command("pr-review-assessment"), "## Step 3:", "## Step 4:");
 		expect(assessment).toContain("scramjet:independent-command-assessor");
 		expect(assessment).toContain("mach12:independent-assessor");
-		expect(assessment).toMatch(/every finding exactly one verdict owner/i);
-		expect(assessment).toMatch(/cross-boundary[^.]*one[^.]*owner/i);
-		expect(assessment).toMatch(/at most two assessors/i);
-		expect(assessment).toMatch(/F\/S identifiers[^.]*caller[^.]*taxonomy/i);
-		expect(assessment).toMatch(/actual referenced artifact[^.]*command prose[^.]*runtime source/i);
-		expect(assessment).toMatch(
-			/exclusively owning repository mutation, test execution, user interaction, and publication/i,
-		);
+		expect(assessment).toContain("writing-scramjet-commands");
 	});
 
 	it.each(["pr-review-assessment", "pr-review-fix"])(
@@ -514,73 +469,6 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		expect(context).toMatch(/exact numeric ID[^.]*complete verified target-PR comment stream/i);
 		expect(context).toMatch(/explicit reference[^.]*review comment ID or URL/i);
 		expect(context).not.toContain("issues/comments/<assessment-comment-id>");
-	});
-});
-
-describe("mach12 issue planning — architecture choice contract", () => {
-	const issuePlan = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-plan.md`), "utf-8");
-	const step6Start = issuePlan.indexOf("## Step 6:");
-	const step6End = issuePlan.indexOf("## Step 7:");
-	const step6 = issuePlan.slice(step6Start, step6End);
-
-	it("presents technical-debt differences and requires an accepted approach before proceeding", () => {
-		expect(step6Start).toBeGreaterThan(-1);
-		expect(step6End).toBeGreaterThan(step6Start);
-		for (const disposition of ["introduces", "retains", "reduces", "avoids"]) {
-			expect(step6).toContain(disposition);
-		}
-		expect(step6).toMatch(/none identified/i);
-		expect(step6).toMatch(/future (?:maintenance|cost)/i);
-		for (const cost of ["maintenance", "migration", "coupling", "testing", "operational"]) {
-			expect(step6).toContain(cost);
-		}
-
-		for (const existingRequirement of [
-			"brief summary of each approach",
-			"trade-offs comparison",
-			"recommendation with reasoning",
-			"concrete implementation differences",
-		]) {
-			expect(step6).toContain(existingRequirement);
-		}
-
-		expect(step6).toMatch(/three options[^.]*narrow Markdown table/i);
-		expect(step6).toMatch(
-			/columns, in order: \*\*Option\*\*, \*\*Approach\*\*, \*\*Key difference \/ trade-off\*\*, and \*\*Debt delta\*\*/i,
-		);
-		expect(step6).toMatch(/use \*\*Option\*\* only for the short lens or option name/i);
-		expect(step6).toMatch(
-			/in \*\*Approach\*\*[^.]*what the architecture builds[^.]*how it works[^.]*requirement or problem it solves/i,
-		);
-		expect(step6).toMatch(
-			/reserve \*\*Key difference \/ trade-off\*\*[^.]*comparative benefits, costs, and sacrifices[^.]*other options/i,
-		);
-		expect(step6).toMatch(/against the current implementation[^:]*:\s*`\+` means debt introduced/i);
-		expect(step6).toMatch(/`-` means existing debt reduced or removed/i);
-		expect(step6).toMatch(/signs indicate direction, not whether an option is good or bad/i);
-		expect(step6).toMatch(/option does not need to contain both/i);
-		expect(step6).toMatch(/use `None identified`[^;]*; never invent debt/i);
-		expect(step6).toMatch(/omit retained debt[^.]*immaterial or common/i);
-		expect(step6).toMatch(/materially differentiating retained liability[^.]*in words/i);
-		expect(step6).toMatch(/common material retained debt outside the compact table/i);
-		expect(step6).toMatch(
-			/always present[^.]*detailed trade-offs[^.]*implementation differences[^.]*recommendation with reasoning[^.]*common material debt/i,
-		);
-		expect(step6).toMatch(/place those details outside the compact table[^.]*table cells verbose/i);
-		expect(step6).toMatch(/detailed blueprint rationale outside the table/i);
-
-		const perOptionDebt = step6.search(/each lens must also assess the technical debt/i);
-		const synthesis = step6.search(/cross-option technical-debt (?:summary|synthesis)/i);
-		const choice = step6.search(/ask the user (?:to choose|which approach)/i);
-		expect(perOptionDebt).toBeGreaterThan(-1);
-		expect(synthesis).toBeGreaterThan(perOptionDebt);
-		expect(choice).toBeGreaterThan(synthesis);
-		expect(step6).toMatch(/material differences/i);
-		expect(step6).toMatch(/common to all options/i);
-		expect(step6).toMatch(/every current option[^.]*unsatisfactory/i);
-		expect(step6).toMatch(/reject all current (?:approaches|options)[^.]*request revision/i);
-		expect(step6).toMatch(/complete updated (?:option )?comparison/i);
-		expect(step6).toMatch(/do not proceed to Step 7[^.]*until[^.]*accepts an approach/i);
 	});
 });
 

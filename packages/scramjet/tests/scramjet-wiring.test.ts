@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { parseFrontmatter } from "@leanandmean/coding-agent";
+import { loadSkillsFromDir, parseFrontmatter } from "@leanandmean/coding-agent";
 import { describe, expect, it } from "vitest";
 import { parseCommandFile } from "../src/commands/loader.js";
 
@@ -14,16 +14,10 @@ function body(): string {
 }
 
 const specialistNames = [
-	"scramjet:authority-state-analyzer",
 	"scramjet:command-architect",
-	"scramjet:command-completeness-checker",
-	"scramjet:command-evaluation-designer",
 	"scramjet:command-failure-analyst",
-	"scramjet:command-operability-reviewer",
+	"scramjet:command-reviewer",
 	"scramjet:command-set-explorer",
-	"scramjet:command-simplifier",
-	"scramjet:command-trust-reviewer",
-	"scramjet:context-flow-analyzer",
 	"scramjet:independent-command-assessor",
 	"scramjet:instruction-semantics-analyzer",
 ];
@@ -46,7 +40,7 @@ describe("Scramjet command specialists", () => {
 		const descriptions = definitions.map(({ frontmatter }) => frontmatter.description);
 
 		expect(definitions.map(({ file, frontmatter }) => `${frontmatter.name}.md` === file)).toEqual(
-			Array(12).fill(true),
+			Array(6).fill(true),
 		);
 		expect(descriptions.every((description) => typeof description === "string" && description.trim())).toBe(true);
 		expect(definitions.every(({ body }) => body)).toBe(true);
@@ -56,7 +50,18 @@ describe("Scramjet command specialists", () => {
 					.filter((description): description is string => typeof description === "string")
 					.map((description) => description.trim()),
 			).size,
-		).toBe(12);
+		).toBe(6);
+	});
+});
+
+describe("Scramjet command authoring skill", () => {
+	it("loads the packaged writing-scramjet-commands skill", () => {
+		const result = loadSkillsFromDir({ dir: join(__dirname, "../skills"), source: "package" });
+
+		expect(result.diagnostics).toEqual([]);
+		expect(result.skills).toHaveLength(1);
+		expect(result.skills[0]?.name).toBe("writing-scramjet-commands");
+		expect(readFileSync(result.skills[0]!.filePath, "utf8")).toContain("A Scramjet command is a generalized plan");
 	});
 });
 

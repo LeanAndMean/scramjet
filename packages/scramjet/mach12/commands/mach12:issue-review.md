@@ -74,29 +74,29 @@ Record these as **project review criteria** -- they serve as benchmarks when ass
 
 Classify the plan as command-only, code-only, or mixed before dispatching review evidence:
 
-- **Command-only** plans change executable natural-language surfaces: command or agent Markdown, frontmatter, next-step or delegation contracts, tool scopes, prompt artifacts, command-facing documentation, or tests whose subject is model interpretation. Replace the six mandatory code-oriented evidence lenses with `scramjet:instruction-semantics-analyzer`, `scramjet:command-operability-reviewer`, and `scramjet:command-simplifier`. Add the command-set explorer, architect, context-flow, authority/state, trust, evaluation, failure, or completeness specialist only when a concrete changed surface or requirement makes that responsibility relevant.
+- **Command-only** plans change executable natural-language surfaces: command or agent Markdown, frontmatter, next-step or delegation contracts, tool scopes, prompt artifacts, command-facing documentation, or tests whose subject is model interpretation. Use one `scramjet:command-reviewer` for a holistic independent review. Use `scramjet:instruction-semantics-analyzer` instead when the question is narrowly about contradictory or ambiguous executable wording. Add `scramjet:command-set-explorer` first only when a large multi-command set must be compressed before review; do not union overlapping reviewers.
 - **Code-only** plans retain the six existing Mach 12 exploration lenses: files referenced in the plan, architecture and patterns, gaps, risks and pitfalls, alternative approaches, and test infrastructure.
-- **Mixed** plans use both families with disjoint briefs and file/claim partitions; command specialists replace analogous code lenses rather than being added beside the full code suite.
+- **Mixed** plans use the minimum command reviewer and relevant code lenses with disjoint briefs and file/claim partitions; command specialists replace analogous code lenses rather than being added beside the full code suite.
 
 During parent-owned exploration, identify project-provided tools relevant to the plan's affected artifacts from repository guidance, manifests, adjacent scripts, CI configuration, and established usage. Establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization. Run applicable non-mutating checks when their current evidence is needed for the review, and record exact commands, outputs, and limitations. Treat failures as evidence rather than automatic root-cause findings, warnings as bounded diagnostics rather than new scope, and clean output as insufficient behavioral proof.
 
-The review evidence plus assessment pass is capped at seven subagent calls across both families. Reserve one assessment call for command-only or code-only work; for mixed work, reserve two when both finding families are materially plausible, leaving at most five evidence calls. Select proportionally rather than using every available specialist. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
+The review evidence plus assessment pass is capped at seven subagent calls across both families, primarily for code-heavy or mixed work. Command-only work normally uses one reviewer and one independent assessor, with an explorer added only for context compression. A better-fit installed agent may replace an advisory role only when authoritative repository or command guidance establishes compatibility with its responsibility, read-only posture, context needs, output, and handoff.
 
-Record each selected agent and its evidence-based reason in the dispatch brief and synthesis. Missing, failed, or malformed required output remains visible and narrows the conclusion; never silently substitute another agent or broaden to all specialists. Mention omitted roles only when omission materially limits confidence.
+Record each selected agent and its evidence-based reason. Missing required output narrows the conclusion; never substitute another agent merely to fill a category. Command specialists load the `writing-scramjet-commands` skill as their shared authoring authority.
 
-For command-plan evidence, treat commands as goal-oriented instructions whose known-effective common-path process can be legitimate value. Treat plans and procedures as provisional: when an assumption fails, permit the smallest safe adaptation that preserves the goal and durable boundaries, asking only when missing information or user judgment prevents progress. Require recurring observed user friction where the same unresolved question repeatedly reaches users before proposing speculative exception branches, guards, checkpoints, or recovery protocols; exact consumer contracts, demonstrated trust boundaries, and explicit user requirements remain independent justifications. A hypothetical, one review concern, one disposable probe, one isolated incident, or a failure from a superseded design does not establish recurrence.
-
-For parallel execution, dispatch all selected evidence tasks in one batch. Every brief must include the task-relevant issue title, body, discussion, requirements, and decisions; the current plan; user context, project review criteria, and relevant verified project-tool commands, outputs, and limitations; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected cited output. Pass concise excerpts or summaries rather than an indiscriminate transcript. After the tasks complete, read every identified file needed for the review.
+Every brief must include the task-relevant issue authority and decisions, current plan, user context, project criteria, verified project-tool evidence, relevant parent observations, exact surface partition, and expected cited output. Pass focused material rather than an indiscriminate transcript. When an explorer is needed, run it before the reviewer and give the reviewer its compressed map; otherwise dispatch independent evidence tasks in one parallel batch.
 
 ## Step 5: Review the plan
 
-If the user provided context in Step 1, weight the review toward the areas they emphasized -- surface findings on those areas even at Suggestions-level severity, and note in Step 7 how the user's focus shaped the findings (e.g., "User emphasized testing strategy; this raised three suggestions in that area that would otherwise be borderline."). Apply this weighting across all axes below; do not let it crowd out coverage of the other axes.
+If the user provided context in Step 1, include it in the selected reviewer's brief and runtime review focus. User emphasis does not turn marginal observations into findings.
 
 ### Respect user-attributed decisions
 
 The plan's `## Decision Log` may tag entries with a source: `[user-decided]` (the user explicitly directed the decision) or `[agent-proposed]` (planner judgment). A `[user-decided]` entry reflects settled user intent -- do **not** raise it on minimality (axis 7), alternative-approach, or preference grounds; the minimum-sufficient-solution ladder does not override an explicit user requirement. A genuine correctness or feasibility defect in a `[user-decided]` entry (it references a nonexistent file, contradicts a hard codebase constraint, or cannot work as described) is still in scope. `[agent-proposed]` entries and untagged entries (legacy plans posted before this convention) get normal scrutiny -- treat untagged as `[agent-proposed]`, never as `[user-decided]`.
 
-For each stage in the plan, assess:
+For command-only plans, use the selected command reviewer's candidate findings as the command finding set; the parent validates identifiers and evidence but does not run another command review or add findings. For mixed plans, apply that ownership to the command partition.
+
+For code-only plans and the runtime partition of mixed plans, assess:
 
 1. **Correctness**: Does the stage accurately describe what needs to happen? Are the files and changes correct?
 2. **Completeness**: Are there missing steps, files, or edge cases?
@@ -113,9 +113,9 @@ For each stage in the plan, assess:
    Default severity: Suggestions, unless overbuilding creates significant implementation risk or maintenance burden. Do not apply this axis to `[user-decided]` Decision Log entries -- see "Respect user-attributed decisions" above.
 8. **Release-preparation exclusion**: Does the plan include version bumps, changelog entries, or release-preparation as implementation stages? Flag as a defect (severity: Important). Implementation-necessary version changes (e.g., updating a dependency version the code requires) are not excluded.
 
-For every command-process finding, identify the outcome served and whether the process is known-effective common-path guidance or speculative exception machinery. For speculative exception machinery, identify the qualifying evidence category and compare no change, deletion, capable-agent judgment, and one outcome-level invariant before proposing detailed instructions. Count instruction volume, context pressure, branches, calls, and tests in the plan's complexity. Omit unsupported speculative machinery rather than demoting it to Suggestions.
+For command findings, preserve the selected reviewer's claim, authority, changed-scope ownership, and uncertainty without adding a correction design. Reject a candidate whose required evidence is absent rather than rewriting it.
 
-Also assess the plan holistically:
+For the runtime partition, also assess the plan holistically:
 - Does it address all requirements and acceptance criteria from the issue?
 - Does it follow existing codebase patterns and conventions?
 - Are there alternative approaches worth considering?
@@ -123,7 +123,7 @@ Also assess the plan holistically:
 - **Test coverage planning**: If the project has an existing test suite or the project review criteria specify testing expectations, does each stage that introduces or modifies behavior include adequate test planning (what to test, test types, behaviors to cover)? If the project has no testable runtime code, verify the plan notes this rather than omitting test planning silently.
 - **Project-native tooling**: Does the plan place applicable authoritative checks at the stage where their evidence is needed, distinguish required/advisory and read-only/mutating tools, and preserve missing evidence or unrelated baseline diagnostics without mistaking tool output for behavioral proof?
 
-Create an initial findings list with stable identifiers:
+Create one initial findings list from the selected command reviewer's candidates and the parent's disjoint runtime findings, with stable identifiers:
 
 - Label each Critical and Important finding with a sequential F-prefixed identifier (`F1`, `F2`, `F3`, ...) numbered continuously across both sections.
 - Label each Suggestion with a sequential S-prefixed identifier (`S1`, `S2`, `S3`, ...).
@@ -132,13 +132,13 @@ Create an initial findings list with stable identifiers:
 
 ## Step 6: Independently assess the findings
 
-Before presenting findings to the user, run an independent assessment pass. Give every finding exactly one verdict owner: command-surface findings go to `scramjet:independent-command-assessor`, runtime-code findings go to `mach12:independent-assessor`, and cross-boundary findings go to one explicitly selected owner based on the alleged behavior and controlling responsibility. Use at most two assessors, within the seven-call review evidence plus assessment cap. Do not ask both assessors to classify the same item.
+Before presenting findings to the user, run an independent assessment pass. Give every finding exactly one verdict owner: command-surface findings go to `scramjet:independent-command-assessor`, runtime-code findings go to `mach12:independent-assessor`, and cross-boundary findings go to one explicitly selected owner based on the alleged behavior. Use at most two assessors and do not ask either to classify an empty family or reclassify the other's items.
 
-For mixed work, obtain the runtime assessor's verdicts and unnumbered per-finding plan fragments first. Give the command assessor those accepted results only as non-verdict aggregate context; it must not reclassify them or change their fix approaches. The command assessor classifies only its disjoint command findings and owns one combined-system judgment across the merged accepted set. When accepted runtime results exist but no command findings remain, invoke it in aggregate-only mode: it classifies nothing, preserves every runtime classification, fix approach, and fragment, and returns only the combined-system judgment. The parent validates identifiers and mechanically orders the accepted fragments into one downstream plan when revision is chosen, preserving every assessor-owned classification and fix approach.
+The command assessor receives the actual authority and artifacts plus each finding's identifier, claim, and evidence, without the reviewer's proposed correction when that can be separated. It independently classifies the claims and returns no fix design or implementation fragment. The runtime assessor retains its existing classification and fix-fragment contract. The parent validates completeness and presents the combined dispositions without treating one assessor as owner of the other domain.
 
-A replacement assessor must be explicitly compatible with the caller's exact identifiers, taxonomy, output shape, evidence needs, and workflow handoff; catalog-only similarity is supplementary. Missing or malformed required assessment remains visible and blocks a complete classification rather than triggering silent substitution.
+A replacement assessor must be explicitly compatible with the caller's identifiers, taxonomy, evidence needs, output, and handoff. Missing required assessment blocks a complete classification rather than triggering substitution.
 
-The selected assessor owns classification: do **not** pre-classify its assigned findings, pre-judge their validity, or run the classification yourself after dispatch. Provide each assessor with:
+The selected assessor owns classification: do **not** pre-classify its assigned findings or defend the reviewer before dispatch. Provide each assessor with:
 
 - The issue title/body and full comment stream.
 - The current implementation plan.
@@ -146,7 +146,7 @@ The selected assessor owns classification: do **not** pre-classify its assigned 
 - The key codebase evidence relevant to its assigned surface from Step 4.
 - Its assigned initial F/S findings from Step 5, exact command/runtime partition, and evidence-based selection reason.
 
-Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, and classify it using the taxonomy below. Require an unnumbered implementation fragment for every Genuine blocker and Genuine issue; allow an optional fragment for each Useful suggestion; and require no fragment for Nitpick, False positive, or Deferred/out of scope. For command findings, treat known-effective common-path process as legitimate value and plans as provisional, permitting safe goal-preserving adaptation when assumptions fail. A contained or low-risk edit is not sufficient evidence of net improvement: reject speculative exception branches, guards, checkpoints, or recovery protocols that lack recurring observed user friction, an exact consumer contract, a demonstrated trust boundary, or an explicit user requirement, and assess the merged instruction, context, branch, call, and test burden before finalizing item verdicts:
+Each brief should instruct the assessor to preserve every F/S identifier, verify each item against the issue, plan, comments, and relevant artifacts, and classify it using the taxonomy below. Runtime assessors return their normal implementation fragments for accepted runtime findings. Command assessors return classifications only; correction design belongs to the later architect or main-agent revision step:
 
 - **Genuine blocker** -- the plan is likely to fail or produce incorrect results unless this is fixed.
 - **Genuine issue** -- the plan has a significant gap or risk that should be addressed before implementation.
@@ -171,7 +171,7 @@ Present your review to the user, organized as:
 1. **Plan summary**: Brief restatement of what the plan proposes.
 2. **Strengths**: What the plan gets right.
 3. **Assessment summary**: Counts by classification (e.g., genuine blockers, genuine issues, useful suggestions, nitpicks, false positives, deferred/out-of-scope).
-4. **Selection and aggregate evidence**: Selected specialists and evidence-based reasons, material omissions only, the aggregate owner, and the net change in responsibilities, artifacts, and recovery paths.
+4. **Review method and limits**: Selected reviewers and reasons, material evidence limitations, and any context-compression step used.
 5. **Issues**: Problems found, classified by severity and labeled with stable identifiers:
    - **Critical**: Genuine blockers that will cause the implementation to fail or produce incorrect results.
    - **Important**: Genuine issues or significant risks that should be addressed before implementation.
@@ -203,7 +203,7 @@ If the user picks "Create revised plan", enter the revision loop:
    - The existing plan's `## Pitfalls and Gotchas` section (if present). Instruct the architect to preserve existing pitfalls unless the revision makes them irrelevant, and to add any new pitfalls discovered during review.
    - If this is a subsequent revision iteration, include the prior revised plan and the delta assessment that prompted re-revision.
 
-   Instruct the architect to propose revision advice for its controlling domain that addresses the applicable Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally. Treat the proposal as architect evidence, not yet as the post-ready artifact. The parent must integrate that advice with preserved other-domain evidence, assessor-owned fix approaches, and prior decisions into the complete replacement through the plan-comment contract in the next step.
+   Instruct the architect to propose revision advice for its controlling domain that addresses the applicable Critical and Important findings while preserving the strengths identified in Step 7. Suggestions are optional improvements to incorporate where they fit naturally. Treat the proposal as architect evidence, not yet as the post-ready artifact. The parent integrates that advice with preserved other-domain evidence and prior decisions into the complete replacement through the plan-comment contract in the next step.
 
 2. **Load and apply the plan-comment contract.** After the architect returns and immediately before producing the final revised artifact, delegate once in this turn to:
 
@@ -213,7 +213,7 @@ If the user picks "Create revised plan", enter the revision loop:
 
    This loads the canonical artifact policy into the current model context; it does not run an independent formatter. Apply it to the prior plan, classified findings and deltas, architect proposal and exploration evidence, test strategy, project constraints, pitfalls, and decisions. Produce the exact, complete standalone replacement beginning with `<!-- mach12-plan -->`, and run the contract's final self-check. Resolve supported defects before publication; surface genuinely missing or contradictory evidence instead of producing a publication-eligible marker-bearing body.
 
-3. **Delta assessment.** Assess the finalized candidate, not the architect's raw proposal. Perform a lightweight delta assessment (not a full 6-lens re-exploration). For each finding from the original review (referencing stable F/S identifiers) and each N-prefixed item from prior iteration deltas, classify into one of three categories:
+3. **Delta assessment.** Assess the finalized candidate, not the architect's raw proposal. Perform a lightweight delta assessment rather than another full review. For each finding from the original review (referencing stable F/S identifiers) and each N-prefixed item from prior iteration deltas, classify into one of three categories:
    - **Addressed**: The revised plan resolves this finding. State how in one sentence.
    - **Remaining**: The revised plan does not resolve this finding, or only partially addresses it. State what is still missing.
    - **New issue**: The revised plan introduces a concern not present in the original review. Label with N-prefixed identifiers continuing from the highest prior N-number (e.g., if prior delta had N1–N3, new issues start at N4) and classify severity (Critical/Important/Suggestion) using the same criteria as Step 6.

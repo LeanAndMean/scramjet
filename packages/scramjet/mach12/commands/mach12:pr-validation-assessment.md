@@ -46,7 +46,7 @@ Keep the main agent neutral before dispatch. Construct focused test invocations 
 
 Classify candidates by the behavior they challenge. Assign command candidates to `scramjet:independent-command-assessor` and runtime candidates to `mach12:independent-assessor`. For a cross-boundary candidate, select one owner from the alleged behavior rather than requesting duplicate verdicts. Each candidate gets exactly one verdict owner, and the assessment uses at most two assessors with `agentScope: "user"`.
 
-Never ask either assessor to classify an empty family. Run the runtime assessor first only when runtime candidates are assigned. Run the command assessor to classify assigned command candidates and, for mixed work, to provide the combined-system judgment only when accepted runtime results create a merged accepted set. When a mixed artifact has accepted runtime results but no command candidates, invoke the command assessor in its authorized aggregate-only mode: it classifies nothing, preserves every runtime verdict and root-cause conclusion, and returns only the combined-system judgment. Give accepted runtime results and root-cause conclusions to the command assessor strictly as non-verdict aggregate context. The command assessor must not reclassify runtime candidates. The parent validates completeness and identifiers, then mechanically merges complete verdicts unchanged, including their assessor-owned root-cause conclusions.
+Never ask either assessor to classify an empty family or reclassify the other's items. The command assessor receives actual authority and candidate evidence without a proposed production fix, loads `writing-scramjet-commands`, and classifies only assigned command candidates. The parent validates completeness and identifiers, then merges the disjoint verdicts unchanged.
 
 Every brief must include the authoritative requirements and decisions, relevant parent-established observations, exact assigned candidates and command/runtime partition, selection reason, and expected output. Both named agents are explicitly compatible with the exact candidate identifiers, accepted-or-rejected classification, and evidence contract below. An installed replacement requires authoritative repository or command guidance explicitly establishing compatibility with the same responsibility, read-only posture, context, output shape, and handoff; catalog-only similarity is supplementary and cannot displace either required role. Missing, failed, or malformed output remains incomplete evidence and never triggers all-agent expansion.
 
@@ -71,7 +71,7 @@ If a push succeeds but later publication is uncertain, preserve the pushed `V` a
 Prepare an assessment body beginning `<!-- mach12-assessment -->` and link the exact preliminary review comment. Include:
 
 - every candidate's accepted or rejected disposition and concise evidence;
-- one compact selection-and-aggregate item naming the selected specialists and evidence-based reasons, material omissions only, the aggregate owner, and the net change in responsibilities, artifacts, and recovery paths;
+- one compact assessment-method item naming the selected assessors, assigned partitions, and material evidence limits;
 - stable F/S identifiers only for accepted defects;
 - `P`, the actual merge base, and proof commit `V`, or `proof commit: none` when nothing survives;
 - final accepted test paths, node IDs, assertions, expected failures, and independently supported root causes;

@@ -88,9 +88,9 @@ Classify the affected work before dispatching advisory subagents:
 
 As part of parent-owned exploration, identify project-provided development tools relevant to the affected artifacts from repository guidance, manifests, adjacent scripts, CI configuration, and established project usage. Establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization covering their effects. Record exact verified commands, sources, classifications, availability, outputs, and limitations. Treat diagnostics as evidence rather than automatic root-cause or scope decisions, and never treat clean tooling output as behavioral proof.
 
-Across the initial exploration, architecture, and test-design pass in Steps 4, 6, and 8, use a maximum of eight subagent calls across both families. User-requested targeted architecture reruns after rejecting the initial options are a separate decision branch and do not count against the completed initial pass. Every brief must carry the task-relevant issue title, body, discussion, requirements, and decisions from Step 2; user context, project planning requirements, and verified project-tool commands, outputs, and limitations relevant to the specialist; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected output. Pass concise excerpts or summaries rather than an indiscriminate transcript. Record every selected agent and its evidence-based reason in the synthesis. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
+Across the initial exploration, architecture, and runtime test-design pass in Steps 4, 6, and 8, use a maximum of eight subagent calls across both families. This is a ceiling for code-heavy or mixed work, not a target. User-requested targeted architecture reruns after rejecting the initial options are a separate decision branch and do not count against the completed initial pass. Every brief must carry the task-relevant issue title, body, discussion, requirements, and decisions from Step 2; user context, project planning requirements, and verified project-tool commands, outputs, and limitations relevant to the specialist; relevant parent-established observations; the exact command/runtime partition; the selection reason; and the expected output. Pass concise excerpts or summaries rather than an indiscriminate transcript. Record every selected agent and its evidence-based reason in the synthesis. A better-fit installed agent may replace an advisory role only when this command explicitly names it and defines the required output, or authoritative repository or command guidance establishes compatibility with the responsibility, read-only posture, context needs, required output, and workflow handoff. A catalog-only name or description match is supplementary and cannot replace an applicable named Scramjet specialist or exact Mach 12 role.
 
-For command work, add `scramjet:context-flow-analyzer`, `scramjet:authority-state-analyzer`, `scramjet:command-trust-reviewer`, `scramjet:command-failure-analyst`, or `scramjet:command-completeness-checker` only when delegation or fresh-session flow, duplicated authority or partial state, a concrete trust boundary, an observed failure, or explicit requirement coverage makes that responsibility relevant. Never broaden to every specialist. Reserve enough of the eight-call budget for the architecture calls and, when Step 8's dispatch criteria apply, the evaluation or test designer. Missing, failed, or malformed required output remains visible as incomplete evidence rather than triggering silent substitution.
+For a concrete observed command failure, add `scramjet:command-failure-analyst` only when causal tracing is needed beyond the command-set map. The explorer compresses current behavior; the failure analyst traces one actual execution. Do not add agents merely to cover more quality categories. Missing, failed, or malformed required output remains visible as incomplete evidence rather than triggering substitution.
 
 For parallel execution, dispatch all selected exploration tasks in a single batch. Include user context and project planning requirements in each relevant brief. Each exploration should return key files and cited observations; after it completes, read every identified file needed to build deep understanding.
 
@@ -151,65 +151,60 @@ If the user says "whatever you think is best", provide your recommendation with 
 
 Based on the codebase findings and clarified requirements, route architecture by the Step 4 classification while staying within the shared maximum of eight calls:
 
-- For command-only work, replace the three code architects with three `scramjet:command-architect` calls, one for each alternative below. Each brief asks for one complete selected design under that lens, including rejected additive alternatives, while owning command purpose, responsibility boundaries, side effects, fact authority, partial-state elimination, and total command-set complexity.
+- For command-only work, use one `scramjet:command-architect`. Ask for the minimum generalized plan, details deliberately left to runtime judgment, and a second option only when evidence exposes a material user decision.
 - For code-only work, retain three `mach12:code-architect` calls, one for each alternative below.
-- For mixed work, give prompt and code architects disjoint briefs, reserve at least one `scramjet:command-architect` as aggregate owner for the command design, and have the parent synthesize three coherent system-level options. All calls count against the same eight-call budget.
+- For mixed work, give one command architect and the necessary code architects disjoint briefs. The parent integrates their results without asking either family to design the other domain.
 
-A replacement installed agent must satisfy the selected lens's exact blueprint contract; catalog-only similarity is insufficient. Dispatch the selected architecture tasks in one parallel batch. If the user provided context, include it in each brief.
+A replacement installed agent must satisfy the selected role's exact contract; catalog-only similarity is insufficient. Dispatch independent architecture tasks in one parallel batch. If the user provided context, include it in each brief.
 
-The three alternatives are:
+For code architecture, the three alternatives are:
 
 - **Smallest sufficient change**: Design the implementation that satisfies the requirements with the smallest change surface. Walk the minimum-sufficient solution ladder before proposing any new abstractions, files, or dependencies. Maximize reuse of existing patterns.
 - **Strongest structural design**: Design the implementation prioritizing clear separation of concerns, maintainability, and well-defined abstractions. Still walk the ladder — justify each new component against a lower rung.
 - **Alternative trade-off design**: Design an implementation that optimizes for a different axis (such as performance, extensibility, or a constraint the other lenses deprioritized). Walk the ladder and state what this lens deliberately trades away.
 
-Each option should produce a full implementation blueprint: files to create or modify, component responsibilities, data flow, and a phased build sequence.
+Each code option should produce a full implementation blueprint: files to create or modify, component responsibilities, data flow, and a phased build sequence. The command architect instead returns the concise command design and handoffs defined by its provider contract.
 
-Each lens must also assess the technical debt the option it proposes introduces, retains, reduces, or avoids. An evidence-based “none identified” is valid; do not invent debt. Keep this assessment concise and separate from broader risks and trade-offs: technical debt means likely future maintenance, migration, coupling, testing, or operational cost.
+Each architect must assess the technical debt its proposal introduces, retains, reduces, or avoids. An evidence-based “none identified” is valid; do not invent debt. Keep this assessment concise and separate from broader risks and trade-offs: technical debt means likely future maintenance, migration, coupling, testing, or operational cost.
 
 After all results return, review the approaches and form your own recommendation based on the issue's scope, the codebase's conventions, and the user's clarified requirements.
 
-Each lens must state:
+Each code lens must state:
 - Which ladder rung it sits on and why lower rungs are insufficient.
 - What problem it optimizes for.
 - What it deliberately does not build.
 - What evidence would make this approach inappropriate.
 - The technical debt the option it proposes introduces, retains, reduces, or avoids.
 
-Present the three options in a narrow Markdown table with these concise, parallel columns, in order: **Option**, **Approach**, **Key difference / trade-off**, and **Debt delta**. Use **Option** only for the short lens or option name. In **Approach**, concisely state what the architecture builds, how it works, and what requirement or problem it solves. Reserve **Key difference / trade-off** for comparative benefits, costs, and sacrifices relative to the other options. Define debt deltas against the current implementation: `+` means debt introduced, while `-` means existing debt reduced or removed. These signs indicate direction, not whether an option is good or bad, and an option does not need to contain both. Use `None identified` when the evidence supports no material delta; never invent debt to make rows symmetrical. Omit retained debt that is decision-immaterial or common to the options from the table cells, but state a materially differentiating retained liability explicitly in words rather than adding another symbol. Summarize common material retained debt outside the compact table.
+For command-only work, present the command architect's recommended generalized plan, details deliberately left to runtime judgment, handoffs, and debt delta. Include a second option only when the architect identified a material user decision.
 
-Always present the detailed trade-offs, concrete implementation differences, **your recommendation with reasoning**, common material debt, and whether every current option has unsatisfactory debt implications. Place those details outside the compact table whenever including them would make table cells verbose. Keep detailed blueprint rationale outside the table as needed. The complete presentation must still include a brief summary of each approach, a trade-offs comparison, and a concise cross-option technical-debt summary identifying material differences and debt common to all options.
+For code-only work, present the three options in a narrow Markdown table with these concise, parallel columns, in order: **Option**, **Approach**, **Key difference / trade-off**, and **Debt delta**. Use **Option** only for the short lens or option name. In **Approach**, concisely state what the architecture builds, how it works, and what requirement or problem it solves. Reserve **Key difference / trade-off** for comparative benefits, costs, and sacrifices relative to the other options. Define debt deltas against the current implementation: `+` means debt introduced, while `-` means existing debt reduced or removed. These signs indicate direction, not whether an option is good or bad, and an option does not need to contain both. Use `None identified` when the evidence supports no material delta; never invent debt to make rows symmetrical. Omit retained debt that is decision-immaterial or common to the options from the table cells, but state a materially differentiating retained liability explicitly in words rather than adding another symbol. Summarize common material retained debt outside the compact table.
 
-The recommendation must answer only what the selected lens did not already cover:
+For code options, always present the detailed trade-offs, concrete implementation differences, **your recommendation with reasoning**, common material debt, and whether every current option has unsatisfactory debt implications. Place those details outside the compact table whenever including them would make table cells verbose. Keep detailed blueprint rationale outside the table as needed. The complete code presentation must still include a brief summary of each approach, a trade-offs comparison, and a concise cross-option technical-debt summary identifying material differences and debt common to all options.
+
+A code recommendation must answer only what the selected lens did not already cover:
 - Which lens and ladder rung did you select, citing the lens's lower-rung rationale rather than restating it?
 - Why is this not bigger than necessary?
 - Why is this not too small to satisfy the requirements?
 - Which larger abstractions/dependencies/files were rejected, and why?
 
-Do not default to the middle option without explaining why both the smaller and more structural options are worse for this issue.
+Do not default to the middle code option without explaining why both the smaller and more structural options are worse for this issue.
 
-After presenting the complete comparison and recommendation, ask the user to choose either:
-
-- **Accept one approach**; or
-- **Reject all current approaches and request revision**, optionally supplying constraints.
-
-If the user rejects all current approaches, incorporate their feedback, refine or rerun the relevant architecture analysis as needed, and present the complete updated option comparison and recommendation again. Do not require all three lenses to rerun when targeted refinement is sufficient, but always present a complete coherent replacement rather than a delta.
-
-**Do not proceed to Step 7 or any later planning work until the user explicitly accepts an approach.**
+Ask the user to choose only when multiple code options remain materially viable, the command architect returned a material second option, or the design changes a user-owned product or safety decision. Otherwise present the single supported design and proceed unless the user redirects. If the user rejects the design, incorporate their feedback and return a complete coherent replacement rather than a delta.
 
 ## Step 7: Ask architecture questions
 
-After the architect lenses have run, review their outputs for unresolved architecture questions — aspects of **how to build it** that the lenses surfaced disagreement on, left ambiguous, or where user preference is needed.
+After the architect work returns, review its output for unresolved architecture questions — aspects of **how to build it** that remain ambiguous or require user preference.
 
 ### Self-assessment
 
-Use the architect lens outputs to resolve questions before escalating. When one lens's approach clearly fits the codebase conventions and satisfies the requirements, state your finding rather than asking. Questions deferred from Step 5 may already be answered by the architect analysis — check before presenting them.
+Use the architect output to resolve questions before escalating. When one approach clearly fits the codebase conventions and satisfies the requirements, state your finding rather than asking. Questions deferred from Step 5 may already be answered by the architect analysis — check before presenting them.
 
 ### Procedure
 
 1. Review questions deferred from Step 5 against the architect outputs. Drop any that the analysis resolved.
-2. Identify new architecture questions surfaced by the lenses (e.g., disagreements between lenses on a specific structural choice).
-3. For remaining questions, follow the Question Quality Format from Step 5. Include relevant findings from the architect lenses as context.
+2. Identify new architecture questions surfaced by the design work.
+3. For remaining questions, follow the Question Quality Format from Step 5. Include relevant architect findings as context.
 4. Present your analysis of how the architecture maps to the clarified requirements, even if no questions remain.
 5. **If unresolved questions exist, wait for answers before proceeding.** If the architect analysis resolved everything, present your brief summary and proceed to Step 8.
 
@@ -222,7 +217,7 @@ Before drafting the plan, decide whether the issue needs a deliberate test strat
 - A non-trivial feature (new behavior that needs confidence verification)
 - A refactor touching critical paths
 
-For command-only work, replace `mach12:test-designer` with `scramjet:command-evaluation-designer`; require the same plan-facing classification, test-first recommendation, proposed-tests table, cost/benefit assessment, and stage directives, while distinguishing structural evidence from provider-expensive or operational evidence. For code-only work, retain `mach12:test-designer`. For mixed work, use disjoint command and runtime briefs when both are justified, and count both against the shared eight-call maximum. A catalog-only match cannot replace either exact role.
+For command-only work, do not dispatch a test-design specialist. The parent distinguishes deterministic structural checks from real-use evidence and includes only evidence required by the issue or an observed failure; phrase assertions and synthetic model scenarios cannot establish command value. For code-only work, retain `mach12:test-designer`. For mixed work, use one runtime test-designer brief when runtime behavior warrants it, and let the parent cover the command partition directly. The runtime call counts against the shared eight-call maximum.
 
 **Write a lightweight inline test note instead** when:
 - The change is non-executable documentation, configuration, or mechanical metadata
@@ -231,18 +226,18 @@ For command-only work, replace `mach12:test-designer` with `scramjet:command-eva
 
 ### Dispatching the subagent
 
-Pass the selected designer a synthesized brief containing:
+When a runtime designer is selected, pass a synthesized brief containing:
 - Issue classification (bug fix / feature / refactor) and problem statement
-- The selected architecture from Step 6
+- The selected runtime architecture from Step 6
 - Relevant codebase findings: existing test patterns, related test files, coverage landscape, and verified project-native checks from Step 4
 
-The subagent treats parent-supplied tool evidence as input rather than independently rerunning project tooling. The subagent returns a test strategy with per-test cost/benefit assessments, coverage intent categorization, and -- for bug fixes -- a test-first recommendation.
+The subagent treats parent-supplied tool evidence as input rather than independently rerunning project tooling. It returns a runtime test strategy with per-test cost/benefit assessments, coverage intent categorization, and -- for bug fixes -- a test-first recommendation.
 
 ### Incorporating the output
 
-- Add a `## Test Strategy` section in the plan, placed before the staged breakdown. Include the subagent's classification, test-first recommendation, and proposed tests table.
-- Distribute per-stage test directives into each stage's description in the staged breakdown.
-- For bug fixes where the test-designer recommends test-first, mark the relevant stages with a test-first directive so `issue-implement` knows to write the failing test before the fix.
+- Add a `## Test Strategy` section in the plan, placed before the staged breakdown. For runtime work, include the subagent's classification, test-first recommendation, and proposed tests table. For command work, state deterministic structural checks and any separately justified real-use evidence without presenting either as proof of general effectiveness.
+- Distribute per-stage verification directives into each stage's description in the staged breakdown.
+- For runtime bug fixes where the test-designer recommends test-first, mark the relevant stages with a test-first directive so `issue-implement` knows to write the failing test before the fix.
 
 ### Lightweight path
 
