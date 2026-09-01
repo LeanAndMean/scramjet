@@ -46,21 +46,11 @@ Read ordinary GitHub readiness before changing the branch:
 gh pr view <pr-number> --json state,isDraft,reviewDecision,mergeable,mergeStateStatus
 ```
 
-Require the PR to be open, non-draft, and free of requested changes or required review, and read required checks with `gh pr checks <pr-number> --required`. If GitHub reports `CONFLICTING` or `DIRTY`, retain that conflict evidence and continue through checkout to Step 5 for guarded remediation rather than blocking immediately. This route does not bypass Step 5's Merge/Cancel choice and does not authorize an automatic merge. A behind branch continues to Step 5, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
+Require the PR to be open, non-draft, and free of requested changes or required review, and read required checks with `gh pr checks <pr-number> --required`. If GitHub reports `CONFLICTING` or `DIRTY`, retain that conflict evidence and continue through checkout to Step 4 for guarded remediation rather than blocking immediately. This route does not bypass Step 4's Merge/Cancel choice and does not authorize an automatic merge. A behind branch continues to Step 4, and pending or failing checks continue to Step 9 for resolution rather than blocking the checklist immediately. If GitHub still reports mergeability as unknown after one brief reread, report incomplete rather than guessing.
 
 No creator, provenance marker, issue linkage, or custom metadata participates in readiness.
 
-## Step 3: Read contribution guidelines
-
-Delegate to:
-
-```
-/mach12:find-contribution-guidelines
-```
-
-The subroutine returns requirements from all applicable contribution guidance and repository-local release instructions, with their source paths and any conflicts or missing details. Treat those sources as the primary authority for version locations, required mirrors or generated outputs, generation or synchronization commands, consistency checks, and the other pre-merge requirements below. If that guidance is absent or incomplete, use the fallback investigation in the relevant checklist item rather than inventing policy.
-
-## Step 4: Check out and prepare
+## Step 3: Check out and prepare
 
 Check out the PR branch:
 
@@ -78,7 +68,7 @@ git pull
 
 If the pull fails due to authentication, network error, or merge conflicts, report the error and stop -- the checklist cannot proceed without a clean, up-to-date working copy.
 
-## Step 5: Check branch freshness
+## Step 4: Check branch freshness
 
 Ensure the feature branch is up to date with the default branch before running the checklist.
 
@@ -97,7 +87,7 @@ Count how many commits the branch is behind:
 git rev-list --count HEAD..origin/<default-branch>
 ```
 
-If the count is **0**, the branch is current -- continue to Step 6.
+If the count is **0**, the branch is current -- continue to Step 5.
 
 If the count is **greater than 0**, inform the user that the branch is N commits behind `origin/<default-branch>`, then ask how to proceed:
 
@@ -110,7 +100,7 @@ A behind branch is blocked until updated; do not offer a skip or bypass path. If
 git merge origin/<default-branch>
 ```
 
-**If the merge succeeds cleanly**, push the merge commit (`git push`). If the push fails, report the error to the user and stop -- do not continue the checklist with an unpushed merge commit. Advise the user they can retry with `git push`, or undo the merge with `git reset --hard HEAD~1`. On success, continue to Step 6.
+**If the merge succeeds cleanly**, push the merge commit (`git push`). If the push fails, report the error to the user and stop -- do not continue the checklist with an unpushed merge commit. Advise the user they can retry with `git push`, or undo the merge with `git reset --hard HEAD~1`. On success, continue to Step 5.
 
 **If the merge has conflicts**, check whether all conflicted files are on the version-file allowlist: `plugin.json`, `package.json`, `pyproject.toml`, `setup.cfg`, `Cargo.toml`, `build.gradle`. Only files on this allowlist are eligible for auto-resolution.
 
@@ -135,6 +125,16 @@ git merge origin/<default-branch>
 
 **If the merge fails for any reason other than conflicts** (invalid ref, dirty working tree, internal error), report the full error output to the user and stop.
 
+## Step 5: Read contribution guidelines
+
+Delegate to:
+
+```
+/mach12:find-contribution-guidelines
+```
+
+The subroutine returns requirements from all applicable contribution guidance and repository-local release instructions, with their source paths and any conflicts or missing details. Treat those sources as the primary authority for version locations, required mirrors or generated outputs, generation or synchronization commands, consistency checks, and the other pre-merge requirements below. If that guidance is absent or incomplete, use the fallback investigation in the relevant checklist item rather than inventing policy.
+
 ## Step 6: Gather PR context
 
 Build a picture of what the PR changed so the checklist in Step 7 can make informed decisions:
@@ -158,7 +158,7 @@ If the user provided context, honor it as guidance for this checklist:
 - **Focus directives** (e.g., "focus on docs", "scrutinize the test coverage"): examine the named section more thoroughly. Surface findings that a routine pass might overlook.
 - **Other context**: use as supplementary information when running the relevant sections (e.g., a note about what changed informs documentation review).
 
-Per-item confirmation gates inside a section that runs (e.g., the bump-level question in 7b) remain authoritative -- context can skip the whole section, but it cannot pre-answer the gates inside a section that is executing.
+Per-item confirmation gates inside a section that runs (e.g., the bump-level question in 7b) remain authoritative. After 7b's required authority and fallback investigation establishes that version work is optional, context can skip that optional work, but it cannot pre-answer gates inside work that is executing.
 
 Using the PR context gathered in Step 6, work through each item. For each, report whether action is needed and perform it if so.
 
@@ -185,13 +185,13 @@ If any material detail remains ambiguous after that investigation, ask the user 
 
 Before editing the established version and changelog paths, record `git status --porcelain` and inspect any existing diffs for those paths. If a target path is already dirty, reconcile whether and how its existing changes belong to this bounded operation with the user before mutation; retain that baseline for the final diff and staging review.
 
-If version tracking exists and a bump is warranted, determine its semantic level:
+Follow the repository authority when it specifies the version target or classification rule. Only when that authority establishes semantic versioning but leaves the bump level unresolved, determine its semantic level:
 
 - **Patch**: bug fixes, minor improvements.
 - **Minor**: new features, non-breaking changes.
 - **Major**: breaking changes.
 
-If the bump level is not obvious from the changes, ask the user (Patch / Minor / Major).
+If the applicable target or classification remains unresolved, ask the user rather than overriding repository authority.
 
 After updating the canonical version, run every applicable repository-defined generation or synchronization step before the commit. Inspect `git status` and the complete diff; confirm that the canonical version, required mirrors, and affected tracked generated metadata changed consistently. Investigate unexpected changes, distinguish them from unrelated pre-existing work, and do not treat a generated file's mere appearance as proof that it belongs to the version change.
 
