@@ -18,13 +18,13 @@ next:
     - name: mach12:pr-review-fix
       hint: |
         Pick when at least one finding was classified as a genuine issue
-        that should be fixed before merge (including any reclassified
-        deferred items), or when optional nitpicks were selected for a
-        fix pass.
+        that should be fixed before merge (including deferred items the
+        user explicitly elected to fix in this PR), or when optional
+        nitpicks were selected for a fix pass.
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when no genuine issue remains; optional nitpicks may be
-        skipped before the merge checklist.
+        Pick when no required fix finding remains; optional nitpicks may
+        be skipped before the merge checklist.
 ---
 
 # PR Review Assessment
@@ -87,12 +87,12 @@ Give every finding exactly one verdict owner based on its alleged behavior:
 
 Use at most two assessors and never ask either assessor to classify an empty family or reclassify the other's items. The command assessor classifies only assigned command findings. The parent validates identifiers and combines the disjoint dispositions without changing them.
 
-Every brief must include the review text; verified PR and issue authority; the complete chronological PR conversation; relevant parent observations; exact assigned identifiers and surface partition; selection reason; caller taxonomy; and expected output. For command findings, pass the claim and cited evidence without the reviewer's proposed correction when they can be separated, and require the assessor to load `writing-scramjet-commands`. Do not ask assessors to re-fetch artifacts. A replacement assessor requires authoritative compatibility with the same responsibility, posture, context, output, and handoff. Missing required output blocks a complete assessment. Assessors are read-only; the parent owns tooling, interaction, merging, and publication.
+Every brief must include the review text; verified PR and issue authority; the complete chronological PR conversation; relevant parent observations; exact assigned identifiers and surface partition; selection reason; caller taxonomy; expected output; and, for coaching, framing, instruction-justification, or user-gate findings, the claimed acceptable reason, real-use evidence, exact user decision, and context presented before purported approval. For command findings, pass the claim and cited evidence without the reviewer's proposed correction when they can be separated, and require the assessor to load `writing-scramjet-commands`. Do not ask assessors to re-fetch artifacts. A replacement assessor requires authoritative compatibility with the same responsibility, posture, context, output, and handoff. Missing required output blocks a complete assessment. Assessors are read-only; the parent owns tooling, interaction, merging, and publication.
 
 Each assessor brief should instruct it to:
 
 1. Review the PR title, body, and all existing comments. Note any findings that have already been discussed, resolved, or deferred in the PR conversation.
-2. For each assigned finding, read the actual referenced artifact and determine whether the claimed user-visible defect is substantiated, owned by the changed PR, and not already resolved by existing command, repository, or platform behavior. For runtime findings, also judge whether the suggested correction is net-positive. For command findings, classify the claim without designing or endorsing a correction.
+2. For each assigned finding, read the actual referenced artifact and determine whether the claimed user-visible defect is substantiated, owned by the changed PR, and not already resolved by existing command, repository, or platform behavior. For coaching or other instruction exceptions, distinguish evidence-backed and informed-user-approved, speculative but explicitly user-required, unapproved, and purportedly approved without adequate context; general plan acceptance is not approval. For runtime findings, also judge whether the suggested correction is net-positive. For command findings, classify the claim without designing or endorsing a correction.
 3. Classify each assigned finding using its F/S identifier from the review comment (e.g., "F1 -- Genuine", "S2 -- Nitpick"). Apply the two axes via this decision tree:
    - **False positive** -- The observation is not real: the reviewer flagged something that is not actually an issue. Explain why the code is correct. If a finding was already fixed in a subsequent commit or resolved in discussion, classify it here with a note that it has been addressed.
    - **Genuine issue** -- The claimed problem is substantiated, material, owned by the changed PR, and worth correcting. Runtime assessors state a sound fix approach. Command assessors return no correction design; downstream work derives the smallest correction from the accepted defect and current user context.
@@ -127,16 +127,16 @@ Record aggregate counts for genuine issues, nitpicks, false positives, deferred 
 
 If no findings were classified as deferred, skip this step.
 
-If any findings were classified as **deferred**, present each deferred finding only when its disposition is being chosen, using its F/S identifier, one-line summary, reason for deferral, and the consequences of the available choices. This step performs decision gathering, duplicate reads, payload preparation, and in-memory assessment updates only. It must not create labels, issues, or comments. Queue every authorized remote mutation for Step 7, after the final assessment is approved and verified.
+If any findings were classified as **deferred**, present each deferred finding only when its disposition is being chosen, using its F/S identifier, one-line summary, reason for deferral, and the consequences of the available choices. This step performs decision gathering, duplicate reads, payload preparation, and in-memory disposition updates only. It must not create labels, issues, or comments. Queue every authorized remote mutation for Step 7, after the final assessment is approved and verified.
 
 - **Create issues for all**: create a GitHub issue for every deferred finding.
-- **Reclassify all as genuine**: mark all deferred items as genuine so they can be fixed in this PR.
+- **Fix all in this PR**: preserve each Deferred classification while recording the user's decision to include it in the current fix scope.
 - **Decide per finding**: choose what to do with each deferred finding individually.
-- **Skip deferred items**: do not create issues or reclassify any deferred findings.
+- **Skip deferred items**: preserve the Deferred classifications and take no further action.
 
 ### Shared issue-creation batch contract
 
-Treat all findings under **Create issues for all**, or all findings selected as **Create issue** under **Decide per finding**, as one issue-creation batch. Reclassified and skipped findings do not participate. Option 3 reuses this same batch decision rather than restarting label handling for each finding.
+Treat all findings under **Create issues for all**, or all findings selected as **Create issue** under **Decide per finding**, as one issue-creation batch. Current-PR and skipped dispositions do not participate. Option 3 reuses this same batch decision rather than restarting label handling for each finding.
 
 Run duplicate detection for every participating item and collect the intended disposition without mutating issues. For every plausible match, delegate to `/mach12:gh-issue-read <candidate-number>` and inspect its current body and complete discussion. Only a successfully read candidate may be classified or referenced as a clear duplicate; unread candidates remain ambiguous and cannot receive comments. A clear open duplicate queues the relationship-comment path. Never inspect, create, or apply the label to a clear duplicate. An ambiguous match remains eligible for creation and labelling with its existing overlap note. If every item is a clear duplicate, skip label resolution and queue the collected relationship comments.
 
@@ -197,42 +197,36 @@ For each deferred item, check for existing issues before creating a new one:
 
 Record the intended disposition for each item, then proceed to **Persist Deferred-Item Decisions** below.
 
-### Option 2: Reclassify all as genuine
+### Option 2: Fix all in this PR
 
-Update the in-memory final assessment to change every deferred classification from "Deferred" to "Genuine" and incorporate those items into its staged implementation plan before publication.
-
-1. In the in-memory final assessment body, change every selected item's classification from "Deferred" to "Genuine".
-2. Update its staged implementation plan to include the reclassified items -- add them to an appropriate existing stage or create a new stage.
-3. Revalidate the complete in-memory assessment. Do not publish an intermediate version.
-
-All reclassified items join the genuine findings list. Skip the decision comment when no deferred items remain to record.
+Preserve every assessor-owned Deferred classification. In the in-memory final assessment, add `User disposition: fix in this PR` to each selected item and include its identifier and affected surface in the bounded follow-up plan. These items join the current-PR fix route without being presented as Genuine or attributed to the assessor. Revalidate the complete in-memory assessment and skip a separate decision comment when no deferred item has another disposition to audit.
 
 ### Option 3: Decide per finding
 
 Present each deferred finding one at a time (in F/S identifier order) and ask:
 
 - **Create issue**: create a GitHub issue for this finding.
-- **Mark as genuine**: reclassify as genuine to fix in this PR.
+- **Fix in this PR**: preserve the Deferred classification and include the item in current fix scope.
 - **Skip**: do nothing with this finding.
 
 After all items are processed:
 
 1. **Issue creation**: For items marked "Create issue", first complete duplicate classification and resolve the label decision in the **Shared issue-creation batch contract**. All selected items share that one result; do not resolve or prompt per finding. The queued mutation sequence becomes eligible in Step 7 only after `add_pr_comment` returns a verified assessment publication and the label is found or queued for creation, the user explicitly declines label creation, label lookup fails or is malformed, or queued label creation fails. Cancellation is the sole unresolved state and prevents assessment publication and all queued mutation until a resumed user turn.
 
-2. **Reclassified items**: If any items were marked as genuine, then update the classifications and staged implementation plan in the in-memory final assessment as described in Option 2 -- apply all reclassified items in one in-memory revision before final publication.
+2. **Current-PR items**: If any items were selected for fixing in this PR, preserve their Deferred classifications and update their user dispositions and bounded follow-up plan as described in Option 2.
 
-3. If any items remain deferred, record their intended dispositions for the decision-comment template below. If all items were reclassified as genuine, skip the decision comment.
+3. Record issue-creation and skipped outcomes in the decision-comment template below. If every deferred item was selected for the current PR, skip the separate decision comment because the final assessment records those dispositions.
 
 ### Option 4: Skip deferred items
 
-No issues created, no reclassification. Skip the decision comment entirely.
+No issues created and all Deferred classifications remain unchanged. Skip the decision comment entirely.
 
 ### Persist Deferred-Item Decisions
 
 For Options 1 and 3, when at least one item remains deferred, prepare and hold a decision-comment template for publication after the final assessment and queued mutations. Use this shape:
 - First line: `<!-- mach12-decisions -->`
 - A note that deferred findings were processed after the review.
-- One line per originally deferred item using its actual settled outcome: `Created as #N`, `Created as #N with overlap note`, or `Related finding comment verified on #N` only after verified publication; `Cancelled — no issue or relationship comment published`; `Publication failed before dispatch — no issue or relationship comment published`; `Publication ambiguous — acceptance unknown; reconciliation required`; `Skipped (not selected)`; or `Reclassified as genuine`.
+- One line per originally deferred item using its actual settled outcome: `Created as #N`, `Created as #N with overlap note`, or `Related finding comment verified on #N` only after verified publication; `Fix in this PR (classification remains Deferred)`; `Cancelled — no issue or relationship comment published`; `Publication failed before dispatch — no issue or relationship comment published`; `Publication ambiguous — acceptance unknown; reconciliation required`; or `Skipped (not selected)`.
 - Keep the comment concise. Include every required disposition even when doing so exceeds 20 lines.
 
 Use F/S identifiers (e.g., F1, S2) or plain words (e.g., finding 1, suggestion 2) for artifact-local findings; format any intentional issue or PR relationships under Step 4’s linkable-reference policy.
@@ -241,7 +235,7 @@ Do not publish this decision body yet; the final assessment must be the first du
 
 ## Step 7: Publish the final assessment and surface comment IDs
 
-After all deferred choices, duplicate reads, queued mutation preparation, and in-memory reclassifications are complete, finalize and internally validate the one assessment body. State the review source, classification counts, deferred dispositions, and routing consequence concisely without repeating the body. Call `add_pr_comment` with the PR number and complete final assessment.
+After all deferred choices, duplicate reads, queued mutation preparation, and in-memory disposition updates are complete, finalize and internally validate the one assessment body. State the review source, classification counts, deferred dispositions, and routing consequence concisely without repeating the body. Call `add_pr_comment` with the PR number and complete final assessment.
 
 Continue only when publication is verified, then extract and retain the numeric GitHub comment ID from the verified canonical URL. If the ID cannot be extracted, block queued mutations and routing without retrying publication. Cancellation or a definite pre-dispatch no-write failure leaves no assessment artifact and prevents queued mutations and routing. An ambiguous publication may have created the assessment; do not retry automatically, and block queued mutations and routing pending deliberate reconciliation.
 
@@ -256,47 +250,47 @@ Cancellation and definite no-write failure are settled no-publication outcomes b
 
 When Step 6 prepared a deferred-disposition decision-comment template, fill every line from these actual outcomes and call `add_pr_comment` only after all queued mutations have settled without unresolved ambiguity. Treat this final audit publication as required: verified publication retains its canonical URL and permits routing; cancellation or definite no-write failure preserves earlier verified artifacts but stops without routing; ambiguity preserves earlier artifacts, prohibits automatic retry, and blocks later mutation and routing pending deliberate reconciliation.
 
-Routing is eligible only when the assessment publication is verified, every requested queued publication is verified, skipped by explicit user choice, or reclassified as genuine, no publication remains cancelled, failed, or ambiguous, and any required deferred-disposition decision audit is verified.
+Routing is eligible only when the assessment publication is verified, every requested queued publication is verified, skipped by explicit user choice, or recorded for the current PR, no publication remains cancelled, failed, or ambiguous, and any required deferred-disposition decision audit is verified.
 
 Retain the verified artifact URLs and these comment IDs for routing:
 - Review comment ID: `<review-comment-id from Step 2>`
 - Assessment comment ID: `<assessment-comment-id verified in Step 7>`
 
-If genuine issues remain (including any reclassified items), the natural next step is `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>` (e.g., `F1 F3 S2` -- all genuine issues, interleaved in F/S identifier order).
+Define **required fix findings** as Genuine issues plus Deferred items the user explicitly elected to fix in this PR. When required fix findings remain, the natural next step is `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <findings>` (e.g., `F1 F3 S2`, interleaved in F/S identifier order).
 
-If all findings are nitpicks, false positives, regressions, or deferred, the natural next step is `/mach12:pr-pre-merge <pr-number>`.
+If no required fix finding remains, the natural next step is `/mach12:pr-pre-merge <pr-number>`; unselected Deferred findings remain deferred.
 
 After delivering your answer, call `report_scramjet_command_status` and summarize the work you performed in `summary`. Set `status: "completed"` and populate `next_steps` only when the routing eligibility gate above passes:
 
-**When genuine issues exist AND nitpicks/optional items were also found:**
+**When required fix findings exist AND nitpicks/optional items were also found:**
 
 Emit three entries — two `/mach12:pr-review-fix` messages with different arguments, plus `/mach12:pr-pre-merge`:
 
-1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <genuine-findings-only>` (e.g., `/mach12:pr-review-fix 94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3`), `fresh_session`: `true`, `reason`: "Address the genuine issues flagged in the review assessment."
-2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <genuine-and-nitpick-findings>` (e.g., `/mach12:pr-review-fix 94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3 S2`), `fresh_session`: `true`, `reason`: "Address genuine issues and optional nitpicks in one pass."
+1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <required-fix-findings>` (e.g., `/mach12:pr-review-fix 94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3`), `fresh_session`: `true`, `reason`: "Address the required findings selected through assessment and user disposition."
+2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <required-fix-and-nitpick-findings>` (e.g., `/mach12:pr-review-fix 94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3 S2`), `fresh_session`: `true`, `reason`: "Address required findings and optional nitpicks in one pass."
 3. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
 
-Set `recommended_next_step` to `0` (genuine-only fix pass).
+Set `recommended_next_step` to `0` (required-fix pass).
 
-**When genuine issues exist but NO nitpicks/optional items were found:**
+**When required fix findings exist but NO nitpicks/optional items were found:**
 
 Emit two entries — one `/mach12:pr-review-fix` and one `/mach12:pr-pre-merge`:
 
-1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <all-genuine-findings>`, `fresh_session`: `true`, `reason`: "Address the genuine issues flagged in the review assessment."
+1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <required-fix-findings>`, `fresh_session`: `true`, `reason`: "Address the required findings selected through assessment and user disposition."
 2. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
 
 Set `recommended_next_step` to `0` (fix pass).
 
-**When no genuine issues exist AND nitpicks/optional items were found:**
+**When no required fix findings exist AND nitpicks/optional items were found:**
 
 Emit two entries:
 
-1. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "No genuine issues found — proceed to the merge checklist."
+1. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "No required fixes remain — proceed to the merge checklist."
 2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <nitpick-findings>`, `fresh_session`: `true`, `reason`: "Optionally address nitpicks before merging."
 
 Set `recommended_next_step` to `0` (pre-merge).
 
-**When no genuine issues or nitpicks/optional items exist:**
+**When no required fix findings or nitpicks/optional items exist:**
 
 Emit one entry:
 
@@ -306,5 +300,5 @@ Set `recommended_next_step` to `0` (pre-merge).
 
 **General rules:**
 - Report `status: "completed"` and emit routing `next_steps` only when the routing eligibility gate above passes. Otherwise leave `next_steps` empty and report `status: "incomplete"` or `"blocked"` as appropriate.
-- **Regression findings never appear in any `/mach12:pr-review-fix` argument set** in any branch above -- they were rejected as harmful, not deferred for later. Count them toward the "no fixes required" condition alongside nitpicks, false positives, and deferred items.
+- **Regression findings never appear in any `/mach12:pr-review-fix` argument set** in any branch above—they were rejected as harmful. Unselected Deferred findings, false positives, and regressions do not count as required fixes.
 - Leave `next_steps` empty if the user needs to decide before continuing. If the assessment could not finish, report the matching `status` (`blocked` / `incomplete`) instead of `completed`. If you need user input, use `get_scramjet_user_input` (freetext) instead of reporting a status.

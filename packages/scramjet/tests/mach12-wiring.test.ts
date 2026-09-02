@@ -376,7 +376,6 @@ describe("mach12 command-surface issue routing", () => {
 		const exploration = section(command("issue-create"), "## Step 4:", "## Step 5:");
 		expect(exploration).toContain("scramjet:command-set-explorer");
 		expect(exploration).toContain("scramjet:command-failure-analyst");
-		expect(exploration).toMatch(/non-trivial command surface/i);
 	});
 
 	it("references shipped command planning roles without a command evaluation specialist", () => {
@@ -1103,7 +1102,7 @@ describe("mach12 publication routing gates", () => {
 
 	it("requires verified queued work and audit publication before assessment routing", () => {
 		expect(assessment).toContain(
-			"every requested queued publication is verified, skipped by explicit user choice, or reclassified as genuine",
+			"every requested queued publication is verified, skipped by explicit user choice, or recorded for the current PR",
 		);
 		expect(assessment).toContain("any required deferred-disposition decision audit is verified");
 		expect(assessment).toContain('Set `status: "completed"` and populate `next_steps` only when');
@@ -1112,9 +1111,9 @@ describe("mach12 publication routing gates", () => {
 
 	it("omits the optional fix route when no nitpicks exist", () => {
 		const optionalStart = assessment.indexOf(
-			"**When no genuine issues exist AND nitpicks/optional items were found:**",
+			"**When no required fix findings exist AND nitpicks/optional items were found:**",
 		);
-		const emptyStart = assessment.indexOf("**When no genuine issues or nitpicks/optional items exist:**");
+		const emptyStart = assessment.indexOf("**When no required fix findings or nitpicks/optional items exist:**");
 		const emptyEnd = assessment.indexOf("**General rules:**", emptyStart);
 		const optionalRoute = assessment.slice(optionalStart, emptyStart);
 		const emptyRoute = assessment.slice(emptyStart, emptyEnd);

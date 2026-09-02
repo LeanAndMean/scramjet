@@ -193,12 +193,12 @@ next:
   candidates:
     - name: mach12:pr-review-fix
       hint: |
-        Pick when at least one genuine issue requires a fix or optional
+        Pick when at least one required finding remains or optional
         nitpicks were selected for a fix pass.
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when no genuine issue remains; optional nitpicks may be
-        skipped before the merge checklist.
+        Pick when no required fix finding remains; optional nitpicks may
+        be skipped before the merge checklist.
 ```
 
 **Fields:**
@@ -280,7 +280,7 @@ A command's `next_steps` array (reported via `report_scramjet_command_status`) c
 
 When the outcome of a command determines different parameterizations of the same next command. Common cases:
 
-- Fix genuine issues only vs. fix genuine + optional nitpicks
+- Fix required findings only vs. required findings + optional nitpicks
 - Continue implementing stage N+1 vs. create a PR (both are the same "next action" concept but different commands)
 - Re-run with a subset of findings vs. all findings
 
@@ -292,10 +292,10 @@ After assessing review findings, the command reports multiple `/mach12:pr-review
 next_steps:
   - message: "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456 F1 F3"
     fresh_session: true
-    reason: "Address the genuine issues flagged in the review assessment."
+    reason: "Address required findings selected through assessment and user disposition."
   - message: "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456 F1 F3 S2"
     fresh_session: true
-    reason: "Address genuine issues and optional nitpicks in one pass."
+    reason: "Address required findings and optional nitpicks in one pass."
   - message: "/mach12:pr-pre-merge 94"
     fresh_session: true
     reason: "Skip fixes and proceed to the merge checklist."
@@ -307,19 +307,19 @@ recommended_next_step: 0
 A command's outcome may determine not just which entry to recommend but the entire shape of the `next_steps` array. When different outcomes call for different sets of options, instruct the agent with explicit branching in the status-reporting prose:
 
 ```markdown
-**When genuine issues exist AND nitpicks were also found:**
-Emit three entries — two fix commands (genuine-only, genuine+nitpicks) plus skip-to-merge.
+**When required fix findings exist AND nitpicks were also found:**
+Emit three entries — two fix commands (required-only, required+nitpicks) plus skip-to-merge.
 Set `recommended_next_step` to `0`.
 
-**When genuine issues exist but NO nitpicks found:**
+**When required fix findings exist but NO nitpicks found:**
 Emit two entries — one fix command plus skip-to-merge.
 Set `recommended_next_step` to `0`.
 
-**When no genuine issues exist AND nitpicks were found:**
+**When no required fix findings exist AND nitpicks were found:**
 Emit two entries — skip-to-merge plus a fix command for optional items.
 Set `recommended_next_step` to `0`.
 
-**When no genuine issues or nitpicks exist:**
+**When no required fix findings or nitpicks exist:**
 Emit one entry — skip-to-merge only.
 Set `recommended_next_step` to `0`.
 ```
@@ -490,7 +490,7 @@ Command frontmatter `allowed-tools` and subagent frontmatter `tools:` have diffe
 
 Treat command and agent Markdown, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and model-interpreted behavior as **command surfaces**. Runtime source and executable implementation tests remain **code surfaces**. Partition mixed work into disjoint briefs.
 
-The packaged `writing-scramjet-commands` skill is the shared authoring authority. It describes commands as light-touch generalized plans, appropriate degrees of freedom, context and handoff design, project-native tools, and when subagent isolation is justified. Load it on demand instead of copying those principles into every command and agent.
+The packaged `writing-scramjet-commands` skill is the shared authoring authority. It describes commands as light-touch generalized plans; defines acceptable reasons for instructions, informed user-alignment gates, approval-only coaching exceptions, framing and word economy, context and handoff design, project-native tools, and justified subagent isolation. Load it on demand instead of copying those principles into every command and agent. The base system prompt carries only the fundamental rule that the main agent must provide enough compressed context for consequential user input to be informed.
 
 Scramjet ships six read-only command agents:
 
@@ -501,9 +501,9 @@ Scramjet ships six read-only command agents:
 - `scramjet:command-reviewer` provides one independent holistic review after authoring.
 - `scramjet:independent-command-assessor` adjudicates another review's supplied findings without designing fixes.
 
-Use the minimum role that benefits from isolation. A command-only review uses one finding reviewer: the holistic reviewer for broad behavior, or the semantics analyzer for a narrow wording contract. Add the explorer only when context compression is necessary, and run it before the reviewer. Do not dispatch overlapping agents to union findings.
+Use the minimum role that benefits from isolation. A material command instruction, responsibility, handoff, framing, or user-gate change receives holistic command review. The semantics analyzer may act alone only for narrow analysis or a clarification that adds no procedure, responsibility, or gate; use both only for explicitly disjoint questions. Add the explorer only when context compression is necessary, and run it before review.
 
-A replacement installed agent requires authoritative evidence of compatible responsibility, read-only posture, context needs, output, and workflow handoff. A catalog description alone is insufficient. Missing required output narrows the conclusion rather than triggering substitution. The parent command owns orchestration, synthesis, project-tool execution, user interaction, mutation, and publication.
+A replacement installed agent requires authoritative evidence of compatible responsibility, read-only posture, context needs, output, and workflow handoff. A catalog description alone is insufficient. Missing required output narrows the conclusion rather than triggering substitution. The parent command owns orchestration, synthesis, project-tool execution, user interaction, mutation, publication, and presentation of coaching or other instruction exceptions. Unclassified instructions default to deletion; only an informed, explicit user decision can retain an exception, using existing decision artifacts rather than a new ledger.
 
 Static tests can protect parsing, discovery, tool posture, references, and exact trust handoffs. They do not establish that an agent, command, or routing policy improves decisions. Synthetic model scenarios may expose possible interpretations but do not establish product value or merge readiness; effectiveness claims come from actual use.
 

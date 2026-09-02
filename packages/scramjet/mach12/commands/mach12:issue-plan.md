@@ -122,7 +122,7 @@ This step covers questions about **what to build** — scope boundaries, require
 
 ### Self-assessment
 
-Before escalating a question to the user, attempt to answer it from codebase evidence. When the codebase strongly suggests one answer, state your finding and ask for confirmation rather than presenting it as an open question. The user's value is correcting wrong assumptions and providing knowledge that isn't in the codebase — not answering questions the codebase already answers.
+Before escalating a question to the user, attempt to answer it from codebase evidence. When the evidence resolves the matter and the decision is not user-owned, state the finding and proceed while exposing material assumptions so the user can redirect. The user's value is correcting wrong assumptions and providing knowledge that is not in the codebase—not confirming answers the agent can safely establish.
 
 ### Question Quality Format
 
@@ -145,13 +145,13 @@ Purely informational questions (yes/no confirmations, factual clarifications whe
 5. **Wait for answers before proceeding** — but only if you have escalated questions. If self-assessment resolved everything, present your findings and proceed to Step 6.
 6. Before proceeding to Step 6, list any architecture questions deferred to Step 7 so they remain visible in the conversation for later reference.
 
-If the user says "whatever you think is best", provide your recommendation with rationale and get explicit confirmation.
+If the user delegates judgment with "whatever you think is best", state the selected approach, rationale, and material assumptions, then proceed unless a distinct user-owned or authorization decision remains.
 
 ## Step 6: Design architecture
 
 Based on the codebase findings and clarified requirements, route architecture by the Step 4 classification while staying within the shared maximum of eight calls:
 
-- For command-only work, use one `scramjet:command-architect`. Ask for the minimum generalized plan, details deliberately left to runtime judgment, and a second option only when evidence exposes a material user decision.
+- For command-only work, load `writing-scramjet-commands`, then use one `scramjet:command-architect`. Ask for the minimum generalized plan, instruction-justification summary, user-alignment map, details deliberately left to runtime judgment, and a second option only when evidence exposes a material user decision.
 - For code-only work, retain three `mach12:code-architect` calls, one for each alternative below.
 - For mixed work, give one command architect and the necessary code architects disjoint briefs. The parent integrates their results without asking either family to design the other domain.
 
@@ -168,6 +168,8 @@ Each code option should produce a full implementation blueprint: files to create
 Each architect must assess the technical debt its proposal introduces, retains, reduces, or avoids. An evidence-based “none identified” is valid; do not invent debt. Keep this assessment concise and separate from broader risks and trade-offs: technical debt means likely future maintenance, migration, coupling, testing, or operational cost.
 
 After all results return, review the approaches and form your own recommendation based on the issue's scope, the codebase's conventions, and the user's clarified requirements.
+
+For command work, delete unsupported instructions by default. When the architect returns coaching or another unclassified exception, the parent—not the subagent—must present the exact instruction, intended outcome, real examples and limits, why ordinary judgment and accepted reasons are insufficient, lower-cost alternatives, and prompt/workflow cost. State that coaching exceptions should be uncommon and recommend deletion when real evidence is absent. Retain an exception only after explicit informed user approval, and record the exact decision and evidence status in the existing plan Decision Log as `[user-decided]`; general plan acceptance is not exception approval.
 
 Each code lens must state:
 - Which ladder rung it sits on and why lower rungs are insufficient.
@@ -190,7 +192,7 @@ A code recommendation must answer only what the selected lens did not already co
 
 Do not default to the middle code option without explaining why both the smaller and more structural options are worse for this issue.
 
-Ask the user to choose only when multiple code options remain materially viable, the command architect returned a material second option, or the design changes a user-owned product or safety decision. Otherwise present the single supported design and proceed unless the user redirects. If the user rejects the design, incorporate their feedback and return a complete coherent replacement rather than a delta.
+Ask the user to choose only when multiple code options remain materially viable, the command architect returned a material second option, the design changes a user-owned product or safety decision, or an instruction exception needs approval. Before asking, compress the relevant evidence, alternatives, consequences, uncertainty, and recommendation so the user does not need to reconstruct the investigation. Do not frame approval as expected workflow progress. Otherwise present the single supported design and proceed unless the user redirects. If the user rejects the design, incorporate their feedback and return a complete coherent replacement rather than a delta.
 
 ## Step 7: Ask architecture questions
 

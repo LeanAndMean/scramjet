@@ -51,9 +51,11 @@ Scramjet should make workflows easier to follow, not harder to leave. Users reta
 
 When Scramjet has no useful action or suggestion, it should add no behavioral noise. Process guidance and history should remain supportive rather than competing with the work itself.
 
-### Informed decisions without consent theater
+### Informed alignment without consent theater
 
-Before asking for a consequential choice or taking a risky action, commands should provide the context, trade-offs, and likely consequences needed for an informed decision. Routine transitions should not accumulate ritual confirmations that provide no new information.
+User-input and approval gates are alignment mechanisms, not obstacles to clear. Before asking for a consequential choice or authorization, the main agent should compress the relevant context, alternatives, consequences, and uncertainty so the user can make an informed decision without reconstructing the agent's investigation. Agreement without that understanding is not alignment and defers correction until it is more expensive.
+
+Commands should reserve gates for decisions the user owns, information the agent cannot obtain, or effects requiring authorization. Agent-resolvable uncertainty and routine transitions should not accumulate ritual confirmation.
 
 ### Simplicity and resistance to structural debt
 

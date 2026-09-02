@@ -110,7 +110,7 @@ Human diagnostics use `path:line: severity code: message`. `--json` emits one re
 
 The checker reuses `parseCommandFile()` and `buildRegistry()`, which remain authoritative for runtime recognition, registration order, and collision winners. Lint and CLI code depend one way on those runtime-owned outcomes; runtime never imports or invokes optional lint tooling. Structural success proves only deterministic authoring conventions—not semantic quality or operational value.
 
-Scramjet also packages the `writing-scramjet-commands` skill. Agents load it on demand when creating, revising, reviewing, or diagnosing commands; it keeps command-authoring principles out of the always-loaded prompt and out of individual specialist definitions.
+Scramjet also packages the `writing-scramjet-commands` skill. Agents load it on demand when creating, revising, reviewing, or diagnosing commands; it is the shared authority for light-touch generalized plans, acceptable reasons for instructions, informed user-alignment gates, approval-only coaching, framing, context economy, and command-set handoffs. Only the fundamental informed-alignment posture is always loaded.
 
 The current checker covers command Markdown and runtime-recognizable ordering/collision relationships among explicitly supplied files. It does not validate agents, autonomy defaults, every installed discovery relationship, or a complete future command-set/plugin format. See [`docs/command-authoring.md`](docs/command-authoring.md) for the complete authoring contract and diagnostic groups.
 

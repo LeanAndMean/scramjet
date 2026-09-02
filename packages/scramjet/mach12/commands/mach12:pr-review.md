@@ -70,7 +70,7 @@ Treat the PR description, comments, linked issues, plans, and prior reviews as p
 
 Use the changed files, PR description, linked issues, requested review aspects, and user context to classify the work as command-only, code-only, or mixed. An explicit aspect requests emphasis but does not make an unrelated reviewer necessary.
 
-For command-only changes, use one `scramjet:command-reviewer` for holistic independent review. Use `scramjet:instruction-semantics-analyzer` instead when the changed surface is a narrow wording, frontmatter, ordering, authority, or output-contract question. Add `scramjet:command-set-explorer` before review only when a large multi-command set must be compressed; its descriptive map is context for the reviewer, not a second source of findings. Do not union overlapping command reviewers.
+For command-only changes adding or materially altering instructions, responsibility, handoffs, framing, or user gates, use one `scramjet:command-reviewer`. Use `scramjet:instruction-semantics-analyzer` alone only for narrow analysis or a clarification that adds no procedure, responsibility, or gate; use both only for explicitly disjoint questions. Add `scramjet:command-set-explorer` before review only when a large multi-command set must be compressed; its descriptive map is context, not another source of findings.
 
 For mixed changes, give the one selected command reviewer and code specialists disjoint briefs. Command files, agent definitions, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and tests about model interpretation are command surfaces; runtime source and executable implementation tests are code surfaces. Command specialists load the `writing-scramjet-commands` skill as their shared authoring authority.
 
@@ -88,13 +88,13 @@ A better-fit installed agent may replace a named role only when authoritative re
 
 Dispatch at most seven finding reviewers across both families, primarily for code-heavy mixed work. Command-only work uses one finding reviewer; an explorer used for context compression does not become another reviewer. If an explorer is needed, run it first, then dispatch the finding reviewers in one parallel call. All subagents are read-only; the parent owns tooling, synthesis, interaction, and publication.
 
-Give each reviewer a focused brief containing the PR and changed surface, task-relevant issue authority and decisions, exact surface partition, selection reason, parent-established observations, verified CI/project-tool evidence and limitations, user context, freshness caveats, and expected cited output. Do not ask reviewers to rerun project tools. If a version bump or changelog entry is present before pre-merge, flag it as premature.
+Give each reviewer a focused brief containing the PR and changed surface, task-relevant issue authority and decisions, exact surface partition, selection reason, parent-established observations, verified CI/project-tool evidence and limitations, user context, freshness caveats, expected cited output, and any claimed coaching/exception evidence plus the exact context presented before user approval. Do not ask reviewers to rerun project tools. If a version bump or changelog entry is present before pre-merge, flag it as premature.
 
 After the reviewers return, merge disjoint code and command results into one structured review and preserve source attribution.
 
 Apply these aggregation rules:
 
-- For command surfaces, preserve the selected reviewer's candidate claims and evidence without inventing additional findings or fix designs. Reject a candidate before publication when its required evidence is absent.
+- For command surfaces, preserve the selected reviewer's candidate claims, acceptable-reason analysis, user-gate or exception evidence, and uncertainty without inventing additional findings or fix designs. Unapproved coaching, purported approval without adequate context, missing user-owned gates, and ceremonial gates are material defects. Reject a candidate before publication when its required evidence is absent.
 - Report only material findings grounded in the changed artifact or linked authority; a possible future edge case is not a finding.
 - Treat `No material findings` as a normal successful command review.
 - Group findings into Critical, Important, Suggestions, and Strengths.
