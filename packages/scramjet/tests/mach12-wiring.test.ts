@@ -1082,6 +1082,60 @@ describe("mach12 publication routing gates", () => {
 	});
 });
 
+describe("mach12 pre-merge version propagation contract", () => {
+	const guidelines = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:find-contribution-guidelines.md`), "utf-8");
+	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
+	const version = preMerge.slice(preMerge.indexOf("### 7b."), preMerge.indexOf("### 7c."));
+	const commit = preMerge.slice(preMerge.indexOf("## Step 8:"), preMerge.indexOf("## Step 9:"));
+
+	it("consults all applicable contribution and release guidance before fallback investigation", () => {
+		expect(guidelines).toMatch(/all applicable[^.]*contribution[^.]*release instructions/i);
+		expect(guidelines).toMatch(/release[^.]*directly referenced/i);
+		expect(guidelines).toMatch(/source paths/i);
+		expect(guidelines).toMatch(/conflicts|missing details/i);
+		expect(guidelines.indexOf("contribution and release guidance")).toBeLessThan(
+			guidelines.indexOf("project scripts"),
+		);
+	});
+
+	it("reads release authority after checkout and freshness handling", () => {
+		const checkout = preMerge.indexOf("gh pr checkout <pr-number>");
+		const freshness = preMerge.indexOf("## Step 4: Check branch freshness");
+		const guidance = preMerge.indexOf("/mach12:find-contribution-guidelines");
+		expect(checkout).toBeGreaterThan(-1);
+		expect(freshness).toBeGreaterThan(checkout);
+		expect(guidance).toBeGreaterThan(freshness);
+	});
+
+	it("runs applicable version generation or synchronization before commit", () => {
+		expect(version).toMatch(/every applicable[^.]*generation or synchronization/i);
+		expect(version).toMatch(/before (?:the )?commit/i);
+		expect(preMerge.indexOf("generation or synchronization")).toBeLessThan(preMerge.indexOf("## Step 8:"));
+	});
+
+	it("verifies and commits the complete version change together", () => {
+		expect(version).toMatch(/canonical version[^.]*required mirrors[^.]*tracked generated metadata/i);
+		expect(version).toMatch(/repository-defined consistency checks/i);
+		expect(commit).toMatch(/canonical version[^.]*required mirrors[^.]*tracked generated metadata/i);
+		expect(commit).toMatch(/same (?:bounded )?(?:pre-merge )?commit|commit[^.]*together/i);
+	});
+
+	it("investigates incomplete authority and asks rather than guessing", () => {
+		expect(version).toMatch(/guidance[^.]*absent|guidance[^.]*incomplete/i);
+		expect(version).toMatch(/tracked files[^.]*project (?:scripts|commands)/i);
+		expect(version).toMatch(/ask the user/i);
+		expect(version).toMatch(/incomplete/i);
+		expect(version).toMatch(/do not guess|rather than guessing|never infer/i);
+	});
+
+	it("preserves mandatory investigation and repository version authority", () => {
+		expect(preMerge).toMatch(/after 7b's required authority and fallback investigation[^.]*optional/i);
+		expect(version).toMatch(/follow the repository authority[^.]*version target or classification rule/i);
+		expect(version).toMatch(/only when[^.]*semantic versioning[^.]*leaves the bump level unresolved/i);
+		expect(version).toMatch(/ask the user rather than overriding repository authority/i);
+	});
+});
+
 describe("mach12 ordinary PR readiness", () => {
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
 	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
@@ -1104,15 +1158,18 @@ describe("mach12 ordinary PR readiness", () => {
 
 	it("pre-merge routes remediable outcomes to later steps", () => {
 		const readiness = readinessSection(preMerge);
-		expect(readiness).toContain("A behind branch continues to Step 5");
+		expect(readiness).toContain("A behind branch continues to Step 4");
 		expect(readiness).toContain("pending or failing checks continue to Step 9");
 		expect(readiness).toContain("`CONFLICTING` or `DIRTY`");
-		expect(readiness).toContain("continue through checkout to Step 5");
+		expect(readiness).toContain("continue through checkout to Step 4");
 		expect(readiness).toContain("does not authorize an automatic merge");
 	});
 
 	it("pre-merge keeps conflict remediation behind user confirmation", () => {
-		const freshness = preMerge.slice(preMerge.indexOf("## Step 5:"), preMerge.indexOf("## Step 6:"));
+		const freshness = preMerge.slice(
+			preMerge.indexOf("## Step 4: Check branch freshness"),
+			preMerge.indexOf("## Step 5: Read contribution guidelines"),
+		);
 		const mergeChoice = freshness.indexOf("**Merge**");
 		const cancelChoice = freshness.indexOf("**Cancel**");
 		const mergeCommand = freshness.indexOf("git merge origin/<default-branch>");

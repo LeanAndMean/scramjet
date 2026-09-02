@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.86.0 — Make pre-merge version propagation atomic
+
+Strengthens pre-merge release preparation by treating canonical versions, mirrors, generated metadata, and consistency checks as one bounded operation. Fixes [#508](https://github.com/LeanAndMean/scramjet/issues/508).
+
+### Changed
+
+- Discover all applicable contribution guidance and directly referenced repository release instructions before relying on fallback evidence.
+- Propagate required version changes, generated outputs, and changelog updates together while preserving repository authority and surfacing ambiguity.
+
+### Tests
+
+- Add command-contract coverage for authority precedence, propagation ordering, commit scope, verification, and ambiguity handling.
+
 ## 0.85.0 — Add proportional architecture analysis to PR fixes
 
 Improves PR review fixes by separating requirements clarification from proportional architecture analysis. Fixes [#506](https://github.com/LeanAndMean/scramjet/issues/506).
