@@ -166,6 +166,8 @@ A taxonomy category is not a reason to create or dispatch an agent. Do not union
 
 ## Commands and command sets
 
+Recommendations are semantic, not positional. Command authors define eligible continuations and genuine invariants; the executing agent chooses the best-supported route from the completed work's actual context, constructs the concrete options, and derives the selected route's runtime index. A frequent or first-listed route is not automatically best, and durable command prose must not prescribe a numeric position.
+
 A command can be internally clear and still fail as part of a set. Check:
 
 - whether its inputs are available at invocation;
@@ -214,6 +216,7 @@ Before finalizing a command, ask:
 - Are outcomes and hard boundaries distinct from tactics?
 - Does each substantive instruction have an acceptable reason and required evidence?
 - Did I leave ordinary decisions to the agent?
+- Does next-step routing preserve runtime recommendation judgment instead of encoding array position?
 - Did I avoid hypothetical edge-case causes?
 - Does every required artifact or field have a consumer?
 - Do user gates match user-owned decisions and provide enough context?

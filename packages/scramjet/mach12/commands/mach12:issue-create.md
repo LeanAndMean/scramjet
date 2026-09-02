@@ -247,4 +247,4 @@ After delivering your answer, call `report_scramjet_command_status` and summariz
 - `fresh_session`: `true`
 - `reason`: `The new issue is ready for staged implementation planning.`
 
-Set `recommended_next_step` to `0` when including that entry. Leave `next_steps` empty when creation was skipped, the issue is only a tracking or reference artifact, or the user asked not to continue. If the command could not finish, report `status: "blocked"` or `status: "incomplete"` instead. If you need user input, use `get_scramjet_user_input` rather than reporting a status.
+Recommend that planning entry when including it. Leave `next_steps` empty when creation was skipped, the issue is only a tracking or reference artifact, or the user asked not to continue. If the command could not finish, report `status: "blocked"` or `status: "incomplete"` instead. If you need user input, use `get_scramjet_user_input` rather than reporting a status.

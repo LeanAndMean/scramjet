@@ -1273,7 +1273,7 @@ describe("mach12 ordinary PR readiness", () => {
 		);
 		const validationEntry = finalSection.slice(
 			finalSection.indexOf("`/mach12:pr-validation <pr-number>`"),
-			finalSection.indexOf("- Set `recommended_next_step`"),
+			finalSection.indexOf('- Report `status: "blocked"`'),
 		);
 		expect(finalSection).toContain("exactly three entries");
 		expect(mergeEntry).toContain("`fresh_session`: `true`");
@@ -1282,7 +1282,6 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(reviewEntry).toContain("non-empty reason explaining that additional static review is optional");
 		expect(validationEntry).toContain("`fresh_session`: `true`");
 		expect(validationEntry).toContain("non-empty reason explaining that executable validation is optional");
-		expect(finalSection).toContain("`recommended_next_step` to `0`");
 		expect(finalSection).toContain("Do not include `mach12:pr-review-fix`");
 		expect(finalSection).toContain("omit `next_steps` and `recommended_next_step`");
 		expect(finalSection).not.toContain("`/mach12:pr-review-fix <pr-number>`");

@@ -286,7 +286,7 @@ When the outcome of a command determines different parameterizations of the same
 
 ### Example: PR review assessment
 
-After assessing review findings, the command reports multiple `/mach12:pr-review-fix` entries with different finding lists:
+After assessing review findings, suppose the completed-work context supports addressing required and optional findings together. The command reports multiple `/mach12:pr-review-fix` entries with different finding lists, then derives the recommendation from that semantic choice:
 
 ```
 next_steps:
@@ -299,7 +299,7 @@ next_steps:
   - message: "/mach12:pr-pre-merge 94"
     fresh_session: true
     reason: "Skip fixes and proceed to the merge checklist."
-recommended_next_step: 0
+recommended_next_step: 1
 ```
 
 ### Conditional `next_steps` shapes
@@ -309,19 +309,19 @@ A command's outcome may determine not just which entry to recommend but the enti
 ```markdown
 **When required fix findings exist AND nitpicks were also found:**
 Emit three entries — two fix commands (required-only, required+nitpicks) plus skip-to-merge.
-Set `recommended_next_step` to `0`.
+Recommend the fix scope best supported by the completed assessment; do not recommend skipping required fixes.
 
 **When required fix findings exist but NO nitpicks found:**
 Emit two entries — one fix command plus skip-to-merge.
-Set `recommended_next_step` to `0`.
+Recommend the required-fix entry.
 
 **When no required fix findings exist AND nitpicks were found:**
 Emit two entries — skip-to-merge plus a fix command for optional items.
-Set `recommended_next_step` to `0`.
+Recommend the route best supported by the optional work's value and current context.
 
 **When no required fix findings or nitpicks exist:**
 Emit one entry — skip-to-merge only.
-Set `recommended_next_step` to `0`.
+Recommend that sole entry.
 ```
 
 This is more explicit than a generic "populate `next_steps` based on the outcome" instruction. The agent needs to know the exact array shape for each branch.
@@ -331,7 +331,7 @@ This is more explicit than a generic "populate `next_steps` based on the outcome
 - **`reason` is required** on every selector-visible `next_steps` entry. The harness rejects entries without a non-empty `reason`. This is the differentiation mechanism — without it, the user sees two identical command wires and cannot choose.
 - **`message` is the full command wire**, shown verbatim in the selector. Include all arguments. The user sees exactly what will be dispatched.
 - **`fresh_session`** defaults to `false`. Set to `true` when the next command should start in a fresh session (common for implementation stages that need maximum context window).
-- **`recommended_next_step`** is a zero-based index into `next_steps`. Set it to the entry you recommend Scramjet auto-dispatch. If omitted, automatic dispatch is disabled and the user must manually select.
+- **Recommendations are semantic, not positional.** Choose the best continuation from the completed work's actual outcome, risk, evidence, user intent, and trajectory. When only one route exists or an explicit invariant makes one route unconditionally preferred, name that route semantically. Construct the concrete `next_steps` array first, then set `recommended_next_step` to that route's zero-based runtime index. Durable command prose must not prescribe a literal array position. If the field is omitted, automatic dispatch is disabled and the user must manually select.
 
 ---
 
@@ -533,7 +533,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 | `summary` | string | Yes | The work performed. On the first report, summarize the work done so far; on each later report, summarize only the work completed since the previous report. `summary` comes first so the agent writes its evidence before committing to a status. Must be non-empty. |
 | `status` | enum | Yes | `"continuing"`, `"completed"`, `"blocked"`, or `"incomplete"` |
 | `next_steps` | array | No | Ordered next-step candidates. Omit to stop the chain. |
-| `recommended_next_step` | integer | No | Zero-based index into `next_steps` for auto-dispatch. |
+| `recommended_next_step` | integer | No | Zero-based index into `next_steps` for selector highlighting and eligible slash-command auto-dispatch. |
 
 **Every accepted report is journaled** — including `continuing` — as a `scramjet:command-status` session artifact carrying its `summary`. Incremental summaries can be aggregated offline into a full record of a command's work (see `docs/logging.md`). A report is either **accepted** (journaled and handled) or **rejected**. A `continuing` report sent outside a probe or dormant window is productively redirected back to the agent's work ("keep working") rather than dropped. Terminal-report rejections still occur while a command is active: in the parked phase the tool tells the agent to wait for the user's reply before reporting, and in the already-reported phase it rejects a second terminal report for the same command ("do not call this tool again").
 
@@ -556,7 +556,7 @@ The command body must include explicit instructions for how to call `report_scra
 
 1. What `status` to report and under what conditions.
 2. What `next_steps` entries to populate (with concrete examples of `message`, `fresh_session`, and `reason`).
-3. Where `recommended_next_step` should point.
+3. What semantic rule determines the recommended route; the agent derives its runtime index after constructing `next_steps`.
 4. What to do when the command hits a non-completion state.
 
 **Example prose (from a command with `forced` next step):**
@@ -586,7 +586,7 @@ selector-visible `next_steps` entries:
 2. If all stages landed: `message`: `/mach12:pr-create <issue>`,
    `reason`: "Implementation complete, ready for PR creation."
 
-Set `recommended_next_step` to the zero-based index of the recommended entry.
+Recommend the entry best supported by the completed work, then derive its zero-based runtime index.
 If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 ```
 
@@ -691,7 +691,7 @@ When a command completes with `next_steps`, the user sees a selector with:
 - **Each entry's `message`** as the primary text (the full `/command args` wire).
 - **Each entry's `reason`** as the description underneath, differentiating entries.
 
-The `recommended_next_step` entry is highlighted as the default selection. If `/autopilot on` and the policy allows automatic dispatch, the recommended entry fires without user interaction.
+The `recommended_next_step` entry is highlighted as the default selection. If `/autopilot on` and the policy allows automatic dispatch, a recommended slash command fires without user interaction. A recommended non-command entry under an `open` policy remains highlighted but requires manual selection, which pastes it into the editor.
 
 When multiple models are available, the selector also shows a model line below the options. The user can cycle models with left/right arrows before committing a selection; the chosen model is committed via `pi.setModel` before dispatch. The configured `app.thinking.cycle` action changes effort immediately against the currently committed model and the selector shows its effective value and usable shortcut. Effort changes survive Escape, while model choice remains tentative and may clamp effort when committed. Selector-owned controls take precedence on binding conflicts. These controls are transparent to command authors — they do not affect command, result, lifecycle, record, or journal schemas.
 
@@ -700,7 +700,7 @@ When multiple models are available, the selector also shows a model line below t
 1. **`message` must be complete and correct.** Include all arguments the target command needs. The message is dispatched verbatim — no interpolation happens at dispatch time.
 2. **`reason` differentiates.** When multiple entries share the same command name (different args), `reason` is the only way the user tells them apart. Make it descriptive of what differs.
 3. **No synthetic labels.** Don't invent display names or abbreviations. The command wire is the label.
-4. **Order matters.** Entries appear in array order. Put the most likely next step first (index 0) and point `recommended_next_step` at it.
+4. **Order controls display, not recommendation authority.** Entries appear in array order, but the best-supported semantic route may be any emitted entry. Derive `recommended_next_step` from that choice rather than treating the first position as the default.
 
 ### Example: selector with three entries
 

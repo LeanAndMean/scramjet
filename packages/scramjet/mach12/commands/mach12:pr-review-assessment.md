@@ -270,7 +270,7 @@ Emit three entries — two `/mach12:pr-review-fix` messages with different argum
 2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <required-fix-and-nitpick-findings>` (e.g., `/mach12:pr-review-fix 94 --review-comment 4662883802 --assessment-comment 4662902077 F1 F3 S2`), `fresh_session`: `true`, `reason`: "Address required findings and optional nitpicks in one pass."
 3. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
 
-Set `recommended_next_step` to `0` (required-fix pass).
+Recommend one of the fix entries, not pre-merge. Choose required-only or required-plus-optional fixing from the assessment evidence, fix scope, trajectory, and user dispositions.
 
 **When required fix findings exist but NO nitpicks/optional items were found:**
 
@@ -279,7 +279,7 @@ Emit two entries — one `/mach12:pr-review-fix` and one `/mach12:pr-pre-merge`:
 1. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <required-fix-findings>`, `fresh_session`: `true`, `reason`: "Address the required findings selected through assessment and user disposition."
 2. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "Skip fixes and proceed to the merge checklist."
 
-Set `recommended_next_step` to `0` (fix pass).
+Recommend the required-fix entry.
 
 **When no required fix findings exist AND nitpicks/optional items were found:**
 
@@ -288,7 +288,7 @@ Emit two entries:
 1. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "No required fixes remain — proceed to the merge checklist."
 2. `message`: `/mach12:pr-review-fix <pr-number> --review-comment <review-comment-id> --assessment-comment <assessment-comment-id> <nitpick-findings>`, `fresh_session`: `true`, `reason`: "Optionally address nitpicks before merging."
 
-Set `recommended_next_step` to `0` (pre-merge).
+Recommend pre-merge or the optional-fix entry according to the optional work's supported value, scope, trajectory, and user intent.
 
 **When no required fix findings or nitpicks/optional items exist:**
 
@@ -296,7 +296,7 @@ Emit one entry:
 
 1. `message`: `/mach12:pr-pre-merge <pr-number>`, `fresh_session`: `true`, `reason`: "No findings require a fix — proceed to the merge checklist."
 
-Set `recommended_next_step` to `0` (pre-merge).
+Recommend the sole pre-merge entry.
 
 **General rules:**
 - Report `status: "completed"` and emit routing `next_steps` only when the routing eligibility gate above passes. Otherwise leave `next_steps` empty and report `status: "incomplete"` or `"blocked"` as appropriate.

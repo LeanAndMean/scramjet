@@ -83,7 +83,7 @@ Authors and agents can check command structure before installation or interactiv
 
 ### Guided continuation
 
-A command can communicate useful next steps so related commands form a discoverable flow. Scramjet can help a user or agent continue when appropriate while validating choices against the command author's intended boundaries.
+A command can communicate useful next steps so related commands form a discoverable flow. Scramjet can help a user or agent continue when appropriate while validating choices against the command author's intended boundaries. Commands define eligible edges and semantic invariants; except for deterministic transitions, the executing agent recommends among those edges from current context rather than treating static option order as the decision.
 
 ### In-command collaboration
 
