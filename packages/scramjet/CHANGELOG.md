@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.86.0 — Make pre-merge version propagation atomic
+
+Strengthens pre-merge release preparation by treating canonical versions, mirrors, generated metadata, and consistency checks as one bounded operation. Fixes [#508](https://github.com/LeanAndMean/scramjet/issues/508).
+
+### Changed
+
+- Discover all applicable contribution guidance and directly referenced repository release instructions before relying on fallback evidence.
+- Propagate required version changes, generated outputs, and changelog updates together while preserving repository authority and surfacing ambiguity.
+
+### Tests
+
+- Add command-contract coverage for authority precedence, propagation ordering, commit scope, verification, and ambiguity handling.
+
+## 0.85.0 — Add proportional architecture analysis to PR fixes
+
+Improves PR review fixes by separating requirements clarification from proportional architecture analysis. Fixes [#506](https://github.com/LeanAndMean/scramjet/issues/506).
+
+### Changed
+
+- Dispatch focused architecture analysis only for unresolved non-trivial decision boundaries while preserving parent authority and bounded finding scope.
+- Separate scope and requirements clarification from later architecture questions.
+
+### Tests
+
+- Add command-contract coverage for decision-boundary classification, architect context, parent authority, and clarification ordering.
+
+## 0.84.1 — Tolerate npm publication propagation
+
+Extends post-publish verification for normal multi-minute npm registry and provenance delays. Fixes [#503](https://github.com/LeanAndMean/scramjet/issues/503).
+
+### Fixed
+
+- Poll registry visibility, latest tags, and provenance for up to 31 attempts at ten-second intervals without republishing.
+- Clarify forward-release recovery after the partial `v0.84.0` publication.
+
+### Tests
+
+- Add multi-minute registry, tag, provenance, and polling-exhaustion coverage.
+
+## 0.84.0 — Publish npm packages with trusted OIDC
+
+Replaces stored npm publishing credentials with a fail-closed trusted-publishing workflow using GitHub Actions OIDC. Fixes [#162](https://github.com/LeanAndMean/scramjet/issues/162).
+
+### Added
+
+- Add a release helper that validates release identity, preflights registry state, publishes packages in dependency order, preserves dist-tags, and verifies provenance.
+- Add a maintainer runbook for trusted-publisher setup, release verification, and partial-publication recovery.
+
+### Changed
+
+- Publish all five packages from version tags through repository-wide serialized OIDC releases without stored npm credentials.
+- Add canonical repository metadata to every publishable package.
+
+### Tests
+
+- Add release-helper and workflow-contract coverage for validation, publication, provenance, and recovery behavior.
+
 ## 0.83.1 — Clarify long skill description warnings
 
 Clarifies that the Agent Skills description-length warning is advisory while preserving complete descriptions for model-visible skill content. Fixes [#500](https://github.com/LeanAndMean/scramjet/issues/500).

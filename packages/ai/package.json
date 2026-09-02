@@ -1,11 +1,15 @@
 {
 	"name": "@leanandmean/ai",
-	"version": "0.74.1-scramjet.13",
+	"version": "0.74.1-scramjet.14",
 	"publishConfig": {
 		"access": "public"
 	},
 	"description": "Unified LLM API with automatic model discovery and provider configuration",
 	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/LeanAndMean/scramjet.git"
+	},
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",

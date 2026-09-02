@@ -1,11 +1,15 @@
 {
 	"name": "@leanandmean/tui",
-	"version": "0.74.1-scramjet.10",
+	"version": "0.74.1-scramjet.11",
 	"publishConfig": {
 		"access": "public"
 	},
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/LeanAndMean/scramjet.git"
+	},
 	"type": "module",
 	"main": "dist/index.js",
 	"types": "./dist/index.d.ts",

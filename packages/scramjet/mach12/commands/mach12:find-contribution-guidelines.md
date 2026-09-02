@@ -1,5 +1,5 @@
 ---
-description: Locate and surface the project's contribution guidelines for planning context
+description: Locate and surface the project's contribution and release guidance
 delegate-only: true
 allowed-tools:
   - bash
@@ -12,34 +12,36 @@ allowed-tools:
 
 ## Goals
 
-- Give the caller a concise, source-grounded summary of project guidance relevant to planning, implementation, review, and pre-merge work.
-- Preserve documented requirements and meaningful omissions without inventing project guidance.
+- Give the caller a concise, source-grounded summary of all applicable contribution and release guidance.
+- Preserve documented requirements, fallback evidence, conflicts, and meaningful omissions without inventing policy or making decisions for the caller.
 
-## Step 1: Locate the guidelines file
+## Step 1: Locate authoritative guidance
 
-Check these paths in priority order and use the first one that exists:
+Inspect all applicable conventional contribution guidance and repository-local release instructions, rather than stopping after the first file found. Include release material directly referenced by those files.
 
-1. `CONTRIBUTING.md` (repo root)
-2. `DEVELOPMENT.md` (repo root)
-3. `.github/CONTRIBUTING.md`
+Keep discovery bounded to conventional guidance locations and their direct references. Do not recursively crawl documentation, infer policy from release history, or search for a repository-specific filename inventory.
 
-If none of these files exist, return: "No contribution guidelines were found." and stop.
+Treat contribution and release guidance as primary authority. Only when that authority is absent or leaves a material detail unspecified, inspect nearby project scripts, commands, manifests, and tracked metadata for evidence. Evidence can reveal a missing detail but must not silently override guidance or invent policy.
 
-## Step 2: Extract planning-relevant sections
+If neither guidance nor fallback evidence exists, return that no applicable guidance was found.
 
-Read the located file. Identify and surface:
+## Step 2: Extract relevant requirements
 
-- **Project layers**: what conceptual layers the codebase is organized into (e.g., models, migrations, API routes, services, UI, documentation). The plan-shaped lens cares about coverage across these layers.
-- **Testing expectations**: test frameworks, coverage requirements, test types (unit / integration / end-to-end), and any testing-related rules.
-- **Pre-merge requirements**: version bumps, changelog entries, documentation updates, lint/format gates, anything the project expects before a PR can merge.
-- **Development tooling**: documented build, lint, format, schema or artifact validation, generation, compiler/typecheck, and repository-specific verification commands. When the guidance establishes it, report whether each command is required or optional and whether it is read-only or mutating.
-- **Issue conventions**: issue templates, label taxonomy, required fields, any other shaping rules for new issues.
-- **Other guidance**: anything else relevant to planning, implementation, or PR shaping that the caller should know about.
+Read every located authority and identify:
 
-If a section is absent from the guidelines file, omit it from the output -- do not invent guidance.
+- **Project layers**: conceptual layers relevant to planning and implementation coverage.
+- **Testing expectations**: frameworks, required test types, coverage rules, and verification commands.
+- **Pre-merge and release requirements**: version declarations and mirrors, generation or synchronization commands, consistency checks, changelog and documentation updates, and lint or format gates.
+- **Development tooling**: documented build, lint, format, schema or artifact validation, generation, compiler/typecheck, and repository-specific verification commands. When the evidence establishes it, report each tool's authority, required or advisory relevance, and mutating or non-mutating effects.
+- **Issue conventions**: templates, label taxonomy, required fields, and shaping rules.
+- **Other guidance**: anything else material to the caller's planning, implementation, review, or release work.
+
+Record each material requirement with its source path. Surface conflicting instructions and details that remain missing after bounded fallback investigation; do not select one source silently or guess. Omit categories for which no requirement was found.
 
 ## Step 3: Return the summary
 
-Produce a concise summary organized under the headings above. The caller reads this summary and applies the guidance to whichever step is invoking the subroutine (planning, review, implementation, pre-merge checklist, etc.).
+Return a concise summary organized under the headings above. Distinguish authoritative requirements from fallback evidence, list the inspected source paths, and identify conflicts or missing details that the caller must resolve.
 
-If the guidelines file is short and a paraphrase would lose nuance, quote it directly.
+Keep the delegate read-only and non-interactive. Do not choose versions, mutate files, run release steps, or ask the user questions; the caller owns those decisions and actions.
+
+If a source is short and paraphrasing would lose nuance, quote it directly.

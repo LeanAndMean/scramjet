@@ -249,6 +249,40 @@ describe("mach12 wiring — bundled command set", () => {
 	);
 });
 
+describe("mach12 PR review fix — proportional architecture contract", () => {
+	const prReviewFix = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-fix.md`), "utf-8");
+	const step4 = prReviewFix.slice(prReviewFix.indexOf("## Step 4:"), prReviewFix.indexOf("## Step 5:"));
+
+	it("locks one evidence-informed scope before proportional architecture", () => {
+		const phases = [
+			"1. **Codebase exploration**",
+			"2. **Lock scope and requirements**",
+			"3. **Proportional architecture analysis**",
+			"4. **Implementation**",
+		];
+		let offset = 0;
+		for (const phase of phases) {
+			const index = step4.indexOf(phase, offset);
+			expect(index, phase).toBeGreaterThan(-1);
+			offset = index + phase.length;
+		}
+
+		expect(step4).toMatch(/selected findings[^.]*fixed goal[^.]*user explicitly revises/i);
+		expect(step4).toMatch(
+			/ask only when the user owns an unresolved decision or necessary information is unavailable/i,
+		);
+		expect(step4).toMatch(/skip architect ceremony[^.]*trivial/i);
+		expect(step4).toContain("For command-only fixes, use one `scramjet:command-architect`");
+		expect(step4).toContain("For code-only fixes, use the minimum useful set of `mach12:code-architect`");
+		expect(step4).toMatch(/mixed fixes[^.]*both domains[^.]*disjoint briefs/i);
+		expect(step4).toMatch(/every architect[^.]*same locked scope/i);
+		expect(step4).toMatch(/neither reduce nor expand the locked outcomes/i);
+		expect(step4).toMatch(/parent[^.]*selects or synthesizes[^.]*smallest supported design/i);
+		expect(step4).toMatch(/asks a separate architecture question only when evidence cannot resolve/i);
+		expect(step4).toMatch(/parent owns the final design, repository mutation, tool execution, and testing/i);
+	});
+});
+
 describe("mach12 inline forge publication inventory", () => {
 	const expected = new Map<string, string[]>([
 		["issue-create", ["create_issue", "add_issue_comment"]],
@@ -430,11 +464,22 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
 	});
 
-	it.each(["issue-implement", "pr-review-fix"])("%s references the bounded command review roles", (basename) => {
-		const quality = section(command(basename), "6. **Quality review**", "7. **Summary**");
+	it.each([
+		{ basename: "issue-implement", start: "6. **Quality review**", end: "7. **Summary**" },
+		{ basename: "pr-review-fix", start: "5. **Quality review**", end: "6. **Summary**" },
+	])("$basename references the bounded command review roles", ({ basename, start, end }) => {
+		const quality = section(command(basename), start, end);
 		expect(quality).toContain("scramjet:command-reviewer");
 		expect(quality).toContain("scramjet:instruction-semantics-analyzer");
 		expect(quality).toContain("mach12:code-reviewer");
+	});
+
+	it("reserves PR fix review capacity for independent command assessment", () => {
+		const quality = section(command("pr-review-fix"), "5. **Quality review**", "6. **Summary**");
+		expect(quality).toMatch(/mixed fixes[^.]*at most one code reviewer[^.]*assessment/i);
+		expect(quality).toMatch(/command reviewer[^.]*initial batch[^.]*two[^.]*assessment capacity is reserved/i);
+		expect(quality).toMatch(/re-review[^.]*capacity remains after any required assessment/i);
+		expect(quality).toMatch(/at most 3 subagents per stage, total across both families/i);
 	});
 
 	it("references one command finding reviewer and optional context compression", () => {
@@ -1124,6 +1169,60 @@ describe("mach12 publication routing gates", () => {
 	});
 });
 
+describe("mach12 pre-merge version propagation contract", () => {
+	const guidelines = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:find-contribution-guidelines.md`), "utf-8");
+	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
+	const version = preMerge.slice(preMerge.indexOf("### 7b."), preMerge.indexOf("### 7c."));
+	const commit = preMerge.slice(preMerge.indexOf("## Step 8:"), preMerge.indexOf("## Step 9:"));
+
+	it("consults all applicable contribution and release guidance before fallback investigation", () => {
+		expect(guidelines).toMatch(/all applicable[^.]*contribution[^.]*release instructions/i);
+		expect(guidelines).toMatch(/release[^.]*directly referenced/i);
+		expect(guidelines).toMatch(/source paths/i);
+		expect(guidelines).toMatch(/conflicts|missing details/i);
+		expect(guidelines.indexOf("contribution and release guidance")).toBeLessThan(
+			guidelines.indexOf("project scripts"),
+		);
+	});
+
+	it("reads release authority after checkout and freshness handling", () => {
+		const checkout = preMerge.indexOf("gh pr checkout <pr-number>");
+		const freshness = preMerge.indexOf("## Step 4: Check branch freshness");
+		const guidance = preMerge.indexOf("/mach12:find-contribution-guidelines");
+		expect(checkout).toBeGreaterThan(-1);
+		expect(freshness).toBeGreaterThan(checkout);
+		expect(guidance).toBeGreaterThan(freshness);
+	});
+
+	it("runs applicable version generation or synchronization before commit", () => {
+		expect(version).toMatch(/every applicable[^.]*generation or synchronization/i);
+		expect(version).toMatch(/before (?:the )?commit/i);
+		expect(preMerge.indexOf("generation or synchronization")).toBeLessThan(preMerge.indexOf("## Step 8:"));
+	});
+
+	it("verifies and commits the complete version change together", () => {
+		expect(version).toMatch(/canonical version[^.]*required mirrors[^.]*tracked generated metadata/i);
+		expect(version).toMatch(/repository-defined consistency checks/i);
+		expect(commit).toMatch(/canonical version[^.]*required mirrors[^.]*tracked generated metadata/i);
+		expect(commit).toMatch(/same (?:bounded )?(?:pre-merge )?commit|commit[^.]*together/i);
+	});
+
+	it("investigates incomplete authority and asks rather than guessing", () => {
+		expect(version).toMatch(/guidance[^.]*absent|guidance[^.]*incomplete/i);
+		expect(version).toMatch(/tracked files[^.]*project (?:scripts|commands)/i);
+		expect(version).toMatch(/ask the user/i);
+		expect(version).toMatch(/incomplete/i);
+		expect(version).toMatch(/do not guess|rather than guessing|never infer/i);
+	});
+
+	it("preserves mandatory investigation and repository version authority", () => {
+		expect(preMerge).toMatch(/after 7b's required authority and fallback investigation[^.]*optional/i);
+		expect(version).toMatch(/follow the repository authority[^.]*version target or classification rule/i);
+		expect(version).toMatch(/only when[^.]*semantic versioning[^.]*leaves the bump level unresolved/i);
+		expect(version).toMatch(/ask the user rather than overriding repository authority/i);
+	});
+});
+
 describe("mach12 ordinary PR readiness", () => {
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
 	const merge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
@@ -1146,15 +1245,18 @@ describe("mach12 ordinary PR readiness", () => {
 
 	it("pre-merge routes remediable outcomes to later steps", () => {
 		const readiness = readinessSection(preMerge);
-		expect(readiness).toContain("A behind branch continues to Step 5");
+		expect(readiness).toContain("A behind branch continues to Step 4");
 		expect(readiness).toContain("pending or failing checks continue to Step 9");
 		expect(readiness).toContain("`CONFLICTING` or `DIRTY`");
-		expect(readiness).toContain("continue through checkout to Step 5");
+		expect(readiness).toContain("continue through checkout to Step 4");
 		expect(readiness).toContain("does not authorize an automatic merge");
 	});
 
 	it("pre-merge keeps conflict remediation behind user confirmation", () => {
-		const freshness = preMerge.slice(preMerge.indexOf("## Step 5:"), preMerge.indexOf("## Step 6:"));
+		const freshness = preMerge.slice(
+			preMerge.indexOf("## Step 4: Check branch freshness"),
+			preMerge.indexOf("## Step 5: Read contribution guidelines"),
+		);
 		const mergeChoice = freshness.indexOf("**Merge**");
 		const cancelChoice = freshness.indexOf("**Cancel**");
 		const mergeCommand = freshness.indexOf("git merge origin/<default-branch>");
