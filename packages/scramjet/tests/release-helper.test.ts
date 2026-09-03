@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,13 @@ interface FakeState {
 	visibilityDelays?: Record<string, number>;
 	tagVisibilityDelays?: Record<string, number>;
 	attestationDelays?: Record<string, number>;
+	missingAttestation?: string;
+	wrongAttestationPredicate?: string;
+	installFailure?: boolean;
+	auditFailure?: boolean;
+	cliFailure?: boolean;
+	installedVersionOverrides?: Record<string, string>;
+	verificationPaths?: { project: string; cache: string; home: string; xdg: string };
 }
 
 const FAKE_NPM = `#!/usr/bin/env node
@@ -95,7 +102,7 @@ if (args[0] === "view") {
   }
   const pkg = state.packages[name];
   if (!pkg) stop("unknown package");
-  if (field === "dist.attestations.url") {
+  if (field === "dist.attestations.url" || field === "dist.attestations") {
     const version = spec.slice(versionSeparator + 1);
     const target = Object.values(state.targets).find((entry) => entry.name === name);
     if (versionSeparator <= 0 || target?.version !== version || !pkg.versions.includes(version)) stop("unknown package version");
@@ -103,7 +110,15 @@ if (args[0] === "view") {
       state.attestationDelays[name] -= 1;
       save(); process.exit(0);
     }
-    save(); process.stdout.write(JSON.stringify("https://registry.npmjs.org/fake/" + encodeURIComponent(name) + "/" + version)); process.exit(0);
+    const url = "https://registry.npmjs.org/fake/" + encodeURIComponent(name) + "/" + version;
+    if (field === "dist.attestations.url") {
+      save(); process.stdout.write(JSON.stringify(url)); process.exit(0);
+    }
+    const attestations = state.missingAttestation === name ? {} : {
+      url,
+      provenance: { predicateType: state.wrongAttestationPredicate === name ? "https://example.test/predicate" : "https://slsa.dev/provenance/v1" },
+    };
+    save(); process.stdout.write(JSON.stringify(attestations)); process.exit(0);
   }
   if (field === "versions") {
     state.versionQueries ??= {};
@@ -140,6 +155,40 @@ if (args[0] === "publish") {
   if (state.unexpectedTagChange === target.name) pkg.distTags.scramjet = target.version;
   save(); process.stdout.write("published"); process.exit(0);
 }
+if (args[0] === "install") {
+  state.verificationPaths = {
+    project: process.cwd(),
+    cache: process.env.npm_config_cache,
+    home: process.env.HOME,
+    xdg: process.env.XDG_DATA_HOME,
+  };
+  if (state.installFailure) stop("install failed");
+  for (const target of Object.values(state.targets)) {
+    const packageDir = require("node:path").join(process.cwd(), "node_modules", target.name);
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(require("node:path").join(packageDir, "package.json"), JSON.stringify({
+      name: target.name,
+      version: state.installedVersionOverrides?.[target.name] ?? target.version,
+    }));
+  }
+  const binDir = require("node:path").join(process.cwd(), "node_modules", ".bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(require("node:path").join(binDir, "scramjet"), [
+    "#!/usr/bin/env node",
+    'const fs = require("node:fs");',
+    'const state = JSON.parse(fs.readFileSync(process.env.FAKE_NPM_STATE, "utf8"));',
+    'state.calls.push(["installed-scramjet", ...process.argv.slice(2)]);',
+    'fs.writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));',
+    'if (state.cliFailure) process.exit(1);',
+    'process.stdout.write("scramjet help");',
+  ].join("\\n"));
+  fs.chmodSync(require("node:path").join(binDir, "scramjet"), 0o755);
+  save(); process.exit(0);
+}
+if (args[0] === "audit" && args[1] === "signatures") {
+  if (state.auditFailure) stop("audit failed");
+  save(); process.exit(0);
+}
 stop("unexpected command");
 `;
 
@@ -166,7 +215,9 @@ function initialState(): FakeState {
 }
 
 function runHelper(mode: string, statePath: string, args = mode === "preflight" ? [SHA] : []) {
-	const script = ["publish", "registry-preflight"].includes(mode) ? join(dirname(statePath), "runner.mjs") : HELPER;
+	const script = ["publish", "registry-preflight", "verify"].includes(mode)
+		? join(dirname(statePath), "runner.mjs")
+		: HELPER;
 	return spawnSync(process.execPath, [script, mode, ...args], {
 		cwd: REPO_ROOT,
 		encoding: "utf8",
@@ -474,11 +525,12 @@ describe("release helper registry preflight and publication", () => {
 		chmodSync(join(workDir, "npm"), 0o755);
 		writeFileSync(
 			join(workDir, "runner.mjs"),
-			`import { loadInventory, preflight, publish, validateIdentity } from ${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))};
+			`import { loadInventory, preflight, publish, validateIdentity, verify } from ${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))};
 try {
   const inventory = loadInventory();
   validateIdentity(inventory);
   if (process.argv[2] === "publish") await publish(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
+  else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
   else preflight(inventory);
 } catch (error) {
   console.error("release: " + error.message);
@@ -519,7 +571,7 @@ try {
 	it("does not expose retained-package reconciliation", () => {
 		const result = runHelper("reconcile", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("usage: release.mjs <validate|publish>");
+		expect(result.stderr).toContain("usage: release.mjs <validate|publish|verify>");
 		expect(readState(statePath).calls).toHaveLength(0);
 	});
 
@@ -848,6 +900,73 @@ try {
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	function publishedState(): FakeState {
+		const state = initialState();
+		for (const { name, version } of INVENTORY) {
+			state.packages[name].versions.push(version);
+			state.packages[name].distTags.latest = version;
+		}
+		return state;
+	}
+
+	function expectVerificationPathsRemoved(state: FakeState) {
+		expect(state.verificationPaths).toBeDefined();
+		for (const path of Object.values(state.verificationPaths!)) expect(existsSync(path)).toBe(false);
+	}
+
+	it.each([
+		["attestation URL", { missingAttestation: INVENTORY[2].name }, "has no attestation URL"],
+		[
+			"SLSA provenance predicate",
+			{ wrongAttestationPredicate: INVENTORY[2].name },
+			"has no SLSA v1 provenance predicate",
+		],
+	] as const)("requires an exact %s even when native signature audit would succeed", (_label, override, message) => {
+		writeFileSync(statePath, JSON.stringify(Object.assign(publishedState(), override)));
+		const result = runHelper("verify", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(`${INVENTORY[2].name}@${INVENTORY[2].version} ${message}`);
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(readState(statePath).calls.some((args) => args[0] === "audit")).toBe(false);
+	});
+
+	it("verifies metadata, a normal exact install, native signatures, installed closure, and the CLI", () => {
+		writeFileSync(statePath, JSON.stringify(publishedState()));
+		const result = runHelper("verify", statePath);
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		const state = readState(statePath);
+		const install = state.calls.find(([command]) => command === "install")!;
+		expect(install).toContain(`@leanandmean/scramjet@${SCRAMJET_VERSION}`);
+		expect(install).toContain("--ignore-scripts=false");
+		expect(state.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(state.calls).toContainEqual(["installed-scramjet", "--help"]);
+		expect(publishCalls(state)).toHaveLength(0);
+		expectVerificationPathsRemoved(state);
+	});
+
+	it.each([
+		["install", { installFailure: true }, "install failed", false],
+		[
+			"installed closure",
+			{ installedVersionOverrides: { [INVENTORY[0].name]: "0.0.0" } },
+			"installed version",
+			false,
+		],
+		["signature audit", { auditFailure: true }, "audit failed", false],
+		["CLI", { cliFailure: true }, "installed scramjet --help failed", true],
+	] as const)("fails %s verification and removes all owned temporary state", (_label, overrides, message, cliRan) => {
+		const state = Object.assign(publishedState(), overrides);
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(message);
+		const finalState = readState(statePath);
+		expect(finalState.calls.some(([command]) => command === "installed-scramjet")).toBe(cliRan);
+		expectVerificationPathsRemoved(finalState);
 	});
 });
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -184,6 +185,31 @@ function requireDistTags(value, name) {
 		fail(`${name} dist-tags must contain only string values`);
 	}
 	return value;
+}
+
+function readAttestations(pkg) {
+	const description = `${pkg.name}@${pkg.version} attestations`;
+	const output = run("npm", [
+		"view",
+		`${pkg.name}@${pkg.version}`,
+		"dist.attestations",
+		"--json",
+		"--registry",
+		REGISTRY_URL,
+	]);
+	if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+	return parseJson(output, description);
+}
+
+function requireAttestations(value, pkg) {
+	const attestations = requireObject(value, `${pkg.name}@${pkg.version} attestations`);
+	if (typeof attestations.url !== "string" || attestations.url.length === 0) {
+		throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+	}
+	const provenance = requireObject(attestations.provenance, `${pkg.name}@${pkg.version} provenance`);
+	if (provenance.predicateType !== "https://slsa.dev/provenance/v1") {
+		throw registryPropagationError(`${pkg.name}@${pkg.version} has no SLSA v1 provenance predicate`);
+	}
 }
 
 function parseVersion(version) {
@@ -395,10 +421,93 @@ export async function publish(inventory, dependencies = {}) {
 	}
 }
 
+function commandFailureDetail(error) {
+	for (const value of [error?.stderr, error?.stdout]) {
+		const text = Buffer.isBuffer(value) ? value.toString("utf8") : value;
+		if (typeof text === "string" && text.trim().length > 0) return text.trim();
+	}
+	return error?.message ?? String(error);
+}
+
+export async function verify(inventory, dependencies = {}) {
+	let root;
+	try {
+		for (const pkg of inventory) {
+			await pollRead(
+				`${pkg.name}@${pkg.version} verification metadata`,
+				async () => {
+					const versions = requireVersions(
+						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`),
+						pkg.name,
+					);
+					if (!versions.includes(pkg.version)) {
+						throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
+					}
+					const distTags = requireDistTags(
+						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`),
+						pkg.name,
+					);
+					if (distTags.latest !== pkg.version) {
+						throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
+					}
+					requireAttestations(readAttestations(pkg), pkg);
+				},
+				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
+			);
+		}
+
+		root = mkdtempSync(join(tmpdir(), "scramjet-release-verification-"));
+		const project = join(root, "project");
+		const cache = join(root, "cache");
+		const home = join(root, "home");
+		const xdg = join(root, "xdg");
+		for (const path of [project, cache, home, xdg]) mkdirSync(path);
+		writeFileSync(join(project, "package.json"), JSON.stringify({ private: true }));
+		const env = { ...process.env, HOME: home, XDG_DATA_HOME: xdg, npm_config_cache: cache };
+		const scramjet = inventory.at(-1);
+		run(
+			"npm",
+			[
+				"install",
+				"--save-exact",
+				`${scramjet.name}@${scramjet.version}`,
+				"--ignore-scripts=false",
+				"--registry",
+				REGISTRY_URL,
+			],
+			{ cwd: project, env, timeout: PUBLISH_TIMEOUT_MS },
+		);
+		for (const pkg of inventory) {
+			const manifestPath = join(project, "node_modules", pkg.name, "package.json");
+			const manifest = requireObject(parseJson(readFileSync(manifestPath, "utf8"), manifestPath), manifestPath);
+			if (manifest.name !== pkg.name || manifest.version !== pkg.version) {
+				fail(`${pkg.name} installed version must be exactly ${pkg.version}`);
+			}
+		}
+		run("npm", ["audit", "signatures", "--registry", REGISTRY_URL], {
+			cwd: project,
+			env,
+			timeout: PUBLISH_TIMEOUT_MS,
+		});
+		try {
+			run(join(project, "node_modules", ".bin", "scramjet"), ["--help"], { cwd: project, env });
+		} catch (error) {
+			throw new Error(`installed scramjet --help failed: ${commandFailureDetail(error)}`, { cause: error });
+		}
+	} catch (error) {
+		throw new Error(
+			`Published release verification failed; publication state is ambiguous. Inspect registry state read-only and prepare another five-fresh forward release. Cause: ${commandFailureDetail(error)}`,
+			{ cause: error },
+		);
+	} finally {
+		if (root !== undefined) rmSync(root, { recursive: true, force: true });
+	}
+}
+
 async function main() {
 	const [mode, ...args] = process.argv.slice(2);
-	if (!["validate", "preflight", "publish"].includes(mode)) {
-		fail("usage: release.mjs <validate|publish> | release.mjs preflight <confirmed-sha>");
+	if (!["validate", "preflight", "publish", "verify"].includes(mode)) {
+		fail("usage: release.mjs <validate|publish|verify> | release.mjs preflight <confirmed-sha>");
 	}
 	if (mode === "preflight") {
 		if (args.length !== 1) fail("usage: release.mjs preflight <confirmed-sha>");
@@ -410,6 +519,7 @@ async function main() {
 	validateIdentity(inventory);
 	if (mode === "validate") return;
 	if (mode === "publish") await publish(inventory);
+	if (mode === "verify") await verify(inventory);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
