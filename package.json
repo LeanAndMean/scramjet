@@ -15,7 +15,6 @@
 		"@biomejs/biome": "2.3.5",
 		"@types/node": "^22.10.5",
 		"@typescript/native-preview": "7.0.0-dev.20260120.1",
-		"sigstore": "4.1.1",
 		"typescript": "^5.9.2",
 		"vitest": "^3.2.4",
 		"shx": "^0.4.0"

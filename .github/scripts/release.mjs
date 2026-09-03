@@ -1,20 +1,13 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/LeanAndMean/scramjet.git";
 const REGISTRY_URL = "https://registry.npmjs.org/";
-const WORKFLOW_REPOSITORY = "https://github.com/LeanAndMean/scramjet";
 const WORKFLOW_PATH = ".github/workflows/release.yml";
-const SLSA_PREDICATE = "https://slsa.dev/provenance/v1";
-const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
-const CERTIFICATE_IDENTITY =
-	"^https://github\\.com/LeanAndMean/scramjet/\\.github/workflows/release\\.yml@refs/tags/v\\d+\\.\\d+\\.\\d+$";
 export const READ_TIMEOUT_MS = 60_000;
 export const PUBLISH_TIMEOUT_MS = 10 * 60_000;
 export const POST_PUBLISH_ATTEMPTS = 31;
@@ -36,8 +29,6 @@ const INTERNAL_DEPENDENCIES = new Map([
 const DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 const RELEASE_METADATA_PATHS = [...INVENTORY.map(([workspace]) => `${workspace}/package.json`), "package-lock.json"];
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-let defaultProvenanceVerifier;
-
 function fail(message) {
 	throw new Error(message);
 }
@@ -220,156 +211,17 @@ export function preflight(inventory) {
 	const plan = inventory.map((pkg) => {
 		const versions = requireVersions(npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions`), pkg.name);
 		const distTags = requireDistTags(npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags`), pkg.name);
-		const present = versions.includes(pkg.version);
+		if (versions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} already exists; every release requires five fresh versions`);
 		if (typeof distTags.latest !== "string") fail(`${pkg.name} has no string-valued latest dist-tag`);
-		if (present && distTags.latest !== pkg.version) {
-			fail(`${pkg.name}@${pkg.version} is present but is not current latest ${distTags.latest}`);
-		}
-		if (!present && compareVersions(pkg.version, distTags.latest) <= 0) {
+		if (compareVersions(pkg.version, distTags.latest) <= 0) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${distTags.latest}`);
 		}
-		return { ...pkg, present, distTags };
+		return { ...pkg, distTags };
 	});
 	for (const pkg of plan) {
-		console.log(`${pkg.name}@${pkg.version}: ${pkg.present ? "present" : "missing"}; dist-tags=${JSON.stringify(pkg.distTags)}`);
+		console.log(`${pkg.name}@${pkg.version}: missing; dist-tags=${JSON.stringify(pkg.distTags)}`);
 	}
 	return plan;
-}
-
-function expectedPurl(name, version) {
-	return `pkg:npm/${name.replace("@", "%40")}@${version}`;
-}
-
-function integrityHex(integrity) {
-	const match = /^sha512-([A-Za-z0-9+/]+={0,2})$/.exec(integrity);
-	if (!match) fail("registry integrity must be an sha512 SRI value");
-	const digest = Buffer.from(match[1], "base64");
-	if (digest.length !== 64 || digest.toString("base64") !== match[1]) {
-		fail("registry integrity must contain one canonical 64-byte SHA-512 digest");
-	}
-	return digest.toString("hex");
-}
-
-export function localPackageIntegrity(pkg, command = run) {
-	const packDirectory = mkdtempSync(join(tmpdir(), "scramjet-release-pack-"));
-	try {
-		const result = parseJson(
-			command("npm", ["pack", "-w", pkg.workspace, "--json", "--pack-destination", packDirectory]),
-			`${pkg.name} npm pack output`,
-		);
-		const filename = result?.[0]?.filename;
-		if (!Array.isArray(result) || result.length !== 1 || typeof filename !== "string" || filename !== basename(filename)) {
-			fail(`${pkg.name} npm pack must report exactly one archive filename`);
-		}
-		const digest = createHash("sha512").update(readFileSync(join(packDirectory, filename))).digest("base64");
-		return `sha512-${digest}`;
-	} finally {
-		rmSync(packDirectory, { recursive: true, force: true });
-	}
-}
-
-export async function fetchAttestationJson(url, fetchImpl = fetch, timeoutMs = READ_TIMEOUT_MS) {
-	const parsed = new URL(url);
-	if (parsed.protocol !== "https:" || parsed.hostname !== "registry.npmjs.org") {
-		fail("attestation URL must use the npm registry over HTTPS");
-	}
-	const response = await fetchImpl(parsed, { signal: AbortSignal.timeout(timeoutMs) });
-	if (!response.ok) {
-		const error = new Error(`attestation request failed with HTTP ${response.status} for ${parsed.href}`);
-		error.status = response.status;
-		throw error;
-	}
-	return response.json();
-}
-
-export async function createProvenanceVerifier(createVerifier) {
-	let verifier;
-	try {
-		createVerifier ??= (await import("sigstore")).createVerifier;
-		verifier = await createVerifier({
-			certificateIssuer: GITHUB_OIDC_ISSUER,
-			certificateIdentityURI: CERTIFICATE_IDENTITY,
-			ctLogThreshold: 1,
-			tlogThreshold: 1,
-			timeout: READ_TIMEOUT_MS,
-			retry: 0,
-		});
-	} catch (error) {
-		fail(`Sigstore trust initialization failed: ${error?.message ?? String(error)}`);
-	}
-	return (bundle) => verifier.verify(bundle);
-}
-
-async function getProvenanceVerifier() {
-	defaultProvenanceVerifier ??= createProvenanceVerifier();
-	return defaultProvenanceVerifier;
-}
-
-async function authenticateProvenance(bundle, verifyBundle) {
-	try {
-		await verifyBundle(bundle);
-	} catch (error) {
-		fail(`Sigstore provenance authentication failed: ${error?.message ?? String(error)}`);
-	}
-}
-
-export async function reconcilePackage(pkg, identity, dependencies = {}) {
-	const registry = dependencies.registry ?? ((args, description) => npmJson(args, description));
-	const fetchJson = dependencies.fetchJson ?? fetchAttestationJson;
-	const metadata = registry(
-		["view", `${pkg.name}@${pkg.version}`, "dist.integrity", "dist.attestations.url", "--json"],
-		`${pkg.name}@${pkg.version} provenance metadata`,
-	);
-	if (metadata === null || Array.isArray(metadata) || typeof metadata !== "object") fail("provenance metadata must be an object");
-	if (typeof metadata["dist.integrity"] !== "string" || typeof metadata["dist.attestations.url"] !== "string") {
-		fail(`${pkg.name}@${pkg.version} must have integrity and an attestation URL`);
-	}
-	const response = await fetchJson(metadata["dist.attestations.url"]);
-	if (!Array.isArray(response?.attestations)) fail("attestation response must contain an attestations array");
-	const candidates = response.attestations.filter((entry) => entry?.predicateType === SLSA_PREDICATE);
-	if (candidates.length === 0) fail("attestation response must contain an SLSA provenance statement");
-	if (candidates.length > 1) fail("attestation response must contain exactly one SLSA provenance statement");
-	await authenticateProvenance(candidates[0]?.bundle, dependencies.verifyBundle ?? (await getProvenanceVerifier()));
-	const envelope = candidates[0]?.bundle?.dsseEnvelope;
-	if (envelope?.payloadType !== "application/vnd.in-toto+json" || typeof envelope.payload !== "string") {
-		fail("SLSA provenance must contain an in-toto DSSE payload");
-	}
-	const statement = parseJson(Buffer.from(envelope.payload, "base64").toString("utf8"), "SLSA provenance payload");
-	if (statement._type !== "https://in-toto.io/Statement/v1") fail("SLSA payload has the wrong statement type");
-	if (statement.predicateType !== SLSA_PREDICATE) fail("SLSA payload has the wrong predicate type");
-	if (!Array.isArray(statement.subject) || statement.subject.length !== 1) fail("SLSA payload must have exactly one subject");
-	const subject = statement.subject[0];
-	if (subject?.name !== expectedPurl(pkg.name, pkg.version)) fail("SLSA subject does not match the package version");
-	if (subject?.digest?.sha512 !== integrityHex(metadata["dist.integrity"])) fail("SLSA subject digest does not match registry integrity");
-	const build = statement.predicate?.buildDefinition;
-	const workflow = build?.externalParameters?.workflow;
-	if (workflow?.repository !== WORKFLOW_REPOSITORY) fail("SLSA workflow repository does not match");
-	if (workflow?.path !== WORKFLOW_PATH) fail("SLSA workflow path does not match");
-	const allowPriorRelease = dependencies.allowPriorRelease ?? false;
-	const provenanceRef = workflow?.ref;
-	if (provenanceRef !== identity.ref && (!allowPriorRelease || !/^refs\/tags\/v\d+\.\d+\.\d+$/.test(provenanceRef))) {
-		fail("SLSA workflow ref does not match");
-	}
-	const expectedUri = `git+${WORKFLOW_REPOSITORY}@${provenanceRef}`;
-	const sources = build?.resolvedDependencies;
-	if (!Array.isArray(sources) || sources.length !== 1 || sources[0]?.uri !== expectedUri) {
-		fail("SLSA resolved source does not match the release tag");
-	}
-	const provenanceSha = sources[0]?.digest?.gitCommit;
-	if (
-		provenanceRef === identity.ref
-			? provenanceSha !== identity.sha
-			: !allowPriorRelease || !/^[0-9a-f]{40}$/.test(provenanceSha)
-	) {
-		fail("SLSA resolved commit does not match GITHUB_SHA");
-	}
-	if (provenanceRef !== identity.ref) {
-		const localIntegrity = await (dependencies.localIntegrity ?? localPackageIntegrity)(pkg);
-		if (localIntegrity !== metadata["dist.integrity"]) {
-			fail(`${pkg.name}@${pkg.version} prior-release artifact does not match the current workspace package`);
-		}
-	}
-	return true;
 }
 
 function tagsEqual(left, right) {
@@ -438,12 +290,7 @@ function isRegistryVisibilityRetryError(error) {
 }
 
 export function isTransientReadError(error) {
-	return (
-		isTransientTransportError(error) ||
-		/provenance metadata must be an object|must have integrity and an attestation URL|must contain an SLSA provenance statement/.test(
-			error?.message ?? "",
-		)
-	);
+	return isRegistryVisibilityRetryError(error);
 }
 
 export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_MS) {
@@ -472,46 +319,20 @@ export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_M
 			.join("\n");
 		const detail = output || error?.message;
 		throw new Error(
-			`npm publish for ${pkg.name}@${pkg.version} failed after publication began; publication state is ambiguous. Do not retry publication; run read-only reconciliation.${detail ? ` Cause: ${detail}` : ""}`,
+			`npm publish for ${pkg.name}@${pkg.version} failed after publication began; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release.${detail ? ` Cause: ${detail}` : ""}`,
 			{ cause: error },
 		);
 	}
 }
 
-export async function reconcile(inventory, identity, dependencies = {}) {
-	const verifyBundle = dependencies.verifyBundle ?? (await getProvenanceVerifier());
+export async function publish(inventory, dependencies = {}) {
 	const plan = preflight(inventory);
 	for (const pkg of plan) {
-		if (!pkg.present) {
-			console.log(`Not yet published ${pkg.name}@${pkg.version}`);
-			continue;
-		}
-		await reconcilePackage(pkg, identity, { ...dependencies, allowPriorRelease: true, verifyBundle });
-		console.log(`Reconciled ${pkg.name}@${pkg.version}`);
-	}
-}
-
-export async function publish(inventory, identity, dependencies = {}) {
-	const verifyBundle = dependencies.verifyBundle ?? (await getProvenanceVerifier());
-	const plan = preflight(inventory);
-	for (const pkg of plan.filter(({ present }) => present)) {
-		await reconcilePackage(pkg, identity, { ...dependencies, allowPriorRelease: true, verifyBundle });
-		const currentTags = requireDistTags(
-			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after reconciliation`),
-			pkg.name,
-		);
-		if (!tagsEqual(currentTags, pkg.distTags)) fail(`${pkg.name} dist-tags changed after preflight`);
-	}
-	for (const pkg of plan) {
-		if (pkg.present) {
-			console.log(`Skipping reconciled ${pkg.name}@${pkg.version}`);
-			continue;
-		}
 		const currentVersions = requireVersions(
 			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions before publish`),
 			pkg.name,
 		);
-		if (currentVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} appeared after preflight; reconcile before retrying`);
+		if (currentVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} appeared after preflight`);
 		const currentTags = requireDistTags(
 			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags before publish`),
 			pkg.name,
@@ -549,13 +370,25 @@ export async function publish(inventory, identity, dependencies = {}) {
 			delete afterNonLatest.latest;
 			if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
 			await pollRead(
-				`${pkg.name}@${pkg.version} provenance`,
-				() => reconcilePackage(pkg, identity, { ...dependencies, verifyBundle }),
+				`${pkg.name}@${pkg.version} attestation metadata`,
+				async () => {
+					const output = run("npm", [
+						"view",
+						`${pkg.name}@${pkg.version}`,
+						"dist.attestations.url",
+						"--json",
+						"--registry",
+						REGISTRY_URL,
+					]);
+					if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+					const url = parseJson(output, `${pkg.name}@${pkg.version} attestation URL`);
+					if (typeof url !== "string") fail(`${pkg.name}@${pkg.version} attestation URL must be a string`);
+				},
 				{ ...dependencies.pollDependencies, retryIf: isTransientReadError },
 			);
 		} catch (error) {
 			throw new Error(
-				`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; run read-only reconciliation. Cause: ${error?.message ?? String(error)}`,
+				`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release. Cause: ${error?.message ?? String(error)}`,
 				{ cause: error },
 			);
 		}
@@ -564,8 +397,8 @@ export async function publish(inventory, identity, dependencies = {}) {
 
 async function main() {
 	const [mode, ...args] = process.argv.slice(2);
-	if (!["validate", "preflight", "publish", "reconcile"].includes(mode)) {
-		fail("usage: release.mjs <validate|publish|reconcile> | release.mjs preflight <confirmed-sha>");
+	if (!["validate", "preflight", "publish"].includes(mode)) {
+		fail("usage: release.mjs <validate|publish> | release.mjs preflight <confirmed-sha>");
 	}
 	if (mode === "preflight") {
 		if (args.length !== 1) fail("usage: release.mjs preflight <confirmed-sha>");
@@ -574,13 +407,9 @@ async function main() {
 	}
 	if (args.length !== 0) fail(`usage: release.mjs ${mode}`);
 	const inventory = loadInventory();
-	const identity = validateIdentity(inventory);
+	validateIdentity(inventory);
 	if (mode === "validate") return;
-	if (mode === "publish") {
-		await publish(inventory, identity);
-		return;
-	}
-	await reconcile(inventory, identity);
+	if (mode === "publish") await publish(inventory);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
