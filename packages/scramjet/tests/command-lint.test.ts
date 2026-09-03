@@ -330,7 +330,7 @@ describe("runCommandLint — targets, output, and exit policy", () => {
 
 		expect(mach12.status).toBe(0);
 		expect(scramjet.status).toBe(0);
-		expect(JSON.parse(mach12.stdout).summary).toEqual({ files: 19, errors: 0, warnings: 0 });
+		expect(JSON.parse(mach12.stdout).summary).toEqual({ files: 20, errors: 0, warnings: 0 });
 		expect(JSON.parse(scramjet.stdout).summary).toEqual({ files: 1, errors: 0, warnings: 0 });
 	});
 });

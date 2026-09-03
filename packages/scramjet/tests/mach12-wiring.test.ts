@@ -1436,19 +1436,34 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(readiness).toContain("does not authorize an automatic merge");
 	});
 
-	it("pre-merge keeps conflict remediation behind user confirmation", () => {
+	it("pre-merge authorizes integration before delegating and consumes only a verified success", () => {
 		const freshness = preMerge.slice(
 			preMerge.indexOf("## Step 4: Check branch freshness"),
 			preMerge.indexOf("## Step 5: Read contribution guidelines"),
 		);
 		const mergeChoice = freshness.indexOf("**Merge**");
 		const cancelChoice = freshness.indexOf("**Cancel**");
-		const mergeCommand = freshness.indexOf("git merge origin/<default-branch>");
+		const delegation = freshness.indexOf("/mach12:integrate-branch <default-branch> --pr <pr-number>");
 		expect(mergeChoice).toBeGreaterThan(-1);
 		expect(cancelChoice).toBeGreaterThan(mergeChoice);
-		expect(mergeCommand).toBeGreaterThan(cancelChoice);
-		expect(freshness).toContain("resolve them using codebase context");
-		expect(freshness).toContain("genuinely ambiguous");
+		expect(delegation).toBeGreaterThan(cancelChoice);
+		expect(freshness).toContain("get_scramjet_user_input");
+		expect(freshness).toContain("prior informed **Merge** choice authorizes the delegated integration and push");
+		expect(freshness).toContain("outcome is `integrated` or `already integrated`");
+		expect(freshness).toContain("every required check succeeded");
+		expect(freshness).toContain("local, upstream, forge, and matching-PR convergence is established");
+		expect(freshness).toContain("For `aborted`, `blocked`, or `indeterminate` outcomes");
+		expect(freshness).toContain("without attempting to integrate, finalize, or push it again");
+		expect(freshness).toContain("delegated command exclusively owns integration");
+		expect(freshness).not.toContain("git merge");
+		expect(freshness).not.toContain("git checkout --theirs");
+		expect(freshness).not.toContain("git commit --no-edit");
+		expect(freshness).not.toMatch(/`git push(?:\s|`)/);
+
+		const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), preMerge, SET_NAME);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.def.allowedTools).toContain("get_scramjet_user_input");
 	});
 
 	it("merge requires ordinary GitHub readiness", () => {
