@@ -18,6 +18,7 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 	"unclear-instruction interpretation": "When given an unclear or generic instruction",
 	"defer to user judgment": "defer to user judgement about whether a task is too large",
 	"exploratory questions don't trigger implementation": "For exploratory questions",
+	"ordinary planning structural evidence": "Before producing a non-trivial file-level implementation plan",
 	"prefer editing existing files": "Prefer editing existing files to creating new ones.",
 	"avoid security vulnerabilities": "OWASP top 10",
 	"scope discipline / smallest correct change": "beyond what the task requires",
@@ -95,6 +96,22 @@ describe("registerBaseDirectives", () => {
 		const { list } = captureHandler();
 		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
 		expect(result.systemPromptSection.text).toContain(anchor);
+	});
+
+	it("scopes structural mapping to proportional ordinary file-level planning", async () => {
+		const { list } = captureHandler();
+		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
+		const text = result.systemPromptSection.text;
+
+		expect(text).toMatch(
+			/non-trivial file-level implementation plan outside an active `\/mach12:issue-plan`[\s\S]*dispatch `scramjet:structural-mapper`[\s\S]*Consume its Current-State Structural Evidence Packet before selecting files or changing interfaces/,
+		);
+		expect(text).toMatch(
+			/Skip this when current authority establishes that the work is mechanical,[\s\S]*owner and location are unambiguous,[\s\S]*changes no shared, exported, public, serialized, cross-owner, or dependency contract/,
+		);
+		expect(text).toContain(
+			"Do not trigger it for a short exploratory response that does not provide a file-level plan.",
+		);
 	});
 
 	// Covers the packageRoot() walk and doc-pointer construction the anchor table

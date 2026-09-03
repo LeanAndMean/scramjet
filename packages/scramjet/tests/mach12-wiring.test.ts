@@ -464,7 +464,9 @@ describe("mach12 command-surface issue routing", () => {
 			expect(explorer).toMatch(/do not recreate[^.]*packet/i);
 		}
 		expect(codeExplorer).toMatch(/behavior, data flow, algorithms, side effects/i);
-		expect(codeExplorer).toMatch(/when no packet is supplied[^\n]*component responsibilities, architecture insights, and dependencies/i);
+		expect(codeExplorer).toMatch(
+			/when no packet is supplied[^\n]*component responsibilities, architecture insights, and dependencies/i,
+		);
 		expect(codeExplorer).toMatch(/when a packet is supplied[^\n]*behavioral findings[^\n]*exact packet gaps/i);
 		expect(commandExplorer).toMatch(/command journeys, context boundaries, artifacts, and side-effect owners/i);
 	});
