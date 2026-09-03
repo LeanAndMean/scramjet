@@ -1409,6 +1409,80 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(confirmation).toBeGreaterThan(mergeCommand);
 		expect(cleanup).toBeGreaterThan(confirmation);
 		expect(mergeSection).toContain("Before cleanup or release work");
+		expect(mergeSection).toContain("MERGED_SHA");
+		expect(mergeSection).toContain("mergeCommit.oid");
+		expect(mergeSection).toMatch(/full 40-character[^.]*merge commit SHA/i);
+	});
+
+	it("merge handles release intent once while preserving exact draft approval", () => {
+		const intent = merge.slice(merge.indexOf("## Step 4:"), merge.indexOf("## Step 5:"));
+		const release = merge.slice(merge.indexOf("## Step 5:"), merge.indexOf("## Step 6:"));
+		expect(intent).toMatch(/explicitly declines[^.]*skip[^.]*without asking/i);
+		expect(intent).toMatch(/explicitly requests[^.]*settled[^.]*without asking again/i);
+		expect(intent).toMatch(/otherwise[^.]*ask[^.]*create a release/i);
+		expect(release).toContain("Present the exact draft");
+		expect(release).toContain("Approve");
+		expect(release).toContain("Modify");
+		expect(release).toContain("Skip release");
+	});
+
+	it("merge reacquires repository release authority before informed approval", () => {
+		const release = merge.slice(merge.indexOf("## Step 5:"), merge.indexOf("## Step 6:"));
+		const authority = release.indexOf("/mach12:find-contribution-guidelines");
+		const risk = release.indexOf("immutable");
+		const draft = release.indexOf("Present the exact draft");
+		expect(authority).toBeGreaterThan(-1);
+		expect(risk).toBeGreaterThan(authority);
+		expect(draft).toBeGreaterThan(risk);
+		expect(release).toMatch(/irreversible[^.]*nontransactional publication/i);
+		expect(release).toMatch(/mandatory[^.]*preflight/i);
+		expect(release).toMatch(/downstream proof outcomes[^.]*release creation does not itself establish/i);
+		expect(release).toContain("MERGED_SHA");
+		expect(release).toContain("User context may choose or modify the optional title and notes");
+	});
+
+	it("merge rechecks release conflicts and preflight immediately before explicit-target creation", () => {
+		const release = merge.slice(merge.indexOf("## Step 5:"), merge.indexOf("## Step 6:"));
+		const approval = release.indexOf("After exact approval");
+		const head = release.indexOf("current checkout's `HEAD` to equal `MERGED_SHA`", approval);
+		const preflight = release.indexOf("authority-defined read-only preflight", head);
+		const conflicts = release.indexOf("remote tag and GitHub release are still absent", preflight);
+		const creation = release.indexOf('gh release create <tag> --target "$MERGED_SHA"', conflicts);
+		expect(approval).toBeGreaterThan(-1);
+		expect(head).toBeGreaterThan(approval);
+		expect(preflight).toBeGreaterThan(head);
+		expect(conflicts).toBeGreaterThan(preflight);
+		expect(creation).toBeGreaterThan(conflicts);
+		expect(release).toMatch(/failed or ambiguous[^.]*stop[^.]*without retry/i);
+	});
+
+	it("merge keeps release handling repository-generic and outcomes independent", () => {
+		for (const repositorySpecific of [
+			"@leanandmean",
+			"release.mjs",
+			"v0.87.0",
+			"v0.88.0",
+			"npm audit",
+			"GITHUB_RUN_ATTEMPT",
+		]) {
+			expect(merge).not.toContain(repositorySpecific);
+		}
+		expect(merge).toMatch(/repositories without applicable release authority[^.]*generic/i);
+		for (const outcome of ["merge", "cleanup", "GitHub release", "publication", "provenance", "installation"]) {
+			expect(merge).toContain(outcome);
+		}
+		expect(merge).toMatch(/never infer[^.]*downstream[^.]*release creation/i);
+	});
+
+	it("merge defines outcome-based terminal statuses", () => {
+		const status = merge.slice(merge.indexOf("## Status Reporting"));
+		expect(status).toMatch(
+			/completed[^.]*every other applicable required outcome succeeded or were explicitly non-applicable/i,
+		);
+		expect(status).toMatch(/release was skipped[^.]*non-applicable/i);
+		expect(status).toMatch(/release was requested[^.]*every authority-defined release outcome must succeed/i);
+		expect(status).toMatch(/blocked[^.]*determinate failed required outcome/i);
+		expect(status).toMatch(/incomplete[^.]*pending, ambiguous, timed-out, or otherwise indeterminate/i);
 	});
 
 	it("pre-merge defines terminal status predicates and requires final readiness", () => {
