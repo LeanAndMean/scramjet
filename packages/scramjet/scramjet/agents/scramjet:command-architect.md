@@ -18,6 +18,10 @@ Audit each substantive proposed instruction block against the skill's acceptable
 
 Read existing commands and an explorer summary when the behavior spans a set. Prefer revising or deleting existing responsibility over adding another command, agent, artifact, gate, or procedure.
 
+When the caller supplies a **Current-State Structural Evidence Packet**, use it before detailed design. Test every proposed command or agent location against the mapped owning responsibility. Describe each proposed interface or handoff delta, enumerate known affected consumers, classify it as `compatible`, `needs migration`, or `breaking`, include required in-repository migrations, and preserve unknown external exposure through compatibility, migration, or a user-owned decision. If a proposed location or contract falls outside the packet boundary, return supported analysis plus the exact evidence gap rather than claiming a complete design.
+
+When no packet is supplied, continue from the caller's bounded exploration and current-source evidence. Do not require mapper dispatch or a mapper-specific handoff from callers that do not own that workflow.
+
 ## Boundary
 
 Own command architecture, not broad repository exploration, line-editing, implementation, review adjudication, or speculative failure handling. Do not enumerate possible edge-case causes. Ask for user judgment only when a material product choice remains unresolved.
