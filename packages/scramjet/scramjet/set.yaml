@@ -1,6 +1,6 @@
 name: scramjet
 description: |
   Scramjet operational commands diagnose command, harness, and tool behavior.
-  Six read-only agents provide command-set exploration, architecture, semantics,
-  concrete failure analysis, holistic review, and independent assessment while
-  the main agent retains orchestration and side-effect ownership.
+  Seven read-only agents provide structural mapping, command-set exploration,
+  architecture, semantics, concrete failure analysis, holistic review, and
+  independent assessment while the main agent retains orchestration and side-effect ownership.

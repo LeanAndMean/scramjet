@@ -492,8 +492,9 @@ Treat command and agent Markdown, frontmatter, next-step and delegation contract
 
 The packaged `writing-scramjet-commands` skill is the shared authoring authority. It describes commands as light-touch generalized plans; defines acceptable reasons for instructions, informed user-alignment gates, approval-only coaching exceptions, framing and word economy, context and handoff design, project-native tools, and justified subagent isolation. Load it on demand instead of copying those principles into every command and agent. The base system prompt carries only the fundamental rule that the main agent must provide enough compressed context for consequential user input to be informed.
 
-Scramjet ships six read-only command agents:
+Scramjet ships seven read-only agents:
 
+- `scramjet:structural-mapper` produces task-scoped current-state evidence about responsibilities, dependencies, contracts, consumers, and evidence limits for implementation planning.
 - `scramjet:command-set-explorer` compresses large multi-command definitions into a map of edges, context, artifacts, and owners.
 - `scramjet:command-architect` designs or substantially revises the minimum generalized plan.
 - `scramjet:instruction-semantics-analyzer` handles narrow contradictions, ambiguity, impossible ordering, and authority conflicts.
