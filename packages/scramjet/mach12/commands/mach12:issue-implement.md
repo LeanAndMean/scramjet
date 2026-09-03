@@ -28,11 +28,15 @@ next:
 
 # Implement Stage
 
-You are implementing a specific stage of a staged implementation plan. This command gathers context from a GitHub issue, then walks through the implementation under the structured development workflow.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Complete exactly the requested implementation-plan stage or range with the smallest sound change that preserves the issue's requirements and approved architecture.
+- Leave the requested scope's intended files verified, committed, pushed, and documented in a durable progress artifact.
+- Report remaining work accurately and offer only the next planned stage or PR creation when its prerequisites are satisfied.
 
 ## Step 1: Parse Input
 
@@ -133,12 +137,14 @@ If the marker comment was not found, fall back to identifying the most recent su
 
 ## Step 4: Implement the Stage
 
-Walk through the implementation using a structured 7-phase development plan. Treat the phases as due-diligence discipline, not mandatory token burn: if the issue plan already contains current architecture, relevant files, decisions, and stage scope, verify that context is still fresh and mark exploration/design as satisfied instead of re-exploring the whole codebase. If the plan is stale, ambiguous, or lacks enough context for this stage, do targeted exploration before coding.
+Walk through the implementation using a structured 7-phase development plan. Treat the phases as due-diligence discipline, not mandatory token burn: if the issue plan already contains current architecture, relevant files, decisions, and stage scope, verify that context is still fresh and mark exploration/design as satisfied instead of re-exploring the whole codebase. If the plan is stale, ambiguous, or lacks enough context for this stage, do targeted exploration before coding. When the stage modifies command surfaces, load `writing-scramjet-commands` before editing.
+
+Before specialist dispatch or completion claims, identify project-provided tools relevant to this stage's affected artifacts from repository guidance, manifests, adjacent scripts, CI configuration, and established usage. Establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization covering their effects. The parent command owns tool execution; read-only specialists receive verified commands, outputs, and limitations as evidence rather than rerunning them.
 
 1. **Discovery** -- restate the goal of the stage in your own words; confirm the stage scope and what is intentionally out of scope. Re-run the minimum-sufficient solution ladder for the stage: identify the smallest change that satisfies the approved plan.
 2. **Codebase exploration** -- when prior planning is sufficient, briefly verify the referenced files still exist and the plan still matches current code. When more context is needed, dispatch focused `mach12:code-explorer` tasks for the specific files, patterns, and integration points relevant to the stage; read every file the exploration flags.
-3. **Clarifying questions** -- before implementing, surface underspecified behavior, constraints, edge cases, or scope boundaries to the user and wait for answers. Do not ask ceremonial questions when the plan already resolves the ambiguity.
-4. **Architecture design** -- if the stage has non-trivial structural choices not already settled by the plan, present 2-3 approaches with trade-offs and confirm the user's preference. If the plan already made a sound architecture decision, state that you are following it and proceed.
+3. **Clarifying questions** -- ask only when the user owns the decision or necessary information is unavailable. Before asking, state the relevant evidence, uncertainty, options, consequences, and recommendation so the user does not need to reconstruct the investigation. Do not ask ceremonial questions when authority and capable agent judgment resolve the matter.
+4. **Architecture design** -- if the stage has non-trivial structural choices not already settled by the plan, present only materially viable approaches with trade-offs and ask for user preference when the decision belongs to the user. If the plan already made a sound architecture decision, state that you are following it and proceed.
 5. **Implementation** -- write the code, follow existing codebase conventions strictly.
    - Prefer editing existing code over adding files.
    - Prefer existing utilities and dependencies over new ones.
@@ -146,12 +152,18 @@ Walk through the implementation using a structured 7-phase development plan. Tre
    - If the approved plan appears overbuilt during implementation, surface that observation and ask before deviating.
    - When the plan's Test Strategy section includes test-first directives for this stage, follow the sequence: write the failing test first, confirm it fails for the expected reason, implement the fix, then confirm the test passes. This applies only when the plan explicitly calls for test-first — it is not a blanket TDD requirement.
    - Non-trivial behavior changes need the smallest meaningful test consistent with the repo; trivial prompt/docs/mechanical changes may skip new tests if the reason is stated.
+   - Run applicable non-mutating project-native checks before claiming completion. Address in-scope failures, but do not infer a root cause from an error alone or expand the stage because of unrelated baseline warnings. Report unavailable required tooling and unrelated baseline evidence explicitly instead of silently substituting an improvised check; clean output does not replace behavioral verification.
    - If the plan includes a version-bump or changelog stage (from an older plan), defer it rather than executing it — note the deferral in the stage summary.
-6. **Quality review** -- run a single, lightweight sanity pass over this stage's own changes. This is a fast confidence check that the stage's diff is sound; it is explicitly **not** a substitute for the thorough, full-branch PR review that runs later (`mach12:pr-review` re-covers correctness, tests, error handling, type design, and simplification across the whole branch). Keep it proportional to the stage:
-   - **Cap: at most 3 `mach12:code-reviewer` subagents per stage, total** -- dispatched in a single parallel batch, each given a focused brief for this stage's changes (e.g., bugs/correctness, project conventions and abstraction fit, and -- only when the stage warrants it -- a higher-risk angle such as error/fallback paths, type/interface design, or test coverage). Three is a ceiling for unusually risky stages, not a quota: most stages need one or two, and a trivial or low-risk stage (mechanical rename, comment/text edit, config tweak with no logic change) may skip review entirely when you can state why the change is below threshold.
-   - **Single pass.** Run the brief(s) once, consolidate the findings, and act on them directly. Do not loop: re-review is warranted only when a fix you made was non-trivial and substantively reworked code a reviewer flagged -- and then only the one brief covering that area, dispatched once more and **counted against the three-subagent per-stage cap** (keep the initial batch small when a re-review is plausible so you reserve headroom). A reviewer returning findings is not itself a reason to re-review.
-   - **Never re-dispatch to restate.** Act on the findings you already hold. Do not spawn a subagent to re-report, restate, or re-confirm a finding you already received -- you carry the finding; a fresh subagent does not.
-   Fix only findings that matter for this stage's scope.
+6. **Quality review** -- run a single, lightweight sanity pass over this stage's own changes. This is a fast confidence check that the stage's diff is sound; it is explicitly **not** a substitute for the thorough, full-branch PR review that runs later. Classify the changed surfaces before dispatch:
+   - For command-only changes that add or materially alter instructions, responsibility, handoffs, framing, or user gates, use one `scramjet:command-reviewer`. Use `scramjet:instruction-semantics-analyzer` alone only for narrow analysis or a clarification that adds no procedure, responsibility, or gate; use both only for explicitly disjoint questions.
+   - For code-only changes, retain `mach12:code-reviewer` with focused correctness, convention, or higher-risk briefs as warranted.
+   - For mixed changes, give one command reviewer and the necessary code reviewers disjoint briefs under one shared maximum of three subagents total.
+   Every brief must include the governing issue requirements, approved plan and selected stage, authoritative decisions, relevant parent observations, verified project-tool evidence, exact surface partition, selection reason, and expected output. Command specialists load the `writing-scramjet-commands` skill as their shared authority. Missing required output narrows the quality conclusion rather than triggering another reviewer. If the command reviewer returns candidate findings, dispatch `scramjet:independent-command-assessor` with the actual authority, changed artifacts, candidate IDs and evidence, exact user decisions, and context presented before exception approval. Only assessor-accepted findings become fix authority.
+   The parent remains the sole owner of repository mutation, test execution, user interaction, and publication. Keep the review proportional:
+   - **Cap: at most 3 subagents per stage, total across both families** -- dispatch independent initial briefs in one parallel batch, followed by the command assessor only when candidate findings exist. Three is a ceiling for unusually risky mixed or code work, not a quota; trivial work may skip review.
+   - **Single pass.** Run the brief(s) once, consolidate the findings, and act on them directly. Do not loop: re-review is warranted only when a fix was non-trivial and substantively reworked code or command prose. Keep the initial batch below the cap when re-review is plausible; any one re-review remains counted within the three-subagent cap.
+   - **Never re-dispatch to restate.** Act on the findings you already hold. Do not spawn a subagent to re-report, restate, or re-confirm a finding you already received.
+   Fix only findings that matter for this stage's scope. For command changes, delete unjustified instructions by default. If retaining coaching or another unclassified exception may be warranted, the parent presents the evidence, lower-cost alternatives, consequences, and cost to the user and obtains explicit informed approval before completion. Record approved exceptions and their evidence status in the existing progress artifact; do not infer approval from the plan or neighboring decisions.
 7. **Summary** -- list what was built, key decisions, files modified.
 
 If the stage reveals issues with the original plan, surface them and suggest plan adjustments rather than silently deviating.

@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadSkillsFromDir, parseFrontmatter } from "@leanandmean/coding-agent";
 import { describe, expect, it } from "vitest";
 import { parseCommandFile } from "../src/commands/loader.js";
 
@@ -11,6 +12,58 @@ function body(): string {
 	if (!parsed.ok) throw new Error(parsed.error);
 	return parsed.def.body;
 }
+
+const specialistNames = [
+	"scramjet:command-architect",
+	"scramjet:command-failure-analyst",
+	"scramjet:command-reviewer",
+	"scramjet:command-set-explorer",
+	"scramjet:independent-command-assessor",
+	"scramjet:instruction-semantics-analyzer",
+];
+
+const specialistsPath = join(__dirname, "../scramjet/agents");
+
+describe("Scramjet command specialists", () => {
+	it("ships the exact parseable specialist roster with matching filenames and distinct descriptions", () => {
+		const files = readdirSync(specialistsPath)
+			.filter((file) => file.endsWith(".md"))
+			.sort();
+		expect(files).toEqual(specialistNames.map((name) => `${name}.md`));
+
+		const definitions = files.map((file) => {
+			const parsedAgent = parseFrontmatter<Record<string, unknown>>(
+				readFileSync(join(specialistsPath, file), "utf8"),
+			);
+			return { file, frontmatter: parsedAgent.frontmatter, body: parsedAgent.body.trim() };
+		});
+		const descriptions = definitions.map(({ frontmatter }) => frontmatter.description);
+
+		expect(definitions.map(({ file, frontmatter }) => `${frontmatter.name}.md` === file)).toEqual(
+			Array(6).fill(true),
+		);
+		expect(descriptions.every((description) => typeof description === "string" && description.trim())).toBe(true);
+		expect(definitions.every(({ body }) => body)).toBe(true);
+		expect(
+			new Set(
+				descriptions
+					.filter((description): description is string => typeof description === "string")
+					.map((description) => description.trim()),
+			).size,
+		).toBe(6);
+	});
+});
+
+describe("Scramjet command authoring skill", () => {
+	it("loads the packaged writing-scramjet-commands skill", () => {
+		const result = loadSkillsFromDir({ dir: join(__dirname, "../skills"), source: "package" });
+
+		expect(result.diagnostics).toEqual([]);
+		expect(result.skills).toHaveLength(1);
+		expect(result.skills[0]?.name).toBe("writing-scramjet-commands");
+		expect(readFileSync(result.skills[0]!.filePath, "utf8")).toContain("A Scramjet command is a generalized plan");
+	});
+});
 
 describe("scramjet:troubleshoot", () => {
 	it("is a read-oriented top-level command with open issue routing", () => {
@@ -29,9 +82,10 @@ describe("scramjet:troubleshoot", () => {
 		});
 	});
 
-	it("requires exactly the five concise visible sections", () => {
+	it("requires exactly the five concise visible answer sections", () => {
 		const headings = body().match(/^## .+$/gm) ?? [];
-		expect(headings).toEqual([
+		expect(headings[0]).toBe("## Goals");
+		expect(headings.slice(1)).toEqual([
 			"## User intent",
 			"## What actually occurred",
 			"## Root cause analysis",

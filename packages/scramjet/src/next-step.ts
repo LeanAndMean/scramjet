@@ -29,9 +29,11 @@ function formatCandidates(candidates: Candidate[]): string {
 }
 
 function recommendationRule(scramjetEnabled: boolean): string {
+	const chooseRecommendation =
+		"Choose the best-supported continuation from the completed work and current context, construct `next_steps`, and derive any `recommended_next_step` from the selected entry's zero-based runtime index.";
 	return scramjetEnabled
-		? "With `/autopilot on`, set `recommended_next_step` to the zero-based index only when the recommended entry's message is a slash command; do not set it for a non-command message."
-		: "With `/autopilot off`, set `recommended_next_step` to the zero-based index of the best option to show the user; Scramjet will not auto-dispatch it.";
+		? `${chooseRecommendation} With \`/autopilot on\`, set it to highlight the selected entry; Scramjet auto-dispatches it only when its message is a slash command.`
+		: `${chooseRecommendation} With \`/autopilot off\`, set it to highlight the best option for the user; Scramjet will not auto-dispatch it.`;
 }
 
 export function buildNextStepBlock(policy: NextStepPolicy, commandId: string, scramjetEnabled = true): string {

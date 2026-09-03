@@ -4,6 +4,8 @@
 
 Prompt templates are Markdown snippets that expand into full prompts. Type `/name` in the editor to invoke a template, where `name` is the filename without `.md`.
 
+A template expansion is an ordinary user prompt, not a Scramjet command. It does not receive `<scramjet-command>` framing, command lifecycle association, declared next-step behavior, or a guarantee that the agent must execute it as an active command. Skills are on-demand capability packages rather than ordinary prompt expansions, but they likewise do not carry the Scramjet command guarantee. When template-derived information supports an active command, that command's explicit Goals (or inferred outcomes for a legacy command), user decisions, trust boundaries, consumer contracts, and required side effects remain controlling. See the [Scramjet command authoring guide](../../scramjet/docs/command-authoring.md) for the command contract.
+
 ## Locations
 
 Scramjet loads prompt templates from:

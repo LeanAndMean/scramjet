@@ -4,6 +4,76 @@ This document covers the patterns and conventions for authoring Scramjet command
 
 A command file is a Markdown file with YAML frontmatter. It lives in a command-set directory (e.g., `mach12/commands/`) and is named `<set-name>:<command-name>.md`. The filename determines the slash-command name: `mach12/commands/mach12:issue-plan.md` becomes `/mach12:issue-plan`.
 
+## Command semantics and Goals
+
+A harness-delivered Scramjet command is an actively invoked executable task. The harness wraps it in `<scramjet-command>` framing, associates it with command lifecycle and continuation behavior, and expects the agent to complete its controlling outcomes. This guarantee does not apply to supporting resources:
+
+- A **skill** is an on-demand capability package containing workflows, setup guidance, scripts, or reference material. Even when loaded through `/skill:name`, it does not receive Scramjet command framing or command lifecycle semantics.
+- A **prompt template** expands into an ordinary user prompt. It does not receive the command guarantee, lifecycle association, delegation contract, or declared next-step policy.
+
+An active command may use skills or material originating from prompt templates, but those resources support the command; they do not replace its authority.
+
+### Explicit Goals
+
+New and bundled commands should place one early `## Goals` section before procedural H2 sections and express its durable user- or caller-visible outcomes as Markdown list items:
+
+```markdown
+# Publish Review
+
+## Goals
+
+- Give the user a complete, evidence-backed review of the selected change.
+- Publish exactly one verified review artifact when publication is authorized.
+
+<user-context>
+$ARGUMENTS
+</user-context>
+
+## Step 1: Read the change
+```
+
+Goals are controlling outcomes. Actions, plans, checklists, and tactics serve those Goals and remain provisional unless an authority requires an exact method. User decisions, trust boundaries, consumer contracts, required durable artifacts, and owned side effects remain controlling constraints. Delegate-only commands should state the result their caller can consume; top-level commands should state user-visible outcomes and material consequential effects.
+
+Goals remain ordinary portable Markdown. There is no `goals:` frontmatter field or `CommandDef.goals` representation. Runtime loading remains permissive: an existing command without `## Goals` still loads and executes, and the agent infers its intended outcomes from the complete command and invocation. Missing or malformed Goals are authoring warnings, never runtime rejection or runtime warnings.
+
+The checker validates deterministic structure, not semantic quality. A structurally clean Goals section does not prove that the outcomes are useful, complete, consistent with the command's actions, or operationally achievable. Load the packaged `writing-scramjet-commands` skill when authoring or reviewing commands, and judge effectiveness from actual use.
+
+### Authoring check
+
+When creating or editing command files, proactively run the authoritative command-authoring check without waiting for the user to request it:
+
+```sh
+scramjet-command-lint --strict <command-set-root>
+```
+
+Resolve errors. Address warnings or explain intentional legacy exceptions. If the executable is unavailable, report the missing verification rather than installing a replacement or claiming success.
+
+The executable accepts one or more explicit targets:
+
+- a command-set root containing `commands/`;
+- a `commands/` directory;
+- a qualified `<set>:<command>.md` file whose set identity is unambiguous.
+
+Directory targets scan sorted direct `.md` children only. An explicitly targeted command-set root or `commands/` directory with no direct command Markdown is an incomplete scan and exits with status 2. The checker does not implicitly discover global or project roots and never writes source. Human output is `path:line: severity code: message` followed by counts. `--json` emits one report with `checkedFiles`, ordered `diagnostics`, and `summary` counts. `--strict` changes only the warning exit policy; it never changes parsing or registry results.
+
+| Result | Default exit | `--strict` exit |
+|---|---:|---:|
+| Clean | 0 | 0 |
+| Warnings only | 0 | 1 |
+| Runtime-derived recognition or shadowing errors | 1 | 1 |
+| Invalid arguments, inaccessible target, or incomplete scan | 2 | 2 |
+
+Current diagnostic groups are:
+
+- runtime-derived errors for unrecognized files and commands shadowed by an earlier winner;
+- tolerated runtime notices as warnings;
+- authoring warnings for missing, duplicate, empty, late, non-list, or context-bearing Goals;
+- authoring warnings for invalid top-level `<user-context>` or delegate-only `<caller-context>` framing.
+
+`parseCommandFile()` remains authoritative for command-file recognition, and `buildRegistry()` remains authoritative for registration order, collisions, and winners. The optional checker calls that runtime-owned path once and derives diagnostics downstream; runtime modules do not import lint or CLI modules. Removing the checker must not change command discovery, registry membership, expansion, delegation, lifecycle, or dispatch.
+
+The current checker is limited to command Markdown and the runtime-recognizable relationships among the explicitly supplied files, including ordering and collisions. It does not validate agent definitions, autonomy defaults, semantic goal quality, operational behavior, every installed discovery relationship, or a complete future plugin format.
+
 ---
 
 ## 1. Frontmatter Schema
@@ -123,12 +193,12 @@ next:
   candidates:
     - name: mach12:pr-review-fix
       hint: |
-        Pick when at least one finding was classified as a genuine issue
-        that should be fixed before merge.
+        Pick when at least one required finding remains or optional
+        nitpicks were selected for a fix pass.
     - name: mach12:pr-pre-merge
       hint: |
-        Pick when all findings are nitpicks, false positives, or
-        explicitly deferred -- no fixes are required.
+        Pick when no required fix finding remains; optional nitpicks may
+        be skipped before the merge checklist.
 ```
 
 **Fields:**
@@ -210,26 +280,26 @@ A command's `next_steps` array (reported via `report_scramjet_command_status`) c
 
 When the outcome of a command determines different parameterizations of the same next command. Common cases:
 
-- Fix genuine issues only vs. fix genuine + optional nitpicks
+- Fix required findings only vs. required findings + optional nitpicks
 - Continue implementing stage N+1 vs. create a PR (both are the same "next action" concept but different commands)
 - Re-run with a subset of findings vs. all findings
 
 ### Example: PR review assessment
 
-After assessing review findings, the command reports multiple `/mach12:pr-review-fix` entries with different finding lists:
+After assessing review findings, suppose the completed-work context supports addressing required and optional findings together. The command reports multiple `/mach12:pr-review-fix` entries with different finding lists, then derives the recommendation from that semantic choice:
 
 ```
 next_steps:
   - message: "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456 F1 F3"
     fresh_session: true
-    reason: "Address the genuine issues flagged in the review assessment."
+    reason: "Address required findings selected through assessment and user disposition."
   - message: "/mach12:pr-review-fix 94 --review-comment 123 --assessment-comment 456 F1 F3 S2"
     fresh_session: true
-    reason: "Address genuine issues and optional nitpicks in one pass."
+    reason: "Address required findings and optional nitpicks in one pass."
   - message: "/mach12:pr-pre-merge 94"
     fresh_session: true
     reason: "Skip fixes and proceed to the merge checklist."
-recommended_next_step: 0
+recommended_next_step: 1
 ```
 
 ### Conditional `next_steps` shapes
@@ -237,17 +307,21 @@ recommended_next_step: 0
 A command's outcome may determine not just which entry to recommend but the entire shape of the `next_steps` array. When different outcomes call for different sets of options, instruct the agent with explicit branching in the status-reporting prose:
 
 ```markdown
-**When genuine issues exist AND nitpicks were also found:**
-Emit three entries — two fix commands (genuine-only, genuine+nitpicks) plus skip-to-merge.
-Set `recommended_next_step` to `0`.
+**When required fix findings exist AND nitpicks were also found:**
+Emit three entries — two fix commands (required-only, required+nitpicks) plus skip-to-merge.
+Recommend the fix scope best supported by the completed assessment; do not recommend skipping required fixes.
 
-**When genuine issues exist but NO nitpicks found:**
+**When required fix findings exist but NO nitpicks found:**
 Emit two entries — one fix command plus skip-to-merge.
-Set `recommended_next_step` to `0`.
+Recommend the required-fix entry.
 
-**When all findings are nitpicks/false positives:**
+**When no required fix findings exist AND nitpicks were found:**
 Emit two entries — skip-to-merge plus a fix command for optional items.
-Set `recommended_next_step` to `0`.
+Recommend the route best supported by the optional work's value and current context.
+
+**When no required fix findings or nitpicks exist:**
+Emit one entry — skip-to-merge only.
+Recommend that sole entry.
 ```
 
 This is more explicit than a generic "populate `next_steps` based on the outcome" instruction. The agent needs to know the exact array shape for each branch.
@@ -257,7 +331,7 @@ This is more explicit than a generic "populate `next_steps` based on the outcome
 - **`reason` is required** on every selector-visible `next_steps` entry. The harness rejects entries without a non-empty `reason`. This is the differentiation mechanism — without it, the user sees two identical command wires and cannot choose.
 - **`message` is the full command wire**, shown verbatim in the selector. Include all arguments. The user sees exactly what will be dispatched.
 - **`fresh_session`** defaults to `false`. Set to `true` when the next command should start in a fresh session (common for implementation stages that need maximum context window).
-- **`recommended_next_step`** is a zero-based index into `next_steps`. Set it to the entry you recommend Scramjet auto-dispatch. If omitted, automatic dispatch is disabled and the user must manually select.
+- **Recommendations are semantic, not positional.** Choose the best continuation from the completed work's actual outcome, risk, evidence, user intent, and trajectory. When only one route exists or an explicit invariant makes one route unconditionally preferred, name that route semantically. Construct the concrete `next_steps` array first, then set `recommended_next_step` to that route's zero-based runtime index. Durable command prose must not prescribe a literal array position. If the field is omitted, automatic dispatch is disabled and the user must manually select.
 
 ---
 
@@ -412,6 +486,27 @@ Command frontmatter `allowed-tools` and subagent frontmatter `tools:` have diffe
 - Read-only agents must declare an explicit non-empty allowlist that omits every mutation-capable tool, including `bash`, `edit`, and `write`. Omitting only `edit` and `write` is insufficient because shell commands can still mutate the shared working tree.
 - A writable parent command may own sequential repository mutation while read-only subagents return analysis, fixture guidance, or other non-mutating recommendations.
 
+### Command authoring skill and specialist roles
+
+Treat command and agent Markdown, frontmatter, next-step and delegation contracts, tool scopes, prompt artifacts, command-facing documentation, and model-interpreted behavior as **command surfaces**. Runtime source and executable implementation tests remain **code surfaces**. Partition mixed work into disjoint briefs.
+
+The packaged `writing-scramjet-commands` skill is the shared authoring authority. It describes commands as light-touch generalized plans; defines acceptable reasons for instructions, informed user-alignment gates, approval-only coaching exceptions, framing and word economy, context and handoff design, project-native tools, and justified subagent isolation. Load it on demand instead of copying those principles into every command and agent. The base system prompt carries only the fundamental rule that the main agent must provide enough compressed context for consequential user input to be informed.
+
+Scramjet ships six read-only command agents:
+
+- `scramjet:command-set-explorer` compresses large multi-command definitions into a map of edges, context, artifacts, and owners.
+- `scramjet:command-architect` designs or substantially revises the minimum generalized plan.
+- `scramjet:instruction-semantics-analyzer` handles narrow contradictions, ambiguity, impossible ordering, and authority conflicts.
+- `scramjet:command-failure-analyst` traces one concrete observed failure through Scramjet execution.
+- `scramjet:command-reviewer` provides one independent holistic review after authoring.
+- `scramjet:independent-command-assessor` adjudicates another review's supplied findings without designing fixes.
+
+Use the minimum role that benefits from isolation. A material command instruction, responsibility, handoff, framing, or user-gate change receives holistic command review. The semantics analyzer may act alone only for narrow analysis or a clarification that adds no procedure, responsibility, or gate; use both only for explicitly disjoint questions. Add the explorer only when context compression is necessary, and run it before review.
+
+A replacement installed agent requires authoritative evidence of compatible responsibility, read-only posture, context needs, output, and workflow handoff. A catalog description alone is insufficient. Missing required output narrows the conclusion rather than triggering substitution. The parent command owns orchestration, synthesis, project-tool execution, user interaction, mutation, publication, and presentation of coaching or other instruction exceptions. Unclassified instructions default to deletion; only an informed, explicit user decision can retain an exception, using existing decision artifacts rather than a new ledger.
+
+Static tests can protect parsing, discovery, tool posture, references, and exact trust handoffs. They do not establish that an agent, command, or routing policy improves decisions. Synthetic model scenarios may expose possible interpretations but do not establish product value or merge readiness; effectiveness claims come from actual use.
+
 ### Don't
 
 - Don't omit `delegate` from `allowed-tools` if the command body instructs delegation.
@@ -438,7 +533,7 @@ Every top-level command (not delegate-only subroutines) must instruct the agent 
 | `summary` | string | Yes | The work performed. On the first report, summarize the work done so far; on each later report, summarize only the work completed since the previous report. `summary` comes first so the agent writes its evidence before committing to a status. Must be non-empty. |
 | `status` | enum | Yes | `"continuing"`, `"completed"`, `"blocked"`, or `"incomplete"` |
 | `next_steps` | array | No | Ordered next-step candidates. Omit to stop the chain. |
-| `recommended_next_step` | integer | No | Zero-based index into `next_steps` for auto-dispatch. |
+| `recommended_next_step` | integer | No | Zero-based index into `next_steps` for selector highlighting and eligible slash-command auto-dispatch. |
 
 **Every accepted report is journaled** — including `continuing` — as a `scramjet:command-status` session artifact carrying its `summary`. Incremental summaries can be aggregated offline into a full record of a command's work (see `docs/logging.md`). A report is either **accepted** (journaled and handled) or **rejected**. A `continuing` report sent outside a probe or dormant window is productively redirected back to the agent's work ("keep working") rather than dropped. Terminal-report rejections still occur while a command is active: in the parked phase the tool tells the agent to wait for the user's reply before reporting, and in the already-reported phase it rejects a second terminal report for the same command ("do not call this tool again").
 
@@ -461,7 +556,7 @@ The command body must include explicit instructions for how to call `report_scra
 
 1. What `status` to report and under what conditions.
 2. What `next_steps` entries to populate (with concrete examples of `message`, `fresh_session`, and `reason`).
-3. Where `recommended_next_step` should point.
+3. What semantic rule determines the recommended route; the agent derives its runtime index after constructing `next_steps`.
 4. What to do when the command hits a non-completion state.
 
 **Example prose (from a command with `forced` next step):**
@@ -491,7 +586,7 @@ selector-visible `next_steps` entries:
 2. If all stages landed: `message`: `/mach12:pr-create <issue>`,
    `reason`: "Implementation complete, ready for PR creation."
 
-Set `recommended_next_step` to the zero-based index of the recommended entry.
+Recommend the entry best supported by the completed work, then derive its zero-based runtime index.
 If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 ```
 
@@ -596,7 +691,7 @@ When a command completes with `next_steps`, the user sees a selector with:
 - **Each entry's `message`** as the primary text (the full `/command args` wire).
 - **Each entry's `reason`** as the description underneath, differentiating entries.
 
-The `recommended_next_step` entry is highlighted as the default selection. If `/autopilot on` and the policy allows automatic dispatch, the recommended entry fires without user interaction.
+The `recommended_next_step` entry is highlighted as the default selection. If `/autopilot on` and the policy allows automatic dispatch, a recommended slash command fires without user interaction. A recommended non-command entry under an `open` policy remains highlighted but requires manual selection, which pastes it into the editor.
 
 When multiple models are available, the selector also shows a model line below the options. The user can cycle models with left/right arrows before committing a selection; the chosen model is committed via `pi.setModel` before dispatch. The configured `app.thinking.cycle` action changes effort immediately against the currently committed model and the selector shows its effective value and usable shortcut. Effort changes survive Escape, while model choice remains tentative and may clamp effort when committed. Selector-owned controls take precedence on binding conflicts. These controls are transparent to command authors — they do not affect command, result, lifecycle, record, or journal schemas.
 
@@ -605,7 +700,7 @@ When multiple models are available, the selector also shows a model line below t
 1. **`message` must be complete and correct.** Include all arguments the target command needs. The message is dispatched verbatim — no interpolation happens at dispatch time.
 2. **`reason` differentiates.** When multiple entries share the same command name (different args), `reason` is the only way the user tells them apart. Make it descriptive of what differs.
 3. **No synthetic labels.** Don't invent display names or abbreviations. The command wire is the label.
-4. **Order matters.** Entries appear in array order. Put the most likely next step first (index 0) and point `recommended_next_step` at it.
+4. **Order controls display, not recommendation authority.** Entries appear in array order, but the best-supported semantic route may be any emitted entry. Derive `recommended_next_step` from that choice rather than treating the first position as the default.
 
 ### Example: selector with three entries
 
@@ -688,7 +783,7 @@ The normal persisted tool call is the sole durable complete proposal artifact. I
 
 ## Command File Anatomy
 
-Putting it all together — a complete command file has this structure:
+Putting it all together, the following is one complete example rather than a required Markdown template. Preserve the runtime contracts documented above, but organize goals and actions in the clearest form for the task.
 
 ```markdown
 ---
@@ -704,7 +799,10 @@ next:
 
 # Command Title
 
-<Brief statement of what the agent is doing.>
+## Goals
+
+- <Durable user-visible outcome.>
+- <Required artifact or material consequential effect.>
 
 <user-context>
 $ARGUMENTS
@@ -741,8 +839,7 @@ instructions for this command's reporting>.
   - `<caller-context>$ARGUMENTS</caller-context>` — delegate-only subroutines (arguments come from the calling command).
   - Omit the context block entirely for commands that accept no arguments (e.g., `mach12:find-contribution-guidelines`).
 - **Single substitution rule** — `$ARGUMENTS` (or positional placeholders like `$1`, `$@`) appears exactly once in the command body, inside the context tags. Subsequent references use prose (e.g., "the user context above", "the arguments provided above") rather than re-substituting the full content. This prevents argument duplication in the expanded prompt.
-- **Title** uses `# Heading` (H1). Matches the command's purpose.
-- **Steps** are numbered `## Step N:` headings.
+- **Goals, title, and steps** — use one early `## Goals` section with Markdown list items for lint-clean new authoring. An H1 matching the command's purpose and numbered `## Step N:` action headings are optional style, not schema; another process structure is valid when it keeps responsibilities and execution clear.
 - **Delegation** uses a fenced code block with the slash-command invocation.
 - **Status reporting** goes at the end of the last substantive step in a top-level command. It does not need its own dedicated step — most commands embed reporting instructions in the final step that also handles the last action (posting a comment, pushing code, etc.).
 - **Imperative voice** throughout: "You are doing X", "Read the issue", "Delegate to".

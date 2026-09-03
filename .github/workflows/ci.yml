@@ -64,10 +64,13 @@ jobs:
           tar -tzf "$SCRAMJET_TARBALL" > "$TARBALL_CONTENTS"
           grep -qxF 'package/assets/scramjet-logo.png' "$TARBALL_CONTENTS"
           grep -qF 'package/dist/index.js' "$TARBALL_CONTENTS"
+          grep -qxF 'package/dist/command-lint-cli.js' "$TARBALL_CONTENTS"
           grep -qF 'package/bin/scramjet.js' "$TARBALL_CONTENTS"
+          grep -qxF 'package/bin/scramjet-command-lint.js' "$TARBALL_CONTENTS"
           grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/commands/mach12:issue-create.md' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
+          grep -qxF 'package/skills/writing-scramjet-commands/SKILL.md' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/set.yaml' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/commands/scramjet:troubleshoot.md' "$TARBALL_CONTENTS"
           XDG_DATA_HOME="$PREFIX/data" npm install --ignore-scripts --prefix "$PREFIX" -g \
@@ -81,6 +84,17 @@ jobs:
           test ! -e "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
           test ! -e "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
           XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --help >/dev/null
+          "$PREFIX/bin/scramjet-command-lint" --help >/dev/null
+          LINT_FIXTURE=$(mktemp -d)
+          mkdir -p "$LINT_FIXTURE/sample/commands"
+          printf '%s\n' '---' '---' '# Smoke' '' '## Goals' '' '- Verify the installed executable.' > "$LINT_FIXTURE/sample/commands/sample:smoke.md"
+          "$PREFIX/bin/scramjet-command-lint" --strict --json "$LINT_FIXTURE/sample" | node -e '
+            const report = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+            const expected = { files: 1, errors: 0, warnings: 0 };
+            if (report.summary.files !== expected.files || report.summary.errors !== expected.errors || report.summary.warnings !== expected.warnings) {
+              throw new Error(`Expected lint summary ${JSON.stringify(expected)}, observed report ${JSON.stringify(report)}`);
+            }
+          '
           RPC_STDOUT=$(mktemp)
           RPC_STDERR=$(mktemp)
           SCRAMJET_OFFLINE=1 \
@@ -135,7 +149,7 @@ jobs:
           test ! -e "$PREFIX/data/scramjet/scramjet"
           test ! -e "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
           test ! -e "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
-          rm -rf "$PACK_DIR" "$PREFIX" "$TARBALL_CONTENTS" "$RPC_STDOUT" "$RPC_STDERR"
+          rm -rf "$PACK_DIR" "$PREFIX" "$LINT_FIXTURE" "$TARBALL_CONTENTS" "$RPC_STDOUT" "$RPC_STDERR"
 
       - name: postinstall script smoke
         # Run the postinstall script directly against a temporary

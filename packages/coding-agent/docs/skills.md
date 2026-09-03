@@ -4,6 +4,8 @@
 
 Skills are self-contained capability packages that the agent loads on-demand. A skill provides specialized workflows, setup instructions, helper scripts, and reference documentation for specific tasks.
 
+A skill is supporting material, not a Scramjet command. Loading a skill—including through `/skill:name`—does not wrap it in `<scramjet-command>`, associate it with Scramjet's command lifecycle, give it declared next-step behavior, or guarantee that it is an actively invoked executable task. When an active command uses a skill, the command's explicit Goals (or inferred outcomes for a legacy command), user decisions, trust boundaries, consumer contracts, and required side effects remain controlling; the skill supplies capabilities or guidance in support of them. Prompt templates are different again: they expand into ordinary user prompts. See the [Scramjet command authoring guide](../../scramjet/docs/command-authoring.md) for the command contract.
+
 Scramjet implements the [Agent Skills standard](https://agentskills.io/specification), warning about most violations but remaining lenient. Scramjet allows skill names to differ from their parent directory even though the standard disallows it; that rule is suboptimal for shared skill directories used across multiple agent harnesses.
 
 ## Table of Contents
@@ -75,11 +77,11 @@ This is progressive disclosure: only descriptions are always in context, full in
 Skills register as `/skill:name` commands:
 
 ```bash
-/skill:brave-search           # Load and execute the skill
-/skill:pdf-tools extract      # Load skill with arguments
+/skill:brave-search           # Load the skill instructions
+/skill:pdf-tools extract      # Load skill instructions with arguments
 ```
 
-Arguments after the command are appended to the skill content as `User: <args>`.
+Arguments after the command are appended to the expanded skill instructions in the same ordinary user prompt.
 
 Toggle skill commands via `/settings` in interactive mode or in `settings.json`:
 

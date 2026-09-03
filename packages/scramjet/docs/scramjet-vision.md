@@ -23,6 +23,8 @@ A **command set** codifies a particular domain or team's way of working. Users c
 
 **Mach 12** is one command set: it expresses a software-development methodology spanning issue definition, planning, implementation, review, validation, and delivery. It demonstrates reusable process fragments, guided continuation, independent assessment, and controlled automation. Mach 12 is an example of what Scramjet enables, not infrastructure every Scramjet user must adopt or imitate.
 
+A Scramjet command is an actively invoked task with outcomes the agent is expected to complete. Skills and prompt templates are supporting resources: they can supply capabilities, guidance, or ordinary prompt text, but do not carry the command's execution guarantee or control an active command's outcomes.
+
 ## Durable principles
 
 ### Emergent workflows
@@ -37,6 +39,10 @@ Users should be able to add, edit, remove, share, and organize commands as ordin
 
 A recurring process fragment should have one maintained definition that other commands can reuse. Composition should preserve enough context for the fragment to be useful while keeping the caller responsible for the larger task.
 
+### Goal-directed, adaptable execution
+
+Commands should make durable outcomes clear while leaving tactics adaptable. Plans and procedures serve those outcomes; they should not displace user decisions, trust boundaries, exact consumer contracts, required artifacts, or consequential side effects. Older commands without an explicit goal section remain usable so authoring improvements do not become runtime lock-in.
+
 ### User control and easy disengagement
 
 Scramjet should make workflows easier to follow, not harder to leave. Users retain control over meaningful choices and can readily return to ordinary agent interaction. Automation should be graduated and user-controlled rather than an all-or-nothing commitment.
@@ -45,9 +51,11 @@ Scramjet should make workflows easier to follow, not harder to leave. Users reta
 
 When Scramjet has no useful action or suggestion, it should add no behavioral noise. Process guidance and history should remain supportive rather than competing with the work itself.
 
-### Informed decisions without consent theater
+### Informed alignment without consent theater
 
-Before asking for a consequential choice or taking a risky action, commands should provide the context, trade-offs, and likely consequences needed for an informed decision. Routine transitions should not accumulate ritual confirmations that provide no new information.
+User-input and approval gates are alignment mechanisms, not obstacles to clear. Before asking for a consequential choice or authorization, the main agent should compress the relevant context, alternatives, consequences, and uncertainty so the user can make an informed decision without reconstructing the agent's investigation. Agreement without that understanding is not alignment and defers correction until it is more expensive.
+
+Commands should reserve gates for decisions the user owns, information the agent cannot obtain, or effects requiring authorization. Agent-resolvable uncertainty and routine transitions should not accumulate ritual confirmation.
 
 ### Simplicity and resistance to structural debt
 
@@ -69,9 +77,13 @@ Users can make multiple command sets available to Scramjet and invoke their comm
 
 Commands can reuse other commands as process fragments. Authors can maintain shared due-diligence steps in one place, and users can understand when a larger command relied on those fragments.
 
+### Command authoring feedback
+
+Authors and agents can check command structure before installation or interactive use. Deterministic feedback should reuse runtime recognition and registration authority without making runtime loading stricter. It cannot establish whether a command is useful or well interpreted; those judgments come from independent review and actual use. Current checker behavior and scope are governed by the command-authoring guide rather than this vision.
+
 ### Guided continuation
 
-A command can communicate useful next steps so related commands form a discoverable flow. Scramjet can help a user or agent continue when appropriate while validating choices against the command author's intended boundaries.
+A command can communicate useful next steps so related commands form a discoverable flow. Scramjet can help a user or agent continue when appropriate while validating choices against the command author's intended boundaries. Commands define eligible edges and semantic invariants; except for deterministic transitions, the executing agent recommends among those edges from current context rather than treating static option order as the decision.
 
 ### In-command collaboration
 

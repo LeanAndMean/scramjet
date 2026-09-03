@@ -54,6 +54,13 @@ Scramjet supports both patterns:
 - **Composability.** Commands invoke other commands as subroutines — write common routines once, call them from anywhere.
 - **Chaining.** Commands declare what should come next. Scramjet validates the options and shows a selector. With `/autopilot on`, the recommendation auto-selects after a brief countdown. With `/autopilot off`, you pick manually. Either way, Escape returns to plain Pi.
 
+A Scramjet command is an actively invoked executable task. The harness frames it as a command, tracks its lifecycle, and expects the agent to complete its controlling outcomes. This differs from two supporting Pi resources:
+
+- **Skills** are on-demand capability packages containing workflows, setup guidance, scripts, or reference material. Loading one, including through `/skill:name`, does not give it Scramjet command framing or lifecycle semantics.
+- **Prompt templates** expand into ordinary user prompts. They do not gain command framing, declared next-step behavior, or a command execution guarantee.
+
+An active command can use either resource, but its own Goals, user decisions, trust boundaries, consumer contracts, and required side effects remain controlling.
+
 ```
 > /mach12:issue-plan 55
   [agent works, asks you about architecture, you pick an approach, plan posted]
@@ -79,6 +86,33 @@ Scramjet supports both patterns:
 ```
 
 No workflow engine, no queue, no DAG, no state machine. The workflow emerges from what each command declares as its next step.
+
+## Command authoring
+
+Bundled commands and lint-clean new commands use an early `## Goals` section with Markdown list items describing durable user- or caller-visible outcomes. Goals are ordinary Markdown, not frontmatter or runtime schema. Runtime compatibility remains permissive: legacy and user-owned commands without Goals still load and execute, and missing or malformed Goals produce authoring warnings rather than runtime rejection.
+
+When creating or editing command files, the running agent proactively uses the separate read-only checker without requiring a reminder:
+
+```sh
+scramjet-command-lint --strict <command-set-root>
+```
+
+If the executable is unavailable, it should report the missing verification rather than install anything or silently claim success. The checker also accepts one or more explicit `commands/` directories or qualified `<set>:<command>.md` files. It scans sorted direct `.md` children only, performs no implicit global/project discovery, and never writes source. An explicitly targeted command-set root or `commands/` directory with no direct command Markdown is an incomplete scan and exits with status 2.
+
+Human diagnostics use `path:line: severity code: message`. `--json` emits one report containing `checkedFiles`, ordered `diagnostics`, and error/warning summary counts.
+
+| Result | Default exit | `--strict` exit |
+|---|---:|---:|
+| Clean | 0 | 0 |
+| Warnings only | 0 | 1 |
+| Runtime-derived recognition or shadowing errors | 1 | 1 |
+| Invalid arguments, inaccessible target, or incomplete scan | 2 | 2 |
+
+The checker reuses `parseCommandFile()` and `buildRegistry()`, which remain authoritative for runtime recognition, registration order, and collision winners. Lint and CLI code depend one way on those runtime-owned outcomes; runtime never imports or invokes optional lint tooling. Structural success proves only deterministic authoring conventions—not semantic quality or operational value.
+
+Scramjet also packages the `writing-scramjet-commands` skill. Agents load it on demand when creating, revising, reviewing, or diagnosing commands; it is the shared authority for light-touch generalized plans, acceptable reasons for instructions, informed user-alignment gates, approval-only coaching, framing, context economy, and command-set handoffs. Only the fundamental informed-alignment posture is always loaded.
+
+The current checker covers command Markdown and runtime-recognizable ordering/collision relationships among explicitly supplied files. It does not validate agents, autonomy defaults, every installed discovery relationship, or a complete future command-set/plugin format. See [`docs/command-authoring.md`](docs/command-authoring.md) for the complete authoring contract and diagnostic groups.
 
 ## Design
 
@@ -173,6 +207,8 @@ The product-owned `scramjet` command set contains operational workflows for Scra
 
 The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still follows the issue-creation command's effective publication policy and exact-verification safeguards; troubleshooting never edits source or publishes an issue itself.
 
+The set also ships six read-only command agents: a command-set explorer for context compression, command architect, instruction-semantics analyzer, concrete failure analyst, holistic command reviewer, and independent finding assessor. The main agent remains the user's orchestrator and owns synthesis, mutation, and publication; command review uses one finding reviewer rather than a union of lenses.
+
 ## Mach 12
 
 Mach 12 is one team's codification of their development process. It's a starting point and a concrete example of what a command set looks like, not required infrastructure for Scramjet operations.
@@ -185,14 +221,14 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:issue-implement` | Implement a planned stage |
 | `mach12:pr-create` | Create a pull request |
 | `mach12:pr-review` | Review a PR |
-| `mach12:pr-review-assessment` | Detailed multi-lens PR assessment |
+| `mach12:pr-review-assessment` | Independent PR finding assessment |
 | `mach12:pr-validation` | Challenge a PR through independently validated executable tests |
 | `mach12:pr-validation-assessment` | Reassess executable findings and route validated outcomes |
 | `mach12:pr-review-fix` | Fix issues flagged in review |
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus eight subroutine commands and eleven specialized agents covering code exploration, architecture, review, testing, and more. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
+Plus seven subroutine commands and eleven specialized code agents covering exploration, architecture, review, testing, and more. For command work, Mach 12 uses the minimum relevant Scramjet role: exploration for context compression, one architect for design, one reviewer for broad review or the semantics analyzer for a narrow wording question, and a fresh assessor for published findings. Runtime work retains code specialists, and mixed work uses disjoint briefs. Across projects Mach 12 discovers authoritative development tools from repository guidance, manifests, adjacent scripts, CI, and established usage; it classifies their relevance and mutation effects, runs applicable non-mutating checks, and reports missing evidence without installing tools or treating clean output as behavioral proof. This is generic behavior—Mach 12 does not hard-code Scramjet's command checker. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
 
 ## Bundled command-set installation
 

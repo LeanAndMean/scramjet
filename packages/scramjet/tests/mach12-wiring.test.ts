@@ -9,6 +9,7 @@ import type { NextStepPolicy } from "../src/types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
+const SCRAMJET_AGENTS_DIR = resolve(HERE, "..", "scramjet", "agents");
 const SET_NAME = "mach12";
 
 interface WiringRow {
@@ -267,14 +268,18 @@ describe("mach12 PR review fix — proportional architecture contract", () => {
 		}
 
 		expect(step4).toMatch(/selected findings[^.]*fixed goal[^.]*user explicitly revises/i);
-		expect(step4).toMatch(/ask only unresolved scope or requirement questions here/i);
+		expect(step4).toMatch(
+			/ask only when the user owns an unresolved decision or necessary information is unavailable/i,
+		);
 		expect(step4).toMatch(/skip architect ceremony[^.]*trivial/i);
-		expect(step4).toMatch(/unresolved non-trivial architecture requires one or more `mach12:code-architect`/i);
+		expect(step4).toContain("For command-only fixes, use one `scramjet:command-architect`");
+		expect(step4).toContain("For code-only fixes, use the minimum useful set of `mach12:code-architect`");
+		expect(step4).toMatch(/mixed fixes[^.]*both domains[^.]*disjoint briefs/i);
 		expect(step4).toMatch(/every architect[^.]*same locked scope/i);
 		expect(step4).toMatch(/neither reduce nor expand the locked outcomes/i);
-		expect(step4).toMatch(/ask separate architecture questions only after synthesis/i);
 		expect(step4).toMatch(/parent[^.]*selects or synthesizes[^.]*smallest supported design/i);
-		expect(step4).toMatch(/parent owns the final design, repository mutation, and testing/i);
+		expect(step4).toMatch(/asks a separate architecture question only when evidence cannot resolve/i);
+		expect(step4).toMatch(/parent owns the final design, repository mutation, tool execution, and testing/i);
 	});
 });
 
@@ -376,70 +381,138 @@ describe("mach12 inline forge publication inventory", () => {
 	);
 });
 
-describe("mach12 issue planning — architecture choice contract", () => {
-	const issuePlan = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:issue-plan.md`), "utf-8");
-	const step6Start = issuePlan.indexOf("## Step 6:");
-	const step6End = issuePlan.indexOf("## Step 7:");
-	const step6 = issuePlan.slice(step6Start, step6End);
+describe("mach12 command-surface issue routing", () => {
+	const command = (basename: string) => readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+	const section = (content: string, start: string, end: string) =>
+		content.slice(content.indexOf(start), content.indexOf(end));
+	const referencedScramjetAgents = (content: string) =>
+		[...content.matchAll(/scramjet:[a-z][a-z-]+/g)].map((match) => match[0]);
 
-	it("presents technical-debt differences and requires an accepted approach before proceeding", () => {
-		expect(step6Start).toBeGreaterThan(-1);
-		expect(step6End).toBeGreaterThan(step6Start);
-		for (const disposition of ["introduces", "retains", "reduces", "avoids"]) {
-			expect(step6).toContain(disposition);
+	it.each(["issue-create", "issue-plan", "issue-review"])(
+		"%s routes advisory work without dangling Scramjet references or catalog-wide fallback",
+		(basename) => {
+			const content = command(basename);
+			const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), content, SET_NAME);
+			expect(parsed.ok).toBe(true);
+			if (!parsed.ok) return;
+			expect(parsed.def.allowedTools).toContain("subagent");
+
+			const references = [...new Set(referencedScramjetAgents(content))];
+			expect(references.length).toBeGreaterThan(0);
+			for (const name of references) {
+				expect(existsSync(join(SCRAMJET_AGENTS_DIR, `${name}.md`)), name).toBe(true);
+			}
+			expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
+		},
+	);
+
+	it("preserves issue creation's proportional exploration threshold", () => {
+		const exploration = section(command("issue-create"), "## Step 4:", "## Step 5:");
+		expect(exploration).toContain("scramjet:command-set-explorer");
+		expect(exploration).toContain("scramjet:command-failure-analyst");
+	});
+
+	it("references shipped command planning roles without a command evaluation specialist", () => {
+		const content = command("issue-plan");
+		const exploration = section(content, "## Step 4:", "## Step 5:");
+		const architecture = section(content, "## Step 6:", "## Step 7:");
+		const evaluation = section(content, "## Step 8:", "## Step 9:");
+
+		expect(exploration).toContain("scramjet:command-set-explorer");
+		expect(exploration).toContain("scramjet:command-failure-analyst");
+		expect(architecture).toContain("scramjet:command-architect");
+		expect(architecture).toContain("mach12:code-architect");
+		expect(evaluation).toContain("mach12:test-designer");
+	});
+
+	it("references one holistic command reviewer and one independent command assessor", () => {
+		const content = command("issue-review");
+		const evidence = section(content, "## Step 4:", "## Step 5:");
+		const assessment = section(content, "## Step 6:", "## Step 7:");
+
+		expect(evidence).toContain("scramjet:command-reviewer");
+		expect(evidence).toContain("scramjet:instruction-semantics-analyzer");
+		expect(evidence).toContain("scramjet:command-set-explorer");
+		expect(assessment).toContain("scramjet:independent-command-assessor");
+		expect(assessment).toContain("mach12:independent-assessor");
+	});
+});
+
+describe("mach12 command-surface implementation and PR review routing", () => {
+	const command = (basename: string) => readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), "utf-8");
+	const section = (content: string, start: string, end?: string) => {
+		const startIndex = content.indexOf(start);
+		return content.slice(startIndex, end === undefined ? undefined : content.indexOf(end, startIndex));
+	};
+
+	it.each([
+		"issue-implement",
+		"pr-review",
+		"pr-review-assessment",
+		"pr-review-fix",
+		"pr-validation",
+		"pr-validation-assessment",
+	])("%s allows command-specialist dispatch and references only shipped specialists", (basename) => {
+		const content = command(basename);
+		const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:${basename}.md`), content, SET_NAME);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.def.allowedTools).toContain("subagent");
+		for (const name of new Set(content.match(/scramjet:[a-z][a-z-]+/g) ?? [])) {
+			expect(existsSync(join(SCRAMJET_AGENTS_DIR, `${name}.md`)), name).toBe(true);
 		}
-		expect(step6).toMatch(/none identified/i);
-		expect(step6).toMatch(/future (?:maintenance|cost)/i);
-		for (const cost of ["maintenance", "migration", "coupling", "testing", "operational"]) {
-			expect(step6).toContain(cost);
-		}
+		expect(content).not.toMatch(/dispatch (?:all|every) (?:available|installed) (?:agent|specialist)/i);
+	});
 
-		for (const existingRequirement of [
-			"brief summary of each approach",
-			"trade-offs comparison",
-			"recommendation with reasoning",
-			"concrete implementation differences",
-		]) {
-			expect(step6).toContain(existingRequirement);
-		}
+	it.each([
+		{ basename: "issue-implement", start: "6. **Quality review**", end: "7. **Summary**" },
+		{ basename: "pr-review-fix", start: "5. **Quality review**", end: "6. **Summary**" },
+	])("$basename references the bounded command review roles", ({ basename, start, end }) => {
+		const quality = section(command(basename), start, end);
+		expect(quality).toContain("scramjet:command-reviewer");
+		expect(quality).toContain("scramjet:instruction-semantics-analyzer");
+		expect(quality).toContain("mach12:code-reviewer");
+	});
 
-		expect(step6).toMatch(/three options[^.]*narrow Markdown table/i);
-		expect(step6).toMatch(
-			/columns, in order: \*\*Option\*\*, \*\*Approach\*\*, \*\*Key difference \/ trade-off\*\*, and \*\*Debt delta\*\*/i,
-		);
-		expect(step6).toMatch(/use \*\*Option\*\* only for the short lens or option name/i);
-		expect(step6).toMatch(
-			/in \*\*Approach\*\*[^.]*what the architecture builds[^.]*how it works[^.]*requirement or problem it solves/i,
-		);
-		expect(step6).toMatch(
-			/reserve \*\*Key difference \/ trade-off\*\*[^.]*comparative benefits, costs, and sacrifices[^.]*other options/i,
-		);
-		expect(step6).toMatch(/against the current implementation[^:]*:\s*`\+` means debt introduced/i);
-		expect(step6).toMatch(/`-` means existing debt reduced or removed/i);
-		expect(step6).toMatch(/signs indicate direction, not whether an option is good or bad/i);
-		expect(step6).toMatch(/option does not need to contain both/i);
-		expect(step6).toMatch(/use `None identified`[^;]*; never invent debt/i);
-		expect(step6).toMatch(/omit retained debt[^.]*immaterial or common/i);
-		expect(step6).toMatch(/materially differentiating retained liability[^.]*in words/i);
-		expect(step6).toMatch(/common material retained debt outside the compact table/i);
-		expect(step6).toMatch(
-			/always present[^.]*detailed trade-offs[^.]*implementation differences[^.]*recommendation with reasoning[^.]*common material debt/i,
-		);
-		expect(step6).toMatch(/place those details outside the compact table[^.]*table cells verbose/i);
-		expect(step6).toMatch(/detailed blueprint rationale outside the table/i);
+	it("reserves PR fix review capacity for independent command assessment", () => {
+		const quality = section(command("pr-review-fix"), "5. **Quality review**", "6. **Summary**");
+		expect(quality).toMatch(/mixed fixes[^.]*at most one code reviewer[^.]*assessment/i);
+		expect(quality).toMatch(/command reviewer[^.]*initial batch[^.]*two[^.]*assessment capacity is reserved/i);
+		expect(quality).toMatch(/re-review[^.]*capacity remains after any required assessment/i);
+		expect(quality).toMatch(/at most 3 subagents per stage, total across both families/i);
+	});
 
-		const perOptionDebt = step6.search(/each lens must also assess the technical debt/i);
-		const synthesis = step6.search(/cross-option technical-debt (?:summary|synthesis)/i);
-		const choice = step6.search(/ask the user (?:to choose|which approach)/i);
-		expect(perOptionDebt).toBeGreaterThan(-1);
-		expect(synthesis).toBeGreaterThan(perOptionDebt);
-		expect(choice).toBeGreaterThan(synthesis);
-		expect(step6).toMatch(/material differences/i);
-		expect(step6).toMatch(/common to all options/i);
-		expect(step6).toMatch(/every current option[^.]*unsatisfactory/i);
-		expect(step6).toMatch(/reject all current (?:approaches|options)[^.]*request revision/i);
-		expect(step6).toMatch(/complete updated (?:option )?comparison/i);
-		expect(step6).toMatch(/do not proceed to Step 7[^.]*until[^.]*accepts an approach/i);
+	it("references one command finding reviewer and optional context compression", () => {
+		const review = section(command("pr-review"), "## Step 3:", "## Step 4:");
+		expect(review).toContain("scramjet:command-reviewer");
+		expect(review).toContain("scramjet:instruction-semantics-analyzer");
+		expect(review).toContain("scramjet:command-set-explorer");
+	});
+
+	it("references the disjoint command and runtime assessors", () => {
+		const assessment = section(command("pr-review-assessment"), "## Step 3:", "## Step 4:");
+		expect(assessment).toContain("scramjet:independent-command-assessor");
+		expect(assessment).toContain("mach12:independent-assessor");
+		expect(assessment).toContain("writing-scramjet-commands");
+	});
+
+	it.each(["pr-review-assessment", "pr-review-fix"])(
+		"reacquires linked-issue authority before downstream work in %s",
+		(basename) => {
+			const context = section(command(basename), "## Step 2:", "## Step 3:");
+			expect(context).toContain("/mach12:gh-issue-read <issue-number>");
+			expect(context).toContain("complete discussion, plans, decisions, and timestamps");
+			expect(context).toMatch(/stop before (?:assessment|implementation)/i);
+		},
+	);
+
+	it("authenticates an explicit fix assessment from the verified PR comment stream", () => {
+		const context = section(command("pr-review-fix"), "## Step 2:", "## Step 3:");
+		expect(context).toContain("<!-- mach12-assessment -->");
+		expect(context).toContain("gh api user --jq .login");
+		expect(context).toMatch(/exact numeric ID[^.]*complete verified target-PR comment stream/i);
+		expect(context).toMatch(/explicit reference[^.]*review comment ID or URL/i);
+		expect(context).not.toContain("issues/comments/<assessment-comment-id>");
 	});
 });
 
@@ -1074,11 +1147,25 @@ describe("mach12 publication routing gates", () => {
 
 	it("requires verified queued work and audit publication before assessment routing", () => {
 		expect(assessment).toContain(
-			"every requested queued publication is verified, skipped by explicit user choice, or reclassified as genuine",
+			"every requested queued publication is verified, skipped by explicit user choice, or recorded for the current PR",
 		);
 		expect(assessment).toContain("any required deferred-disposition decision audit is verified");
 		expect(assessment).toContain('Set `status: "completed"` and populate `next_steps` only when');
 		expect(assessment).toContain("On a resumed user turn, reconcile the exact target without mutation");
+	});
+
+	it("omits the optional fix route when no nitpicks exist", () => {
+		const optionalStart = assessment.indexOf(
+			"**When no required fix findings exist AND nitpicks/optional items were found:**",
+		);
+		const emptyStart = assessment.indexOf("**When no required fix findings or nitpicks/optional items exist:**");
+		const emptyEnd = assessment.indexOf("**General rules:**", emptyStart);
+		const optionalRoute = assessment.slice(optionalStart, emptyStart);
+		const emptyRoute = assessment.slice(emptyStart, emptyEnd);
+
+		expect(optionalRoute).toContain("/mach12:pr-review-fix");
+		expect(emptyRoute).toContain("/mach12:pr-pre-merge");
+		expect(emptyRoute).not.toContain("/mach12:pr-review-fix");
 	});
 });
 
@@ -1288,7 +1375,7 @@ describe("mach12 ordinary PR readiness", () => {
 		);
 		const validationEntry = finalSection.slice(
 			finalSection.indexOf("`/mach12:pr-validation <pr-number>`"),
-			finalSection.indexOf("- Set `recommended_next_step`"),
+			finalSection.indexOf('- Report `status: "blocked"`'),
 		);
 		expect(finalSection).toContain("exactly three entries");
 		expect(mergeEntry).toContain("`fresh_session`: `true`");
@@ -1297,7 +1384,6 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(reviewEntry).toContain("non-empty reason explaining that additional static review is optional");
 		expect(validationEntry).toContain("`fresh_session`: `true`");
 		expect(validationEntry).toContain("non-empty reason explaining that executable validation is optional");
-		expect(finalSection).toContain("`recommended_next_step` to `0`");
 		expect(finalSection).toContain("Do not include `mach12:pr-review-fix`");
 		expect(finalSection).toContain("omit `next_steps` and `recommended_next_step`");
 		expect(finalSection).not.toContain("`/mach12:pr-review-fix <pr-number>`");

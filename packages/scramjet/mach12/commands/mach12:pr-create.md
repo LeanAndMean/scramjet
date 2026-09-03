@@ -23,11 +23,15 @@ next:
 
 # Create Pull Request
 
-You are creating a pull request for the current branch, with a structured description that includes a summary, test plan, and optional issue linkage.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Publish one verified pull request whose title, summary, test plan, draft state, base, and optional single-issue linkage accurately represent the current branch.
+- Ensure the branch is safely synchronized to its intended remote without overwriting divergent work.
+- Return the verified pull-request identity and offer review paths only after creation succeeds.
 
 ## Step 1: Parse input and resolve linkage
 
@@ -109,7 +113,7 @@ After successful creation, report the PR number, URL, and whether the published 
 
 After delivering your answer, call `report_scramjet_command_status`: summarize the work you performed in `summary`. Report `status: "incomplete"` if the user cancelled. Reserve `status: "completed"` for a successfully created PR and include these selector-visible next steps in order:
 
-1. `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`; `reason`: the PR was created with its complete verified body and is ready for the recommended automated review.
+1. `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`; `reason`: the PR was created with its complete verified body and is ready for automated static review.
 2. `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`; `reason`: use the slower, opt-in executable-behavior path when the PR's behavioral risk warrants test-driven regression hunting.
 
-Set `recommended_next_step` to `0`, ordinary PR review. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.
+Recommend the path best supported by the completed PR's actual change risk and evidence: ordinary review for the common static-review path, or executable validation when behavioral risk warrants a test-driven challenge. If creation failed or work could not finish, report the matching `blocked` or `incomplete` status. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

@@ -6,13 +6,18 @@ delegate-only: true
 
 # Plan Comment Contract
 
-You are applying the canonical artifact contract for an implementation plan that another Mach 12 command owns.
-Delegation loads this policy into the caller's current model context; it does not execute an independent formatter or
-return a separately generated plan.
-
 <caller-context>
 $ARGUMENTS
 </caller-context>
+
+## Goals
+
+- Make the caller-owned implementation plan a complete, standalone, post-ready artifact that a fresh implementation session can execute.
+- Preserve implementation-critical contracts, decisions, and provenance while removing duplicate or non-actionable planning material.
+- Return unresolved evidence gaps instead of allowing an incomplete plan to carry the publication marker.
+
+Delegation loads this policy into the caller's current model context; it does not execute an independent formatter or
+return a separately generated plan.
 
 ## Step 1: Select the mode
 

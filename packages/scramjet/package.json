@@ -1,6 +1,6 @@
 {
   "name": "@leanandmean/scramjet",
-  "version": "0.86.0",
+  "version": "0.87.0",
   "description": "A high-velocity harness for agentic development",
   "license": "Apache-2.0",
   "repository": {
@@ -9,7 +9,8 @@
   },
   "type": "module",
   "bin": {
-    "scramjet": "./bin/scramjet.js"
+    "scramjet": "./bin/scramjet.js",
+    "scramjet-command-lint": "./bin/scramjet-command-lint.js"
   },
   "exports": {
     ".": {
@@ -23,6 +24,7 @@
     "dist/",
     "mach12/",
     "scramjet/",
+    "skills/",
     "themes/",
     "scripts/",
     "docs/",

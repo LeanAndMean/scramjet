@@ -196,6 +196,7 @@ export function registerCommandLoader(
 	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
+		const skillPaths = [join(bundledRoot, "skills")];
 		const themePaths = [join(packageRoot(), "themes")];
 		try {
 			const discoveryWarnings: string[] = [];
@@ -300,13 +301,13 @@ export function registerCommandLoader(
 			}
 			lastNotificationSignature = visibleDiagnostics.length > 0 ? signature : "";
 
-			return { promptPaths: [...registry.values()].map((def) => def.filePath), themePaths };
+			return { skillPaths, promptPaths: [...registry.values()].map((def) => def.filePath), themePaths };
 		} catch (err) {
 			state.logger.warn(
 				"discovery",
 				`failed: ${(err as Error).message}; no scramjet commands will be available this session (bundled scramjet-dark theme unaffected)`,
 			);
-			return { promptPaths: [], themePaths };
+			return { skillPaths, promptPaths: [], themePaths };
 		}
 	});
 }

@@ -58,17 +58,21 @@ describe("buildNextStepBlock — closed mode", () => {
 		expect(block).toContain("fresh_session");
 		expect(block).toContain("reason");
 		expect(block).toContain("recommended_next_step");
-		expect(block).toContain("zero-based index");
+		expect(block).toContain("zero-based runtime index");
 		expect(block).toContain("stop the chain");
 	});
 
 	it("includes only the current /autopilot on or off recommendation rule", () => {
 		const on = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
+		expect(on).toContain("Choose the best-supported continuation from the completed work and current context");
+		expect(on).toContain("derive any `recommended_next_step`");
 		expect(on).toContain("With `/autopilot on`");
-		expect(on).toContain("recommended entry's message is a slash command");
+		expect(on).toContain("auto-dispatches it only when its message is a slash command");
 		expect(on).not.toContain("With `/autopilot off`");
 
 		const off = buildNextStepBlock({ mode: "closed", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
+		expect(off).toContain("Choose the best-supported continuation from the completed work and current context");
+		expect(off).toContain("derive any `recommended_next_step`");
 		expect(off).toContain("With `/autopilot off`");
 		expect(off).toContain("Scramjet will not auto-dispatch");
 		expect(off).not.toContain("With `/autopilot on`");
@@ -102,11 +106,16 @@ describe("buildNextStepBlock — open mode", () => {
 
 	it("includes only the current /autopilot on or off open-policy recommendation rule", () => {
 		const on = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", true);
+		expect(on).toContain("Choose the best-supported continuation from the completed work and current context");
+		expect(on).toContain("derive any `recommended_next_step`");
 		expect(on).toContain("With `/autopilot on`");
-		expect(on).toContain("do not set it for a non-command message");
+		expect(on).toContain("set it to highlight the selected entry");
+		expect(on).toContain("auto-dispatches it only when its message is a slash command");
 		expect(on).not.toContain("With `/autopilot off`");
 
 		const off = buildNextStepBlock({ mode: "open", candidates: [{ name: "b:ok" }] }, "a:cmd", false);
+		expect(off).toContain("Choose the best-supported continuation from the completed work and current context");
+		expect(off).toContain("derive any `recommended_next_step`");
 		expect(off).toContain("With `/autopilot off`");
 		expect(off).toContain("Scramjet will not auto-dispatch");
 		expect(off).not.toContain("With `/autopilot on`");

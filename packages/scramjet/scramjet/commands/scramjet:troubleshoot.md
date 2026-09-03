@@ -15,11 +15,15 @@ next:
 
 # Troubleshoot
 
-Diagnose why a Scramjet command did not work as the user expected, explain the result concisely, and offer only safe, concrete ways forward.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Give the user a concise, evidence-grounded explanation of the gap between their intent and the observed Scramjet behavior.
+- Identify the simplest supported root cause, distinguish observations from inference, and state material uncertainty plainly.
+- Recommend only safe, concrete next steps.
 
 Use the user's description, the current conversation, command instructions, tool results, logs, source, and external state as read-only evidence. Establish both the user's intent and the specific unexpected behavior before drawing a conclusion. If either remains materially ambiguous, ask the user instead of inventing it.
 

@@ -24,11 +24,15 @@ next:
 
 # Pre-Merge Checklist
 
-You are running the pre-merge checklist for a PR that has passed review. Walk through each checklist item, perform the necessary updates, and commit the results.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Bring the pull-request branch to a current state with applicable policy, test, and CI outcomes authoritatively recorded, including user-authorized skips.
+- Complete and publish any required documentation, version, changelog, conflict-resolution, or CI-fix changes without absorbing unrelated work.
+- Report a determinate readiness result and offer merge only when every required gate succeeds.
 
 ## Step 1: Parse input
 
@@ -170,7 +174,7 @@ Using the PR context gathered in Step 6, work through each item. For each, repor
 
 ### 7b. Version Bump
 
-Treat version propagation as one atomic checklist operation. Contribution guidance and applicable repository-local release instructions from Step 3 are the primary authority for version locations, required mirrors or generated outputs, generation or synchronization commands, and repository-defined consistency checks.
+Treat version propagation as one atomic checklist operation. Contribution guidance and applicable repository-local release instructions from Step 5 are the primary authority for version locations, required mirrors or generated outputs, generation or synchronization commands, and repository-defined consistency checks.
 
 Before editing, establish from that authority:
 
@@ -315,6 +319,6 @@ After delivering your answer, call `report_scramjet_command_status` and summariz
   - `message`: `/mach12:pr-merge <pr-number>`, `fresh_session`: `true`, with a non-empty reason explaining that the PR is merge-ready.
   - `message`: `/mach12:pr-review <pr-number>`, `fresh_session`: `true`, with a non-empty reason explaining that additional static review is optional.
   - `message`: `/mach12:pr-validation <pr-number>`, `fresh_session`: `true`, with a non-empty reason explaining that executable validation is optional.
-- Set `recommended_next_step` to `0`. Do not include `mach12:pr-review-fix` in the completed reporting contract.
+- Recommend the path best supported by final readiness evidence and residual risk: merge when current evidence supports proceeding without further assurance, static review when review uncertainty remains, or executable validation when behavioral risk warrants it. Do not include `mach12:pr-review-fix` in the completed reporting contract.
 - Report `status: "blocked"` when a determinate condition requires user or repository action: a non-open PR, draft state, requested changes, required review, failing or pending required checks, a behind branch, or conflict remediation was declined or remains unresolved.
 - Report `status: "incomplete"` when readiness remains indeterminate after one reread or an execution failure prevents a trustworthy completed/blocked determination. For blocked or incomplete results, omit `next_steps` and `recommended_next_step`. If user input is needed, use `get_scramjet_user_input` instead of reporting status.

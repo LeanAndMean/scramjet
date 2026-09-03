@@ -32,11 +32,15 @@ next:
 
 # Fix Review Issues
 
-You are fixing specific issues identified in a PR review. This command gathers context from the PR and its review comments, then walks through the implementation under the structured development workflow.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Apply the smallest sound corrections for exactly the authenticated, selected review findings without expanding into unrelated review or cleanup work.
+- Preserve accepted executable proofs where applicable, verify the repaired behavior, and leave the fixes committed, pushed, and durably documented.
+- Give the user an evidence-based review-cycle retrospective and recommend the next verification path from the PR's current trajectory.
 
 ## Step 1: Parse input
 
@@ -71,15 +75,15 @@ The subroutine returns the PR title, body, comments array, and the matched revie
 
 ### Locate the assessment comment (optional)
 
-**If `--assessment-comment` was provided:** Fetch it by ID:
-
-```
-gh api repos/:owner/:repo/issues/comments/<assessment-comment-id>
-```
+**If `--assessment-comment` was provided:** Select that exact numeric ID from the complete verified target-PR comment stream returned by `gh-pr-read`; do not fetch it separately. Require exactly one match, the literal `<!-- mach12-assessment -->` marker, an author matching the authenticated `gh api user --jq .login` identity, and an explicit reference to the invocation-selected review comment ID or URL. Stop before implementation when any check fails.
 
 **If not provided:** This is optional context. Do not attempt to locate the assessment heuristically -- proceed without it.
 
 Save the review comment content for use in Step 4. Also retain the complete verified chronological top-level PR comment stream returned by `gh-pr-read` for the final retrospective.
+
+Identify task-relevant linked issues from explicit relationship forms (`Fixes`, `Closes`, `Resolves`, `Part of`, or `Issue`) and contextually relevant bare `#<number>` references in the verified PR body. Treat references found only in the conversation as candidates and establish their relevance to the PR before considering them linked; do not treat quoted material, review finding identifiers, or incidental references as links. Deduplicate issue numbers.
+
+For each linked issue, delegate to `/mach12:gh-issue-read <issue-number>` so its current body, complete discussion, plans, decisions, and timestamps are available before implementation and quality-review dispatch. If any task-relevant linked issue cannot be read completely, surface the failed issue and error, stop before implementation or specialist dispatch, and report the fix blocked or incomplete; do not silently continue with reduced authoritative context.
 
 ### Classify review cycles for final reporting
 
@@ -107,7 +111,9 @@ Let the user select which issues to fix. If there are 4 or fewer findings, list 
 
 ## Step 4: Implement the fixes
 
-Treat the selected findings from Step 3 as the fixed goal unless the user explicitly revises them. Plans and suggested approaches are provisional guides: verify their assumptions and adapt tactics when evidence changes without changing the locked outcomes or proof restrictions. Use the six phases below as due-diligence discipline, not mandatory ceremony.
+Treat the selected findings from Step 3 as the fixed goal unless the user explicitly revises them. Plans and suggested approaches are provisional guides: verify their assumptions and adapt tactics when evidence changes without reducing or expanding the locked outcomes or weakening proof restrictions. Use the six phases below as due-diligence discipline, not mandatory ceremony. When fixes modify command surfaces, load `writing-scramjet-commands` before editing.
+
+Identify project-provided tools relevant to the bounded fixes from repository guidance, manifests, adjacent scripts, CI configuration, and established usage. Establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization covering their effects. The parent command owns tool execution; read-only specialists receive verified commands, outputs, and limitations as evidence rather than rerunning them.
 
 ### Validation-origin proof contract
 
@@ -122,16 +128,23 @@ Preserve accepted test paths, node IDs, fixtures, and assertions. Do not weaken,
 Ordinary static-review fixes retain their existing behavior when the exact comments do not establish this validation-origin contract.
 
 1. **Codebase exploration** -- read every file referenced by the selected findings and trace the relevant code paths. When more context is needed, dispatch focused `mach12:code-explorer` tasks for the selected findings only. Verify current assumptions before deciding requirements or architecture.
-2. **Lock scope and requirements** -- use the selected findings, review and optional assessment context, user decisions, validation proofs, and current repository evidence to lock the required outcomes, constraints, acceptance behavior, and non-goals. Ask only unresolved scope or requirement questions here; do not ask ceremonial questions. Only the user may revise the selected finding set.
-3. **Proportional architecture analysis** -- skip architect ceremony when the work is trivial or verified current evidence leaves no unresolved structural choice. Otherwise, unresolved non-trivial architecture requires one or more `mach12:code-architect` subagents. Dispatch the minimum useful set, combining findings governed by the same decision and running independent briefs in parallel. Give every architect the same locked scope plus relevant current code evidence. Approaches may vary implementation only; they must neither reduce nor expand the locked outcomes or weaken proof restrictions.
-
-   Treat plans and architect recommendations as evidence. The parent selects or synthesizes the smallest supported design. Ask separate architecture questions only after synthesis and only when evidence cannot resolve a consequential preference-dependent choice.
-4. **Implementation** -- write the code only after the selected design has been evaluated against the current locked scope. The parent owns the final design, repository mutation, and testing; follow existing codebase conventions strictly.
-5. **Quality review** -- run a single, lightweight sanity pass over the selected findings' changes. This is a fast confidence check that the fix diff is sound; it is explicitly **not** a substitute for the thorough, full-branch PR review that runs later (`mach12:pr-review` re-covers correctness, tests, error handling, type design, and simplification across the whole branch). Keep it proportional to the fix:
-   - **Cap: at most 3 `mach12:code-reviewer` subagents per stage, total** -- dispatched in a single parallel batch, each given a focused brief for the selected findings' changes (e.g., bugs/correctness, project conventions and abstraction fit, and -- only when the fix warrants it -- a higher-risk angle such as error/fallback paths, type/interface design, or test coverage). Three is a ceiling for unusually risky fixes, not a quota: most fixes need one or two, and a trivial or low-risk fix (mechanical rename, comment/text edit, config tweak with no logic change) may skip review entirely when you can state why the change is below threshold.
-   - **Single pass.** Run the brief(s) once, consolidate the findings, and act on them directly. Do not loop: re-review is warranted only when a fix you made was non-trivial and substantively reworked code a reviewer flagged -- and then only the one brief covering that area, dispatched once more and **counted against the three-subagent per-stage cap** (keep the initial batch small when a re-review is plausible so you reserve headroom). A reviewer returning findings is not itself a reason to re-review.
-   - **Never re-dispatch to restate.** Act on the findings you already hold. Do not spawn a subagent to re-report, restate, or re-confirm a finding you already received -- you carry the finding; a fresh subagent does not.
-   Fix only quality-review findings that matter for the selected findings' scope.
+2. **Lock scope and requirements** -- use the selected findings, review and optional assessment context, user decisions, validation proofs, and current repository evidence to lock the required outcomes, constraints, acceptance behavior, and non-goals. Ask only when the user owns an unresolved decision or necessary information is unavailable; before asking, state the relevant evidence, uncertainty, viable options, consequences, and recommendation. Only the user may revise the selected finding set.
+3. **Proportional architecture analysis** -- skip architect ceremony when the work is trivial or verified current evidence leaves no unresolved structural choice. Otherwise, classify the affected surfaces before dispatch:
+   - For command-only fixes, use one `scramjet:command-architect`.
+   - For code-only fixes, use the minimum useful set of `mach12:code-architect` subagents.
+   - For mixed fixes with unresolved choices in both domains, use one command architect and the minimum necessary code architects with disjoint briefs.
+   Give every architect the same locked scope plus relevant current code and command evidence. Approaches may vary implementation only; they must neither reduce nor expand the locked outcomes or weaken proof restrictions. Treat plans and architect recommendations as evidence. The parent selects or synthesizes the smallest supported design and asks a separate architecture question only when evidence cannot resolve a consequential preference-dependent choice.
+4. **Implementation** -- write the code only after the selected design has been evaluated against the current locked scope. The parent owns the final design, repository mutation, tool execution, and testing; follow existing codebase conventions strictly. Rerun applicable non-mutating project-native checks for the bounded fixes. Address in-scope failures, but do not infer root cause from an error alone or absorb unrelated warnings into the selected finding set. Report unavailable required tooling and unrelated baseline evidence rather than silently substituting an improvised check; clean output does not replace behavioral verification.
+5. **Quality review** -- run a single, lightweight sanity pass over the selected findings' changes. This is a fast confidence check that the fix diff is sound; it is explicitly **not** a substitute for the thorough, full-branch PR review that runs later. Classify the changed surfaces before dispatch:
+   - For command-only fixes that add or materially alter instructions, responsibility, handoffs, framing, or user gates, use one `scramjet:command-reviewer`. Use `scramjet:instruction-semantics-analyzer` alone only for narrow analysis or a clarification that adds no procedure, responsibility, or gate; use both only for explicitly disjoint questions.
+   - For code-only fixes, retain `mach12:code-reviewer` with focused correctness, convention, or higher-risk briefs as warranted.
+   - For mixed fixes, give one command reviewer and at most one code reviewer disjoint briefs so one slot remains available if command findings require assessment.
+   Every brief must include the governing PR and issue authority, selected finding definitions, relevant parent observations, verified project-tool evidence, exact surface partition, selection reason, and expected output. Command specialists load the `writing-scramjet-commands` skill as their shared authority. Missing required output narrows the quality conclusion rather than triggering another reviewer. If the command reviewer returns candidate findings, dispatch `scramjet:independent-command-assessor` with the actual authority, changed artifacts, candidate IDs and evidence, exact user decisions, and context presented before exception approval. Only assessor-accepted findings become fix authority.
+   The parent remains the sole owner of repository mutation, test execution, user interaction, and publication. Keep the review proportional:
+   - **Cap: at most 3 subagents per stage, total across both families** -- dispatch independent initial briefs in one parallel batch, followed by the command assessor only when candidate findings exist. Whenever a command reviewer runs, limit the initial batch to two so assessment capacity is reserved. Three is a ceiling for unusually risky mixed or code fixes, not a quota; trivial work may skip review.
+   - **Single pass.** Run the brief(s) once, consolidate the findings, and act on them directly. Do not loop: re-review is warranted only when a fix was non-trivial, substantively reworked code or command prose, and capacity remains after any required assessment. Any one re-review remains counted within the three-subagent cap.
+   - **Never re-dispatch to restate.** Act on the findings you already hold. Do not spawn a subagent to re-report, restate, or re-confirm a finding you already received.
+   Fix only quality-review findings that matter for the selected findings' scope. A review finding proposing coaching is not implementation authority by itself. Delete unjustified command instructions by default; retaining coaching or another unclassified exception requires the parent to present evidence, lower-cost alternatives, consequences, and cost and obtain explicit informed approval before completion. Record approved exceptions and evidence status in the existing progress artifact; do not infer approval from general plan or review acceptance.
 6. **Summary** -- after implementation, quality review, and Step 5's commit, push, and progress publication complete, refresh the PR's head OID, commit history, and checks. Require the refreshed `headRefOid` to equal the verified pushed `HEAD` before treating commits or checks as evidence for that push. Treat a head mismatch or unavailable, pending, cancelled, or failed checks as unresolved evidence that cannot support a readiness claim. Then deliver a concise review retrospective in these sections, in order:
    - **Lead verdict** -- state whether the PR is converging, stalled, regressing, or blocked and give the principal reason. Do not open with an artifact inventory.
    - **Review-cycle progression** -- give one chronological entry per recognizable review cycle and complete the full progression before the next section. Summarize the actual concerns or theme, severity/counts when established, assessment disposition, explicitly associated fix outcome, and verification evidence. Mark the exact invocation-selected cycle. Label cycles after the invoked review as subsequent and not used as authority for this fix. If no other cycle is recognizable, explicitly state that no other review cycle was recognized and also substantively analyze the invoked cycle.

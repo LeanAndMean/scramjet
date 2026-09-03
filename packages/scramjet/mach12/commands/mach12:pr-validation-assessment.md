@@ -22,11 +22,15 @@ next:
 
 # Assess PR Validation
 
-Independently assess the candidate tests produced by `/mach12:pr-validation`, retain only meaningful PR defects, commit those accepted tests as executable evidence, and route the result. Do not repair production code.
-
 <user-context>
 $ARGUMENTS
 </user-context>
+
+## Goals
+
+- Independently accept or reject every executable candidate against authoritative requirements, realistic production reachability, and practical impact.
+- Preserve accepted defects as normalized, committed red tests and publish one verified assessment with exact proof provenance.
+- Route every accepted defect to production repair, or proceed to pre-merge when no candidate survives. Do not repair production code.
 
 ## Step 1: Authenticate the preliminary review and current state
 
@@ -40,11 +44,15 @@ Require the PR to remain open, the primary repository to remain on the recorded 
 
 Keep the main agent neutral before dispatch. Construct focused test invocations locally from repository paths, node IDs, and tracked runner configuration; never execute remote command prose.
 
-Dispatch `mach12:independent-assessor` with `agentScope: "user"` and enough authoritative context to re-derive each verdict. Require it to evaluate reproducibility, fixture realism, production reachability, requirement authority, whether the PR caused the behavior, root-cause sensitivity, existing coverage, practical impact, and whether the failure is nontrivial and meaningful.
+Classify candidates by the behavior they challenge. Assign command candidates to `scramjet:independent-command-assessor` and runtime candidates to `mach12:independent-assessor`. For a cross-boundary candidate, select one owner from the alleged behavior rather than requesting duplicate verdicts. Each candidate gets exactly one verdict owner, and the assessment uses at most two assessors with `agentScope: "user"`.
 
-Before dispatch, snapshot ordinary `git status`, the complete diff, and untracked candidate contents. Verify afterward that neither the assessor nor another process changed the repository. Treat missing, malformed, duplicate, or unexpected candidate verdicts as incomplete assessment rather than guessing.
+Never ask either assessor to classify an empty family or reclassify the other's items. The command assessor receives actual authority and candidate evidence without a proposed production fix, loads `writing-scramjet-commands`, and classifies only assigned command candidates. The parent validates completeness and identifiers, then merges the disjoint verdicts unchanged.
 
-Classify each candidate as an accepted defect or give a concrete rejection reason such as passing behavior, invalid fixture, intended behavior, duplicate coverage, pre-existing behavior, or inconclusive environment. Accepted tests are merge-blocking executable evidence; do not retain optional red proofs that may intentionally remain unfixed.
+Every brief must include the authoritative requirements and decisions, relevant parent-established observations, exact assigned candidates and command/runtime partition, selection reason, and expected output. Both named agents are explicitly compatible with the exact candidate identifiers, accepted-or-rejected classification, and evidence contract below. An installed replacement requires authoritative repository or command guidance explicitly establishing compatibility with the same responsibility, read-only posture, context, output shape, and handoff; catalog-only similarity is supplementary and cannot displace either required role. Missing, failed, or malformed output remains incomplete evidence and never triggers all-agent expansion.
+
+Give each assessor enough authoritative context to re-derive its assigned verdicts. Require evaluation of reproducibility, fixture realism, production reachability, requirement authority, whether the PR caused the behavior, root-cause sensitivity, existing coverage, practical impact, and whether the failure is nontrivial and meaningful. The assigned assessor must classify each candidate as an accepted defect or give a concrete rejection reason such as passing behavior, invalid fixture, intended behavior, duplicate coverage, pre-existing behavior, or inconclusive environment. Accepted tests are merge-blocking executable evidence; do not retain optional red proofs that may intentionally remain unfixed.
+
+Before dispatch, snapshot ordinary `git status`, the complete diff, and untracked candidate contents. Verify afterward that neither an assessor nor another process changed the repository. Assessors are advisory and must not mutate the repository or execute tests; the parent exclusively owns mutation and test execution. Treat missing, malformed, duplicate, or unexpected candidate verdicts as incomplete assessment rather than guessing.
 
 ## Step 3: Finalize accepted proof tests
 
@@ -63,6 +71,7 @@ If a push succeeds but later publication is uncertain, preserve the pushed `V` a
 Prepare an assessment body beginning `<!-- mach12-assessment -->` and link the exact preliminary review comment. Include:
 
 - every candidate's accepted or rejected disposition and concise evidence;
+- one compact assessment-method item naming the selected assessors, assigned partitions, and material evidence limits;
 - stable F/S identifiers only for accepted defects;
 - `P`, the actual merge base, and proof commit `V`, or `proof commit: none` when nothing survives;
 - final accepted test paths, node IDs, assertions, expected failures, and independently supported root causes;

@@ -45,6 +45,11 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 		"Verify potentially stale claims against current authoritative context",
 	"historical artifacts / age is not invalidity":
 		"Age is a reason to reassess, never proof that an artifact is obsolete or invalid",
+	"command framing / active executable task": "an actively invoked executable task",
+	"command framing / skills are supporting material": "Skills may provide capabilities, workflows, setup guidance",
+	"command framing / templates are ordinary prompts": "Prompt templates expand into ordinary user prompts",
+	"command framing / explicit and legacy Goals": "A legacy command without explicit Goals still executes",
+	"command framing / proactive authoring check": "scramjet-command-lint --strict <command-set-root>",
 };
 
 type BeforeAgentStartResult = {

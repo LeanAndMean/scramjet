@@ -62,18 +62,17 @@ describe("mach12 pr-validation candidate workflow", () => {
 			"actual merge base",
 		])
 			expect(boundary).toContain(clause);
-		expectInOrder(command, "## Step 1:", "## Step 2:", "## Step 3:", "Dispatch focused `mach12:test-designer`");
+		expectInOrder(command, "## Step 1:", "## Step 2:", "## Step 3:", "For runtime clusters");
 	});
 
-	it("uses read-only designers while the main agent owns sequential candidate mutation", () => {
+	it("uses runtime test designers and keeps command candidate design with the parent", () => {
 		const candidates = section(command, "## Step 3:", "## Step 4:");
 		expect(candidates).toContain('agentScope: "user"');
-		expect(candidates).toContain("Designers are read-only");
+		expect(candidates).toContain("mach12:test-designer");
+		expect(candidates).toMatch(/command-only behavior[^.]*parent/i);
+		expect(candidates).toContain("Do not turn prompt wording or synthetic model output into an executable proof");
 		expect(candidates).toContain("The main agent owns all repository mutation and execution");
-		expect(candidates).toContain("sequentially in the primary repository");
-		expect(candidates).toContain("ordinary uncommitted test changes");
 		expect(candidates).toContain("Do not modify production code");
-		expect(candidates).toContain("Remove passing, invalid, duplicate, pre-existing, environmental");
 	});
 
 	it("allows useful baseline comparison without linked worktrees or primary-head changes", () => {
@@ -120,12 +119,17 @@ describe("mach12 pr-validation-assessment accepted-proof workflow", () => {
 			expect(state).toContain(clause);
 	});
 
-	it("independently adjudicates before removing rejected tests and committing accepted proofs", () => {
+	it("gives each candidate one read-only assessor before finalizing accepted proofs", () => {
+		const assessment = section(command, "## Step 2:", "## Step 3:");
+		expect(assessment).toContain("scramjet:independent-command-assessor");
+		expect(assessment).toContain("mach12:independent-assessor");
+		expect(assessment).toMatch(/each candidate gets exactly one verdict owner/i);
+		expect(assessment).toContain("writing-scramjet-commands");
+		expect(assessment).toMatch(/parent exclusively owns mutation and test execution/i);
 		expectInOrder(
 			command,
 			"## Step 2: Independently assess every candidate",
-			"Dispatch `mach12:independent-assessor`",
-			"Classify each candidate as an accepted defect",
+			"must classify each candidate as an accepted defect",
 			"## Step 3: Finalize accepted proof tests",
 			"Remove rejected candidate changes through targeted edits",
 			"Normalize accepted tests",
