@@ -27,10 +27,14 @@ const INVENTORY = [
 	["packages/scramjet", "@leanandmean/scramjet"],
 ];
 const INTERNAL_DEPENDENCIES = new Map([
+	["@leanandmean/tui", []],
+	["@leanandmean/ai", []],
 	["@leanandmean/agent", ["@leanandmean/ai"]],
 	["@leanandmean/coding-agent", ["@leanandmean/agent", "@leanandmean/ai", "@leanandmean/tui"]],
 	["@leanandmean/scramjet", INVENTORY.slice(0, -1).map(([, name]) => name)],
 ]);
+const DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+const RELEASE_METADATA_PATHS = [...INVENTORY.map(([workspace]) => `${workspace}/package.json`), "package-lock.json"];
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 let defaultProvenanceVerifier;
 
@@ -57,10 +61,37 @@ export function run(command, args, options = {}) {
 	return typeof output === "string" ? output.trim() : "";
 }
 
-export function loadInventory(root = REPO_ROOT) {
+function requireObject(value, description) {
+	if (value === null || Array.isArray(value) || typeof value !== "object") fail(`${description} must be a JSON object`);
+	return value;
+}
+
+function validateInternalDependencies(record, name, versions, description) {
+	const actual = new Map();
+	for (const section of DEPENDENCY_SECTIONS) {
+		if (record[section] === undefined) continue;
+		const dependencies = requireObject(record[section], `${description} ${section}`);
+		for (const [dependencyName, version] of Object.entries(dependencies)) {
+			if (!versions.has(dependencyName)) continue;
+			if (section !== "dependencies") fail(`${description} must declare ${dependencyName} only in dependencies`);
+			actual.set(dependencyName, version);
+		}
+	}
+	const expected = INTERNAL_DEPENDENCIES.get(name);
+	if (actual.size !== expected.length) fail(`${description} must contain the exact fixed internal dependency set`);
+	for (const dependencyName of expected) {
+		const version = versions.get(dependencyName);
+		if (actual.get(dependencyName) !== version) {
+			fail(`${description} must depend on exact ${dependencyName}@${version}`);
+		}
+	}
+}
+
+function parseInventory(readMetadata) {
 	const manifests = new Map();
 	const inventory = INVENTORY.map(([workspace, expectedName]) => {
-		const manifest = parseJson(readFileSync(join(root, workspace, "package.json"), "utf8"), `${workspace}/package.json`);
+		const path = `${workspace}/package.json`;
+		const manifest = requireObject(parseJson(readMetadata(path), path), path);
 		if (manifest.name !== expectedName) fail(`${workspace} must be named ${expectedName}`);
 		if (typeof manifest.version !== "string" || manifest.version.length === 0) fail(`${expectedName} has no version`);
 		if (
@@ -70,10 +101,7 @@ export function loadInventory(root = REPO_ROOT) {
 		) {
 			fail(`${expectedName} must declare the canonical repository metadata`);
 		}
-		if (
-			manifest.publishConfig?.access !== "public" ||
-			Object.keys(manifest.publishConfig).length !== 1
-		) {
+		if (manifest.publishConfig?.access !== "public" || Object.keys(manifest.publishConfig).length !== 1) {
 			fail(`${expectedName} publishConfig must contain only public access`);
 		}
 		manifests.set(expectedName, manifest);
@@ -89,20 +117,54 @@ export function loadInventory(root = REPO_ROOT) {
 		fail("@leanandmean/scramjet must use a stable X.Y.Z version");
 	}
 	const versions = new Map(inventory.map(({ name, version }) => [name, version]));
-	for (const [name, dependencyNames] of INTERNAL_DEPENDENCIES) {
-		const dependencies = manifests.get(name).dependencies;
-		for (const dependencyName of dependencyNames) {
-			const version = versions.get(dependencyName);
-			if (dependencies?.[dependencyName] !== version) {
-				fail(`${name} must depend on exact ${dependencyName}@${version}`);
-			}
+	for (const { name } of inventory) validateInternalDependencies(manifests.get(name), name, versions, `${name} manifest`);
+
+	const lock = requireObject(parseJson(readMetadata("package-lock.json"), "package-lock.json"), "package-lock.json");
+	if (lock.lockfileVersion !== 3) fail("package-lock.json must use lockfileVersion 3");
+	const packages = requireObject(lock.packages, "package-lock.json packages");
+	const workspaceKeys = Object.keys(packages).filter((path) => /^packages\/[^/]+$/.test(path)).sort();
+	const expectedWorkspaceKeys = inventory.map(({ workspace }) => workspace).sort();
+	if (JSON.stringify(workspaceKeys) !== JSON.stringify(expectedWorkspaceKeys)) {
+		fail("package-lock.json must contain exactly the five release workspaces");
+	}
+	for (const pkg of inventory) {
+		const workspaceRecord = requireObject(packages[pkg.workspace], `package-lock.json ${pkg.workspace}`);
+		if (workspaceRecord.name !== pkg.name || workspaceRecord.version !== pkg.version) {
+			fail(`package-lock.json ${pkg.workspace} must match ${pkg.name}@${pkg.version}`);
+		}
+		validateInternalDependencies(workspaceRecord, pkg.name, versions, `package-lock.json ${pkg.workspace}`);
+	}
+	const linkKeys = Object.keys(packages).filter((path) => /^node_modules\/@leanandmean\/[^/]+$/.test(path)).sort();
+	const expectedLinkKeys = inventory.map(({ name }) => `node_modules/${name}`).sort();
+	if (JSON.stringify(linkKeys) !== JSON.stringify(expectedLinkKeys)) {
+		fail("package-lock.json must contain exactly the five release workspace links");
+	}
+	for (const pkg of inventory) {
+		const link = requireObject(packages[`node_modules/${pkg.name}`], `package-lock.json link for ${pkg.name}`);
+		if (link.link !== true || link.resolved !== pkg.workspace) {
+			fail(`package-lock.json link for ${pkg.name} must resolve to ${pkg.workspace}`);
 		}
 	}
 	return inventory;
 }
 
+export function loadInventory(root = REPO_ROOT) {
+	return parseInventory((path) => readFileSync(join(root, path), "utf8"));
+}
+
+export function loadPreflightInventory(confirmedSha, git = (args) => run("git", args)) {
+	if (!/^[0-9a-f]{40}$/.test(confirmedSha ?? "")) fail("confirmed SHA must be a canonical 40-character commit SHA");
+	git(["cat-file", "-e", `${confirmedSha}^{commit}`]);
+	if (git(["rev-parse", "HEAD"]) !== confirmedSha) fail("confirmed SHA must equal checked-out HEAD");
+	if (git(["status", "--porcelain=v1", "--", ...RELEASE_METADATA_PATHS]) !== "") {
+		fail("release manifests and package-lock.json must match checked-out HEAD");
+	}
+	return parseInventory((path) => git(["show", `${confirmedSha}:${path}`]));
+}
+
 export function validateIdentity(inventory, env = process.env, git = (args) => run("git", args)) {
 	if (env.GITHUB_EVENT_NAME !== "push") fail("GITHUB_EVENT_NAME must be push");
+	if (env.GITHUB_RUN_ATTEMPT !== "1") fail("GITHUB_RUN_ATTEMPT must be 1");
 	const scramjet = inventory.find(({ name }) => name === "@leanandmean/scramjet");
 	const expectedRef = `refs/tags/v${scramjet.version}`;
 	if (env.GITHUB_REF !== expectedRef) fail(`GITHUB_REF must be ${expectedRef}`);
@@ -501,15 +563,17 @@ export async function publish(inventory, identity, dependencies = {}) {
 }
 
 async function main() {
-	const mode = process.argv[2];
+	const [mode, ...args] = process.argv.slice(2);
 	if (!["validate", "preflight", "publish", "reconcile"].includes(mode)) {
-		fail("usage: release.mjs <validate|preflight|publish|reconcile>");
+		fail("usage: release.mjs <validate|publish|reconcile> | release.mjs preflight <confirmed-sha>");
 	}
-	const inventory = loadInventory();
 	if (mode === "preflight") {
-		preflight(inventory);
+		if (args.length !== 1) fail("usage: release.mjs preflight <confirmed-sha>");
+		preflight(loadPreflightInventory(args[0]));
 		return;
 	}
+	if (args.length !== 0) fail(`usage: release.mjs ${mode}`);
+	const inventory = loadInventory();
 	const identity = validateIdentity(inventory);
 	if (mode === "validate") return;
 	if (mode === "publish") {

@@ -30,7 +30,23 @@ const RELEASE_ENV = {
 	GITHUB_REF: `refs/tags/v${SCRAMJET_VERSION}`,
 	GITHUB_SHA: SHA,
 	GITHUB_WORKFLOW_REF: `LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/v${SCRAMJET_VERSION}`,
+	GITHUB_RUN_ATTEMPT: "1",
 };
+const RELEASE_METADATA_PATHS = [...INVENTORY.map(({ workspace }) => `${workspace}/package.json`), "package-lock.json"];
+
+function copyReleaseMetadata(root: string) {
+	for (const path of RELEASE_METADATA_PATHS) {
+		mkdirSync(dirname(join(root, path)), { recursive: true });
+		writeFileSync(join(root, path), readFileSync(join(REPO_ROOT, path)));
+	}
+}
+
+function mutateJson(root: string, path: string, mutate: (value: any) => void) {
+	const file = join(root, path);
+	const value = JSON.parse(readFileSync(file, "utf8"));
+	mutate(value);
+	writeFileSync(file, JSON.stringify(value));
+}
 
 interface FakeState {
 	packages: Record<string, { versions: string[]; distTags: Record<string, string> }>;
@@ -216,9 +232,9 @@ function initialState(): FakeState {
 	};
 }
 
-function runHelper(mode: string, statePath: string) {
+function runHelper(mode: string, statePath: string, args = mode === "preflight" ? [SHA] : []) {
 	const script = ["publish", "reconcile"].includes(mode) ? join(dirname(statePath), "runner.mjs") : HELPER;
-	return spawnSync(process.execPath, [script, mode], {
+	return spawnSync(process.execPath, [script, mode, ...args], {
 		cwd: REPO_ROOT,
 		encoding: "utf8",
 		env: {
@@ -325,6 +341,7 @@ describe("release helper package and event validation", () => {
 	])("rejects incorrect %s", (_label, targetWorkspace, mutate) => {
 		const root = mkdtempSync(join(tmpdir(), "scramjet-release-manifests-"));
 		try {
+			writeFileSync(join(root, "package-lock.json"), readFileSync(join(REPO_ROOT, "package-lock.json")));
 			for (const { workspace } of INVENTORY) {
 				mkdirSync(join(root, workspace), { recursive: true });
 				const manifest = JSON.parse(readFileSync(join(REPO_ROOT, workspace, "package.json"), "utf8"));
@@ -337,7 +354,117 @@ describe("release helper package and event validation", () => {
 		}
 	});
 
-	it("accepts only an aligned push event, tag, workflow ref, SHA, and HEAD", () => {
+	it.each([
+		[
+			"lockfile version",
+			(lock: any) => {
+				lock.lockfileVersion = 2;
+			},
+		],
+		[
+			"missing workspace",
+			(lock: any) => {
+				delete lock.packages["packages/ai"];
+			},
+		],
+		[
+			"extra workspace",
+			(lock: any) => {
+				lock.packages["packages/extra"] = { name: "extra", version: "1.0.0" };
+			},
+		],
+		[
+			"workspace name",
+			(lock: any) => {
+				lock.packages["packages/ai"].name = "@leanandmean/other";
+			},
+		],
+		[
+			"workspace version",
+			(lock: any) => {
+				lock.packages["packages/ai"].version = "0.0.0";
+			},
+		],
+		[
+			"missing lock dependency",
+			(lock: any) => {
+				delete lock.packages["packages/agent"].dependencies["@leanandmean/ai"];
+			},
+		],
+		[
+			"ranged lock dependency",
+			(lock: any) => {
+				lock.packages["packages/agent"].dependencies["@leanandmean/ai"] = "^0.0.0";
+			},
+		],
+		[
+			"extra lock dependency",
+			(lock: any) => {
+				lock.packages["packages/ai"].dependencies["@leanandmean/tui"] = "0.0.0";
+			},
+		],
+		[
+			"missing workspace link",
+			(lock: any) => {
+				delete lock.packages["node_modules/@leanandmean/ai"];
+			},
+		],
+		[
+			"extra workspace link",
+			(lock: any) => {
+				lock.packages["node_modules/@leanandmean/extra"] = { resolved: "packages/extra", link: true };
+			},
+		],
+		[
+			"redirected workspace link",
+			(lock: any) => {
+				lock.packages["node_modules/@leanandmean/ai"].resolved = "packages/tui";
+			},
+		],
+		[
+			"non-link workspace",
+			(lock: any) => {
+				lock.packages["node_modules/@leanandmean/ai"].link = false;
+			},
+		],
+	])("rejects incorrect %s", (_label, mutate) => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-lock-"));
+		try {
+			copyReleaseMetadata(root);
+			mutateJson(root, "package-lock.json", mutate);
+			expect(() => loadInventory(root)).toThrow();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		[
+			"an extra manifest dependency",
+			"packages/ai/package.json",
+			(manifest: any) => {
+				manifest.dependencies["@leanandmean/tui"] = "0.0.0";
+			},
+		],
+		[
+			"a misplaced manifest dependency",
+			"packages/agent/package.json",
+			(manifest: any) => {
+				manifest.devDependencies = { "@leanandmean/ai": manifest.dependencies["@leanandmean/ai"] };
+			},
+		],
+	])("rejects %s", (_label, path, mutate) => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-closure-"));
+		try {
+			copyReleaseMetadata(root);
+			mutateJson(root, path, mutate);
+			expect(() => loadInventory(root)).toThrow();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts only an aligned push event, tag, workflow ref, SHA, attempt, and HEAD", () => {
 		expect(validateIdentity(INVENTORY, RELEASE_ENV, () => SHA)).toEqual({ ref: RELEASE_ENV.GITHUB_REF, sha: SHA });
 	});
 
@@ -346,13 +473,7 @@ describe("release helper package and event validation", () => {
 		try {
 			mkdirSync(join(root, ".github", "scripts"), { recursive: true });
 			writeFileSync(join(root, ".github", "scripts", "release.mjs"), readFileSync(HELPER));
-			for (const { workspace } of INVENTORY) {
-				mkdirSync(join(root, workspace), { recursive: true });
-				writeFileSync(
-					join(root, workspace, "package.json"),
-					readFileSync(join(REPO_ROOT, workspace, "package.json")),
-				);
-			}
+			copyReleaseMetadata(root);
 			const bin = join(root, "bin");
 			mkdirSync(bin);
 			writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' '${SHA}'\n`);
@@ -434,6 +555,8 @@ printf 'node|%s|%s|%s|%s|%s\\n' "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA"
 			{ GITHUB_WORKFLOW_REF: "LeanAndMean/scramjet/.github/workflows/release.yml@refs/heads/main" },
 		],
 		["invalid SHA", { GITHUB_SHA: "not-a-sha" }],
+		["missing run attempt", { GITHUB_RUN_ATTEMPT: undefined }],
+		["a repeated run attempt", { GITHUB_RUN_ATTEMPT: "2" }],
 	])("rejects %s", (_label, override) => {
 		expect(() => validateIdentity(INVENTORY, { ...RELEASE_ENV, ...override }, () => SHA)).toThrow();
 	});
@@ -494,11 +617,68 @@ try {
 
 	afterEach(() => rmSync(workDir, { recursive: true, force: true }));
 
-	it("preflights all five packages without publishing", () => {
+	it("preflights all five packages from the confirmed clean HEAD without publishing", () => {
 		const result = runHelper("preflight", statePath);
 		expect(result.status).toBe(0);
 		expect(result.stdout.match(/: missing;/g)).toHaveLength(5);
-		expect(publishCalls(readState(statePath))).toHaveLength(0);
+		const state = readState(statePath);
+		expect(state.calls).toHaveLength(10);
+		expect(publishCalls(state)).toHaveLength(0);
+	});
+
+	it.each([
+		["a missing SHA", []],
+		["an extra argument", [SHA, "extra"]],
+		["a noncanonical SHA", [SHA.toUpperCase()]],
+		["a nonexistent SHA", ["0".repeat(40)]],
+		[
+			"a commit other than HEAD",
+			[execFileSync("git", ["rev-parse", "HEAD^"], { cwd: REPO_ROOT, encoding: "utf8" }).trim()],
+		],
+	])("rejects preflight with %s before registry access", (_label, args) => {
+		const result = runHelper("preflight", statePath, args);
+		expect(result.status).not.toBe(0);
+		expect(readState(statePath).calls).toHaveLength(0);
+	});
+
+	it.each([
+		["unstaged manifest changes", "packages/agent/package.json", false],
+		["staged manifest changes", "packages/agent/package.json", true],
+		["unstaged lockfile changes", "package-lock.json", false],
+		["staged lockfile changes", "package-lock.json", true],
+	])("rejects %s before registry access", (_label, path, staged) => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-preflight-"));
+		try {
+			mkdirSync(join(root, ".github", "scripts"), { recursive: true });
+			writeFileSync(join(root, ".github", "scripts", "release.mjs"), readFileSync(HELPER));
+			copyReleaseMetadata(root);
+			writeFileSync(join(root, "npm"), FAKE_NPM);
+			chmodSync(join(root, "npm"), 0o755);
+			const git = (args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+			git(["init", "--quiet"]);
+			git(["config", "user.name", "Release Test"]);
+			git(["config", "user.email", "release-test@example.test"]);
+			git(["add", "."]);
+			git(["commit", "--quiet", "-m", "release fixture"]);
+			const head = git(["rev-parse", "HEAD"]);
+			writeFileSync(join(root, path), `${readFileSync(join(root, path), "utf8")}\n`);
+			if (staged) git(["add", path]);
+			const fixtureState = join(root, "state.json");
+			writeFileSync(fixtureState, JSON.stringify(initialState()));
+			const result = spawnSync(
+				process.execPath,
+				[join(root, ".github", "scripts", "release.mjs"), "preflight", head],
+				{
+					cwd: root,
+					encoding: "utf8",
+					env: { ...process.env, PATH: `${root}:${process.env.PATH}`, FAKE_NPM_STATE: fixtureState },
+				},
+			);
+			expect(result.status).not.toBe(0);
+			expect(readState(fixtureState).calls).toHaveLength(0);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("runs local event-shaped reconciliation without publishing missing packages", () => {
