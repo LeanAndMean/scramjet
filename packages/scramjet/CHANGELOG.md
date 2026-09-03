@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.87.0 — Add command-authoring specialists
+
+Adds prompt-specialist support for designing, reviewing, diagnosing, and assessing Scramjet commands. Fixes [#474](https://github.com/LeanAndMean/scramjet/issues/474).
+
+### Added
+
+- Add six read-only command specialists and a progressively loaded command-authoring skill.
+- Add standalone command lint analysis and CLI tooling for deterministic structural validation.
+
+### Changed
+
+- Route Mach 12 command work to compatible prompt specialists while preserving parent ownership of mutation and publication.
+- Document command authority, informed alignment, side-effect ownership, and static-versus-operational validation limits.
+
+### Tests
+
+- Add command lint, specialist wiring, command contract, and behavioral scenario coverage.
+
 ## 0.86.0 — Make pre-merge version propagation atomic
 
 Strengthens pre-merge release preparation by treating canonical versions, mirrors, generated metadata, and consistency checks as one bounded operation. Fixes [#508](https://github.com/LeanAndMean/scramjet/issues/508).
