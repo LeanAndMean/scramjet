@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.88.0 — Require structural evidence for implementation plans
+
+Adds proportional current-state structural mapping before non-trivial implementation planning. Fixes [#511](https://github.com/LeanAndMean/scramjet/issues/511).
+
+### Added
+
+- Add a read-only structural mapper for task-scoped responsibilities, dependencies, contracts, consumers, and evidence limits.
+
+### Changed
+
+- Require structural evidence before architecture in Mach 12 issue planning while preserving a bounded subagent-call budget.
+- Apply proportional structural mapping to ordinary file-level implementation plans and narrow overlapping explorer responsibilities.
+
+### Tests
+
+- Add structural mapper discovery, contract, planning-order, handoff, and proportional-skip coverage.
+
 ## 0.87.0 — Add command-authoring specialists
 
 Adds prompt-specialist support for designing, reviewing, diagnosing, and assessing Scramjet commands. Fixes [#474](https://github.com/LeanAndMean/scramjet/issues/474).

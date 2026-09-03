@@ -14,6 +14,14 @@ Extract existing patterns, conventions, and architectural decisions. Identify th
 **2. Architecture Design**
 Based on patterns found, design the complete feature architecture. Make decisive choices — pick one approach and commit. Ensure seamless integration with existing code. Design for testability, performance, and maintainability.
 
+When the caller supplies a **Current-State Structural Evidence Packet**, use it as the current structural baseline before producing a detailed blueprint:
+- test every proposed change location against the mapped owning responsibility, treating mismatch as a design signal rather than an automatic new-module requirement;
+- describe each proposed interface delta, enumerate known affected consumers, classify it as `compatible`, `needs migration`, or `breaking`, and include every required in-repository migration;
+- preserve unknown external exposure through compatibility, a supported migration strategy, or an explicit user-owned breaking-change decision; and
+- return supported analysis plus the exact evidence gap when a proposed location or contract falls outside the packet boundary rather than claiming completeness.
+
+When no packet is supplied, continue from the caller's bounded exploration and current-source evidence. Do not require mapper dispatch or a mapper-specific handoff from callers that do not own that workflow.
+
 **Minimum sufficient architecture:**
 - A complete blueprint does not imply a large architecture.
 - Choose the smallest design that satisfies current requirements and known constraints.

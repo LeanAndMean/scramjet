@@ -425,6 +425,65 @@ describe("mach12 command-surface issue routing", () => {
 		expect(evaluation).toContain("mach12:test-designer");
 	});
 
+	it("integrates one current-state packet before architecture within the shared call ceiling", () => {
+		const content = command("issue-plan");
+		const exploration = section(content, "## Step 4:", "## Step 5:");
+		const architecture = section(content, "## Step 6:", "## Step 7:");
+		const mapper = content.indexOf("scramjet:structural-mapper");
+		const architect = content.indexOf("scramjet:command-architect", content.indexOf("## Step 6:"));
+
+		expect(mapper).toBeGreaterThan(-1);
+		expect(mapper).toBeLessThan(architect);
+		expect(exploration).toMatch(/skip[^.]*mapper[^.]*mechanical/i);
+		expect(exploration).toMatch(/owner and location[^.]*unambiguous/i);
+		expect(exploration).toMatch(/no shared, exported, public, serialized, cross-owner, or dependency contract/i);
+		expect(exploration).toMatch(/initial[^.]*maximum of seven subagent calls/i);
+		expect(exploration).toMatch(/eighth call[^.]*narrow mapper refresh/i);
+		expect(exploration).toMatch(/no rerun or decision branch[^.]*exceed the total ceiling/i);
+		expect(exploration).toMatch(/mapper replaces[^.]*structural[^.]*exploration/i);
+		expect(architecture).toMatch(/packet[^.]*citations[^.]*evidence limit/i);
+		expect(content).toMatch(/responsibilities, dependencies, contracts, consumers, public exposure/i);
+		expect(architecture).toMatch(/location[^.]*owning responsibility/i);
+		expect(architecture).toMatch(/compatible[^.]*needs migration[^.]*breaking/i);
+	});
+
+	it("routes packet evidence gaps through one reserved mapper refresh without automatic architect redispatch", () => {
+		const architecture = section(command("issue-plan"), "## Step 6:", "## Step 7:");
+		expect(architecture).toMatch(/exact evidence gap/i);
+		expect(architecture).toMatch(/reserved eighth call[^.]*same `scramjet:structural-mapper`/i);
+		expect(architecture).toMatch(/do not automatically re-dispatch[^.]*architect/i);
+		expect(architecture).toMatch(/report incomplete evidence[^.]*exceed/i);
+	});
+
+	it("narrows explorers when a structural packet is supplied", () => {
+		const codeExplorer = readFileSync(join(MACH12_AGENTS_DIR, "mach12:code-explorer.md"), "utf-8");
+		const commandExplorer = readFileSync(join(SCRAMJET_AGENTS_DIR, "scramjet:command-set-explorer.md"), "utf-8");
+		for (const explorer of [codeExplorer, commandExplorer]) {
+			expect(explorer).toMatch(/when[^.]*suppl(?:y|ies)[^.]*packet/i);
+			expect(explorer).toMatch(/contradictions? or gaps/i);
+			expect(explorer).toMatch(/do not recreate[^.]*packet/i);
+		}
+		expect(codeExplorer).toMatch(/behavior, data flow, algorithms, side effects/i);
+		expect(codeExplorer).toMatch(
+			/when no packet is supplied[^\n]*component responsibilities, architecture insights, and dependencies/i,
+		);
+		expect(codeExplorer).toMatch(/when a packet is supplied[^\n]*behavioral findings[^\n]*exact packet gaps/i);
+		expect(commandExplorer).toMatch(/command journeys, context boundaries, artifacts, and side-effect owners/i);
+	});
+
+	it.each([
+		["mach12:code-architect", MACH12_AGENTS_DIR],
+		["scramjet:command-architect", SCRAMJET_AGENTS_DIR],
+	])("%s conditionally consumes the packet while preserving non-packet callers", (name, directory) => {
+		const architect = readFileSync(join(directory, `${name}.md`), "utf-8");
+		expect(architect).toMatch(/when the caller supplies[^.]*Current-State Structural Evidence Packet/i);
+		expect(architect).toMatch(/proposed[^.]*location[^.]*owning responsibility/i);
+		expect(architect).toMatch(/compatible[^.]*needs migration[^.]*breaking/i);
+		expect(architect).toMatch(/exact evidence gap/i);
+		expect(architect).toMatch(/when no packet is supplied/i);
+		expect(architect).toMatch(/bounded exploration and current-source evidence/i);
+	});
+
 	it("references one holistic command reviewer and one independent command assessor", () => {
 		const content = command("issue-review");
 		const evidence = section(content, "## Step 4:", "## Step 5:");

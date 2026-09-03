@@ -150,7 +150,7 @@ describe("discoverAgents — bundled command specialists", () => {
 		const result = discoverAgents(tmpDir, "project");
 
 		expect(result.diagnostics).toEqual([]);
-		expect(result.agents).toHaveLength(6);
+		expect(result.agents).toHaveLength(7);
 		for (const agent of result.agents) {
 			expect(agent.tools).toEqual(["read", "grep", "find", "ls"]);
 			expect(agent.systemPrompt.trim()).not.toBe("");

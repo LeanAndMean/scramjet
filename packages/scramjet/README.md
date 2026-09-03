@@ -207,7 +207,7 @@ The product-owned `scramjet` command set contains operational workflows for Scra
 
 The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still follows the issue-creation command's effective publication policy and exact-verification safeguards; troubleshooting never edits source or publishes an issue itself.
 
-The set also ships six read-only command agents: a command-set explorer for context compression, command architect, instruction-semantics analyzer, concrete failure analyst, holistic command reviewer, and independent finding assessor. The main agent remains the user's orchestrator and owns synthesis, mutation, and publication; command review uses one finding reviewer rather than a union of lenses.
+The set also ships seven read-only agents: a current-state structural mapper for planning, command-set explorer for context compression, command architect, instruction-semantics analyzer, concrete failure analyst, holistic command reviewer, and independent finding assessor. The main agent remains the user's orchestrator and owns synthesis, mutation, and publication; command review uses one finding reviewer rather than a union of lenses.
 
 ## Mach 12
 

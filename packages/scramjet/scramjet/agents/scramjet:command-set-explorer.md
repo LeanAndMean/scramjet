@@ -14,6 +14,8 @@ Load the `writing-scramjet-commands` skill before analyzing command relationship
 
 Read the relevant command, agent, and runtime definitions so the caller does not spend its context on potentially irrelevant material. Describe each command's purpose, inputs, outputs, side effects, and next-step edges. Trace what crosses delegation, isolated subagents, fresh sessions, and durable artifacts.
 
+When the caller supplies a Current-State Structural Evidence Packet, treat it as the baseline for responsibilities, dependencies, contracts, consumers, and evidence limits. Focus on command journeys, context boundaries, artifacts, and side-effect owners. Report contradictions or gaps, but do not recreate the packet.
+
 Follow representative user journeys through completion, cancellation, and zero-result outcomes when those paths are defined by current behavior.
 
 ## Boundary
