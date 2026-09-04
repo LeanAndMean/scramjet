@@ -89,7 +89,7 @@ Resolve every policy-owned tag, version, target, preflight, and downstream verif
 
 Read recent releases for style consistency and gather the PR, linked-issue, and commit context needed for accurate notes. For linked issues, delegate to `/mach12:gh-issue-read <issue-number> --marker mach12-plan`; continue without linked issues when none exist. User context may choose or modify the optional title and notes, but cannot override policy-owned tag, version, target, preflight, or proof requirements.
 
-Before asking for approval, explain that release creation is immutable and can trigger irreversible, nontransactional publication. Identify the mandatory authority-defined read-only preflight, the consequences of failure or ambiguity, and the downstream proof outcomes that release creation does not itself establish. Present the exact draft with:
+Before asking for approval, explain that release creation is immutable and can trigger irreversible, nontransactional publication. Identify any mandatory authority-defined read-only preflight and its consequences of failure or ambiguity; when none applies, say so rather than inventing one. Also identify the downstream proof outcomes that release creation does not itself establish. Present the exact draft with:
 
 - **Tag**: the authority-compliant release tag.
 - **Target**: the exact `MERGED_SHA`.
@@ -102,7 +102,7 @@ Present the exact draft and ask:
 - **Modify**: change the optional title or notes, or resolve an authority-permitted tag choice, then present the complete updated draft again.
 - **Skip release**: finish without creating a release.
 
-After exact approval, immediately require the current checkout's `HEAD` to equal `MERGED_SHA`, run the authority-defined read-only preflight against `MERGED_SHA`, then reread that the intended remote tag and GitHub release are still absent. Only after every check succeeds, create the approved release with its explicit target:
+After exact approval, immediately require the current checkout's `HEAD` to equal `MERGED_SHA`, run any applicable authority-defined read-only preflight against `MERGED_SHA`, then reread that the intended remote tag and GitHub release are still absent. Only after every check succeeds, create the approved release with its explicit target:
 
 ```
 gh release create <tag> --target "$MERGED_SHA" --title "..." --notes "..."

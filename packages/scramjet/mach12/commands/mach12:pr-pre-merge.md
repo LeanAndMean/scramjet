@@ -10,6 +10,7 @@ allowed-tools:
   - glob
   - edit
   - write
+  - get_scramjet_user_input
   - delegate
 next:
   mode: open
@@ -93,41 +94,22 @@ git rev-list --count HEAD..origin/<default-branch>
 
 If the count is **0**, the branch is current -- continue to Step 5.
 
-If the count is **greater than 0**, inform the user that the branch is N commits behind `origin/<default-branch>`, then ask how to proceed:
+If the count is **greater than 0**, tell the user that the branch is N commits behind `origin/<default-branch>`. Explain that continuing requires integrating the freshly fetched default branch, semantically reviewing and checking the combined result, and publishing the verified integration to the current branch's configured upstream. Recommend **Merge** when the PR should proceed, then use `get_scramjet_user_input` to ask:
 
-- **Merge**: merge the default branch into this branch now.
-- **Cancel**: stop without running the checklist.
+- **Merge**: authorize integration and publication through the dedicated integration command.
+- **Cancel**: stop without running the checklist or changing the branch.
 
-A behind branch is blocked until updated; do not offer a skip or bypass path. If the user picks **Cancel**, stop the session. If the user picks **Merge**, run:
+A behind branch is blocked until updated; do not offer a skip or bypass path. If the user picks **Cancel**, stop the session. If the user picks **Merge**, delegate to:
 
 ```
-git merge origin/<default-branch>
+/mach12:integrate-branch <default-branch> --pr <pr-number>
 ```
 
-**If the merge succeeds cleanly**, push the merge commit (`git push`). If the push fails, report the error to the user and stop -- do not continue the checklist with an unpushed merge commit. Advise the user they can retry with `git push`, or undo the merge with `git reset --hard HEAD~1`. On success, continue to Step 5.
+Pass the unqualified default branch name established above and the current PR number exactly. The prior informed **Merge** choice authorizes the delegated integration and push, so do not add a second publication prompt.
 
-**If the merge has conflicts**, check whether all conflicted files are on the version-file allowlist: `plugin.json`, `package.json`, `pyproject.toml`, `setup.cfg`, `Cargo.toml`, `build.gradle`. Only files on this allowlist are eligible for auto-resolution.
+Consume the complete delegated handoff, including its outcome, repository and branch identities, commits, both delta intents, conflict resolutions and semantic corrections, project-native checks, push destination, convergence evidence, preserved unrelated state, and unresolved follow-up. Continue to Step 5 only when the outcome is `integrated` or `already integrated`, every required check succeeded, and local, upstream, forge, and matching-PR convergence is established. For `aborted`, `blocked`, or `indeterminate` outcomes, or an incomplete success handoff, surface the result and stop without attempting to integrate, finalize, or push it again.
 
-- **All conflicts are trivial (version files only):** For each conflicted file, resolve by taking the default branch's version (`git checkout --theirs <file>` then `git add <file>`), then finalize the merge with `git commit --no-edit`. Push the result (`git push`). If the push fails, report the error and stop. Record which files were auto-resolved for the report.
-- **Any non-trivial conflicts exist:** Attempt to resolve them using codebase context before aborting. For each conflicted file:
-
-  1. Read the conflict markers to understand both sides of the conflict.
-  2. Gather context: the PR description, commit history on both sides (`git log origin/<default-branch>..HEAD --oneline` and `git log HEAD..origin/<default-branch> --oneline`), and the surrounding code.
-  3. Assess whether the resolution is clear from context:
-     - **Non-overlapping additions** (both sides added different imports, different functions, different config entries): combine both additions.
-     - **Rename/refactor + feature** (one side renamed a symbol or refactored, the other used the old name): apply the rename to the new code.
-     - **Mechanical conflicts** (formatting, whitespace, comment changes alongside substantive edits): take the substantive edit.
-  4. If the resolution is clear, resolve the file (`git add <file>`) and move to the next conflict.
-  5. If the resolution is genuinely ambiguous (both sides modified the same logic with different intent, or the correct merge requires design judgment), present the conflict to the user with:
-     - The file path and a summary of the conflicting hunks.
-     - What each side changed and why (inferred from commits and PR context).
-     - A recommended resolution with rationale.
-     - Ask whether to apply the recommendation, apply a different resolution the user specifies, or abort the merge entirely.
-  6. If the user picks abort at any point, run `git merge --abort` and stop.
-
-  After all conflicts are resolved, verify no residual conflict markers remain: `grep -rn '^<<<<<<< \|^=======$\|^>>>>>>> ' <resolved-files>`. If any markers are found, the resolution is incomplete -- re-examine the affected files. Once clean, finalize with `git commit --no-edit` and push (`git push`). If the push fails, report the error and stop. Record which files were resolved and how (auto-resolved vs. user-directed) for the report.
-
-**If the merge fails for any reason other than conflicts** (invalid ref, dirty working tree, internal error), report the full error output to the user and stop.
+The delegated command exclusively owns integration, conflict resolution, semantic corrections, merge finalization, integration push, and convergence verification. Pre-Merge retains the later checklist-change commit and push in Step 8 and the existing `mach12:push` delegation for CI-fix batches in Step 9.
 
 ## Step 5: Read contribution guidelines
 
@@ -304,7 +286,7 @@ Do not attempt a second fix cycle — a persistent failure after one fix always 
 After all checklist changes are pushed and CI settles, repeat the Step 2 readiness check. Complete only when the PR is open, non-draft, free of blocking review decisions, current with the default branch, conflict-free, and passing its required checks. If mergeability remains unknown after one brief reread, report incomplete.
 
 Present a summary of what was done:
-- [ ] Branch freshness: [current with <default-branch> / merged N commits from <default-branch> / auto-resolved conflicts in: <files>]
+- [ ] Branch freshness: [current with <default-branch> / integrated N commits from <default-branch>; conflict resolutions and semantic corrections: <summary or none>]
 - [ ] Documentation: [updated / no changes needed / skipped per user request]
 - [ ] Version: [bumped to X.Y.Z / no version tracking / no changes needed / skipped per user request]
 - [ ] CHANGELOG: [updated / no changelog maintained / no changes needed / skipped per user request]

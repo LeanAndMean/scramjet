@@ -31,7 +31,7 @@ scramjet
 
 At startup, Scramjet may show a notice when npm reports a newer release. For globally package-manager-managed installations, `scramjet update` resolves one current npm release, installs that exact version, and verifies the managed package metadata before reporting success. Source installations should pull the latest source and reinstall from that checkout. Offline and failed checks remain silent.
 
-Scramjet ships with two command sets: the product-owned **Scramjet** operational set and **Mach 12**, a starting point with twelve top-level commands for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
+Scramjet ships with two command sets: the product-owned **Scramjet** operational set and **Mach 12**, a starting point with thirteen top-level commands for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
 Try it:
 
@@ -215,6 +215,7 @@ Mach 12 is one team's codification of their development process. It's a starting
 
 | Command | Purpose |
 | --- | --- |
+| `mach12:integrate-branch` | Integrate a same-repository branch and publish the verified result when authorized |
 | `mach12:issue-create` | Create a new GitHub issue |
 | `mach12:issue-plan` | Plan implementation of an issue |
 | `mach12:issue-review` | Review the plan before implementing |
