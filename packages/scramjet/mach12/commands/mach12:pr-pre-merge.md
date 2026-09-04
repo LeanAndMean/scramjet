@@ -286,7 +286,7 @@ Do not attempt a second fix cycle — a persistent failure after one fix always 
 After all checklist changes are pushed and CI settles, repeat the Step 2 readiness check. Complete only when the PR is open, non-draft, free of blocking review decisions, current with the default branch, conflict-free, and passing its required checks. If mergeability remains unknown after one brief reread, report incomplete.
 
 Present a summary of what was done:
-- [ ] Branch freshness: [current with <default-branch> / merged N commits from <default-branch> / auto-resolved conflicts in: <files>]
+- [ ] Branch freshness: [current with <default-branch> / integrated N commits from <default-branch>; conflict resolutions and semantic corrections: <summary or none>]
 - [ ] Documentation: [updated / no changes needed / skipped per user request]
 - [ ] Version: [bumped to X.Y.Z / no version tracking / no changes needed / skipped per user request]
 - [ ] CHANGELOG: [updated / no changelog maintained / no changes needed / skipped per user request]

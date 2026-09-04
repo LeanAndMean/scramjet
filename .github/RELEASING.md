@@ -1,10 +1,18 @@
 # npm releases
 
-This is the repository-specific authority for publishing the five public `@leanandmean` packages. Normal publication is a push of `v<packages/scramjet version>` to `.github/workflows/release.yml`; the event ref, event SHA, workflow ref, and checked-out `HEAD` must all identify that tag and commit. Checkout cannot substitute a different provenance identity.
+This is the repository-specific authority for publishing the five public `@leanandmean` packages. Every release is one forward-only unit containing fresh, unpublished versions of all five packages:
+
+1. `@leanandmean/tui`
+2. `@leanandmean/ai`
+3. `@leanandmean/agent`
+4. `@leanandmean/coding-agent`
+5. `@leanandmean/scramjet`
+
+Normal publication starts only from a new `v<packages/scramjet version>` tag pushed to `.github/workflows/release.yml`. Never move, recreate, or rerun an existing release tag, and never continue a partial package set under the same tag.
 
 ## Trusted publishers
 
-Before configuration, confirm the repository is public, the operator can administer all five npm package settings, account 2FA remains enabled, and the npm publishing-access policy permits trusted publishing. Configure an independent npm trusted-publisher record for each package:
+Before configuration, confirm the repository is public, the operator can administer all five npm package settings, account 2FA remains enabled, and the npm publishing-access policy permits trusted publishing. Configure and reread an independent npm trusted-publisher record for each package:
 
 | Package | Owner | Repository | Workflow | Environment | Allowed action |
 | --- | --- | --- | --- | --- | --- |
@@ -14,62 +22,79 @@ Before configuration, confirm the repository is public, the operator can adminis
 | `@leanandmean/coding-agent` | `LeanAndMean` | `scramjet` | `release.yml` | None | `npm publish` |
 | `@leanandmean/scramjet` | `LeanAndMean` | `scramjet` | `release.yml` | None | `npm publish` |
 
-The accepted trust boundary has no npm environment: repository write authority, the tag-only workflow, and the helper's exact event-identity validation are the controls. A protected GitHub environment is optional future hardening. Scope ownership does not configure package records transitively; save and reread every field for all five records.
+The accepted trust boundary has no npm environment: repository write authority, the tag-only workflow, and the helper's exact event-identity validation are the controls. A protected GitHub environment is optional future hardening. Scope ownership does not configure package records transitively.
 
-## Normal release contract
+## Pre-merge preparation
 
-The workflow uses Node 22.14.0 or newer and npm 11.5.1, grants only `contents: read` and `id-token: write`, and publishes without stored npm credentials. It validates identity before dependency installation and runs the full build before publication.
+`mach12:pr-pre-merge` owns release metadata changes after implementation and review. Every PR must:
 
-`.github/scripts/release.mjs publish` forces the public npm registry, performs a complete five-package registry preflight before mutation, then publishes in dependency order with explicit `--tag latest --access public --provenance`. It rejects a `latest` regression, requires every present target to be the package's current `latest`, snapshots and audits every dist-tag, and preserves all non-`latest` tags, including Coding Agent's `scramjet` tag. Registry lookup failure is not evidence that a version is absent, and every publish failure is fatal. An already-published unchanged package is accepted only when its provenance proves a supported prior version-tag release from this repository and workflow; a partial rerun's newly present artifact must prove the current event identity.
-
-Registry reads, attestation fetches, and publish subprocesses are individually bounded; the workflow's six-hour job timeout is the enforceable outer bound for the release. Post-publish visibility and provenance reads use 31 bounded, logged attempts at ten-second intervals to tolerate propagation delay; `npm publish` itself runs once and is never retried. Any publish failure or workflow cancellation after publication starts leaves publication state ambiguous and requires read-only reconciliation before any authorized rerun.
-
-The repository-wide concurrency group prevents overlapping publication, with cancellation disabled. GitHub retains at most one pending run for a concurrency group, so this is serialization, not a durable release queue; do not queue multiple releases.
-
-## Forward-only cutover
-
-Scramjet versions `0.82.1`, `0.83.0`, `0.83.1`, and `0.84.0` intentionally remain absent from npm. Never rerun their historical workflows, move or recreate their tags, rewrite their releases, or claim they have provenance. The `v0.84.0` cutover published all four runtime targets with authenticated provenance but stopped before publishing Scramjet. A corrected forward release may retain those runtime versions only when their prior-release provenance and packed bytes match the release checkout exactly; Scramjet receives a new version through the normal pre-merge process.
-
-Perform the cutover in this order, with explicit authorization for every external mutation:
-
-1. Merge the corrected workflow without creating a release. Record the merged SHA as `MERGED_SHA` and the five manifest versions, and verify no version tag was created.
-2. Configure and reread all five trusted-publisher records above. Keep the old repository npm secret temporarily, but the merged workflow must not reference or use it.
-3. Record every package's current versions and dist-tags. Confirm each retained runtime target is present and current `latest`, authenticate its historical release provenance, and verify its registry artifact is byte-identical to the package packed from the release checkout. Confirm the new Scramjet target is absent and newer than `latest`, and that it depends on the exact retained runtime versions.
-4. Set `TAG=v<scramjet version>`, validate both values, require the remote tag and release to be absent, and only then create the single normal release with `gh release create "$TAG" --target "$MERGED_SHA"`. After creation triggers the workflow, fetch the exact remote tag and verify `git rev-list -n 1 "$TAG"` equals `MERGED_SHA`; also verify the workflow event ref, SHA, workflow ref, Node/npm versions, complete preflight, dependency order, OIDC authentication, and dist-tag effects. The helper's identity validation is the fail-closed publication gate.
-5. Reconcile the new Scramjet artifact by exact package subject, tarball SHA-512 digest, workflow path, new tag ref, and `MERGED_SHA`. Reconcile each retained runtime artifact by exact package subject, tarball SHA-512 digest, workflow path, its authenticated historical tag and commit, and byte identity with the package packed from the release checkout. Membership in npm alone is insufficient.
-6. Install the exact Scramjet remediation version using a fresh prefix and cache, verify its runtime dependency versions, and run `scramjet --help`.
-7. Record the run ID, ref, SHA, package digests, final dist-tags, and clean-install result. Only then delete the repository's legacy npm secret and verify it is absent; do not revoke unrelated credentials.
-
-## Partial, ambiguous, or failed publication
-
-Publication is irreversible and nontransactional. Do not create another tag, move the existing tag, restore token auth, or retry a publish blindly. An OIDC failure may surface as `ENEEDAUTH`; diagnose it with verbose OIDC logs. A same-event rerun is eligible only after correcting external trusted-publisher configuration or a transient service failure. A defect in the workflow or release helper committed at the immutable tag cannot be repaired by rerunning that event; reconcile the partial state, correct the repository code, and publish a forward release under a new version and tag.
-
-Use `.github/scripts/release.mjs reconcile` for read-only reconciliation against the same event tag and SHA. From a clean clone, set `TAG` to the existing release tag and run this complete procedure; it verifies the remote tag, uses a detached worktree at its exact commit, and supplies the same constrained identity shape as the tag-push event:
+1. Assign a new, unpublished version to each of the five package manifests, even when a runtime package's source did not change. Runtime versions retain their existing precision format.
+2. Propagate those exact versions through the fixed internal dependency graph: `agent → ai`, `coding-agent → agent/ai/tui`, and `scramjet → all four`. `tui` and `ai` remain free of internal package edges.
+3. Update the Scramjet changelog and regenerate synchronized lock metadata with `npm install --package-lock-only --ignore-scripts`.
+4. Commit all manifest, changelog, dependency, and lock changes together, then require a clean checkout.
+5. Run the commit-bound, read-only registry preflight against the exact candidate:
 
 ```bash
-set -euo pipefail
-TAG=v0.0.0 # replace with the existing release tag
-[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag: $TAG" >&2; exit 1; }
-REMOTE_TAG=$(git ls-remote --exit-code --refs origin "refs/tags/$TAG")
-test "$(printf '%s\n' "$REMOTE_TAG" | wc -l)" -eq 1
-TAG_SHA=${REMOTE_TAG%%[[:space:]]*}
-[[ "$TAG_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid remote tag SHA" >&2; exit 1; }
-git fetch --no-tags origin "refs/tags/$TAG"
-test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$TAG_SHA"
-WORKTREE=$(mktemp -d)
-trap 'git worktree remove --force "$WORKTREE" 2>/dev/null || true' EXIT
-git worktree add --detach "$WORKTREE" "$TAG_SHA"
-(
-  cd "$WORKTREE"
-  test "v$(node -p 'require("./packages/scramjet/package.json").version')" = "$TAG"
-  npm ci --ignore-scripts
-  npm run build
-  GITHUB_EVENT_NAME=push \
-  GITHUB_REF="refs/tags/$TAG" \
-  GITHUB_SHA="$TAG_SHA" \
-  GITHUB_WORKFLOW_REF="LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/$TAG" \
-    node .github/scripts/release.mjs reconcile
-)
+CONFIRMED_SHA=$(git rev-parse HEAD)
+node .github/scripts/release.mjs preflight "$CONFIRMED_SHA"
 ```
 
-Reconciliation preflights all five packages, reports missing targets without failing solely because they are absent, and cryptographically authenticates each present package's Sigstore bundle before checking its exact package, digest, workflow, ref, and commit claims. A partial rerun may skip a newly present version only when its attestation proves the current event identity; prior-release provenance is accepted only when a package built and packed from the checked-out release commit has the registry artifact's exact SRI. After reconciliation, rerun the existing workflow event with explicit authorization only for a corrected external configuration or transient failure. For tagged workflow or helper defects, use a corrected forward release under a new version and tag instead. Preserve and re-audit every non-`latest` dist-tag throughout recovery.
+Preflight rejects dirty release metadata, a candidate other than `HEAD`, incomplete or inexact manifest/lock closure, any target version already present, and any target not strictly newer than its package's string-valued npm `latest`. Registry failure or malformed metadata is not evidence that a target is fresh.
+
+Exact version, dependency, changelog, and lock edits belong only to pre-merge preparation. Do not perform them in implementation stages.
+
+## Creating the release
+
+After GitHub confirms the PR merge, retain the full `mergeCommit.oid` as `MERGED_SHA`. From the updated default-branch checkout, require the checked-out commit to be exactly that merge commit:
+
+```bash
+test "$(git rev-parse HEAD)" = "$MERGED_SHA"
+```
+
+Set `TAG=v<packages/scramjet version>` and validate it against the committed manifest. Immediately before any release mutation, rerun strict preflight against the confirmed merge commit, then prove both the remote tag and GitHub release are absent:
+
+```bash
+VERSION=$(node -p 'require("./packages/scramjet/package.json").version')
+test "v$VERSION" = "$TAG"
+node .github/scripts/release.mjs preflight "$MERGED_SHA"
+REMOTE_TAG=$(git ls-remote --refs origin "refs/tags/$TAG") || exit 1
+test -z "$REMOTE_TAG"
+set +e
+RELEASE_RESPONSE=$(gh api --include "repos/{owner}/{repo}/releases/tags/$TAG" 2>&1)
+RELEASE_STATUS=$?
+set -e
+if test "$RELEASE_STATUS" -eq 0; then
+  echo "GitHub release already exists: $TAG" >&2
+  exit 1
+elif ! printf '%s\n' "$RELEASE_RESPONSE" | grep -qE '^HTTP/[^ ]+ 404 '; then
+  printf '%s\n' "$RELEASE_RESPONSE" >&2
+  exit "$RELEASE_STATUS"
+fi
+gh release create "$TAG" --target "$MERGED_SHA" --title "..." --notes "..."
+```
+
+Release creation is immutable and can trigger irreversible, nontransactional publication. Obtain exact draft approval for the tag, target SHA, title, and notes before running the final checks. A failed or ambiguous preflight, conflict check, or release creation stops without retry; preserve the successful merge as a separate fact.
+
+The workflow validates tag identity and registry configuration, pins npm 11.5.1 on Node 22.14.0 or newer, reruns `preflight "$GITHUB_SHA"`, installs with scripts disabled, builds, publishes once in dependency order, and runs post-publication verification. It grants only `contents: read` and `id-token: write`, carries no npm credential fallback, and permits only workflow attempt 1. The global non-cancelling `npm-publication` concurrency group prevents overlapping publication; it is not a durable release queue.
+
+## Publication and proof boundaries
+
+Before publication, the helper independently requires all five targets to remain absent and forward of npm `latest`. Immediately before each package's turn it rereads the target and tags, then invokes `npm publish` exactly once with the public registry, `latest`, public access, and provenance. It never skips a present target or retries publication.
+
+After each publish and during final verification, bounded read-only polling tolerates registry and attestation propagation delay. Exhaustion, malformed state, or ambiguous transport stops the release permanently. It does not authorize another workflow attempt or same-tag continuation; inspect state read-only, correct repository code or external configuration as needed, and prepare another five-fresh release under a new tag.
+
+The final verifier requires each exact target to expose a non-empty npm attestation URL and the SLSA provenance v1 predicate. It then performs a normal postinstall-enabled installation of the exact Scramjet version in isolated project, cache, home, and data paths; verifies the installed five-package closure; runs pinned npm's native `npm audit signatures`; and probes the installed CLI.
+
+These checks establish separate facts:
+
+- Exact npm metadata establishes that every target advertises the required attestation.
+- Native `npm audit signatures` authenticates signatures and attestations for the downloaded dependency tree.
+- Tag-workflow validation separately binds repository, workflow, tag ref, event SHA, checked-out `HEAD`, attempt 1, and OIDC publication context.
+
+No one fact substitutes for another. Record GitHub release creation, each of the five npm package publications, provenance verification, and normal clean-install/CLI verification independently.
+
+## Immutable failed releases
+
+`v0.87.0` remains at commit `4477fd04dba6425ca163c8c757f183e67eda4475`, and `v0.88.0` remains at commit `c5131f3323905d89be282c5c6437a862ab805850`. Both are immutable failed releases, and `@leanandmean/scramjet@0.87.0` and `@leanandmean/scramjet@0.88.0` remain absent from npm.
+
+Do not rerun either workflow, move or recreate either tag, rewrite either release, reconcile retained runtime artifacts for continuation, or publish a missing package into either release. The sole recovery path is read-only inspection followed by another release with five fresh versions and a new tag.

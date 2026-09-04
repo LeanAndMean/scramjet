@@ -19,17 +19,13 @@ $ARGUMENTS
 
 - Merge only a pull request that authoritative readiness evidence shows is safe to merge, without bypassing required checks or review.
 - Bring the local default branch and feature-branch cleanup to a truthful final state after the merge.
-- Create a release only when explicitly approved, and report merge, cleanup, and release outcomes independently.
+- Create only an exactly approved release targeted at the confirmed merge commit, under current repository authority, and report every applicable outcome independently.
 
-This command intentionally declares no next-step policy. Merge is the natural terminus of a feature lifecycle, so Scramjet pauses after a successful merge. If your process has a post-merge follow-up (e.g., a `release:announce` step), add an explicit next-step policy in your local command set.
+This command intentionally declares no next-step policy. Merge is the natural terminus of a feature lifecycle, so Scramjet pauses after a successful merge. If a process has a post-merge follow-up, add an explicit next-step policy in the local command set.
 
 ## Step 1: Parse input
 
-The user's input contains:
-- A **PR number** (required)
-- Additional **context** or constraints (optional)
-
-Extract the PR number from the input. If the input is ambiguous, ask the user to clarify. If context was provided, note it for use in later steps (e.g., release notes guidance, version tag preference).
+Extract the required PR number and any additional context or constraints. If the input is ambiguous, ask the user to clarify. Classify only unambiguous release intent: the user may explicitly decline a release, explicitly request one, or leave release creation undecided. Treat tag, title, notes, or emphasis details as draft guidance.
 
 ## Step 2: Verify readiness
 
@@ -52,13 +48,14 @@ gh pr view <pr-number> --json headRefName --jq .headRefName
 gh pr merge <pr-number> --delete-branch
 ```
 
-Before cleanup or release work, confirm that GitHub reports the PR as merged:
+Before cleanup or release work, confirm that GitHub reports the PR as merged and retain its full 40-character merge commit SHA as `MERGED_SHA`:
 
 ```
 gh pr view <pr-number> --json state,mergeCommit
+MERGED_SHA=$(gh pr view <pr-number> --json mergeCommit --jq '.mergeCommit.oid')
 ```
 
-If the PR is not confirmed merged, report the result and stop. After confirmation, update the local default branch and delete the local feature branch if it still exists:
+If the PR is not confirmed merged or `mergeCommit.oid` is not a full commit SHA, report the result and stop. After confirmation, update the local default branch and delete the local feature branch if it still exists:
 
 ```
 DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)
@@ -69,84 +66,58 @@ git branch -d <branch-name>
 
 Report cleanup failures accurately without undoing or obscuring the successful merge.
 
-## Step 4: Ask about a release
+## Step 4: Resolve release intent
 
-If the user provided context about release creation, honor it as guidance for this step:
+If the user context explicitly declines a release, skip release work without asking and proceed to Step 6. If it explicitly requests a release, treat that intent as settled and proceed to Step 5 without asking again. Otherwise, give the user the current merge and cleanup facts, then ask whether to create a release:
 
-- **Skip directives** (e.g., "skip release", "no release this time"): skip the release question entirely and proceed directly to Step 6. Report in CLI output: "Skipping release per user request." The user has already declined; re-asking is friction without safety benefit.
-- **Release-creating directives** (e.g., "tag as v2.0.0", "highlight the auth changes"): still ask the question below, but frame it to acknowledge the user wants to create a release and present "Create release" as the recommended choice in the question text. Stash the specific details (tag, highlights, notes style) for the Step 5 draft. The yes/no gate is preserved because a release is a substantive action -- do not draft and create one without an explicit confirmation, even if the user named a tag.
-- **No release-relevant context**: ask the question below as a neutral yes/no.
+- **Create release**: proceed to the release authority and exact-draft gate.
+- **Skip release**: finish without release creation.
 
-Step 5's draft-approval gate is the content-review gate for the release itself -- it always runs when a release is being created, regardless of context.
-
-If no skip directive was given, ask the user whether to create a release:
-
-- **Create release**: create a release for this merge.
-- **Skip release**: skip release creation.
-
-If the user picks "Create release", proceed to Step 5. If "Skip release", skip to Step 6.
+The exact-draft approval in Step 5 remains mandatory whenever a release is requested; it authorizes the concrete payload rather than duplicating the intent decision.
 
 ## Step 5: Create a release (if requested)
 
 Release publication is not supported by `create_issue`, `create_pr`, `add_issue_comment`, or `add_pr_comment`. This separate draft approval and `gh release create` path remains an explicit exception to inline forge publication until a release-publication tool exists.
 
-Read recent releases for style consistency:
+Reacquire all applicable contribution and release authority before drafting by delegating to:
 
 ```
-gh release list --limit 5
+/mach12:find-contribution-guidelines
 ```
 
-If there are existing releases, read the most recent one for format reference:
+Resolve every policy-owned tag, version, target, preflight, and downstream verification requirement from the returned source paths. If authority is absent or leaves a detail unspecified, use current repository evidence and established release style without inventing an ecosystem-specific gate. Repositories without applicable release authority retain generic release behavior.
+
+Read recent releases for style consistency and gather the PR, linked-issue, and commit context needed for accurate notes. For linked issues, delegate to `/mach12:gh-issue-read <issue-number> --marker mach12-plan`; continue without linked issues when none exist. User context may choose or modify the optional title and notes, but cannot override policy-owned tag, version, target, preflight, or proof requirements.
+
+Before asking for approval, explain that release creation is immutable and can trigger irreversible, nontransactional publication. Identify any mandatory authority-defined read-only preflight and its consequences of failure or ambiguity; when none applies, say so rather than inventing one. Also identify the downstream proof outcomes that release creation does not itself establish. Present the exact draft with:
+
+- **Tag**: the authority-compliant release tag.
+- **Target**: the exact `MERGED_SHA`.
+- **Title**: the proposed optional release title.
+- **Notes**: the complete proposed release notes.
+
+Present the exact draft and ask:
+
+- **Approve**: authorize exactly the displayed release.
+- **Modify**: change the optional title or notes, or resolve an authority-permitted tag choice, then present the complete updated draft again.
+- **Skip release**: finish without creating a release.
+
+After exact approval, immediately require the current checkout's `HEAD` to equal `MERGED_SHA`, run any applicable authority-defined read-only preflight against `MERGED_SHA`, then reread that the intended remote tag and GitHub release are still absent. Only after every check succeeds, create the approved release with its explicit target:
 
 ```
-gh release view <latest-tag>
+gh release create <tag> --target "$MERGED_SHA" --title "..." --notes "..."
 ```
 
-If the user provided context, use it to inform the release draft (e.g., specific tag, highlighted changes, notes style).
-
-Gather context from the PR, linked issues, and commits:
-
-```
-gh pr view <pr-number> --json title,body,closingIssuesReferences,commits
-```
-
-For each linked issue in `closingIssuesReferences`, delegate to:
-
-```
-/mach12:gh-issue-read <issue-number> --marker mach12-plan
-```
-
-This retrieves the issue title, body, and implementation plan. If no `mach12-plan` marker is found for an issue, use just its title and body. If there are no linked issues, continue without — this is not an error.
-
-Draft a release using the PR title/body, linked issue context (including plans when available), and commit headlines alongside the existing style reference:
-- **Tag**: follow existing tagging convention (e.g., `v1.2.3`, `1.2.3`). If a version bump was done in pre-merge, use that version.
-- **Title**: follow existing title convention. If none, use the PR title.
-- **Notes**: summarize changes from this PR, informed by the full gathered context. Match the style of previous release notes.
-
-Present the draft to the user and ask:
-
-- **Approve**: create the release as drafted.
-- **Modify**: edit the release tag, title, or notes.
-- **Skip release**: skip release creation after all.
-
-If the user picks "Modify", ask what they want to change, apply the changes, and present the updated draft for approval again. If the user picks "Skip release", skip to Step 6.
-
-After approval, create the release:
-
-```
-gh release create <tag> --title "..." --notes "..."
-```
-
-If creation fails, report that the PR was merged but the release was not created. Do not claim success for an operation that failed.
+A failed or ambiguous preflight, conflict check, or release creation must stop release work without retry while preserving the successful merge fact. After verified release creation, observe each authority-defined downstream outcome within its stated bounds. Never infer downstream publication, provenance, or installation success from GitHub release creation.
 
 ## Step 6: Confirm
 
-Report the merge, branch cleanup, release, and local default-branch outcomes accurately, distinguishing a successful merge from any later cleanup or release failure.
+Report the merge, local and remote branch cleanup, local default-branch update, GitHub release, publication, provenance, and installation outcomes independently when applicable. Mark non-applicable outcomes explicitly, and distinguish determinate failure from pending, timed-out, ambiguous, or otherwise indeterminate state.
 
 ## Status Reporting
 
-After delivering your answer, report command status by calling `report_scramjet_command_status`; summarize the work you performed in `summary`, then choose the status:
+After delivering your answer, report command status by calling `report_scramjet_command_status`; summarize the work you performed in `summary`, omit `next_steps`, and choose the status from the complete outcome:
 
-- After a successful merge (and optional release): report `status: "completed"` with a brief summary. Omit `next_steps` entirely — this command has no next-step policy and no chaining occurs.
-- If merge readiness checks fail (CI, conflicts, review, or branch freshness): report `status: "blocked"` with a summary of the blocking issues. Omit `next_steps`.
-- If the command stopped before completing (user cancelled, unexpected error): report `status: "incomplete"` with a summary. Omit `next_steps`.
+- Report `status: "completed"` only when the merge and every other applicable required outcome succeeded or were explicitly non-applicable. When release was skipped, its outcomes are non-applicable; when release was requested, every authority-defined release outcome must succeed.
+- Report `status: "blocked"` for a determinate failed required outcome that needs user or repository action, while preserving any successful merge or cleanup facts.
+- Report `status: "incomplete"` for a pending, ambiguous, timed-out, or otherwise indeterminate release state, cancellation, or execution failure that prevents a trustworthy completed or blocked result.
