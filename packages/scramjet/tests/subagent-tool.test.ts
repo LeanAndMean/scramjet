@@ -129,7 +129,7 @@ describe("discoverAgents — empty directory", () => {
 	});
 });
 
-describe("discoverAgents — bundled command specialists", () => {
+describe("discoverAgents — bundled read-only specialists", () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
@@ -140,6 +140,8 @@ describe("discoverAgents — bundled command specialists", () => {
 		for (const file of fs.readdirSync(sourceDir)) {
 			if (file.endsWith(".md")) fs.copyFileSync(path.join(sourceDir, file), path.join(agentsDir, file));
 		}
+		const mapper = "mach12:structural-mapper.md";
+		fs.copyFileSync(path.join(__dirname, "../mach12/agents", mapper), path.join(agentsDir, mapper));
 	});
 
 	afterEach(() => {

@@ -2,7 +2,9 @@ name: mach12
 description: |
   Mach 12 codifies the Mach 10 development methodology under scramjet's
   next-step policies, command delegation, and authoring loop. Vendor-neutral
-  prose throughout: commands name no specific LLM or harness flavor.
+  prose throughout: commands name no specific LLM or harness flavor. Its agents
+  include mach12:structural-mapper for bounded implementation-planning evidence;
+  registered agents remain callable across command-set boundaries.
 
   Each command file declares its post-turn next-step policy in YAML
   frontmatter. The harness reads the declaration, surfaces candidate hints
