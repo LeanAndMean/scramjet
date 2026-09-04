@@ -144,6 +144,7 @@ const EXPECTED_AGENTS = [
 	"mach12:feature-completeness-checker",
 	"mach12:independent-assessor",
 	"mach12:silent-failure-hunter",
+	"mach12:structural-mapper",
 	"mach12:test-analyzer",
 	"mach12:test-designer",
 	"mach12:type-design-analyzer",
@@ -433,7 +434,7 @@ describe("mach12 command-surface issue routing", () => {
 		const content = command("issue-plan");
 		const exploration = section(content, "## Step 4:", "## Step 5:");
 		const architecture = section(content, "## Step 6:", "## Step 7:");
-		const mapper = content.indexOf("scramjet:structural-mapper");
+		const mapper = content.indexOf("mach12:structural-mapper");
 		const architect = content.indexOf("scramjet:command-architect", content.indexOf("## Step 6:"));
 
 		expect(mapper).toBeGreaterThan(-1);
@@ -454,7 +455,7 @@ describe("mach12 command-surface issue routing", () => {
 	it("routes packet evidence gaps through one reserved mapper refresh without automatic architect redispatch", () => {
 		const architecture = section(command("issue-plan"), "## Step 6:", "## Step 7:");
 		expect(architecture).toMatch(/exact evidence gap/i);
-		expect(architecture).toMatch(/reserved eighth call[^.]*same `scramjet:structural-mapper`/i);
+		expect(architecture).toMatch(/reserved eighth call[^.]*same `mach12:structural-mapper`/i);
 		expect(architecture).toMatch(/do not automatically re-dispatch[^.]*architect/i);
 		expect(architecture).toMatch(/report incomplete evidence[^.]*exceed/i);
 	});
@@ -1686,6 +1687,31 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 			expect(typeof frontmatter.description).toBe("string");
 			expect((frontmatter.description as string).trim().length).toBeGreaterThan(0);
 		}
+	});
+
+	it("defines the structural mapper's bounded read-only evidence contract", () => {
+		const source = readFileSync(join(MACH12_AGENTS_DIR, "mach12:structural-mapper.md"), "utf8");
+		const mapper = parseFrontmatter<Record<string, unknown>>(source);
+
+		expect(mapper.frontmatter).toMatchObject({
+			name: "mach12:structural-mapper",
+			description:
+				"Produces bounded current-state evidence about responsibilities, dependencies, contracts, consumers, and evidence limits.",
+			tools: "read, grep, find, ls",
+		});
+		for (const section of [
+			"Task boundary and authority",
+			"System map",
+			"Module ownership",
+			"Contract baseline",
+			"Evidence limits",
+		]) {
+			expect(mapper.body).toContain(section);
+		}
+		expect(mapper.body).toContain("Verify material supplied claims and documentation against current source");
+		expect(mapper.body).toContain("unknowable external consumers");
+		expect(mapper.body).toContain("do not design a replacement architecture");
+		expect(mapper.body).toContain("Do not mutate, execute project tools, publish, delegate, interact with the user");
 	});
 });
 

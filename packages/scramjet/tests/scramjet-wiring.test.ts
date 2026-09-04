@@ -20,7 +20,6 @@ const specialistNames = [
 	"scramjet:command-set-explorer",
 	"scramjet:independent-command-assessor",
 	"scramjet:instruction-semantics-analyzer",
-	"scramjet:structural-mapper",
 ];
 
 const specialistsPath = join(__dirname, "../scramjet/agents");
@@ -41,7 +40,7 @@ describe("Scramjet command specialists", () => {
 		const descriptions = definitions.map(({ frontmatter }) => frontmatter.description);
 
 		expect(definitions.map(({ file, frontmatter }) => `${frontmatter.name}.md` === file)).toEqual(
-			Array(7).fill(true),
+			Array(6).fill(true),
 		);
 		expect(descriptions.every((description) => typeof description === "string" && description.trim())).toBe(true);
 		expect(definitions.every(({ body }) => body)).toBe(true);
@@ -51,32 +50,7 @@ describe("Scramjet command specialists", () => {
 					.filter((description): description is string => typeof description === "string")
 					.map((description) => description.trim()),
 			).size,
-		).toBe(7);
-	});
-
-	it("defines the structural mapper's bounded read-only evidence contract", () => {
-		const source = readFileSync(join(specialistsPath, "scramjet:structural-mapper.md"), "utf8");
-		const mapper = parseFrontmatter<Record<string, unknown>>(source);
-
-		expect(mapper.frontmatter).toMatchObject({
-			name: "scramjet:structural-mapper",
-			description:
-				"Produces bounded current-state evidence about responsibilities, dependencies, contracts, consumers, and evidence limits.",
-			tools: "read, grep, find, ls",
-		});
-		for (const section of [
-			"Task boundary and authority",
-			"System map",
-			"Module ownership",
-			"Contract baseline",
-			"Evidence limits",
-		]) {
-			expect(mapper.body).toContain(section);
-		}
-		expect(mapper.body).toContain("Verify material supplied claims and documentation against current source");
-		expect(mapper.body).toContain("unknowable external consumers");
-		expect(mapper.body).toContain("do not design a replacement architecture");
-		expect(mapper.body).toContain("Do not mutate, execute project tools, publish, delegate, interact with the user");
+		).toBe(6);
 	});
 });
 
