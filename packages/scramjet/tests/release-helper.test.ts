@@ -558,13 +558,26 @@ try {
 		["an extra argument", [SHA, "extra"]],
 		["a noncanonical SHA", [SHA.toUpperCase()]],
 		["a nonexistent SHA", ["0".repeat(40)]],
-		[
-			"a commit other than HEAD",
-			[execFileSync("git", ["rev-parse", "HEAD^"], { cwd: REPO_ROOT, encoding: "utf8" }).trim()],
-		],
 	])("rejects preflight with %s before registry access", (_label, args) => {
 		const result = runHelper("preflight", statePath, args);
 		expect(result.status).not.toBe(0);
+		expect(readState(statePath).calls).toHaveLength(0);
+	});
+
+	it("rejects an existing commit other than HEAD before registry access", () => {
+		const otherSha = "1".repeat(40);
+		writeFileSync(
+			join(workDir, "git"),
+			`#!/bin/sh
+if [ "$1 $2" = "cat-file -e" ]; then exit 0; fi
+if [ "$1 $2" = "rev-parse HEAD" ]; then printf '%s\\n' '${SHA}'; exit 0; fi
+exit 1
+`,
+		);
+		chmodSync(join(workDir, "git"), 0o755);
+		const result = runHelper("preflight", statePath, [otherSha]);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("confirmed SHA must equal checked-out HEAD");
 		expect(readState(statePath).calls).toHaveLength(0);
 	});
 
