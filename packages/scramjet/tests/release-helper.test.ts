@@ -620,7 +620,13 @@ exit 1
 				{
 					cwd: root,
 					encoding: "utf8",
-					env: { ...process.env, PATH: `${root}:${process.env.PATH}`, FAKE_NPM_STATE: fixtureState },
+					env: {
+						...process.env,
+						PATH: `${root}:${process.env.PATH}`,
+						FAKE_NPM_STATE: fixtureState,
+						GIT_DIR: join(root, ".git"),
+						GIT_WORK_TREE: root,
+					},
 				},
 			);
 			expect(result.status).not.toBe(0);
