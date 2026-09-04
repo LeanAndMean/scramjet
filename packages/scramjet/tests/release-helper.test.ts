@@ -8,6 +8,7 @@ import {
 	compareVersions,
 	isTransientReadError,
 	loadInventory,
+	loadPreflightInventory,
 	pollRead,
 	publishPackage,
 	run,
@@ -596,11 +597,7 @@ exit 1
 	])("rejects %s before registry access", (_label, path, staged) => {
 		const root = mkdtempSync(join(tmpdir(), "scramjet-release-preflight-"));
 		try {
-			mkdirSync(join(root, ".github", "scripts"), { recursive: true });
-			writeFileSync(join(root, ".github", "scripts", "release.mjs"), readFileSync(HELPER));
 			copyReleaseMetadata(root);
-			writeFileSync(join(root, "npm"), FAKE_NPM);
-			chmodSync(join(root, "npm"), 0o755);
 			const git = (args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
 			git(["init", "--quiet"]);
 			git(["config", "user.name", "Release Test"]);
@@ -612,25 +609,9 @@ exit 1
 				value.releaseFixtureDirty = true;
 			});
 			if (staged) git(["add", path]);
-			const fixtureState = join(root, "state.json");
-			writeFileSync(fixtureState, JSON.stringify(initialState()));
-			const result = spawnSync(
-				process.execPath,
-				[join(root, ".github", "scripts", "release.mjs"), "preflight", head],
-				{
-					cwd: root,
-					encoding: "utf8",
-					env: {
-						...process.env,
-						PATH: `${root}:${process.env.PATH}`,
-						FAKE_NPM_STATE: fixtureState,
-						GIT_DIR: join(root, ".git"),
-						GIT_WORK_TREE: root,
-					},
-				},
+			expect(() => loadPreflightInventory(head, git)).toThrow(
+				"release manifests and package-lock.json must match checked-out HEAD",
 			);
-			expect(result.status).not.toBe(0);
-			expect(readState(fixtureState).calls).toHaveLength(0);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
