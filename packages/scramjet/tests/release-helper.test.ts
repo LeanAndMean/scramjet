@@ -700,6 +700,21 @@ try {
 		expect(publishCalls(readState(statePath))).toHaveLength(0);
 	});
 
+	it("reports forward-only recovery when a later target appears after publication began", () => {
+		const state = initialState();
+		state.race = INVENTORY[1].name;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(`${INVENTORY[1].name}@${INVENTORY[1].version} appeared after preflight`);
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication");
+		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(publishCalls(readState(statePath)).map((args) => args[args.indexOf("-w") + 1])).toEqual([
+			INVENTORY[0].workspace,
+		]);
+	});
+
 	it("treats every publish failure as ambiguous without retrying", () => {
 		const state = initialState();
 		state.publishFailure = INVENTORY[1].name;
