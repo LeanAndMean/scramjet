@@ -148,7 +148,7 @@ export function loadPreflightInventory(confirmedSha, git = (args) => run("git", 
 	if (!/^[0-9a-f]{40}$/.test(confirmedSha ?? "")) fail("confirmed SHA must be a canonical 40-character commit SHA");
 	git(["cat-file", "-e", `${confirmedSha}^{commit}`]);
 	if (git(["rev-parse", "HEAD"]) !== confirmedSha) fail("confirmed SHA must equal checked-out HEAD");
-	if (git(["status", "--porcelain=v1", "--", ...RELEASE_METADATA_PATHS]) !== "") {
+	if (git(["diff", "--name-only", "HEAD", "--", ...RELEASE_METADATA_PATHS]) !== "") {
 		fail("release manifests and package-lock.json must match checked-out HEAD");
 	}
 	return parseInventory((path) => git(["show", `${confirmedSha}:${path}`]));
