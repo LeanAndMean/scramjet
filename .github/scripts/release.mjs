@@ -353,12 +353,18 @@ export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_M
 
 export async function publish(inventory, dependencies = {}) {
 	const plan = preflight(inventory);
+	let publicationBegan = false;
 	for (const pkg of plan) {
 		const currentVersions = requireVersions(
 			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions before publish`),
 			pkg.name,
 		);
-		if (currentVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} appeared after preflight`);
+		if (currentVersions.includes(pkg.version)) {
+			const recovery = publicationBegan
+				? "; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release"
+				: "";
+			fail(`${pkg.name}@${pkg.version} appeared after preflight${recovery}`);
+		}
 		const currentTags = requireDistTags(
 			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags before publish`),
 			pkg.name,
@@ -368,6 +374,7 @@ export async function publish(inventory, dependencies = {}) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
 		}
 		publishPackage(pkg);
+		publicationBegan = true;
 		try {
 			const publishedTags = await pollRead(
 				`${pkg.name}@${pkg.version} registry visibility`,
