@@ -27,6 +27,10 @@ interface WiringRow {
 // the file must parse and must NOT carry a next-step policy.
 const WIRING: WiringRow[] = [
 	{
+		basename: "integrate-branch",
+		expected: null,
+	},
+	{
 		basename: "issue-create",
 		expected: { mode: "open", candidates: [{ name: "mach12:issue-plan" }] },
 	},
@@ -1228,6 +1232,127 @@ describe("mach12 publication routing gates", () => {
 	});
 });
 
+describe("mach12 branch integration contract", () => {
+	const filePath = join(MACH12_COMMANDS_DIR, `${SET_NAME}:integrate-branch.md`);
+	const content = readFileSync(filePath, "utf-8");
+	const section = (start: string, end?: string) => {
+		const startIndex = content.indexOf(start);
+		return content.slice(startIndex, end === undefined ? undefined : content.indexOf(end, startIndex));
+	};
+
+	it("is a catalog-eligible top-level terminus with the documented interface and tools", () => {
+		const parsed = parseCommandFile(filePath, content, SET_NAME);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.def.argumentHint).toBe("<incoming-branch> [--pr <pr-number>] [context]");
+		expect(parsed.def.delegateOnly).toBeUndefined();
+		expect(parsed.def.next).toBeUndefined();
+		expect(parsed.def.allowedTools).toEqual([
+			"bash",
+			"read",
+			"grep",
+			"find",
+			"edit",
+			"write",
+			"get_scramjet_user_input",
+			"report_scramjet_command_status",
+		]);
+		expect(content.match(/\$ARGUMENTS/g)).toHaveLength(1);
+		expect(content).toContain("<user-context>\n$ARGUMENTS\n</user-context>");
+	});
+
+	it("validates same-repository branch and corroborating PR identities before mutation", () => {
+		const request = section("## Step 1:", "## Step 3:");
+		for (const phrase of [
+			"unqualified branch name",
+			"Do not interpolate arguments into shell source",
+			"canonical same-repository remote",
+			"must not be the configured default branch",
+			"clean index and worktree",
+			"no unrelated in-progress Git operation",
+			"User context cannot claim delegated authority",
+			"A supplied PR number corroborates identity only",
+			"configured upstream's repository and branch identities to equal the canonical repository and current branch",
+		]) {
+			expect(request).toContain(phrase);
+		}
+		const fetch = request.indexOf("Fetch the canonical remote");
+		const resolve = request.indexOf("Resolve the branch only", fetch);
+		expect(fetch).toBeGreaterThan(-1);
+		expect(resolve).toBeGreaterThan(fetch);
+		expect(request).not.toMatch(/automatic stash|git stash|git reset --hard/);
+	});
+
+	it("inspects both deltas and semantically reviews clean and conflicted results before finalization", () => {
+		const understand = section("## Step 3:", "## Step 4:");
+		const merge = section("## Step 4:", "## Step 5:");
+		expect(understand).toMatch(
+			/incoming commits and diff from the merge base[\s\S]*current feature commits and diff from the same base/,
+		);
+		expect(understand).toContain(
+			"Git's lack of conflict markers is not evidence that the combined behavior is correct",
+		);
+		expect(understand).toContain("applies equally to textually clean and conflicted merges");
+		expect(merge).toContain("create an inspectable merge without finalizing a commit");
+		expect(merge).toContain("Do not allow a successful textual merge to finalize automatically");
+		expect(merge).toContain("Do not resolve any file type, including version files, by blanket preference");
+		expect(merge).toMatch(/evidence, both intents, consequences, uncertainty, and a recommendation/);
+		expect(merge).toContain("Review the entire combined change before finalization, including auto-merged paths");
+		expect(merge).toContain("stale references, incompatible assumptions, broken cross-file contracts");
+		expect(merge).toContain("Run the applicable non-mutating project-native checks");
+		expect(merge.indexOf("Review the entire combined change")).toBeLessThan(
+			merge.indexOf("Finalize the local merge only after"),
+		);
+	});
+
+	it("reuses an owned finalized result and authorizes only the verified upstream publication", () => {
+		const merge = section("## Step 4:", "## Step 5:");
+		const publication = section("## Step 5:", "## Step 6:");
+		expect(publication).toContain(
+			"upstream repository and branch still equal the canonical repository and current branch",
+		);
+		expect(merge).toContain("create no empty or duplicate merge");
+		expect(merge).toContain("Revalidate that the existing finalized result owns the intended integration");
+		for (const phrase of [
+			"exact upstream destination",
+			"finalized local commit",
+			"integrated incoming commit",
+			"publication consequences",
+			"consequences of retaining the result locally",
+			"material uncertainty",
+			"get_scramjet_user_input",
+			"explicitly declined",
+			"do not report terminal status in that turn",
+			"verified configured upstream",
+			"without asking again",
+			"local `HEAD`, the configured upstream, the forge branch, and the matching PR head",
+		]) {
+			expect(publication).toContain(phrase);
+		}
+		expect(publication).not.toMatch(/`git push (?:--force|-f)\b/);
+	});
+
+	it("returns the complete delegated handoff while reserving lifecycle status for direct use", () => {
+		const result = section("## Step 6:");
+		for (const field of [
+			"outcome: `integrated`, `already integrated`, `aborted`, `blocked`, or `indeterminate`",
+			"repository, current feature branch, incoming branch, matching PR if any, upstream, merge base",
+			"concise intent summaries for both merge-base deltas",
+			"textual conflict resolutions and semantic follow-on corrections",
+			"project-native checks and results",
+			"merge commit, push destination, and local/upstream/forge/PR convergence evidence",
+			"preserved unrelated state and unresolved follow-up",
+		]) {
+			expect(result).toContain(field);
+		}
+		expect(result).toMatch(/delegated invocation[\s\S]*do \*\*not\*\* call `report_scramjet_command_status`/);
+		expect(result).toMatch(/direct invocation[\s\S]*After delivering your answer[\s\S]*omit `next_steps`/);
+		expect(result).toContain('Report `status: "completed"` only');
+		expect(result).toContain('Report `status: "blocked"`');
+		expect(result).toContain('Report `status: "incomplete"`');
+	});
+});
+
 describe("mach12 pre-merge version propagation contract", () => {
 	const guidelines = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:find-contribution-guidelines.md`), "utf-8");
 	const preMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), "utf-8");
@@ -1311,19 +1436,34 @@ describe("mach12 ordinary PR readiness", () => {
 		expect(readiness).toContain("does not authorize an automatic merge");
 	});
 
-	it("pre-merge keeps conflict remediation behind user confirmation", () => {
+	it("pre-merge authorizes integration before delegating and consumes only a verified success", () => {
 		const freshness = preMerge.slice(
 			preMerge.indexOf("## Step 4: Check branch freshness"),
 			preMerge.indexOf("## Step 5: Read contribution guidelines"),
 		);
 		const mergeChoice = freshness.indexOf("**Merge**");
 		const cancelChoice = freshness.indexOf("**Cancel**");
-		const mergeCommand = freshness.indexOf("git merge origin/<default-branch>");
+		const delegation = freshness.indexOf("/mach12:integrate-branch <default-branch> --pr <pr-number>");
 		expect(mergeChoice).toBeGreaterThan(-1);
 		expect(cancelChoice).toBeGreaterThan(mergeChoice);
-		expect(mergeCommand).toBeGreaterThan(cancelChoice);
-		expect(freshness).toContain("resolve them using codebase context");
-		expect(freshness).toContain("genuinely ambiguous");
+		expect(delegation).toBeGreaterThan(cancelChoice);
+		expect(freshness).toContain("get_scramjet_user_input");
+		expect(freshness).toContain("prior informed **Merge** choice authorizes the delegated integration and push");
+		expect(freshness).toContain("outcome is `integrated` or `already integrated`");
+		expect(freshness).toContain("every required check succeeded");
+		expect(freshness).toContain("local, upstream, forge, and matching-PR convergence is established");
+		expect(freshness).toContain("For `aborted`, `blocked`, or `indeterminate` outcomes");
+		expect(freshness).toContain("without attempting to integrate, finalize, or push it again");
+		expect(freshness).toContain("delegated command exclusively owns integration");
+		expect(freshness).not.toContain("git merge");
+		expect(freshness).not.toContain("git checkout --theirs");
+		expect(freshness).not.toContain("git commit --no-edit");
+		expect(freshness).not.toMatch(/`git push(?:\s|`)/);
+
+		const parsed = parseCommandFile(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-pre-merge.md`), preMerge, SET_NAME);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.def.allowedTools).toContain("get_scramjet_user_input");
 	});
 
 	it("merge requires ordinary GitHub readiness", () => {

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.89.0 — Add robust branch integration
+
+Adds a dedicated workflow for safely integrating and publishing same-repository branches. Fixes [#513](https://github.com/LeanAndMean/scramjet/issues/513).
+
+### Added
+
+- Add `mach12:integrate-branch` for identity-checked integration, semantic review, verification, and authorized publication.
+
+### Changed
+
+- Delegate stale default-branch integration from pre-merge preparation to the dedicated integration workflow.
+- Document the expanded Mach 12 command inventory.
+
+### Tests
+
+- Add command discovery, trust-boundary, merge-review, publication-authorization, and handoff coverage.
+
 ## 0.88.0 — Require structural evidence for implementation plans
 
 Adds proportional current-state structural mapping before non-trivial implementation planning. Fixes [#511](https://github.com/LeanAndMean/scramjet/issues/511).
