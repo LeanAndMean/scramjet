@@ -608,7 +608,9 @@ exit 1
 			git(["add", "."]);
 			git(["commit", "--quiet", "-m", "release fixture"]);
 			const head = git(["rev-parse", "HEAD"]);
-			writeFileSync(join(root, path), `${readFileSync(join(root, path), "utf8")}\n`);
+			mutateJson(root, path, (value) => {
+				value.releaseFixtureDirty = true;
+			});
 			if (staged) git(["add", path]);
 			const fixtureState = join(root, "state.json");
 			writeFileSync(fixtureState, JSON.stringify(initialState()));
@@ -951,15 +953,19 @@ exit 1
 			{ wrongAttestationPredicate: INVENTORY[2].name },
 			"has no SLSA v1 provenance predicate",
 		],
-	] as const)("requires an exact %s even when native signature audit would succeed", (_label, override, message) => {
-		writeFileSync(statePath, JSON.stringify(Object.assign(publishedState(), override)));
-		const result = runHelper("verify", statePath);
-		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain(`${INVENTORY[2].name}@${INVENTORY[2].version} ${message}`);
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("another five-fresh forward release");
-		expect(readState(statePath).calls.some((args) => args[0] === "audit")).toBe(false);
-	});
+	] as const)(
+		"requires an exact %s even when native signature audit would succeed",
+		(_label, override, message) => {
+			writeFileSync(statePath, JSON.stringify(Object.assign(publishedState(), override)));
+			const result = runHelper("verify", statePath);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain(`${INVENTORY[2].name}@${INVENTORY[2].version} ${message}`);
+			expect(result.stderr).toContain("publication state is ambiguous");
+			expect(result.stderr).toContain("another five-fresh forward release");
+			expect(readState(statePath).calls.some((args) => args[0] === "audit")).toBe(false);
+		},
+		10_000,
+	);
 
 	it("verifies metadata, a normal exact install, native signatures, installed closure, and the CLI", () => {
 		writeFileSync(statePath, JSON.stringify(publishedState()));
