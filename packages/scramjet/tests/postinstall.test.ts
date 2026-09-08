@@ -428,7 +428,9 @@ describe("scripts/postinstall.js — independent bundled sets", () => {
 
 		expect(result.status).toBe(0);
 		expect(existsSync(join(root, "mach12", "commands", "mach12:issue-create.md"))).toBe(true);
+		expect(existsSync(join(root, "mach12", "agents", "mach12:structural-mapper.md"))).toBe(true);
 		expect(existsSync(join(root, "scramjet", "commands", "scramjet:troubleshoot.md"))).toBe(true);
+		expect(existsSync(join(root, "scramjet", "agents", "scramjet:structural-mapper.md"))).toBe(false);
 		expect(readManifest(join(root, "mach12")).version).toBe(PKG_VERSION);
 		expect(readManifest(join(root, "scramjet")).version).toBe(PKG_VERSION);
 	});

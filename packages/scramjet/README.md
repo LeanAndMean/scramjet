@@ -31,7 +31,7 @@ scramjet
 
 At startup, Scramjet may show a notice when npm reports a newer release. For globally package-manager-managed installations, `scramjet update` resolves one current npm release, installs that exact version, and verifies the managed package metadata before reporting success. Source installations should pull the latest source and reinstall from that checkout. Offline and failed checks remain silent.
 
-Scramjet ships with two command sets: the product-owned **Scramjet** operational set and **Mach 12**, a starting point with thirteen top-level commands for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
+Scramjet ships with the product-owned **Scramjet** operational set and **Mach 12**, a starting point for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
 
 Try it:
 
@@ -207,7 +207,7 @@ The product-owned `scramjet` command set contains operational workflows for Scra
 
 The diagnosis may route to a registered continuation command or to `/mach12:issue-create` for a reviewable issue draft. Local journal and tool artifacts may remain detailed, but evidence must be reviewed and redacted before it leaves the computer through GitHub. Issue publication still follows the issue-creation command's effective publication policy and exact-verification safeguards; troubleshooting never edits source or publishes an issue itself.
 
-The set also ships seven read-only agents: a current-state structural mapper for planning, command-set explorer for context compression, command architect, instruction-semantics analyzer, concrete failure analyst, holistic command reviewer, and independent finding assessor. The main agent remains the user's orchestrator and owns synthesis, mutation, and publication; command review uses one finding reviewer rather than a union of lenses.
+The set also ships read-only command specialists for exploration, architecture, semantics, failure analysis, holistic review, and independent assessment. The main agent remains the user's orchestrator and owns synthesis, mutation, and publication; command review uses one finding reviewer rather than a union of lenses.
 
 ## Mach 12
 
@@ -229,7 +229,11 @@ Mach 12 is one team's codification of their development process. It's a starting
 | `mach12:pr-pre-merge` | Pre-merge checks |
 | `mach12:pr-merge` | Merge the PR |
 
-Plus seven subroutine commands and eleven specialized code agents covering exploration, architecture, review, testing, and more. For command work, Mach 12 uses the minimum relevant Scramjet role: exploration for context compression, one architect for design, one reviewer for broad review or the semantics analyzer for a narrow wording question, and a fresh assessor for published findings. Runtime work retains code specialists, and mixed work uses disjoint briefs. Across projects Mach 12 discovers authoritative development tools from repository guidance, manifests, adjacent scripts, CI, and established usage; it classifies their relevance and mutation effects, runs applicable non-mutating checks, and reports missing evidence without installing tools or treating clean output as behavioral proof. This is generic behavior—Mach 12 does not hard-code Scramjet's command checker. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
+Mach 12 also ships subroutine commands and specialized agents covering structural mapping, exploration, architecture, review, testing, and more.
+
+For structural planning, `mach12:structural-mapper` provides current-state evidence before implementation design. Like any registered agent, it remains callable across command-set boundaries, including ordinary planning outside a Mach 12 command; installations without Mach 12 do not offer that mapping step. This is the canonical replacement for the former `scramjet:structural-mapper` name, so external name-based callers must migrate.
+
+For command work, Mach 12 uses the minimum relevant Scramjet role: exploration for context compression, one architect for design, one reviewer for broad review or the semantics analyzer for a narrow wording question, and a fresh assessor for published findings. Runtime work retains code specialists, and mixed work uses disjoint briefs. Across projects Mach 12 discovers authoritative development tools from repository guidance, manifests, adjacent scripts, CI, and established usage; it classifies their relevance and mutation effects, runs applicable non-mutating checks, and reports missing evidence without installing tools or treating clean output as behavioral proof. This is generic behavior—Mach 12 does not hard-code Scramjet's command checker. The issue-creation workflow identifies the motivating problem, drafts the complete issue directly from its established anchor and evidence, and performs a separate authority-aware review against live context before approval.
 
 ## Bundled command-set installation
 

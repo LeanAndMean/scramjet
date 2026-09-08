@@ -104,10 +104,11 @@ describe("registerBaseDirectives", () => {
 		const text = result.systemPromptSection.text;
 
 		expect(text).toMatch(
-			/non-trivial file-level implementation plan outside an active `\/mach12:issue-plan`[\s\S]*dispatch `scramjet:structural-mapper`[\s\S]*Consume its Current-State Structural Evidence Packet before selecting files or changing interfaces/,
+			/non-trivial file-level implementation plan outside an active `\/mach12:issue-plan`[\s\S]*dispatch `mach12:structural-mapper`[\s\S]*when it appears in the available subagent catalog[\s\S]*Consume its Current-State Structural Evidence Packet before selecting files or changing interfaces/,
 		);
+		expect(text).toMatch(/When the mapper is unavailable,[\s\S]*without dispatching a substitute/);
 		expect(text).toMatch(
-			/Skip this when current authority establishes that the work is mechanical,[\s\S]*owner and location are unambiguous,[\s\S]*changes no shared, exported, public, serialized, cross-owner, or dependency contract/,
+			/Skip mapping when current authority establishes that the work is mechanical,[\s\S]*owner and location are unambiguous,[\s\S]*changes no shared, exported, public, serialized, cross-owner, or dependency contract/,
 		);
 		expect(text).toContain(
 			"Do not trigger it for a short exploratory response that does not provide a file-level plan.",

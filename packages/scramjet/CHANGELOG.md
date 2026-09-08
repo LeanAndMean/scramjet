@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.90.0 — Move structural mapping to Mach 12
+
+Moves structural-planning ownership from the Scramjet operational set to Mach 12. Fixes [#518](https://github.com/LeanAndMean/scramjet/issues/518).
+
+### Changed
+
+- Rename the canonical structural mapper from `scramjet:structural-mapper` to `mach12:structural-mapper` without retaining an alias.
+- Keep ordinary planning integration conditional on the Mach 12 mapper being available in the agent catalog.
+- Align bundled command-set metadata, documentation, installer coverage, and wiring tests with the new ownership.
+
 ## 0.89.1 — Harden forward-only releases
 
 Prevents stale package versions and ambiguous partial publication from reaching or reusing immutable release tags. Fixes [#514](https://github.com/LeanAndMean/scramjet/issues/514).

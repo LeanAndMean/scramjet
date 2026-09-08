@@ -1,5 +1,5 @@
 ---
-name: scramjet:structural-mapper
+name: mach12:structural-mapper
 description: Produces bounded current-state evidence about responsibilities, dependencies, contracts, consumers, and evidence limits.
 tools: read, grep, find, ls
 ---
