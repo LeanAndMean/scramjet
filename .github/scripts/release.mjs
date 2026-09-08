@@ -1,20 +1,14 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_URL = "git+https://github.com/LeanAndMean/scramjet.git";
 const REGISTRY_URL = "https://registry.npmjs.org/";
-const WORKFLOW_REPOSITORY = "https://github.com/LeanAndMean/scramjet";
 const WORKFLOW_PATH = ".github/workflows/release.yml";
-const SLSA_PREDICATE = "https://slsa.dev/provenance/v1";
-const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
-const CERTIFICATE_IDENTITY =
-	"^https://github\\.com/LeanAndMean/scramjet/\\.github/workflows/release\\.yml@refs/tags/v\\d+\\.\\d+\\.\\d+$";
 export const READ_TIMEOUT_MS = 60_000;
 export const PUBLISH_TIMEOUT_MS = 10 * 60_000;
 export const POST_PUBLISH_ATTEMPTS = 31;
@@ -27,13 +21,15 @@ const INVENTORY = [
 	["packages/scramjet", "@leanandmean/scramjet"],
 ];
 const INTERNAL_DEPENDENCIES = new Map([
+	["@leanandmean/tui", []],
+	["@leanandmean/ai", []],
 	["@leanandmean/agent", ["@leanandmean/ai"]],
 	["@leanandmean/coding-agent", ["@leanandmean/agent", "@leanandmean/ai", "@leanandmean/tui"]],
 	["@leanandmean/scramjet", INVENTORY.slice(0, -1).map(([, name]) => name)],
 ]);
+const DEPENDENCY_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+const RELEASE_METADATA_PATHS = [...INVENTORY.map(([workspace]) => `${workspace}/package.json`), "package-lock.json"];
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-let defaultProvenanceVerifier;
-
 function fail(message) {
 	throw new Error(message);
 }
@@ -57,10 +53,37 @@ export function run(command, args, options = {}) {
 	return typeof output === "string" ? output.trim() : "";
 }
 
-export function loadInventory(root = REPO_ROOT) {
+function requireObject(value, description) {
+	if (value === null || Array.isArray(value) || typeof value !== "object") fail(`${description} must be a JSON object`);
+	return value;
+}
+
+function validateInternalDependencies(record, name, versions, description) {
+	const actual = new Map();
+	for (const section of DEPENDENCY_SECTIONS) {
+		if (record[section] === undefined) continue;
+		const dependencies = requireObject(record[section], `${description} ${section}`);
+		for (const [dependencyName, version] of Object.entries(dependencies)) {
+			if (!versions.has(dependencyName)) continue;
+			if (section !== "dependencies") fail(`${description} must declare ${dependencyName} only in dependencies`);
+			actual.set(dependencyName, version);
+		}
+	}
+	const expected = INTERNAL_DEPENDENCIES.get(name);
+	if (actual.size !== expected.length) fail(`${description} must contain the exact fixed internal dependency set`);
+	for (const dependencyName of expected) {
+		const version = versions.get(dependencyName);
+		if (actual.get(dependencyName) !== version) {
+			fail(`${description} must depend on exact ${dependencyName}@${version}`);
+		}
+	}
+}
+
+function parseInventory(readMetadata) {
 	const manifests = new Map();
 	const inventory = INVENTORY.map(([workspace, expectedName]) => {
-		const manifest = parseJson(readFileSync(join(root, workspace, "package.json"), "utf8"), `${workspace}/package.json`);
+		const path = `${workspace}/package.json`;
+		const manifest = requireObject(parseJson(readMetadata(path), path), path);
 		if (manifest.name !== expectedName) fail(`${workspace} must be named ${expectedName}`);
 		if (typeof manifest.version !== "string" || manifest.version.length === 0) fail(`${expectedName} has no version`);
 		if (
@@ -70,10 +93,7 @@ export function loadInventory(root = REPO_ROOT) {
 		) {
 			fail(`${expectedName} must declare the canonical repository metadata`);
 		}
-		if (
-			manifest.publishConfig?.access !== "public" ||
-			Object.keys(manifest.publishConfig).length !== 1
-		) {
+		if (manifest.publishConfig?.access !== "public" || Object.keys(manifest.publishConfig).length !== 1) {
 			fail(`${expectedName} publishConfig must contain only public access`);
 		}
 		manifests.set(expectedName, manifest);
@@ -89,20 +109,54 @@ export function loadInventory(root = REPO_ROOT) {
 		fail("@leanandmean/scramjet must use a stable X.Y.Z version");
 	}
 	const versions = new Map(inventory.map(({ name, version }) => [name, version]));
-	for (const [name, dependencyNames] of INTERNAL_DEPENDENCIES) {
-		const dependencies = manifests.get(name).dependencies;
-		for (const dependencyName of dependencyNames) {
-			const version = versions.get(dependencyName);
-			if (dependencies?.[dependencyName] !== version) {
-				fail(`${name} must depend on exact ${dependencyName}@${version}`);
-			}
+	for (const { name } of inventory) validateInternalDependencies(manifests.get(name), name, versions, `${name} manifest`);
+
+	const lock = requireObject(parseJson(readMetadata("package-lock.json"), "package-lock.json"), "package-lock.json");
+	if (lock.lockfileVersion !== 3) fail("package-lock.json must use lockfileVersion 3");
+	const packages = requireObject(lock.packages, "package-lock.json packages");
+	const workspaceKeys = Object.keys(packages).filter((path) => /^packages\/[^/]+$/.test(path)).sort();
+	const expectedWorkspaceKeys = inventory.map(({ workspace }) => workspace).sort();
+	if (JSON.stringify(workspaceKeys) !== JSON.stringify(expectedWorkspaceKeys)) {
+		fail("package-lock.json must contain exactly the five release workspaces");
+	}
+	for (const pkg of inventory) {
+		const workspaceRecord = requireObject(packages[pkg.workspace], `package-lock.json ${pkg.workspace}`);
+		if (workspaceRecord.name !== pkg.name || workspaceRecord.version !== pkg.version) {
+			fail(`package-lock.json ${pkg.workspace} must match ${pkg.name}@${pkg.version}`);
+		}
+		validateInternalDependencies(workspaceRecord, pkg.name, versions, `package-lock.json ${pkg.workspace}`);
+	}
+	const linkKeys = Object.keys(packages).filter((path) => /^node_modules\/@leanandmean\/[^/]+$/.test(path)).sort();
+	const expectedLinkKeys = inventory.map(({ name }) => `node_modules/${name}`).sort();
+	if (JSON.stringify(linkKeys) !== JSON.stringify(expectedLinkKeys)) {
+		fail("package-lock.json must contain exactly the five release workspace links");
+	}
+	for (const pkg of inventory) {
+		const link = requireObject(packages[`node_modules/${pkg.name}`], `package-lock.json link for ${pkg.name}`);
+		if (link.link !== true || link.resolved !== pkg.workspace) {
+			fail(`package-lock.json link for ${pkg.name} must resolve to ${pkg.workspace}`);
 		}
 	}
 	return inventory;
 }
 
+export function loadInventory(root = REPO_ROOT) {
+	return parseInventory((path) => readFileSync(join(root, path), "utf8"));
+}
+
+export function loadPreflightInventory(confirmedSha, git = (args) => run("git", args)) {
+	if (!/^[0-9a-f]{40}$/.test(confirmedSha ?? "")) fail("confirmed SHA must be a canonical 40-character commit SHA");
+	git(["cat-file", "-e", `${confirmedSha}^{commit}`]);
+	if (git(["rev-parse", "HEAD"]) !== confirmedSha) fail("confirmed SHA must equal checked-out HEAD");
+	if (git(["status", "--porcelain=v1", "--", ...RELEASE_METADATA_PATHS]) !== "") {
+		fail("release manifests and package-lock.json must match checked-out HEAD");
+	}
+	return parseInventory((path) => git(["show", `${confirmedSha}:${path}`]));
+}
+
 export function validateIdentity(inventory, env = process.env, git = (args) => run("git", args)) {
 	if (env.GITHUB_EVENT_NAME !== "push") fail("GITHUB_EVENT_NAME must be push");
+	if (env.GITHUB_RUN_ATTEMPT !== "1") fail("GITHUB_RUN_ATTEMPT must be 1");
 	const scramjet = inventory.find(({ name }) => name === "@leanandmean/scramjet");
 	const expectedRef = `refs/tags/v${scramjet.version}`;
 	if (env.GITHUB_REF !== expectedRef) fail(`GITHUB_REF must be ${expectedRef}`);
@@ -133,6 +187,31 @@ function requireDistTags(value, name) {
 	return value;
 }
 
+function readAttestations(pkg) {
+	const description = `${pkg.name}@${pkg.version} attestations`;
+	const output = run("npm", [
+		"view",
+		`${pkg.name}@${pkg.version}`,
+		"dist.attestations",
+		"--json",
+		"--registry",
+		REGISTRY_URL,
+	]);
+	if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+	return parseJson(output, description);
+}
+
+function requireAttestations(value, pkg) {
+	const attestations = requireObject(value, `${pkg.name}@${pkg.version} attestations`);
+	if (typeof attestations.url !== "string" || attestations.url.length === 0) {
+		throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+	}
+	const provenance = requireObject(attestations.provenance, `${pkg.name}@${pkg.version} provenance`);
+	if (provenance.predicateType !== "https://slsa.dev/provenance/v1") {
+		throw registryPropagationError(`${pkg.name}@${pkg.version} has no SLSA v1 provenance predicate`);
+	}
+}
+
 function parseVersion(version) {
 	const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-scramjet\.(0|[1-9]\d*))?$/.exec(version);
 	if (!match) fail(`unsupported version format: ${version}`);
@@ -158,156 +237,17 @@ export function preflight(inventory) {
 	const plan = inventory.map((pkg) => {
 		const versions = requireVersions(npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions`), pkg.name);
 		const distTags = requireDistTags(npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags`), pkg.name);
-		const present = versions.includes(pkg.version);
+		if (versions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} already exists; every release requires five fresh versions`);
 		if (typeof distTags.latest !== "string") fail(`${pkg.name} has no string-valued latest dist-tag`);
-		if (present && distTags.latest !== pkg.version) {
-			fail(`${pkg.name}@${pkg.version} is present but is not current latest ${distTags.latest}`);
-		}
-		if (!present && compareVersions(pkg.version, distTags.latest) <= 0) {
+		if (compareVersions(pkg.version, distTags.latest) <= 0) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${distTags.latest}`);
 		}
-		return { ...pkg, present, distTags };
+		return { ...pkg, distTags };
 	});
 	for (const pkg of plan) {
-		console.log(`${pkg.name}@${pkg.version}: ${pkg.present ? "present" : "missing"}; dist-tags=${JSON.stringify(pkg.distTags)}`);
+		console.log(`${pkg.name}@${pkg.version}: missing; dist-tags=${JSON.stringify(pkg.distTags)}`);
 	}
 	return plan;
-}
-
-function expectedPurl(name, version) {
-	return `pkg:npm/${name.replace("@", "%40")}@${version}`;
-}
-
-function integrityHex(integrity) {
-	const match = /^sha512-([A-Za-z0-9+/]+={0,2})$/.exec(integrity);
-	if (!match) fail("registry integrity must be an sha512 SRI value");
-	const digest = Buffer.from(match[1], "base64");
-	if (digest.length !== 64 || digest.toString("base64") !== match[1]) {
-		fail("registry integrity must contain one canonical 64-byte SHA-512 digest");
-	}
-	return digest.toString("hex");
-}
-
-export function localPackageIntegrity(pkg, command = run) {
-	const packDirectory = mkdtempSync(join(tmpdir(), "scramjet-release-pack-"));
-	try {
-		const result = parseJson(
-			command("npm", ["pack", "-w", pkg.workspace, "--json", "--pack-destination", packDirectory]),
-			`${pkg.name} npm pack output`,
-		);
-		const filename = result?.[0]?.filename;
-		if (!Array.isArray(result) || result.length !== 1 || typeof filename !== "string" || filename !== basename(filename)) {
-			fail(`${pkg.name} npm pack must report exactly one archive filename`);
-		}
-		const digest = createHash("sha512").update(readFileSync(join(packDirectory, filename))).digest("base64");
-		return `sha512-${digest}`;
-	} finally {
-		rmSync(packDirectory, { recursive: true, force: true });
-	}
-}
-
-export async function fetchAttestationJson(url, fetchImpl = fetch, timeoutMs = READ_TIMEOUT_MS) {
-	const parsed = new URL(url);
-	if (parsed.protocol !== "https:" || parsed.hostname !== "registry.npmjs.org") {
-		fail("attestation URL must use the npm registry over HTTPS");
-	}
-	const response = await fetchImpl(parsed, { signal: AbortSignal.timeout(timeoutMs) });
-	if (!response.ok) {
-		const error = new Error(`attestation request failed with HTTP ${response.status} for ${parsed.href}`);
-		error.status = response.status;
-		throw error;
-	}
-	return response.json();
-}
-
-export async function createProvenanceVerifier(createVerifier) {
-	let verifier;
-	try {
-		createVerifier ??= (await import("sigstore")).createVerifier;
-		verifier = await createVerifier({
-			certificateIssuer: GITHUB_OIDC_ISSUER,
-			certificateIdentityURI: CERTIFICATE_IDENTITY,
-			ctLogThreshold: 1,
-			tlogThreshold: 1,
-			timeout: READ_TIMEOUT_MS,
-			retry: 0,
-		});
-	} catch (error) {
-		fail(`Sigstore trust initialization failed: ${error?.message ?? String(error)}`);
-	}
-	return (bundle) => verifier.verify(bundle);
-}
-
-async function getProvenanceVerifier() {
-	defaultProvenanceVerifier ??= createProvenanceVerifier();
-	return defaultProvenanceVerifier;
-}
-
-async function authenticateProvenance(bundle, verifyBundle) {
-	try {
-		await verifyBundle(bundle);
-	} catch (error) {
-		fail(`Sigstore provenance authentication failed: ${error?.message ?? String(error)}`);
-	}
-}
-
-export async function reconcilePackage(pkg, identity, dependencies = {}) {
-	const registry = dependencies.registry ?? ((args, description) => npmJson(args, description));
-	const fetchJson = dependencies.fetchJson ?? fetchAttestationJson;
-	const metadata = registry(
-		["view", `${pkg.name}@${pkg.version}`, "dist.integrity", "dist.attestations.url", "--json"],
-		`${pkg.name}@${pkg.version} provenance metadata`,
-	);
-	if (metadata === null || Array.isArray(metadata) || typeof metadata !== "object") fail("provenance metadata must be an object");
-	if (typeof metadata["dist.integrity"] !== "string" || typeof metadata["dist.attestations.url"] !== "string") {
-		fail(`${pkg.name}@${pkg.version} must have integrity and an attestation URL`);
-	}
-	const response = await fetchJson(metadata["dist.attestations.url"]);
-	if (!Array.isArray(response?.attestations)) fail("attestation response must contain an attestations array");
-	const candidates = response.attestations.filter((entry) => entry?.predicateType === SLSA_PREDICATE);
-	if (candidates.length === 0) fail("attestation response must contain an SLSA provenance statement");
-	if (candidates.length > 1) fail("attestation response must contain exactly one SLSA provenance statement");
-	await authenticateProvenance(candidates[0]?.bundle, dependencies.verifyBundle ?? (await getProvenanceVerifier()));
-	const envelope = candidates[0]?.bundle?.dsseEnvelope;
-	if (envelope?.payloadType !== "application/vnd.in-toto+json" || typeof envelope.payload !== "string") {
-		fail("SLSA provenance must contain an in-toto DSSE payload");
-	}
-	const statement = parseJson(Buffer.from(envelope.payload, "base64").toString("utf8"), "SLSA provenance payload");
-	if (statement._type !== "https://in-toto.io/Statement/v1") fail("SLSA payload has the wrong statement type");
-	if (statement.predicateType !== SLSA_PREDICATE) fail("SLSA payload has the wrong predicate type");
-	if (!Array.isArray(statement.subject) || statement.subject.length !== 1) fail("SLSA payload must have exactly one subject");
-	const subject = statement.subject[0];
-	if (subject?.name !== expectedPurl(pkg.name, pkg.version)) fail("SLSA subject does not match the package version");
-	if (subject?.digest?.sha512 !== integrityHex(metadata["dist.integrity"])) fail("SLSA subject digest does not match registry integrity");
-	const build = statement.predicate?.buildDefinition;
-	const workflow = build?.externalParameters?.workflow;
-	if (workflow?.repository !== WORKFLOW_REPOSITORY) fail("SLSA workflow repository does not match");
-	if (workflow?.path !== WORKFLOW_PATH) fail("SLSA workflow path does not match");
-	const allowPriorRelease = dependencies.allowPriorRelease ?? false;
-	const provenanceRef = workflow?.ref;
-	if (provenanceRef !== identity.ref && (!allowPriorRelease || !/^refs\/tags\/v\d+\.\d+\.\d+$/.test(provenanceRef))) {
-		fail("SLSA workflow ref does not match");
-	}
-	const expectedUri = `git+${WORKFLOW_REPOSITORY}@${provenanceRef}`;
-	const sources = build?.resolvedDependencies;
-	if (!Array.isArray(sources) || sources.length !== 1 || sources[0]?.uri !== expectedUri) {
-		fail("SLSA resolved source does not match the release tag");
-	}
-	const provenanceSha = sources[0]?.digest?.gitCommit;
-	if (
-		provenanceRef === identity.ref
-			? provenanceSha !== identity.sha
-			: !allowPriorRelease || !/^[0-9a-f]{40}$/.test(provenanceSha)
-	) {
-		fail("SLSA resolved commit does not match GITHUB_SHA");
-	}
-	if (provenanceRef !== identity.ref) {
-		const localIntegrity = await (dependencies.localIntegrity ?? localPackageIntegrity)(pkg);
-		if (localIntegrity !== metadata["dist.integrity"]) {
-			fail(`${pkg.name}@${pkg.version} prior-release artifact does not match the current workspace package`);
-		}
-	}
-	return true;
 }
 
 function tagsEqual(left, right) {
@@ -376,12 +316,7 @@ function isRegistryVisibilityRetryError(error) {
 }
 
 export function isTransientReadError(error) {
-	return (
-		isTransientTransportError(error) ||
-		/provenance metadata must be an object|must have integrity and an attestation URL|must contain an SLSA provenance statement/.test(
-			error?.message ?? "",
-		)
-	);
+	return isRegistryVisibilityRetryError(error);
 }
 
 export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_MS) {
@@ -410,46 +345,26 @@ export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_M
 			.join("\n");
 		const detail = output || error?.message;
 		throw new Error(
-			`npm publish for ${pkg.name}@${pkg.version} failed after publication began; publication state is ambiguous. Do not retry publication; run read-only reconciliation.${detail ? ` Cause: ${detail}` : ""}`,
+			`npm publish for ${pkg.name}@${pkg.version} failed after publication began; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release.${detail ? ` Cause: ${detail}` : ""}`,
 			{ cause: error },
 		);
 	}
 }
 
-export async function reconcile(inventory, identity, dependencies = {}) {
-	const verifyBundle = dependencies.verifyBundle ?? (await getProvenanceVerifier());
+export async function publish(inventory, dependencies = {}) {
 	const plan = preflight(inventory);
+	let publicationBegan = false;
 	for (const pkg of plan) {
-		if (!pkg.present) {
-			console.log(`Not yet published ${pkg.name}@${pkg.version}`);
-			continue;
-		}
-		await reconcilePackage(pkg, identity, { ...dependencies, allowPriorRelease: true, verifyBundle });
-		console.log(`Reconciled ${pkg.name}@${pkg.version}`);
-	}
-}
-
-export async function publish(inventory, identity, dependencies = {}) {
-	const verifyBundle = dependencies.verifyBundle ?? (await getProvenanceVerifier());
-	const plan = preflight(inventory);
-	for (const pkg of plan.filter(({ present }) => present)) {
-		await reconcilePackage(pkg, identity, { ...dependencies, allowPriorRelease: true, verifyBundle });
-		const currentTags = requireDistTags(
-			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after reconciliation`),
-			pkg.name,
-		);
-		if (!tagsEqual(currentTags, pkg.distTags)) fail(`${pkg.name} dist-tags changed after preflight`);
-	}
-	for (const pkg of plan) {
-		if (pkg.present) {
-			console.log(`Skipping reconciled ${pkg.name}@${pkg.version}`);
-			continue;
-		}
 		const currentVersions = requireVersions(
 			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions before publish`),
 			pkg.name,
 		);
-		if (currentVersions.includes(pkg.version)) fail(`${pkg.name}@${pkg.version} appeared after preflight; reconcile before retrying`);
+		if (currentVersions.includes(pkg.version)) {
+			const recovery = publicationBegan
+				? "; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release"
+				: "";
+			fail(`${pkg.name}@${pkg.version} appeared after preflight${recovery}`);
+		}
 		const currentTags = requireDistTags(
 			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags before publish`),
 			pkg.name,
@@ -459,6 +374,7 @@ export async function publish(inventory, identity, dependencies = {}) {
 			fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
 		}
 		publishPackage(pkg);
+		publicationBegan = true;
 		try {
 			const publishedTags = await pollRead(
 				`${pkg.name}@${pkg.version} registry visibility`,
@@ -487,36 +403,130 @@ export async function publish(inventory, identity, dependencies = {}) {
 			delete afterNonLatest.latest;
 			if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
 			await pollRead(
-				`${pkg.name}@${pkg.version} provenance`,
-				() => reconcilePackage(pkg, identity, { ...dependencies, verifyBundle }),
+				`${pkg.name}@${pkg.version} attestation metadata`,
+				async () => {
+					const output = run("npm", [
+						"view",
+						`${pkg.name}@${pkg.version}`,
+						"dist.attestations.url",
+						"--json",
+						"--registry",
+						REGISTRY_URL,
+					]);
+					if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+					const url = parseJson(output, `${pkg.name}@${pkg.version} attestation URL`);
+					if (typeof url !== "string") fail(`${pkg.name}@${pkg.version} attestation URL must be a string`);
+				},
 				{ ...dependencies.pollDependencies, retryIf: isTransientReadError },
 			);
 		} catch (error) {
 			throw new Error(
-				`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; run read-only reconciliation. Cause: ${error?.message ?? String(error)}`,
+				`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release. Cause: ${error?.message ?? String(error)}`,
 				{ cause: error },
 			);
 		}
 	}
 }
 
+function commandFailureDetail(error) {
+	for (const value of [error?.stderr, error?.stdout]) {
+		const text = Buffer.isBuffer(value) ? value.toString("utf8") : value;
+		if (typeof text === "string" && text.trim().length > 0) return text.trim();
+	}
+	return error?.message ?? String(error);
+}
+
+export async function verify(inventory, dependencies = {}) {
+	let root;
+	try {
+		for (const pkg of inventory) {
+			await pollRead(
+				`${pkg.name}@${pkg.version} verification metadata`,
+				async () => {
+					const versions = requireVersions(
+						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`),
+						pkg.name,
+					);
+					if (!versions.includes(pkg.version)) {
+						throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
+					}
+					const distTags = requireDistTags(
+						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`),
+						pkg.name,
+					);
+					if (distTags.latest !== pkg.version) {
+						throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
+					}
+					requireAttestations(readAttestations(pkg), pkg);
+				},
+				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
+			);
+		}
+
+		root = mkdtempSync(join(tmpdir(), "scramjet-release-verification-"));
+		const project = join(root, "project");
+		const cache = join(root, "cache");
+		const home = join(root, "home");
+		const xdg = join(root, "xdg");
+		for (const path of [project, cache, home, xdg]) mkdirSync(path);
+		writeFileSync(join(project, "package.json"), JSON.stringify({ private: true }));
+		const env = { ...process.env, HOME: home, XDG_DATA_HOME: xdg, npm_config_cache: cache };
+		const scramjet = inventory.at(-1);
+		run(
+			"npm",
+			[
+				"install",
+				"--save-exact",
+				`${scramjet.name}@${scramjet.version}`,
+				"--ignore-scripts=false",
+				"--registry",
+				REGISTRY_URL,
+			],
+			{ cwd: project, env, timeout: PUBLISH_TIMEOUT_MS },
+		);
+		for (const pkg of inventory) {
+			const manifestPath = join(project, "node_modules", pkg.name, "package.json");
+			const manifest = requireObject(parseJson(readFileSync(manifestPath, "utf8"), manifestPath), manifestPath);
+			if (manifest.name !== pkg.name || manifest.version !== pkg.version) {
+				fail(`${pkg.name} installed version must be exactly ${pkg.version}`);
+			}
+		}
+		run("npm", ["audit", "signatures", "--registry", REGISTRY_URL], {
+			cwd: project,
+			env,
+			timeout: PUBLISH_TIMEOUT_MS,
+		});
+		try {
+			run(join(project, "node_modules", ".bin", "scramjet"), ["--help"], { cwd: project, env });
+		} catch (error) {
+			throw new Error(`installed scramjet --help failed: ${commandFailureDetail(error)}`, { cause: error });
+		}
+	} catch (error) {
+		throw new Error(
+			`Published release verification failed; publication state is ambiguous. Inspect registry state read-only and prepare another five-fresh forward release. Cause: ${commandFailureDetail(error)}`,
+			{ cause: error },
+		);
+	} finally {
+		if (root !== undefined) rmSync(root, { recursive: true, force: true });
+	}
+}
+
 async function main() {
-	const mode = process.argv[2];
-	if (!["validate", "preflight", "publish", "reconcile"].includes(mode)) {
-		fail("usage: release.mjs <validate|preflight|publish|reconcile>");
+	const [mode, ...args] = process.argv.slice(2);
+	if (!["validate", "preflight", "publish", "verify"].includes(mode)) {
+		fail("usage: release.mjs <validate|publish|verify> | release.mjs preflight <confirmed-sha>");
 	}
-	const inventory = loadInventory();
 	if (mode === "preflight") {
-		preflight(inventory);
+		if (args.length !== 1) fail("usage: release.mjs preflight <confirmed-sha>");
+		preflight(loadPreflightInventory(args[0]));
 		return;
 	}
-	const identity = validateIdentity(inventory);
+	if (args.length !== 0) fail(`usage: release.mjs ${mode}`);
+	const inventory = loadInventory();
+	validateIdentity(inventory);
 	if (mode === "validate") return;
-	if (mode === "publish") {
-		await publish(inventory, identity);
-		return;
-	}
-	await reconcile(inventory, identity);
+	if (mode === "publish") await publish(inventory);
+	if (mode === "verify") await verify(inventory);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

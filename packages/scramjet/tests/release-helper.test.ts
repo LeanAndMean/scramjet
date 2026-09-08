@@ -1,19 +1,16 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	compareVersions,
-	createProvenanceVerifier,
-	fetchAttestationJson,
 	isTransientReadError,
 	loadInventory,
+	loadPreflightInventory,
 	pollRead,
 	publishPackage,
-	reconcilePackage,
 	run,
 	validateIdentity,
 } from "../../../.github/scripts/release.mjs";
@@ -21,7 +18,6 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../../..");
 const HELPER = join(REPO_ROOT, ".github", "scripts", "release.mjs");
-const RELEASE_GUIDE = readFileSync(join(REPO_ROOT, ".github", "RELEASING.md"), "utf8");
 const SHA = execFileSync("git", ["rev-parse", "HEAD"], { cwd: REPO_ROOT, encoding: "utf8" }).trim();
 const INVENTORY = loadInventory(REPO_ROOT);
 const SCRAMJET_VERSION = INVENTORY.find(({ name }) => name === "@leanandmean/scramjet")!.version;
@@ -30,7 +26,23 @@ const RELEASE_ENV = {
 	GITHUB_REF: `refs/tags/v${SCRAMJET_VERSION}`,
 	GITHUB_SHA: SHA,
 	GITHUB_WORKFLOW_REF: `LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/v${SCRAMJET_VERSION}`,
+	GITHUB_RUN_ATTEMPT: "1",
 };
+const RELEASE_METADATA_PATHS = [...INVENTORY.map(({ workspace }) => `${workspace}/package.json`), "package-lock.json"];
+
+function copyReleaseMetadata(root: string) {
+	for (const path of RELEASE_METADATA_PATHS) {
+		mkdirSync(dirname(join(root, path)), { recursive: true });
+		writeFileSync(join(root, path), readFileSync(join(REPO_ROOT, path)));
+	}
+}
+
+function mutateJson(root: string, path: string, mutate: (value: any) => void) {
+	const file = join(root, path);
+	const value = JSON.parse(readFileSync(file, "utf8"));
+	mutate(value);
+	writeFileSync(file, JSON.stringify(value));
+}
 
 interface FakeState {
 	packages: Record<string, { versions: string[]; distTags: Record<string, string> }>;
@@ -48,15 +60,19 @@ interface FakeState {
 	publishFailure?: string;
 	race?: string;
 	unexpectedTagChange?: string;
-	badAttestation?: string;
-	priorAttestation?: string;
-	localPackMismatch?: string;
 	versionQueries?: Record<string, number>;
 	publicationCounts?: Record<string, number>;
 	prePublishLatest?: Record<string, string>;
 	visibilityDelays?: Record<string, number>;
 	tagVisibilityDelays?: Record<string, number>;
 	attestationDelays?: Record<string, number>;
+	missingAttestation?: string;
+	wrongAttestationPredicate?: string;
+	installFailure?: boolean;
+	auditFailure?: boolean;
+	cliFailure?: boolean;
+	installedVersionOverrides?: Record<string, string>;
+	verificationPaths?: { project: string; cache: string; home: string; xdg: string };
 }
 
 const FAKE_NPM = `#!/usr/bin/env node
@@ -87,15 +103,23 @@ if (args[0] === "view") {
   }
   const pkg = state.packages[name];
   if (!pkg) stop("unknown package");
-  if (field === "dist.integrity") {
+  if (field === "dist.attestations.url" || field === "dist.attestations") {
     const version = spec.slice(versionSeparator + 1);
     const target = Object.values(state.targets).find((entry) => entry.name === name);
     if (versionSeparator <= 0 || target?.version !== version || !pkg.versions.includes(version)) stop("unknown package version");
-    const digest = createHash("sha512").update(name + "@" + version).digest("base64");
-    save(); process.stdout.write(JSON.stringify({
-      "dist.integrity": "sha512-" + digest,
-      "dist.attestations.url": "https://registry.npmjs.org/fake/" + encodeURIComponent(name) + "/" + version
-    })); process.exit(0);
+    if ((state.attestationDelays?.[name] ?? 0) > 0) {
+      state.attestationDelays[name] -= 1;
+      save(); process.exit(0);
+    }
+    const url = "https://registry.npmjs.org/fake/" + encodeURIComponent(name) + "/" + version;
+    if (field === "dist.attestations.url") {
+      save(); process.stdout.write(JSON.stringify(url)); process.exit(0);
+    }
+    const attestations = state.missingAttestation === name ? {} : {
+      url,
+      provenance: { predicateType: state.wrongAttestationPredicate === name ? "https://example.test/predicate" : "https://slsa.dev/provenance/v1" },
+    };
+    save(); process.stdout.write(JSON.stringify(attestations)); process.exit(0);
   }
   if (field === "versions") {
     state.versionQueries ??= {};
@@ -117,16 +141,6 @@ if (args[0] === "view") {
   }
   stop("unexpected view");
 }
-if (args[0] === "pack") {
-  const workspace = args[args.indexOf("-w") + 1];
-  const target = state.targets[workspace];
-  if (!target) stop("unknown workspace");
-  const packDirectory = args[args.indexOf("--pack-destination") + 1];
-  const filename = "package.tgz";
-  const content = state.localPackMismatch === target.name ? "different package bytes" : target.name + "@" + target.version;
-  fs.writeFileSync(require("node:path").join(packDirectory, filename), content);
-  save(); process.stdout.write(JSON.stringify([{ filename }])); process.exit(0);
-}
 if (args[0] === "publish") {
   const workspace = args[args.indexOf("-w") + 1];
   const target = state.targets[workspace];
@@ -142,56 +156,41 @@ if (args[0] === "publish") {
   if (state.unexpectedTagChange === target.name) pkg.distTags.scramjet = target.version;
   save(); process.stdout.write("published"); process.exit(0);
 }
-stop("unexpected command");
-`;
-
-const FAKE_FETCH = `
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-export async function fetchJson(input) {
-  const url = new URL(input);
-  const parts = url.pathname.slice("/fake/".length).split("/");
-  const name = decodeURIComponent(parts[0]);
-  const version = parts[1];
-  const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
-  if ((state.attestationDelays?.[name] ?? 0) > 0) {
-    state.attestationDelays[name] -= 1;
-    writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
-    return { attestations: [] };
-  }
-  const digest = createHash("sha512").update(name + "@" + version).digest("hex");
-  const ref = state.priorAttestation === name ? "refs/tags/v0.80.0" : process.env.GITHUB_REF;
-  const sha = state.priorAttestation === name ? "b".repeat(40) : process.env.GITHUB_SHA;
-  const statement = {
-    _type: "https://in-toto.io/Statement/v1",
-    subject: [{ name: "pkg:npm/" + name.replace("@", "%40") + "@" + version, digest: { sha512: state.badAttestation === name ? "00" : digest } }],
-    predicateType: "https://slsa.dev/provenance/v1",
-    predicate: { buildDefinition: {
-      externalParameters: { workflow: {
-        ref,
-        repository: "https://github.com/LeanAndMean/scramjet",
-        path: ".github/workflows/release.yml"
-      } },
-      resolvedDependencies: [{
-        uri: "git+https://github.com/LeanAndMean/scramjet@" + ref,
-        digest: { gitCommit: sha }
-      }]
-    } }
+if (args[0] === "install") {
+  state.verificationPaths = {
+    project: process.cwd(),
+    cache: process.env.npm_config_cache,
+    home: process.env.HOME,
+    xdg: process.env.XDG_DATA_HOME,
   };
-  return { attestations: [{
-    predicateType: "https://slsa.dev/provenance/v1",
-    bundle: {
-      verificationMaterial: { testAuthenticated: true },
-      dsseEnvelope: {
-        payloadType: "application/vnd.in-toto+json",
-        payload: Buffer.from(JSON.stringify(statement)).toString("base64")
-      }
-    }
-  }] };
+  if (state.installFailure) stop("install failed");
+  for (const target of Object.values(state.targets)) {
+    const packageDir = require("node:path").join(process.cwd(), "node_modules", target.name);
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(require("node:path").join(packageDir, "package.json"), JSON.stringify({
+      name: target.name,
+      version: state.installedVersionOverrides?.[target.name] ?? target.version,
+    }));
+  }
+  const binDir = require("node:path").join(process.cwd(), "node_modules", ".bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(require("node:path").join(binDir, "scramjet"), [
+    "#!/usr/bin/env node",
+    'const fs = require("node:fs");',
+    'const state = JSON.parse(fs.readFileSync(process.env.FAKE_NPM_STATE, "utf8"));',
+    'state.calls.push(["installed-scramjet", ...process.argv.slice(2)]);',
+    'fs.writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));',
+    'if (state.cliFailure) process.exit(1);',
+    'process.stdout.write("scramjet help");',
+  ].join("\\n"));
+  fs.chmodSync(require("node:path").join(binDir, "scramjet"), 0o755);
+  save(); process.exit(0);
 }
-export async function verifyBundle(bundle) {
-  if (bundle?.verificationMaterial?.testAuthenticated !== true) throw new Error("test bundle was not authenticated");
+if (args[0] === "audit" && args[1] === "signatures") {
+  if (state.auditFailure) stop("audit failed");
+  save(); process.exit(0);
 }
+stop("unexpected command");
 `;
 
 function previousVersion(version: string): string {
@@ -216,9 +215,11 @@ function initialState(): FakeState {
 	};
 }
 
-function runHelper(mode: string, statePath: string) {
-	const script = ["publish", "reconcile"].includes(mode) ? join(dirname(statePath), "runner.mjs") : HELPER;
-	return spawnSync(process.execPath, [script, mode], {
+function runHelper(mode: string, statePath: string, args = mode === "preflight" ? [SHA] : []) {
+	const script = ["publish", "registry-preflight", "verify"].includes(mode)
+		? join(dirname(statePath), "runner.mjs")
+		: HELPER;
+	return spawnSync(process.execPath, [script, mode, ...args], {
 		cwd: REPO_ROOT,
 		encoding: "utf8",
 		env: {
@@ -325,6 +326,7 @@ describe("release helper package and event validation", () => {
 	])("rejects incorrect %s", (_label, targetWorkspace, mutate) => {
 		const root = mkdtempSync(join(tmpdir(), "scramjet-release-manifests-"));
 		try {
+			writeFileSync(join(root, "package-lock.json"), readFileSync(join(REPO_ROOT, "package-lock.json")));
 			for (const { workspace } of INVENTORY) {
 				mkdirSync(join(root, workspace), { recursive: true });
 				const manifest = JSON.parse(readFileSync(join(REPO_ROOT, workspace, "package.json"), "utf8"));
@@ -337,7 +339,117 @@ describe("release helper package and event validation", () => {
 		}
 	});
 
-	it("accepts only an aligned push event, tag, workflow ref, SHA, and HEAD", () => {
+	it.each([
+		[
+			"lockfile version",
+			(lock: any) => {
+				lock.lockfileVersion = 2;
+			},
+		],
+		[
+			"missing workspace",
+			(lock: any) => {
+				delete lock.packages["packages/ai"];
+			},
+		],
+		[
+			"extra workspace",
+			(lock: any) => {
+				lock.packages["packages/extra"] = { name: "extra", version: "1.0.0" };
+			},
+		],
+		[
+			"workspace name",
+			(lock: any) => {
+				lock.packages["packages/ai"].name = "@leanandmean/other";
+			},
+		],
+		[
+			"workspace version",
+			(lock: any) => {
+				lock.packages["packages/ai"].version = "0.0.0";
+			},
+		],
+		[
+			"missing lock dependency",
+			(lock: any) => {
+				delete lock.packages["packages/agent"].dependencies["@leanandmean/ai"];
+			},
+		],
+		[
+			"ranged lock dependency",
+			(lock: any) => {
+				lock.packages["packages/agent"].dependencies["@leanandmean/ai"] = "^0.0.0";
+			},
+		],
+		[
+			"extra lock dependency",
+			(lock: any) => {
+				lock.packages["packages/ai"].dependencies["@leanandmean/tui"] = "0.0.0";
+			},
+		],
+		[
+			"missing workspace link",
+			(lock: any) => {
+				delete lock.packages["node_modules/@leanandmean/ai"];
+			},
+		],
+		[
+			"extra workspace link",
+			(lock: any) => {
+				lock.packages["node_modules/@leanandmean/extra"] = { resolved: "packages/extra", link: true };
+			},
+		],
+		[
+			"redirected workspace link",
+			(lock: any) => {
+				lock.packages["node_modules/@leanandmean/ai"].resolved = "packages/tui";
+			},
+		],
+		[
+			"non-link workspace",
+			(lock: any) => {
+				lock.packages["node_modules/@leanandmean/ai"].link = false;
+			},
+		],
+	])("rejects incorrect %s", (_label, mutate) => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-lock-"));
+		try {
+			copyReleaseMetadata(root);
+			mutateJson(root, "package-lock.json", mutate);
+			expect(() => loadInventory(root)).toThrow();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it.each([
+		[
+			"an extra manifest dependency",
+			"packages/ai/package.json",
+			(manifest: any) => {
+				manifest.dependencies["@leanandmean/tui"] = "0.0.0";
+			},
+		],
+		[
+			"a misplaced manifest dependency",
+			"packages/agent/package.json",
+			(manifest: any) => {
+				manifest.devDependencies = { "@leanandmean/ai": manifest.dependencies["@leanandmean/ai"] };
+			},
+		],
+	])("rejects %s", (_label, path, mutate) => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-closure-"));
+		try {
+			copyReleaseMetadata(root);
+			mutateJson(root, path, mutate);
+			expect(() => loadInventory(root)).toThrow();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts only an aligned push event, tag, workflow ref, SHA, attempt, and HEAD", () => {
 		expect(validateIdentity(INVENTORY, RELEASE_ENV, () => SHA)).toEqual({ ref: RELEASE_ENV.GITHUB_REF, sha: SHA });
 	});
 
@@ -346,13 +458,7 @@ describe("release helper package and event validation", () => {
 		try {
 			mkdirSync(join(root, ".github", "scripts"), { recursive: true });
 			writeFileSync(join(root, ".github", "scripts", "release.mjs"), readFileSync(HELPER));
-			for (const { workspace } of INVENTORY) {
-				mkdirSync(join(root, workspace), { recursive: true });
-				writeFileSync(
-					join(root, workspace, "package.json"),
-					readFileSync(join(REPO_ROOT, workspace, "package.json")),
-				);
-			}
+			copyReleaseMetadata(root);
 			const bin = join(root, "bin");
 			mkdirSync(bin);
 			writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' '${SHA}'\n`);
@@ -364,58 +470,6 @@ describe("release helper package and event validation", () => {
 			});
 			expect(result.stderr).toBe("");
 			expect(result.status).toBe(0);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	it("executes the documented local reconciliation procedure read-only", () => {
-		const block = RELEASE_GUIDE.match(/```bash\n(set -euo pipefail[\s\S]*?)\n```/)?.[1];
-		expect(block).toBeDefined();
-		expect(block).not.toMatch(/release\.mjs publish|gh release create|git (?:push|tag)/);
-		const root = mkdtempSync(join(tmpdir(), "scramjet-release-recovery-"));
-		try {
-			const remote = join(root, "remote.git");
-			const source = join(root, "source");
-			const checkout = join(root, "checkout");
-			mkdirSync(source);
-			const git = (cwd: string, args: string[]) =>
-				spawnSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } });
-			expect(git(root, ["init", "--bare", "--quiet", remote]).status).toBe(0);
-			expect(git(source, ["init", "--quiet"]).status).toBe(0);
-			expect(git(source, ["config", "user.name", "Release Test"]).status).toBe(0);
-			expect(git(source, ["config", "user.email", "release-test@example.test"]).status).toBe(0);
-			mkdirSync(join(source, "packages", "scramjet"), { recursive: true });
-			writeFileSync(join(source, "packages", "scramjet", "package.json"), '{"version":"1.2.3"}\n');
-			expect(git(source, ["add", "."]).status).toBe(0);
-			expect(git(source, ["commit", "--quiet", "-m", "release fixture"]).status).toBe(0);
-			expect(git(source, ["tag", "v1.2.3"]).status).toBe(0);
-			expect(git(source, ["remote", "add", "origin", remote]).status).toBe(0);
-			expect(git(source, ["push", "--quiet", "origin", "HEAD", "refs/tags/v1.2.3"]).status).toBe(0);
-			expect(git(root, ["clone", "--quiet", remote, checkout]).status).toBe(0);
-			const tagSha = git(source, ["rev-parse", "v1.2.3"]).stdout.trim();
-			const bin = join(root, "bin");
-			const record = join(root, "record");
-			mkdirSync(bin);
-			writeFileSync(
-				join(bin, "node"),
-				`#!/bin/sh
-if test "$1" = "-p"; then printf '1.2.3\\n'; exit 0; fi
-printf 'node|%s|%s|%s|%s|%s\\n' "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA" "$GITHUB_WORKFLOW_REF" "$*" >> "$RECOVERY_RECORD"
-`,
-			);
-			writeFileSync(join(bin, "npm"), `#!/bin/sh\nprintf 'npm|%s\\n' "$*" >> "$RECOVERY_RECORD"\n`);
-			chmodSync(join(bin, "node"), 0o755);
-			chmodSync(join(bin, "npm"), 0o755);
-			const result = spawnSync("bash", ["-c", block!.replace("TAG=v0.0.0", "TAG=v1.2.3")], {
-				cwd: checkout,
-				encoding: "utf8",
-				env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, RECOVERY_RECORD: record },
-			});
-			expect(result.status).toBe(0);
-			expect(readFileSync(record, "utf8")).toBe(
-				`npm|ci --ignore-scripts\nnpm|run build\nnode|push|refs/tags/v1.2.3|${tagSha}|LeanAndMean/scramjet/.github/workflows/release.yml@refs/tags/v1.2.3|.github/scripts/release.mjs reconcile\n`,
-			);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -434,6 +488,8 @@ printf 'node|%s|%s|%s|%s|%s\\n' "$GITHUB_EVENT_NAME" "$GITHUB_REF" "$GITHUB_SHA"
 			{ GITHUB_WORKFLOW_REF: "LeanAndMean/scramjet/.github/workflows/release.yml@refs/heads/main" },
 		],
 		["invalid SHA", { GITHUB_SHA: "not-a-sha" }],
+		["missing run attempt", { GITHUB_RUN_ATTEMPT: undefined }],
+		["a repeated run attempt", { GITHUB_RUN_ATTEMPT: "2" }],
 	])("rejects %s", (_label, override) => {
 		expect(() => validateIdentity(INVENTORY, { ...RELEASE_ENV, ...override }, () => SHA)).toThrow();
 	});
@@ -468,20 +524,15 @@ describe("release helper registry preflight and publication", () => {
 		workDir = mkdtempSync(join(tmpdir(), "scramjet-release-"));
 		writeFileSync(join(workDir, "npm"), FAKE_NPM);
 		chmodSync(join(workDir, "npm"), 0o755);
-		writeFileSync(join(workDir, "fake-fetch.mjs"), FAKE_FETCH);
 		writeFileSync(
 			join(workDir, "runner.mjs"),
-			`import { loadInventory, publish, reconcile, validateIdentity } from ${JSON.stringify(pathToFileURL(HELPER).href)};
-import { fetchJson, verifyBundle } from "./fake-fetch.mjs";
+			`import { loadInventory, preflight, publish, validateIdentity, verify } from ${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))};
 try {
   const inventory = loadInventory();
-  const identity = validateIdentity(inventory);
-  const operation = process.argv[2] === "publish" ? publish : reconcile;
-  await operation(inventory, identity, {
-    fetchJson,
-    verifyBundle,
-    pollDependencies: { delayMs: 0, sleep: async () => {} }
-  });
+  validateIdentity(inventory);
+  if (process.argv[2] === "publish") await publish(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
+  else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
+  else preflight(inventory);
 } catch (error) {
   console.error("release: " + error.message);
   process.exitCode = 1;
@@ -494,18 +545,76 @@ try {
 
 	afterEach(() => rmSync(workDir, { recursive: true, force: true }));
 
-	it("preflights all five packages without publishing", () => {
-		const result = runHelper("preflight", statePath);
+	it("registry-preflights all five packages without publishing", () => {
+		const result = runHelper("registry-preflight", statePath);
 		expect(result.status).toBe(0);
 		expect(result.stdout.match(/: missing;/g)).toHaveLength(5);
-		expect(publishCalls(readState(statePath))).toHaveLength(0);
+		const state = readState(statePath);
+		expect(state.calls).toHaveLength(10);
+		expect(publishCalls(state)).toHaveLength(0);
 	});
 
-	it("runs local event-shaped reconciliation without publishing missing packages", () => {
+	it.each([
+		["a missing SHA", []],
+		["an extra argument", [SHA, "extra"]],
+		["a noncanonical SHA", [SHA.toUpperCase()]],
+		["a nonexistent SHA", ["0".repeat(40)]],
+	])("rejects preflight with %s before registry access", (_label, args) => {
+		const result = runHelper("preflight", statePath, args);
+		expect(result.status).not.toBe(0);
+		expect(readState(statePath).calls).toHaveLength(0);
+	});
+
+	it("rejects an existing commit other than HEAD before registry access", () => {
+		const otherSha = "1".repeat(40);
+		writeFileSync(
+			join(workDir, "git"),
+			`#!/bin/sh
+if [ "$1 $2" = "cat-file -e" ]; then exit 0; fi
+if [ "$1 $2" = "rev-parse HEAD" ]; then printf '%s\\n' '${SHA}'; exit 0; fi
+exit 1
+`,
+		);
+		chmodSync(join(workDir, "git"), 0o755);
+		const result = runHelper("preflight", statePath, [otherSha]);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("confirmed SHA must equal checked-out HEAD");
+		expect(readState(statePath).calls).toHaveLength(0);
+	});
+
+	it("does not expose retained-package reconciliation", () => {
 		const result = runHelper("reconcile", statePath);
-		expect(result.status).toBe(0);
-		expect(result.stdout.match(/^Not yet published /gm)).toHaveLength(5);
-		expect(publishCalls(readState(statePath))).toHaveLength(0);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("usage: release.mjs <validate|publish|verify>");
+		expect(readState(statePath).calls).toHaveLength(0);
+	});
+
+	it.each([
+		["unstaged manifest changes", "packages/agent/package.json", false],
+		["staged manifest changes", "packages/agent/package.json", true],
+		["unstaged lockfile changes", "package-lock.json", false],
+		["staged lockfile changes", "package-lock.json", true],
+	])("rejects %s before registry access", (_label, path, staged) => {
+		const root = mkdtempSync(join(tmpdir(), "scramjet-release-preflight-"));
+		try {
+			copyReleaseMetadata(root);
+			const git = (args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+			git(["init", "--quiet"]);
+			git(["config", "user.name", "Release Test"]);
+			git(["config", "user.email", "release-test@example.test"]);
+			git(["add", "."]);
+			git(["commit", "--quiet", "-m", "release fixture"]);
+			const head = git(["rev-parse", "HEAD"]);
+			mutateJson(root, path, (value) => {
+				value.releaseFixtureDirty = true;
+			});
+			if (staged) git(["add", path]);
+			expect(() => loadPreflightInventory(head, git)).toThrow(
+				"release manifests and package-lock.json must match checked-out HEAD",
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("publishes all missing packages in dependency order with explicit latest and provenance", () => {
@@ -535,65 +644,19 @@ try {
 		}
 	});
 
-	it("reconciles and skips an already-present version", () => {
+	it.each(["registry-preflight", "publish"])("rejects a present target before publication in %s", (mode) => {
 		const state = initialState();
 		const present = INVENTORY[0];
 		state.packages[present.name].versions.push(present.version);
 		state.packages[present.name].distTags.latest = present.version;
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
-		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`Skipping reconciled ${present.name}@${present.version}`);
-		expect(publishCalls(readState(statePath)).map((args) => args[args.indexOf("-w") + 1])).toEqual(
-			INVENTORY.slice(1).map(({ workspace }) => workspace),
-		);
-	});
-
-	it("accepts an unchanged package from a prior trusted Scramjet release", () => {
-		const state = initialState();
-		const present = INVENTORY[0];
-		state.packages[present.name].versions.push(present.version);
-		state.packages[present.name].distTags.latest = present.version;
-		state.priorAttestation = present.name;
-		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
-		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`Skipping reconciled ${present.name}@${present.version}`);
-		expect(publishCalls(readState(statePath)).map((args) => args[args.indexOf("-w") + 1])).toEqual(
-			INVENTORY.slice(1).map(({ workspace }) => workspace),
-		);
-	});
-
-	it("rejects prior provenance when current packed bytes differ from the registry artifact", () => {
-		const state = initialState();
-		const present = INVENTORY[0];
-		state.packages[present.name].versions.push(present.version);
-		state.packages[present.name].distTags.latest = present.version;
-		state.priorAttestation = present.name;
-		state.localPackMismatch = present.name;
-		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
+		const result = runHelper(mode, statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("prior-release artifact does not match");
+		expect(result.stderr).toContain(`${present.name}@${present.version} already exists`);
 		expect(publishCalls(readState(statePath))).toHaveLength(0);
 	});
 
-	it("reconciles a mixed partial release without requiring missing packages", () => {
-		const state = initialState();
-		for (const present of INVENTORY.slice(0, 2)) {
-			state.packages[present.name].versions.push(present.version);
-			state.packages[present.name].distTags.latest = present.version;
-		}
-		state.priorAttestation = INVENTORY[1].name;
-		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("reconcile", statePath);
-		expect(result.status).toBe(0);
-		expect(result.stdout.match(/^Reconciled /gm)).toHaveLength(2);
-		expect(result.stdout.match(/^Not yet published /gm)).toHaveLength(3);
-		expect(publishCalls(readState(statePath))).toHaveLength(0);
-	});
-
-	it("rejects a present target that is not current latest", () => {
+	it("rejects a present target even when a newer latest exists", () => {
 		const state = initialState();
 		const present = INVENTORY[0];
 		state.packages[present.name].versions.push(present.version, "999.0.0");
@@ -601,33 +664,8 @@ try {
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("is present but is not current latest");
+		expect(result.stderr).toContain(`${present.name}@${present.version} already exists`);
 		expect(publishCalls(readState(statePath))).toHaveLength(0);
-	});
-
-	it("reconciles every present version before the first publication", () => {
-		const state = initialState();
-		const present = INVENTORY.at(-1)!;
-		state.packages[present.name].versions.push(present.version);
-		state.packages[present.name].distTags.latest = present.version;
-		state.badAttestation = present.name;
-		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
-		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("digest does not match");
-		expect(publishCalls(readState(statePath))).toHaveLength(0);
-	});
-
-	it("reconciles a new publication before continuing", () => {
-		const state = initialState();
-		state.badAttestation = INVENTORY[0].name;
-		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
-		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("digest does not match");
-		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
-		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
 	it.each([
@@ -664,6 +702,21 @@ try {
 		expect(publishCalls(readState(statePath))).toHaveLength(0);
 	});
 
+	it("reports forward-only recovery when a later target appears after publication began", () => {
+		const state = initialState();
+		state.race = INVENTORY[1].name;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(`${INVENTORY[1].name}@${INVENTORY[1].version} appeared after preflight`);
+		expect(result.stderr).toContain("publication state is ambiguous");
+		expect(result.stderr).toContain("Do not retry publication");
+		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(publishCalls(readState(statePath)).map((args) => args[args.indexOf("-w") + 1])).toEqual([
+			INVENTORY[0].workspace,
+		]);
+	});
+
 	it("treats every publish failure as ambiguous without retrying", () => {
 		const state = initialState();
 		state.publishFailure = INVENTORY[1].name;
@@ -671,7 +724,8 @@ try {
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
+		expect(result.stderr).toContain("Do not retry publication");
+		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(result.stderr).toContain("publish failed");
 		const calls = publishCalls(readState(statePath));
 		expect(calls.map((args) => args[args.indexOf("-w") + 1])).toEqual(
@@ -687,11 +741,11 @@ try {
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("non-latest dist-tags changed");
 		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
+		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
-	it("polls multi-minute version and attestation visibility through publication", () => {
+	it("polls multi-minute version and attestation-metadata visibility through publication", () => {
 		const state = initialState();
 		const first = INVENTORY[0].name;
 		state.visibilityDelays = { [first]: 18 };
@@ -700,7 +754,7 @@ try {
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} provenance not ready`);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} attestation metadata not ready`);
 		const finalState = readState(statePath);
 		expect(finalState.publicationCounts?.[first]).toBe(1);
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
@@ -735,6 +789,22 @@ try {
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === field,
 		);
 		expect(calls).toHaveLength(3);
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	it("fails malformed attestation metadata without retrying", () => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = { name: first.name, field: "dist.attestations.url", output: "{}" };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("attestation URL must be a string");
+		const calls = readState(statePath).calls.filter(
+			(args) =>
+				args[0] === "view" && args[1] === `${first.name}@${first.version}` && args[2] === "dist.attestations.url",
+		);
+		expect(calls).toHaveLength(1);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -821,7 +891,7 @@ try {
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
 		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
+		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -833,319 +903,97 @@ try {
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
 		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
+		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	}, 10_000);
 
-	it("stops after provenance polling is exhausted without republishing or continuing", () => {
+	it("stops after attestation-metadata polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
 		state.attestationDelays = { [INVENTORY[0].name]: 31 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("provenance did not converge after 31 attempts");
+		expect(result.stderr).toContain("attestation metadata did not converge after 31 attempts");
 		expect(result.stderr).toContain("publication state is ambiguous");
-		expect(result.stderr).toContain("Do not retry publication; run read-only reconciliation");
+		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
-});
 
-function provenanceFixture() {
-	const pkg = { name: "@leanandmean/scramjet", version: "1.2.3" };
-	const sha = "a".repeat(40);
-	const ref = "refs/tags/v1.2.3";
-	const tarball = Buffer.from("fixture tarball");
-	const digest = createHash("sha512").update(tarball).digest();
-	const statement = {
-		_type: "https://in-toto.io/Statement/v1",
-		subject: [{ name: "pkg:npm/%40leanandmean/scramjet@1.2.3", digest: { sha512: digest.toString("hex") } }],
-		predicateType: "https://slsa.dev/provenance/v1",
-		predicate: {
-			buildDefinition: {
-				externalParameters: {
-					workflow: {
-						ref,
-						repository: "https://github.com/LeanAndMean/scramjet",
-						path: ".github/workflows/release.yml",
-					},
-				},
-				resolvedDependencies: [
-					{
-						uri: `git+https://github.com/LeanAndMean/scramjet@${ref}`,
-						digest: { gitCommit: sha },
-					},
-				],
-			},
+	function publishedState(): FakeState {
+		const state = initialState();
+		for (const { name, version } of INVENTORY) {
+			state.packages[name].versions.push(version);
+			state.packages[name].distTags.latest = version;
+		}
+		return state;
+	}
+
+	function expectVerificationPathsRemoved(state: FakeState) {
+		expect(state.verificationPaths).toBeDefined();
+		for (const path of Object.values(state.verificationPaths!)) expect(existsSync(path)).toBe(false);
+	}
+
+	it.each([
+		["attestation URL", { missingAttestation: INVENTORY[2].name }, "has no attestation URL"],
+		[
+			"SLSA provenance predicate",
+			{ wrongAttestationPredicate: INVENTORY[2].name },
+			"has no SLSA v1 provenance predicate",
+		],
+	] as const)(
+		"requires an exact %s even when native signature audit would succeed",
+		(_label, override, message) => {
+			writeFileSync(statePath, JSON.stringify(Object.assign(publishedState(), override)));
+			const result = runHelper("verify", statePath);
+			expect(result.status).not.toBe(0);
+			expect(result.stderr).toContain(`${INVENTORY[2].name}@${INVENTORY[2].version} ${message}`);
+			expect(result.stderr).toContain("publication state is ambiguous");
+			expect(result.stderr).toContain("another five-fresh forward release");
+			expect(readState(statePath).calls.some((args) => args[0] === "audit")).toBe(false);
 		},
-	};
-	const response = {
-		attestations: [
-			{
-				predicateType: "https://slsa.dev/provenance/v1",
-				bundle: {
-					dsseEnvelope: {
-						payloadType: "application/vnd.in-toto+json",
-						payload: Buffer.from(JSON.stringify(statement)).toString("base64"),
-					},
-				},
-			},
-		],
-	};
-	return {
-		pkg,
-		identity: { ref, sha },
-		metadata: {
-			"dist.integrity": `sha512-${digest.toString("base64")}`,
-			"dist.attestations.url": "https://registry.npmjs.org/fixture",
-		},
-		statement,
-		response,
-	};
-}
+		10_000,
+	);
 
-function updatePayload(fixture: ReturnType<typeof provenanceFixture>) {
-	fixture.response.attestations[0].bundle.dsseEnvelope.payload = Buffer.from(
-		JSON.stringify(fixture.statement),
-	).toString("base64");
-}
-
-function reconcileFixture(fixture: ReturnType<typeof provenanceFixture>, dependencies = {}) {
-	return reconcilePackage(fixture.pkg, fixture.identity, {
-		registry: () => fixture.metadata,
-		fetchJson: async () => fixture.response,
-		verifyBundle: async () => {},
-		...dependencies,
-	});
-}
-
-describe("release helper provenance reconciliation", () => {
-	it("configures Sigstore for the exact GitHub Actions trust boundary", async () => {
-		const verify = vi.fn();
-		const createVerifier = vi.fn(async () => ({ verify }));
-		const authenticate = await createProvenanceVerifier(createVerifier);
-		const bundle = { mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json" };
-		await authenticate(bundle);
-		expect(createVerifier).toHaveBeenCalledWith({
-			certificateIssuer: "https://token.actions.githubusercontent.com",
-			certificateIdentityURI:
-				"^https://github\\.com/LeanAndMean/scramjet/\\.github/workflows/release\\.yml@refs/tags/v\\d+\\.\\d+\\.\\d+$",
-			ctLogThreshold: 1,
-			tlogThreshold: 1,
-			timeout: 60_000,
-			retry: 0,
-		});
-		expect(verify).toHaveBeenCalledWith(bundle);
+	it("verifies metadata, a normal exact install, native signatures, installed closure, and the CLI", () => {
+		writeFileSync(statePath, JSON.stringify(publishedState()));
+		const result = runHelper("verify", statePath);
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		const state = readState(statePath);
+		const install = state.calls.find(([command]) => command === "install")!;
+		expect(install).toContain(`@leanandmean/scramjet@${SCRAMJET_VERSION}`);
+		expect(install).toContain("--ignore-scripts=false");
+		expect(state.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(state.calls).toContainEqual(["installed-scramjet", "--help"]);
+		expect(publishCalls(state)).toHaveLength(0);
+		expectVerificationPathsRemoved(state);
 	});
 
 	it.each([
-		["an unsigned bundle", "no signatures"],
-		["an invalid signature", "signature verification failed"],
-		["the wrong certificate identity", "certificate identity mismatch"],
-		["missing transparency evidence", "transparency log threshold not met"],
-	])("rejects %s before parsing claims", async (_label, message) => {
-		const fixture = provenanceFixture();
-		fixture.response.attestations[0].bundle.dsseEnvelope.payload = "not-json";
-		const authenticate = await createProvenanceVerifier(async () => ({
-			verify: async () => {
-				throw new Error(message);
-			},
-		}));
-		await expect(reconcileFixture(fixture, { verifyBundle: authenticate })).rejects.toThrow(
-			`Sigstore provenance authentication failed: ${message}`,
-		);
-	});
-
-	it("accepts authenticated exact package, digest, workflow, tag, source, and commit evidence", async () => {
-		const fixture = provenanceFixture();
-		await expect(reconcileFixture(fixture)).resolves.toBe(true);
-	});
-
-	it.each([
+		["install", { installFailure: true }, "install failed", false],
 		[
-			"missing statement type",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				delete (fixture.statement as { _type?: string })._type;
-			},
+			"installed closure",
+			{ installedVersionOverrides: { [INVENTORY[0].name]: "0.0.0" } },
+			"installed version",
+			false,
 		],
-		[
-			"wrong statement type",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement._type = "https://in-toto.io/Statement/v0.1";
-			},
-		],
-		[
-			"package subject",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement.subject[0].name = "pkg:npm/other@1.2.3";
-			},
-		],
-		[
-			"digest",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement.subject[0].digest.sha512 = "00";
-			},
-		],
-		[
-			"workflow repository",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement.predicate.buildDefinition.externalParameters.workflow.repository =
-					"https://github.com/other/repo";
-			},
-		],
-		[
-			"workflow path",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement.predicate.buildDefinition.externalParameters.workflow.path =
-					".github/workflows/other.yml";
-			},
-		],
-		[
-			"workflow ref",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement.predicate.buildDefinition.externalParameters.workflow.ref = "refs/heads/main";
-			},
-		],
-		[
-			"resolved source",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement.predicate.buildDefinition.resolvedDependencies[0].uri =
-					"git+https://github.com/LeanAndMean/scramjet@refs/heads/main";
-			},
-		],
-		[
-			"resolved commit",
-			(fixture: ReturnType<typeof provenanceFixture>) => {
-				fixture.statement.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit = "b".repeat(40);
-			},
-		],
-	])("rejects a mismatched %s", async (_label, mutate) => {
-		const fixture = provenanceFixture();
-		mutate(fixture);
-		updatePayload(fixture);
-		await expect(reconcileFixture(fixture)).rejects.toThrow();
-	});
-
-	it("rejects an empty SLSA provenance response", async () => {
-		const fixture = provenanceFixture();
-		fixture.response.attestations = [];
-		await expect(reconcileFixture(fixture)).rejects.toThrow(/an SLSA provenance statement/);
-	});
-
-	it("rejects multiple SLSA provenance statements without retrying", async () => {
-		const fixture = provenanceFixture();
-		fixture.response.attestations.push(structuredClone(fixture.response.attestations[0]));
-		let attempts = 0;
-		await expect(
-			pollRead(
-				"provenance",
-				async () => {
-					attempts += 1;
-					return reconcileFixture(fixture);
-				},
-				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
-			),
-		).rejects.toThrow(/exactly one SLSA provenance statement/);
-		expect(attempts).toBe(1);
-	});
-
-	it("requires exactly one package subject", async () => {
-		const fixture = provenanceFixture();
-		fixture.statement.subject.push(structuredClone(fixture.statement.subject[0]));
-		updatePayload(fixture);
-		await expect(reconcileFixture(fixture)).rejects.toThrow(/exactly one subject/);
-	});
-
-	it.each([
-		["invalid alphabet", "sha512-!"],
-		["short digest", "sha512-QQ=="],
-		["noncanonical padding", `sha512-${Buffer.alloc(64).toString("base64").replace(/==$/, "")}`],
-	])("rejects %s in registry integrity", async (_label, integrity) => {
-		const fixture = provenanceFixture();
-		fixture.metadata["dist.integrity"] = integrity;
-		await expect(reconcileFixture(fixture)).rejects.toThrow(/integrity|SHA-512/);
-	});
-
-	it("rejects an off-registry attestation URL before fetching", async () => {
-		const fixture = provenanceFixture();
-		fixture.metadata["dist.attestations.url"] = "https://example.test/attestations";
-		await expect(
-			reconcilePackage(fixture.pkg, fixture.identity, { registry: () => fixture.metadata }),
-		).rejects.toThrow(/npm registry over HTTPS/);
-	});
-
-	it.each([
-		["malformed prior tag", "refs/tags/v1.2", "b".repeat(40)],
-		["non-release prior ref", "refs/heads/main", "b".repeat(40)],
-		["malformed prior SHA", "refs/tags/v1.2.2", "not-a-sha"],
-	])("rejects a prior release with a %s", async (_label, ref, sha) => {
-		const fixture = provenanceFixture();
-		fixture.statement.predicate.buildDefinition.externalParameters.workflow.ref = ref;
-		fixture.statement.predicate.buildDefinition.resolvedDependencies[0].uri = `git+https://github.com/LeanAndMean/scramjet@${ref}`;
-		fixture.statement.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit = sha;
-		updatePayload(fixture);
-		await expect(reconcileFixture(fixture, { allowPriorRelease: true })).rejects.toThrow();
+		["signature audit", { auditFailure: true }, "audit failed", false],
+		["CLI", { cliFailure: true }, "installed scramjet --help failed", true],
+	] as const)("fails %s verification and removes all owned temporary state", (_label, overrides, message, cliRan) => {
+		const state = Object.assign(publishedState(), overrides);
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify", statePath);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(message);
+		const finalState = readState(statePath);
+		expect(finalState.calls.some(([command]) => command === "installed-scramjet")).toBe(cliRan);
+		expectVerificationPathsRemoved(finalState);
 	});
 });
 
 describe("release operation bounds and post-publish polling", () => {
 	it("terminates a bounded external read", () => {
 		expect(() => run(process.execPath, ["-e", "setTimeout(() => {}, 1000)"], { timeout: 10 })).toThrow();
-	});
-
-	it("aborts a bounded attestation fetch", async () => {
-		let signal: AbortSignal | undefined;
-		await expect(
-			fetchAttestationJson(
-				"https://registry.npmjs.org/fixture",
-				async (_url: URL, options: { signal: AbortSignal }) => {
-					signal = options.signal;
-					return new Promise((_resolve, reject) => {
-						options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
-					});
-				},
-				10,
-			),
-		).rejects.toThrow();
-		expect(signal?.aborted).toBe(true);
-	});
-
-	it.each([400, 401, 403])("fails immediately for permanent attestation HTTP %s", async (status) => {
-		let fetchAttempts = 0;
-		let pollAttempts = 0;
-		await expect(
-			pollRead(
-				"provenance",
-				async () => {
-					pollAttempts += 1;
-					return fetchAttestationJson("https://registry.npmjs.org/fixture", async () => {
-						fetchAttempts += 1;
-						return { ok: false, status } as Response;
-					});
-				},
-				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
-			),
-		).rejects.toThrow(`attestation request failed with HTTP ${status} for https://registry.npmjs.org/fixture`);
-		expect(fetchAttempts).toBe(1);
-		expect(pollAttempts).toBe(1);
-	});
-
-	it.each([404, 408, 429, 500, 503])("retries transient attestation HTTP %s within the bound", async (status) => {
-		let attempts = 0;
-		await expect(
-			pollRead(
-				"provenance",
-				async () => {
-					attempts += 1;
-					return fetchAttestationJson("https://registry.npmjs.org/fixture", async () =>
-						attempts < 3
-							? ({ ok: false, status } as Response)
-							: ({ ok: true, json: async () => ({}) } as Response),
-					);
-				},
-				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
-			),
-		).resolves.toEqual({});
-		expect(attempts).toBe(3);
 	});
 
 	it.each([
@@ -1166,7 +1014,7 @@ describe("release operation bounds and post-publish polling", () => {
 		} catch (error) {
 			thrown = error as Error;
 		}
-		expect(thrown?.message).toMatch(/state is ambiguous.*Do not retry publication.*read-only reconciliation/);
+		expect(thrown?.message).toMatch(/state is ambiguous.*Do not retry publication.*five-fresh forward release/);
 		expect((thrown as Error & { cause?: unknown }).cause).toBe(failure);
 		expect(calls).toHaveLength(1);
 		expect(calls[0][2]).toMatchObject({ timeout: 25 });
@@ -1187,7 +1035,7 @@ describe("release operation bounds and post-publish polling", () => {
 		expect(sleep).toHaveBeenCalledWith(10_000);
 	});
 
-	it("tolerates delayed registry and attestation visibility", async () => {
+	it("tolerates delayed registry visibility", async () => {
 		let attempts = 0;
 		const result = await pollRead(
 			"published package",

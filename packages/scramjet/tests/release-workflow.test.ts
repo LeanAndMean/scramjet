@@ -128,21 +128,26 @@ describe("release workflow", () => {
 		expect(step("Pin release tooling").run).toContain("npm --version");
 	});
 
-	it("validates identity and registry state before install, then builds before one helper publication", () => {
+	it("validates identity and registry state, pins tooling, preflights, publishes once, then verifies", () => {
 		const names = steps.map((candidate) => candidate.name);
-		expect(names.indexOf("Validate release identity")).toBeLessThan(names.indexOf("Pin release tooling"));
+		expect(names.indexOf("Validate release identity")).toBeLessThan(names.indexOf("Validate registry configuration"));
 		expect(names.indexOf("Validate registry configuration")).toBeLessThan(names.indexOf("Pin release tooling"));
-		expect(names.indexOf("Pin release tooling")).toBeLessThan(names.indexOf("Install dependencies"));
+		expect(names.indexOf("Pin release tooling")).toBeLessThan(names.indexOf("Preflight release candidate"));
+		expect(names.indexOf("Preflight release candidate")).toBeLessThan(names.indexOf("Install dependencies"));
 		expect(names.indexOf("Install dependencies")).toBeLessThan(names.indexOf("Build"));
 		expect(names.indexOf("Build")).toBeLessThan(names.indexOf("Publish packages"));
+		expect(names.indexOf("Publish packages")).toBeLessThan(names.indexOf("Verify published release"));
 		expect(step("Validate release identity").run).toBe("node .github/scripts/release.mjs validate");
 		expect(step("Validate registry configuration").run).toContain("https://registry.npmjs.org/");
 		expect(step("Validate registry configuration").run).toContain("npm config get @leanandmean:registry");
 		expect(step("Validate registry configuration").run).toMatch(/_password\|username/);
+		expect(step("Preflight release candidate").run).toBe('node .github/scripts/release.mjs preflight "$GITHUB_SHA"');
 		expect(step("Install dependencies").run).toBe("npm ci --ignore-scripts");
 		expect(step("Build").run).toBe("npm run build");
 		expect(step("Publish packages").run).toBe("node .github/scripts/release.mjs publish");
+		expect(step("Verify published release").run).toBe("node .github/scripts/release.mjs verify");
 		expect(source.match(/release\.mjs publish/g)).toHaveLength(1);
+		expect(source.match(/release\.mjs verify/g)).toHaveLength(1);
 		expect(source.match(/npm publish/g)).toBeNull();
 	});
 

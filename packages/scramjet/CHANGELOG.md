@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.89.1 — Harden forward-only releases
+
+Prevents stale package versions and ambiguous partial publication from reaching or reusing immutable release tags. Fixes [#514](https://github.com/LeanAndMean/scramjet/issues/514).
+
+### Changed
+
+- Require commit-bound, five-fresh release preflight with exact manifest, dependency, workspace-link, lockfile, and registry invariants.
+- Publish all five packages once in dependency order, tolerate bounded read-only propagation, and require a new five-version release after any partial or ambiguous outcome.
+- Verify npm attestation metadata, native package signatures, isolated installation, exact runtime closure, and the installed CLI as separate release outcomes.
+- Align release policy and `mach12:pr-merge` with exact merged-SHA targeting, informed approval, repository-defined preflight, and truthful outcome reporting.
+
+### Fixed
+
+- Report mandatory no-retry and fresh-forward recovery guidance when a later package appears after publication has begun.
+- Make release-helper Git and polling fixtures deterministic across shallow Linux and macOS CI checkouts.
+
+### Tests
+
+- Add release identity, closure, race, publication, provenance, installation, workflow-ordering, merge-command, and forward-recovery coverage.
+
 ## 0.89.0 — Add robust branch integration
 
 Adds a dedicated workflow for safely integrating and publishing same-repository branches. Fixes [#513](https://github.com/LeanAndMean/scramjet/issues/513).
