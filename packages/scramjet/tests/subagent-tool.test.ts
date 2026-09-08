@@ -129,30 +129,30 @@ describe("discoverAgents — empty directory", () => {
 	});
 });
 
-describe("discoverAgents — bundled read-only specialists", () => {
+describe("discoverAgents — bundled Scramjet command specialists", () => {
 	let tmpDir: string;
+	let sourceFiles: string[];
 
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-agent-test-"));
 		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
 		fs.mkdirSync(agentsDir, { recursive: true });
 		const sourceDir = path.join(__dirname, "../scramjet/agents");
-		for (const file of fs.readdirSync(sourceDir)) {
-			if (file.endsWith(".md")) fs.copyFileSync(path.join(sourceDir, file), path.join(agentsDir, file));
+		sourceFiles = fs.readdirSync(sourceDir).filter((file) => file.endsWith(".md"));
+		for (const file of sourceFiles) {
+			fs.copyFileSync(path.join(sourceDir, file), path.join(agentsDir, file));
 		}
-		const mapper = "mach12:structural-mapper.md";
-		fs.copyFileSync(path.join(__dirname, "../mach12/agents", mapper), path.join(agentsDir, mapper));
 	});
 
 	afterEach(() => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("loads every provider through production discovery with the exact read-only tool posture", () => {
+	it("loads every specialist through production discovery with the exact read-only tool posture", () => {
 		const result = discoverAgents(tmpDir, "project");
 
 		expect(result.diagnostics).toEqual([]);
-		expect(result.agents).toHaveLength(7);
+		expect(result.agents).toHaveLength(sourceFiles.length);
 		for (const agent of result.agents) {
 			expect(agent.tools).toEqual(["read", "grep", "find", "ls"]);
 			expect(agent.systemPrompt.trim()).not.toBe("");
