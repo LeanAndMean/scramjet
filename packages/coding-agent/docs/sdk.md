@@ -427,6 +427,8 @@ If no model is provided:
 
 Scramjet builds the system prompt as ordered sections and isolates the volatile environment tail (current date, working directory, session journal path) into a final uncached section. On Anthropic, the stable sections are folded into a single system block carrying the cache breakpoint, so the cached prefix survives across turns even though the tail varies between sessions. Extensions can contribute stable sections via `before_agent_start` — see [extensions.md](extensions.md#system-prompt-sections).
 
+Within one accepted top-level prompt, changing the active tools regenerates the generated tool guidance while preserving that run's `before_agent_start` composition. Contributed sections are reapplied once against the regenerated base; an authoritative `systemPrompt` string remains byte-identical and receives no generated guidance. The same composition remains in effect for intra-run continuations and automatic retries. Each later accepted top-level prompt runs `before_agent_start` against a fresh generated base, and a successful same-session reload clears the prior extension instance's composition before rebuilding the runtime. Tree navigation changes messages only; the next accepted prompt performs the normal fresh composition.
+
 > Before sectioned system prompts landed, the effective default was `short` (the env var could only upgrade it to `long`). Sessions created through the SDK or CLI now default to `long`; set `PI_CACHE_RETENTION=short` or pass `cacheRetention: "short"` to restore the old behavior.
 
 > See [examples/sdk/02-custom-model.ts](../examples/sdk/02-custom-model.ts)

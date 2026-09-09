@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
-import type { AssistantMessage, UserMessage } from "@leanandmean/ai";
+import type { AssistantMessage, Model, UserMessage } from "@leanandmean/ai";
 import { createAssistantMessageEventStream } from "@leanandmean/ai";
 import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
@@ -17,6 +17,20 @@ import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader, RequiredBuiltinInitError } from "../src/core/resource-loader.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+
+const testModel: Model<"openai-chat"> = {
+	id: "model-a",
+	name: "Model A",
+	api: "openai-chat",
+	provider: "provider-a",
+	baseUrl: "https://example.test",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1_050_000,
+};
+
+const RUN_COMPOSITION_MARKER = "RUNTIME INSTANCE CONTRIBUTION";
 
 function assistantText(text: string): AssistantMessage {
 	return {
@@ -57,6 +71,7 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 
 	const settingsManager = SettingsManager.inMemory();
 	const authStorage = AuthStorage.inMemory();
+	authStorage.setRuntimeApiKey("provider-a", "fake");
 	const modelRegistry = ModelRegistry.inMemory(authStorage);
 
 	// Real session lifecycle events are observed through a required builtin: session_shutdown fires
@@ -67,6 +82,9 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 		agentDir,
 		settingsManager,
 		builtinInit: (pi) => {
+			pi.on("before_agent_start", () => ({
+				systemPromptSection: { id: "test:runtime-instance", text: `\n\n${RUN_COMPOSITION_MARKER}` },
+			}));
 			pi.on("session_shutdown", () => {
 				events.push("session_shutdown");
 			});
@@ -79,10 +97,15 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 
 	function makeSession(sessionManager: SessionManager, sessionStartEvent?: SessionStartEvent): AgentSession {
 		const agent = new Agent({
-			initialState: { systemPrompt: "", model: null as any, tools: [] },
+			initialState: { systemPrompt: "", model: testModel, tools: [] },
 			streamFn() {
-				return createAssistantMessageEventStream(assistantText("ok"));
+				const message = assistantText("ok");
+				const stream = createAssistantMessageEventStream();
+				stream.push({ type: "start", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+				return stream;
 			},
+			getApiKey: async () => "fake",
 		});
 		return new AgentSession({
 			agent,
@@ -167,6 +190,38 @@ const replacementCases: Array<{ name: string; invoke: (fx: Fixture) => Promise<{
 		},
 	},
 ];
+
+describe("AgentSessionRuntime — prompt composition isolation", () => {
+	for (const { name, invoke } of replacementCases) {
+		it(`${name}: the replacement AgentSession starts without the prior run composition`, async () => {
+			const fx = await buildFixture();
+			const before = fx.runtime.session;
+			await before.prompt("prime composition");
+			expect(before.systemPrompt).toContain(RUN_COMPOSITION_MARKER);
+
+			await invoke(fx);
+
+			expect(fx.runtime.session).not.toBe(before);
+			expect(fx.runtime.session.systemPrompt).not.toContain(RUN_COMPOSITION_MARKER);
+		});
+	}
+
+	it("fork: the replacement AgentSession starts without the prior run composition", async () => {
+		const fx = await buildFixture({ initialInMemory: true });
+		const before = fx.runtime.session;
+		await before.prompt("prime composition");
+		expect(before.systemPrompt).toContain(RUN_COMPOSITION_MARKER);
+		const userEntry = before.sessionManager
+			.getBranch()
+			.find((entry) => entry.type === "message" && entry.message.role === "user");
+		if (!userEntry) throw new Error("expected persisted user entry");
+
+		await fx.runtime.fork(userEntry.id, { position: "at" });
+
+		expect(fx.runtime.session).not.toBe(before);
+		expect(fx.runtime.session.systemPrompt).not.toContain(RUN_COMPOSITION_MARKER);
+	});
+});
 
 describe("AgentSessionRuntime — atomic replacement (Stage 3)", () => {
 	describe("failed candidate preparation preserves the live runtime", () => {
