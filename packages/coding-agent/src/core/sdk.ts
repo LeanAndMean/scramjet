@@ -382,6 +382,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		streamFn: async (model, context, options) => {
 			const routedModelIdentity = { provider: model.provider, id: model.id, api: model.api } as const;
 			const requestContextToolNames = (context.tools ?? []).map((tool) => tool.name);
+			const requestRunner = extensionRunnerRef.current;
 			const incomingOnPayload = options?.onPayload;
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
 			if (!auth.ok) {
@@ -400,9 +401,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				onPayload: async (payload, payloadModel) => {
 					const replacement = await incomingOnPayload?.(payload, payloadModel);
 					const finalPayload = replacement === undefined ? payload : replacement;
-					const runner = extensionRunnerRef.current;
-					if (runner?.hasHandlers("provider_request_tool_inventory")) {
-						await runner.emitProviderRequestToolInventory(
+					if (
+						requestRunner === extensionRunnerRef.current &&
+						requestRunner?.hasHandlers("provider_request_tool_inventory")
+					) {
+						await requestRunner.emitProviderRequestToolInventory(
 							routedModelIdentity,
 							requestContextToolNames,
 							inspectProviderRequestToolInventory(routedModelIdentity.api, finalPayload),

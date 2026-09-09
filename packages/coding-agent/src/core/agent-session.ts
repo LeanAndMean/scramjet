@@ -435,8 +435,8 @@ export class AgentSession {
 	}
 
 	// SCRAMJET-DIVERGENCE: _drainAgentEventQueue ensures all queued async extension event
-	// processing has settled before proceeding. Used by beforeToolBatch (pre-extraction drain)
-	// and beforeToolCall (per-tool drain).
+	// processing has settled before proceeding. Used by beforeToolBatch (pre-extraction drain),
+	// beforeToolCall (per-tool drain), and the awaited turn_end listener barrier.
 	private async _drainAgentEventQueue(): Promise<void> {
 		await this._agentEventQueue;
 	}
@@ -530,7 +530,7 @@ export class AgentSession {
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
-	private _handleAgentEvent = (event: AgentEvent): void => {
+	private _handleAgentEvent = (event: AgentEvent): Promise<void> | void => {
 		this._captureOutputThroughput(event);
 
 		// Create retry promise synchronously before queueing async processing.
@@ -547,6 +547,10 @@ export class AgentSession {
 
 		// Keep queue alive if an event handler fails
 		this._agentEventQueue.catch(() => {});
+
+		// SCRAMJET-DIVERGENCE: turn_end tool/prompt changes must settle before Agent snapshots
+		// live state for the next provider request (#524).
+		if (event.type === "turn_end") return this._agentEventQueue;
 	};
 
 	// SCRAMJET-DIVERGENCE: Capture provider events synchronously and reset stale throughput lifecycles (#476).

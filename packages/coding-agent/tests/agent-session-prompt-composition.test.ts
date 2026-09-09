@@ -192,6 +192,53 @@ describe("AgentSession run prompt composition", () => {
 		expect(fixture.contexts[1].sections?.filter((section) => section.id === "test:contribution")).toHaveLength(1);
 	});
 
+	it("settles turn_end tool changes before refreshing the next request", async () => {
+		let handlerStarted!: () => void;
+		const handlerEntry = new Promise<void>((resolve) => {
+			handlerStarted = resolve;
+		});
+		let releaseHandler!: () => void;
+		const handlerGate = new Promise<void>((resolve) => {
+			releaseHandler = resolve;
+		});
+		let secondRequestStarted!: () => void;
+		const secondRequestEntry = new Promise<void>((resolve) => {
+			secondRequestStarted = resolve;
+		});
+		const fixture = await createFixture({
+			responses: (index) => {
+				if (index === 1) secondRequestStarted();
+				return index === 0 ? assistantToolCall("trigger") : assistantText("done");
+			},
+			customTools: [makeTool("trigger", "Trigger guidance"), makeTool("new_tool", "New tool guidance")],
+			initialActiveToolNames: ["trigger"],
+			extensionFactory: (pi) => {
+				pi.on("turn_end", async (event) => {
+					if (event.turnIndex !== 0) return;
+					handlerStarted();
+					await handlerGate;
+					pi.setActiveTools(["trigger", "new_tool"]);
+				});
+			},
+		});
+
+		const prompt = fixture.session.prompt("go");
+		await handlerEntry;
+		const advancedBeforeRelease = await Promise.race([
+			secondRequestEntry.then(() => true),
+			new Promise<false>((resolve) => setTimeout(() => resolve(false), 20)),
+		]);
+		releaseHandler();
+		await prompt;
+
+		expect(advancedBeforeRelease).toBe(false);
+		expect(fixture.contexts).toHaveLength(2);
+		expectToolParity(fixture.session, fixture.contexts[1], [
+			{ name: "trigger", guidance: "Trigger guidance" },
+			{ name: "new_tool", guidance: "New tool guidance" },
+		]);
+	});
+
 	it("keeps an authoritative string byte-identical through an active-tool rebuild", async () => {
 		const authoritative = "\u0000AUTHORITATIVE\nno generated guidance";
 		let session!: AgentSession;

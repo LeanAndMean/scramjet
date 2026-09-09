@@ -222,4 +222,47 @@ describe("provider request tool inventory boundary", () => {
 			session.dispose();
 		}
 	});
+
+	it("suppresses an old request observation after reload replaces its runner", async () => {
+		let generation = 0;
+		const observationGenerations: number[] = [];
+		let rewriteStarted!: () => void;
+		const rewriteEntry = new Promise<void>((resolve) => {
+			rewriteStarted = resolve;
+		});
+		let releaseRewrite!: () => void;
+		const rewriteGate = new Promise<void>((resolve) => {
+			releaseRewrite = resolve;
+		});
+		const { session } = await createFixture((pi) => {
+			const runnerGeneration = ++generation;
+			pi.on("before_provider_request", async (event) => {
+				if (runnerGeneration === 1) {
+					rewriteStarted();
+					await rewriteGate;
+				}
+				return event.payload;
+			});
+			pi.on("provider_request_tool_inventory", () => {
+				observationGenerations.push(runnerGeneration);
+			});
+		});
+
+		try {
+			const payload = { tools: [{ name: "zeta" }, { name: "alpha" }] };
+			requestPayloads.push(payload);
+			const prompt = session.prompt("first");
+			await rewriteEntry;
+			await session.reload();
+			registerApiProvider({ api, stream: fakeStream, streamSimple: fakeStream, handlesSystemPromptSections: true });
+			releaseRewrite();
+			await prompt;
+
+			expect(generation).toBe(2);
+			expect(observationGenerations).toEqual([]);
+			expect(transportedPayloads).toEqual([payload]);
+		} finally {
+			session.dispose();
+		}
+	});
 });

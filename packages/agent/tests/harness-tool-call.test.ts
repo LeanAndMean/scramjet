@@ -342,6 +342,33 @@ describe("Agent.runHarnessTool", () => {
 		expect(calls[1]!.model.id).toBe(secondModel.id);
 	});
 
+	it("preserves an explicit prepareNextTurn model update", async () => {
+		const { fn, calls } = createRecordingStreamFn([
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "real-1", name: "read", arguments: { path: "a.ts" } }],
+				"toolUse",
+			),
+			makeTextAssistantMessage("done"),
+		]);
+
+		let agentRef!: Agent;
+		const readTool = makeReadTool(async () => {
+			agentRef.state.model = secondModel;
+			return { content: [{ type: "text", text: "ok" }], details: undefined };
+		});
+		const agent = new Agent({
+			initialState: { model: testModel, tools: [readTool] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+			prepareNextTurn: async () => ({ model: testModel }),
+		});
+		agentRef = agent;
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls.map((call) => call.model.id)).toEqual([testModel.id, testModel.id]);
+	});
+
 	it("refreshes effort for the next intra-run provider request", async () => {
 		const { fn, calls } = createRecordingStreamFn([
 			makeAssistantMessage(

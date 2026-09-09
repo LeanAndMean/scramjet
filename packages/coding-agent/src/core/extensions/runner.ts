@@ -137,7 +137,6 @@ type RunnerEmitEvent = Exclude<
 	| ContextEvent
 	| BeforeProviderCallEvent
 	| BeforeProviderRequestEvent
-	| ProviderRequestToolInventoryEvent
 	| BeforeAgentStartEvent
 	| MessageEndEvent
 	| ResourcesDiscoverEvent
@@ -1078,32 +1077,13 @@ export class ExtensionRunner {
 		inventory: ProviderRequestToolInventoryEvent["inventory"],
 	): Promise<void> {
 		if (this.skipStale("provider_request_tool_inventory")) return;
-		const ctx = this.createContext();
 		const event: ProviderRequestToolInventoryEvent = Object.freeze({
 			type: "provider_request_tool_inventory",
 			model: Object.freeze({ ...model }),
 			requestContextToolNames: Object.freeze([...requestContextToolNames]),
 			inventory: deepFreeze(structuredClone(inventory)),
 		});
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("provider_request_tool_inventory");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				if (this.skipStale("provider_request_tool_inventory")) return;
-				try {
-					await handler(event, ctx);
-				} catch (err) {
-					this.emitError({
-						extensionPath: ext.path,
-						event: "provider_request_tool_inventory",
-						error: err instanceof Error ? err.message : String(err),
-						stack: err instanceof Error ? err.stack : undefined,
-					});
-				}
-			}
-		}
+		await this.emit(event);
 	}
 
 	async emitBeforeAgentStart(

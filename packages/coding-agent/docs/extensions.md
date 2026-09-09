@@ -690,7 +690,7 @@ pi.on("provider_request_tool_inventory", (event) => {
 
 The event and all nested fields are frozen. The model snapshot contains only `provider`, `id`, and `api`; it excludes model headers, credentials, URLs, and other configuration. Supported built-in shape families are OpenAI Responses/Azure/Codex, OpenAI completions, Mistral conversations, Anthropic messages, Google Generative AI/Vertex function declarations, and Bedrock tool specifications. A missing optional tool container or valid empty list is observed as an empty inventory; malformed known shapes report only a bounded reason, never raw payload content. Custom API identifiers report `unsupported` when their provider invokes `onPayload`; a custom provider that does not invoke `onPayload` produces no final-schema observation.
 
-This boundary proves only what was present in the final pre-transport payload value. It does not prove transport success, response parsing, assistant completion, persistence, or model tool selection. Observer failures use normal extension error isolation and do not alter the outgoing payload.
+This boundary proves only what was present in the final pre-transport payload value. It does not prove transport success, response parsing, assistant completion, persistence, or model tool selection. The observation is suppressed if a successful reload replaces the request's extension runner while payload rewriting is in flight. Observer failures use normal extension error isolation and do not alter the outgoing payload.
 
 **TypeScript compatibility:** Adding this event extends the exported `ExtensionEvent` union. Consumers with exhaustive switches over that union must add this member or a default/unknown-event branch; ordinary `pi.on(...)` registrations remain compatible.
 
@@ -1606,6 +1606,8 @@ const builtinTools = all.filter((t) => t.sourceInfo.source === "builtin");
 const extensionTools = all.filter((t) => t.sourceInfo.source !== "builtin" && t.sourceInfo.source !== "sdk");
 pi.setActiveTools(["read", "bash"]); // Switch to read-only
 ```
+
+Changes made by an awaited `turn_end` handler settle before the next provider request snapshots active tools and generated guidance.
 
 `pi.getAllTools()` returns `name`, `description`, `parameters`, and `sourceInfo`.
 
