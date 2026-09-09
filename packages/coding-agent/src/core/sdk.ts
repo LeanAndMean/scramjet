@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, type ThinkingLevel } from "@leanandmean/agent";
-import { type CacheRetention, clampThinkingLevel, type Message, type Model, streamSimple } from "@leanandmean/ai";
+import {
+	type CacheRetention,
+	clampThinkingLevel,
+	inspectProviderRequestToolInventory,
+	type Message,
+	type Model,
+	streamSimple,
+} from "@leanandmean/ai";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
@@ -373,6 +380,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
+			const routedModelIdentity = { provider: model.provider, id: model.id, api: model.api } as const;
+			const requestContextToolNames = (context.tools ?? []).map((tool) => tool.name);
+			const incomingOnPayload = options?.onPayload;
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
 			if (!auth.ok) {
 				throw new Error(auth.error);
@@ -386,6 +396,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+				// SCRAMJET-DIVERGENCE: observe names only after the complete payload-rewrite chain (#524).
+				onPayload: async (payload, payloadModel) => {
+					const replacement = await incomingOnPayload?.(payload, payloadModel);
+					const finalPayload = replacement === undefined ? payload : replacement;
+					const runner = extensionRunnerRef.current;
+					if (runner?.hasHandlers("provider_request_tool_inventory")) {
+						await runner.emitProviderRequestToolInventory(
+							routedModelIdentity,
+							requestContextToolNames,
+							inspectProviderRequestToolInventory(routedModelIdentity.api, finalPayload),
+						);
+					}
+					return finalPayload;
+				},
 				headers:
 					attributionHeaders || auth.headers || options?.headers
 						? { ...attributionHeaders, ...auth.headers, ...options?.headers }
