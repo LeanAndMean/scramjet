@@ -227,6 +227,15 @@ function isGemma4Model(modelId: string): boolean {
 }
 
 function applyThinkingLevelMetadata(model: Model<any>): void {
+	// SCRAMJET-DIVERGENCE: GPT-6 Astra's five efforts are exact to its verified provider/API records (issue 522).
+	if (
+		model.id === "gpt-6-astra" &&
+		((model.provider === "openai" && model.api === "openai-responses") ||
+			(model.provider === "openai-codex" && model.api === "openai-codex-responses") ||
+			(model.provider === "github-copilot" && model.api === "openai-responses"))
+	) {
+		mergeThinkingLevelMap(model, { off: null, minimal: null, xhigh: "xhigh", max: "max" });
+	}
 	if (
 		(model.api === "openai-responses" || model.api === "azure-openai-responses") &&
 		model.id.startsWith("gpt-5")
@@ -951,8 +960,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 
 				// Claude 4.x models route to Anthropic Messages API
 				const isCopilotClaude4 = /^claude-(haiku|sonnet|opus)-4([.\-]|$)/.test(modelId);
-				// gpt-5 models require responses API, others use completions
-				const needsResponsesApi = modelId.startsWith("gpt-5") || modelId.startsWith("oswe");
+				// gpt-5 models and GPT-6 Astra require responses API, others use completions
+				const needsResponsesApi =
+					modelId.startsWith("gpt-5") || modelId === "gpt-6-astra" || modelId.startsWith("oswe");
 
 				const api: Api = isCopilotClaude4
 					? "anthropic-messages"
@@ -1220,6 +1230,29 @@ async function generateModels() {
 			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
+		if (candidate.provider === "openai" && candidate.id === "gpt-6-astra") {
+			candidate.name = "GPT-6 Astra";
+			candidate.api = "openai-responses";
+			candidate.baseUrl = "https://api.openai.com/v1";
+			candidate.reasoning = true;
+			candidate.input = ["text", "image"];
+			candidate.cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+			candidate.contextWindow = 1050000;
+			candidate.contextWindowBudget = 272000;
+			candidate.maxTokens = 128000;
+		}
+		if (candidate.provider === "github-copilot" && candidate.id === "gpt-6-astra") {
+			candidate.name = "GPT-6 Astra";
+			candidate.api = "openai-responses";
+			candidate.baseUrl = "https://api.individual.githubcopilot.com";
+			candidate.reasoning = true;
+			candidate.input = ["text", "image"];
+			candidate.cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+			candidate.contextWindow = 400000;
+			candidate.contextWindowBudget = 272000;
+			candidate.maxTokens = 128000;
+			candidate.headers = { ...COPILOT_STATIC_HEADERS };
+		}
 		// Keep selected OpenRouter model metadata stable until upstream settles.
 		if (candidate.provider === "openrouter" && candidate.id === "moonshotai/kimi-k2.5") {
 			candidate.cost.input = 0.41;
@@ -1422,6 +1455,22 @@ async function generateModels() {
 		});
 	}
 
+	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-6-astra")) {
+		allModels.push({
+			id: "gpt-6-astra",
+			name: "GPT-6 Astra",
+			api: "openai-responses",
+			baseUrl: "https://api.openai.com/v1",
+			provider: "openai",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+			contextWindow: 1050000,
+			contextWindowBudget: 272000,
+			maxTokens: 128000,
+		});
+	}
+
 	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-5.6-sol")) {
 		allModels.push({
 			id: "gpt-5.6-sol",
@@ -1464,6 +1513,23 @@ async function generateModels() {
 			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
 			contextWindow: 1050000,
 			maxTokens: 128000,
+		});
+	}
+
+	if (!allModels.some((m) => m.provider === "github-copilot" && m.id === "gpt-6-astra")) {
+		allModels.push({
+			id: "gpt-6-astra",
+			name: "GPT-6 Astra",
+			api: "openai-responses",
+			baseUrl: "https://api.individual.githubcopilot.com",
+			provider: "github-copilot",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+			contextWindow: 400000,
+			contextWindowBudget: 272000,
+			maxTokens: 128000,
+			headers: { ...COPILOT_STATIC_HEADERS },
 		});
 	}
 
@@ -1684,6 +1750,18 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-6-astra",
+			name: "GPT-6 Astra",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
 			contextWindow: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
@@ -2006,7 +2084,9 @@ async function generateModels() {
 	allModels.push(...vertexModels);
 
 	const azureOpenAiModels: Model<Api>[] = allModels
-		.filter((model) => model.provider === "openai" && model.api === "openai-responses")
+		.filter(
+			(model) => model.provider === "openai" && model.api === "openai-responses" && model.id !== "gpt-6-astra",
+		)
 		.map((model) => ({
 			...model,
 			api: "azure-openai-responses",

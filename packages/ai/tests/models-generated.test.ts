@@ -250,6 +250,78 @@ describe("generated catalog - GPT-5.6 Luna (openai)", () => {
 	});
 });
 
+describe("generated catalog - GPT-6 Astra", () => {
+	const expectedCost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+	const expectedLevels = ["low", "medium", "high", "xhigh", "max"];
+
+	function expectAstraThinking(model: Parameters<typeof getSupportedThinkingLevels>[0]) {
+		expect(getSupportedThinkingLevels(model)).toEqual(expectedLevels);
+		expect(clampThinkingLevel(model, "off")).toBe("low");
+		expect(clampThinkingLevel(model, "minimal")).toBe("low");
+		for (const level of expectedLevels) {
+			expect(clampThinkingLevel(model, level as "low" | "medium" | "high" | "xhigh" | "max")).toBe(level);
+		}
+	}
+
+	it("has the verified public OpenAI contract", () => {
+		const model = getModel("openai", "gpt-6-astra");
+		expect(model).toMatchObject({
+			id: "gpt-6-astra",
+			provider: "openai",
+			api: "openai-responses",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: expectedCost,
+			contextWindow: 1_050_000,
+			contextWindowBudget: 272_000,
+			maxTokens: 128_000,
+		});
+		expectAstraThinking(model);
+	});
+
+	it("has the verified OpenAI Codex contract", () => {
+		const model = getModel("openai-codex", "gpt-6-astra");
+		expect(model).toMatchObject({
+			id: "gpt-6-astra",
+			provider: "openai-codex",
+			api: "openai-codex-responses",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: expectedCost,
+			contextWindow: 272_000,
+			maxTokens: 128_000,
+		});
+		expect(model.contextWindowBudget).toBeUndefined();
+		expectAstraThinking(model);
+	});
+
+	it("has the verified GitHub Copilot contract and static headers", () => {
+		const model = getModel("github-copilot", "gpt-6-astra");
+		expect(model).toMatchObject({
+			id: "gpt-6-astra",
+			provider: "github-copilot",
+			api: "openai-responses",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: expectedCost,
+			contextWindow: 400_000,
+			contextWindowBudget: 272_000,
+			maxTokens: 128_000,
+			headers: {
+				"User-Agent": "GitHubCopilotChat/0.35.0",
+				"Editor-Version": "vscode/1.107.0",
+				"Editor-Plugin-Version": "copilot-chat/0.35.0",
+				"Copilot-Integration-Id": "vscode-chat",
+			},
+		});
+		expectAstraThinking(model);
+	});
+
+	it("does not expose Astra through Azure", () => {
+		expect(getModels("azure-openai-responses").some((model) => model.id === "gpt-6-astra")).toBe(false);
+	});
+});
+
 describe("generated catalog - GPT-5.6 Codex variants", () => {
 	it("all three exist under openai-codex", () => {
 		const sol = getModel("openai-codex", "gpt-5.6-sol");
