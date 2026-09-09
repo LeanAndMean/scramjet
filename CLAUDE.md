@@ -196,6 +196,14 @@ Treat an implementation much larger than the request or its analog as a signal t
 
 Use a disposable empirical probe when documentation is ambiguous or a decision depends on exact ordering, return shape, error behavior, or side effects. Put probes in a temporary directory, never the repository. Report the reproducible snippet and observed output rather than a temporary filename. A confirmed probe result outweighs conflicting documentation for planning purposes, and the disagreement should be surfaced.
 
+## Model context policy
+
+Use one authoritative `contextWindow` for the maximum evidenced supported context of the selected provider/model, consistently in catalog generation, runtime context handling, and presentation. Do not introduce lower limits for pricing, presumed quality, or speculative conservatism, whether as a separate budget or directly in `contextWindow`. Changing this policy requires explicit user authorization, not a model-specific agent judgment.
+
+For model additions, updates, and reviews, record applicable provider/model evidence, its source and observation date, and endpoint/account qualifications. Distinguish total context, independent input constraints, output allowance, pricing thresholds, and client defaults; a client default or configuration-override ceiling is not proof of a backend maximum. Do not transfer limits between public APIs, subscription routes, proxies, or deployments without applicable evidence. Report unresolved maxima and block dependent numeric changes rather than inventing a cap or claiming an existing value is verified. If independently enforced constraints cannot fit the one-value contract, obtain a bounded design amendment before changing types or provider allocation.
+
+Keep output limits and configurable compaction reserves separate from catalog context; do not globally subtract maximum output or count headroom twice. Context regressions use deterministic offline metadata and synthetic usage tests, which verify configuration and behavior, not endpoint acceptance. Paid boundary experiments require separate explicit authorization.
+
 ## Dependency orientation
 
 Before adding a dependency, utility, or custom implementation, check whether existing project dependencies already provide the capability. Inspect `package.json` files, adjacent imports, and Pi source code as needed; treat the source directly as authoritative for available APIs. Pi packages live in `packages/{tui,ai,agent,coding-agent}` and can be read and modified directly.
