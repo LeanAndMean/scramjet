@@ -19,6 +19,22 @@ describe("generated catalog invariants", () => {
 	});
 });
 
+describe("generated catalog - approved context corrections", () => {
+	it.each([
+		["openai", "gpt-5.4", 1050000],
+		["openai", "gpt-5.5", 1050000],
+		["azure-openai-responses", "gpt-5.4", 1050000],
+		["azure-openai-responses", "gpt-5.5", 1050000],
+		["opencode", "gpt-5.4", 1050000],
+		["opencode", "claude-sonnet-4-5", 1000000],
+		["openai-codex", "gpt-5.5", 400000],
+	] as const)("uses the approved total context for %s/%s", (provider, id, context) => {
+		const model = getModels(provider).find((candidate) => candidate.id === id)!;
+		expect(model.contextWindow).toBe(context);
+		expect(getContextWindowBudget(model)).toBe(context);
+	});
+});
+
 describe("generated catalog - Anthropic Opus 4.8", () => {
 	const model = getModel("anthropic", "claude-opus-4-8");
 
@@ -273,9 +289,10 @@ describe("generated catalog - GPT-6 Astra", () => {
 			input: ["text", "image"],
 			cost: expectedCost,
 			contextWindow: 1_050_000,
-			contextWindowBudget: 272_000,
 			maxTokens: 128_000,
 		});
+		expect(model.contextWindowBudget).toBeUndefined();
+		expect(getContextWindowBudget(model)).toBe(1_050_000);
 		expectAstraThinking(model);
 	});
 

@@ -1207,19 +1207,20 @@ async function generateModels() {
 			candidate.contextWindow = 1000000;
 		}
 
-		// OpenCode variants list Claude Sonnet 4/4.5 with 1M context, actual limit is 200K
+		// SCRAMJET-DIVERGENCE: Zen Sonnet 4.5 supports 1M; Go and retained Sonnet 4 evidence remains unresolved.
 		if (
-			(candidate.provider === "opencode" || candidate.provider === "opencode-go") &&
-			(candidate.id === "claude-sonnet-4-5" || candidate.id === "claude-sonnet-4")
+			(candidate.provider === "opencode-go" && candidate.id === "claude-sonnet-4-5") ||
+			((candidate.provider === "opencode" || candidate.provider === "opencode-go") && candidate.id === "claude-sonnet-4")
 		) {
 			candidate.contextWindow = 200000;
 		}
 		if ((candidate.provider === "opencode" || candidate.provider === "opencode-go") && candidate.id === "gpt-5.4") {
-			candidate.contextWindow = 272000;
+			candidate.contextWindow = candidate.provider === "opencode" ? 1050000 : 272000;
 			candidate.maxTokens = 128000;
 		}
+		// SCRAMJET-DIVERGENCE: Public API context is 1.05M; 272K is a pricing threshold.
 		if (candidate.provider === "openai" && (candidate.id === "gpt-5.4" || candidate.id === "gpt-5.5")) {
-			candidate.contextWindow = 272000;
+			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
 		if (
@@ -1238,7 +1239,6 @@ async function generateModels() {
 			candidate.input = ["text", "image"];
 			candidate.cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
 			candidate.contextWindow = 1050000;
-			candidate.contextWindowBudget = 272000;
 			candidate.maxTokens = 128000;
 		}
 		if (candidate.provider === "github-copilot" && candidate.id === "gpt-6-astra") {
@@ -1466,7 +1466,6 @@ async function generateModels() {
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
 			contextWindow: 1050000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 		});
 	}
@@ -1562,7 +1561,7 @@ async function generateModels() {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		});
 	}
@@ -1750,7 +1749,8 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
+			// SCRAMJET-DIVERGENCE: GPT-5.5's Codex launch documents 400K total, independently of API limits.
+			contextWindow: 400000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
