@@ -28,6 +28,7 @@ describe("generated catalog - approved context corrections", () => {
 		["opencode", "gpt-5.4", 1050000],
 		["opencode", "claude-sonnet-4-5", 1000000],
 		["openai-codex", "gpt-5.5", 400000],
+		["xai", "grok-code-fast-1", 256000],
 	] as const)("uses the approved total context for %s/%s", (provider, id, context) => {
 		const model = getModels(provider).find((candidate) => candidate.id === id)!;
 		expect(model.contextWindow).toBe(context);

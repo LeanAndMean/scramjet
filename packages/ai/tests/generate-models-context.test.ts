@@ -32,6 +32,7 @@ async function generate(present: boolean) {
 		if (url === "https://models.dev/api.json") {
 			return {
 				json: async () => ({
+					xai: { models: present ? { "grok-code-fast-1": feedModel("grok-code-fast-1", 32768) } : {} },
 					openai: { models: present ? models : {} },
 					opencode: { models },
 					"opencode-go": { models },
@@ -43,6 +44,7 @@ async function generate(present: boolean) {
 			return {
 				json: async () => ({
 					data: [
+						{ id: "x-ai/grok-code-fast-1", context_length: 32768, supported_parameters: ["tools"] },
 						{ id: "openai/gpt-5.4", name: "First", context_length: 1500000, supported_parameters: ["tools"] },
 						{ id: "openai/gpt-5.4", name: "Second", context_length: 2000000, supported_parameters: ["tools"] },
 					],
@@ -76,6 +78,13 @@ afterEach(() => {
 describe("real generator context corrections", () => {
 	it.each([true, false])("preserves route scope with feed-present=%s", async (present) => {
 		const models = await generate(present);
+		expect(models.xai["grok-code-fast-1"]).toMatchObject({
+			contextWindow: 256000,
+			maxTokens: present ? 128000 : 8192,
+		});
+		expect(models.xai["grok-3"].contextWindow).toBe(131072);
+		expect(models.xai["grok-3-fast"].contextWindow).toBe(131072);
+		expect(models.openrouter["x-ai/grok-code-fast-1"].contextWindow).toBe(32768);
 		for (const provider of ["openai", "azure-openai-responses"]) {
 			expect(models[provider]["gpt-5.4"].contextWindow).toBe(1050000);
 			if (present) expect(models[provider]["gpt-5.5"].contextWindow).toBe(1050000);

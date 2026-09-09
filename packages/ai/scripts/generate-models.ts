@@ -1253,6 +1253,10 @@ async function generateModels() {
 			candidate.maxTokens = 128000;
 			candidate.headers = { ...COPILOT_STATIC_HEADERS };
 		}
+		// SCRAMJET-DIVERGENCE: xAI documents 256K for this retained alias.
+		if (candidate.provider === "xai" && candidate.id === "grok-code-fast-1") {
+			candidate.contextWindow = 256000;
+		}
 		// Keep selected OpenRouter model metadata stable until upstream settles.
 		if (candidate.provider === "openrouter" && candidate.id === "moonshotai/kimi-k2.5") {
 			candidate.cost.input = 0.41;
@@ -1868,7 +1872,7 @@ async function generateModels() {
 				cacheRead: 0.02,
 				cacheWrite: 0,
 			},
-			contextWindow: 32768,
+			contextWindow: 256000,
 			maxTokens: 8192,
 		},
 	];

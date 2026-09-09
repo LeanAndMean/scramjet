@@ -17824,7 +17824,7 @@ export const MODELS = {
 				cacheRead: 0.02,
 				cacheWrite: 0,
 			},
-			contextWindow: 32768,
+			contextWindow: 256000,
 			maxTokens: 8192,
 		} satisfies Model<"openai-completions">,
 	},
