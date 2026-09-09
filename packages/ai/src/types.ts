@@ -552,6 +552,14 @@ export interface VercelGatewayRouting {
 	order?: string[];
 }
 
+// SCRAMJET-DIVERGENCE: A declared endpoint's joint token constraints, not a second model context denominator.
+export interface ModelRequestLimit {
+	maxTotalTokens: number;
+	maxInputTokens?: number;
+	maxOutputTokens?: number;
+	supportsTools: boolean;
+}
+
 // Model interface for the unified model system
 export interface Model<TApi extends Api> {
 	id: string;
@@ -575,6 +583,7 @@ export interface Model<TApi extends Api> {
 	contextWindow: number;
 	// SCRAMJET-DIVERGENCE: Only a genuine provider input constraint, never a discretionary context budget.
 	maxInputTokens?: number;
+	requestLimits?: ModelRequestLimit[];
 	maxTokens: number;
 	headers?: Record<string, string>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
@@ -590,7 +599,7 @@ export interface Model<TApi extends Api> {
 export interface ImagesModel<TApi extends ImagesApi>
 	extends Omit<
 		Model<Api>,
-		"api" | "provider" | "reasoning" | "contextWindow" | "maxInputTokens" | "maxTokens" | "compat"
+		"api" | "provider" | "reasoning" | "contextWindow" | "maxInputTokens" | "requestLimits" | "maxTokens" | "compat"
 	> {
 	api: TApi;
 	provider: ImagesProvider;

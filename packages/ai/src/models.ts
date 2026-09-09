@@ -36,6 +36,53 @@ export function getModels<TProvider extends KnownProvider>(
 	return models ? (Array.from(models.values()) as Model<ModelApi<TProvider, keyof (typeof MODELS)[TProvider]>>[]) : [];
 }
 
+// SCRAMJET-DIVERGENCE: Validate joint constraints at model ingestion, including dynamic and OAuth producers.
+export function validateModelRequestLimits(model: Pick<Model<Api>, "provider" | "id" | "requestLimits">): void {
+	const limits = model.requestLimits;
+	if (limits === undefined) return;
+	if (!Array.isArray(limits) || limits.length === 0) {
+		throw new Error(
+			`${model.provider}/${model.id}: invalid requestLimits; expected a non-empty endpoint constraint array`,
+		);
+	}
+	for (const [index, limit] of limits.entries()) {
+		if (
+			!limit ||
+			typeof limit.supportsTools !== "boolean" ||
+			!Number.isFinite(limit.maxTotalTokens) ||
+			limit.maxTotalTokens <= 0 ||
+			[limit.maxInputTokens, limit.maxOutputTokens].some(
+				(value) => value !== undefined && (!Number.isFinite(value) || value <= 0),
+			)
+		) {
+			throw new Error(
+				`${model.provider}/${model.id}: invalid requestLimits[${index}]; expected positive finite token limits and boolean supportsTools`,
+			);
+		}
+	}
+}
+
+// SCRAMJET-DIVERGENCE: Keep endpoint input/output combinations together without selecting a provider.
+export function getEndpointOutputLimit(model: Model<Api>, inputTokens: number, hasTools: boolean): number {
+	if (model.requestLimits === undefined) return Infinity;
+	const output = Math.floor(
+		Math.max(
+			0,
+			...model.requestLimits.map((limit) =>
+				(hasTools && !limit.supportsTools) || inputTokens > (limit.maxInputTokens ?? Infinity)
+					? 0
+					: Math.min(limit.maxOutputTokens ?? Infinity, limit.maxTotalTokens - inputTokens),
+			),
+		),
+	);
+	if (output < 1) {
+		throw new Error(
+			`context_length_exceeded: ${model.provider}/${model.id} estimated input ${inputTokens} has no compatible endpoint with output space${hasTools ? " and tools" : ""}; compact or reduce the request and check provider requestLimits.`,
+		);
+	}
+	return output;
+}
+
 export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage): Usage["cost"] {
 	usage.cost.input = (model.cost.input / 1000000) * usage.input;
 	usage.cost.output = (model.cost.output / 1000000) * usage.output;

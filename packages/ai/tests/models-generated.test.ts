@@ -111,6 +111,21 @@ describe("generated catalog - approved context corrections", () => {
 	});
 });
 
+describe("generated catalog - joint endpoint constraints", () => {
+	it("preserves the captured Qwen3-14B endpoint combinations", () => {
+		expect(getModel("openrouter", "qwen/qwen3-14b")).toMatchObject({
+			contextWindow: 131072,
+			maxInputTokens: 98304,
+			maxTokens: 40960,
+			requestLimits: [
+				{ maxTotalTokens: 40960, maxOutputTokens: 36864, supportsTools: false },
+				{ maxTotalTokens: 40960, maxOutputTokens: 16384, supportsTools: true },
+				{ maxTotalTokens: 131072, maxInputTokens: 98304, maxOutputTokens: 8192, supportsTools: true },
+			],
+		});
+	});
+});
+
 describe("generated catalog - OpenRouter independent input constraints", () => {
 	it.each([
 		["openai/gpt-5", 272000, 400000],

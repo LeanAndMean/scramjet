@@ -17,6 +17,7 @@ import {
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
+	validateModelRequestLimits,
 } from "@leanandmean/ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@leanandmean/ai/oauth";
 import { existsSync, readFileSync } from "fs";
@@ -160,6 +161,19 @@ const OPENAI_COMPLETIONS_COMPAT_KEYS = new Set(Object.keys(OpenAICompletionsComp
 const OPENAI_RESPONSES_COMPAT_KEYS = new Set(Object.keys(OpenAIResponsesCompatSchema.properties));
 const ANTHROPIC_MESSAGES_COMPAT_KEYS = new Set(Object.keys(AnthropicMessagesCompatSchema.properties));
 
+const RequestLimitsSchema = Type.Array(
+	Type.Object(
+		{
+			maxTotalTokens: Type.Number({ exclusiveMinimum: 0 }),
+			maxInputTokens: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+			maxOutputTokens: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
+			supportsTools: Type.Boolean(),
+		},
+		{ additionalProperties: false },
+	),
+	{ minItems: 1 },
+);
+
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
 const ModelDefinitionSchema = Type.Object({
@@ -180,6 +194,7 @@ const ModelDefinitionSchema = Type.Object({
 	),
 	contextWindow: Type.Optional(Type.Number()),
 	maxInputTokens: Type.Optional(Type.Number()),
+	requestLimits: Type.Optional(RequestLimitsSchema),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
@@ -201,6 +216,7 @@ const ModelOverrideSchema = Type.Object({
 	),
 	contextWindow: Type.Optional(Type.Number()),
 	maxInputTokens: Type.Optional(Type.Number()),
+	requestLimits: Type.Optional(RequestLimitsSchema),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
@@ -394,6 +410,7 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 	if (override.input !== undefined) result.input = override.input as ("text" | "image")[];
 	if (override.contextWindow !== undefined) result.contextWindow = override.contextWindow;
 	if (override.maxInputTokens !== undefined) result.maxInputTokens = override.maxInputTokens;
+	if (override.requestLimits !== undefined) result.requestLimits = override.requestLimits;
 	if (override.maxTokens !== undefined) result.maxTokens = override.maxTokens;
 
 	// Merge cost (partial override)
@@ -749,6 +766,7 @@ export class ModelRegistry {
 					cost: modelDef.cost ?? defaultCost,
 					contextWindow: modelDef.contextWindow ?? 128000,
 					maxInputTokens: modelDef.maxInputTokens,
+					requestLimits: modelDef.requestLimits,
 					maxTokens: modelDef.maxTokens ?? 16384,
 					headers: undefined,
 					compat,
@@ -988,6 +1006,7 @@ export class ModelRegistry {
 				throw new Error(`${model.provider}/${model.id}: invalid contextWindow`);
 			}
 			rejectContextWindowBudget(model, model.provider, model.id);
+			validateModelRequestLimits(model);
 			if (
 				model.maxInputTokens !== undefined &&
 				(!Number.isFinite(model.maxInputTokens) || model.maxInputTokens <= 0)
@@ -1066,6 +1085,7 @@ export class ModelRegistry {
 					cost: modelDef.cost,
 					contextWindow: modelDef.contextWindow,
 					maxInputTokens: modelDef.maxInputTokens,
+					requestLimits: modelDef.requestLimits,
 					maxTokens: modelDef.maxTokens,
 					headers: undefined,
 					compat: modelDef.compat,
@@ -1133,6 +1153,7 @@ export interface ProviderConfigInput {
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow: number;
 		maxInputTokens?: number;
+		requestLimits?: Model<Api>["requestLimits"];
 		maxTokens: number;
 		headers?: Record<string, string>;
 		compat?: Model<Api>["compat"];

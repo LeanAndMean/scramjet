@@ -217,6 +217,55 @@ describe.each([
 	["coding-agent", allocate, summarize],
 	["agent harness", allocateHarness, summarizeHarness],
 ])("%s request allocation", (_name, allocateRequest, generate) => {
+	it("allocates a jointly feasible endpoint output without reducing short-request output", () => {
+		const constrained = {
+			...model,
+			contextWindow: 131072,
+			maxInputTokens: 98304,
+			maxTokens: 40960,
+			requestLimits: [
+				{ maxTotalTokens: 40960, maxOutputTokens: 36864, supportsTools: false },
+				{ maxTotalTokens: 40960, maxOutputTokens: 16384, supportsTools: true },
+				{ maxTotalTokens: 131072, maxInputTokens: 98304, maxOutputTokens: 8192, supportsTools: true },
+			],
+		};
+		expect(allocateRequest(constrained, request(90000), 13107)).toBe(8192);
+		expect(allocateRequest(constrained, request(98304), 2048)).toBe(2048);
+		expect(allocateRequest(constrained, request(1000), 40000)).toBe(36864);
+		const tools = [{ name: "tool", description: "test", parameters: {} }] as Context["tools"];
+		expect(allocateRequest(constrained, { ...request(1000), tools }, 40000)).toBe(16384);
+		expect(constrained.contextWindow).toBe(131072);
+		expect(constrained.maxTokens).toBe(40960);
+	});
+	it("rejects input with no tool-compatible endpoint, including implicit OpenRouter output", () => {
+		const constrained = {
+			...model,
+			requestLimits: [
+				{ maxTotalTokens: 1000, maxInputTokens: 800, supportsTools: false },
+				{ maxTotalTokens: 500, supportsTools: true },
+			],
+		};
+		const tools = [{ name: "tool", description: "test", parameters: {} }] as Context["tools"];
+		expect(allocateRequest(constrained, request(700), 400)).toBe(300);
+		for (const provider of [model.provider, "openrouter"]) {
+			const context = { ...request(700), tools };
+			(context.messages[0] as AssistantMessage).provider = provider;
+			expect(() => allocateRequest({ ...constrained, provider }, context)).toThrow(/no compatible endpoint/);
+		}
+	});
+	it("caps actual summary requests using endpoint output declarations", async () => {
+		await generate(
+			[],
+			{
+				...model,
+				contextWindow: 2000,
+				requestLimits: [{ maxTotalTokens: 2000, maxOutputTokens: 150, supportsTools: true }],
+			},
+			1000,
+			"test",
+		);
+		expect(completeSimple.mock.calls.at(-1)![2].maxTokens).toBe(150);
+	});
 	it("checks the input boundary separately and leaves output room outside it", () => {
 		const constrained = { ...model, maxInputTokens: 800 };
 		expect(allocateRequest(constrained, request(800))).toBe(200);

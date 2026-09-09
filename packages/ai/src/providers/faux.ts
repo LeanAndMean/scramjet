@@ -1,4 +1,5 @@
 import { registerApiProvider, unregisterApiProviders } from "../api-registry.js";
+import { validateModelRequestLimits } from "../models.js";
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
@@ -43,6 +44,7 @@ export interface FauxModelDefinition {
 	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	contextWindow?: number;
 	maxInputTokens?: number;
+	requestLimits?: Model<string>["requestLimits"];
 	maxTokens?: number;
 }
 
@@ -419,6 +421,7 @@ export function registerFauxProvider(options: RegisterFauxProviderOptions = {}):
 				},
 			];
 	for (const definition of modelDefinitions) {
+		validateModelRequestLimits({ ...definition, provider });
 		if ("contextWindowBudget" in definition) {
 			throw new Error(
 				`${provider}/${definition.id}: contextWindowBudget was removed; remove this key and use the evidenced maximum total contextWindow, not a discretionary budget.`,
@@ -437,6 +440,7 @@ export function registerFauxProvider(options: RegisterFauxProviderOptions = {}):
 		contextWindow: definition.contextWindow ?? 128000,
 		// SCRAMJET-DIVERGENCE: Preserve genuine input constraints without changing total context.
 		maxInputTokens: definition.maxInputTokens,
+		requestLimits: definition.requestLimits,
 		maxTokens: definition.maxTokens ?? 16384,
 	})) as [Model<string>, ...Model<string>[]];
 

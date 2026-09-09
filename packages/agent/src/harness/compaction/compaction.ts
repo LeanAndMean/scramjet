@@ -1,5 +1,5 @@
 import type { AssistantMessage, Context, ImageContent, Model, TextContent, Usage } from "@leanandmean/ai";
-import { completeSimple, flattenSystemPrompt } from "@leanandmean/ai";
+import { completeSimple, flattenSystemPrompt, getEndpointOutputLimit } from "@leanandmean/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
 	convertToLlm,
@@ -225,9 +225,15 @@ export function getRequestMaxTokens(
 			`context_length_exceeded: ${model.provider}/${model.id} estimated input ${inputTokens} leaves no output space in total context ${model.contextWindow}; compact or reduce the request.`,
 		);
 	}
+	const endpointOutput = getEndpointOutputLimit(model, inputTokens, !!context.tools?.length);
 	// Aggregate output maxima can exclude the only long-context endpoint when sent as defaults.
 	if (requested === undefined && model.provider === "openrouter") return undefined;
-	const maxTokens = Math.min(requested ?? Infinity, model.maxTokens > 0 ? model.maxTokens : Infinity, remaining);
+	const maxTokens = Math.min(
+		requested ?? Infinity,
+		model.maxTokens > 0 ? model.maxTokens : Infinity,
+		remaining,
+		endpointOutput,
+	);
 	if (maxTokens < 1)
 		throw new Error(
 			`${model.provider}/${model.id}: no positive output allocation; increase the output allowance or compaction reserve.`,

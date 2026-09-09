@@ -198,7 +198,13 @@ describe("resolveCliModel", () => {
 			baseUrl: "https://unused.invalid",
 			apiKey: "test",
 			api: "anthropic-messages",
-			models: [{ ...getModel("anthropic", "claude-opus-4-8"), maxInputTokens: 800 }],
+			models: [
+				{
+					...getModel("anthropic", "claude-opus-4-8"),
+					maxInputTokens: 800,
+					requestLimits: [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }],
+				},
+			],
 		});
 		try {
 			const result = resolveCliModel({
@@ -208,6 +214,7 @@ describe("resolveCliModel", () => {
 			});
 			expect(result.model).toBeDefined();
 			expect(result.model?.maxInputTokens).toBeUndefined();
+			expect(result.model?.requestLimits).toBeUndefined();
 		} finally {
 			customRegistry.unregisterProvider("anthropic");
 		}

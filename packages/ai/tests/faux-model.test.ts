@@ -3,6 +3,18 @@ import { registerFauxProvider } from "../src/index.js";
 import type { ImagesModel, Model } from "../src/types.js";
 
 describe("Faux model context", () => {
+	it("preserves and validates joint request limits", () => {
+		const requestLimits = [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }];
+		const faux = registerFauxProvider({ models: [{ id: "joint", requestLimits }] });
+		try {
+			expect(faux.getModel().requestLimits).toEqual(requestLimits);
+		} finally {
+			faux.unregister();
+		}
+		expect(() => registerFauxProvider({ models: [{ id: "invalid", requestLimits: [] }] })).toThrow(
+			/invalid requestLimits/,
+		);
+	});
 	it("preserves total context and an independent input constraint", () => {
 		const faux = registerFauxProvider({
 			models: [{ id: "constrained", contextWindow: 1_050_000, maxInputTokens: 900_000 }],
@@ -37,5 +49,6 @@ describe("Faux model context", () => {
 			"contextWindowBudget" extends keyof Model<"openai-responses"> ? true : false
 		>().toEqualTypeOf<false>();
 		expectTypeOf<"maxInputTokens" extends keyof ImagesModel<"openai-images"> ? true : false>().toEqualTypeOf<false>();
+		expectTypeOf<"requestLimits" extends keyof ImagesModel<"openai-images"> ? true : false>().toEqualTypeOf<false>();
 	});
 });

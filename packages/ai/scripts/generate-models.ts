@@ -3,6 +3,7 @@
 import { writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { validateModelRequestLimits } from "../src/models.js";
 import {
 	CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL,
 	CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
@@ -310,6 +311,25 @@ function getBedrockBaseUrl(modelId: string): string {
 		: "https://bedrock-runtime.us-east-1.amazonaws.com";
 }
 
+// SCRAMJET-DIVERGENCE: Preserve endpoint feasibility without copying routing identities or live availability.
+function endpointRequestLimits(endpoints: any[], provider: string, id: string): NonNullable<Model<any>["requestLimits"]> {
+	const requestLimits = endpoints.map((endpoint) => {
+		if (!endpoint || (!Array.isArray(endpoint.supported_parameters) && !Array.isArray(endpoint.tags)) ||
+			[endpoint.supported_parameters, endpoint.tags].some((values) => values !== undefined &&
+				(!Array.isArray(values) || values.some((value) => typeof value !== "string")))) {
+			throw new Error(`${provider}/${id}: invalid endpoint capability declarations`);
+		}
+		return {
+			maxTotalTokens: endpoint.context_length,
+			...(endpoint.max_prompt_tokens != null ? { maxInputTokens: endpoint.max_prompt_tokens } : {}),
+			...(endpoint.max_completion_tokens != null ? { maxOutputTokens: endpoint.max_completion_tokens } : {}),
+			supportsTools: endpoint.supported_parameters?.includes("tools") || endpoint.tags?.includes("tool-use") || false,
+		};
+	});
+	if (requestLimits.length) validateModelRequestLimits({ provider, id, requestLimits });
+	return requestLimits;
+}
+
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
@@ -333,17 +353,10 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 			if (!Array.isArray(endpointData.data?.endpoints)) {
 				throw new Error(`Invalid OpenRouter endpoint catalog for ${model.id}`);
 			}
-			const endpoints = endpointData.data.endpoints as { context_length: number; max_prompt_tokens?: number | null }[];
-			if (endpoints.some((endpoint) =>
-				!endpoint || !Number.isFinite(endpoint.context_length) || endpoint.context_length <= 0 ||
-				(endpoint.max_prompt_tokens != null &&
-					(!Number.isFinite(endpoint.max_prompt_tokens) || endpoint.max_prompt_tokens <= 0))
-			)) {
-				throw new Error(`Invalid OpenRouter endpoint constraints for ${model.id}`);
-			}
-			const endpointContext = Math.max(...endpoints.map((endpoint) => endpoint.context_length));
-			const endpointInput = Math.max(...endpoints.map((endpoint) =>
-				Math.min(endpoint.context_length, endpoint.max_prompt_tokens ?? endpoint.context_length),
+			const requestLimits = endpointRequestLimits(endpointData.data.endpoints, "openrouter", model.id);
+			const endpointContext = Math.max(...requestLimits.map((endpoint) => endpoint.maxTotalTokens));
+			const endpointInput = Math.max(...requestLimits.map((endpoint) =>
+				Math.min(endpoint.maxTotalTokens, endpoint.maxInputTokens ?? endpoint.maxTotalTokens),
 			));
 			const maxInputTokens = endpointInput < endpointContext && endpointInput < model.context_length
 				? endpointInput : undefined;
@@ -382,6 +395,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 				},
 				contextWindow: model.context_length ?? Number.NaN,
 				...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
+				...(requestLimits.length ? { requestLimits } : {}),
 				maxTokens: model.top_provider?.max_completion_tokens || 4096,
 			};
 			models.push(normalizedModel);
@@ -426,21 +440,10 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 			if (!Array.isArray(endpointData.data?.endpoints)) {
 				throw new Error(`Invalid endpoint catalog for ${model.id}`);
 			}
-			const endpoints = endpointData.data.endpoints.filter(
-				(endpoint: { supported_parameters?: string[]; tags?: string[] }) =>
-					(Array.isArray(endpoint.supported_parameters) && endpoint.supported_parameters.includes("tools")) ||
-					(Array.isArray(endpoint.tags) && endpoint.tags.includes("tool-use")),
-			);
-			if (
-				endpoints.length === 0 ||
-				endpoints.some(
-					(endpoint: { context_length?: number }) =>
-						!Number.isFinite(endpoint.context_length) || endpoint.context_length! <= 0,
-				)
-			) {
-				throw new Error(`Unresolved endpoint context maximum for ${model.id}`);
-			}
-			const contextWindow = Math.max(...endpoints.map((endpoint: { context_length: number }) => endpoint.context_length));
+			const requestLimits = endpointRequestLimits(endpointData.data.endpoints, "vercel-ai-gateway", model.id);
+			const endpoints = requestLimits.filter((endpoint) => endpoint.supportsTools);
+			if (endpoints.length === 0) throw new Error(`Unresolved endpoint context maximum for ${model.id}`);
+			const contextWindow = Math.max(...endpoints.map((endpoint) => endpoint.maxTotalTokens));
 
 			const input: ("text" | "image")[] = ["text"];
 			if (tags.includes("vision")) {
@@ -467,6 +470,7 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 					cacheWrite: cacheWriteCost,
 				},
 				contextWindow,
+				requestLimits,
 				maxTokens: model.max_tokens || 4096,
 			});
 		}
@@ -2239,6 +2243,14 @@ export const MODELS = {
 			output += `\t\t\tcontextWindow: ${model.contextWindow},\n`;
 			if (model.maxInputTokens !== undefined) {
 				output += `\t\t\tmaxInputTokens: ${model.maxInputTokens},\n`;
+			}
+			if (model.requestLimits && !model.requestLimits.some((limit) =>
+				limit.supportsTools && limit.maxTotalTokens >= model.contextWindow &&
+				(limit.maxInputTokens ?? Infinity) >= Math.min(model.maxInputTokens ?? Infinity, model.contextWindow) &&
+				(limit.maxOutputTokens ?? Infinity) >= Math.min(model.maxTokens > 0 ? model.maxTokens : Infinity, model.contextWindow)
+			)) {
+				const limits = [...new Map(model.requestLimits.map((limit) => [JSON.stringify(limit), limit])).values()];
+				output += `\t\t\trequestLimits: ${JSON.stringify(limits)},\n`;
 			}
 			output += `\t\t\tmaxTokens: ${model.maxTokens},\n`;
 			output += `\t\t} satisfies Model<"${model.api}">,\n`;

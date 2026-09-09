@@ -1,7 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Context, createAssistantMessageEventStream, type SimpleStreamOptions } from "@leanandmean/ai";
+import {
+	type Context,
+	createAssistantMessageEventStream,
+	type ModelRequestLimit,
+	type SimpleStreamOptions,
+} from "@leanandmean/ai";
 import { describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
@@ -10,7 +15,7 @@ import { createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
-async function fixture(maxInputTokens?: number) {
+async function fixture(maxInputTokens?: number, requestLimits?: ModelRequestLimit[]) {
 	const root = mkdtempSync(join(tmpdir(), "context-allocation-"));
 	const authStorage = AuthStorage.inMemory();
 	const registry = ModelRegistry.inMemory(authStorage);
@@ -29,6 +34,7 @@ async function fixture(maxInputTokens?: number) {
 				contextWindow: 1000,
 				maxTokens: 500,
 				maxInputTokens,
+				requestLimits,
 			},
 		],
 		streamSimple: (model, context, options) => {
@@ -93,6 +99,19 @@ async function fixture(maxInputTokens?: number) {
 }
 
 describe("SDK request context allocation", () => {
+	it("allocates using the prepared request and preserves scalar model maxima", async () => {
+		const f = await fixture(undefined, [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }]);
+		try {
+			f.session.agent.beforeProviderCall = (context) => ({ ...context, systemPrompt: "x".repeat(3000) });
+			await f.session.prompt("xxxx");
+			expect(f.calls).toHaveLength(1);
+			expect(f.calls[0].options?.maxTokens).toBe(100);
+			expect(f.session.model?.contextWindow).toBe(1000);
+			expect(f.session.model?.maxTokens).toBe(500);
+		} finally {
+			f.dispose();
+		}
+	});
 	it("checks actual request-local context and allocates output without mutating model metadata", async () => {
 		const f = await fixture();
 		try {

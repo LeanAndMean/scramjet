@@ -173,6 +173,7 @@ function buildFallbackModel(provider: string, modelId: string, availableModels: 
 		name: modelId,
 		// SCRAMJET-DIVERGENCE: Unknown IDs must not inherit another model's constraints or capabilities.
 		maxInputTokens: undefined,
+		requestLimits: undefined,
 		compat: undefined,
 		thinkingLevelMap: undefined,
 	};

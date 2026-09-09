@@ -67,7 +67,23 @@ afterEach(() => {
 	unregisterOAuthProvider("dynamic");
 });
 
+const requestLimits = [{ maxTotalTokens: 1000, maxInputTokens: 800, maxOutputTokens: 100, supportsTools: true }];
+
 describe("models.json context constraints", () => {
+	it("preserves joint constraints through custom definitions and built-in overrides", () => {
+		const custom = loadConfig(customConfig({ requestLimits }));
+		expect(custom.getError()).toBeUndefined();
+		expect(custom.find("custom", "test-model")?.requestLimits).toEqual(requestLimits);
+		const override = loadConfig({ providers: { openai: { modelOverrides: { "gpt-5.4": { requestLimits } } } } });
+		expect(override.getError()).toBeUndefined();
+		expect(override.find("openai", "gpt-5.4")?.requestLimits).toEqual(requestLimits);
+	});
+	it.each([[], null, [{}], [{ maxTotalTokens: 1000 }], [{ ...requestLimits[0], maxOutputTokens: 0 }]])(
+		"rejects malformed configured joint constraints: %j",
+		(requestLimits) => {
+			expect(loadConfig(customConfig({ requestLimits })).getError()).toContain("requestLimits");
+		},
+	);
 	it("preserves a separate genuine input limit without changing total context", () => {
 		const registry = loadConfig(customConfig({ contextWindow: 1000, maxInputTokens: 800 }));
 		expect(registry.getError()).toBeUndefined();
@@ -140,10 +156,38 @@ describe("models.json context constraints", () => {
 
 const invalidModels = [
 	...[0, -1, NaN, Infinity, -Infinity].flatMap((value) => [{ contextWindow: value }, { maxInputTokens: value }]),
+	...[
+		[],
+		null,
+		[null],
+		[{}],
+		[{ ...requestLimits[0], supportsTools: "true" }],
+		...[0, -1, NaN, Infinity, null, "1000"].flatMap((value) =>
+			["maxTotalTokens", "maxInputTokens", "maxOutputTokens"].map((field) => [
+				{ ...requestLimits[0], [field]: value },
+			]),
+		),
+	].map((requestLimits) => ({ requestLimits })),
 	{ contextWindowBudget: 1000 },
 	{ contextWindowBudget: undefined },
 ];
 describe("dynamic and OAuth context boundaries", () => {
+	it("preserves joint constraints through dynamic and OAuth model construction", () => {
+		const registry = ModelRegistry.inMemory(authenticated("dynamic"));
+		const config = dynamicConfig({ requestLimits });
+		config.oauth = oauthProvider((models) =>
+			models.map((model) =>
+				model.provider === "dynamic"
+					? { ...model, requestLimits: [{ ...model.requestLimits![0], maxOutputTokens: 90 }] }
+					: model,
+			),
+		);
+		registry.registerProvider("dynamic", config);
+		expect(registry.getError()).toBeUndefined();
+		expect(registry.find("dynamic", "test-model")?.requestLimits).toEqual([
+			{ ...requestLimits[0], maxOutputTokens: 90 },
+		]);
+	});
 	it.each(invalidModels)("rejects a dynamic candidate without replacing live models: %j", (invalid) => {
 		const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
 		registry.registerProvider("dynamic", dynamicConfig());

@@ -27,6 +27,7 @@ async function generate(
 		expectFailure?: boolean;
 		openRouterEndpoints?: unknown;
 		openRouterEndpointError?: boolean;
+		vercelEndpoints?: unknown;
 	} = {},
 ) {
 	vi.resetModules();
@@ -48,8 +49,8 @@ async function generate(
 				json: async () => ({
 					data: {
 						endpoints: options.openRouterEndpoints ?? [
-							{ context_length: 1500000, max_prompt_tokens: 1200000 },
-							{ context_length: 1400000, max_prompt_tokens: null },
+							{ context_length: 1500000, max_prompt_tokens: 1200000, supported_parameters: ["tools"] },
+							{ context_length: 1400000, max_prompt_tokens: null, supported_parameters: ["tools"] },
 						],
 					},
 				}),
@@ -61,7 +62,7 @@ async function generate(
 				status: options.endpointError ? 503 : 200,
 				json: async () => ({
 					data: {
-						endpoints: [
+						endpoints: options.vercelEndpoints ?? [
 							{ context_length: 1600000, supported_parameters: ["tools"] },
 							{ context_length: 2000000, supported_parameters: ["tools"] },
 							{ context_length: 3000000, supported_parameters: [] },
@@ -259,19 +260,24 @@ describe("real generator context corrections", () => {
 
 	it.each([
 		{ openRouterEndpoints: [] },
-		{ openRouterEndpoints: [{ context_length: 1500000 }] },
-		{ openRouterEndpoints: [{ context_length: 1500000, max_prompt_tokens: 1600000 }] },
+		{ openRouterEndpoints: [{ context_length: 1500000, supported_parameters: ["tools"] }] },
+		{
+			openRouterEndpoints: [
+				{ context_length: 1500000, max_prompt_tokens: 1600000, supported_parameters: ["tools"] },
+			],
+		},
 	])("does not invent an independent input cap from $openRouterEndpoints", async ({ openRouterEndpoints }) => {
 		const models = (await generate(true, { openRouterEndpoints }))!;
 		expect(models.openrouter["openai/gpt-5.4"].contextWindow).toBe(1500000);
 		expect(models.openrouter["openai/gpt-5.4"]).not.toHaveProperty("maxInputTokens");
+		expect(models.openrouter["openai/gpt-5.4"]).not.toHaveProperty("requestLimits");
 	});
 
 	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, "98304"])(
 		"rejects invalid endpoint input limit %s before writing",
 		async (max_prompt_tokens) => {
 			await generate(true, {
-				openRouterEndpoints: [{ context_length: 131072, max_prompt_tokens }],
+				openRouterEndpoints: [{ context_length: 131072, max_prompt_tokens, supported_parameters: ["tools"] }],
 				expectFailure: true,
 			});
 		},
@@ -285,6 +291,83 @@ describe("real generator context corrections", () => {
 		await generate(true, { openRouterEndpoints, expectFailure: true });
 	});
 
+	it("retains Vercel joint output constraints without selecting a smaller total context", async () => {
+		const models = (await generate(true, {
+			vercelEndpoints: [
+				{ context_length: 1600000, max_completion_tokens: 4096, tags: ["tool-use"] },
+				{ context_length: 2000000, max_completion_tokens: 2048, supported_parameters: ["tools"] },
+			],
+		}))!;
+		expect(models["vercel-ai-gateway"]["openai/gpt-5.4"]).toMatchObject({
+			contextWindow: 2000000,
+			maxTokens: 4096,
+			requestLimits: [
+				{ maxTotalTokens: 1600000, maxOutputTokens: 4096, supportsTools: true },
+				{ maxTotalTokens: 2000000, maxOutputTokens: 2048, supportsTools: true },
+			],
+		});
+	});
+	it("deduplicates equivalent constraints and omits non-binding endpoint metadata", async () => {
+		const endpoint = { context_length: 1000000, max_completion_tokens: 2048, supported_parameters: ["tools"] };
+		const models = (await generate(true, { openRouterEndpoints: [endpoint, endpoint] }))!;
+		expect(models.openrouter["openai/gpt-5.4"].requestLimits).toHaveLength(1);
+		const unbound = (await generate(true, {
+			openRouterEndpoints: [{ ...endpoint, context_length: 1500000, max_completion_tokens: 4096 }, endpoint],
+		}))!;
+		expect(unbound.openrouter["openai/gpt-5.4"].requestLimits).toBeUndefined();
+	});
+	it.each([null, 0, Infinity, "8192"])("rejects malformed Vercel endpoint declaration %s", async (value) => {
+		await generate(true, {
+			vercelEndpoints: [
+				value === null
+					? null
+					: {
+							context_length: 1500000,
+							max_completion_tokens: value,
+							supported_parameters: ["tools"],
+						},
+			],
+			expectFailure: true,
+		});
+	});
+	it.each([undefined, null, "tools", [1]])(
+		"rejects unqualified endpoint capabilities %s",
+		async (supported_parameters) => {
+			await generate(true, {
+				openRouterEndpoints: [{ context_length: 131072, supported_parameters }],
+				expectFailure: true,
+			});
+		},
+	);
+	it("retains joint endpoint constraints and tool capability instead of independent maxima", async () => {
+		const models = (await generate(true, {
+			openRouterEndpoints: [
+				{ context_length: 40960, max_completion_tokens: 36864, supported_parameters: [] },
+				{ context_length: 40960, max_completion_tokens: 16384, supported_parameters: ["tools"] },
+				{
+					context_length: 131072,
+					max_prompt_tokens: 98304,
+					max_completion_tokens: 8192,
+					supported_parameters: ["tools"],
+				},
+			],
+		}))!;
+		expect(models.openrouter["openai/gpt-5.4"].requestLimits).toEqual([
+			{ maxTotalTokens: 40960, maxOutputTokens: 36864, supportsTools: false },
+			{ maxTotalTokens: 40960, maxOutputTokens: 16384, supportsTools: true },
+			{ maxTotalTokens: 131072, maxInputTokens: 98304, maxOutputTokens: 8192, supportsTools: true },
+		]);
+		expect(models.openai["gpt-5.4"].requestLimits).toBeUndefined();
+	});
+	it.each([0, -1, Infinity, NaN, "8192"])(
+		"rejects invalid endpoint output %s before writing",
+		async (max_completion_tokens) => {
+			await generate(true, {
+				openRouterEndpoints: [{ context_length: 131072, max_completion_tokens, supported_parameters: ["tools"] }],
+				expectFailure: true,
+			});
+		},
+	);
 	it("does not emit a partial catalog when OpenRouter endpoint acquisition fails", async () => {
 		await generate(true, { openRouterEndpointError: true, expectFailure: true });
 	});

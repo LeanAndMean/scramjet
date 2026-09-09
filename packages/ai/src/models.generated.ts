@@ -10480,6 +10480,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":262141,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":117964,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":40960,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"google/gemma-4-31b-it:free": {
@@ -10702,6 +10703,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
+			requestLimits: [{"maxTotalTokens":128000,"maxOutputTokens":115200,"supportsTools":true},{"maxTotalTokens":1048576,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":1048576,"maxOutputTokens":8192,"supportsTools":false},{"maxTotalTokens":524288,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":524288,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"meta-llama/llama-4-scout": {
@@ -10719,6 +10721,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1310720,
+			requestLimits: [{"maxTotalTokens":327680,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":131072,"maxOutputTokens":117964,"supportsTools":false},{"maxTotalTokens":1310720,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"minimax/minimax-m1": {
@@ -10787,6 +10790,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 204800,
+			requestLimits: [{"maxTotalTokens":198000,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":200000,"maxOutputTokens":128000,"supportsTools":true},{"maxTotalTokens":196608,"maxOutputTokens":176947,"supportsTools":true},{"maxTotalTokens":65536,"maxOutputTokens":58982,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131100,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131072,"supportsTools":true}],
 			maxTokens: 196608,
 		} satisfies Model<"openai-completions">,
 		"minimax/minimax-m2.7": {
@@ -10804,6 +10808,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 204800,
+			requestLimits: [{"maxTotalTokens":196608,"maxOutputTokens":176947,"supportsTools":true},{"maxTotalTokens":196608,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131072,"supportsTools":true}],
 			maxTokens: 196608,
 		} satisfies Model<"openai-completions">,
 		"minimax/minimax-m3": {
@@ -11025,6 +11030,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			requestLimits: [{"maxTotalTokens":131072,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":131072,"maxOutputTokens":104857,"supportsTools":false},{"maxTotalTokens":60288,"maxOutputTokens":16000,"supportsTools":false},{"maxTotalTokens":128000,"maxOutputTokens":102400,"supportsTools":true}],
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"mistralai/mistral-saba": {
@@ -11076,6 +11082,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			requestLimits: [{"maxTotalTokens":128000,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":32768,"supportsTools":false}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"mistralai/mixtral-8x22b-instruct": {
@@ -11195,6 +11202,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65535,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":230400,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262000,"maxOutputTokens":235800,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"moonshotai/kimi-k2.7-code": {
@@ -11212,6 +11220,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":32000,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262000,"maxOutputTokens":235800,"supportsTools":false},{"maxTotalTokens":262144,"maxInputTokens":229376,"maxOutputTokens":16384,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"nex-agi/nex-n2-mini": {
@@ -11348,6 +11357,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"nvidia/nemotron-3-ultra-550b-a55b": {
@@ -11450,6 +11460,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 4095,
+			requestLimits: [{"maxTotalTokens":4095,"maxOutputTokens":3685,"supportsTools":true}],
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-3.5-turbo-16k": {
@@ -12604,6 +12615,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 32768,
+			requestLimits: [{"maxTotalTokens":32768,"maxOutputTokens":29491,"supportsTools":true}],
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen-plus": {
@@ -12675,6 +12687,7 @@ export const MODELS = {
 			},
 			contextWindow: 131072,
 			maxInputTokens: 98304,
+			requestLimits: [{"maxTotalTokens":40960,"maxOutputTokens":36864,"supportsTools":false},{"maxTotalTokens":40960,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":131072,"maxInputTokens":98304,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 40960,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-235b-a22b": {
@@ -12745,6 +12758,7 @@ export const MODELS = {
 			},
 			contextWindow: 131072,
 			maxInputTokens: 98304,
+			requestLimits: [{"maxTotalTokens":40960,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":131072,"maxInputTokens":98304,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-30b-a3b-instruct-2507": {
@@ -12883,6 +12897,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":64000,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxInputTokens":204800,"maxOutputTokens":65536,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder-plus": {
@@ -13143,6 +13158,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":false},{"maxTotalTokens":262144,"maxInputTokens":258048,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":81920,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-27b": {
@@ -13211,6 +13227,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":81920,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":false}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-flash-02-23": {
@@ -13299,6 +13316,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":false}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-flash": {
@@ -13406,6 +13424,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 16384,
+			requestLimits: [{"maxTotalTokens":16384,"maxOutputTokens":14745,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"relace/relace-search": {
@@ -13457,6 +13476,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			requestLimits: [{"maxTotalTokens":131072,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":8192,"maxOutputTokens":7372,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"stepfun/step-3.5-flash": {
@@ -13559,6 +13579,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1024000,
+			requestLimits: [{"maxTotalTokens":1024000,"maxOutputTokens":819200,"supportsTools":false},{"maxTotalTokens":32768,"maxOutputTokens":26214,"supportsTools":true}],
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"upstage/solar-pro-3": {
@@ -13678,6 +13699,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			requestLimits: [{"maxTotalTokens":1050000,"maxOutputTokens":945000,"supportsTools":false},{"maxTotalTokens":1048576,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":1024000,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":1000000,"maxOutputTokens":128000,"supportsTools":true}],
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-4.5": {
@@ -14994,6 +15016,7 @@ export const MODELS = {
 				cacheWrite: 18.75,
 			},
 			contextWindow: 200000,
+			requestLimits: [{"maxTotalTokens":200000,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 32000,
 		} satisfies Model<"anthropic-messages">,
 		"anthropic/claude-opus-4.1": {
@@ -15102,6 +15125,7 @@ export const MODELS = {
 				cacheWrite: 3.75,
 			},
 			contextWindow: 1000000,
+			requestLimits: [{"maxTotalTokens":1000000,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 64000,
 		} satisfies Model<"anthropic-messages">,
 		"anthropic/claude-sonnet-4.5": {
@@ -15903,6 +15927,7 @@ export const MODELS = {
 				cacheWrite: 0.375,
 			},
 			contextWindow: 1000000,
+			requestLimits: [{"maxTotalTokens":1000000,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":196608,"maxOutputTokens":131000,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131000,"supportsTools":true},{"maxTotalTokens":196000,"maxOutputTokens":196000,"supportsTools":true}],
 			maxTokens: 131000,
 		} satisfies Model<"anthropic-messages">,
 		"minimax/minimax-m2.5-highspeed": {
@@ -17669,6 +17694,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 204800,
+			requestLimits: [{"maxTotalTokens":202752,"maxOutputTokens":202752,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":202800,"maxOutputTokens":64000,"supportsTools":true}],
 			maxTokens: 202000,
 		} satisfies Model<"anthropic-messages">,
 		"zai/glm-5.2": {

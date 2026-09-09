@@ -1501,6 +1501,7 @@ export interface ProviderModelConfig {
 	contextWindow: number;
 	// SCRAMJET-DIVERGENCE: Separate genuine provider input constraints from total context.
 	maxInputTokens?: number;
+	requestLimits?: Model<Api>["requestLimits"];
 	/** Maximum output tokens. */
 	maxTokens: number;
 	/** Custom headers for this model. */
