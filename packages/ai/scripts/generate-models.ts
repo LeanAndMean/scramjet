@@ -52,7 +52,6 @@ interface ModelsDevModel {
 interface AiGatewayModel {
 	id: string;
 	name?: string;
-	context_window?: number;
 	max_tokens?: number;
 	tags?: string[];
 	pricing?: {
@@ -68,6 +67,7 @@ const COPILOT_STATIC_HEADERS = {
 	"Editor-Version": "vscode/1.107.0",
 	"Editor-Plugin-Version": "copilot-chat/0.35.0",
 	"Copilot-Integration-Id": "vscode-chat",
+	"X-GitHub-Api-Version": "2026-06-01",
 } as const;
 
 const KIMI_STATIC_HEADERS = {
@@ -314,7 +314,9 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
 		const response = await fetch("https://openrouter.ai/api/v1/models");
+		if (!response.ok) throw new Error(`OpenRouter model catalog: HTTP ${response.status}`);
 		const data = await response.json();
+		if (!Array.isArray(data.data)) throw new Error("Invalid OpenRouter model catalog");
 
 		const models: Model<any>[] = [];
 
@@ -354,7 +356,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 					cacheRead: cacheReadCost,
 					cacheWrite: cacheWriteCost,
 				},
-				contextWindow: model.context_length || 4096,
+				contextWindow: model.context_length ?? Number.NaN,
 				maxTokens: model.top_provider?.max_completion_tokens || 4096,
 			};
 			models.push(normalizedModel);
@@ -363,8 +365,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 		console.log(`Fetched ${models.length} tool-capable models from OpenRouter`);
 		return models;
 	} catch (error) {
-		console.error("Failed to fetch OpenRouter models:", error);
-		return [];
+		throw new Error("Failed to fetch OpenRouter models", { cause: error });
 	}
 }
 
@@ -372,7 +373,9 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from Vercel AI Gateway API...");
 		const response = await fetch(`${AI_GATEWAY_MODELS_URL}/models`);
+		if (!response.ok) throw new Error(`Vercel model catalog: HTTP ${response.status}`);
 		const data = await response.json();
+		if (!Array.isArray(data.data)) throw new Error("Invalid Vercel model catalog");
 		const models: Model<any>[] = [];
 
 		const toNumber = (value: string | number | undefined): number => {
@@ -383,11 +386,36 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 			return Number.isFinite(parsed) ? parsed : 0;
 		};
 
-		const items = Array.isArray(data.data) ? (data.data as AiGatewayModel[]) : [];
+		const items = data.data as AiGatewayModel[];
 		for (const model of items) {
 			const tags = Array.isArray(model.tags) ? model.tags : [];
 			// Only include models that support tools
 			if (!tags.includes("tool-use")) continue;
+
+			// SCRAMJET-DIVERGENCE: The aggregate catalog can describe a shorter default route.
+			const endpointResponse = await fetch(`${AI_GATEWAY_MODELS_URL}/models/${model.id}/endpoints`);
+			if (!endpointResponse.ok) {
+				throw new Error(`Failed to fetch endpoints for ${model.id}: HTTP ${endpointResponse.status}`);
+			}
+			const endpointData = await endpointResponse.json();
+			if (!Array.isArray(endpointData.data?.endpoints)) {
+				throw new Error(`Invalid endpoint catalog for ${model.id}`);
+			}
+			const endpoints = endpointData.data.endpoints.filter(
+				(endpoint: { supported_parameters?: string[]; tags?: string[] }) =>
+					(Array.isArray(endpoint.supported_parameters) && endpoint.supported_parameters.includes("tools")) ||
+					(Array.isArray(endpoint.tags) && endpoint.tags.includes("tool-use")),
+			);
+			if (
+				endpoints.length === 0 ||
+				endpoints.some(
+					(endpoint: { context_length?: number }) =>
+						!Number.isFinite(endpoint.context_length) || endpoint.context_length! <= 0,
+				)
+			) {
+				throw new Error(`Unresolved endpoint context maximum for ${model.id}`);
+			}
+			const contextWindow = Math.max(...endpoints.map((endpoint: { context_length: number }) => endpoint.context_length));
 
 			const input: ("text" | "image")[] = ["text"];
 			if (tags.includes("vision")) {
@@ -413,7 +441,7 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 					cacheRead: cacheReadCost,
 					cacheWrite: cacheWriteCost,
 				},
-				contextWindow: model.context_window || 4096,
+				contextWindow,
 				maxTokens: model.max_tokens || 4096,
 			});
 		}
@@ -421,8 +449,7 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 		console.log(`Fetched ${models.length} tool-capable models from Vercel AI Gateway`);
 		return models;
 	} catch (error) {
-		console.error("Failed to fetch Vercel AI Gateway models:", error);
-		return [];
+		throw new Error("Failed to fetch Vercel AI Gateway models", { cause: error });
 	}
 }
 
@@ -430,7 +457,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from models.dev API...");
 		const response = await fetch("https://models.dev/api.json");
+		if (!response.ok) throw new Error(`models.dev catalog: HTTP ${response.status}`);
 		const data = await response.json();
+		if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid models.dev catalog");
 
 		const models: Model<any>[] = [];
 
@@ -466,7 +495,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -492,7 +521,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -518,7 +547,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -544,7 +573,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -570,7 +599,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -596,7 +625,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -622,7 +651,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					compat: { sendSessionAffinityHeaders: true },
 				});
@@ -677,7 +706,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					...(compat ? { compat } : {}),
 				});
@@ -704,7 +733,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -736,7 +765,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						thinkingFormat: "zai",
 						...(!ZAI_TOOL_STREAM_UNSUPPORTED_MODELS.has(modelId) ? { zaiToolStream: true } : {}),
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -762,7 +791,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -791,7 +820,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					compat: {
 						supportsDeveloperRole: false,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -818,7 +847,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					// Fireworks prompt caching uses automatic prefix matching + session affinity.
 					// x-session-affinity routes requests to the same replica for cache hits.
@@ -860,7 +889,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheWrite: m.cost?.cache_write || 0,
 					},
 					compat: getTogetherCompat(modelId, reasoning),
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -945,7 +974,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheWrite: m.cost?.cache_write || 0,
 					},
 					...(compat ? { compat } : {}),
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -987,7 +1016,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 128000,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 8192,
 					headers: { ...COPILOT_STATIC_HEADERS },
 					...(anthropicCompat ? { compat: anthropicCompat } : {}),
@@ -1032,7 +1061,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 							cacheRead: m.cost?.cache_read || 0,
 							cacheWrite: m.cost?.cache_write || 0,
 						},
-						contextWindow: m.limit?.context || 4096,
+						contextWindow: m.limit?.context ?? Number.NaN,
 						maxTokens: m.limit?.output || 4096,
 					});
 				}
@@ -1072,7 +1101,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 				});
 			}
@@ -1112,7 +1141,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						cacheRead: m.cost?.cache_read || 0,
 						cacheWrite: m.cost?.cache_write || 0,
 					},
-					contextWindow: m.limit?.context || 4096,
+					contextWindow: m.limit?.context ?? Number.NaN,
 					maxTokens: m.limit?.output || 4096,
 					compat: moonshotCompat,
 				});
@@ -1150,7 +1179,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 							cacheRead: m.cost?.cache_read || 0,
 							cacheWrite: m.cost?.cache_write || 0,
 						},
-						contextWindow: m.limit?.context || 4096,
+						contextWindow: m.limit?.context ?? Number.NaN,
 						maxTokens: m.limit?.output || 4096,
 					});
 				}
@@ -1160,8 +1189,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		console.log(`Loaded ${models.length} tool-capable models from models.dev`);
 		return models;
 	} catch (error) {
-		console.error("Failed to load models.dev data:", error);
-		return [];
+		throw new Error("Failed to load models.dev data", { cause: error });
 	}
 }
 
@@ -1207,15 +1235,15 @@ async function generateModels() {
 			candidate.contextWindow = 1000000;
 		}
 
-		// SCRAMJET-DIVERGENCE: Zen Sonnet 4.5 supports 1M; Go and retained Sonnet 4 evidence remains unresolved.
-		if (
-			(candidate.provider === "opencode-go" && candidate.id === "claude-sonnet-4-5") ||
-			((candidate.provider === "opencode" || candidate.provider === "opencode-go") && candidate.id === "claude-sonnet-4")
-		) {
+		// SCRAMJET-DIVERGENCE: The direct Anthropic Sonnet 4.5 long-context beta has retired.
+		if (candidate.provider === "anthropic" && ["claude-sonnet-4-5", "claude-sonnet-4-5-20250929"].includes(candidate.id)) {
 			candidate.contextWindow = 200000;
 		}
-		if ((candidate.provider === "opencode" || candidate.provider === "opencode-go") && candidate.id === "gpt-5.4") {
-			candidate.contextWindow = candidate.provider === "opencode" ? 1050000 : 272000;
+		if (candidate.provider === "opencode" && candidate.id === "claude-sonnet-4") {
+			candidate.contextWindow = 200000;
+		}
+		if (candidate.provider === "opencode" && candidate.id === "gpt-5.4") {
+			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
 		// SCRAMJET-DIVERGENCE: Public API context is 1.05M; 272K is a pricing threshold.
@@ -1241,6 +1269,16 @@ async function generateModels() {
 			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
+		if (candidate.provider === "github-copilot" && ["claude-opus-4.7", "claude-opus-4.8", "gemini-3.5-flash"].includes(candidate.id)) {
+			candidate.contextWindow = 1000000;
+		}
+		if (candidate.provider === "github-copilot" && ["claude-fable-5", "claude-sonnet-5"].includes(candidate.id)) {
+			candidate.contextWindow = 1000000;
+			candidate.maxTokens = 64000;
+		}
+		if (candidate.provider === "together" && candidate.id === "zai-org/GLM-5.2") {
+			candidate.contextWindow = 1000000;
+		}
 		if (candidate.provider === "github-copilot" && candidate.id === "gpt-6-astra") {
 			candidate.name = "GPT-6 Astra";
 			candidate.api = "openai-responses";
@@ -1248,7 +1286,7 @@ async function generateModels() {
 			candidate.reasoning = true;
 			candidate.input = ["text", "image"];
 			candidate.cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
-			candidate.contextWindow = 400000;
+			candidate.contextWindow = 1000000;
 			candidate.contextWindowBudget = 272000;
 			candidate.maxTokens = 128000;
 			candidate.headers = { ...COPILOT_STATIC_HEADERS };
@@ -1289,7 +1327,7 @@ async function generateModels() {
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
 			maxTokens: 128000,
 		});
 	}
@@ -1529,7 +1567,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-			contextWindow: 400000,
+			contextWindow: 1000000,
 			contextWindowBudget: 272000,
 			maxTokens: 128000,
 			headers: { ...COPILOT_STATIC_HEADERS },
@@ -1654,9 +1692,9 @@ async function generateModels() {
 
 	// OpenAI Codex (ChatGPT OAuth) models
 	// NOTE: These are not fetched from models.dev; we keep a small, explicit list to avoid aliases.
-	// Retain shared constants without asserting backend limits.
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
-	const CODEX_CONTEXT = 272000;
+	// SCRAMJET-DIVERGENCE: The older Codex models' 272K default reserves 128K output from 400K total.
+	const CODEX_CONTEXT = 400000;
 	const GPT_5_6_CONTEXT = 1050000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
@@ -1729,7 +1767,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1741,7 +1779,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
+			contextWindow: 1000000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1766,7 +1804,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-			contextWindow: CODEX_CONTEXT,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1814,7 +1852,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-			contextWindow: CODEX_CONTEXT,
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1833,7 +1871,7 @@ async function generateModels() {
 	allModels.push(...codexModels);
 
 	// Add missing Grok models
-	const missingGrokModels: Model[] = [
+	const missingGrokModels: Model<"openai-completions">[] = [
 		{
 			id: "grok-3",
 			name: "Grok 3",
@@ -2135,6 +2173,9 @@ export const MODELS = {
 		const sortedModelIds = Object.keys(models).sort();
 		for (const modelId of sortedModelIds) {
 			const model = models[modelId];
+			if (!Number.isFinite(model.contextWindow) || model.contextWindow <= 0) {
+				throw new Error(`Unresolved contextWindow for ${providerId}/${modelId}: ${model.contextWindow}`);
+			}
 			output += `\t\t"${model.id}": {\n`;
 			output += `\t\t\tid: "${model.id}",\n`;
 			output += `\t\t\tname: "${model.name}",\n`;
@@ -2193,4 +2234,7 @@ export const MODELS = {
 }
 
 // Run the generator
-generateModels().catch(console.error);
+generateModels().catch((error) => {
+	console.error(error);
+	process.exitCode = 1;
+});
