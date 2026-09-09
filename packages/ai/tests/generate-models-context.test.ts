@@ -35,9 +35,11 @@ async function generate(
 	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 	vi.spyOn(console, "log").mockImplementation(() => {});
 	const models = Object.fromEntries(
-		["gpt-5.4", "gpt-5.5", "gpt-6-astra", "claude-sonnet-4", "claude-sonnet-4-5"].map((id) => [
+		["gpt-5.4", "gpt-5.5", "gpt-6-astra", "gpt-5-pro", "claude-sonnet-4", "claude-sonnet-4-5"].map((id) => [
 			id,
-			feedModel(id, id.startsWith("claude") ? 1000000 : 1050000),
+			id === "gpt-5-pro"
+				? { ...feedModel(id, 400000), limit: { context: 400000, output: 272000 } }
+				: feedModel(id, id.startsWith("claude") ? 1000000 : 1050000),
 		]),
 	);
 	const fetch = vi.fn(async (url: string) => {
@@ -253,7 +255,17 @@ describe("real generator context corrections", () => {
 			maxInputTokens: 1400000,
 		});
 		expect(models.openai["gpt-5.4"]).not.toHaveProperty("maxInputTokens");
-		expect(models["azure-openai-responses"]["gpt-5.4"]).not.toHaveProperty("maxInputTokens");
+		expect(models["azure-openai-responses"]["gpt-5.4"].maxInputTokens).toBe(922000);
+		expect(models["azure-openai-responses"]["gpt-5.1-codex"].maxInputTokens).toBe(272000);
+		for (const id of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+			expect(models["azure-openai-responses"][id].maxInputTokens).toBe(922000);
+			expect(models["openai-codex"][id]).not.toHaveProperty("maxInputTokens");
+		}
+		if (present) {
+			expect(models["azure-openai-responses"]["gpt-5.5"]).not.toHaveProperty("maxInputTokens");
+			expect(models["azure-openai-responses"]["gpt-5-pro"].maxTokens).toBe(128000);
+			expect(models.openai["gpt-5-pro"].maxTokens).toBe(272000);
+		}
 		expect(models["vercel-ai-gateway"]["openai/gpt-5.4"].contextWindow).toBe(2000000);
 		expect(models.openai["gpt-5.4"].name).toBe(present ? "Feed gpt-5.4" : "GPT-5.4");
 	});

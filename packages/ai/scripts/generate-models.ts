@@ -2163,6 +2163,28 @@ async function generateModels() {
 	];
 	allModels.push(...vertexModels);
 
+	// SCRAMJET-DIVERGENCE: Azure documents individual input limits; public-API copies do not establish them.
+	const azureInputLimits: Record<string, number> = {
+		"gpt-5.6-sol": 922000,
+		"gpt-5.6-terra": 922000,
+		"gpt-5.6-luna": 922000,
+		"gpt-5.4": 922000,
+		"gpt-5.4-pro": 922000,
+		"gpt-5.4-mini": 272000,
+		"gpt-5.4-nano": 272000,
+		"gpt-5.3-codex": 272000,
+		"gpt-5.2-codex": 272000,
+		"gpt-5.2": 272000,
+		"gpt-5.1": 272000,
+		"gpt-5.1-codex": 272000,
+		"gpt-5.1-codex-mini": 272000,
+		"gpt-5.1-codex-max": 272000,
+		"gpt-5": 272000,
+		"gpt-5-mini": 272000,
+		"gpt-5-nano": 272000,
+		"gpt-5-codex": 272000,
+		"gpt-5-pro": 272000,
+	};
 	const azureOpenAiModels: Model<Api>[] = allModels
 		.filter(
 			(model) => model.provider === "openai" && model.api === "openai-responses" && model.id !== "gpt-6-astra",
@@ -2172,6 +2194,8 @@ async function generateModels() {
 			api: "azure-openai-responses",
 			provider: "azure-openai-responses",
 			baseUrl: "",
+			maxInputTokens: azureInputLimits[model.id],
+			maxTokens: model.id === "gpt-5-pro" ? 128000 : model.maxTokens,
 		}));
 	allModels.push(...azureOpenAiModels);
 

@@ -111,6 +111,39 @@ describe("generated catalog - approved context corrections", () => {
 	});
 });
 
+describe("generated catalog - Azure independent input limits", () => {
+	it.each([
+		["gpt-5.6-sol", 922000],
+		["gpt-5.6-terra", 922000],
+		["gpt-5.6-luna", 922000],
+		["gpt-5.4", 922000],
+		["gpt-5.4-pro", 922000],
+		["gpt-5.4-mini", 272000],
+		["gpt-5.4-nano", 272000],
+		["gpt-5.3-codex", 272000],
+		["gpt-5.2-codex", 272000],
+		["gpt-5.2", 272000],
+		["gpt-5.1", 272000],
+		["gpt-5.1-codex", 272000],
+		["gpt-5.1-codex-mini", 272000],
+		["gpt-5.1-codex-max", 272000],
+		["gpt-5", 272000],
+		["gpt-5-mini", 272000],
+		["gpt-5-nano", 272000],
+		["gpt-5-codex", 272000],
+		["gpt-5-pro", 272000],
+	] as const)("keeps %s input constraints scoped to Azure", (id, maxInputTokens) => {
+		const model = getModels("azure-openai-responses").find((model) => model.id === id)!;
+		expect(model.maxInputTokens).toBe(maxInputTokens);
+		expect(model.maxTokens).toBe(128000);
+		expect(model.contextWindow).toBe(maxInputTokens === 922000 ? 1050000 : 400000);
+		expect(getModels("openai").find((model) => model.id === id)).not.toHaveProperty("maxInputTokens");
+	});
+	it("preserves the unresolved GPT-5.5 combined-budget disposition", () => {
+		expect(getModel("azure-openai-responses", "gpt-5.5")).not.toHaveProperty("maxInputTokens");
+	});
+});
+
 describe("generated catalog - joint endpoint constraints", () => {
 	it("preserves the captured Qwen3-14B endpoint combinations", () => {
 		expect(getModel("openrouter", "qwen/qwen3-14b")).toMatchObject({

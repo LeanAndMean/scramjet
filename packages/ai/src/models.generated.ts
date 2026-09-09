@@ -2267,6 +2267,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-chat-latest": {
@@ -2303,6 +2304,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-mini": {
@@ -2321,6 +2323,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-nano": {
@@ -2339,6 +2342,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-pro": {
@@ -2357,7 +2361,8 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
-			maxTokens: 272000,
+			maxInputTokens: 272000,
+			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1": {
 			id: "gpt-5.1",
@@ -2375,6 +2380,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1-chat-latest": {
@@ -2411,6 +2417,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1-codex-max": {
@@ -2429,6 +2436,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1-codex-mini": {
@@ -2447,6 +2455,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.2": {
@@ -2465,6 +2474,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.2-chat-latest": {
@@ -2501,6 +2511,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.2-pro": {
@@ -2555,6 +2566,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.3-codex-spark": {
@@ -2591,6 +2603,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.4-mini": {
@@ -2609,6 +2622,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.4-nano": {
@@ -2627,6 +2641,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.4-pro": {
@@ -2645,6 +2660,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.5": {
@@ -2717,6 +2733,7 @@ export const MODELS = {
 				cacheWrite: 1.25,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.6-sol": {
@@ -2735,6 +2752,7 @@ export const MODELS = {
 				cacheWrite: 6.25,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.6-terra": {
@@ -2753,6 +2771,7 @@ export const MODELS = {
 				cacheWrite: 3.125,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"o1": {
