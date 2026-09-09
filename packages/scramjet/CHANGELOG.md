@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.91.0 — Add GPT-6 Astra support
+
+Adds provider-scoped GPT-6 Astra support across Responses providers. Fixes [#522](https://github.com/LeanAndMean/scramjet/issues/522).
+
+### Added
+
+- Add GPT-6 Astra catalog records for OpenAI, OpenAI Codex, and GitHub Copilot with provider-specific capacities, operational budgets, and five reasoning efforts.
+- Document long-context public API cost-estimation limits and subscription-provider usage estimates.
+
+### Fixed
+
+- Preserve compound Responses tool-call IDs for GitHub Copilot switched-provider history and streamed tool continuation.
+
+### Tests
+
+- Add generated-catalog and Responses continuation coverage across OpenAI, OpenAI Codex, and GitHub Copilot.
+
 ## 0.90.0 — Move structural mapping to Mach 12
 
 Moves structural-planning ownership from the Scramjet operational set to Mach 12. Fixes [#518](https://github.com/LeanAndMean/scramjet/issues/518).

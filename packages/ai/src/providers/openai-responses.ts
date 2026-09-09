@@ -21,7 +21,8 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
-const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+// SCRAMJET-DIVERGENCE: Copilot uses Responses compound tool-call IDs, including switched history (#522).
+const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "github-copilot", "opencode"]);
 
 /**
  * Resolve cache retention preference.

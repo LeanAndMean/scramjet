@@ -206,6 +206,8 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 
 GPT-5.6 Sol, Terra, and Luna through `openai-codex` use OpenAI's documented 1,050,000-token model capacity as their default operational budget. Set `contextWindowBudget` in a per-model override when an account requires a lower operational limit.
 
+GPT-6 Astra through the public OpenAI API stores the standard scalar rates of $10 input, $50 output, $1 cache read, and $12.50 cache write per million tokens. Requests above 272,000 input tokens use higher rates for the whole request, which the current scalar estimator cannot represent, so its monetary estimate may be too low while its token counts remain valid. The `openai-codex` and `github-copilot` Astra records carry the same scalar values only as usage estimates; those subscription providers do not imply marginal per-request API charges.
+
 Current behavior:
 - `/model` and `--list-models` list entries by model `id`.
 - The configured `name` is used for model matching and detail/status text.
