@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
 import type { AssistantMessage, Context, Model, SystemPromptSection } from "@leanandmean/ai";
-import { createAssistantMessageEventStream, flattenSystemPrompt } from "@leanandmean/ai";
+import {
+	createAssistantMessageEventStream,
+	flattenSystemPrompt,
+	inspectProviderRequestToolInventory,
+} from "@leanandmean/ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
@@ -14,10 +18,10 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
-const testModel: Model<"openai-chat"> = {
+const testModel: Model<"openai-completions"> = {
 	id: "test-model",
 	name: "Test Model",
-	api: "openai-chat",
+	api: "openai-completions",
 	provider: "openai",
 	baseUrl: "https://api.openai.com",
 	reasoning: false,
@@ -30,7 +34,7 @@ function assistantText(text: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
-		api: "openai-chat",
+		api: "openai-completions",
 		provider: "openai",
 		model: "test-model",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -72,6 +76,8 @@ function makeTool(name: string, promptSnippet: string, execute?: () => void): To
 interface CapturedContext {
 	systemPrompt: string;
 	sections?: SystemPromptSection[];
+	toolNames: string[];
+	inventory: ReturnType<typeof inspectProviderRequestToolInventory>;
 }
 
 async function createFixture(options: {
@@ -103,11 +109,16 @@ async function createFixture(options: {
 	const agent = new Agent({
 		initialState: { systemPrompt: "", model: testModel, tools: [] },
 		streamFn: (_model, context: Context) => {
+			const payload = {
+				tools: (context.tools ?? []).map((tool) => ({ function: { name: tool.name } })),
+			};
 			contexts.push({
 				systemPrompt: flattenSystemPrompt(context.systemPrompt),
 				sections: Array.isArray(context.systemPrompt)
 					? context.systemPrompt.map((section) => ({ ...section }))
 					: undefined,
+				toolNames: (context.tools ?? []).map((tool) => tool.name).sort(),
+				inventory: inspectProviderRequestToolInventory(testModel.api, payload),
 			});
 			const message = options.responses(contexts.length - 1);
 			const stream = createAssistantMessageEventStream();
@@ -135,6 +146,18 @@ async function createFixture(options: {
 
 function occurrences(text: string, marker: string): number {
 	return text.split(marker).length - 1;
+}
+
+function expectToolParity(
+	session: AgentSession,
+	context: CapturedContext,
+	expected: Array<{ name: string; guidance: string }>,
+): void {
+	const expectedNames = expected.map(({ name }) => name).sort();
+	expect([...session.getActiveToolNames()].sort()).toEqual(expectedNames);
+	expect(context.toolNames).toEqual(expectedNames);
+	expect(context.inventory).toEqual({ status: "observed", toolNames: expectedNames });
+	for (const { guidance } of expected) expect(context.systemPrompt).toContain(guidance);
 }
 
 describe("AgentSession run prompt composition", () => {
@@ -239,6 +262,8 @@ describe("AgentSession run prompt composition", () => {
 		let generation = 0;
 		const fixture = await createFixture({
 			responses: () => assistantText("done"),
+			customTools: [makeTool("reload_tool", "Reload tool guidance")],
+			initialActiveToolNames: ["reload_tool"],
 			extensionFactory: (pi) => {
 				const marker = `INSTANCE:${++generation}`;
 				pi.on("before_agent_start", () => ({
@@ -256,11 +281,16 @@ describe("AgentSession run prompt composition", () => {
 
 		expect(fixture.contexts[1].systemPrompt).toContain("INSTANCE:2");
 		expect(fixture.contexts[1].systemPrompt).not.toContain("INSTANCE:1");
+		expectToolParity(fixture.session, fixture.contexts[1], [
+			{ name: "reload_tool", guidance: "Reload tool guidance" },
+		]);
 	});
 
 	it("recomposes normally after tree navigation without resetting composition during navigation", async () => {
 		const fixture = await createFixture({
 			responses: () => assistantText("done"),
+			customTools: [makeTool("tree_tool", "Tree tool guidance")],
+			initialActiveToolNames: ["tree_tool"],
 			extensionFactory: (pi) => {
 				pi.on("before_agent_start", (event) => ({
 					systemPromptSection: { id: "test:tree", text: `\n\nTREE:${event.prompt}` },
@@ -281,5 +311,6 @@ describe("AgentSession run prompt composition", () => {
 
 		expect(fixture.contexts[1].systemPrompt).toContain("TREE:second");
 		expect(fixture.contexts[1].systemPrompt).not.toContain("TREE:first");
+		expectToolParity(fixture.session, fixture.contexts[1], [{ name: "tree_tool", guidance: "Tree tool guidance" }]);
 	});
 });

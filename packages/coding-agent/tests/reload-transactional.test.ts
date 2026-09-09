@@ -18,9 +18,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
-import type { AssistantMessage, Model } from "@leanandmean/ai";
+import type { AssistantMessage, Context, Model } from "@leanandmean/ai";
 import {
 	createAssistantMessageEventStream,
+	flattenSystemPrompt,
 	getApiProvider,
 	registerApiProvider,
 	unregisterApiProviders,
@@ -32,6 +33,8 @@ import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader, RequiredBuiltinInitError } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+
+const PROMPT_CONTRIBUTION = "TRANSACTIONAL RELOAD CONTRIBUTION";
 
 const testModel: Model<"openai-chat"> = {
 	id: "test-model",
@@ -64,12 +67,14 @@ async function buildFixture() {
 
 	const settingsManager = SettingsManager.inMemory();
 	const authStorage = AuthStorage.inMemory();
+	authStorage.setRuntimeApiKey("openai", "fake");
 	const modelRegistry = ModelRegistry.inMemory(authStorage);
 	const sessionManager = SessionManager.inMemory(cwd);
 
 	// The builtin records real lifecycle events through the extension runner and can be armed to
 	// throw on a later reload (mirroring a required product component that fails to re-initialize).
 	const events: string[] = [];
+	const prompts: string[] = [];
 	const control = { armed: false };
 	const resourceLoader = new DefaultResourceLoader({
 		cwd,
@@ -79,6 +84,9 @@ async function buildFixture() {
 			if (control.armed) {
 				throw new Error("reload builtin boom");
 			}
+			pi.on("before_agent_start", () => ({
+				systemPromptSection: { id: "test:transactional-reload", text: `\n\n${PROMPT_CONTRIBUTION}` },
+			}));
 			pi.on("session_shutdown", () => {
 				events.push("session_shutdown");
 			});
@@ -91,8 +99,13 @@ async function buildFixture() {
 
 	const agent = new Agent({
 		initialState: { systemPrompt: "", model: testModel, tools: [] },
-		streamFn() {
-			return createAssistantMessageEventStream(assistantText("ok"));
+		streamFn(_model, context: Context) {
+			prompts.push(flattenSystemPrompt(context.systemPrompt));
+			const message = assistantText("ok");
+			const stream = createAssistantMessageEventStream();
+			stream.push({ type: "start", partial: message });
+			stream.push({ type: "done", reason: "stop", message });
+			return stream;
 		},
 		getApiKey: async () => "fake",
 	});
@@ -111,7 +124,7 @@ async function buildFixture() {
 	// precondition for reload() to re-emit session_start.
 	await session.bindExtensions({ shutdownHandler: async () => {} });
 
-	return { session, events, control };
+	return { session, events, prompts, control };
 }
 
 describe("AgentSession.reload() — transactional required-builtin validation (Stage 5)", () => {
@@ -131,12 +144,20 @@ describe("AgentSession.reload() — transactional required-builtin validation (S
 		);
 
 		try {
+			await fx.session.prompt("prime composition");
+			const primedPrompt = fx.session.systemPrompt;
+			expect(primedPrompt.split(PROMPT_CONTRIBUTION)).toHaveLength(2);
+
 			fx.control.armed = true;
 			await expect(fx.session.reload()).rejects.toBeInstanceOf(RequiredBuiltinInitError);
 
 			expect(fx.events).not.toContain("session_shutdown");
 			expect(fx.events).toEqual(["session_start"]);
 			expect(getApiProvider("reload-sentinel-api")).toBeDefined();
+			expect(fx.session.systemPrompt).toBe(primedPrompt);
+			await fx.session.prompt("after failed reload");
+			expect(fx.prompts.at(-1)).toContain(PROMPT_CONTRIBUTION);
+			expect(fx.prompts.at(-1)?.split(PROMPT_CONTRIBUTION)).toHaveLength(2);
 		} finally {
 			unregisterApiProviders(sentinelSource);
 		}

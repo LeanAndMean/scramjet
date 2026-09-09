@@ -381,9 +381,9 @@ For no-policy commands (`policyMode: "none"` in log details), steps 13–15 are 
 
 ## Provider tool-visibility evidence
 
-Each built-in provider request whose serializer invokes `onPayload` produces one `tool-visibility` log entry after every `before_provider_request` payload replacement and before transport. The entry is only a final pre-transport observation: it does not establish that transport succeeded, that a response was parsed, that an assistant message completed or persisted, or that the model selected or ignored a tool.
+Each built-in provider request whose serializer invokes `onPayload` delivers a final pre-transport inventory observation to the current extension runner after every `before_provider_request` payload replacement. A delivered observation attempts one `tool-visibility` journal entry before transport, subject to runner validity and successful persistence. The observation does not establish that transport succeeded, that a response was parsed, that an assistant message completed or persisted, or that the model selected or ignored a tool.
 
-The entry records the routed `provider`, `model`, and `api`; lifecycle `phase` and `lifecycleGeneration`; sorted request-context tool names; and either sorted serialized names or a bounded malformed/unsupported reason. Observed entries also include sorted `missingNames` and `unexpectedNames`. It never records raw payloads, prompts, descriptions, schemas, messages, arguments, headers, credentials, or a durable request/response correlation identifier.
+The entry records the routed `provider`, `model`, and `api`; lifecycle `phase` and `lifecycleGeneration`; sorted request-context tool names; and the inventory status. An observed inventory includes sorted serialized names, `missingNames`, and `unexpectedNames`; an unsupported inventory records `inventoryStatus: "unsupported"` without a reason; and a malformed inventory includes a bounded reason. Anthropic identity ambiguity retains the observed serialized names and adds a bounded reason. The entry never records raw payloads, prompts, descriptions, schemas, messages, arguments, headers, credentials, or a durable request/response correlation identifier.
 
 Classifications are:
 

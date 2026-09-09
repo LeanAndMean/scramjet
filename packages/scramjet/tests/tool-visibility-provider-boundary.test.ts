@@ -31,7 +31,7 @@ const api = "openai-responses" as const;
 const originalProvider = getApiProvider(api);
 const temporaryDirectories: string[] = [];
 const payloads: unknown[] = [];
-const assistantContents: AssistantMessage["content"][] = [];
+const assistantResponses: Array<Pick<AssistantMessage, "content" | "stopReason">> = [];
 
 const testModel: Model<typeof api> = {
 	id: "test-model",
@@ -47,14 +47,15 @@ const testModel: Model<typeof api> = {
 };
 
 function assistantMessage(): AssistantMessage {
+	const response = assistantResponses.shift();
 	return {
 		role: "assistant",
-		content: assistantContents.shift() ?? [{ type: "text", text: "done" }],
+		content: response?.content ?? [{ type: "text", text: "done" }],
 		api,
 		provider: "openai",
 		model: testModel.id,
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		stopReason: "stop",
+		stopReason: response?.stopReason ?? "stop",
 		timestamp: Date.now(),
 	};
 }
@@ -73,7 +74,7 @@ const fakeStream: StreamFunction<typeof api, SimpleStreamOptions> = (model, cont
 		payloads.push(replacement === undefined ? payload : replacement);
 		const message = assistantMessage();
 		stream.push({ type: "start", partial: message });
-		stream.push({ type: "done", reason: "stop", message });
+		stream.push({ type: "done", reason: message.stopReason as "stop" | "aborted", message });
 	})();
 	return stream;
 };
@@ -95,7 +96,7 @@ afterAll(() => {
 
 afterEach(() => {
 	payloads.length = 0;
-	assistantContents.length = 0;
+	assistantResponses.length = 0;
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 	for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -313,6 +314,29 @@ describe("production Scramjet provider boundary", () => {
 		}
 	});
 
+	it("restores active, guided, and serialized tool parity after an aborted turn", async () => {
+		const { session } = await createFixture();
+		assistantResponses.push({ content: [{ type: "text", text: "partial" }], stopReason: "aborted" });
+		try {
+			await session.prompt("abort this turn");
+			await session.prompt("capture after abort");
+
+			const activeNames = [...session.getActiveToolNames()].sort();
+			expect(activeNames).toContain("suggest_scramjet_next_steps");
+			expect(activeNames).toContain("switch_scramjet_model");
+			expect(activeNames).not.toContain("scramjet_model_change_notice");
+			expect(session.systemPrompt).toContain("suggest_scramjet_next_steps");
+			expect(session.systemPrompt).toContain("switch_scramjet_model");
+			expect(session.systemPrompt).not.toContain("scramjet_model_change_notice");
+			expect(inspectProviderRequestToolInventory(api, payloads.at(-1))).toEqual({
+				status: "observed",
+				toolNames: activeNames,
+			});
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	it("applies a startup allowlist consistently", async () => {
 		const { session } = await createFixture(["switch_scramjet_model"]);
 		try {
@@ -344,18 +368,21 @@ describe("production Scramjet provider boundary", () => {
 				notify: vi.fn(),
 			} as any,
 		});
-		assistantContents.push(
-			[
-				{
-					type: "toolCall",
-					id: "suggest-while-active",
-					name: "suggest_scramjet_next_steps",
-					arguments: {
-						next_steps: [{ message: "Follow up", fresh_session: false, reason: "Continue later" }],
+		assistantResponses.push(
+			{
+				content: [
+					{
+						type: "toolCall",
+						id: "suggest-while-active",
+						name: "suggest_scramjet_next_steps",
+						arguments: {
+							next_steps: [{ message: "Follow up", fresh_session: false, reason: "Continue later" }],
+						},
 					},
-				},
-			],
-			[{ type: "text", text: "active command done" }],
+				],
+				stopReason: "toolUse",
+			},
+			{ content: [{ type: "text", text: "active command done" }], stopReason: "stop" },
 		);
 		try {
 			await session.prompt("/testset:command", { source: "interactive" });
@@ -390,18 +417,21 @@ describe("production Scramjet provider boundary", () => {
 				notify: vi.fn(),
 			} as any,
 		});
-		assistantContents.push(
-			[
-				{
-					type: "toolCall",
-					id: "suggest-while-idle",
-					name: "suggest_scramjet_next_steps",
-					arguments: {
-						next_steps: [{ message: "Follow up", fresh_session: false, reason: "Continue now" }],
+		assistantResponses.push(
+			{
+				content: [
+					{
+						type: "toolCall",
+						id: "suggest-while-idle",
+						name: "suggest_scramjet_next_steps",
+						arguments: {
+							next_steps: [{ message: "Follow up", fresh_session: false, reason: "Continue now" }],
+						},
 					},
-				},
-			],
-			[{ type: "text", text: "idle suggestion done" }],
+				],
+				stopReason: "toolUse",
+			},
+			{ content: [{ type: "text", text: "idle suggestion done" }], stopReason: "stop" },
 		);
 		try {
 			await session.prompt("recommend a follow-up", { source: "interactive" });

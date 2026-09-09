@@ -25,6 +25,7 @@ const originalProvider = getApiProvider(api);
 const temporaryDirectories: string[] = [];
 const transportedPayloads: unknown[] = [];
 let requestPayloads: unknown[] = [];
+let beforeTransport: (() => void) | undefined;
 
 const testModel: Model<typeof api> = {
 	id: "test-model",
@@ -58,6 +59,7 @@ const fakeStream: StreamFunction<typeof api, SimpleStreamOptions> = (model, _con
 	void (async () => {
 		const payload = requestPayloads.shift() ?? {};
 		const replacement = await options?.onPayload?.(payload, model);
+		beforeTransport?.();
 		transportedPayloads.push(replacement === undefined ? payload : replacement);
 		const message = assistantMessage();
 		stream.push({ type: "start", partial: message });
@@ -84,6 +86,7 @@ afterAll(() => {
 afterEach(() => {
 	transportedPayloads.length = 0;
 	requestPayloads = [];
+	beforeTransport = undefined;
 	for (const directory of temporaryDirectories.splice(0)) {
 		rmSync(directory, { recursive: true, force: true });
 	}
@@ -139,6 +142,16 @@ describe("provider request tool inventory boundary", () => {
 		let mutationHandlers = 0;
 		let replacementHandlers = 0;
 		let observationHandlers = 0;
+		let releaseObserver!: () => void;
+		const observerGate = new Promise<void>((resolve) => {
+			releaseObserver = resolve;
+		});
+		let observerStarted!: () => void;
+		const observerEntry = new Promise<void>((resolve) => {
+			observerStarted = resolve;
+		});
+		const ordering: string[] = [];
+		beforeTransport = () => ordering.push("transport");
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 		const { session } = await createFixture((pi) => {
 			pi.on("before_provider_request", (event) => {
@@ -157,15 +170,27 @@ describe("provider request tool inventory boundary", () => {
 			pi.on("provider_request_tool_inventory", () => {
 				throw new Error("observer failure");
 			});
-			pi.on("provider_request_tool_inventory", (event) => {
+			pi.on("provider_request_tool_inventory", async (event) => {
 				observationHandlers++;
 				observations.push(event);
+				if (observationHandlers === 1) {
+					ordering.push("observer-start");
+					observerStarted();
+					await observerGate;
+					ordering.push("observer-complete");
+				}
 			});
 		});
 
 		try {
 			requestPayloads.push({ tools: [{ name: "initial" }] });
-			await session.prompt("first");
+			const firstPrompt = session.prompt("first");
+			await observerEntry;
+			expect(transportedPayloads).toHaveLength(0);
+			expect(ordering).toEqual(["observer-start"]);
+			releaseObserver();
+			await firstPrompt;
+			expect(ordering).toEqual(["observer-start", "observer-complete", "transport"]);
 			session.setActiveToolsByName(["second"]);
 			requestPayloads.push({ tools: [{ name: "second" }] });
 			await session.prompt("second");
