@@ -3,44 +3,39 @@ import { describe, expect, it } from "vitest";
 import { formatModelContext } from "../src/cli/list-models.js";
 import { formatContextUsage } from "../src/modes/interactive/components/footer.js";
 
-const model = (contextWindow: number, contextWindowBudget?: number) =>
-	({ contextWindow, contextWindowBudget }) as Model<"openai-responses">;
-
-describe("context window budget display", () => {
-	it("shows generated GPT-5.6 Codex context without a split budget", () => {
-		const codex = getModel("openai-codex", "gpt-5.6-sol");
-
-		expect(formatModelContext(codex)).toBe("1.1M");
-		expect(formatContextUsage(525_000, 50, codex.contextWindow, codex.contextWindow, true)).toEqual({
-			display: "525k/1.1M (50.0%, auto)",
+describe("one context display", () => {
+	it("shows the same generated Copilot total in the listing and footer", () => {
+		const model = getModel("github-copilot", "gpt-6-astra");
+		expect(formatModelContext(model)).toBe("1M");
+		expect(formatContextUsage(500_000, 50, model.contextWindow, true)).toEqual({
+			display: "500k/1.0M (50.0%, auto)",
 			severity: "normal",
 		});
 	});
 
-	it("labels split capacity and operational budget in model listings", () => {
-		expect(formatModelContext(model(1_050_000, 272_000))).toBe("1.1M capacity (272K budget)");
+	it("does not display an independent input constraint as a context budget", () => {
+		const model = { contextWindow: 1_050_000, maxInputTokens: 900_000 } as Model<"openai-responses">;
+		expect(formatModelContext(model)).toBe("1.1M");
 	});
 
-	it("keeps ordinary model listings concise", () => {
-		expect(formatModelContext(model(272_000))).toBe("272K");
+	it.each([
+		[70, "normal"],
+		[75, "warning"],
+		[90, "warning"],
+		[91, "error"],
+	] as const)("uses total-context percentage %s for severity", (percent, severity) => {
+		expect(formatContextUsage(percent * 10_000, percent, 1_000_000, true).severity).toBe(severity);
 	});
 
-	it("aligns footer percentage, denominator, and warning state to the budget", () => {
-		expect(formatContextUsage(204_000, 75, 272_000, 1_050_000, true)).toEqual({
-			display: "204k/272k budget (75.0%, auto; 1.1M capacity)",
-			severity: "warning",
-		});
-	});
-
-	it("shows unknown usage cleanly after compaction on split-budget models", () => {
-		expect(formatContextUsage(null, null, 272_000, 1_050_000, true)).toEqual({
-			display: "?/272k budget (?, auto; 1.1M capacity)",
+	it("keeps unknown usage unknown", () => {
+		expect(formatContextUsage(null, null, 1_050_000, true)).toEqual({
+			display: "?/1.1M (?, auto)",
 			severity: "normal",
 		});
 	});
 
-	it("keeps ordinary footer context concise", () => {
-		expect(formatContextUsage(136_000, 50, 272_000, 272_000, false)).toEqual({
+	it("preserves disabled auto-compaction presentation", () => {
+		expect(formatContextUsage(136_000, 50, 272_000, false)).toEqual({
 			display: "136k/272k (50.0%)",
 			severity: "normal",
 		});

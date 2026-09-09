@@ -326,11 +326,15 @@ export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", Simp
 
 		const adjusted = adjustMaxTokensForThinking(
 			base.maxTokens || 0,
-			model.maxTokens,
+			Math.min(model.maxTokens, options.maxTokens ?? Infinity),
 			options.reasoning,
 			options.thinkingBudgets,
 		);
 
+		// SCRAMJET-DIVERGENCE: An explicit output ceiling includes thinking, including its minimum allocation.
+		if (adjusted.thinkingBudget < 1024) {
+			throw new Error("Insufficient output space for Bedrock thinking; reduce input or request more output space.");
+		}
 		return streamBedrock(model, context, {
 			...base,
 			maxTokens: adjusted.maxTokens,

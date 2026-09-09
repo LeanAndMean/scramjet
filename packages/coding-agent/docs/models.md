@@ -196,15 +196,23 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `reasoning` | No | `false` | Supports extended thinking |
 | `thinkingLevelMap` | No | omitted | Maps scramjet thinking levels to provider values and marks unsupported levels (see below) |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
-| `contextWindow` | No | `128000` | Advertised model capacity in tokens |
-| `contextWindowBudget` | No | `contextWindow` | Operational token budget used for overflow handling and compaction |
+| `contextWindow` | No | `128000` | Maximum supported total context for this provider/model, in tokens |
+| `maxInputTokens` | No | omitted | Genuine independently enforced provider input limit, only when evidenced for this route |
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `cost` | No | all zeros | `{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}` (per million tokens) |
 | `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
 
-`contextWindowBudget`, when supplied, must be a positive finite integer no greater than the final `contextWindow`. Omit it to use the advertised capacity as the operational budget. Custom models and per-model overrides set capacity and budget independently; after all overrides are merged, an invalid budget/capacity relationship is rejected with the provider, model, and both values. The existing `contextWindow` validation remains unchanged and rejects values `<= 0`.
+`contextWindow` is the sole total-context authority for usage percentages, the footer, listings, and compaction. Do not reduce it for pricing, presumed quality, or speculative conservatism. `maxTokens` is an independent output allowance; configurable compaction reserves remain separate. Custom-model defaults are client defaults, not evidence of your backend's maximum—set the actual deployment value.
 
-GPT-5.6 Sol, Terra, and Luna through `openai-codex` use OpenAI's documented 1,050,000-token model capacity as their default operational budget. Set `contextWindowBudget` in a per-model override when an account requires a lower operational limit.
+Final `contextWindow` and any `maxInputTokens` must be positive finite numbers after configuration merges, dynamic registration, and OAuth transformations; positive fractional context values remain accepted. An input constraint above total context is non-binding, not a reason to increase total context. Only assign input constraints from applicable provider evidence, never by subtracting maximum output or copying an old budget. Aggregate endpoint maxima may not be jointly available under custom routing or account restrictions.
+
+### Breaking migration from context budgets
+
+`contextWindowBudget` and the exported `getContextWindowBudget()` resolver have been removed, without aliases. Replace resolver calls and usage-budget reads with `contextWindow`; `ContextUsage` is now `{ tokens, percent, contextWindow }`. Remove the obsolete key from model definitions, `models.json` overrides, dynamic providers, Faux definitions, and OAuth-produced models—even when it equals total context. Registration/configuration diagnostics identify the provider/model and explain removal. No user files are rewritten and no old value is automatically copied into `contextWindow` or `maxInputTokens`.
+
+Invalid configuration retains built-ins while rejecting its request settings; an invalid OAuth transformation is diagnosed and its untransformed candidate models remain. This preserves existing fallback behavior, not a guarantee that requests are blocked until configuration is repaired.
+
+Built-in metadata is not proof of endpoint acceptance. The provider audit in [issue #525](https://github.com/LeanAndMean/scramjet/issues/525) retains unresolved numerical/route dispositions, including some Codex maxima and aggregate input/output combinations; retained values are not newly verified by this migration. Tests use static metadata and synthetic usage, not paid maximum-context requests.
 
 GPT-6 Astra through the public OpenAI API stores the standard scalar rates of $10 input, $50 output, $1 cache read, and $12.50 cache write per million tokens. Requests above 272,000 input tokens use higher rates for the whole request, which the current scalar estimator cannot represent, so its monetary estimate may be too low while its token counts remain valid. The `openai-codex` and `github-copilot` Astra records carry the same scalar values only as usage estimates; those subscription providers do not imply marginal per-request API charges.
 
@@ -314,7 +322,7 @@ Use `modelOverrides` to customize specific built-in models without replacing the
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `headers`, `compat`.
+`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxInputTokens`, `maxTokens`, `headers`, `compat`.
 
 Behavior notes:
 - `modelOverrides` are applied to built-in provider models.

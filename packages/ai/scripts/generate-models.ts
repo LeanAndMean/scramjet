@@ -1287,7 +1287,6 @@ async function generateModels() {
 			candidate.input = ["text", "image"];
 			candidate.cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
 			candidate.contextWindow = 1000000;
-			candidate.contextWindowBudget = 272000;
 			candidate.maxTokens = 128000;
 			candidate.headers = { ...COPILOT_STATIC_HEADERS };
 		}
@@ -1568,7 +1567,6 @@ async function generateModels() {
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
 			contextWindow: 1000000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 			headers: { ...COPILOT_STATIC_HEADERS },
 		});
@@ -2203,8 +2201,8 @@ export const MODELS = {
 			output += `\t\t\t\tcacheWrite: ${model.cost.cacheWrite},\n`;
 			output += `\t\t\t},\n`;
 			output += `\t\t\tcontextWindow: ${model.contextWindow},\n`;
-			if (model.contextWindowBudget !== undefined) {
-				output += `\t\t\tcontextWindowBudget: ${model.contextWindowBudget},\n`;
+			if (model.maxInputTokens !== undefined) {
+				output += `\t\t\tmaxInputTokens: ${model.maxInputTokens},\n`;
 			}
 			output += `\t\t\tmaxTokens: ${model.maxTokens},\n`;
 			output += `\t\t} satisfies Model<"${model.api}">,\n`;

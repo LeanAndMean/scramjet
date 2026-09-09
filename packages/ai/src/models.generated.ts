@@ -4695,7 +4695,6 @@ export const MODELS = {
 				cacheWrite: 12.5,
 			},
 			contextWindow: 1000000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"kimi-k2.7-code": {

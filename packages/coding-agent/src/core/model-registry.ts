@@ -179,7 +179,7 @@ const ModelDefinitionSchema = Type.Object({
 		}),
 	),
 	contextWindow: Type.Optional(Type.Number()),
-	contextWindowBudget: Type.Optional(Type.Number()),
+	maxInputTokens: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
@@ -200,7 +200,7 @@ const ModelOverrideSchema = Type.Object({
 		}),
 	),
 	contextWindow: Type.Optional(Type.Number()),
-	contextWindowBudget: Type.Optional(Type.Number()),
+	maxInputTokens: Type.Optional(Type.Number()),
 	maxTokens: Type.Optional(Type.Number()),
 	headers: Type.Optional(Type.Record(Type.String(), Type.String())),
 	compat: Type.Optional(ProviderCompatSchema),
@@ -228,8 +228,13 @@ const validateModelsConfig = Compile(ModelsConfigSchema);
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
 
-function isPositiveInteger(value: number): boolean {
-	return Number.isFinite(value) && Number.isInteger(value) && value > 0;
+// SCRAMJET-DIVERGENCE: Reject obsolete policy keys rather than silently changing their meaning.
+function rejectContextWindowBudget(model: object, provider: string, id: string): void {
+	if ("contextWindowBudget" in model) {
+		throw new Error(
+			`${provider}/${id}: contextWindowBudget was removed; remove this key and set contextWindow to the evidenced maximum total context. Do not copy a discretionary budget into contextWindow or maxInputTokens.`,
+		);
+	}
 }
 
 function formatValidationPath(error: TLocalizedValidationError): string {
@@ -376,7 +381,7 @@ function mergeCompat(
  * Deep merge a model override into a model.
  * Handles nested objects (cost, compat) by merging rather than replacing.
  */
-// SCRAMJET-DIVERGENCE: model capacity and operational context budget are independently overridable.
+// SCRAMJET-DIVERGENCE: Total context and genuine input constraints are independently overridable.
 function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<Api> {
 	const result = { ...model };
 
@@ -388,7 +393,7 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 	}
 	if (override.input !== undefined) result.input = override.input as ("text" | "image")[];
 	if (override.contextWindow !== undefined) result.contextWindow = override.contextWindow;
-	if (override.contextWindowBudget !== undefined) result.contextWindowBudget = override.contextWindowBudget;
+	if (override.maxInputTokens !== undefined) result.maxInputTokens = override.maxInputTokens;
 	if (override.maxTokens !== undefined) result.maxTokens = override.maxTokens;
 
 	// Merge cost (partial override)
@@ -478,7 +483,7 @@ export class ModelRegistry {
 		let builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
 		let combined = this.mergeCustomModels(builtInModels, customModels);
 		try {
-			this.validateResolvedBudgets(combined);
+			this.validateContextLimits(combined);
 		} catch (validationError) {
 			this.appendLoadError(
 				`Failed to load models.json: ${validationError instanceof Error ? validationError.message : validationError}`,
@@ -495,7 +500,7 @@ export class ModelRegistry {
 			if (cred?.type === "oauth" && oauthProvider.modifyModels) {
 				try {
 					const transformed = oauthProvider.modifyModels(combined, cred);
-					this.validateResolvedBudgets(transformed);
+					this.validateContextLimits(transformed);
 					combined = transformed;
 				} catch (validationError) {
 					this.appendLoadError(
@@ -675,8 +680,7 @@ export class ModelRegistry {
 				// Validate contextWindow/maxTokens only if provided (they have defaults)
 				if (modelDef.contextWindow !== undefined && modelDef.contextWindow <= 0)
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindow`);
-				if (modelDef.contextWindowBudget !== undefined && !isPositiveInteger(modelDef.contextWindowBudget))
-					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid contextWindowBudget`);
+				rejectContextWindowBudget(modelDef, providerName, modelDef.id);
 				if (modelDef.maxTokens !== undefined && modelDef.maxTokens <= 0)
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: invalid maxTokens`);
 
@@ -686,12 +690,7 @@ export class ModelRegistry {
 			}
 
 			for (const [modelId, modelOverride] of Object.entries(providerConfig.modelOverrides ?? {})) {
-				if (
-					modelOverride.contextWindowBudget !== undefined &&
-					!isPositiveInteger(modelOverride.contextWindowBudget)
-				) {
-					throw new Error(`Provider ${providerName}, model ${modelId}: invalid contextWindowBudget`);
-				}
+				rejectContextWindowBudget(modelOverride, providerName, modelId);
 				const api =
 					builtInModels.find((model) => model.id === modelId)?.api ?? providerConfig.api ?? builtInDefaultApi;
 				if (api) {
@@ -749,7 +748,7 @@ export class ModelRegistry {
 					input: (modelDef.input ?? ["text"]) as ("text" | "image")[],
 					cost: modelDef.cost ?? defaultCost,
 					contextWindow: modelDef.contextWindow ?? 128000,
-					contextWindowBudget: modelDef.contextWindowBudget,
+					maxInputTokens: modelDef.maxInputTokens,
 					maxTokens: modelDef.maxTokens ?? 16384,
 					headers: undefined,
 					compat,
@@ -983,18 +982,18 @@ export class ModelRegistry {
 		this.loadError = this.loadError ? `${this.loadError}\n${error}` : error;
 	}
 
-	private validateResolvedBudgets(models: Model<Api>[]): void {
+	private validateContextLimits(models: Model<Api>[]): void {
 		for (const model of models) {
 			if (!Number.isFinite(model.contextWindow) || model.contextWindow <= 0) {
 				throw new Error(`${model.provider}/${model.id}: invalid contextWindow`);
 			}
-			if (model.contextWindowBudget !== undefined && !isPositiveInteger(model.contextWindowBudget)) {
-				throw new Error(`${model.provider}/${model.id}: invalid contextWindowBudget`);
-			}
-			const budget = model.contextWindowBudget ?? model.contextWindow;
-			if (budget > model.contextWindow) {
+			rejectContextWindowBudget(model, model.provider, model.id);
+			if (
+				model.maxInputTokens !== undefined &&
+				(!Number.isFinite(model.maxInputTokens) || model.maxInputTokens <= 0)
+			) {
 				throw new Error(
-					`${model.provider}/${model.id}: context window budget ${budget} exceeds capacity ${model.contextWindow}; lower or remove contextWindowBudget, or raise contextWindow`,
+					`${model.provider}/${model.id}: invalid maxInputTokens; expected a positive finite provider input limit`,
 				);
 			}
 		}
@@ -1021,7 +1020,7 @@ export class ModelRegistry {
 			if (!api) {
 				throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
 			}
-			this.validateResolvedBudgets([
+			this.validateContextLimits([
 				{ ...modelDef, api, provider: providerName, baseUrl: modelDef.baseUrl ?? config.baseUrl } as Model<Api>,
 			]);
 		}
@@ -1066,7 +1065,7 @@ export class ModelRegistry {
 					input: modelDef.input as ("text" | "image")[],
 					cost: modelDef.cost,
 					contextWindow: modelDef.contextWindow,
-					contextWindowBudget: modelDef.contextWindowBudget,
+					maxInputTokens: modelDef.maxInputTokens,
 					maxTokens: modelDef.maxTokens,
 					headers: undefined,
 					compat: modelDef.compat,
@@ -1079,7 +1078,7 @@ export class ModelRegistry {
 				if (cred?.type === "oauth") {
 					try {
 						const transformed = config.oauth.modifyModels(candidateModels, cred);
-						this.validateResolvedBudgets(transformed);
+						this.validateContextLimits(transformed);
 						candidateModels = transformed;
 					} catch (validationError) {
 						this.appendLoadError(
@@ -1133,7 +1132,7 @@ export interface ProviderConfigInput {
 		input: ("text" | "image")[];
 		cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
 		contextWindow: number;
-		contextWindowBudget?: number;
+		maxInputTokens?: number;
 		maxTokens: number;
 		headers?: Record<string, string>;
 		compat?: Model<Api>["compat"];

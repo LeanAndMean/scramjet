@@ -1,5 +1,5 @@
-import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "@leanandmean/ai";
-import { completeSimple } from "@leanandmean/ai";
+import type { AssistantMessage, Context, ImageContent, Model, TextContent, Usage } from "@leanandmean/ai";
+import { completeSimple, flattenSystemPrompt } from "@leanandmean/ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
 import {
 	convertToLlm,
@@ -192,9 +192,52 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 	};
 }
 
+// SCRAMJET-DIVERGENCE: Allocate remaining total context without reserving maximum output or headroom twice.
+export function getRequestMaxTokens(
+	model: Model<any>,
+	context: Context,
+	requested?: number,
+	usageAfter = -Infinity,
+): number | undefined {
+	const fixedTokens = Math.ceil(
+		((flattenSystemPrompt(context.systemPrompt)?.length ?? 0) +
+			(context.tools?.length ? JSON.stringify(context.tools).length : 0)) /
+			4,
+	);
+	const heuristic = fixedTokens + context.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+	const estimate = estimateContextTokens(context.messages);
+	const source = estimate.lastUsageIndex === null ? undefined : context.messages[estimate.lastUsageIndex];
+	const inputTokens =
+		source?.role === "assistant" &&
+		source.provider === model.provider &&
+		source.model === model.id &&
+		source.timestamp > usageAfter
+			? Math.max(heuristic, estimate.tokens)
+			: heuristic;
+	if (model.maxInputTokens !== undefined && inputTokens > model.maxInputTokens) {
+		throw new Error(
+			`context_length_exceeded: ${model.provider}/${model.id} estimated input ${inputTokens} exceeds provider input limit ${model.maxInputTokens}; compact or reduce the request.`,
+		);
+	}
+	const remaining = Math.floor(model.contextWindow - inputTokens);
+	if (remaining < 1) {
+		throw new Error(
+			`context_length_exceeded: ${model.provider}/${model.id} estimated input ${inputTokens} leaves no output space in total context ${model.contextWindow}; compact or reduce the request.`,
+		);
+	}
+	// Aggregate output maxima can exclude the only long-context endpoint when sent as defaults.
+	if (requested === undefined && model.provider === "openrouter") return undefined;
+	const maxTokens = Math.min(requested ?? Infinity, model.maxTokens > 0 ? model.maxTokens : Infinity, remaining);
+	if (maxTokens < 1)
+		throw new Error(
+			`${model.provider}/${model.id}: no positive output allocation; increase the output allowance or compaction reserve.`,
+		);
+	return maxTokens;
+}
+
 /** Return whether context usage exceeds the configured compaction threshold. */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	// SCRAMJET-DIVERGENCE: Disable automatic compaction when the reserve consumes the operational budget (issue 398).
+	// SCRAMJET-DIVERGENCE: A reserve consuming the whole context must not cause repeated compaction.
 	if (!settings.enabled || contextWindow <= settings.reserveTokens) return false;
 	return contextTokens > contextWindow - settings.reserveTokens;
 }
@@ -212,6 +255,8 @@ export function estimateTokens(message: AgentMessage): number {
 				for (const block of content) {
 					if (block.type === "text" && block.text) {
 						chars += block.text.length;
+					} else if (block.type === "image") {
+						chars += 4800;
 					}
 				}
 			}
@@ -464,10 +509,6 @@ export async function generateSummary(
 	previousSummary?: string,
 	thinkingLevel?: ThinkingLevel,
 ): Promise<Result<string, CompactionError>> {
-	const maxTokens = Math.min(
-		Math.floor(0.8 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	);
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
 	if (customInstructions) {
 		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
@@ -488,16 +529,19 @@ export async function generateSummary(
 		},
 	];
 
+	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
+	let maxTokens: number | undefined;
+	try {
+		maxTokens = getRequestMaxTokens(model, context, Math.floor(0.8 * reserveTokens));
+	} catch (error) {
+		return err(new CompactionError("summarization_failed", error instanceof Error ? error.message : String(error)));
+	}
 	const completionOptions =
 		model.reasoning && thinkingLevel && thinkingLevel !== "off"
 			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
 			: { maxTokens, signal, apiKey, headers };
 
-	const response = await completeSimple(
-		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		completionOptions,
-	);
+	const response = await completeSimple(model, context, completionOptions);
 	if (response.stopReason === "aborted") {
 		return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
 	}
@@ -713,10 +757,6 @@ async function generateTurnPrefixSummary(
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 ): Promise<Result<string, CompactionError>> {
-	const maxTokens = Math.min(
-		Math.floor(0.5 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	);
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
@@ -728,9 +768,16 @@ async function generateTurnPrefixSummary(
 		},
 	];
 
+	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
+	let maxTokens: number | undefined;
+	try {
+		maxTokens = getRequestMaxTokens(model, context, Math.floor(0.5 * reserveTokens));
+	} catch (error) {
+		return err(new CompactionError("summarization_failed", error instanceof Error ? error.message : String(error)));
+	}
 	const response = await completeSimple(
 		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+		context,
 		model.reasoning && thinkingLevel && thinkingLevel !== "off"
 			? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
 			: { maxTokens, signal, apiKey, headers },

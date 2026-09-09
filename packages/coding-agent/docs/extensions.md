@@ -985,12 +985,12 @@ Returns current context usage for the active model. Uses last assistant usage wh
 
 ```typescript
 const usage = ctx.getContextUsage();
-if (usage && usage.tokens !== null && usage.tokens > usage.contextWindowBudget * 0.8) {
+if (usage && usage.tokens !== null && usage.tokens > usage.contextWindow * 0.8) {
   // ...
 }
 ```
 
-`usage.contextWindow` is advertised model capacity, while `usage.contextWindowBudget` is the resolved operational budget (`model.contextWindowBudget ?? model.contextWindow`). `usage.percent` uses the budget as its denominator. Extensions registering models may provide an optional positive finite integer budget no greater than capacity; models without one retain capacity-based behavior.
+`usage.contextWindow` is maximum supported total context and the denominator of `usage.percent`. Tokens and percent remain `null` when usage is unknown after compaction. The former `contextWindowBudget` field and `getContextWindowBudget()` export are removed; replace those reads with `contextWindow`. Model registrations may separately represent a genuine provider input constraint with `maxInputTokens`, not a discretionary budget. See [models.md](models.md#breaking-migration-from-context-budgets) for the breaking migration, validation, and preserved configuration/OAuth fallback behavior.
 
 ### ctx.compact()
 

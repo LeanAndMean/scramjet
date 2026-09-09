@@ -29,10 +29,16 @@ Both use the same structured summary format and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindowBudget - reserveTokens
+contextTokens > contextWindow - reserveTokens
 ```
 
-`contextWindowBudget` resolves to `model.contextWindowBudget ?? model.contextWindow`. This separates advertised model capacity from a lower provider operational policy while preserving capacity-based behavior for ordinary models. By default, `reserveTokens` is 16384 tokens (configurable in `~/.scramjet/agent/settings.json` or `<project-dir>/.scramjet/settings.json`). This leaves room for the LLM's response. Auto-compaction is disabled when `contextWindowBudget` is less than or equal to `reserveTokens`; lower the reserve or raise the budget to enable it.
+`contextWindow` is the selected provider/model's maximum supported total context, also used by the footer and usage percentages. The default `reserveTokens` is 16384 (configurable in `~/.scramjet/agent/settings.json` or `<project-dir>/.scramjet/settings.json`). With 1,050,000 total context, 1,033,616 tokens does not trigger threshold compaction; 1,033,617 does. There is no lower pricing or quality budget and no global subtraction of maximum output. Auto-compaction remains disabled when the reserve consumes the whole context; reduce the reserve rather than inventing a larger model maximum.
+
+An applicable `maxInputTokens` is checked separately, without subtracting output reserve from that input-only limit. Request allocation and both built-in summarizers use approximate message/system/tool estimates, aided by same-model usage when available, to reject estimated input breaches and limit requested output to remaining total space. Reserve is not subtracted again. Estimates are not exact tokenization or an upper bound, and later payload replacements can invalidate them; real provider overflow handling remains necessary.
+
+Explicit output limits include thinking in the Anthropic and Bedrock simple adapters. Too little space for minimum token-based thinking produces an actionable error, not silent reasoning disablement. Codex does not serialize an output limit, so its output allocation is not wire-enforced. OpenRouter ordinary requests omit an implicit aggregate output maximum to avoid excluding long-context routes; explicit summary limits remain bounded. Aggregate route/output compatibility, including Vercel's required output field, still needs applicable provider evidence.
+
+Checkpoint timing and bounded one-attempt overflow recovery are unchanged; this does not fix the separate continuous-tool-run compaction/recovery work in [#526](https://github.com/LeanAndMean/scramjet/issues/526).
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -154,8 +160,8 @@ When you use `/tree` to navigate to a different branch, Scramjet offers to summa
 
 1. **Find common ancestor**: Deepest node shared by old and new positions
 2. **Collect entries**: Walk from old leaf back to common ancestor
-3. **Prepare with budget**: Include messages up to `contextWindowBudget - reserveTokens` (newest first)
-4. **Generate summary**: Call LLM with structured format
+3. **Prepare content**: Include entries within `contextWindow - reserveTokens` (newest first), additionally bounded by any input constraint minus estimated fixed prompt overhead; retain the existing minimum-one-token selection clamp
+4. **Generate summary**: Check the constructed prompt (including instructions and previous summaries), then allocate output from remaining total context; an oversized request fails without silently truncating history
 5. **Append entry**: Save `BranchSummaryEntry` at navigation point
 
 ```

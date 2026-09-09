@@ -42,8 +42,8 @@ export interface ModelInfo {
 	provider: string;
 	id: string;
 	contextWindow: number;
-	// SCRAMJET-DIVERGENCE: Preserve operational budget metadata in the narrowed RPC model view (issue 398).
-	contextWindowBudget?: number;
+	// SCRAMJET-DIVERGENCE: Expose genuine input constraints separately from total context.
+	maxInputTokens?: number;
 	reasoning: boolean;
 }
 

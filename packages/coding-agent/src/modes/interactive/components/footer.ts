@@ -1,4 +1,3 @@
-import { getContextWindowBudget } from "@leanandmean/ai";
 import { type Component, truncateToWidth, visibleWidth } from "@leanandmean/tui";
 import type { AgentSession } from "../../../core/agent-session.js";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.js";
@@ -28,21 +27,17 @@ function formatTokens(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
-// SCRAMJET-DIVERGENCE: Keep footer usage and warnings budget-based while displaying capacity (issue 398).
+// SCRAMJET-DIVERGENCE: Display one total-context denominator, including unknown usage.
 export function formatContextUsage(
 	tokens: number | null,
 	percent: number | null,
-	budget: number,
-	capacity: number,
+	contextWindow: number,
 	autoCompactEnabled: boolean,
 ): { display: string; severity: "normal" | "warning" | "error" } {
 	const numerator = tokens === null ? "?" : formatTokens(tokens);
 	const percentage = percent === null ? "?" : `${percent.toFixed(1)}%`;
 	const auto = autoCompactEnabled ? ", auto" : "";
-	const split = budget === capacity ? "" : ` budget (${percentage}${auto}; ${formatTokens(capacity)} capacity)`;
-	const display = split
-		? `${numerator}/${formatTokens(budget)}${split}`
-		: `${numerator}/${formatTokens(budget)} (${percentage}${auto})`;
+	const display = `${numerator}/${formatTokens(contextWindow)} (${percentage}${auto})`;
 	const severity =
 		percent !== null && percent > 90 ? "error" : percent !== null && percent > 70 ? "warning" : "normal";
 	return { display, severity };
@@ -108,12 +103,9 @@ export class FooterComponent implements Component {
 		// After compaction, tokens are unknown until the next LLM response.
 		const contextUsage = this.session.getContextUsage();
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
-		const contextWindowBudget =
-			contextUsage?.contextWindowBudget ?? (state.model ? getContextWindowBudget(state.model) : contextWindow);
 		const formattedContext = formatContextUsage(
 			contextUsage?.tokens ?? null,
 			contextUsage?.percent ?? null,
-			contextWindowBudget,
 			contextWindow,
 			this.autoCompactEnabled,
 		);

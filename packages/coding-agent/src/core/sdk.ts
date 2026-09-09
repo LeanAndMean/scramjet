@@ -5,6 +5,7 @@ import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
 import { AuthStorage } from "./auth-storage.js";
+import { getRequestMaxTokens } from "./compaction/compaction.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.js";
 import { convertToLlm } from "./messages.js";
@@ -12,7 +13,7 @@ import { ModelRegistry } from "./model-registry.js";
 import { findInitialModel } from "./model-resolver.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
-import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
+import { getDefaultSessionDir, getLatestCompactionEntry, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 import { time } from "./timings.js";
@@ -379,8 +380,15 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			}
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const attributionHeaders = getAttributionHeaders(model, settingsManager);
+			const compaction = getLatestCompactionEntry(sessionManager.getBranch());
 			return streamSimple(model, context, {
 				...options,
+				maxTokens: getRequestMaxTokens(
+					model,
+					context,
+					options?.maxTokens,
+					compaction ? new Date(compaction.timestamp).getTime() : undefined,
+				),
 				apiKey: auth.apiKey,
 				cacheRetention: options?.cacheRetention ?? cacheRetention,
 				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,

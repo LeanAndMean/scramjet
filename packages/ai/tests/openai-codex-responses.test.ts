@@ -54,6 +54,24 @@ async function streamFailedResponse(error: { code?: string; message: string }) {
 }
 
 describe("openai-codex response failures", () => {
+	it("does not classify generic invalid_request_body as overflow", async () => {
+		const result = await streamFailedResponse({ code: "invalid_request_body", message: "Request failed" });
+		expect(isContextOverflow(result, failureModel.contextWindow)).toBe(false);
+	});
+	it("does not add an unsupported output allocation field", async () => {
+		let payload: Record<string, unknown> | undefined;
+		await streamSimpleOpenAICodexResponses(failureModel, context, {
+			apiKey,
+			transport: "sse",
+			maxTokens: 2048,
+			onPayload: (value) => {
+				payload = value as Record<string, unknown>;
+				throw new Error("halt-before-network");
+			},
+		}).result();
+		expect(payload).toBeDefined();
+		expect(payload).not.toHaveProperty("max_output_tokens");
+	});
 	it("preserves the provider error code for overflow classification", async () => {
 		const result = await streamFailedResponse({ code: "context_length_exceeded", message: "Request failed" });
 

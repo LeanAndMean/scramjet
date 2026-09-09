@@ -1,19 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-	clampThinkingLevel,
-	getContextWindowBudget,
-	getModel,
-	getModels,
-	getProviders,
-	getSupportedThinkingLevels,
-} from "../src/models.js";
+import { clampThinkingLevel, getModel, getModels, getProviders, getSupportedThinkingLevels } from "../src/models.js";
 import type { AnthropicMessagesCompat } from "../src/types.js";
 
 describe("generated catalog invariants", () => {
-	it("keeps every operational budget within advertised capacity", () => {
+	it("has one finite positive context field and no obsolete budget", () => {
 		for (const provider of getProviders()) {
 			for (const model of getModels(provider)) {
-				expect(getContextWindowBudget(model), `${provider}/${model.id}`).toBeLessThanOrEqual(model.contextWindow);
+				expect(Number.isFinite(model.contextWindow), `${provider}/${model.id}`).toBe(true);
+				expect(model.contextWindow).toBeGreaterThan(0);
+				expect(model).not.toHaveProperty("contextWindowBudget");
 			}
 		}
 	});
@@ -106,7 +101,6 @@ describe("generated catalog - approved context corrections", () => {
 	] as const)("uses the approved total context for %s/%s", (provider, id, context) => {
 		const model = getModels(provider).find((candidate) => candidate.id === id)!;
 		expect(model.contextWindow).toBe(context);
-		expect(getContextWindowBudget(model)).toBe(context);
 	});
 });
 
@@ -366,12 +360,11 @@ describe("generated catalog - GPT-6 Astra", () => {
 			contextWindow: 1_050_000,
 			maxTokens: 128_000,
 		});
-		expect(model.contextWindowBudget).toBeUndefined();
-		expect(getContextWindowBudget(model)).toBe(1_050_000);
+		expect(model).not.toHaveProperty("contextWindowBudget");
 		expectAstraThinking(model);
 	});
 
-	it("has the verified OpenAI Codex contract", () => {
+	it("preserves the unresolved OpenAI Codex context pending provider evidence", () => {
 		const model = getModel("openai-codex", "gpt-6-astra");
 		expect(model).toMatchObject({
 			id: "gpt-6-astra",
@@ -383,7 +376,7 @@ describe("generated catalog - GPT-6 Astra", () => {
 			contextWindow: 272_000,
 			maxTokens: 128_000,
 		});
-		expect(model.contextWindowBudget).toBeUndefined();
+		expect(model).not.toHaveProperty("contextWindowBudget");
 		expectAstraThinking(model);
 	});
 
@@ -397,7 +390,6 @@ describe("generated catalog - GPT-6 Astra", () => {
 			input: ["text", "image"],
 			cost: expectedCost,
 			contextWindow: 1_000_000,
-			contextWindowBudget: 272_000,
 			maxTokens: 128_000,
 			headers: {
 				"User-Agent": "GitHubCopilotChat/0.35.0",
@@ -437,22 +429,15 @@ describe("generated catalog - GPT-5.6 Codex variants", () => {
 		expect(luna.cost.cacheWrite).toBe(0);
 	});
 
-	it("all use documented capacity as the operational budget", () => {
+	it("preserves inherited context values pending route-specific evidence", () => {
 		const sol = getModel("openai-codex", "gpt-5.6-sol");
 		const terra = getModel("openai-codex", "gpt-5.6-terra");
 		const luna = getModel("openai-codex", "gpt-5.6-luna");
 		for (const model of [sol, terra, luna]) {
 			expect(model.contextWindow).toBe(1_050_000);
-			expect(model.contextWindowBudget).toBeUndefined();
-			expect(getContextWindowBudget(model)).toBe(1_050_000);
+			expect(model).not.toHaveProperty("contextWindowBudget");
 			expect(model.maxTokens).toBe(128_000);
 		}
-	});
-
-	it("falls back to model capacity when no operational budget is configured", () => {
-		const model = getModel("openai-codex", "gpt-5.5");
-		expect(model.contextWindowBudget).toBeUndefined();
-		expect(getContextWindowBudget(model)).toBe(model.contextWindow);
 	});
 
 	it("Sol has max thinking level", () => {

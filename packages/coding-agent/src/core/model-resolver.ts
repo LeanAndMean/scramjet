@@ -171,8 +171,8 @@ function buildFallbackModel(provider: string, modelId: string, availableModels: 
 		...baseModel,
 		id: modelId,
 		name: modelId,
-		// SCRAMJET-DIVERGENCE: clear model-specific quirks so unknown IDs don't inherit
-		// Opus 4.8's compat (wrong payloads) or thinkingLevelMap (wrong thinking levels)
+		// SCRAMJET-DIVERGENCE: Unknown IDs must not inherit another model's constraints or capabilities.
+		maxInputTokens: undefined,
 		compat: undefined,
 		thinkingLevelMap: undefined,
 	};

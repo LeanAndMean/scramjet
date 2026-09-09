@@ -175,9 +175,11 @@ describe("real generator context corrections", () => {
 		}
 		expect(models["github-copilot"]["gpt-6-astra"]).toMatchObject({
 			contextWindow: 1000000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 		});
+		for (const records of Object.values(models)) {
+			for (const model of Object.values(records)) expect(model).not.toHaveProperty("contextWindowBudget");
+		}
 		const codexContexts: Record<string, number> = {
 			"gpt-5.1": 400000,
 			"gpt-5.1-codex-max": 400000,

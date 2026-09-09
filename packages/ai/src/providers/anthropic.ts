@@ -769,11 +769,15 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 
 	const adjusted = adjustMaxTokensForThinking(
 		base.maxTokens || 0,
-		model.maxTokens,
+		Math.min(model.maxTokens, options.maxTokens ?? Infinity),
 		options.reasoning,
 		options.thinkingBudgets,
 	);
 
+	// SCRAMJET-DIVERGENCE: An explicit output ceiling includes thinking; never resurrect a zero budget.
+	if (adjusted.thinkingBudget < 1024) {
+		throw new Error("Insufficient output space for Anthropic thinking; reduce input or request more output space.");
+	}
 	return streamAnthropic(model, context, {
 		...base,
 		maxTokens: adjusted.maxTokens,

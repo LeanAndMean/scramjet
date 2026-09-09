@@ -51,7 +51,7 @@ function footerSession(liveOutputRate: number | undefined, medianOutputRate?: nu
 			getCwd: () => "/tmp/project",
 			getSessionName: () => undefined,
 		},
-		getContextUsage: () => ({ tokens: 10, percent: 1, contextWindow: 1000, contextWindowBudget: 1000 }),
+		getContextUsage: () => ({ tokens: 10, percent: 1, contextWindow: 1000 }),
 		modelRegistry: { isUsingOAuth: () => false },
 	};
 }
