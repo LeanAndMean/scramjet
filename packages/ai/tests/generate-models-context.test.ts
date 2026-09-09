@@ -20,7 +20,14 @@ function feedModel(id: string, context: number) {
 
 async function generate(
 	present: boolean,
-	options: { invalidContext?: number; endpointError?: boolean; failedCatalog?: string; expectFailure?: boolean } = {},
+	options: {
+		invalidContext?: number;
+		endpointError?: boolean;
+		failedCatalog?: string;
+		expectFailure?: boolean;
+		openRouterEndpoints?: unknown;
+		openRouterEndpointError?: boolean;
+	} = {},
 ) {
 	vi.resetModules();
 	writeFileSync.mockClear();
@@ -34,6 +41,20 @@ async function generate(
 	);
 	const fetch = vi.fn(async (url: string) => {
 		if (url === options.failedCatalog) return { ok: false, status: 503 };
+		if (url.startsWith("https://openrouter.ai/api/v1/models/") && url.endsWith("/endpoints")) {
+			return {
+				ok: !options.openRouterEndpointError,
+				status: options.openRouterEndpointError ? 503 : 200,
+				json: async () => ({
+					data: {
+						endpoints: options.openRouterEndpoints ?? [
+							{ context_length: 1500000, max_prompt_tokens: 1200000 },
+							{ context_length: 1400000, max_prompt_tokens: null },
+						],
+					},
+				}),
+			};
+		}
 		if (url === "https://ai-gateway.vercel.sh/v1/models/openai/gpt-5.4/endpoints") {
 			return {
 				ok: !options.endpointError,
@@ -53,6 +74,24 @@ async function generate(
 			return {
 				ok: true,
 				json: async () => ({
+					"zai-coding-plan": {
+						models: Object.fromEntries(
+							["glm-4.7", "glm-5.1", "glm-5-turbo"].map((id) => [id, feedModel(id, 200000)]),
+						),
+					},
+					"cloudflare-ai-gateway": {
+						models: {
+							"workers-ai/@cf/moonshotai/kimi-k2.6": feedModel("workers-ai/@cf/moonshotai/kimi-k2.6", 256000),
+						},
+					},
+					"fireworks-ai": {
+						models: Object.fromEntries(
+							["deepseek-v4-flash", "deepseek-v4-pro", "glm-5p1"].map((id) => [
+								`accounts/fireworks/models/${id}`,
+								feedModel(id, id === "glm-5p1" ? 202800 : 1000000),
+							]),
+						),
+					},
 					groq: {
 						models: {
 							example: feedModel("example", "invalidContext" in options ? options.invalidContext! : 500000),
@@ -114,7 +153,7 @@ async function generate(
 	}
 	expect(writeFileSync).toHaveBeenCalledTimes(1);
 	expect(errors).not.toHaveBeenCalled();
-	expect(fetch).toHaveBeenCalledTimes(4);
+	expect(fetch).toHaveBeenCalledTimes(7);
 	const output = writeFileSync.mock.calls[0][1] as string;
 	const compiled = ts.transpileModule(output, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
 	const exports: { MODELS?: Record<string, Record<string, Model<any>>> } = {};
@@ -132,6 +171,13 @@ describe("real generator context corrections", () => {
 	it.each([true, false])("preserves route scope with feed-present=%s", async (present) => {
 		const models = (await generate(present))!;
 		expect(models.together["zai-org/GLM-5.2"].contextWindow).toBe(1000000);
+		expect(models["cloudflare-ai-gateway"]["workers-ai/@cf/moonshotai/kimi-k2.6"].contextWindow).toBe(262144);
+		for (const id of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+			expect(models.fireworks[`accounts/fireworks/models/${id}`].contextWindow).toBe(1048576);
+		}
+		expect(models.fireworks["accounts/fireworks/models/glm-5p1"].contextWindow).toBe(202752);
+		for (const id of ["glm-4.7", "glm-5.1"]) expect(models.zai[id].contextWindow).toBe(1000000);
+		expect(models.zai["glm-5-turbo"].contextWindow).toBe(200000);
 		expect(models["amazon-bedrock"]["eu.anthropic.claude-opus-4-6-v1"].contextWindow).toBe(1000000);
 		for (const model of Object.values(models["github-copilot"])) {
 			expect(model.headers?.["X-GitHub-Api-Version"]).toBe("2026-06-01");
@@ -200,9 +246,47 @@ describe("real generator context corrections", () => {
 			expect(model.contextWindow, model.id).toBe(codexContexts[model.id]);
 			expect(model.maxTokens).toBe(128000);
 		}
-		expect(models.openrouter["openai/gpt-5.4"]).toMatchObject({ name: "First", contextWindow: 1500000 });
+		expect(models.openrouter["openai/gpt-5.4"]).toMatchObject({
+			name: "First",
+			contextWindow: 1500000,
+			maxInputTokens: 1400000,
+		});
+		expect(models.openai["gpt-5.4"]).not.toHaveProperty("maxInputTokens");
+		expect(models["azure-openai-responses"]["gpt-5.4"]).not.toHaveProperty("maxInputTokens");
 		expect(models["vercel-ai-gateway"]["openai/gpt-5.4"].contextWindow).toBe(2000000);
 		expect(models.openai["gpt-5.4"].name).toBe(present ? "Feed gpt-5.4" : "GPT-5.4");
+	});
+
+	it.each([
+		{ openRouterEndpoints: [] },
+		{ openRouterEndpoints: [{ context_length: 1500000 }] },
+		{ openRouterEndpoints: [{ context_length: 1500000, max_prompt_tokens: 1600000 }] },
+	])("does not invent an independent input cap from $openRouterEndpoints", async ({ openRouterEndpoints }) => {
+		const models = (await generate(true, { openRouterEndpoints }))!;
+		expect(models.openrouter["openai/gpt-5.4"].contextWindow).toBe(1500000);
+		expect(models.openrouter["openai/gpt-5.4"]).not.toHaveProperty("maxInputTokens");
+	});
+
+	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, "98304"])(
+		"rejects invalid endpoint input limit %s before writing",
+		async (max_prompt_tokens) => {
+			await generate(true, {
+				openRouterEndpoints: [{ context_length: 131072, max_prompt_tokens }],
+				expectFailure: true,
+			});
+		},
+	);
+
+	it.each([
+		{ openRouterEndpoints: {} },
+		{ openRouterEndpoints: [null] },
+		{ openRouterEndpoints: [{ max_prompt_tokens: 98304 }] },
+	])("rejects malformed endpoint constraints $openRouterEndpoints before writing", async ({ openRouterEndpoints }) => {
+		await generate(true, { openRouterEndpoints, expectFailure: true });
+	});
+
+	it("does not emit a partial catalog when OpenRouter endpoint acquisition fails", async () => {
+		await generate(true, { openRouterEndpointError: true, expectFailure: true });
 	});
 
 	it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(

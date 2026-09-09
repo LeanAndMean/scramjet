@@ -3574,7 +3574,7 @@ export const MODELS = {
 				cacheRead: 0.16,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 262144,
 			maxTokens: 256000,
 		} satisfies Model<"openai-completions">,
 		"workers-ai/@cf/nvidia/nemotron-3-120b-a12b": {
@@ -3906,7 +3906,7 @@ export const MODELS = {
 				cacheRead: 0.028,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1048576,
 			maxTokens: 384000,
 		} satisfies Model<"anthropic-messages">,
 		"accounts/fireworks/models/deepseek-v4-pro": {
@@ -3924,7 +3924,7 @@ export const MODELS = {
 				cacheRead: 0.145,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1048576,
 			maxTokens: 384000,
 		} satisfies Model<"anthropic-messages">,
 		"accounts/fireworks/models/glm-5p1": {
@@ -3942,7 +3942,7 @@ export const MODELS = {
 				cacheRead: 0.26,
 				cacheWrite: 0,
 			},
-			contextWindow: 202800,
+			contextWindow: 202752,
 			maxTokens: 131072,
 		} satisfies Model<"anthropic-messages">,
 		"accounts/fireworks/models/glm-5p2": {
@@ -11688,6 +11688,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5-codex": {
@@ -11756,6 +11757,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1": {
@@ -11773,6 +11775,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1-chat": {
@@ -11807,6 +11810,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1-codex-max": {
@@ -11824,6 +11828,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1-codex-mini": {
@@ -11841,6 +11846,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 100000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2": {
@@ -11859,6 +11865,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2-chat": {
@@ -11877,6 +11884,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 128000,
+			maxInputTokens: 96000,
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2-codex": {
@@ -11895,6 +11903,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2-pro": {
@@ -11913,6 +11922,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.3-chat": {
@@ -11949,6 +11959,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.4": {
@@ -12021,6 +12032,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.5": {
@@ -12057,6 +12069,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.6-luna": {
@@ -12216,6 +12229,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-oss-120b": {
@@ -12607,6 +12621,7 @@ export const MODELS = {
 				cacheWrite: 0.325,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 995904,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen-plus-2025-07-28": {
@@ -12624,6 +12639,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 995904,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen-plus-2025-07-28:thinking": {
@@ -12658,6 +12674,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 98304,
 			maxTokens: 40960,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-235b-a22b": {
@@ -12675,6 +12692,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 98304,
 			maxTokens: 8192,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-235b-a22b-2507": {
@@ -12726,6 +12744,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 98304,
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-30b-a3b-instruct-2507": {
@@ -12794,6 +12813,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 98304,
 			maxTokens: 8192,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder": {
@@ -12845,6 +12865,7 @@ export const MODELS = {
 				cacheWrite: 0.24375,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 997952,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder-next": {
@@ -12879,6 +12900,7 @@ export const MODELS = {
 				cacheWrite: 0.8125,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 997952,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder:free": {
@@ -12913,6 +12935,7 @@ export const MODELS = {
 				cacheWrite: 0.975,
 			},
 			contextWindow: 262144,
+			maxInputTokens: 258048,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-max-thinking": {
@@ -12930,6 +12953,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			maxInputTokens: 258048,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-next-80b-a3b-instruct": {
@@ -13066,6 +13090,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 129024,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-vl-8b-instruct": {
@@ -13100,6 +13125,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 126976,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-122b-a10b": {
@@ -13202,6 +13228,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-plus-02-15": {
@@ -13219,6 +13246,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-plus-20260420": {
@@ -13236,6 +13264,7 @@ export const MODELS = {
 				cacheWrite: 0.375,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-27b": {
@@ -13287,6 +13316,7 @@ export const MODELS = {
 				cacheWrite: 0.234375,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-max-preview": {
@@ -13304,6 +13334,7 @@ export const MODELS = {
 				cacheWrite: 1.3,
 			},
 			contextWindow: 262144,
+			maxInputTokens: 229376,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-plus": {
@@ -13321,6 +13352,7 @@ export const MODELS = {
 				cacheWrite: 0.40625,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.7-max": {
@@ -13338,6 +13370,7 @@ export const MODELS = {
 				cacheWrite: 1.5625,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.7-plus": {
@@ -13355,6 +13388,7 @@ export const MODELS = {
 				cacheWrite: 0.39999999999999997,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"rekaai/reka-edge": {
@@ -13966,7 +14000,7 @@ export const MODELS = {
 				cacheRead: 0.15,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 1048576,
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"~openai/gpt-latest": {
@@ -18277,7 +18311,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 204800,
+			contextWindow: 1000000,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"glm-5-turbo": {
@@ -18313,7 +18347,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"glm-5.2": {

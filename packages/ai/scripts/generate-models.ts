@@ -324,6 +324,30 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 			// Only include models that support tools
 			if (!model.supported_parameters?.includes("tools")) continue;
 
+			// SCRAMJET-DIVERGENCE: Input-only constraints must cover every route, not just the default endpoint.
+			const endpointResponse = await fetch(`https://openrouter.ai/api/v1/models/${model.id}/endpoints`);
+			if (!endpointResponse.ok) {
+				throw new Error(`Failed to fetch OpenRouter endpoints for ${model.id}: HTTP ${endpointResponse.status}`);
+			}
+			const endpointData = await endpointResponse.json();
+			if (!Array.isArray(endpointData.data?.endpoints)) {
+				throw new Error(`Invalid OpenRouter endpoint catalog for ${model.id}`);
+			}
+			const endpoints = endpointData.data.endpoints as { context_length: number; max_prompt_tokens?: number | null }[];
+			if (endpoints.some((endpoint) =>
+				!endpoint || !Number.isFinite(endpoint.context_length) || endpoint.context_length <= 0 ||
+				(endpoint.max_prompt_tokens != null &&
+					(!Number.isFinite(endpoint.max_prompt_tokens) || endpoint.max_prompt_tokens <= 0))
+			)) {
+				throw new Error(`Invalid OpenRouter endpoint constraints for ${model.id}`);
+			}
+			const endpointContext = Math.max(...endpoints.map((endpoint) => endpoint.context_length));
+			const endpointInput = Math.max(...endpoints.map((endpoint) =>
+				Math.min(endpoint.context_length, endpoint.max_prompt_tokens ?? endpoint.context_length),
+			));
+			const maxInputTokens = endpointInput < endpointContext && endpointInput < model.context_length
+				? endpointInput : undefined;
+
 			// Parse provider from model ID
 			let provider: KnownProvider = "openrouter";
 			let modelKey = model.id;
@@ -357,6 +381,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 					cacheWrite: cacheWriteCost,
 				},
 				contextWindow: model.context_length ?? Number.NaN,
+				...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
 				maxTokens: model.top_provider?.max_completion_tokens || 4096,
 			};
 			models.push(normalizedModel);
@@ -1255,7 +1280,6 @@ async function generateModels() {
 			candidate.provider === "openai" &&
 			(candidate.id === "gpt-5.6-sol" || candidate.id === "gpt-5.6-terra" || candidate.id === "gpt-5.6-luna")
 		) {
-			// Store advertised total capacity; runtime consumers derive the usable budget with output-limit and reserve handling.
 			candidate.contextWindow = 1050000;
 			candidate.maxTokens = 128000;
 		}
@@ -1293,6 +1317,18 @@ async function generateModels() {
 		// SCRAMJET-DIVERGENCE: xAI documents 256K for this retained alias.
 		if (candidate.provider === "xai" && candidate.id === "grok-code-fast-1") {
 			candidate.contextWindow = 256000;
+		}
+		if (candidate.provider === "zai" && ["glm-4.7", "glm-5.1"].includes(candidate.id)) {
+			candidate.contextWindow = 1000000;
+		}
+		if (candidate.provider === "cloudflare-ai-gateway" && candidate.id === "workers-ai/@cf/moonshotai/kimi-k2.6") {
+			candidate.contextWindow = 262144;
+		}
+		if (candidate.provider === "fireworks" && ["accounts/fireworks/models/deepseek-v4-flash", "accounts/fireworks/models/deepseek-v4-pro"].includes(candidate.id)) {
+			candidate.contextWindow = 1048576;
+		}
+		if (candidate.provider === "fireworks" && candidate.id === "accounts/fireworks/models/glm-5p1") {
+			candidate.contextWindow = 202752;
 		}
 		// Keep selected OpenRouter model metadata stable until upstream settles.
 		if (candidate.provider === "openrouter" && candidate.id === "moonshotai/kimi-k2.5") {

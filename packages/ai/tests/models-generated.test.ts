@@ -24,6 +24,13 @@ describe("generated catalog - approved context corrections", () => {
 		["opencode", "claude-sonnet-4-5", 1000000],
 		["openai-codex", "gpt-5.5", 400000],
 		["xai", "grok-code-fast-1", 256000],
+		["cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6", 262144],
+		["openrouter", "~moonshotai/kimi-latest", 1048576],
+		["fireworks", "accounts/fireworks/models/deepseek-v4-flash", 1048576],
+		["fireworks", "accounts/fireworks/models/deepseek-v4-pro", 1048576],
+		["fireworks", "accounts/fireworks/models/glm-5p1", 202752],
+		["zai", "glm-4.7", 1000000],
+		["zai", "glm-5.1", 1000000],
 		["openrouter", "deepseek/deepseek-chat", 163840],
 		["openrouter", "deepseek/deepseek-r1", 64000],
 		["openrouter", "deepseek/deepseek-v3.2", 163840],
@@ -101,6 +108,50 @@ describe("generated catalog - approved context corrections", () => {
 	] as const)("uses the approved total context for %s/%s", (provider, id, context) => {
 		const model = getModels(provider).find((candidate) => candidate.id === id)!;
 		expect(model.contextWindow).toBe(context);
+	});
+});
+
+describe("generated catalog - OpenRouter independent input constraints", () => {
+	it.each([
+		["openai/gpt-5", 272000, 400000],
+		["openai/gpt-5-pro", 272000, 400000],
+		["openai/gpt-5.1", 272000, 400000],
+		["openai/gpt-5.1-codex", 272000, 400000],
+		["openai/gpt-5.1-codex-max", 272000, 400000],
+		["openai/gpt-5.1-codex-mini", 272000, 400000],
+		["openai/gpt-5.2", 272000, 400000],
+		["openai/gpt-5.2-chat", 96000, 128000],
+		["openai/gpt-5.2-codex", 272000, 400000],
+		["openai/gpt-5.2-pro", 272000, 400000],
+		["openai/gpt-5.3-codex", 272000, 400000],
+		["openai/gpt-5.4-pro", 922000, 1050000],
+		["openai/gpt-5.5-pro", 922000, 1050000],
+		["openai/gpt-chat-latest", 272000, 400000],
+		["qwen/qwen-plus", 995904, 1000000],
+		["qwen/qwen-plus-2025-07-28", 995904, 1000000],
+		["qwen/qwen3-14b", 98304, 131072],
+		["qwen/qwen3-235b-a22b", 98304, 131072],
+		["qwen/qwen3-30b-a3b", 98304, 131072],
+		["qwen/qwen3-8b", 98304, 131072],
+		["qwen/qwen3-coder-flash", 997952, 1000000],
+		["qwen/qwen3-coder-plus", 997952, 1000000],
+		["qwen/qwen3-max", 258048, 262144],
+		["qwen/qwen3-max-thinking", 258048, 262144],
+		["qwen/qwen3-vl-32b-instruct", 129024, 131072],
+		["qwen/qwen3-vl-8b-thinking", 126976, 131072],
+		["qwen/qwen3.5-flash-02-23", 983616, 1000000],
+		["qwen/qwen3.5-plus-02-15", 983616, 1000000],
+		["qwen/qwen3.5-plus-20260420", 983616, 1000000],
+		["qwen/qwen3.6-flash", 983616, 1000000],
+		["qwen/qwen3.6-max-preview", 229376, 262144],
+		["qwen/qwen3.6-plus", 983616, 1000000],
+		["qwen/qwen3.7-max", 983616, 1000000],
+		["qwen/qwen3.7-plus", 983616, 1000000],
+	] as const)("keeps %s total context separate from its input ceiling", (id, maxInputTokens, contextWindow) => {
+		expect(getModels("openrouter").find((model) => model.id === id)).toMatchObject({
+			contextWindow,
+			maxInputTokens,
+		});
 	});
 });
 
