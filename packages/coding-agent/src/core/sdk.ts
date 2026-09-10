@@ -370,6 +370,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
+	let requestRunnerBinding: { runner?: ExtensionRunner } | undefined;
 
 	agent = new Agent({
 		initialState: {
@@ -382,7 +383,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		streamFn: async (model, context, options) => {
 			const routedModelIdentity = { provider: model.provider, id: model.id, api: model.api } as const;
 			const requestContextToolNames = (context.tools ?? []).map((tool) => tool.name);
-			const requestRunner = extensionRunnerRef.current;
+			const binding = requestRunnerBinding;
+			requestRunnerBinding = undefined;
+			const requestRunner = binding ? binding.runner : extensionRunnerRef.current;
+			const incomingOnPayload = options?.onPayload;
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
 			if (!auth.ok) {
 				throw new Error(auth.error);
@@ -396,12 +400,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				// SCRAMJET-DIVERGENCE: bind payload hooks and names-only observation to the request runner (#524).
+				// SCRAMJET-DIVERGENCE: compose the public callback, payload hooks, and observation on one runner (#524).
 				onPayload: async (payload, payloadModel) => {
-					if (requestRunner !== extensionRunnerRef.current) return payload;
+					const callbackResult = await incomingOnPayload?.(payload, payloadModel);
+					const callbackPayload = callbackResult === undefined ? payload : callbackResult;
+					if (requestRunner !== extensionRunnerRef.current) return callbackPayload;
 					const finalPayload = requestRunner?.hasHandlers("before_provider_request")
-						? await requestRunner.emitBeforeProviderRequest(payload, payloadModel)
-						: payload;
+						? await requestRunner.emitBeforeProviderRequest(callbackPayload, payloadModel)
+						: callbackPayload;
 					if (
 						requestRunner === extensionRunnerRef.current &&
 						requestRunner?.hasHandlers("provider_request_tool_inventory")
@@ -421,7 +427,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		},
 		beforeProviderCall: async (context, model) => {
-			const runner = extensionRunnerRef.current;
+			const binding = { runner: extensionRunnerRef.current };
+			requestRunnerBinding = binding;
+			const runner = binding.runner;
 			if (!runner?.hasHandlers("before_provider_call")) return context;
 			return runner.emitBeforeProviderCall(context, model);
 		},

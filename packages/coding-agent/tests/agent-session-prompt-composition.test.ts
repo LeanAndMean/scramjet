@@ -59,12 +59,18 @@ function assistantToolCall(name: string): AssistantMessage {
 	};
 }
 
-function makeTool(name: string, promptSnippet: string, execute?: () => void): ToolDefinition {
+function makeTool(
+	name: string,
+	promptSnippet: string,
+	execute?: () => void,
+	promptGuidelines?: string[],
+): ToolDefinition {
 	return defineTool({
 		name,
 		label: name,
 		description: `${name} test tool`,
 		promptSnippet,
+		promptGuidelines,
 		parameters: Type.Object({}),
 		execute: async () => {
 			execute?.();
@@ -171,7 +177,11 @@ describe("AgentSession run prompt composition", () => {
 		});
 		const fixture = await createFixture({
 			responses: (index) => (index === 0 ? assistantToolCall("trigger") : assistantText("done")),
-			customTools: [trigger, makeTool("old_tool", "Old tool guidance"), makeTool("new_tool", "New tool guidance")],
+			customTools: [
+				trigger,
+				makeTool("old_tool", "Old tool guidance", undefined, ["OLD TOOL GUIDELINE"]),
+				makeTool("new_tool", "New tool guidance", undefined, ["NEW TOOL GUIDELINE"]),
+			],
 			initialActiveToolNames: ["trigger", "old_tool"],
 			extensionFactory: (pi) => {
 				pi.on("before_agent_start", () => ({
@@ -187,7 +197,9 @@ describe("AgentSession run prompt composition", () => {
 		expect(rebuildCalls).toBe(1);
 		expect(session.getActiveToolNames()).toEqual(["trigger", "new_tool"]);
 		expect(fixture.contexts[1].systemPrompt).toContain("New tool guidance");
+		expect(fixture.contexts[1].systemPrompt).toContain("NEW TOOL GUIDELINE");
 		expect(fixture.contexts[1].systemPrompt).not.toContain("Old tool guidance");
+		expect(fixture.contexts[1].systemPrompt).not.toContain("OLD TOOL GUIDELINE");
 		expect(occurrences(fixture.contexts[1].systemPrompt, "RUN CONTRIBUTION")).toBe(1);
 		expect(fixture.contexts[1].sections?.filter((section) => section.id === "test:contribution")).toHaveLength(1);
 	});

@@ -223,9 +223,57 @@ describe("provider request tool inventory boundary", () => {
 		}
 	});
 
+	it("composes the public payload callback before extension rewriting and final observation", async () => {
+		const ordering: string[] = [];
+		const handlerPayloads: unknown[] = [];
+		const observations: ProviderRequestToolInventoryEvent[] = [];
+		const publicReplacement = { tools: [{ name: "public" }], source: "public" };
+		const extensionReplacement = { tools: [{ name: "extension" }], source: "extension" };
+		const secondPayload = { tools: [{ name: "second" }], source: "serializer" };
+		let callbackCalls = 0;
+		let handlerCalls = 0;
+		const { session } = await createFixture((pi) => {
+			pi.on("before_provider_request", (event) => {
+				ordering.push("extension");
+				handlerPayloads.push(event.payload);
+				handlerCalls++;
+				return handlerCalls === 1 ? extensionReplacement : undefined;
+			});
+			pi.on("provider_request_tool_inventory", (event) => {
+				ordering.push("inventory");
+				observations.push(event);
+			});
+		});
+		session.agent.onPayload = () => {
+			ordering.push("public");
+			callbackCalls++;
+			return callbackCalls === 1 ? publicReplacement : undefined;
+		};
+
+		try {
+			requestPayloads.push({ tools: [{ name: "first" }], source: "serializer" });
+			await session.prompt("first");
+			requestPayloads.push(secondPayload);
+			await session.prompt("second");
+
+			expect(callbackCalls).toBe(2);
+			expect(handlerPayloads).toEqual([publicReplacement, secondPayload]);
+			expect(ordering).toEqual(["public", "extension", "inventory", "public", "extension", "inventory"]);
+			expect(transportedPayloads[0]).toBe(extensionReplacement);
+			expect(transportedPayloads[1]).toBe(secondPayload);
+			expect(observations.map((event) => event.inventory)).toEqual([
+				{ status: "observed", toolNames: ["extension"] },
+				{ status: "observed", toolNames: ["second"] },
+			]);
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("suppresses an old request observation after reload replaces its runner", async () => {
 		let generation = 0;
 		const observationGenerations: number[] = [];
+		const oldRunnerReplacement = { tools: [{ name: "generation-one" }], rewrittenBy: 1 };
 		let rewriteStarted!: () => void;
 		const rewriteEntry = new Promise<void>((resolve) => {
 			rewriteStarted = resolve;
@@ -240,6 +288,7 @@ describe("provider request tool inventory boundary", () => {
 				if (runnerGeneration === 1) {
 					rewriteStarted();
 					await rewriteGate;
+					return oldRunnerReplacement;
 				}
 				return event.payload;
 			});
@@ -260,7 +309,8 @@ describe("provider request tool inventory boundary", () => {
 
 			expect(generation).toBe(2);
 			expect(observationGenerations).toEqual([]);
-			expect(transportedPayloads).toEqual([payload]);
+			expect(transportedPayloads).toEqual([oldRunnerReplacement]);
+			expect(transportedPayloads[0]).toBe(oldRunnerReplacement);
 		} finally {
 			session.dispose();
 		}
@@ -295,6 +345,10 @@ describe("provider request tool inventory boundary", () => {
 			return resolveAuth(model);
 		});
 
+		const publicReplacement = { tools: [{ name: "public" }], rewrittenBy: "public" };
+		const publicCallback = vi.fn(() => publicReplacement);
+		session.agent.onPayload = publicCallback;
+
 		try {
 			const payload = { tools: [{ name: "zeta" }, { name: "alpha" }] };
 			requestPayloads.push(payload);
@@ -306,12 +360,63 @@ describe("provider request tool inventory boundary", () => {
 			await prompt;
 
 			expect(generation).toBe(2);
+			expect(publicCallback).toHaveBeenCalledTimes(1);
+			expect(rewriteGenerations).toEqual([]);
+			expect(observationGenerations).toEqual([]);
+			expect(transportedPayloads).toEqual([publicReplacement]);
+			expect(transportedPayloads[0]).toBe(publicReplacement);
+		} finally {
+			releaseAuth();
+			authSpy.mockRestore();
+			session.dispose();
+		}
+	});
+
+	it("keeps one request runner across provider preparation and payload dispatch", async () => {
+		let generation = 0;
+		const rewriteGenerations: number[] = [];
+		const observationGenerations: number[] = [];
+		let preparationStarted!: () => void;
+		const preparationEntry = new Promise<void>((resolve) => {
+			preparationStarted = resolve;
+		});
+		let releasePreparation!: () => void;
+		const preparationGate = new Promise<void>((resolve) => {
+			releasePreparation = resolve;
+		});
+		const { session } = await createFixture((pi) => {
+			const runnerGeneration = ++generation;
+			pi.on("before_provider_call", async () => {
+				if (runnerGeneration === 1) {
+					preparationStarted();
+					await preparationGate;
+				}
+			});
+			pi.on("before_provider_request", (event) => {
+				rewriteGenerations.push(runnerGeneration);
+				return { ...(event.payload as object), rewrittenBy: runnerGeneration };
+			});
+			pi.on("provider_request_tool_inventory", () => {
+				observationGenerations.push(runnerGeneration);
+			});
+		});
+
+		try {
+			const payload = { tools: [{ name: "zeta" }, { name: "alpha" }] };
+			requestPayloads.push(payload);
+			const prompt = session.prompt("first");
+			await preparationEntry;
+			await session.reload();
+			registerApiProvider({ api, stream: fakeStream, streamSimple: fakeStream, handlesSystemPromptSections: true });
+			releasePreparation();
+			await prompt;
+
+			expect(generation).toBe(2);
 			expect(rewriteGenerations).toEqual([]);
 			expect(observationGenerations).toEqual([]);
 			expect(transportedPayloads).toEqual([payload]);
 		} finally {
-			releaseAuth();
-			authSpy.mockRestore();
+			releasePreparation();
 			session.dispose();
 		}
 	});
