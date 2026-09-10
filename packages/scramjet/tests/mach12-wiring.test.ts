@@ -712,6 +712,25 @@ describe("mach12 issue creation — problem capture and direct drafting", () => 
 		expect(issueCreate).toMatch(/do not (?:silently )?combine/i);
 	});
 
+	it("prioritizes hard-to-reconstruct session evidence without transporting transcripts or broadening scope", () => {
+		const identification = section("## Step 1: Identify the problem", "## Step 2: Classify the anchored problem");
+		const drafting = section("## Step 6: Draft the complete issue", "## Step 7: Validate the draft");
+		const review = section("## Step 8: Review the complete draft", "## Step 9: Check for duplicates");
+
+		expect(issueCreate).toMatch(/future session[^.]*cannot reasonably reconstruct/i);
+		expect(identification).toMatch(/mid-session invocation/i);
+		expect(identification).toMatch(/detail[^.]*proportion[^.]*reconstruction difficulty/i);
+		expect(identification).toMatch(/readily available repository facts[^.]*authoritative source/i);
+		expect(identification).toMatch(/problem anchor[^.]*bounds evidence preservation/i);
+		expect(identification).toMatch(/unrelated conversation[^.]*raw transcript transport[^.]*chronology/i);
+		expect(drafting).toMatch(/conditions, source, and interpretive context[^.]*fresh session/i);
+		expect(drafting).toMatch(/attributed circumstances[^.]*\*\*Context\*\*/i);
+		expect(drafting).toMatch(/direct observations and citations[^.]*\*\*Investigation\*\*/i);
+		expect(drafting).toMatch(/conclusions traceable[^.]*\*\*Analysis\*\*/i);
+		expect(review).toMatch(/hard-to-reconstruct evidence[^.]*usable by a fresh session/i);
+		expect(review).toMatch(/irrelevant or transcript-like session material[^.]*neither entered nor broadened/i);
+	});
+
 	it("distinguishes material factual premises from attributed user evidence", () => {
 		const identification = section("## Step 1: Identify the problem", "## Step 2: Classify the anchored problem");
 		for (const phrase of [

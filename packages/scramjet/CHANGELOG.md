@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.94.0 — Prioritize ephemeral session evidence
+
+Improves mid-session issue creation by preserving material evidence that future sessions cannot reasonably reconstruct.
+Fixes [#534](https://github.com/LeanAndMean/scramjet/issues/534).
+
+### Changed
+
+- Prioritize active-session evidence that is material, scoped to the issue, and not readily reacquirable.
+- Preserve qualifying evidence with proportionate provenance without copying transcript-like or unrelated context.
+
+### Tests
+
+- Add command-contract coverage for reconstructability, provenance, and scope boundaries.
+
 ## 0.93.0 — Use maximum supported model contexts
 
 Uses evidence-backed maximum context windows consistently across model metadata, runtime allocation, compaction, and public interfaces. Fixes [#525](https://github.com/LeanAndMean/scramjet/issues/525).
