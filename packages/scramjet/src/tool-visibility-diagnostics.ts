@@ -57,7 +57,8 @@ export function classifyToolVisibility(
 			continue;
 		}
 		const foldedMatches = requestContextToolNames.filter(
-			(requestName) => requestName.toLowerCase() === serializedName.toLowerCase(),
+			(requestName) =>
+				!matchedExpected.has(requestName) && requestName.toLowerCase() === serializedName.toLowerCase(),
 		);
 		if (foldedMatches.length > 1) {
 			return {
