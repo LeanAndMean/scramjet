@@ -101,7 +101,7 @@ describe("models.json context constraints", () => {
 					providers: { "openai-codex": { modelOverrides: { [id]: { contextWindowBudget } } } },
 				});
 				expect(overridden.getError()).toContain(`openai-codex/${id}: contextWindowBudget was removed`);
-				expect(overridden.find("openai-codex", "gpt-5.6-sol")?.contextWindow).toBe(1050000);
+				expect(overridden.find("openai-codex", "gpt-5.6-sol")?.contextWindow).toBe(872000);
 			}
 		},
 	);
@@ -143,7 +143,7 @@ describe("models.json context constraints", () => {
 			});
 			const model = registry.find("openai-codex", "gpt-5.6-sol")!;
 			expect(registry.getError()).toBeDefined();
-			expect(model.contextWindow).toBe(1050000);
+			expect(model.contextWindow).toBe(872000);
 			const auth = await registry.getApiKeyAndHeaders(model);
 			expect(auth).toMatchObject({ ok: true, apiKey: undefined });
 			if (auth.ok) {

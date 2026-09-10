@@ -1268,7 +1268,8 @@ async function generateModels() {
 		if (candidate.provider === "anthropic" && ["claude-sonnet-4-5", "claude-sonnet-4-5-20250929"].includes(candidate.id)) {
 			candidate.contextWindow = 200000;
 		}
-		if (candidate.provider === "opencode" && candidate.id === "claude-sonnet-4") {
+		// SCRAMJET-DIVERGENCE: OpenCode Zen rejects long-context Sonnet 4/4.5 requests.
+		if (candidate.provider === "opencode" && ["claude-sonnet-4", "claude-sonnet-4-5"].includes(candidate.id)) {
 			candidate.contextWindow = 200000;
 		}
 		if (candidate.provider === "opencode" && candidate.id === "gpt-5.4") {
@@ -1625,6 +1626,11 @@ async function generateModels() {
 			});
 		}
 	}
+	// SCRAMJET-DIVERGENCE: GitHub documents an extended 1M Copilot context for GPT-5.3 Codex.
+	const copilotGpt53Codex = allModels.find(
+		(model) => model.provider === "github-copilot" && model.id === "gpt-5.3-codex",
+	);
+	if (copilotGpt53Codex) copilotGpt53Codex.contextWindow = 1000000;
 
 	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-5.4")) {
 		allModels.push({
@@ -1733,7 +1739,8 @@ async function generateModels() {
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	// SCRAMJET-DIVERGENCE: The older Codex models' 272K default reserves 128K output from 400K total.
 	const CODEX_CONTEXT = 400000;
-	const GPT_5_6_CONTEXT = 1050000;
+	// SCRAMJET-DIVERGENCE: Codex declares 872K as GPT-5.6's maximum configurable route context.
+	const GPT_5_6_CONTEXT = 872000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
 		{

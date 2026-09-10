@@ -21,7 +21,7 @@ describe("generated catalog - approved context corrections", () => {
 		["azure-openai-responses", "gpt-5.4", 1050000],
 		["azure-openai-responses", "gpt-5.5", 1050000],
 		["opencode", "gpt-5.4", 1050000],
-		["opencode", "claude-sonnet-4-5", 1000000],
+		["opencode", "claude-sonnet-4-5", 200000],
 		["openai-codex", "gpt-5.5", 400000],
 		["xai", "grok-code-fast-1", 256000],
 		["cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6", 262144],
@@ -95,6 +95,9 @@ describe("generated catalog - approved context corrections", () => {
 		["vercel-ai-gateway", "zai/glm-5.2", 1048576],
 		["together", "zai-org/GLM-5.2", 1000000],
 		["openai-codex", "gpt-5.4", 1000000],
+		["openai-codex", "gpt-5.6-sol", 872000],
+		["openai-codex", "gpt-5.6-terra", 872000],
+		["openai-codex", "gpt-5.6-luna", 872000],
 		["openai-codex", "gpt-5.1", 400000],
 		["openai-codex", "gpt-5.1-codex-max", 400000],
 		["openai-codex", "gpt-5.1-codex-mini", 400000],
@@ -105,6 +108,7 @@ describe("generated catalog - approved context corrections", () => {
 		["github-copilot", "claude-opus-4.7", 1000000],
 		["github-copilot", "claude-opus-4.8", 1000000],
 		["github-copilot", "gemini-3.5-flash", 1000000],
+		["github-copilot", "gpt-5.3-codex", 1000000],
 	] as const)("uses the approved total context for %s/%s", (provider, id, context) => {
 		const model = getModels(provider).find((candidate) => candidate.id === id)!;
 		expect(model.contextWindow).toBe(context);
@@ -528,12 +532,12 @@ describe("generated catalog - GPT-5.6 Codex variants", () => {
 		expect(luna.cost.cacheWrite).toBe(0);
 	});
 
-	it("preserves inherited context values pending route-specific evidence", () => {
+	it("uses Codex's declared maximum route context", () => {
 		const sol = getModel("openai-codex", "gpt-5.6-sol");
 		const terra = getModel("openai-codex", "gpt-5.6-terra");
 		const luna = getModel("openai-codex", "gpt-5.6-luna");
 		for (const model of [sol, terra, luna]) {
-			expect(model.contextWindow).toBe(1_050_000);
+			expect(model.contextWindow).toBe(872_000);
 			expect(model).not.toHaveProperty("contextWindowBudget");
 			expect(model.maxTokens).toBe(128_000);
 		}

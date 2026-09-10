@@ -35,12 +35,14 @@ async function generate(
 	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 	vi.spyOn(console, "log").mockImplementation(() => {});
 	const models = Object.fromEntries(
-		["gpt-5.4", "gpt-5.5", "gpt-6-astra", "gpt-5-pro", "claude-sonnet-4", "claude-sonnet-4-5"].map((id) => [
-			id,
-			id === "gpt-5-pro"
-				? { ...feedModel(id, 400000), limit: { context: 400000, output: 272000 } }
-				: feedModel(id, id.startsWith("claude") ? 1000000 : 1050000),
-		]),
+		["gpt-5.3-codex", "gpt-5.4", "gpt-5.5", "gpt-6-astra", "gpt-5-pro", "claude-sonnet-4", "claude-sonnet-4-5"].map(
+			(id) => [
+				id,
+				id === "gpt-5-pro"
+					? { ...feedModel(id, 400000), limit: { context: 400000, output: 272000 } }
+					: feedModel(id, id.startsWith("claude") ? 1000000 : 1050000),
+			],
+		),
 	);
 	const fetch = vi.fn(async (url: string) => {
 		if (url === options.failedCatalog) return { ok: false, status: 503 };
@@ -107,20 +109,23 @@ async function generate(
 					opencode: { models },
 					"opencode-go": { models },
 					"github-copilot": {
-						models: present
-							? {
-									...models,
-									...Object.fromEntries(
-										[
-											"claude-opus-4.7",
-											"claude-opus-4.8",
-											"gemini-3.5-flash",
-											"claude-fable-5",
-											"claude-sonnet-5",
-										].map((id) => [id, feedModel(id, 200000)]),
-									),
-								}
-							: {},
+						models: {
+							"gpt-5.2-codex": feedModel("gpt-5.2-codex", 400000),
+							...(present
+								? {
+										...models,
+										...Object.fromEntries(
+											[
+												"claude-opus-4.7",
+												"claude-opus-4.8",
+												"gemini-3.5-flash",
+												"claude-fable-5",
+												"claude-sonnet-5",
+											].map((id) => [id, feedModel(id, 200000)]),
+										),
+									}
+								: {}),
+						},
 					},
 				}),
 			};
@@ -215,7 +220,7 @@ describe("real generator context corrections", () => {
 		expect(models.openai["gpt-6-astra"]).not.toHaveProperty("contextWindowBudget");
 		expect(models["azure-openai-responses"]["gpt-6-astra"]).toBeUndefined();
 		expect(models.opencode["gpt-5.4"].contextWindow).toBe(1050000);
-		expect(models.opencode["claude-sonnet-4-5"].contextWindow).toBe(1000000);
+		expect(models.opencode["claude-sonnet-4-5"].contextWindow).toBe(200000);
 		expect(models.opencode["claude-sonnet-4"].contextWindow).toBe(200000);
 		expect(models.anthropic["claude-sonnet-4-5"].contextWindow).toBe(200000);
 		expect(models["opencode-go"]["gpt-5.4"].contextWindow).toBe(1050000);
@@ -226,6 +231,7 @@ describe("real generator context corrections", () => {
 			contextWindow: 1000000,
 			maxTokens: 128000,
 		});
+		expect(models["github-copilot"]["gpt-5.3-codex"].contextWindow).toBe(1000000);
 		for (const records of Object.values(models)) {
 			for (const model of Object.values(records)) expect(model).not.toHaveProperty("contextWindowBudget");
 		}
@@ -240,9 +246,9 @@ describe("real generator context corrections", () => {
 			"gpt-5.4": 1000000,
 			"gpt-5.4-mini": 272000,
 			"gpt-5.5": 400000,
-			"gpt-5.6-sol": 1050000,
-			"gpt-5.6-terra": 1050000,
-			"gpt-5.6-luna": 1050000,
+			"gpt-5.6-sol": 872000,
+			"gpt-5.6-terra": 872000,
+			"gpt-5.6-luna": 872000,
 			"gpt-6-astra": 272000,
 		};
 		for (const model of Object.values(models["openai-codex"])) {
