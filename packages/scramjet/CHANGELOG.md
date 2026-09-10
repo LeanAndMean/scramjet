@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.93.0 — Use maximum supported model contexts
+
+Uses evidence-backed maximum context windows consistently across model metadata, runtime allocation, compaction, and public interfaces. Fixes [#525](https://github.com/LeanAndMean/scramjet/issues/525).
+
+### Added
+
+- Represent genuine provider input-only and joint request constraints separately from total context.
+- Allocate request-local output within applicable endpoint constraints without changing the authoritative context window.
+
+### Changed
+
+- Replace the context budget/capacity split with one `contextWindow` across generation, compaction, CLI, footer, SDK, extensions, and RPC surfaces.
+- Correct provider-scoped model context maxima and preserve endpoint and account qualifications.
+
+### Fixed
+
+- Fail closed when generated or configured model context constraints are invalid or unresolved.
+- Keep output limits and compaction reserves independent from total context accounting.
+
+### Tests
+
+- Add deterministic coverage for model generation, request allocation, compaction boundaries, configuration validation, and public context reporting.
+
 ## 0.92.1 — Transport subagent tasks through stdin
 
 Routes delegated subagent tasks through child-process stdin to avoid exposing large prompts in process arguments while preserving model-facing task semantics.
