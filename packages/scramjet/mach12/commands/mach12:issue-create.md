@@ -28,7 +28,7 @@ $ARGUMENTS
 
 ## Goals
 
-- Capture the user's supported problem, constraints, evidence, and observable desired outcome in one accurate, implementation-neutral issue artifact.
+- Capture the user's supported problem, constraints, evidence—including material active-session evidence a future session cannot reasonably reconstruct—and observable desired outcome in one accurate, implementation-neutral issue artifact.
 - Publish only a complete, internally reviewed issue or selected related-context comment through the guarded approval and exact-verification boundary.
 - Apply requested or repository-standard metadata only after verified issue creation, and report each outcome without recreating the issue.
 - When an artifact is published, return its verified identity; offer planning only when a newly created issue is ready.
@@ -41,6 +41,8 @@ Use evidence in this order:
 2. A structured artifact explicitly supplied or adopted by the user.
 3. The immediate session context and recent conversation that led to this invocation, including an encountered bug, requested capability, deferred finding, confusing workflow, or unresolved concern.
 4. Relevant recent repository observations already established in the active session.
+
+Within this authority order, prioritize material evidence that a future session could not reasonably reconstruct, especially evidence accumulated before a mid-session invocation. Preserve detail in proportion to reconstruction difficulty; reacquire readily available repository facts from their authoritative source instead of transporting redundant session copies.
 
 Preserve user intent, experienced symptoms, constraints and non-goals, clarification answers, and other session-only problem evidence as attributed evidence, including when that evidence also contains objectively checkable factual premises. Preserve the attribution while separately verifying only any checkable premise whose falsity would materially change the problem identity, actual behavior, impact, proposed outcome, or acceptance criteria. Treat implementation preferences as preferences or explicit constraints, not as contradictions that must be resolved during issue creation.
 
@@ -60,7 +62,7 @@ Record a concise problem anchor containing:
 - exact user-stated constraints and non-goals; and
 - unresolved factual questions needed to describe the problem accurately.
 
-The problem anchor describes what needs attention. It does not choose implementation scope, architecture, or deferred work.
+The problem anchor describes what needs attention and bounds evidence preservation: exclude unrelated conversation, raw transcript transport, and chronology that does not help a future consumer understand the problem. It does not choose implementation scope, architecture, or deferred work.
 
 ## Step 2: Classify the anchored problem
 
@@ -122,7 +124,7 @@ Draft directly from the established problem anchor and classification; exact use
 
 Construct and retain one explicit, imperative title under 80 characters and one complete body beginning with `<!-- mach12-issue -->` for validation and publication.
 
-Use an authority gradient so provenance remains visible:
+Use an authority gradient so provenance remains visible. Preserve each qualifying hard-to-reconstruct observation with the conditions, source, and interpretive context a fresh session needs: attributed circumstances belong in **Context**, direct observations and citations in **Investigation**, and conclusions traceable to those observations in **Analysis**. Choose the representation and detail proportionately rather than adding a separate provenance schema.
 
 - **Summary**: Two or three sentences describing the problem or need.
 - **User's Request**: Exact user-stated requirements, constraints, decisions, and steering context. Omit when there is no descriptive user content.
@@ -159,7 +161,7 @@ After validation, separately compare the complete title and body with the proble
 - user intent, experienced symptoms, constraints, and non-goals retain their authority and meaning;
 - any reconciled disposition of a material contradiction retains its authority and meaning;
 - contradicted or unverified premises are not presented as established facts;
-- unrelated session concerns were not folded into the issue;
+- qualifying hard-to-reconstruct evidence survived with provenance usable by a fresh session, while irrelevant or transcript-like session material neither entered nor broadened the issue;
 - contextual or repository evidence did not become an unsupported requirement;
 - every factual analysis conclusion traces to cited Investigation evidence;
 - acceptance criteria describe observable resolution and identify their derivation;
