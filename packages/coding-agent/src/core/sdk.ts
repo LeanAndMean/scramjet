@@ -370,6 +370,16 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
+	// SCRAMJET-DIVERGENCE: per-session runner handoff from beforeProviderCall to streamFn (#524).
+	// Precondition: this is per-session closure state (not shared across sessions), and requests
+	// are serialized by runWithLifecycle, so beforeProviderCall runs immediately before streamFn
+	// for the same request and sets a fresh binding that streamFn consumes synchronously at entry.
+	// Capturing the runner at beforeProviderCall time (not extensionRunnerRef.current at streamFn
+	// entry) is deliberate: if a reload swaps the runner across the intervening convertToLlm await,
+	// onPayload's requestRunner !== extensionRunnerRef.current check suppresses the observation
+	// rather than emitting it onto the replacement runner. The object wrapper (not the runner
+	// directly) encodes "beforeProviderCall ran", distinguishing a captured undefined runner from
+	// "no capture" (streamFn then falls back to the current runner).
 	let requestRunnerBinding: { runner?: ExtensionRunner } | undefined;
 
 	agent = new Agent({
