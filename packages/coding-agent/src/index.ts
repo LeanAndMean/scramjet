@@ -101,6 +101,7 @@ export type {
 	MessageRenderOptions,
 	ProviderConfig,
 	ProviderModelConfig,
+	ProviderRequestToolInventoryEvent,
 	ReadToolCallEvent,
 	RegisteredCommand,
 	RegisteredTool,

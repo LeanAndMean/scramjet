@@ -7,6 +7,7 @@ export * from "./image-models.js";
 export * from "./images.js";
 export * from "./images-api-registry.js";
 export * from "./models.js";
+export * from "./provider-request-tool-inventory.js";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./providers/amazon-bedrock.js";
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./providers/anthropic.js";
 export type { AzureOpenAIResponsesOptions } from "./providers/azure-openai-responses.js";

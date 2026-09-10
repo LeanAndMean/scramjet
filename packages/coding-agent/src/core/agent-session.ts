@@ -197,6 +197,11 @@ export interface ExtensionBindings {
 	onError?: ExtensionErrorListener;
 }
 
+type RunPromptComposition =
+	| { kind: "generated-base" }
+	| { kind: "contributed-sections"; sections: SystemPromptSection[] }
+	| { kind: "authoritative-string"; systemPrompt: string };
+
 /** Options for AgentSession.prompt() */
 export interface PromptOptions {
 	/** Whether to expand file-based prompt templates (default: true) */
@@ -356,6 +361,9 @@ export class AgentSession {
 	// can apply per-section cache control.
 	private _baseSystemPromptSections: SystemPromptSection[] = [];
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
+	// SCRAMJET-DIVERGENCE: active-tool prompt rebuilds preserve the current top-level run's
+	// before_agent_start composition while new prompts and reloads establish a fresh composition (#524).
+	private _runPromptComposition: RunPromptComposition = { kind: "generated-base" };
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -427,8 +435,8 @@ export class AgentSession {
 	}
 
 	// SCRAMJET-DIVERGENCE: _drainAgentEventQueue ensures all queued async extension event
-	// processing has settled before proceeding. Used by beforeToolBatch (pre-extraction drain)
-	// and beforeToolCall (per-tool drain).
+	// processing has settled before proceeding. Used by beforeToolBatch (pre-extraction drain),
+	// beforeToolCall (per-tool drain), and the awaited turn_end listener barrier.
 	private async _drainAgentEventQueue(): Promise<void> {
 		await this._agentEventQueue;
 	}
@@ -522,7 +530,7 @@ export class AgentSession {
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
-	private _handleAgentEvent = (event: AgentEvent): void => {
+	private _handleAgentEvent = (event: AgentEvent): Promise<void> | void => {
 		this._captureOutputThroughput(event);
 
 		// Create retry promise synchronously before queueing async processing.
@@ -539,6 +547,10 @@ export class AgentSession {
 
 		// Keep queue alive if an event handler fails
 		this._agentEventQueue.catch(() => {});
+
+		// SCRAMJET-DIVERGENCE: turn_end tool/prompt changes must settle before Agent snapshots
+		// live state for the next provider request (#524).
+		if (event.type === "turn_end") return this._agentEventQueue;
 	};
 
 	// SCRAMJET-DIVERGENCE: Capture provider events synchronously and reset stale throughput lifecycles (#476).
@@ -1275,6 +1287,23 @@ export class AgentSession {
 		return Array.from(unique);
 	}
 
+	private _applyRunPromptComposition(): void {
+		switch (this._runPromptComposition.kind) {
+			case "generated-base":
+				this.agent.state.systemPrompt = this._baseSystemPromptSections.slice();
+				break;
+			case "contributed-sections":
+				this.agent.state.systemPrompt = spliceContributedSections(
+					this._baseSystemPromptSections,
+					this._runPromptComposition.sections,
+				);
+				break;
+			case "authoritative-string":
+				this.agent.state.systemPrompt = this._runPromptComposition.systemPrompt;
+				break;
+		}
+	}
+
 	/** Rebuild `_baseSystemPromptSections` from the current resources and tool set and apply it to agent state. */
 	private _rebuildSystemPrompt(toolNames: string[]): void {
 		const validToolNames = toolNames.filter((name) => this._toolRegistry.has(name));
@@ -1312,7 +1341,7 @@ export class AgentSession {
 			sessionFile: this.sessionManager.getSessionFile(),
 		};
 		this._baseSystemPromptSections = buildSystemPromptSections(this._baseSystemPromptOptions);
-		this.agent.state.systemPrompt = this._baseSystemPromptSections.slice();
+		this._applyRunPromptComposition();
 	}
 
 	// =========================================================================
@@ -1443,6 +1472,8 @@ export class AgentSession {
 			}
 			this._pendingNextTurnMessages = [];
 
+			this._runPromptComposition = { kind: "generated-base" };
+
 			// Emit before_agent_start extension event
 			const result = await this._extensionRunner.emitBeforeAgentStart(
 				expandedText,
@@ -1467,16 +1498,17 @@ export class AgentSession {
 			// replacement is authoritative (even an empty string): it wins for the
 			// whole prompt and any contributed sections are dropped for this turn.
 			if (result?.systemPrompt !== undefined) {
-				this.agent.state.systemPrompt = result.systemPrompt;
+				this._runPromptComposition = {
+					kind: "authoritative-string",
+					systemPrompt: result.systemPrompt,
+				};
 			} else if (result?.systemPromptSections) {
-				this.agent.state.systemPrompt = spliceContributedSections(
-					this._baseSystemPromptSections,
-					result.systemPromptSections,
-				);
-			} else {
-				// Ensure we're using the base prompt (in case previous turn had modifications)
-				this.agent.state.systemPrompt = this._baseSystemPromptSections.slice();
+				this._runPromptComposition = {
+					kind: "contributed-sections",
+					sections: result.systemPromptSections.map((section) => ({ ...section })),
+				};
 			}
+			this._applyRunPromptComposition();
 		} catch (error) {
 			preflightResult?.(false);
 			throw error;
@@ -2819,6 +2851,7 @@ export class AgentSession {
 		await this._resourceLoader.reload();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		resetApiProviders();
+		this._runPromptComposition = { kind: "generated-base" };
 		this._buildRuntime({
 			activeToolNames: this.getActiveToolNames(),
 			flagValues: previousFlagValues,

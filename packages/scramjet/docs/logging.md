@@ -59,6 +59,7 @@ The fallback does not serialize the entry's `data`, retry or roll back persisten
 | `subdir-context` | `subdir-context.ts` | Subdirectory context discovery warnings and debug traces |
 | `model-switch` | `model-switch-tool.ts` | Agent-initiated model switch outcomes (unknown/unauthorized/failed target warnings, switch debug traces) |
 | `model-notice` | `model-change-notice.ts` | Model-change notice delivery failures |
+| `tool-visibility` | `tool-visibility-diagnostics.ts` | Final pre-transport provider tool-schema parity, mismatch, or uninspectable evidence |
 
 ## Session JSONL location
 
@@ -378,6 +379,28 @@ For no-policy commands (`policyMode: "none"` in log details), steps 13–15 are 
 **Retention on error:**
 - `"suggestion retained"` with `data.reason: "error-retry"` — error stop keeps suggestion for retry
 
+## Provider tool-visibility evidence
+
+Each built-in provider request whose serializer invokes `onPayload` delivers a final pre-transport inventory observation to the request's extension runner after the public payload callback and every `before_provider_request` payload replacement. If successful reload supersedes that runner during provider-neutral preparation or before payload dispatch begins, extension rewriting and observation are both skipped rather than attributed to the replacement runtime. If reload supersedes the runner while rewriting is already in flight, its completed replacement is preserved but the observation is suppressed. A delivered observation attempts one `tool-visibility` journal entry before transport, subject to runner validity and successful persistence. The observation does not establish that transport succeeded, that a response was parsed, that an assistant message completed or persisted, or that the model selected or ignored a tool.
+
+The entry records the routed `provider`, `model`, and `api`; lifecycle `phase` and `lifecycleGeneration`; sorted request-context tool names; and the inventory status. An observed inventory includes sorted serialized names, `missingNames`, and `unexpectedNames`; an unsupported inventory records `inventoryStatus: "unsupported"` without a reason; and a malformed inventory includes a bounded reason. Anthropic identity ambiguity retains the observed serialized names and adds a bounded reason. The entry never records raw payloads, prompts, descriptions, schemas, messages, arguments, headers, credentials, or a durable request/response correlation identifier.
+
+Classifications are:
+
+- `parity` (`debug`): request-context and serialized tool identities agree.
+- `mismatch` (`warn`): an observed serialized inventory omits expected names or contains unexpected names.
+- `uninspectable` (`debug`): the API is unsupported, the supported payload shape is malformed, or Anthropic case-insensitive reconciliation is ambiguous.
+
+Anthropic OAuth serialization may canonicalize a known tool's casing (for example `read` to `Read`). Scramjet accepts a case-insensitive identity only when exactly one request-context name matches and retains the actual serialized spelling in the record. Exact names always take precedence; ambiguous case-fold matches are uninspectable rather than mismatch.
+
+Inspect the chronology with:
+
+```sh
+jq -c 'select(.type == "custom" and .customType == "scramjet:log" and .data.category == "tool-visibility") | .data | {ts: .timestamp, level, classification: .data.classification, provider: .data.provider, model: .data.model, api: .data.api, phase: .data.phase, expected: .data.requestContextToolNames, serialized: .data.serializedToolNames, missing: .data.missingNames, unexpected: .data.unexpectedNames, reason: .data.reason}' session.jsonl
+```
+
+A parity record followed by no corresponding tool call is neutral by itself. Model interpretation can be considered only through manual chronology when the relevant request has no intervening ambiguous retry, reaches a successfully parsed assistant response, and that response is durably present in the session. Transport failure, abort, malformed response, retry ambiguity, extension-observer failure, or log/message persistence failure leaves the cause inconclusive. Never classify a tool as present-but-not-selected or attribute model error from the parity entry alone.
+
 ## Diagnostic workflow
 
 When a session misbehaves (command didn't chain, probe didn't fire, unexpected pause):
@@ -421,3 +444,4 @@ When a session misbehaves (command didn't chain, probe didn't fire, unexpected p
 | Cancelled prompt did not resume | `cancellation-resume` timeline plus structured cancellation outcomes | Confirm/select grant failed to persist, input was not interactive non-slash, or another boundary superseded eligibility |
 | Wrong build or command content suspected | `runtime versions` and winning `command discovered` fingerprint | Compare resolved package versions (`unknown` when metadata is unavailable), scope/source, and content fingerprint; successful provenance entries omit raw home paths and command bodies |
 | `[scramjet/logger] Failed to persist ...` on stderr | Category, message, and persistence error in the fallback diagnostic | Session journal persistence failed; later appends are still attempted, but the fallback appears only once per logger lifetime |
+| Agent reports an advertised tool unavailable | `tool-visibility` chronology for the relevant request | `mismatch` proves a pre-transport schema difference; `parity` is neutral without the bounded manual response chronology above; absent/uninspectable evidence is inconclusive |
