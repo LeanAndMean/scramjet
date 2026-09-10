@@ -505,13 +505,20 @@ export class Agent {
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			// SCRAMJET-DIVERGENCE: always run prepareNextTurn so mid-run harness tool calls drain
-			// before the next LLM call and live model/effort changes self-heal without overriding
-			// explicit callback updates (#244, #447).
+			// and live request context/routing self-heals without overriding explicit callback updates
+			// (#244, #447, #524).
 			prepareNextTurn: async (ctx) => {
 				await this.drainHarnessToolQueue(ctx, this.signal);
-				const update = await this.prepareNextTurn?.(ctx, this.signal);
+				const liveSystemPrompt = this._state.systemPrompt;
+				const refreshedContext: AgentContext = {
+					systemPrompt: Array.isArray(liveSystemPrompt) ? liveSystemPrompt.slice() : liveSystemPrompt,
+					messages: ctx.context.messages,
+					tools: this._state.tools.slice(),
+				};
+				const update = await this.prepareNextTurn?.({ ...ctx, context: refreshedContext }, this.signal);
 				return {
 					...update,
+					context: update?.context ?? refreshedContext,
 					model: update?.model ?? this._state.model,
 					thinkingLevel: update?.thinkingLevel ?? this._state.thinkingLevel,
 				};

@@ -24,6 +24,7 @@ import type {
 	Model,
 	OAuthCredentials,
 	OAuthLoginCallbacks,
+	ProviderRequestToolInventory,
 	SimpleStreamOptions,
 	SystemPromptSection,
 	TextContent,
@@ -675,6 +676,12 @@ export type DeepReadonly<T> = T extends (...args: any[]) => any
 
 export type RoutedModelSnapshot = DeepReadonly<Model<any>>;
 
+export interface RoutedModelIdentitySnapshot {
+	readonly provider: Model<any>["provider"];
+	readonly id: Model<any>["id"];
+	readonly api: Api;
+}
+
 /** Fired after context transformation and before provider serialization. Can replace the request-local system prompt. */
 export interface BeforeProviderCallEvent {
 	type: "before_provider_call";
@@ -687,6 +694,15 @@ export interface BeforeProviderRequestEvent {
 	type: "before_provider_request";
 	model: RoutedModelSnapshot;
 	payload: unknown;
+}
+
+// SCRAMJET-DIVERGENCE: immutable names-only final provider tool inventory observation (#524).
+/** Fired after all provider payload rewrites and before transport. Observation only. */
+export interface ProviderRequestToolInventoryEvent {
+	type: "provider_request_tool_inventory";
+	readonly model: RoutedModelIdentitySnapshot;
+	readonly requestContextToolNames: readonly string[];
+	readonly inventory: DeepReadonly<ProviderRequestToolInventory>;
 }
 
 /** Fired after a provider response is received and before the response stream is consumed. */
@@ -1048,6 +1064,7 @@ export type ExtensionEvent =
 	| ContextEvent
 	| BeforeProviderCallEvent
 	| BeforeProviderRequestEvent
+	| ProviderRequestToolInventoryEvent
 	| AfterProviderResponseEvent
 	| BeforeAgentStartEvent
 	| AgentStartEvent
@@ -1212,6 +1229,7 @@ export interface ExtensionAPI {
 		event: "before_provider_request",
 		handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>,
 	): void;
+	on(event: "provider_request_tool_inventory", handler: ExtensionHandler<ProviderRequestToolInventoryEvent>): void;
 	on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
 	on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
 	on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
