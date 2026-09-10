@@ -2679,6 +2679,8 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
+			requestLimits: [{"maxTotalTokens":922000,"maxInputTokens":922000,"maxOutputTokens":128000,"supportsTools":true}],
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.5-pro": {

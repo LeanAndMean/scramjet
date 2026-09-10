@@ -123,6 +123,7 @@ describe("generated catalog - Azure independent input limits", () => {
 		["gpt-5.6-luna", 922000],
 		["gpt-5.4", 922000],
 		["gpt-5.4-pro", 922000],
+		["gpt-5.5", 922000],
 		["gpt-5.4-mini", 272000],
 		["gpt-5.4-nano", 272000],
 		["gpt-5.3-codex", 272000],
@@ -144,8 +145,10 @@ describe("generated catalog - Azure independent input limits", () => {
 		expect(model.contextWindow).toBe(maxInputTokens === 922000 ? 1050000 : 400000);
 		expect(getModels("openai").find((model) => model.id === id)).not.toHaveProperty("maxInputTokens");
 	});
-	it("preserves the unresolved GPT-5.5 combined-budget disposition", () => {
-		expect(getModel("azure-openai-responses", "gpt-5.5")).not.toHaveProperty("maxInputTokens");
+	it("preserves the GPT-5.5 Responses combined constraint", () => {
+		expect(getModel("azure-openai-responses", "gpt-5.5").requestLimits).toEqual([
+			{ maxTotalTokens: 922000, maxInputTokens: 922000, maxOutputTokens: 128000, supportsTools: true },
+		]);
 	});
 });
 

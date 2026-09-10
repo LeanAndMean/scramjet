@@ -306,7 +306,12 @@ describe("real generator context corrections", () => {
 			for (const [id, maxInputTokens] of Object.entries(copilotInputLimits)) {
 				expect(models["github-copilot"][id].maxInputTokens, id).toBe(maxInputTokens);
 			}
-			expect(models["azure-openai-responses"]["gpt-5.5"]).not.toHaveProperty("maxInputTokens");
+			expect(models["azure-openai-responses"]["gpt-5.5"]).toMatchObject({
+				maxInputTokens: 922000,
+				requestLimits: [
+					{ maxTotalTokens: 922000, maxInputTokens: 922000, maxOutputTokens: 128000, supportsTools: true },
+				],
+			});
 			expect(models["azure-openai-responses"]["gpt-5-pro"].maxTokens).toBe(128000);
 			expect(models.openai["gpt-5-pro"].maxTokens).toBe(272000);
 		}

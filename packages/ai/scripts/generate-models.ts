@@ -2192,13 +2192,14 @@ async function generateModels() {
 	];
 	allModels.push(...vertexModels);
 
-	// SCRAMJET-DIVERGENCE: Azure documents individual input limits; public-API copies do not establish them.
+	// SCRAMJET-DIVERGENCE: Azure documents input limits and a separate GPT-5.5 Responses combined budget.
 	const azureInputLimits: Record<string, number> = {
 		"gpt-5.6-sol": 922000,
 		"gpt-5.6-terra": 922000,
 		"gpt-5.6-luna": 922000,
 		"gpt-5.4": 922000,
 		"gpt-5.4-pro": 922000,
+		"gpt-5.5": 922000,
 		"gpt-5.4-mini": 272000,
 		"gpt-5.4-nano": 272000,
 		"gpt-5.3-codex": 272000,
@@ -2224,6 +2225,13 @@ async function generateModels() {
 			provider: "azure-openai-responses",
 			baseUrl: "",
 			maxInputTokens: azureInputLimits[model.id],
+			...(model.id === "gpt-5.5"
+				? {
+						requestLimits: [
+							{ maxTotalTokens: 922000, maxInputTokens: 922000, maxOutputTokens: 128000, supportsTools: true },
+						],
+					}
+				: {}),
 			maxTokens: model.id === "gpt-5-pro" ? 128000 : model.maxTokens,
 		}));
 	allModels.push(...azureOpenAiModels);
