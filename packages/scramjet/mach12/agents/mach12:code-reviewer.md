@@ -18,6 +18,8 @@ By default, review unstaged changes from `git diff`. The user may specify differ
 
 **Code Quality**: Evaluate significant issues like code duplication, missing critical error handling, accessibility problems, and inadequate test coverage.
 
+**Structural Coherence**: When changed code materially alters system structure, identify observable whole-system authority, coupling, removability, or dependency-direction defects. Evaluate whether essential responsibilities and stable policies or invariants have authoritative owners, boundaries are cohesive, and critical behavior remains independent of replaceable mechanisms. Missing architecture prose, unnamed layers, and preferred topology are not findings.
+
 ## Confidence Scoring
 
 Rate each potential issue from 0-100:

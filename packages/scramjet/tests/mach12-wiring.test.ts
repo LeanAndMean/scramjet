@@ -549,6 +549,38 @@ describe("mach12 command-surface issue routing", () => {
 		);
 	});
 
+	it("makes runtime plan review originate structural-coherence defects without prescribing topology", () => {
+		const review = section(command("issue-review"), "## Step 5:", "## Step 6:");
+		expect(review).toMatch(/essential responsibilities[^.]*stable policies and invariants[^.]*authoritative owners/i);
+		expect(review).toMatch(/critical from replaceable[^.]*removed or replaced/i);
+		expect(review).toMatch(/locally plausible options[^.]*share[^.]*defect[^.]*plan defect/i);
+		expect(review).toMatch(/rather than requiring named layers or preferred topology/i);
+	});
+
+	it("makes the general code reviewer own observable material structural defects", () => {
+		const reviewer = readFileSync(join(MACH12_AGENTS_DIR, "mach12:code-reviewer.md"), "utf-8");
+		expect(reviewer).toMatch(/materially alters system structure[^.]*observable whole-system/i);
+		expect(reviewer).toMatch(/authority, coupling, removability, or dependency-direction defects/i);
+		expect(reviewer).toMatch(
+			/essential responsibilities[^.]*stable policies or invariants[^.]*authoritative owners/i,
+		);
+		expect(reviewer).toMatch(/critical behavior[^.]*independent of replaceable mechanisms/i);
+		expect(reviewer).toMatch(/missing architecture prose[^.]*preferred topology are not findings/i);
+		expect(reviewer).toContain("**Only report issues with confidence >= 80.**");
+	});
+
+	it("makes the runtime assessor judge supplied structural corrections by whole-system effect", () => {
+		const assessor = readFileSync(join(MACH12_AGENTS_DIR, "mach12:independent-assessor.md"), "utf-8");
+		expect(assessor).toMatch(/for each supplied structural finding[^.]*re-derive both axes/i);
+		expect(assessor).toMatch(
+			/combined system:[^.]*responsibility, policy or invariant ownership, cohesion, replaceability, or dependency defect/i,
+		);
+		expect(assessor).toMatch(
+			/proposed correction improves the whole system's responsibilities, layering, replaceability, and dependency structure/i,
+		);
+		expect(assessor).toMatch(/do not generate fresh findings or expand scope/i);
+	});
+
 	it("references one holistic command reviewer and one independent command assessor", () => {
 		const content = command("issue-review");
 		const evidence = section(content, "## Step 4:", "## Step 5:");
@@ -611,6 +643,19 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		expect(review).toContain("scramjet:command-reviewer");
 		expect(review).toContain("scramjet:instruction-semantics-analyzer");
 		expect(review).toContain("scramjet:command-set-explorer");
+	});
+
+	it("assigns material runtime structural review to the general code reviewer proportionally", () => {
+		const review = section(command("pr-review"), "## Step 3:", "## Step 4:");
+		expect(review).toMatch(/mach12:code-reviewer[^.]*general correctness/i);
+		expect(review).toMatch(/select it whenever runtime changes materially alter/i);
+		expect(review).toMatch(
+			/policy or invariant ownership, component responsibility, replaceability, or dependency direction/i,
+		);
+		expect(review).toMatch(/owns structural-coherence findings/i);
+		expect(review).toMatch(
+			/proportional for local or mechanical changes[^;]*no material responsibility or dependency decision/i,
+		);
 	});
 
 	it("references the disjoint command and runtime assessors", () => {

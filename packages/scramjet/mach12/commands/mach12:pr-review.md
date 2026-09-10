@@ -76,13 +76,15 @@ For mixed changes, give the one selected command reviewer and code specialists d
 
 For code surfaces, retain the bundled Mach 12 lenses proportionally:
 
-- **code**: `mach12:code-reviewer` for general correctness, project conventions, security, and code quality.
+- **code**: `mach12:code-reviewer` for general correctness, project conventions, security, and code quality. Select it whenever runtime changes materially alter policy or invariant ownership, component responsibility, replaceability, or dependency direction so it owns structural-coherence findings.
 - **tests**: `mach12:test-analyzer` when tests changed, behavior changed without corresponding tests, or the user requested `tests` / `all`.
 - **comments**: `mach12:comment-analyzer` when ordinary code comments, runtime docs, or user-facing non-command prose changed, or the user requested `comments` / `all`.
 - **errors**: `mach12:silent-failure-hunter` when error handling, fallback behavior, subprocess/tool execution, async flows, background work, or user-visible failure modes changed, or the user requested `errors` / `all`.
 - **types**: `mach12:type-design-analyzer` when types, schemas, interfaces, config shapes, public APIs, or data models changed, or the user requested `types` / `all`.
 - **simplify**: `mach12:code-simplifier` when implementation code would benefit from clarity review or the user requested `simplify` / `all`.
 - **completeness**: `mach12:feature-completeness-checker` when code behavior must be reconciled with a linked issue or the user requested `completeness` / `all`.
+
+Keep reviewer selection proportional for local or mechanical changes with no material responsibility or dependency decision; the structural criterion does not create review ceremony by itself.
 
 A better-fit installed agent may replace a named role only when authoritative repository or command guidance establishes compatible responsibility, read-only posture, context needs, output, and handoff. Catalog similarity alone is insufficient, and missing output narrows the review rather than triggering substitution.
 
