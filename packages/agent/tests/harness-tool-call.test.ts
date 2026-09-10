@@ -62,6 +62,7 @@ type StreamCall = {
 	systemPrompt: unknown;
 	toolNames: string[];
 	messageRoles: string[];
+	messageTexts: string[];
 	toolCallIds: string[];
 };
 
@@ -82,6 +83,13 @@ function createRecordingStreamFn(messages: AssistantMessage[], order?: string[])
 				: context.systemPrompt,
 			toolNames: context.tools?.map((tool) => tool.name) ?? [],
 			messageRoles: context.messages.map((message) => message.role),
+			messageTexts: context.messages.flatMap((message) => {
+				if (typeof message.content === "string") return [message.content];
+				if (!Array.isArray(message.content)) return [];
+				return message.content.flatMap((content: any) =>
+					content?.type === "text" && typeof content.text === "string" ? [content.text] : [],
+				);
+			}),
 			toolCallIds: context.messages.flatMap((m) =>
 				Array.isArray(m.content)
 					? m.content.filter((c: any) => c?.type === "toolCall").map((c: any) => c.id as string)
@@ -98,10 +106,10 @@ function createRecordingStreamFn(messages: AssistantMessage[], order?: string[])
 	return { fn, calls };
 }
 
-function makeHarnessTool(record: string[], order?: string[]): AgentTool {
+function makeHarnessTool(record: string[], order?: string[], name = "harness_notice"): AgentTool {
 	return {
-		name: "harness_notice",
-		label: "Harness Notice",
+		name,
+		label: name,
 		description: "harness-only notice tool",
 		parameters: { type: "object", properties: { note: { type: "string" } }, required: ["note"] },
 		execute: async (_id, args: any) => {
@@ -261,12 +269,17 @@ describe("Agent.runHarnessTool", () => {
 	});
 
 	it("preserves callback context authority and isolates refreshed live arrays", async () => {
-		const callbackTool = makeHarnessTool([]);
-		const liveTool = makeHarnessTool([]);
+		const callbackExecutions: string[] = [];
+		const callbackTool = makeHarnessTool(callbackExecutions, undefined, "callback_notice");
+		const liveTool = makeHarnessTool([], undefined, "live_notice");
 		const livePrompt = [{ id: "live", text: "live prompt" }];
 		const { fn, calls } = createRecordingStreamFn([
 			makeAssistantMessage(
 				[{ type: "toolCall", id: "mutate-1", name: "read", arguments: { path: "a.ts" } }],
+				"toolUse",
+			),
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "callback-1", name: "callback_notice", arguments: { note: "callback" } }],
 				"toolUse",
 			),
 			makeTextAssistantMessage("done"),
@@ -277,6 +290,7 @@ describe("Agent.runHarnessTool", () => {
 		const mutatorTool = makeReadTool(async () => {
 			agentRef.state.systemPrompt = livePrompt;
 			agentRef.state.tools = [liveTool];
+			agentRef.state.messages.push({ role: "user", content: "state-only message", timestamp: Date.now() });
 			return { content: [{ type: "text", text: "mutated" }], details: undefined };
 		});
 		const agent = new Agent({
@@ -289,6 +303,7 @@ describe("Agent.runHarnessTool", () => {
 
 				expect(ctx.context.systemPrompt).not.toBe(agentRef.state.systemPrompt);
 				expect(ctx.context.tools).not.toBe(agentRef.state.tools);
+				expect(ctx.context.messages).not.toContainEqual(expect.objectContaining({ content: "state-only message" }));
 				if (Array.isArray(ctx.context.systemPrompt)) {
 					ctx.context.systemPrompt.push({ id: "callback-mutation", text: "mutated copy" });
 				}
@@ -296,7 +311,7 @@ describe("Agent.runHarnessTool", () => {
 				return {
 					context: {
 						systemPrompt: "callback prompt",
-						messages: [{ role: "user", content: "callback context", timestamp: Date.now() }],
+						messages: [{ role: "user", content: "callback-only message", timestamp: Date.now() }],
 						tools: [callbackTool],
 					},
 				};
@@ -307,10 +322,12 @@ describe("Agent.runHarnessTool", () => {
 		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
 
 		expect(calls[1]!.systemPrompt).toBe("callback prompt");
-		expect(calls[1]!.toolNames).toEqual(["harness_notice"]);
+		expect(calls[1]!.toolNames).toEqual(["callback_notice"]);
 		expect(calls[1]!.messageRoles).toEqual(["user"]);
+		expect(calls[1]!.messageTexts).toEqual(["callback-only message"]);
+		expect(callbackExecutions).toEqual(["callback"]);
 		expect(agent.state.systemPrompt).toEqual([{ id: "live", text: "live prompt" }]);
-		expect(agent.state.tools.map((tool) => tool.name)).toEqual(["harness_notice"]);
+		expect(agent.state.tools.map((tool) => tool.name)).toEqual(["live_notice"]);
 	});
 
 	it("routes the next intra-run LLM call to a model changed mid-run", async () => {

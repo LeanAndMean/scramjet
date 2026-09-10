@@ -125,6 +125,16 @@ describe("tool visibility classification", () => {
 		});
 	});
 
+	it("does not reconcile case differences for non-Anthropic APIs", () => {
+		expect(classifyToolVisibility(event(["read"], { status: "observed", toolNames: ["Read"] }))).toEqual({
+			classification: "mismatch",
+			requestContextToolNames: ["read"],
+			serializedToolNames: ["Read"],
+			missingNames: ["read"],
+			unexpectedNames: ["Read"],
+		});
+	});
+
 	it("classifies missing and unexpected exact names as a mismatch", () => {
 		expect(
 			classifyToolVisibility(event(["alpha", "missing"], { status: "observed", toolNames: ["alpha", "extra"] })),

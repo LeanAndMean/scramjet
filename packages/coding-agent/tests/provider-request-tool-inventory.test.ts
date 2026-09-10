@@ -265,4 +265,54 @@ describe("provider request tool inventory boundary", () => {
 			session.dispose();
 		}
 	});
+
+	it("skips payload hooks when reload replaces the request runner during authentication", async () => {
+		let generation = 0;
+		const rewriteGenerations: number[] = [];
+		const observationGenerations: number[] = [];
+		const { session } = await createFixture((pi) => {
+			const runnerGeneration = ++generation;
+			pi.on("before_provider_request", (event) => {
+				rewriteGenerations.push(runnerGeneration);
+				return { ...(event.payload as object), rewrittenBy: runnerGeneration };
+			});
+			pi.on("provider_request_tool_inventory", () => {
+				observationGenerations.push(runnerGeneration);
+			});
+		});
+		let authStarted!: () => void;
+		const authEntry = new Promise<void>((resolve) => {
+			authStarted = resolve;
+		});
+		let releaseAuth!: () => void;
+		const authGate = new Promise<void>((resolve) => {
+			releaseAuth = resolve;
+		});
+		const resolveAuth = session.modelRegistry.getApiKeyAndHeaders.bind(session.modelRegistry);
+		const authSpy = vi.spyOn(session.modelRegistry, "getApiKeyAndHeaders").mockImplementation(async (model) => {
+			authStarted();
+			await authGate;
+			return resolveAuth(model);
+		});
+
+		try {
+			const payload = { tools: [{ name: "zeta" }, { name: "alpha" }] };
+			requestPayloads.push(payload);
+			const prompt = session.prompt("first");
+			await authEntry;
+			await session.reload();
+			registerApiProvider({ api, stream: fakeStream, streamSimple: fakeStream, handlesSystemPromptSections: true });
+			releaseAuth();
+			await prompt;
+
+			expect(generation).toBe(2);
+			expect(rewriteGenerations).toEqual([]);
+			expect(observationGenerations).toEqual([]);
+			expect(transportedPayloads).toEqual([payload]);
+		} finally {
+			releaseAuth();
+			authSpy.mockRestore();
+			session.dispose();
+		}
+	});
 });

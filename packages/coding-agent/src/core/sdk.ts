@@ -383,7 +383,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const routedModelIdentity = { provider: model.provider, id: model.id, api: model.api } as const;
 			const requestContextToolNames = (context.tools ?? []).map((tool) => tool.name);
 			const requestRunner = extensionRunnerRef.current;
-			const incomingOnPayload = options?.onPayload;
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
 			if (!auth.ok) {
 				throw new Error(auth.error);
@@ -397,10 +396,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				// SCRAMJET-DIVERGENCE: observe names only after the complete payload-rewrite chain (#524).
+				// SCRAMJET-DIVERGENCE: bind payload hooks and names-only observation to the request runner (#524).
 				onPayload: async (payload, payloadModel) => {
-					const replacement = await incomingOnPayload?.(payload, payloadModel);
-					const finalPayload = replacement === undefined ? payload : replacement;
+					if (requestRunner !== extensionRunnerRef.current) return payload;
+					const finalPayload = requestRunner?.hasHandlers("before_provider_request")
+						? await requestRunner.emitBeforeProviderRequest(payload, payloadModel)
+						: payload;
 					if (
 						requestRunner === extensionRunnerRef.current &&
 						requestRunner?.hasHandlers("provider_request_tool_inventory")
@@ -423,13 +424,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_call")) return context;
 			return runner.emitBeforeProviderCall(context, model);
-		},
-		onPayload: async (payload, model) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("before_provider_request")) {
-				return payload;
-			}
-			return runner.emitBeforeProviderRequest(payload, model);
 		},
 		onResponse: async (response, _model) => {
 			const runner = extensionRunnerRef.current;

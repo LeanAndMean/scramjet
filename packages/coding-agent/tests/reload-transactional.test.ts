@@ -155,6 +155,8 @@ describe("AgentSession.reload() — transactional required-builtin validation (S
 			expect(fx.events).toEqual(["session_start"]);
 			expect(getApiProvider("reload-sentinel-api")).toBeDefined();
 			expect(fx.session.systemPrompt).toBe(primedPrompt);
+			fx.session.setActiveToolsByName(fx.session.getActiveToolNames());
+			expect(fx.session.systemPrompt.split(PROMPT_CONTRIBUTION)).toHaveLength(2);
 			await fx.session.prompt("after failed reload");
 			expect(fx.prompts.at(-1)).toContain(PROMPT_CONTRIBUTION);
 			expect(fx.prompts.at(-1)?.split(PROMPT_CONTRIBUTION)).toHaveLength(2);

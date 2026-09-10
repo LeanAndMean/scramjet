@@ -305,6 +305,28 @@ describe("AgentSession run prompt composition", () => {
 		expect(occurrences(fixture.contexts[1].systemPrompt, "RETRY CONTRIBUTION")).toBe(1);
 	});
 
+	it("preserves composition when an input handler returns before accepting a new prompt", async () => {
+		const fixture = await createFixture({
+			responses: () => assistantText("done"),
+			customTools: [makeTool("one", "One guidance"), makeTool("two", "Two guidance")],
+			initialActiveToolNames: ["one"],
+			extensionFactory: (pi) => {
+				pi.on("before_agent_start", () => ({
+					systemPromptSection: { id: "test:handled-input", text: "\n\nHANDLED INPUT CONTRIBUTION" },
+				}));
+				pi.on("input", (event) => (event.text === "handled" ? { action: "handled" } : undefined));
+			},
+		});
+
+		await fixture.session.prompt("prime");
+		await fixture.session.prompt("handled");
+		expect(fixture.contexts).toHaveLength(1);
+
+		fixture.session.setActiveToolsByName(["two"]);
+		expect(fixture.session.systemPrompt).toContain("Two guidance");
+		expect(occurrences(fixture.session.systemPrompt, "HANDLED INPUT CONTRIBUTION")).toBe(1);
+	});
+
 	it("clears the prior extension instance composition on successful reload", async () => {
 		let generation = 0;
 		const fixture = await createFixture({
@@ -354,6 +376,9 @@ describe("AgentSession run prompt composition", () => {
 
 		await fixture.session.navigateTree(userEntry.id);
 		expect(fixture.session.systemPrompt).toContain("TREE:first");
+		fixture.session.setActiveToolsByName(["tree_tool"]);
+		expect(fixture.session.systemPrompt).toContain("Tree tool guidance");
+		expect(occurrences(fixture.session.systemPrompt, "TREE:first")).toBe(1);
 		await fixture.session.prompt("second");
 
 		expect(fixture.contexts[1].systemPrompt).toContain("TREE:second");
