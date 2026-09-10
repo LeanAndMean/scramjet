@@ -1,35 +1,54 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { getContextWindowBudget, registerFauxProvider } from "../src/index.js";
-import type { ImagesModel } from "../src/types.js";
+import { registerFauxProvider } from "../src/index.js";
+import type { ImagesModel, Model } from "../src/types.js";
 
-describe("Faux model context window budget", () => {
-	it("preserves an explicit budget", () => {
+describe("Faux model context", () => {
+	it("preserves and validates joint request limits", () => {
+		const requestLimits = [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }];
+		const faux = registerFauxProvider({ models: [{ id: "joint", requestLimits }] });
+		try {
+			expect(faux.getModel().requestLimits).toEqual(requestLimits);
+		} finally {
+			faux.unregister();
+		}
+		expect(() => registerFauxProvider({ models: [{ id: "invalid", requestLimits: [] }] })).toThrow(
+			/invalid requestLimits/,
+		);
+	});
+	it("preserves total context and an independent input constraint", () => {
 		const faux = registerFauxProvider({
-			models: [{ id: "split", contextWindow: 1_050_000, contextWindowBudget: 272_000 }],
+			models: [{ id: "constrained", contextWindow: 1_050_000, maxInputTokens: 900_000 }],
 		});
-
 		try {
-			expect(faux.getModel().contextWindowBudget).toBe(272_000);
-			expect(getContextWindowBudget(faux.getModel())).toBe(272_000);
+			expect(faux.getModel()).toMatchObject({ contextWindow: 1_050_000, maxInputTokens: 900_000 });
+			expect(faux.getModel()).not.toHaveProperty("contextWindowBudget");
 		} finally {
 			faux.unregister();
 		}
 	});
 
-	it("falls back to capacity when no budget is supplied", () => {
+	it("does not invent an input constraint", () => {
 		const faux = registerFauxProvider({ models: [{ id: "default", contextWindow: 64_000 }] });
-
 		try {
-			expect(faux.getModel().contextWindowBudget).toBeUndefined();
-			expect(getContextWindowBudget(faux.getModel())).toBe(64_000);
+			expect(faux.getModel().contextWindow).toBe(64_000);
+			expect(faux.getModel().maxInputTokens).toBeUndefined();
 		} finally {
 			faux.unregister();
 		}
 	});
 
-	it("keeps text context budgets out of image models", () => {
+	it("rejects the obsolete field instead of silently ignoring it", () => {
+		const definition = { id: "old", contextWindow: 1000, contextWindowBudget: 1000 };
+		expect(() => registerFauxProvider({ provider: "test", models: [definition] })).toThrow(
+			/test\/old.*contextWindowBudget was removed/,
+		);
+	});
+
+	it("removes the budget contract and excludes text input constraints from image models", () => {
 		expectTypeOf<
-			"contextWindowBudget" extends keyof ImagesModel<"openai-images"> ? true : false
+			"contextWindowBudget" extends keyof Model<"openai-responses"> ? true : false
 		>().toEqualTypeOf<false>();
+		expectTypeOf<"maxInputTokens" extends keyof ImagesModel<"openai-images"> ? true : false>().toEqualTypeOf<false>();
+		expectTypeOf<"requestLimits" extends keyof ImagesModel<"openai-images"> ? true : false>().toEqualTypeOf<false>();
 	});
 });

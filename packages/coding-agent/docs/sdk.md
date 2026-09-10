@@ -435,6 +435,14 @@ For each built-in provider request, `createAgentSession()` binds the current ext
 
 > See [examples/sdk/02-custom-model.ts](../examples/sdk/02-custom-model.ts)
 
+### Context and output allocation
+
+Models and usage expose one authoritative total `contextWindow`; `contextWindowBudget` and `getContextWindowBudget()` are removed. See [the migration guide](models.md#breaking-migration-from-context-budgets) before updating external model definitions or consumers.
+
+The `createAgentSession()` stream path checks the current request's estimated input against any genuine `maxInputTokens`, then bounds output by remaining total context and the applicable output maximum. It does not subtract compaction reserve again. The same accounting applies to both built-in summarizer implementations. These are approximate checks, not exact serialized-payload tokenization; custom stream functions and later payload rewrites must honor their own constraints.
+
+OpenRouter's implicit aggregate output maximum is omitted because it can exclude the long-context endpoint; explicit summary output limits are retained. Vercel's Anthropic route still requires an output limit. Codex still omits `max_output_tokens`. Aggregate route compatibility is not guaranteed by scalar metadata. Anthropic/Bedrock simple adapters treat explicit `maxTokens` as a combined output ceiling including thinking, rather than increasing it for reasoning.
+
 ### API Keys and OAuth
 
 API key resolution priority (handled by AuthStorage):

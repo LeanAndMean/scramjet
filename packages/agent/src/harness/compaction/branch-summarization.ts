@@ -1,5 +1,5 @@
 import type { Model } from "@leanandmean/ai";
-import { completeSimple, getContextWindowBudget } from "@leanandmean/ai";
+import { completeSimple, flattenSystemPrompt } from "@leanandmean/ai";
 import type { AgentMessage } from "../../types.js";
 import {
 	convertToLlm,
@@ -9,7 +9,7 @@ import {
 } from "../messages.js";
 import type { BranchSummaryResult, Session, SessionTreeEntry } from "../types.js";
 import { BranchSummaryError, err, ok, type Result, SessionError } from "../types.js";
-import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
+import { estimateTokens, getRequestMaxTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
 import {
 	computeFileLists,
 	createFileOps,
@@ -202,9 +202,23 @@ export async function generateBranchSummary(
 	options: GenerateBranchSummaryOptions,
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
 	const { model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
-	// SCRAMJET-DIVERGENCE: branch summaries fit content to the operational budget, not advertised capacity.
-	const contextWindowBudget = getContextWindowBudget(model) || 128000;
-	const tokenBudget = Math.max(1, contextWindowBudget - reserveTokens);
+	const instructions =
+		replaceInstructions && customInstructions
+			? customInstructions
+			: customInstructions
+				? `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`
+				: BRANCH_SUMMARY_PROMPT;
+	const fixedTokens = Math.ceil(
+		(flattenSystemPrompt(SUMMARIZATION_SYSTEM_PROMPT).length +
+			`<conversation>\n\n</conversation>\n\n${instructions}`.length) /
+			4,
+	);
+	// SCRAMJET-DIVERGENCE: Reserve total-context headroom once; an input limit does not reserve output.
+	const contextWindow = model.contextWindow || 128000;
+	const tokenBudget = Math.max(
+		1,
+		Math.min(contextWindow - reserveTokens, (model.maxInputTokens ?? Infinity) - fixedTokens),
+	);
 
 	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 
@@ -213,14 +227,6 @@ export async function generateBranchSummary(
 	}
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
-	let instructions: string;
-	if (replaceInstructions && customInstructions) {
-		instructions = customInstructions;
-	} else if (customInstructions) {
-		instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
-	} else {
-		instructions = BRANCH_SUMMARY_PROMPT;
-	}
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
 
 	const summarizationMessages = [
@@ -230,11 +236,16 @@ export async function generateBranchSummary(
 			timestamp: Date.now(),
 		},
 	];
-	const response = await completeSimple(
-		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ apiKey, headers, signal, maxTokens: 2048 },
-	);
+	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
+	let maxTokens: number | undefined;
+	try {
+		maxTokens = getRequestMaxTokens(model, context, 2048);
+	} catch (error) {
+		return err(
+			new BranchSummaryError("summarization_failed", error instanceof Error ? error.message : String(error)),
+		);
+	}
+	const response = await completeSimple(model, context, { apiKey, headers, signal, maxTokens });
 	if (response.stopReason === "aborted") {
 		return err(new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"));
 	}

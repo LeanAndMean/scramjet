@@ -24,7 +24,6 @@ import {
 	clampThinkingLevel,
 	cleanupSessionResources,
 	flattenSystemPrompt,
-	getContextWindowBudget,
 	getSupportedThinkingLevels,
 	isContextOverflow,
 	modelsAreEqual,
@@ -2221,8 +2220,8 @@ export class AgentSession {
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return;
 
-		// SCRAMJET-DIVERGENCE: operational context checks use the provider budget, not advertised capacity.
-		const contextWindow = this.model ? getContextWindowBudget(this.model) : 0;
+		// SCRAMJET-DIVERGENCE: Total context and independent input limits are separate constraints.
+		const contextWindow = this.model?.contextWindow ?? 0;
 
 		// Skip overflow check if the message came from a different model.
 		// This handles the case where user switched from a smaller-context model (e.g. opus)
@@ -2242,7 +2241,10 @@ export class AgentSession {
 		}
 
 		// Case 1: Overflow - LLM returned context overflow error
-		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
+		if (
+			sameModel &&
+			isContextOverflow(assistantMessage, Math.min(contextWindow, this.model?.maxInputTokens ?? Infinity))
+		) {
 			if (this._overflowRecoveryAttempted) {
 				this._emit({
 					type: "compaction_end",
@@ -2290,7 +2292,10 @@ export class AgentSession {
 		} else {
 			contextTokens = calculateContextTokens(assistantMessage.usage);
 		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
+		if (
+			shouldCompact(contextTokens, contextWindow, settings) ||
+			(contextWindow > settings.reserveTokens && contextTokens > (this.model?.maxInputTokens ?? Infinity))
+		) {
 			await this._runAutoCompaction("threshold", false);
 		}
 	}
@@ -2881,9 +2886,8 @@ export class AgentSession {
 		if (message.stopReason !== "error" || !message.errorMessage) return false;
 
 		// Context overflow is handled by compaction, not retry
-		// SCRAMJET-DIVERGENCE: retry classification uses the provider's operational context budget.
-		const contextWindow = this.model ? getContextWindowBudget(this.model) : 0;
-		if (isContextOverflow(message, contextWindow)) return false;
+		const contextWindow = this.model?.contextWindow ?? 0;
+		if (isContextOverflow(message, Math.min(contextWindow, this.model?.maxInputTokens ?? Infinity))) return false;
 
 		const err = message.errorMessage;
 		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, premature stream endings, HTTP/2 closed before response, terminated, retry delay exceeded
@@ -3421,8 +3425,7 @@ export class AgentSession {
 		if (!model) return undefined;
 
 		const contextWindow = model.contextWindow ?? 0;
-		const contextWindowBudget = getContextWindowBudget(model);
-		if (contextWindow <= 0 || contextWindowBudget <= 0) return undefined;
+		if (contextWindow <= 0) return undefined;
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
@@ -3449,17 +3452,16 @@ export class AgentSession {
 			}
 
 			if (!hasPostCompactionUsage) {
-				return { tokens: null, contextWindow, contextWindowBudget, percent: null };
+				return { tokens: null, contextWindow, percent: null };
 			}
 		}
 
 		const estimate = estimateContextTokens(this.messages);
-		const percent = (estimate.tokens / contextWindowBudget) * 100;
+		const percent = (estimate.tokens / contextWindow) * 100;
 
 		return {
 			tokens: estimate.tokens,
 			contextWindow,
-			contextWindowBudget,
 			percent,
 		};
 	}

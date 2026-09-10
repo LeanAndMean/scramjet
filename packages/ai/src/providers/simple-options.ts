@@ -3,7 +3,9 @@ import type { Api, Model, SimpleStreamOptions, StreamOptions, ThinkingBudgets, T
 export function buildBaseOptions(model: Model<Api>, options?: SimpleStreamOptions, apiKey?: string): StreamOptions {
 	return {
 		temperature: options?.temperature,
-		maxTokens: options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : undefined),
+		// SCRAMJET-DIVERGENCE: Aggregate output maxima are not jointly available with every context route.
+		maxTokens:
+			options?.maxTokens ?? (model.provider !== "openrouter" && model.maxTokens > 0 ? model.maxTokens : undefined),
 		signal: options?.signal,
 		apiKey: apiKey || options?.apiKey,
 		transport: options?.transport,

@@ -43,6 +43,25 @@ async function capturePayload(
 	return captured;
 }
 
+describe("explicit output allocation", () => {
+	it("fits token-based thinking inside the output ceiling", async () => {
+		const payload = await capturePayload(makeModel("anthropic.claude-3-5-sonnet-20241022-v2:0"), minimalContext, {
+			reasoning: "high",
+			maxTokens: 4096,
+		});
+		expect(payload.inferenceConfig.maxTokens).toBe(4096);
+		expect(payload.additionalModelRequestFields.thinking.budget_tokens).toBe(3072);
+	});
+	it("reports insufficient thinking space rather than exceeding the ceiling", () => {
+		expect(() =>
+			streamSimpleBedrock(makeModel("anthropic.claude-3-5-sonnet-20241022-v2:0"), minimalContext, {
+				reasoning: "high",
+				maxTokens: 1000,
+			}),
+		).toThrow(/Insufficient output space/);
+	});
+});
+
 describe("Bedrock supportsAdaptiveThinking — new model patterns", () => {
 	const adaptiveModels = [
 		"us.anthropic.claude-opus-4-8-v1",

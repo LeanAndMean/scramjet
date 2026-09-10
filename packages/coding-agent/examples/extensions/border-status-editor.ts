@@ -52,12 +52,7 @@ function formatContext(ctx: ExtensionContext): string {
 	if (!usage || usage.percent === null) {
 		return "ctx ?";
 	}
-	// SCRAMJET-DIVERGENCE: Show the expanded capacity/budget ContextUsage contract (issue 398).
-	const capacity =
-		usage.contextWindowBudget === usage.contextWindow
-			? ""
-			: ` (${(usage.contextWindow / 1000).toFixed(0)}k capacity)`;
-	return `ctx ${Math.round(usage.percent)}%/${(usage.contextWindowBudget / 1000).toFixed(0)}k${capacity}`;
+	return `ctx ${Math.round(usage.percent)}%/${(usage.contextWindow / 1000).toFixed(0)}k`;
 }
 
 function formatThinking(level: string): string {

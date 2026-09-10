@@ -7,7 +7,7 @@
 
 import type { AgentMessage } from "@leanandmean/agent";
 import type { Model } from "@leanandmean/ai";
-import { completeSimple, getContextWindowBudget } from "@leanandmean/ai";
+import { completeSimple, flattenSystemPrompt } from "@leanandmean/ai";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
@@ -15,7 +15,7 @@ import {
 	createCustomMessage,
 } from "../messages.js";
 import type { ReadonlySessionManager, SessionEntry } from "../session-manager.js";
-import { estimateTokens } from "./compaction.js";
+import { estimateTokens, getRequestMaxTokens } from "./compaction.js";
 import {
 	computeFileLists,
 	createFileOps,
@@ -286,9 +286,23 @@ export async function generateBranchSummary(
 ): Promise<BranchSummaryResult> {
 	const { model, apiKey, headers, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
 
-	// SCRAMJET-DIVERGENCE: branch summaries fit content to the operational budget, not advertised capacity.
-	const contextWindowBudget = getContextWindowBudget(model) || 128000;
-	const tokenBudget = Math.max(1, contextWindowBudget - reserveTokens);
+	const instructions =
+		replaceInstructions && customInstructions
+			? customInstructions
+			: customInstructions
+				? `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`
+				: BRANCH_SUMMARY_PROMPT;
+	const fixedTokens = Math.ceil(
+		(flattenSystemPrompt(SUMMARIZATION_SYSTEM_PROMPT).length +
+			`<conversation>\n\n</conversation>\n\n${instructions}`.length) /
+			4,
+	);
+	// SCRAMJET-DIVERGENCE: Reserve total-context headroom once; an input limit does not reserve output.
+	const contextWindow = model.contextWindow || 128000;
+	const tokenBudget = Math.max(
+		1,
+		Math.min(contextWindow - reserveTokens, (model.maxInputTokens ?? Infinity) - fixedTokens),
+	);
 
 	const { messages, fileOps } = prepareBranchEntries(entries, tokenBudget);
 
@@ -301,15 +315,6 @@ export async function generateBranchSummary(
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 
-	// Build prompt
-	let instructions: string;
-	if (replaceInstructions && customInstructions) {
-		instructions = customInstructions;
-	} else if (customInstructions) {
-		instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
-	} else {
-		instructions = BRANCH_SUMMARY_PROMPT;
-	}
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
 
 	const summarizationMessages = [
@@ -320,12 +325,14 @@ export async function generateBranchSummary(
 		},
 	];
 
-	// Call LLM for summarization
-	const response = await completeSimple(
-		model,
-		{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-		{ apiKey, headers, signal, maxTokens: 2048 },
-	);
+	const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
+	let maxTokens: number | undefined;
+	try {
+		maxTokens = getRequestMaxTokens(model, context, 2048);
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
+	const response = await completeSimple(model, context, { apiKey, headers, signal, maxTokens });
 
 	// Check if aborted or errored
 	if (response.stopReason === "aborted") {

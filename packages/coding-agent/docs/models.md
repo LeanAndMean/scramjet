@@ -196,15 +196,32 @@ If your command is slow, expensive, rate-limited, or should keep using a previou
 | `reasoning` | No | `false` | Supports extended thinking |
 | `thinkingLevelMap` | No | omitted | Maps scramjet thinking levels to provider values and marks unsupported levels (see below) |
 | `input` | No | `["text"]` | Input types: `["text"]` or `["text", "image"]` |
-| `contextWindow` | No | `128000` | Advertised model capacity in tokens |
-| `contextWindowBudget` | No | `contextWindow` | Operational token budget used for overflow handling and compaction |
+| `contextWindow` | No | `128000` | Maximum supported total context for this provider/model, in tokens |
+| `maxInputTokens` | No | omitted | Genuine independently enforced provider input limit, only when evidenced for this route |
+| `requestLimits` | No | omitted | Non-empty array of provider-declared joint endpoint token constraints (see below) |
 | `maxTokens` | No | `16384` | Maximum output tokens |
 | `cost` | No | all zeros | `{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}` (per million tokens) |
 | `compat` | No | provider `compat` | Provider compatibility overrides. Merged with provider-level `compat` when both are set. |
 
-`contextWindowBudget`, when supplied, must be a positive finite integer no greater than the final `contextWindow`. Omit it to use the advertised capacity as the operational budget. Custom models and per-model overrides set capacity and budget independently; after all overrides are merged, an invalid budget/capacity relationship is rejected with the provider, model, and both values. The existing `contextWindow` validation remains unchanged and rejects values `<= 0`.
+`contextWindow` is the sole total-context authority for usage percentages, the footer, listings, and compaction. Do not reduce it for pricing, presumed quality, or speculative conservatism. `maxTokens` is an independent output allowance; configurable compaction reserves remain separate. Custom-model defaults are client defaults, not evidence of your backend's maximum—set the actual deployment value.
 
-GPT-5.6 Sol, Terra, and Luna through `openai-codex` use OpenAI's documented 1,050,000-token model capacity as their default operational budget. Set `contextWindowBudget` in a per-model override when an account requires a lower operational limit.
+Final `contextWindow` and any `maxInputTokens` must be positive finite numbers after configuration merges, dynamic registration, and OAuth transformations; positive fractional context values remain accepted. An input constraint above total context is non-binding, not a reason to increase total context. Only assign input constraints from applicable provider evidence, never by subtracting maximum output or copying an old budget. Aggregate endpoint maxima may not be jointly available under custom routing or account restrictions. OpenRouter generation reads endpoint input constraints and retains the largest permitted input across all reported routes, only when that is independently below total context. A route without a separate input limit contributes its total context, not a guessed output reservation. Empty endpoint lists provide no input-limit evidence. This does not guarantee that the maximum input, output, tools, and other requested capabilities are jointly available on one endpoint.
+
+### Joint endpoint constraints
+
+`requestLimits` preserves input/output combinations that independent scalar maxima cannot express. Each entry has required positive finite `maxTotalTokens` and boolean `supportsTools`, plus optional positive finite `maxInputTokens` and `maxOutputTokens`. These are endpoint request constraints, not another model context denominator. Omitted input/output fields add no independent bound; they are not output reservations or proof of unlimited backend capacity. An absent array adds no joint check; an empty or malformed array is rejected at configuration, dynamic/OAuth registration, and Faux boundaries.
+
+For example, a long-context endpoint can accept 98,304 input tokens but only 8,192 output tokens, while another endpoint allows longer output only within a 40,960-token total. Coding-agent sessions and both built-in summarizers filter these declarations by estimated input and required tool support, then cap explicit output at the largest remaining allowance from a compatible entry. They reject requests with no compatible entry rather than selecting a provider, truncating the prompt, or globally reducing `contextWindow` or `maxTokens`. Ordinary OpenRouter output remains omitted when not explicitly requested. Direct AI streams and ordinary standalone Agent/AgentHarness streams do not automatically run this allocation; their callers own request constraints.
+
+OpenRouter and Vercel generation deduplicates equivalent declarations and omits joint metadata when a tool-capable endpoint already admits the entire scalar envelope. Empty or unavailable discovery is not a verified envelope. These declarations do not encode custom routing preferences, account restrictions, modalities, or every requested capability, and do not guarantee provider acceptance. If changing the route, supply applicable constraints through an override or replace the model definition rather than assuming inherited declarations describe the new backend. Overrides replace the entire array, not individual entries.
+
+### Breaking migration from context budgets
+
+`contextWindowBudget` and the exported `getContextWindowBudget()` resolver have been removed, without aliases. Replace resolver calls and usage-budget reads with `contextWindow`; `ContextUsage` is now `{ tokens, percent, contextWindow }`. Remove the obsolete key from model definitions, `models.json` overrides, dynamic providers, Faux definitions, and OAuth-produced models—even when it equals total context. Registration/configuration diagnostics identify the provider/model and explain removal. No user files are rewritten and no old value is automatically copied into `contextWindow` or `maxInputTokens`.
+
+Invalid configuration retains built-ins while rejecting its request settings; an invalid OAuth transformation is diagnosed and its untransformed candidate models remain. This preserves existing fallback behavior, not a guarantee that requests are blocked until configuration is repaired.
+
+Built-in metadata is not proof of endpoint acceptance. The provider audit in [issue #525](https://github.com/LeanAndMean/scramjet/issues/525) retains unresolved numerical/route dispositions, including some Codex maxima and aggregate input/output combinations; retained values are not newly verified by this migration. Tests use static metadata and synthetic usage, not paid maximum-context requests.
 
 GPT-6 Astra through the public OpenAI API stores the standard scalar rates of $10 input, $50 output, $1 cache read, and $12.50 cache write per million tokens. Requests above 272,000 input tokens use higher rates for the whole request, which the current scalar estimator cannot represent, so its monetary estimate may be too low while its token counts remain valid. The `openai-codex` and `github-copilot` Astra records carry the same scalar values only as usage estimates; those subscription providers do not imply marginal per-request API charges.
 
@@ -314,7 +331,7 @@ Use `modelOverrides` to customize specific built-in models without replacing the
 }
 ```
 
-`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxTokens`, `headers`, `compat`.
+`modelOverrides` supports these fields per model: `name`, `reasoning`, `input`, `cost` (partial), `contextWindow`, `maxInputTokens`, `requestLimits`, `maxTokens`, `headers`, `compat`.
 
 Behavior notes:
 - `modelOverrides` are applied to built-in provider models.

@@ -2023,7 +2023,7 @@ export const MODELS = {
 				cacheRead: 0.3,
 				cacheWrite: 3.75,
 			},
-			contextWindow: 1000000,
+			contextWindow: 200000,
 			maxTokens: 64000,
 		} satisfies Model<"anthropic-messages">,
 		"claude-sonnet-4-5-20250929": {
@@ -2040,7 +2040,7 @@ export const MODELS = {
 				cacheRead: 0.3,
 				cacheWrite: 3.75,
 			},
-			contextWindow: 1000000,
+			contextWindow: 200000,
 			maxTokens: 64000,
 		} satisfies Model<"anthropic-messages">,
 		"claude-sonnet-4-6": {
@@ -2267,6 +2267,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-chat-latest": {
@@ -2303,6 +2304,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-mini": {
@@ -2321,6 +2323,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-nano": {
@@ -2339,6 +2342,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5-pro": {
@@ -2357,7 +2361,8 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
-			maxTokens: 272000,
+			maxInputTokens: 272000,
+			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1": {
 			id: "gpt-5.1",
@@ -2375,6 +2380,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1-chat-latest": {
@@ -2411,6 +2417,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1-codex-max": {
@@ -2429,6 +2436,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.1-codex-mini": {
@@ -2447,6 +2455,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.2": {
@@ -2465,6 +2474,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.2-chat-latest": {
@@ -2501,6 +2511,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.2-pro": {
@@ -2555,6 +2566,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.3-codex-spark": {
@@ -2590,7 +2602,8 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.4-mini": {
@@ -2609,6 +2622,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.4-nano": {
@@ -2627,6 +2641,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.4-pro": {
@@ -2645,6 +2660,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.5": {
@@ -2662,7 +2678,9 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
+			maxInputTokens: 922000,
+			requestLimits: [{"maxTotalTokens":922000,"maxInputTokens":922000,"maxOutputTokens":128000,"supportsTools":true}],
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.5-pro": {
@@ -2717,6 +2735,7 @@ export const MODELS = {
 				cacheWrite: 1.25,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.6-sol": {
@@ -2735,6 +2754,7 @@ export const MODELS = {
 				cacheWrite: 6.25,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"gpt-5.6-terra": {
@@ -2753,6 +2773,7 @@ export const MODELS = {
 				cacheWrite: 3.125,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"azure-openai-responses">,
 		"o1": {
@@ -3574,7 +3595,7 @@ export const MODELS = {
 				cacheRead: 0.16,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 262144,
 			maxTokens: 256000,
 		} satisfies Model<"openai-completions">,
 		"workers-ai/@cf/nvidia/nemotron-3-120b-a12b": {
@@ -3906,7 +3927,7 @@ export const MODELS = {
 				cacheRead: 0.028,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1048576,
 			maxTokens: 384000,
 		} satisfies Model<"anthropic-messages">,
 		"accounts/fireworks/models/deepseek-v4-pro": {
@@ -3924,7 +3945,7 @@ export const MODELS = {
 				cacheRead: 0.145,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1048576,
 			maxTokens: 384000,
 		} satisfies Model<"anthropic-messages">,
 		"accounts/fireworks/models/glm-5p1": {
@@ -3942,7 +3963,7 @@ export const MODELS = {
 				cacheRead: 0.26,
 				cacheWrite: 0,
 			},
-			contextWindow: 202800,
+			contextWindow: 202752,
 			maxTokens: 131072,
 		} satisfies Model<"anthropic-messages">,
 		"accounts/fireworks/models/glm-5p2": {
@@ -4187,7 +4208,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
@@ -4199,7 +4220,8 @@ export const MODELS = {
 				cacheWrite: 12.5,
 			},
 			contextWindow: 1000000,
-			maxTokens: 128000,
+			maxInputTokens: 936000,
+			maxTokens: 64000,
 		} satisfies Model<"openai-completions">,
 		"claude-haiku-4.5": {
 			id: "claude-haiku-4.5",
@@ -4207,7 +4229,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsEagerToolInputStreaming":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4226,7 +4248,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			input: ["text", "image"],
 			cost: {
@@ -4244,7 +4266,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"forceAdaptiveThinking":true},
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"max"},
@@ -4264,7 +4286,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"forceAdaptiveThinking":true,"supportsTemperature":false},
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
@@ -4275,7 +4297,8 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 32000,
 		} satisfies Model<"anthropic-messages">,
 		"claude-opus-4.8": {
@@ -4284,7 +4307,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"forceAdaptiveThinking":true,"supportsTemperature":false},
 			reasoning: true,
 			thinkingLevelMap: {"xhigh":"xhigh"},
@@ -4295,7 +4318,8 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 6.25,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 64000,
 		} satisfies Model<"anthropic-messages">,
 		"claude-sonnet-4": {
@@ -4304,7 +4328,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsEagerToolInputStreaming":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4323,7 +4347,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsEagerToolInputStreaming":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4342,7 +4366,7 @@ export const MODELS = {
 			api: "anthropic-messages",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"forceAdaptiveThinking":true},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4361,7 +4385,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4372,7 +4396,8 @@ export const MODELS = {
 				cacheWrite: 2.5,
 			},
 			contextWindow: 1000000,
-			maxTokens: 128000,
+			maxInputTokens: 936000,
+			maxTokens: 64000,
 		} satisfies Model<"openai-completions">,
 		"gemini-2.5-pro": {
 			id: "gemini-2.5-pro",
@@ -4380,7 +4405,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4399,7 +4424,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4418,7 +4443,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4437,7 +4462,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4447,7 +4472,8 @@ export const MODELS = {
 				cacheRead: 0.15,
 				cacheWrite: 0,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 64000,
 		} satisfies Model<"openai-completions">,
 		"gpt-4.1": {
@@ -4456,7 +4482,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: false,
 			input: ["text", "image"],
@@ -4475,7 +4501,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null},
 			input: ["text", "image"],
@@ -4494,7 +4520,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4513,7 +4539,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4532,7 +4558,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4542,7 +4568,7 @@ export const MODELS = {
 				cacheRead: 0.175,
 				cacheWrite: 0,
 			},
-			contextWindow: 400000,
+			contextWindow: 1000000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.4": {
@@ -4551,7 +4577,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4562,6 +4588,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.4-mini": {
@@ -4570,7 +4597,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4581,6 +4608,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.4-nano": {
@@ -4589,7 +4617,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4608,7 +4636,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4619,6 +4647,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-luna": {
@@ -4627,7 +4656,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4638,6 +4667,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-sol": {
@@ -4646,7 +4676,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
@@ -4657,6 +4687,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-terra": {
@@ -4665,7 +4696,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"xhigh":"xhigh"},
 			input: ["text", "image"],
@@ -4676,6 +4707,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-6-astra": {
@@ -4684,7 +4716,7 @@ export const MODELS = {
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			reasoning: true,
 			thinkingLevelMap: {"off":null,"minimal":null,"xhigh":"xhigh","max":"max"},
 			input: ["text", "image"],
@@ -4694,8 +4726,8 @@ export const MODELS = {
 				cacheRead: 1,
 				cacheWrite: 12.5,
 			},
-			contextWindow: 400000,
-			contextWindowBudget: 272000,
+			contextWindow: 1000000,
+			maxInputTokens: 872000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"kimi-k2.7-code": {
@@ -4704,7 +4736,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			input: ["text", "image"],
@@ -4723,7 +4755,7 @@ export const MODELS = {
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
-			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat"},
+			headers: {"User-Agent":"GitHubCopilotChat/0.35.0","Editor-Version":"vscode/1.107.0","Editor-Plugin-Version":"copilot-chat/0.35.0","Copilot-Integration-Id":"vscode-chat","X-GitHub-Api-Version":"2026-06-01"},
 			compat: {"supportsStore":false,"supportsDeveloperRole":false,"supportsReasoningEffort":false},
 			reasoning: true,
 			input: ["text"],
@@ -4734,6 +4766,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 256000,
+			maxInputTokens: 128000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 	},
@@ -7731,7 +7764,7 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.4-mini": {
@@ -7803,7 +7836,7 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.5-pro": {
@@ -7912,7 +7945,6 @@ export const MODELS = {
 				cacheWrite: 12.5,
 			},
 			contextWindow: 1050000,
-			contextWindowBudget: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"o1": {
@@ -8067,7 +8099,7 @@ export const MODELS = {
 				cacheRead: 0.125,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 400000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.1-codex-max": {
@@ -8084,7 +8116,7 @@ export const MODELS = {
 				cacheRead: 0.125,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 400000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.1-codex-mini": {
@@ -8102,7 +8134,7 @@ export const MODELS = {
 				cacheRead: 0.025,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 400000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.2": {
@@ -8120,7 +8152,7 @@ export const MODELS = {
 				cacheRead: 0.175,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 400000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.2-codex": {
@@ -8138,7 +8170,7 @@ export const MODELS = {
 				cacheRead: 0.175,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 400000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.3-codex": {
@@ -8192,7 +8224,7 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 1000000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.4-mini": {
@@ -8246,7 +8278,7 @@ export const MODELS = {
 				cacheRead: 0.1,
 				cacheWrite: 0,
 			},
-			contextWindow: 1050000,
+			contextWindow: 872000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.6-sol": {
@@ -8264,7 +8296,7 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 0,
 			},
-			contextWindow: 1050000,
+			contextWindow: 872000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.6-terra": {
@@ -8282,7 +8314,7 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 1050000,
+			contextWindow: 872000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-6-astra": {
@@ -8300,7 +8332,7 @@ export const MODELS = {
 				cacheRead: 1,
 				cacheWrite: 12.5,
 			},
-			contextWindow: 272000,
+			contextWindow: 872000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 	},
@@ -8876,7 +8908,7 @@ export const MODELS = {
 				cacheRead: 0.25,
 				cacheWrite: 0,
 			},
-			contextWindow: 272000,
+			contextWindow: 1050000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.4-mini": {
@@ -10035,7 +10067,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 163840,
 			maxTokens: 16000,
 		} satisfies Model<"openai-completions">,
 		"deepseek/deepseek-chat-v3-0324": {
@@ -10086,7 +10118,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 163840,
+			contextWindow: 64000,
 			maxTokens: 16000,
 		} satisfies Model<"openai-completions">,
 		"deepseek/deepseek-r1-0528": {
@@ -10137,7 +10169,7 @@ export const MODELS = {
 				cacheRead: 0.02145,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 163840,
 			maxTokens: 64000,
 		} satisfies Model<"openai-completions">,
 		"deepseek/deepseek-v3.2-exp": {
@@ -10311,7 +10343,7 @@ export const MODELS = {
 				cacheRead: 0.19999999999999998,
 				cacheWrite: 0.375,
 			},
-			contextWindow: 65536,
+			contextWindow: 131072,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"google/gemini-3.1-flash-lite": {
@@ -10379,7 +10411,7 @@ export const MODELS = {
 				cacheRead: 0.19999999999999998,
 				cacheWrite: 0.375,
 			},
-			contextWindow: 1048756,
+			contextWindow: 1048576,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"google/gemini-3.5-flash": {
@@ -10482,6 +10514,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":262141,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":117964,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":40960,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"google/gemma-4-31b-it:free": {
@@ -10601,7 +10634,7 @@ export const MODELS = {
 				cacheRead: 0.06,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 262144,
 			maxTokens: 80000,
 		} satisfies Model<"openai-completions">,
 		"liquid/lfm-2.5-1.2b-thinking:free": {
@@ -10704,6 +10737,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1048576,
+			requestLimits: [{"maxTotalTokens":128000,"maxOutputTokens":115200,"supportsTools":true},{"maxTotalTokens":1048576,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":1048576,"maxOutputTokens":8192,"supportsTools":false},{"maxTotalTokens":524288,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":524288,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"meta-llama/llama-4-scout": {
@@ -10720,7 +10754,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 10000000,
+			contextWindow: 1310720,
+			requestLimits: [{"maxTotalTokens":327680,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":131072,"maxOutputTokens":117964,"supportsTools":false},{"maxTotalTokens":1310720,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"minimax/minimax-m1": {
@@ -10789,6 +10824,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 204800,
+			requestLimits: [{"maxTotalTokens":198000,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":200000,"maxOutputTokens":128000,"supportsTools":true},{"maxTotalTokens":196608,"maxOutputTokens":176947,"supportsTools":true},{"maxTotalTokens":65536,"maxOutputTokens":58982,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131100,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131072,"supportsTools":true}],
 			maxTokens: 196608,
 		} satisfies Model<"openai-completions">,
 		"minimax/minimax-m2.7": {
@@ -10806,6 +10842,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 204800,
+			requestLimits: [{"maxTotalTokens":196608,"maxOutputTokens":176947,"supportsTools":true},{"maxTotalTokens":196608,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131072,"supportsTools":true}],
 			maxTokens: 196608,
 		} satisfies Model<"openai-completions">,
 		"minimax/minimax-m3": {
@@ -11027,6 +11064,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			requestLimits: [{"maxTotalTokens":131072,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":131072,"maxOutputTokens":104857,"supportsTools":false},{"maxTotalTokens":60288,"maxOutputTokens":16000,"supportsTools":false},{"maxTotalTokens":128000,"maxOutputTokens":102400,"supportsTools":true}],
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"mistralai/mistral-saba": {
@@ -11077,7 +11115,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 131072,
+			requestLimits: [{"maxTotalTokens":128000,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":131072,"maxOutputTokens":32768,"supportsTools":false}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"mistralai/mixtral-8x22b-instruct": {
@@ -11111,7 +11150,7 @@ export const MODELS = {
 				cacheRead: 0.01,
 				cacheWrite: 0,
 			},
-			contextWindow: 32000,
+			contextWindow: 32768,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"moonshotai/kimi-k2": {
@@ -11197,6 +11236,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65535,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":230400,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262000,"maxOutputTokens":235800,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"moonshotai/kimi-k2.7-code": {
@@ -11214,6 +11254,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":32000,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262000,"maxOutputTokens":235800,"supportsTools":false},{"maxTotalTokens":262144,"maxInputTokens":229376,"maxOutputTokens":16384,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"nex-agi/nex-n2-mini": {
@@ -11332,7 +11373,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 262144,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"nvidia/nemotron-3-super-120b-a12b:free": {
@@ -11349,7 +11390,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"nvidia/nemotron-3-ultra-550b-a55b": {
@@ -11366,7 +11408,7 @@ export const MODELS = {
 				cacheRead: 0.09999999999999999,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 262144,
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"nvidia/nemotron-3-ultra-550b-a55b:free": {
@@ -11452,6 +11494,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 4095,
+			requestLimits: [{"maxTotalTokens":4095,"maxOutputTokens":3685,"supportsTools":true}],
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-3.5-turbo-16k": {
@@ -11690,6 +11733,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5-codex": {
@@ -11758,6 +11802,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1": {
@@ -11775,6 +11820,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1-chat": {
@@ -11809,6 +11855,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1-codex-max": {
@@ -11826,6 +11873,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.1-codex-mini": {
@@ -11843,6 +11891,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 100000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2": {
@@ -11861,6 +11910,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2-chat": {
@@ -11879,6 +11929,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 128000,
+			maxInputTokens: 96000,
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2-codex": {
@@ -11897,6 +11948,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.2-pro": {
@@ -11915,6 +11967,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.3-chat": {
@@ -11951,6 +12004,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.4": {
@@ -12023,6 +12077,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.5": {
@@ -12059,6 +12114,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-5.6-luna": {
@@ -12218,6 +12274,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"openai/gpt-oss-120b": {
@@ -12574,7 +12631,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 32768,
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen-2.5-7b-instruct": {
@@ -12591,7 +12648,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 32768,
+			requestLimits: [{"maxTotalTokens":32768,"maxOutputTokens":29491,"supportsTools":true}],
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen-plus": {
@@ -12609,6 +12667,7 @@ export const MODELS = {
 				cacheWrite: 0.325,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 995904,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen-plus-2025-07-28": {
@@ -12626,6 +12685,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 995904,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen-plus-2025-07-28:thinking": {
@@ -12659,7 +12719,9 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131702,
+			contextWindow: 131072,
+			maxInputTokens: 98304,
+			requestLimits: [{"maxTotalTokens":40960,"maxOutputTokens":36864,"supportsTools":false},{"maxTotalTokens":40960,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":131072,"maxInputTokens":98304,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 40960,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-235b-a22b": {
@@ -12677,6 +12739,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 98304,
 			maxTokens: 8192,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-235b-a22b-2507": {
@@ -12710,7 +12773,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 131072,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-30b-a3b": {
@@ -12728,6 +12791,8 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 98304,
+			requestLimits: [{"maxTotalTokens":40960,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":131072,"maxInputTokens":98304,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-30b-a3b-instruct-2507": {
@@ -12744,7 +12809,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262144,
 			maxTokens: 32000,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-30b-a3b-thinking-2507": {
@@ -12761,7 +12826,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 81920,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-32b": {
@@ -12796,6 +12861,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			maxInputTokens: 98304,
 			maxTokens: 8192,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder": {
@@ -12812,7 +12878,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 1048576,
+			contextWindow: 262144,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder-30b-a3b-instruct": {
@@ -12829,7 +12895,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 160000,
+			contextWindow: 262144,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder-flash": {
@@ -12847,6 +12913,7 @@ export const MODELS = {
 				cacheWrite: 0.24375,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 997952,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder-next": {
@@ -12864,6 +12931,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":64000,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxInputTokens":204800,"maxOutputTokens":65536,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder-plus": {
@@ -12881,6 +12949,7 @@ export const MODELS = {
 				cacheWrite: 0.8125,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 997952,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-coder:free": {
@@ -12915,6 +12984,7 @@ export const MODELS = {
 				cacheWrite: 0.975,
 			},
 			contextWindow: 262144,
+			maxInputTokens: 258048,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-max-thinking": {
@@ -12932,6 +13002,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			maxInputTokens: 258048,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-next-80b-a3b-instruct": {
@@ -13050,7 +13121,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262144,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-vl-32b-instruct": {
@@ -13067,7 +13138,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 131072,
+			maxInputTokens: 129024,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-vl-8b-instruct": {
@@ -13084,7 +13156,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 262144,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3-vl-8b-thinking": {
@@ -13101,7 +13173,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 131072,
+			maxInputTokens: 126976,
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-122b-a10b": {
@@ -13119,6 +13192,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":false},{"maxTotalTokens":262144,"maxInputTokens":258048,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":81920,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-27b": {
@@ -13169,7 +13243,7 @@ export const MODELS = {
 				cacheRead: 0.111,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 262144,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-9b": {
@@ -13187,6 +13261,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":81920,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":false}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-flash-02-23": {
@@ -13204,6 +13279,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-plus-02-15": {
@@ -13221,6 +13297,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.5-plus-20260420": {
@@ -13238,6 +13315,7 @@ export const MODELS = {
 				cacheWrite: 0.375,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-27b": {
@@ -13272,6 +13350,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 262144,
+			requestLimits: [{"maxTotalTokens":262144,"maxOutputTokens":32768,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":16384,"supportsTools":true},{"maxTotalTokens":256000,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":65536,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":false}],
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-flash": {
@@ -13289,6 +13368,7 @@ export const MODELS = {
 				cacheWrite: 0.234375,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-max-preview": {
@@ -13306,6 +13386,7 @@ export const MODELS = {
 				cacheWrite: 1.3,
 			},
 			contextWindow: 262144,
+			maxInputTokens: 229376,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.6-plus": {
@@ -13323,6 +13404,7 @@ export const MODELS = {
 				cacheWrite: 0.40625,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.7-max": {
@@ -13340,6 +13422,7 @@ export const MODELS = {
 				cacheWrite: 1.5625,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"qwen/qwen3.7-plus": {
@@ -13357,6 +13440,7 @@ export const MODELS = {
 				cacheWrite: 0.39999999999999997,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 983616,
 			maxTokens: 65536,
 		} satisfies Model<"openai-completions">,
 		"rekaai/reka-edge": {
@@ -13374,6 +13458,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 16384,
+			requestLimits: [{"maxTotalTokens":16384,"maxOutputTokens":14745,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"relace/relace-search": {
@@ -13425,6 +13510,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
+			requestLimits: [{"maxTotalTokens":131072,"maxOutputTokens":16384,"supportsTools":false},{"maxTotalTokens":8192,"maxOutputTokens":7372,"supportsTools":true}],
 			maxTokens: 16384,
 		} satisfies Model<"openai-completions">,
 		"stepfun/step-3.5-flash": {
@@ -13458,7 +13544,7 @@ export const MODELS = {
 				cacheRead: 0.04,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 262144,
 			maxTokens: 256000,
 		} satisfies Model<"openai-completions">,
 		"tencent/hy3": {
@@ -13526,7 +13612,8 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 32768,
+			contextWindow: 1024000,
+			requestLimits: [{"maxTotalTokens":1024000,"maxOutputTokens":819200,"supportsTools":false},{"maxTotalTokens":32768,"maxOutputTokens":26214,"supportsTools":true}],
 			maxTokens: 32768,
 		} satisfies Model<"openai-completions">,
 		"upstage/solar-pro-3": {
@@ -13543,7 +13630,7 @@ export const MODELS = {
 				cacheRead: 0.015,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 131072,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"x-ai/grok-4.20": {
@@ -13628,7 +13715,7 @@ export const MODELS = {
 				cacheRead: 0.028,
 				cacheWrite: 0,
 			},
-			contextWindow: 1048576,
+			contextWindow: 1050000,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"xiaomi/mimo-v2.5-pro": {
@@ -13645,7 +13732,8 @@ export const MODELS = {
 				cacheRead: 0.0036,
 				cacheWrite: 0,
 			},
-			contextWindow: 1048576,
+			contextWindow: 1050000,
+			requestLimits: [{"maxTotalTokens":1050000,"maxOutputTokens":945000,"supportsTools":false},{"maxTotalTokens":1048576,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":262144,"maxOutputTokens":235929,"supportsTools":true},{"maxTotalTokens":1024000,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":1000000,"maxOutputTokens":128000,"supportsTools":true}],
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-4.5": {
@@ -13713,7 +13801,7 @@ export const MODELS = {
 				cacheRead: 0.08,
 				cacheWrite: 0,
 			},
-			contextWindow: 202752,
+			contextWindow: 204800,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-4.6v": {
@@ -13747,7 +13835,7 @@ export const MODELS = {
 				cacheRead: 0.08,
 				cacheWrite: 0,
 			},
-			contextWindow: 202752,
+			contextWindow: 204800,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-4.7-flash": {
@@ -13781,7 +13869,7 @@ export const MODELS = {
 				cacheRead: 0.119,
 				cacheWrite: 0,
 			},
-			contextWindow: 202752,
+			contextWindow: 204800,
 			maxTokens: 4096,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-5-turbo": {
@@ -13798,7 +13886,7 @@ export const MODELS = {
 				cacheRead: 0.24,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 202752,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-5.1": {
@@ -13815,7 +13903,7 @@ export const MODELS = {
 				cacheRead: 0.1794,
 				cacheWrite: 0,
 			},
-			contextWindow: 202752,
+			contextWindow: 204800,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 		"z-ai/glm-5.2": {
@@ -13968,7 +14056,7 @@ export const MODELS = {
 				cacheRead: 0.15,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 1048576,
 			maxTokens: 262144,
 		} satisfies Model<"openai-completions">,
 		"~openai/gpt-latest": {
@@ -14396,7 +14484,7 @@ export const MODELS = {
 				cacheRead: 0.26,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 1000000,
 			maxTokens: 164000,
 		} satisfies Model<"openai-completions">,
 	},
@@ -14500,7 +14588,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262114,
 			maxTokens: 32768,
 		} satisfies Model<"anthropic-messages">,
 		"alibaba/qwen3-coder": {
@@ -14636,7 +14724,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262144,
 			maxTokens: 32768,
 		} satisfies Model<"anthropic-messages">,
 		"alibaba/qwen3-next-80b-a3b-thinking": {
@@ -14653,7 +14741,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262144,
 			maxTokens: 32768,
 		} satisfies Model<"anthropic-messages">,
 		"alibaba/qwen3-vl-235b-a22b-instruct": {
@@ -14670,7 +14758,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262144,
 			maxTokens: 129024,
 		} satisfies Model<"anthropic-messages">,
 		"alibaba/qwen3-vl-instruct": {
@@ -14687,7 +14775,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 131072,
+			contextWindow: 262144,
 			maxTokens: 129024,
 		} satisfies Model<"anthropic-messages">,
 		"alibaba/qwen3-vl-thinking": {
@@ -14962,6 +15050,7 @@ export const MODELS = {
 				cacheWrite: 18.75,
 			},
 			contextWindow: 200000,
+			requestLimits: [{"maxTotalTokens":200000,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 32000,
 		} satisfies Model<"anthropic-messages">,
 		"anthropic/claude-opus-4.1": {
@@ -15070,6 +15159,7 @@ export const MODELS = {
 				cacheWrite: 3.75,
 			},
 			contextWindow: 1000000,
+			requestLimits: [{"maxTotalTokens":1000000,"maxOutputTokens":8192,"supportsTools":true}],
 			maxTokens: 64000,
 		} satisfies Model<"anthropic-messages">,
 		"anthropic/claude-sonnet-4.5": {
@@ -15241,7 +15331,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 160000,
 			maxTokens: 8192,
 		} satisfies Model<"anthropic-messages">,
 		"deepseek/deepseek-v3": {
@@ -15275,7 +15365,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 163840,
 			maxTokens: 128000,
 		} satisfies Model<"anthropic-messages">,
 		"deepseek/deepseek-v3.1-terminus": {
@@ -15309,7 +15399,7 @@ export const MODELS = {
 				cacheRead: 0.028,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 163842,
 			maxTokens: 8000,
 		} satisfies Model<"anthropic-messages">,
 		"deepseek/deepseek-v3.2-thinking": {
@@ -15326,7 +15416,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 163842,
 			maxTokens: 8000,
 		} satisfies Model<"anthropic-messages">,
 		"deepseek/deepseek-v4-flash": {
@@ -15343,7 +15433,7 @@ export const MODELS = {
 				cacheRead: 0.028,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1048576,
 			maxTokens: 384000,
 		} satisfies Model<"anthropic-messages">,
 		"deepseek/deepseek-v4-pro": {
@@ -15360,7 +15450,7 @@ export const MODELS = {
 				cacheRead: 0.0036,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1048600,
 			maxTokens: 384000,
 		} satisfies Model<"anthropic-messages">,
 		"google/gemini-2.5-flash": {
@@ -15530,7 +15620,7 @@ export const MODELS = {
 				cacheRead: 0.015,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 1048576,
 			maxTokens: 131072,
 		} satisfies Model<"anthropic-messages">,
 		"google/gemma-4-31b-it": {
@@ -15547,7 +15637,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 262144,
+			contextWindow: 1048576,
 			maxTokens: 131072,
 		} satisfies Model<"anthropic-messages">,
 		"inception/mercury-2": {
@@ -15683,7 +15773,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 131072,
 			maxTokens: 8192,
 		} satisfies Model<"anthropic-messages">,
 		"meta/llama-3.1-8b": {
@@ -15700,7 +15790,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 131072,
 			maxTokens: 8192,
 		} satisfies Model<"anthropic-messages">,
 		"meta/llama-3.2-11b": {
@@ -15768,7 +15858,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 131072,
 			maxTokens: 8192,
 		} satisfies Model<"anthropic-messages">,
 		"meta/llama-4-scout": {
@@ -15785,7 +15875,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 131072,
 			maxTokens: 8192,
 		} satisfies Model<"anthropic-messages">,
 		"meta/muse-spark-1.1": {
@@ -15870,7 +15960,8 @@ export const MODELS = {
 				cacheRead: 0.03,
 				cacheWrite: 0.375,
 			},
-			contextWindow: 204800,
+			contextWindow: 1000000,
+			requestLimits: [{"maxTotalTokens":1000000,"maxOutputTokens":8192,"supportsTools":true},{"maxTotalTokens":196608,"maxOutputTokens":131000,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131000,"supportsTools":true},{"maxTotalTokens":196000,"maxOutputTokens":196000,"supportsTools":true}],
 			maxTokens: 131000,
 		} satisfies Model<"anthropic-messages">,
 		"minimax/minimax-m2.5-highspeed": {
@@ -15938,7 +16029,7 @@ export const MODELS = {
 				cacheRead: 0.06,
 				cacheWrite: 0,
 			},
-			contextWindow: 1000000,
+			contextWindow: 1049000,
 			maxTokens: 1000000,
 		} satisfies Model<"anthropic-messages">,
 		"mistral/codestral": {
@@ -16159,7 +16250,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 128000,
+			contextWindow: 131072,
 			maxTokens: 128000,
 		} satisfies Model<"anthropic-messages">,
 		"mistral/mistral-small": {
@@ -16261,7 +16352,7 @@ export const MODELS = {
 				cacheRead: 0.09999999999999999,
 				cacheWrite: 0,
 			},
-			contextWindow: 262114,
+			contextWindow: 262144,
 			maxTokens: 262114,
 		} satisfies Model<"anthropic-messages">,
 		"moonshotai/kimi-k2.6": {
@@ -16278,7 +16369,7 @@ export const MODELS = {
 				cacheRead: 0.16,
 				cacheWrite: 0,
 			},
-			contextWindow: 262000,
+			contextWindow: 262144,
 			maxTokens: 262000,
 		} satisfies Model<"anthropic-messages">,
 		"moonshotai/kimi-k2.7-code": {
@@ -16295,7 +16386,7 @@ export const MODELS = {
 				cacheRead: 0.19,
 				cacheWrite: 0,
 			},
-			contextWindow: 256000,
+			contextWindow: 262144,
 			maxTokens: 32768,
 		} satisfies Model<"anthropic-messages">,
 		"moonshotai/kimi-k2.7-code-highspeed": {
@@ -17500,7 +17591,7 @@ export const MODELS = {
 				cacheRead: 0.11,
 				cacheWrite: 0,
 			},
-			contextWindow: 200000,
+			contextWindow: 204800,
 			maxTokens: 96000,
 		} satisfies Model<"anthropic-messages">,
 		"zai/glm-4.6v": {
@@ -17551,7 +17642,7 @@ export const MODELS = {
 				cacheRead: 0.12,
 				cacheWrite: 0,
 			},
-			contextWindow: 200000,
+			contextWindow: 204800,
 			maxTokens: 120000,
 		} satisfies Model<"anthropic-messages">,
 		"zai/glm-4.7-flash": {
@@ -17636,7 +17727,8 @@ export const MODELS = {
 				cacheRead: 0.26,
 				cacheWrite: 0,
 			},
-			contextWindow: 202000,
+			contextWindow: 204800,
+			requestLimits: [{"maxTotalTokens":202752,"maxOutputTokens":202752,"supportsTools":true},{"maxTotalTokens":204800,"maxOutputTokens":131072,"supportsTools":true},{"maxTotalTokens":202800,"maxOutputTokens":64000,"supportsTools":true}],
 			maxTokens: 202000,
 		} satisfies Model<"anthropic-messages">,
 		"zai/glm-5.2": {
@@ -17653,7 +17745,7 @@ export const MODELS = {
 				cacheRead: 0.26,
 				cacheWrite: 0,
 			},
-			contextWindow: 1040000,
+			contextWindow: 1048576,
 			maxTokens: 128000,
 		} satisfies Model<"anthropic-messages">,
 		"zai/glm-5.2-fast": {
@@ -17825,7 +17917,7 @@ export const MODELS = {
 				cacheRead: 0.02,
 				cacheWrite: 0,
 			},
-			contextWindow: 32768,
+			contextWindow: 256000,
 			maxTokens: 8192,
 		} satisfies Model<"openai-completions">,
 	},
@@ -18279,7 +18371,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 204800,
+			contextWindow: 1000000,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"glm-5-turbo": {
@@ -18315,7 +18407,7 @@ export const MODELS = {
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
-			contextWindow: 200000,
+			contextWindow: 1000000,
 			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"glm-5.2": {

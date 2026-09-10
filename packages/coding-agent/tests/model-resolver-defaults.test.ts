@@ -192,6 +192,34 @@ describe("resolveCliModel", () => {
 		expect(result.model!.id).toBe("us.anthropic.claude-opus-4-8");
 	});
 
+	it("does not transfer a default model's input constraint to an unknown model", () => {
+		const customRegistry = createRegistry(["anthropic"]);
+		customRegistry.registerProvider("anthropic", {
+			baseUrl: "https://unused.invalid",
+			apiKey: "test",
+			api: "anthropic-messages",
+			models: [
+				{
+					...getModel("anthropic", "claude-opus-4-8"),
+					maxInputTokens: 800,
+					requestLimits: [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }],
+				},
+			],
+		});
+		try {
+			const result = resolveCliModel({
+				cliProvider: "anthropic",
+				cliModel: "unknown-model",
+				modelRegistry: customRegistry,
+			});
+			expect(result.model).toBeDefined();
+			expect(result.model?.maxInputTokens).toBeUndefined();
+			expect(result.model?.requestLimits).toBeUndefined();
+		} finally {
+			customRegistry.unregisterProvider("anthropic");
+		}
+	});
+
 	it("does not inherit default model-specific capabilities for unknown custom Anthropic CLI models", () => {
 		const result = resolveCliModel({
 			cliProvider: "anthropic",
