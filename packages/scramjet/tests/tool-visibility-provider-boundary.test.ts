@@ -168,6 +168,19 @@ describe("tool visibility classification", () => {
 		).toMatchObject({ classification: "mismatch", unexpectedNames: ["Read"] });
 	});
 
+	it("reserves exact Anthropic matches before case-fold reconciliation", () => {
+		const model = { provider: "anthropic", id: "claude-test", api: "anthropic-messages" };
+		expect(
+			classifyToolVisibility(event(["read", "Read"], { status: "observed", toolNames: ["read", "READ"] }, model)),
+		).toEqual({
+			classification: "parity",
+			requestContextToolNames: ["Read", "read"],
+			serializedToolNames: ["READ", "read"],
+			missingNames: [],
+			unexpectedNames: [],
+		});
+	});
+
 	it("keeps malformed and unsupported observations inconclusive", () => {
 		expect(
 			classifyToolVisibility(event(["alpha"], { status: "malformed", reason: "tool-name-empty" })),
