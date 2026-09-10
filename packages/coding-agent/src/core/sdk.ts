@@ -6,7 +6,7 @@ import {
 	type Message,
 	type Model,
 	streamSimple,
-	validateModelRequestLimits,
+	validateModelContextLimits,
 } from "@leanandmean/ai";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
@@ -243,8 +243,8 @@ function getAttributionHeaders(
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
-	if (options.model) validateModelRequestLimits(options.model);
-	for (const { model } of options.scopedModels ?? []) validateModelRequestLimits(model);
+	if (options.model) validateModelContextLimits(options.model);
+	for (const { model } of options.scopedModels ?? []) validateModelContextLimits(model);
 
 	const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
 	const agentDir = options.agentDir ?? getDefaultAgentDir();

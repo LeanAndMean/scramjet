@@ -330,22 +330,18 @@ function endpointRequestLimits(endpoints: any[], provider: string, id: string): 
 	return requestLimits;
 }
 
-const MODEL_ENDPOINT_TIMEOUT_MS = 30_000;
+const MODEL_ACQUISITION_TIMEOUT_MS = 30_000;
 
-async function withModelEndpointTimeout<T>(
-	provider: string,
-	modelId: string,
+async function withModelAcquisitionTimeout<T>(
+	description: string,
 	load: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
-	const signal = AbortSignal.timeout(MODEL_ENDPOINT_TIMEOUT_MS);
+	const signal = AbortSignal.timeout(MODEL_ACQUISITION_TIMEOUT_MS);
 	try {
 		return await load(signal);
 	} catch (error) {
 		if (signal.aborted) {
-			throw new Error(
-				`${provider}/${modelId}: endpoint discovery timed out after ${MODEL_ENDPOINT_TIMEOUT_MS}ms`,
-				{ cause: error },
-			);
+			throw new Error(`${description} timed out after ${MODEL_ACQUISITION_TIMEOUT_MS}ms`, { cause: error });
 		}
 		throw error;
 	}
@@ -354,9 +350,11 @@ async function withModelEndpointTimeout<T>(
 async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from OpenRouter API...");
-		const response = await fetch("https://openrouter.ai/api/v1/models");
-		if (!response.ok) throw new Error(`OpenRouter model catalog: HTTP ${response.status}`);
-		const data = await response.json();
+		const data = await withModelAcquisitionTimeout("OpenRouter model catalog acquisition", async (signal) => {
+			const response = await fetch("https://openrouter.ai/api/v1/models", { signal });
+			if (!response.ok) throw new Error(`OpenRouter model catalog: HTTP ${response.status}`);
+			return response.json();
+		});
 		if (!Array.isArray(data.data)) throw new Error("Invalid OpenRouter model catalog");
 
 		const models: Model<any>[] = [];
@@ -366,7 +364,7 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 			if (!model.supported_parameters?.includes("tools")) continue;
 
 			// SCRAMJET-DIVERGENCE: Input-only constraints must cover every route, not just the default endpoint.
-			const endpointData = await withModelEndpointTimeout("openrouter", model.id, async (signal) => {
+			const endpointData = await withModelAcquisitionTimeout(`openrouter/${model.id}: endpoint discovery`, async (signal) => {
 				const endpointResponse = await fetch(`https://openrouter.ai/api/v1/models/${model.id}/endpoints`, { signal });
 				if (!endpointResponse.ok) {
 					throw new Error(`Failed to fetch OpenRouter endpoints for ${model.id}: HTTP ${endpointResponse.status}`);
@@ -434,9 +432,11 @@ async function fetchOpenRouterModels(): Promise<Model<any>[]> {
 async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from Vercel AI Gateway API...");
-		const response = await fetch(`${AI_GATEWAY_MODELS_URL}/models`);
-		if (!response.ok) throw new Error(`Vercel model catalog: HTTP ${response.status}`);
-		const data = await response.json();
+		const data = await withModelAcquisitionTimeout("Vercel AI Gateway model catalog acquisition", async (signal) => {
+			const response = await fetch(`${AI_GATEWAY_MODELS_URL}/models`, { signal });
+			if (!response.ok) throw new Error(`Vercel model catalog: HTTP ${response.status}`);
+			return response.json();
+		});
 		if (!Array.isArray(data.data)) throw new Error("Invalid Vercel model catalog");
 		const models: Model<any>[] = [];
 
@@ -455,13 +455,16 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 			if (!tags.includes("tool-use")) continue;
 
 			// SCRAMJET-DIVERGENCE: The aggregate catalog can describe a shorter default route.
-			const endpointData = await withModelEndpointTimeout("vercel-ai-gateway", model.id, async (signal) => {
-				const endpointResponse = await fetch(`${AI_GATEWAY_MODELS_URL}/models/${model.id}/endpoints`, { signal });
-				if (!endpointResponse.ok) {
-					throw new Error(`Failed to fetch endpoints for ${model.id}: HTTP ${endpointResponse.status}`);
-				}
-				return endpointResponse.json();
-			});
+			const endpointData = await withModelAcquisitionTimeout(
+				`vercel-ai-gateway/${model.id}: endpoint discovery`,
+				async (signal) => {
+					const endpointResponse = await fetch(`${AI_GATEWAY_MODELS_URL}/models/${model.id}/endpoints`, { signal });
+					if (!endpointResponse.ok) {
+						throw new Error(`Failed to fetch endpoints for ${model.id}: HTTP ${endpointResponse.status}`);
+					}
+					return endpointResponse.json();
+				},
+			);
 			if (!Array.isArray(endpointData.data?.endpoints)) {
 				throw new Error(`Invalid endpoint catalog for ${model.id}`);
 			}
@@ -510,9 +513,11 @@ async function fetchAiGatewayModels(): Promise<Model<any>[]> {
 async function loadModelsDevData(): Promise<Model<any>[]> {
 	try {
 		console.log("Fetching models from models.dev API...");
-		const response = await fetch("https://models.dev/api.json");
-		if (!response.ok) throw new Error(`models.dev catalog: HTTP ${response.status}`);
-		const data = await response.json();
+		const data = await withModelAcquisitionTimeout("models.dev catalog acquisition", async (signal) => {
+			const response = await fetch("https://models.dev/api.json", { signal });
+			if (!response.ok) throw new Error(`models.dev catalog: HTTP ${response.status}`);
+			return response.json();
+		});
 		if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid models.dev catalog");
 
 		const models: Model<any>[] = [];

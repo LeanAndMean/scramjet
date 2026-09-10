@@ -165,6 +165,21 @@ describe("SDK request context allocation", () => {
 		);
 	});
 
+	it.each(["model", "scopedModels"] as const)("rejects malformed scalar limits from direct SDK %s", async (source) => {
+		for (const field of ["contextWindow", "maxInputTokens"] as const) {
+			for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+				const malformedModel = { ...directModel, [field]: value };
+				const options =
+					source === "model"
+						? { model: malformedModel }
+						: { model: directModel, scopedModels: [{ model: malformedModel }] };
+				await expect(createWithDirectModels(options)).rejects.toThrow(
+					`direct-provider/direct-model: invalid ${field}`,
+				);
+			}
+		}
+	});
+
 	it("allocates using the prepared request and preserves scalar model maxima", async () => {
 		const f = await fixture(undefined, [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }]);
 		try {

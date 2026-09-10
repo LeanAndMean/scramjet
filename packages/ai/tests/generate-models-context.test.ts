@@ -108,7 +108,7 @@ async function generate(
 		if (url === "https://models.dev/api.json") {
 			return {
 				ok: true,
-				json: async () => ({
+				json: endpointJson({
 					"zai-coding-plan": {
 						models: Object.fromEntries(
 							["glm-4.7", "glm-5.1", "glm-5-turbo"].map((id) => [id, feedModel(id, 200000)]),
@@ -163,7 +163,7 @@ async function generate(
 		if (url === "https://openrouter.ai/api/v1/models") {
 			return {
 				ok: true,
-				json: async () => ({
+				json: endpointJson({
 					data: [
 						{ id: "x-ai/grok-code-fast-1", context_length: 32768, supported_parameters: ["tools"] },
 						{ id: "openai/gpt-5.4", name: "First", context_length: 1500000, supported_parameters: ["tools"] },
@@ -175,7 +175,7 @@ async function generate(
 		if (url === "https://ai-gateway.vercel.sh/v1/models") {
 			return {
 				ok: true,
-				json: async () => ({ data: [{ id: "openai/gpt-5.4", context_window: 1600000, tags: ["tool-use"] }] }),
+				json: endpointJson({ data: [{ id: "openai/gpt-5.4", context_window: 1600000, tags: ["tool-use"] }] }),
 			};
 		}
 		throw new Error(`Unexpected fetch: ${url}`);
@@ -455,6 +455,18 @@ describe("real generator context corrections", () => {
 	});
 
 	describe.each([
+		{
+			endpoint: "https://models.dev/api.json",
+			error: "models.dev catalog acquisition timed out after 30000ms",
+		},
+		{
+			endpoint: "https://openrouter.ai/api/v1/models",
+			error: "OpenRouter model catalog acquisition timed out after 30000ms",
+		},
+		{
+			endpoint: "https://ai-gateway.vercel.sh/v1/models",
+			error: "Vercel AI Gateway model catalog acquisition timed out after 30000ms",
+		},
 		{
 			endpoint: "https://openrouter.ai/api/v1/models/openai/gpt-5.4/endpoints",
 			error: "openrouter/openai/gpt-5.4: endpoint discovery timed out after 30000ms",

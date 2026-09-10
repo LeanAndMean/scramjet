@@ -17,7 +17,7 @@ import {
 	registerApiProvider,
 	resetApiProviders,
 	type SimpleStreamOptions,
-	validateModelRequestLimits,
+	validateModelContextLimits,
 } from "@leanandmean/ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@leanandmean/ai/oauth";
 import { existsSync, readFileSync } from "fs";
@@ -1002,19 +1002,8 @@ export class ModelRegistry {
 
 	private validateContextLimits(models: Model<Api>[]): void {
 		for (const model of models) {
-			if (!Number.isFinite(model.contextWindow) || model.contextWindow <= 0) {
-				throw new Error(`${model.provider}/${model.id}: invalid contextWindow`);
-			}
+			validateModelContextLimits(model);
 			rejectContextWindowBudget(model, model.provider, model.id);
-			validateModelRequestLimits(model);
-			if (
-				model.maxInputTokens !== undefined &&
-				(!Number.isFinite(model.maxInputTokens) || model.maxInputTokens <= 0)
-			) {
-				throw new Error(
-					`${model.provider}/${model.id}: invalid maxInputTokens; expected a positive finite provider input limit`,
-				);
-			}
 		}
 	}
 

@@ -62,6 +62,20 @@ export function validateModelRequestLimits(model: Pick<Model<Api>, "provider" | 
 	}
 }
 
+export function validateModelContextLimits(
+	model: Pick<Model<Api>, "provider" | "id" | "contextWindow" | "maxInputTokens" | "requestLimits">,
+): void {
+	if (!Number.isFinite(model.contextWindow) || model.contextWindow <= 0) {
+		throw new Error(`${model.provider}/${model.id}: invalid contextWindow`);
+	}
+	validateModelRequestLimits(model);
+	if (model.maxInputTokens !== undefined && (!Number.isFinite(model.maxInputTokens) || model.maxInputTokens <= 0)) {
+		throw new Error(
+			`${model.provider}/${model.id}: invalid maxInputTokens; expected a positive finite provider input limit`,
+		);
+	}
+}
+
 // SCRAMJET-DIVERGENCE: Keep endpoint input/output combinations together without selecting a provider.
 export function getEndpointOutputLimit(model: Model<Api>, inputTokens: number, hasTools: boolean): number {
 	if (model.requestLimits === undefined) return Infinity;
