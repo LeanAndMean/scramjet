@@ -1,4 +1,5 @@
 import { registerApiProvider, unregisterApiProviders } from "../api-registry.js";
+import { validateModelRequestLimits } from "../models.js";
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
@@ -42,7 +43,8 @@ export interface FauxModelDefinition {
 	input?: ("text" | "image")[];
 	cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	contextWindow?: number;
-	contextWindowBudget?: number;
+	maxInputTokens?: number;
+	requestLimits?: Model<string>["requestLimits"];
 	maxTokens?: number;
 }
 
@@ -418,6 +420,14 @@ export function registerFauxProvider(options: RegisterFauxProviderOptions = {}):
 					maxTokens: 16384,
 				},
 			];
+	for (const definition of modelDefinitions) {
+		validateModelRequestLimits({ ...definition, provider });
+		if ("contextWindowBudget" in definition) {
+			throw new Error(
+				`${provider}/${definition.id}: contextWindowBudget was removed; remove this key and use the evidenced maximum total contextWindow, not a discretionary budget.`,
+			);
+		}
+	}
 	const models = modelDefinitions.map((definition) => ({
 		id: definition.id,
 		name: definition.name ?? definition.id,
@@ -428,8 +438,9 @@ export function registerFauxProvider(options: RegisterFauxProviderOptions = {}):
 		input: definition.input ?? ["text", "image"],
 		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: definition.contextWindow ?? 128000,
-		// SCRAMJET-DIVERGENCE: Preserve operational context budgets when constructing Faux models.
-		contextWindowBudget: definition.contextWindowBudget,
+		// SCRAMJET-DIVERGENCE: Preserve genuine input constraints without changing total context.
+		maxInputTokens: definition.maxInputTokens,
+		requestLimits: definition.requestLimits,
 		maxTokens: definition.maxTokens ?? 16384,
 	})) as [Model<string>, ...Model<string>[]];
 

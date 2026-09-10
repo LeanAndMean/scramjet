@@ -62,7 +62,9 @@ export default function (pi: ExtensionAPI) {
 
 The extension factory can also be `async`. For dynamic model discovery, fetch and register models in the factory instead of `session_start`. Scramjet waits for the factory before startup continues, so the provider is available during interactive startup and to `scramjet --list-models`.
 
-A model may set `contextWindowBudget` when its operational provider limit is lower than its advertised `contextWindow` capacity. The budget must be a positive finite integer and cannot exceed capacity; omit it to use `contextWindow`. Invalid dynamic registrations identify the provider and model; budget-over-capacity errors also include both values. These stricter requirements apply only to `contextWindowBudget`; existing `contextWindow` validation is unchanged.
+Set `contextWindow` to the maximum supported total context for this provider/model. A genuine independently evidenced input constraint may use `maxInputTokens`; never use it for price, quality, or speculative headroom. Final context and input values must be positive finite numbers. `contextWindowBudget` is rejected with an actionable provider/model diagnostic, not silently ignored or copied. See [models.md](models.md#breaking-migration-from-context-budgets) for migration and preserved configuration/OAuth fallback semantics.
+
+Coding-agent sessions check estimated request input and allocate output from remaining total context before dispatch, additionally honoring provider-declared joint `requestLimits` when present (see [models.md](models.md#joint-endpoint-constraints)). Custom transports, direct AI callers, and payload-replacement hooks remain responsible for their actual request constraints. Explicit `SimpleStreamOptions.maxTokens` now bounds combined output including token-based thinking in Anthropic/Bedrock adapters. The estimates are not a tokenizer or proof of provider acceptance; see [compaction.md](compaction.md).
 
 ## Override Existing Provider
 
@@ -677,8 +679,13 @@ interface ProviderModelConfig {
     cacheWrite: number;
   };
 
-  /** Maximum context window size in tokens. */
+  /** Maximum supported total context in tokens. */
   contextWindow: number;
+
+  /** Genuine independently evidenced provider input limit. */
+  maxInputTokens?: number;
+
+  requestLimits?: Model<Api>["requestLimits"];
 
   /** Maximum output tokens. */
   maxTokens: number;

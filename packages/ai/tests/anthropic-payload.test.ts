@@ -85,6 +85,26 @@ describe("supportsAdaptiveThinking — new model patterns", () => {
 	}
 });
 
+describe("explicit output allocation", () => {
+	it("fits token-based thinking inside the output ceiling", async () => {
+		const params = await capturePayload(makeModel("claude-opus-4-5"), minimalContext, {
+			reasoning: "high",
+			maxTokens: 4096,
+		});
+		expect(params.max_tokens).toBe(4096);
+		expect(params.thinking).toEqual(expect.objectContaining({ type: "enabled", budget_tokens: 3072 }));
+	});
+	it("reports insufficient thinking space rather than restoring a minimum over the ceiling", () => {
+		expect(() =>
+			streamSimpleAnthropic(makeModel("claude-opus-4-5"), minimalContext, {
+				apiKey: "test",
+				reasoning: "high",
+				maxTokens: 1000,
+			}),
+		).toThrow(/Insufficient output space/);
+	});
+});
+
 describe("forceAdaptiveThinking — metadata only, no runtime effect", () => {
 	it("nonmatching model with forceAdaptiveThinking: true still uses budget-based thinking", async () => {
 		const model = makeModel("claude-3-opus", {

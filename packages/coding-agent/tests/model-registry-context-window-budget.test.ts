@@ -8,15 +8,13 @@ import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.js";
 
 const tempDirs: string[] = [];
-
-function loadConfig(config: unknown): ModelRegistry {
-	const dir = mkdtempSync(join(tmpdir(), "model-registry-budget-"));
+function loadConfig(config: unknown, auth = AuthStorage.inMemory()): ModelRegistry {
+	const dir = mkdtempSync(join(tmpdir(), "model-registry-context-"));
 	tempDirs.push(dir);
 	const path = join(dir, "models.json");
 	writeFileSync(path, JSON.stringify(config), "utf-8");
-	return ModelRegistry.create(AuthStorage.inMemory(), path);
+	return ModelRegistry.create(auth, path);
 }
-
 function customConfig(model: Record<string, unknown>): unknown {
 	return {
 		providers: {
@@ -29,10 +27,7 @@ function customConfig(model: Record<string, unknown>): unknown {
 		},
 	};
 }
-
-function dynamicConfig(
-	model: Partial<ProviderConfigInput["models"] extends Array<infer T> ? T : never> = {},
-): ProviderConfigInput {
+function dynamicConfig(model: Record<string, unknown> = {}): ProviderConfigInput {
 	return {
 		baseUrl: "https://example.test",
 		apiKey: "test",
@@ -51,212 +46,195 @@ function dynamicConfig(
 		],
 	};
 }
-
-afterEach(() => {
-	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-	unregisterOAuthProvider("budget-test-oauth");
-});
-
 function oauthProvider(modifyModels: (models: Model<any>[]) => Model<any>[]): OAuthProviderInterface {
 	return {
-		id: "budget-test-oauth",
-		name: "Budget test OAuth",
+		id: "context-test-oauth",
+		name: "Context test OAuth",
 		login: async () => ({ access: "test", refresh: "test", expires: Date.now() + 60_000 }),
 		refreshToken: async (credentials: OAuthCredentials) => credentials,
 		getApiKey: () => "test",
 		modifyModels,
 	};
 }
+function authenticated(id: string): AuthStorage {
+	const auth = AuthStorage.inMemory();
+	auth.set(id, { type: "oauth", access: "test", refresh: "test", expires: Date.now() + 60_000 });
+	return auth;
+}
+afterEach(() => {
+	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+	unregisterOAuthProvider("context-test-oauth");
+	unregisterOAuthProvider("dynamic");
+});
 
-describe("models.json context window budgets", () => {
-	it("copies independent custom-model and override budgets", () => {
-		const custom = loadConfig(customConfig({ contextWindow: 1000, contextWindowBudget: 800 }));
+const requestLimits = [{ maxTotalTokens: 1000, maxInputTokens: 800, maxOutputTokens: 100, supportsTools: true }];
+
+describe("models.json context constraints", () => {
+	it("preserves joint constraints through custom definitions and built-in overrides", () => {
+		const custom = loadConfig(customConfig({ requestLimits }));
 		expect(custom.getError()).toBeUndefined();
-		expect(custom.find("custom", "test-model")).toMatchObject({ contextWindow: 1000, contextWindowBudget: 800 });
-
-		const overridden = loadConfig({
-			providers: { "openai-codex": { modelOverrides: { "gpt-5.6-sol": { contextWindowBudget: 300000 } } } },
-		});
-		expect(overridden.getError()).toBeUndefined();
-		expect(overridden.find("openai-codex", "gpt-5.6-sol")).toMatchObject({
-			contextWindow: 1050000,
-			contextWindowBudget: 300000,
-		});
+		expect(custom.find("custom", "test-model")?.requestLimits).toEqual(requestLimits);
+		const override = loadConfig({ providers: { openai: { modelOverrides: { "gpt-5.4": { requestLimits } } } } });
+		expect(override.getError()).toBeUndefined();
+		expect(override.find("openai", "gpt-5.4")?.requestLimits).toEqual(requestLimits);
 	});
-
-	it.each([0, -1, 1.5])("rejects custom-model budget %s", (contextWindowBudget) => {
-		expect(loadConfig(customConfig({ contextWindow: 1000, contextWindowBudget })).getError()).toContain(
-			"invalid contextWindowBudget",
-		);
-	});
-
-	it.each([0, -1, 1.5])("rejects override budget %s", (contextWindowBudget) => {
-		const registry = loadConfig({
-			providers: { "openai-codex": { modelOverrides: { "gpt-5.6-sol": { contextWindowBudget } } } },
-		});
-		expect(registry.getError()).toContain("invalid contextWindowBudget");
-	});
-
-	it("preserves positive fractional contextWindow compatibility", () => {
-		const registry = loadConfig(customConfig({ contextWindow: 1000.5 }));
+	it.each([[], null, [{}], [{ maxTotalTokens: 1000 }], [{ ...requestLimits[0], maxOutputTokens: 0 }]])(
+		"rejects malformed configured joint constraints: %j",
+		(requestLimits) => {
+			expect(loadConfig(customConfig({ requestLimits })).getError()).toContain("requestLimits");
+		},
+	);
+	it("preserves a separate genuine input limit without changing total context", () => {
+		const registry = loadConfig(customConfig({ contextWindow: 1000, maxInputTokens: 800 }));
 		expect(registry.getError()).toBeUndefined();
-		expect(registry.find("custom", "test-model")?.contextWindow).toBe(1000.5);
+		expect(registry.find("custom", "test-model")).toMatchObject({ contextWindow: 1000, maxInputTokens: 800 });
 	});
 
-	it.each([
-		[800, 1000],
-		[1000, 1000],
-	])("accepts budget %s with capacity %s", (contextWindowBudget, contextWindow) => {
-		expect(loadConfig(customConfig({ contextWindow, contextWindowBudget })).getError()).toBeUndefined();
+	it.each([800, 1000, 0, null, "old"])(
+		"diagnoses obsolete key %s on custom definitions and overrides",
+		(contextWindowBudget) => {
+			const custom = loadConfig(customConfig({ contextWindow: 1000, contextWindowBudget }));
+			expect(custom.getError()).toMatch(/custom\/test-model.*contextWindowBudget was removed.*remove this key/);
+			expect(custom.find("custom", "test-model")).toBeUndefined();
+			for (const id of ["gpt-5.6-sol", "unknown-model"]) {
+				const overridden = loadConfig({
+					providers: { "openai-codex": { modelOverrides: { [id]: { contextWindowBudget } } } },
+				});
+				expect(overridden.getError()).toContain(`openai-codex/${id}: contextWindowBudget was removed`);
+				expect(overridden.find("openai-codex", "gpt-5.6-sol")?.contextWindow).toBe(872000);
+			}
+		},
+	);
+
+	it.each([1000.5, 1000])("accepts positive context %s and a non-binding input ceiling", (contextWindow) => {
+		const registry = loadConfig(customConfig({ contextWindow, maxInputTokens: 1200 }));
+		expect(registry.getError()).toBeUndefined();
+		expect(registry.find("custom", "test-model")?.contextWindow).toBe(contextWindow);
 	});
 
-	it("discards request settings from a rejected merged configuration", async () => {
-		const registry = loadConfig({
-			providers: {
-				"openai-codex": {
-					apiKey: "rejected-key",
-					headers: { "X-Rejected": "provider" },
-					modelOverrides: {
-						"gpt-5.6-sol": {
-							contextWindowBudget: 1050001,
-							headers: { "X-Rejected-Model": "model" },
-						},
-					},
-				},
-			},
-		});
-		const model = registry.find("openai-codex", "gpt-5.6-sol");
-		expect(model).toBeDefined();
-		const auth = await registry.getApiKeyAndHeaders(model!);
-		expect(auth).toMatchObject({ ok: true, apiKey: undefined });
-		if (auth.ok) {
-			expect(auth.headers?.["X-Rejected"]).toBeUndefined();
-			expect(auth.headers?.["X-Rejected-Model"]).toBeUndefined();
+	it.each(["contextWindow", "maxInputTokens"])("rejects invalid %s after configuration merges", (field) => {
+		for (const value of [0, -1, null]) {
+			const custom = loadConfig(customConfig({ [field]: value }));
+			expect(custom.getError()).toContain(field);
+			const override = loadConfig({ providers: { openai: { modelOverrides: { "gpt-5.4": { [field]: value } } } } });
+			expect(override.getError()).toContain(field);
 		}
 	});
 
-	it("rejects custom and override merged budgets above capacity with actionable details", () => {
-		const custom = loadConfig(customConfig({ contextWindow: 1000, contextWindowBudget: 1001 }));
-		expect(custom.getError()).toContain("custom/test-model");
-		expect(custom.getError()).toContain("budget 1001");
-		expect(custom.getError()).toContain("capacity 1000");
-		expect(custom.getError()).toContain("lower or remove contextWindowBudget, or raise contextWindow");
-
-		const raisedBudget = loadConfig({
-			providers: { "openai-codex": { modelOverrides: { "gpt-5.6-sol": { contextWindowBudget: 1050001 } } } },
+	it("merges total context and input overrides independently", () => {
+		const registry = loadConfig({
+			providers: { openai: { modelOverrides: { "gpt-5.4": { maxInputTokens: 900000 } } } },
 		});
-		expect(raisedBudget.getError()).toContain("openai-codex/gpt-5.6-sol");
-
-		const loweredCapacity = loadConfig({
-			providers: {
-				"openai-codex": {
-					modelOverrides: { "gpt-5.6-sol": { contextWindow: 271999, contextWindowBudget: 272000 } },
-				},
-			},
-		});
-		expect(loweredCapacity.getError()).toContain("openai-codex/gpt-5.6-sol");
+		expect(registry.getError()).toBeUndefined();
+		expect(registry.find("openai", "gpt-5.4")).toMatchObject({ contextWindow: 1050000, maxInputTokens: 900000 });
 	});
+
+	it.each([{ contextWindow: 0 }, { contextWindowBudget: 1050000 }])(
+		"discards rejected request settings: %j",
+		async (invalid) => {
+			const registry = loadConfig({
+				providers: {
+					"openai-codex": {
+						apiKey: "rejected-key",
+						headers: { "X-Rejected": "provider" },
+						modelOverrides: { "gpt-5.6-sol": { ...invalid, headers: { "X-Rejected-Model": "model" } } },
+					},
+				},
+			});
+			const model = registry.find("openai-codex", "gpt-5.6-sol")!;
+			expect(registry.getError()).toBeDefined();
+			expect(model.contextWindow).toBe(872000);
+			const auth = await registry.getApiKeyAndHeaders(model);
+			expect(auth).toMatchObject({ ok: true, apiKey: undefined });
+			if (auth.ok) {
+				expect(auth.headers?.["X-Rejected"]).toBeUndefined();
+				expect(auth.headers?.["X-Rejected-Model"]).toBeUndefined();
+			}
+		},
+	);
 });
 
-describe("OAuth-transformed context window budgets", () => {
-	it.each([
-		["budget", { contextWindowBudget: Number.NaN }],
-		["capacity", { contextWindow: 0 }],
-	])("falls back when an OAuth transform introduces an invalid %s while loading models", (_name, invalid) => {
-		const authStorage = AuthStorage.inMemory();
-		authStorage.set("budget-test-oauth", {
-			type: "oauth",
-			access: "test",
-			refresh: "test",
-			expires: Date.now() + 60_000,
-		});
-		registerOAuthProvider(oauthProvider((models) => [{ ...models[0], ...invalid }, ...models.slice(1)]));
-
-		const registry = ModelRegistry.inMemory(authStorage);
-		expect(registry.getAll()).not.toHaveLength(0);
-		expect(registry.getError()).toMatch(/budget-test-oauth.*invalid contextWindow/);
-	});
-
-	it("preserves an earlier load error when an OAuth transform also fails", () => {
-		const authStorage = AuthStorage.inMemory();
-		authStorage.set("budget-test-oauth", {
-			type: "oauth",
-			access: "test",
-			refresh: "test",
-			expires: Date.now() + 60_000,
-		});
-		registerOAuthProvider(
-			oauthProvider((models) => [{ ...models[0], contextWindowBudget: Number.NaN }, ...models.slice(1)]),
+const invalidModels = [
+	...[0, -1, NaN, Infinity, -Infinity].flatMap((value) => [{ contextWindow: value }, { maxInputTokens: value }]),
+	...[
+		[],
+		null,
+		[null],
+		[{}],
+		[{ ...requestLimits[0], supportsTools: "true" }],
+		...[0, -1, NaN, Infinity, null, "1000"].flatMap((value) =>
+			["maxTotalTokens", "maxInputTokens", "maxOutputTokens"].map((field) => [
+				{ ...requestLimits[0], [field]: value },
+			]),
+		),
+	].map((requestLimits) => ({ requestLimits })),
+	{ contextWindowBudget: 1000 },
+	{ contextWindowBudget: undefined },
+];
+describe("dynamic and OAuth context boundaries", () => {
+	it("preserves joint constraints through dynamic and OAuth model construction", () => {
+		const registry = ModelRegistry.inMemory(authenticated("dynamic"));
+		const config = dynamicConfig({ requestLimits });
+		config.oauth = oauthProvider((models) =>
+			models.map((model) =>
+				model.provider === "dynamic"
+					? { ...model, requestLimits: [{ ...model.requestLimits![0], maxOutputTokens: 90 }] }
+					: model,
+			),
 		);
-		const dir = mkdtempSync(join(tmpdir(), "model-registry-budget-"));
-		tempDirs.push(dir);
-		const path = join(dir, "models.json");
-		writeFileSync(path, JSON.stringify({ invalid: true }), "utf-8");
-		const registry = ModelRegistry.create(authStorage, path);
-
-		expect(registry.getError()).toContain("Invalid models.json schema");
-		expect(registry.getError()).toMatch(/budget-test-oauth.*invalid contextWindowBudget/);
+		registry.registerProvider("dynamic", config);
+		expect(registry.getError()).toBeUndefined();
+		expect(registry.find("dynamic", "test-model")?.requestLimits).toEqual([
+			{ ...requestLimits[0], maxOutputTokens: 90 },
+		]);
+	});
+	it.each(invalidModels)("rejects a dynamic candidate without replacing live models: %j", (invalid) => {
+		const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+		registry.registerProvider("dynamic", dynamicConfig());
+		const original = registry.find("dynamic", "test-model");
+		expect(() => registry.registerProvider("dynamic", dynamicConfig(invalid))).toThrow(/dynamic\/test-model/);
+		expect(registry.find("dynamic", "test-model")).toBe(original);
 	});
 
-	it("falls back to untransformed dynamic-provider models without partial request settings", async () => {
-		const authStorage = AuthStorage.inMemory();
-		authStorage.set("dynamic", {
-			type: "oauth",
-			access: "test",
-			refresh: "test",
-			expires: Date.now() + 60_000,
-		});
-		const registry = ModelRegistry.inMemory(authStorage);
+	it("retains valid fractional context through dynamic and OAuth registration", () => {
+		const registry = ModelRegistry.inMemory(authenticated("dynamic"));
+		const config = dynamicConfig({ contextWindow: 1000.5, maxInputTokens: 800 });
+		config.oauth = oauthProvider((models) =>
+			models.map((model) => (model.provider === "dynamic" ? { ...model, contextWindow: 1100.5 } : model)),
+		);
+		registry.registerProvider("dynamic", config);
+		expect(registry.getError()).toBeUndefined();
+		expect(registry.find("dynamic", "test-model")).toMatchObject({ contextWindow: 1100.5, maxInputTokens: 800 });
+	});
+
+	it.each(invalidModels)("reports and discards an invalid OAuth transformation: %j", (invalid) => {
+		registerOAuthProvider(oauthProvider((models) => [{ ...models[0], ...invalid }, ...models.slice(1)]));
+		const registry = ModelRegistry.inMemory(authenticated("context-test-oauth"));
+		expect(registry.getAll().length).toBeGreaterThan(0);
+		expect(registry.getError()).toContain("Failed to apply OAuth model transform for context-test-oauth");
+		expect(registry.getAll()[0].contextWindow).toBeGreaterThan(0);
+		expect(registry.getAll()[0]).not.toHaveProperty("contextWindowBudget");
+	});
+
+	it("preserves earlier diagnostics when an OAuth transform also fails", () => {
+		registerOAuthProvider(
+			oauthProvider((models) => [{ ...models[0], contextWindowBudget: 1000 }, ...models.slice(1)]),
+		);
+		const registry = loadConfig({ invalid: true }, authenticated("context-test-oauth"));
+		expect(registry.getError()).toContain("Invalid models.json schema");
+		expect(registry.getError()).toContain("contextWindowBudget was removed");
+	});
+
+	it("retains untransformed dynamic models and their original request settings", async () => {
+		const registry = ModelRegistry.inMemory(authenticated("dynamic"));
 		const config = dynamicConfig({ headers: { "X-Test": "model" } });
 		config.headers = { "X-Test": "provider" };
-		config.oauth = {
-			...oauthProvider((models) => models.map((model) => ({ ...model, contextWindowBudget: 1001 }))),
-			id: "dynamic",
-		};
-
+		config.oauth = oauthProvider((models) => models.map((model) => ({ ...model, contextWindowBudget: 1000 })));
 		registry.registerProvider("dynamic", config);
-		const registered = registry.find("dynamic", "test-model");
-		expect(registered).toMatchObject({ contextWindow: 1000, contextWindowBudget: undefined });
-		expect(registry.getError()).toMatch(/dynamic.*budget 1001.*capacity 1000/);
-		const auth = await registry.getApiKeyAndHeaders(registered!);
-		expect(auth).toMatchObject({ ok: true, headers: { "X-Test": "model" } });
-	});
-});
-
-describe("dynamic provider context window budgets", () => {
-	it("copies a valid budget without tightening contextWindow", () => {
-		const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
-		registry.registerProvider("dynamic", dynamicConfig({ contextWindow: 1000.5, contextWindowBudget: 800 }));
-		expect(registry.find("dynamic", "test-model")).toMatchObject({
-			contextWindow: 1000.5,
-			contextWindowBudget: 800,
-		});
-	});
-
-	it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-		"rejects capacity %s",
-		(contextWindow) => {
-			const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
-			expect(() => registry.registerProvider("dynamic", dynamicConfig({ contextWindow }))).toThrow(
-				"invalid contextWindow",
-			);
-		},
-	);
-
-	it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-		"rejects budget %s",
-		(contextWindowBudget) => {
-			const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
-			expect(() => registry.registerProvider("dynamic", dynamicConfig({ contextWindowBudget }))).toThrow(
-				"invalid contextWindowBudget",
-			);
-		},
-	);
-
-	it("rejects a final budget above capacity", () => {
-		const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
-		expect(() =>
-			registry.registerProvider("dynamic", dynamicConfig({ contextWindow: 1000, contextWindowBudget: 1001 })),
-		).toThrow(/dynamic\/test-model.*budget 1001.*capacity 1000.*lower or remove contextWindowBudget/);
+		const model = registry.find("dynamic", "test-model")!;
+		expect(model.contextWindow).toBe(1000);
+		expect(model).not.toHaveProperty("contextWindowBudget");
+		expect(registry.getError()).toContain("contextWindowBudget was removed");
+		expect(await registry.getApiKeyAndHeaders(model)).toMatchObject({ ok: true, headers: { "X-Test": "model" } });
 	});
 });

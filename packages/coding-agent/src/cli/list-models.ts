@@ -2,7 +2,7 @@
  * List available models with optional fuzzy search
  */
 
-import { type Api, getContextWindowBudget, type Model } from "@leanandmean/ai";
+import type { Api, Model } from "@leanandmean/ai";
 import { fuzzyFilter } from "@leanandmean/tui";
 import chalk from "chalk";
 import { formatNoModelsAvailableMessage } from "../core/auth-guidance.js";
@@ -23,11 +23,8 @@ function formatTokenCount(count: number): string {
 	return count.toString();
 }
 
-// SCRAMJET-DIVERGENCE: Label provider budgets separately from advertised model capacity (issue 398).
 export function formatModelContext(model: Model<Api>): string {
-	const budget = getContextWindowBudget(model);
-	const capacity = formatTokenCount(model.contextWindow);
-	return budget === model.contextWindow ? capacity : `${capacity} capacity (${formatTokenCount(budget)} budget)`;
+	return formatTokenCount(model.contextWindow);
 }
 
 /**

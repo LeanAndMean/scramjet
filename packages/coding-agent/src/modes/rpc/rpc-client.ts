@@ -6,7 +6,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import type { AgentEvent, AgentMessage, ThinkingLevel } from "@leanandmean/agent";
-import type { ImageContent } from "@leanandmean/ai";
+import type { Api, ImageContent, Model } from "@leanandmean/ai";
 import type { SessionStats } from "../../core/agent-session.js";
 import type { BashResult } from "../../core/bash-executor.js";
 import type { CompactionResult } from "../../core/compaction/index.js";
@@ -42,8 +42,9 @@ export interface ModelInfo {
 	provider: string;
 	id: string;
 	contextWindow: number;
-	// SCRAMJET-DIVERGENCE: Preserve operational budget metadata in the narrowed RPC model view (issue 398).
-	contextWindowBudget?: number;
+	// SCRAMJET-DIVERGENCE: Expose genuine input constraints separately from total context.
+	maxInputTokens?: number;
+	requestLimits?: Model<Api>["requestLimits"];
 	reasoning: boolean;
 }
 

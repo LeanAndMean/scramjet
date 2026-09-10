@@ -263,7 +263,7 @@ List all configured models.
 {"type": "get_available_models"}
 ```
 
-Response contains an array of full [Model](#model) objects. `RpcClient.getAvailableModels()` projects these to `ModelInfo`, including optional `contextWindowBudget` when present; there is no separate runtime mapping:
+Response contains an array of full [Model](#model) objects. `RpcClient.getAvailableModels()` types these as `ModelInfo`, including optional `maxInputTokens`; there is no runtime projection:
 ```json
 {
   "type": "response",
@@ -527,14 +527,13 @@ Response:
     "contextUsage": {
       "tokens": 60000,
       "contextWindow": 200000,
-      "contextWindowBudget": 200000,
       "percent": 30
     }
   }
 }
 ```
 
-`tokens` contains assistant usage totals for the current session state. `contextUsage.contextWindow` is advertised model capacity, `contextWindowBudget` is the resolved operational budget, and `percent` uses that budget as its denominator. Compaction also uses the operational budget.
+`tokens` contains assistant usage totals for the current session state. `contextUsage.contextWindow` is maximum supported total context and the denominator of `percent`. Compaction uses this same context value with the configured reserve. `contextWindowBudget` has been removed from both model and usage transport contracts; clients must read `contextWindow` instead. See [models.md](models.md#breaking-migration-from-context-budgets).
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 
@@ -1218,7 +1217,6 @@ Source files:
   "reasoning": true,
   "input": ["text", "image"],
   "contextWindow": 200000,
-  "contextWindowBudget": 180000,
   "maxTokens": 16384,
   "cost": {
     "input": 3.0,
@@ -1229,7 +1227,7 @@ Source files:
 }
 ```
 
-`contextWindowBudget` is optional on transported models. When absent, consumers use `contextWindow` as the operational budget.
+`contextWindow` is maximum supported total context. An optional `maxInputTokens` represents only an independently evidenced provider input constraint; it is not another context denominator. The removed budget field is not emitted.
 
 ### UserMessage
 
