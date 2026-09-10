@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
 	type Context,
 	createAssistantMessageEventStream,
+	type Model,
 	type ModelRequestLimit,
 	type SimpleStreamOptions,
 } from "@leanandmean/ai";
@@ -11,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
-import { createAgentSession } from "../src/core/sdk.js";
+import { type CreateAgentSessionOptions, createAgentSession } from "../src/core/sdk.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
@@ -98,7 +99,72 @@ async function fixture(maxInputTokens?: number, requestLimits?: ModelRequestLimi
 	};
 }
 
+async function createWithDirectModels(
+	options: Pick<CreateAgentSessionOptions, "model" | "scopedModels">,
+): Promise<void> {
+	const root = mkdtempSync(join(tmpdir(), "direct-model-validation-"));
+	const authStorage = AuthStorage.inMemory();
+	const modelRegistry = ModelRegistry.inMemory(authStorage);
+	const settingsManager = SettingsManager.inMemory();
+	const resourceLoader = new DefaultResourceLoader({
+		cwd: root,
+		agentDir: root,
+		settingsManager,
+		systemPromptOverride: () => "",
+		noExtensions: true,
+		noSkills: true,
+		noPromptTemplates: true,
+		agentsFilesOverride: () => ({ agentsFiles: [] }),
+	});
+	await resourceLoader.reload();
+	let dispose: (() => void) | undefined;
+	try {
+		const { session } = await createAgentSession({
+			...options,
+			cwd: root,
+			agentDir: root,
+			resourceLoader,
+			authStorage,
+			modelRegistry,
+			tools: [],
+			sessionManager: SessionManager.inMemory(root),
+			settingsManager,
+		});
+		dispose = () => session.dispose();
+	} finally {
+		dispose?.();
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+const directModel: Model<"openai-chat"> = {
+	id: "direct-model",
+	name: "Direct Model",
+	api: "openai-chat",
+	provider: "direct-provider",
+	baseUrl: "https://unused.invalid",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1000,
+	maxTokens: 500,
+};
+
+const malformedDirectModel = {
+	...directModel,
+	requestLimits: [{ maxTotalTokens: Number.NaN, supportsTools: true }],
+};
+
 describe("SDK request context allocation", () => {
+	it.each([
+		{ source: "model", options: { model: malformedDirectModel } },
+		{ source: "scopedModels", options: { model: directModel, scopedModels: [{ model: malformedDirectModel }] } },
+	])("rejects malformed request limits from direct SDK $source", async ({ options }) => {
+		await expect(createWithDirectModels(options)).rejects.toThrow(
+			"direct-provider/direct-model: invalid requestLimits[0]",
+		);
+	});
+
 	it("allocates using the prepared request and preserves scalar model maxima", async () => {
 		const f = await fixture(undefined, [{ maxTotalTokens: 1000, maxOutputTokens: 100, supportsTools: true }]);
 		try {

@@ -28,6 +28,9 @@ async function generate(
 		openRouterEndpoints?: unknown;
 		openRouterEndpointError?: boolean;
 		vercelEndpoints?: unknown;
+		unsettledEndpoint?: string;
+		unsettledEndpointBody?: string;
+		expectedError?: string;
 	} = {},
 ) {
 	vi.resetModules();
@@ -64,13 +67,20 @@ async function generate(
 					),
 		]),
 	);
-	const fetch = vi.fn(async (url: string) => {
+	const fetch = vi.fn(async (url: string, init?: RequestInit): Promise<any> => {
+		const waitForAbort = () =>
+			new Promise((_resolve, reject) => {
+				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+			});
+		if (url === options.unsettledEndpoint) return await waitForAbort();
+		const endpointJson = (value: unknown) =>
+			url === options.unsettledEndpointBody ? waitForAbort : async () => value;
 		if (url === options.failedCatalog) return { ok: false, status: 503 };
 		if (url.startsWith("https://openrouter.ai/api/v1/models/") && url.endsWith("/endpoints")) {
 			return {
 				ok: !options.openRouterEndpointError,
 				status: options.openRouterEndpointError ? 503 : 200,
-				json: async () => ({
+				json: endpointJson({
 					data: {
 						endpoints: options.openRouterEndpoints ?? [
 							{ context_length: 1500000, max_prompt_tokens: 1200000, supported_parameters: ["tools"] },
@@ -84,7 +94,7 @@ async function generate(
 			return {
 				ok: !options.endpointError,
 				status: options.endpointError ? 503 : 200,
-				json: async () => ({
+				json: endpointJson({
 					data: {
 						endpoints: options.vercelEndpoints ?? [
 							{ context_length: 1600000, supported_parameters: ["tools"] },
@@ -177,6 +187,15 @@ async function generate(
 		expect(errors).toHaveBeenCalled();
 		expect(writeFileSync).not.toHaveBeenCalled();
 		expect(process.exitCode).toBe(1);
+		if (options.expectedError) {
+			const messages: string[] = [];
+			let error = errors.mock.calls.at(-1)?.[0];
+			while (error instanceof Error) {
+				messages.push(error.message);
+				error = error.cause;
+			}
+			expect(messages.join("\n")).toContain(options.expectedError);
+		}
 		return null;
 	}
 	expect(writeFileSync).toHaveBeenCalledTimes(1);
@@ -433,6 +452,31 @@ describe("real generator context corrections", () => {
 	);
 	it("does not emit a partial catalog when OpenRouter endpoint acquisition fails", async () => {
 		await generate(true, { openRouterEndpointError: true, expectFailure: true });
+	});
+
+	describe.each([
+		{
+			endpoint: "https://openrouter.ai/api/v1/models/openai/gpt-5.4/endpoints",
+			error: "openrouter/openai/gpt-5.4: endpoint discovery timed out after 30000ms",
+		},
+		{
+			endpoint: "https://ai-gateway.vercel.sh/v1/models/openai/gpt-5.4/endpoints",
+			error: "vercel-ai-gateway/openai/gpt-5.4: endpoint discovery timed out after 30000ms",
+		},
+	])("$endpoint timeout", ({ endpoint, error }) => {
+		it.each(["fetch", "body"] as const)("times out an unsettled %s without writing", async (phase) => {
+			const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+			const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((duration) => {
+				expect(duration).toBe(30_000);
+				return nativeTimeout(1);
+			});
+			await generate(true, {
+				...(phase === "fetch" ? { unsettledEndpoint: endpoint } : { unsettledEndpointBody: endpoint }),
+				expectedError: error,
+				expectFailure: true,
+			});
+			expect(timeout).toHaveBeenCalled();
+		});
 	});
 
 	it.each([undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY])(

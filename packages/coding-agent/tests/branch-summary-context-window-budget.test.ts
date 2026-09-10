@@ -320,10 +320,22 @@ describe.each([
 		expect(allocateRequest(requestModel, context, options.maxTokens)).toBe(options.maxTokens);
 	});
 	it("does not dispatch an oversized summary prompt", async () => {
-		try {
-			await generate([], { ...model, maxInputTokens: 100 }, 100, "test", undefined, undefined, "x".repeat(800));
-		} catch (error) {
-			expect(String(error)).toContain("estimated input");
+		const result = generate(
+			[],
+			{ ...model, maxInputTokens: 100 },
+			100,
+			"test",
+			undefined,
+			undefined,
+			"x".repeat(800),
+		);
+		if (_name === "coding-agent") {
+			await expect(result).rejects.toThrow(/estimated input/);
+		} else {
+			await expect(result).resolves.toMatchObject({
+				ok: false,
+				error: { code: "summarization_failed", message: expect.stringContaining("estimated input") },
+			});
 		}
 		expect(completeSimple).not.toHaveBeenCalled();
 	});

@@ -1,6 +1,13 @@
 import { join } from "node:path";
 import { Agent, type AgentMessage, type ThinkingLevel } from "@leanandmean/agent";
-import { type CacheRetention, clampThinkingLevel, type Message, type Model, streamSimple } from "@leanandmean/ai";
+import {
+	type CacheRetention,
+	clampThinkingLevel,
+	type Message,
+	type Model,
+	streamSimple,
+	validateModelRequestLimits,
+} from "@leanandmean/ai";
 import { getAgentDir } from "../config.js";
 import { AgentSession } from "./agent-session.js";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.js";
@@ -236,6 +243,9 @@ function getAttributionHeaders(
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
+	if (options.model) validateModelRequestLimits(options.model);
+	for (const { model } of options.scopedModels ?? []) validateModelRequestLimits(model);
+
 	const cwd = options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd();
 	const agentDir = options.agentDir ?? getDefaultAgentDir();
 	const outputThroughputHistoryPath =
