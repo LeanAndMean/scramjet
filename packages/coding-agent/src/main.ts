@@ -13,7 +13,7 @@ import { ProcessTerminal, setKeybindings, TUI } from "@leanandmean/tui";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.js";
 import { processFileArguments } from "./cli/file-processor.js";
-import { buildInitialMessage } from "./cli/initial-message.js";
+import { buildInitialMessage, normalizePipedStdinContent } from "./cli/initial-message.js";
 import { listModels } from "./cli/list-models.js";
 import { selectSession } from "./cli/session-picker.js";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, VERSION } from "./config.js";
@@ -66,7 +66,7 @@ async function readPipedStdin(): Promise<string | undefined> {
 			data += chunk;
 		});
 		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
+			resolve(normalizePipedStdinContent(data));
 		});
 		process.stdin.resume();
 	});

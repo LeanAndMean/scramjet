@@ -301,6 +301,34 @@ describe("subagent tool — failure reporting", () => {
 		expect(payload.taskMatches).toBe(true);
 	});
 
+	it.skipIf(process.platform === "win32")(
+		"reports stdin delivery failure even when the child exits zero",
+		async () => {
+			process.argv[1] = writeFakeInvocation(
+				tmpDir,
+				"process.stdin.destroy(); setTimeout(() => process.exit(0), 50);\n",
+			);
+			const tool = registeredSubagentTool();
+
+			const result = await tool.execute(
+				"tool-call-id",
+				{
+					agent: "test-agent",
+					task: "x".repeat(1024 * 1024),
+					agentScope: "project",
+					confirmProjectAgents: false,
+				},
+				undefined,
+				undefined,
+				{ cwd: tmpDir, hasUI: false },
+			);
+
+			expect(result.isError).toBe(true);
+			expect(result.details?.results[0].exitCode).toBe(1);
+			expect(textContent(result)).toContain("Failed to send task");
+		},
+	);
+
 	it("includes stderr in parallel failure summaries", async () => {
 		process.argv[1] = writeFakeInvocation(
 			tmpDir,
