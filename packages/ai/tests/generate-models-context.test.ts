@@ -245,11 +245,11 @@ describe("real generator context corrections", () => {
 			"gpt-5.3-codex-spark": 128000,
 			"gpt-5.4": 1000000,
 			"gpt-5.4-mini": 272000,
-			"gpt-5.5": 400000,
+			"gpt-5.5": 272000,
 			"gpt-5.6-sol": 872000,
 			"gpt-5.6-terra": 872000,
 			"gpt-5.6-luna": 872000,
-			"gpt-6-astra": 272000,
+			"gpt-6-astra": 872000,
 		};
 		for (const model of Object.values(models["openai-codex"])) {
 			expect(model.contextWindow, model.id).toBe(codexContexts[model.id]);

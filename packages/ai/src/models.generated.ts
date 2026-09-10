@@ -8245,7 +8245,7 @@ export const MODELS = {
 				cacheRead: 0.5,
 				cacheWrite: 0,
 			},
-			contextWindow: 400000,
+			contextWindow: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 		"gpt-5.6-luna": {
@@ -8317,7 +8317,7 @@ export const MODELS = {
 				cacheRead: 1,
 				cacheWrite: 12.5,
 			},
-			contextWindow: 272000,
+			contextWindow: 872000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-codex-responses">,
 	},

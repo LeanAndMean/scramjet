@@ -1739,8 +1739,8 @@ async function generateModels() {
 	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 	// SCRAMJET-DIVERGENCE: The older Codex models' 272K default reserves 128K output from 400K total.
 	const CODEX_CONTEXT = 400000;
-	// SCRAMJET-DIVERGENCE: Codex declares 872K as GPT-5.6's maximum configurable route context.
-	const GPT_5_6_CONTEXT = 872000;
+	// SCRAMJET-DIVERGENCE: Codex declares 872K as the current extended route maximum.
+	const CODEX_EXTENDED_CONTEXT = 872000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
 		{
@@ -1836,8 +1836,8 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			// SCRAMJET-DIVERGENCE: GPT-5.5's Codex launch documents 400K total, independently of API limits.
-			contextWindow: 400000,
+			// SCRAMJET-DIVERGENCE: Current Codex route metadata supersedes the older 400K launch value.
+			contextWindow: 272000,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1849,7 +1849,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-			contextWindow: 272000,
+			contextWindow: CODEX_EXTENDED_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1861,7 +1861,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-			contextWindow: GPT_5_6_CONTEXT,
+			contextWindow: CODEX_EXTENDED_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1873,7 +1873,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
-			contextWindow: GPT_5_6_CONTEXT,
+			contextWindow: CODEX_EXTENDED_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{
@@ -1885,7 +1885,7 @@ async function generateModels() {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 0 },
-			contextWindow: GPT_5_6_CONTEXT,
+			contextWindow: CODEX_EXTENDED_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
 		},
 		{

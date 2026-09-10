@@ -22,7 +22,8 @@ describe("generated catalog - approved context corrections", () => {
 		["azure-openai-responses", "gpt-5.5", 1050000],
 		["opencode", "gpt-5.4", 1050000],
 		["opencode", "claude-sonnet-4-5", 200000],
-		["openai-codex", "gpt-5.5", 400000],
+		["openai-codex", "gpt-5.5", 272000],
+		["openai-codex", "gpt-6-astra", 872000],
 		["xai", "grok-code-fast-1", 256000],
 		["cloudflare-ai-gateway", "workers-ai/@cf/moonshotai/kimi-k2.6", 262144],
 		["openrouter", "~moonshotai/kimi-latest", 1048576],
@@ -467,7 +468,7 @@ describe("generated catalog - GPT-6 Astra", () => {
 		expectAstraThinking(model);
 	});
 
-	it("preserves the unresolved OpenAI Codex context pending provider evidence", () => {
+	it("uses Codex's declared Astra maximum context", () => {
 		const model = getModel("openai-codex", "gpt-6-astra");
 		expect(model).toMatchObject({
 			id: "gpt-6-astra",
@@ -476,7 +477,7 @@ describe("generated catalog - GPT-6 Astra", () => {
 			reasoning: true,
 			input: ["text", "image"],
 			cost: expectedCost,
-			contextWindow: 272_000,
+			contextWindow: 872_000,
 			maxTokens: 128_000,
 		});
 		expect(model).not.toHaveProperty("contextWindowBudget");
