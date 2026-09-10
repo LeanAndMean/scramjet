@@ -293,6 +293,7 @@ user sends prompt ────────────────────�
   │   ├─► before_provider_call (can replace request-local system prompt)
   │   ├─► provider serialization                   │       │
   │   ├─► before_provider_request (can inspect or replace payload)
+  │   ├─► provider_request_tool_inventory (observe final tool names)
   │   ├─► transport                                │       │
   │   ├─► after_provider_response (status + headers, before stream consume)
   │   │                                            │       │
@@ -664,7 +665,34 @@ pi.on("before_provider_request", (event) => {
 });
 ```
 
-The complete request order is routing refresh → `context` transformation → `before_provider_call` → provider serialization → `before_provider_request` → transport. This is mainly useful for request-local prompt preparation and debugging provider serialization or cache behavior.
+The complete request order is routing refresh → `context` transformation → `before_provider_call` → provider serialization → public `Agent.onPayload` callback → `before_provider_request` → `provider_request_tool_inventory` → transport. The public callback runs exactly once; `undefined` keeps its input unchanged, while any other return value becomes the input to extension payload handlers. One extension runner is bound when `before_provider_call` begins and owns the request through preparation, payload hooks, and observation. If reload supersedes it during provider-neutral preparation or before payload dispatch begins, the public callback still runs but the old request skips extension rewriting and observation instead of entering the replacement runtime. This is mainly useful for request-local prompt preparation and debugging provider serialization or cache behavior.
+
+#### provider_request_tool_inventory
+
+Fired after the complete `before_provider_request` replacement chain and before the final payload is returned to provider transport. This event is observation-only: handlers have no return value and cannot change the outgoing request.
+
+```typescript
+pi.on("provider_request_tool_inventory", (event) => {
+  // Immutable, bounded identity of the exact routed model.
+  console.log(`${event.model.provider}/${event.model.id} (${event.model.api})`);
+  // Frozen copy from this request's provider-neutral context.
+  console.log(event.requestContextToolNames);
+
+  if (event.inventory.status === "observed") {
+    // Sorted, deduplicated names from the final serialized payload.
+    console.log(event.inventory.toolNames);
+  } else {
+    // "malformed" includes a bounded reason; "unsupported" does not inspect payload fields.
+    console.log(event.inventory.status);
+  }
+});
+```
+
+The event and all nested fields are frozen. The model snapshot contains only `provider`, `id`, and `api`; it excludes model headers, credentials, URLs, and other configuration. Supported built-in shape families are OpenAI Responses/Azure/Codex, OpenAI completions, Mistral conversations, Anthropic messages, Google Generative AI/Vertex function declarations, and Bedrock tool specifications. A missing optional tool container or valid empty list is observed as an empty inventory; malformed known shapes report only a bounded reason, never raw payload content. Custom API identifiers report `unsupported` when their provider invokes `onPayload`; a custom provider that does not invoke `onPayload` produces no final-schema observation.
+
+This boundary proves only what was present in the final pre-transport payload value after the public callback and extension rewrite chain. It does not prove transport success, response parsing, assistant completion, persistence, or model tool selection. If successful reload replaces the request's extension runner during provider-neutral preparation or before payload dispatch begins, extension rewriting and observation are skipped while the independent public callback still applies. If replacement occurs while the old runner's rewrite chain is already in flight, its completed replacement is preserved and the observation is suppressed. Observer failures use normal extension error isolation and do not alter the outgoing payload.
+
+**TypeScript compatibility:** Adding this event extends the exported `ExtensionEvent` union. Consumers with exhaustive switches over that union must add this member or a default/unknown-event branch; ordinary `pi.on(...)` registrations remain compatible.
 
 #### after_provider_response
 
@@ -1578,6 +1606,8 @@ const builtinTools = all.filter((t) => t.sourceInfo.source === "builtin");
 const extensionTools = all.filter((t) => t.sourceInfo.source !== "builtin" && t.sourceInfo.source !== "sdk");
 pi.setActiveTools(["read", "bash"]); // Switch to read-only
 ```
+
+Changes made by an awaited `turn_end` handler settle before the next provider request snapshots active tools and generated guidance.
 
 `pi.getAllTools()` returns `name`, `description`, `parameters`, and `sourceInfo`.
 

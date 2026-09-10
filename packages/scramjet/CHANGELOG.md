@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.92.1 — Transport subagent tasks through stdin
+
+Routes delegated subagent tasks through child-process stdin to avoid exposing large prompts in process arguments while preserving model-facing task semantics.
+
+### Changed
+
+- Deliver subagent task payloads through stdin instead of process arguments while retaining existing subprocess options.
+
+### Fixed
+
+- Report failed stdin task delivery as a subagent failure even when the child exits successfully.
+
+### Tests
+
+- Add regression coverage for long-task transport, stdin delivery failures, CLI input normalization, and chained task substitution.
+
+## 0.92.0 — Keep tools visible across provider requests
+
+Keeps the live prompt and executable tool inventory synchronized across provider requests. Fixes [#524](https://github.com/LeanAndMean/scramjet/issues/524).
+
+### Added
+
+- Add provider-boundary tool inventory inspection and privacy-safe Scramjet visibility diagnostics.
+- Expose extension and SDK hooks for observing final serialized provider tool inventories.
+
+### Changed
+
+- Refresh live prompt and executable tool context between provider requests while preserving per-run composition and explicit callback overrides.
+- Keep model-callable tools visible when invocation eligibility changes, while retaining harness-only exclusions.
+
+### Tests
+
+- Add provider serialization, lifecycle, reload, runtime replacement, prompt composition, and tool-visibility regression coverage.
+
 ## 0.91.0 — Add GPT-6 Astra support
 
 Adds provider-scoped GPT-6 Astra support across Responses providers. Fixes [#522](https://github.com/LeanAndMean/scramjet/issues/522).

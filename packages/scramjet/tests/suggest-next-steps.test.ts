@@ -39,7 +39,8 @@ describe("suggest_scramjet_next_steps", () => {
 			expect(tool.promptSnippet).toMatch(/at most once per topic/i);
 			expect(tool.promptSnippet).toMatch(/do not repeat.*dismissed/i);
 			expect(tool.promptSnippet).toMatch(/never call.*file, web, or tool content/i);
-			expect(tool.promptSnippet).toMatch(/not available in non-interactive sessions/i);
+			expect(tool.promptSnippet).toMatch(/remains visible.*accepted only in interactive idle sessions/i);
+			expect(tool.description).toMatch(/callable stays visible.*invocation is accepted only/i);
 		});
 	});
 
@@ -179,6 +180,7 @@ describe("suggest_scramjet_next_steps", () => {
 
 				expect(result.details.error).toBe("command-active");
 				expect(result.details.phase).toBeDefined();
+				expect(result.content[0].text).toMatch(/invocation is accepted only when no command is active/i);
 				expect(state.pendingSuggestion).toBeNull();
 			});
 		}

@@ -56,16 +56,40 @@ function makeTextAssistantMessage(text: string): AssistantMessage {
 	return makeAssistantMessage([{ type: "text", text }], "stop");
 }
 
-type StreamCall = { model: Model<any>; reasoning: string | undefined; toolCallIds: string[] };
+type StreamCall = {
+	model: Model<any>;
+	reasoning: string | undefined;
+	systemPrompt: unknown;
+	toolNames: string[];
+	messageRoles: string[];
+	messageTexts: string[];
+	toolCallIds: string[];
+};
 
-/** Mock stream function that records each call's model, reasoning, and visible tool-call ids. */
+/** Mock stream function that records each call's model, reasoning, and visible context. */
 function createRecordingStreamFn(messages: AssistantMessage[], order?: string[]) {
 	const calls: StreamCall[] = [];
 	let callIndex = 0;
-	const fn = ((model: Model<any>, context: { messages: any[] }, options: { reasoning?: string }) => {
+	const fn = ((
+		model: Model<any>,
+		context: { systemPrompt: unknown; messages: any[]; tools?: AgentTool[] },
+		options: { reasoning?: string },
+	) => {
 		calls.push({
 			model,
 			reasoning: options.reasoning,
+			systemPrompt: Array.isArray(context.systemPrompt)
+				? context.systemPrompt.map((section) => ({ ...section }))
+				: context.systemPrompt,
+			toolNames: context.tools?.map((tool) => tool.name) ?? [],
+			messageRoles: context.messages.map((message) => message.role),
+			messageTexts: context.messages.flatMap((message) => {
+				if (typeof message.content === "string") return [message.content];
+				if (!Array.isArray(message.content)) return [];
+				return message.content.flatMap((content: any) =>
+					content?.type === "text" && typeof content.text === "string" ? [content.text] : [],
+				);
+			}),
 			toolCallIds: context.messages.flatMap((m) =>
 				Array.isArray(m.content)
 					? m.content.filter((c: any) => c?.type === "toolCall").map((c: any) => c.id as string)
@@ -82,10 +106,10 @@ function createRecordingStreamFn(messages: AssistantMessage[], order?: string[])
 	return { fn, calls };
 }
 
-function makeHarnessTool(record: string[], order?: string[]): AgentTool {
+function makeHarnessTool(record: string[], order?: string[], name = "harness_notice"): AgentTool {
 	return {
-		name: "harness_notice",
-		label: "Harness Notice",
+		name,
+		label: name,
 		description: "harness-only notice tool",
 		parameters: { type: "object", properties: { note: { type: "string" } }, required: ["note"] },
 		execute: async (_id, args: any) => {
@@ -195,6 +219,117 @@ describe("Agent.runHarnessTool", () => {
 		expect(calls[1]!.toolCallIds.some((id) => id.startsWith("harness-tool-"))).toBe(true);
 	});
 
+	it("refreshes live prompt and executable tools for the next intra-run request", async () => {
+		const replacementExecutions: string[] = [];
+		const replacementTool: AgentTool = {
+			name: "replacement",
+			label: "Replacement",
+			description: "replacement tool",
+			parameters: { type: "object", properties: {}, required: [] },
+			execute: async () => {
+				replacementExecutions.push("executed");
+				return { content: [{ type: "text", text: "replacement complete" }], details: undefined };
+			},
+		};
+		const { fn, calls } = createRecordingStreamFn([
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "mutate-1", name: "read", arguments: { path: "a.ts" } }],
+				"toolUse",
+			),
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "replacement-1", name: "replacement", arguments: {} }],
+				"toolUse",
+			),
+			makeTextAssistantMessage("done"),
+		]);
+
+		let agentRef!: Agent;
+		const mutatorTool = makeReadTool(async () => {
+			agentRef.state.systemPrompt = "replacement prompt";
+			agentRef.state.tools = [replacementTool];
+			return { content: [{ type: "text", text: "mutated" }], details: undefined };
+		});
+		const agent = new Agent({
+			initialState: { systemPrompt: "initial prompt", model: testModel, tools: [mutatorTool] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+		});
+		agentRef = agent;
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls).toHaveLength(3);
+		expect(calls[0]!.systemPrompt).toBe("initial prompt");
+		expect(calls[0]!.toolNames).toEqual(["read"]);
+		expect(calls[1]!.systemPrompt).toBe("replacement prompt");
+		expect(calls[1]!.toolNames).toEqual(["replacement"]);
+		expect(calls[1]!.messageRoles).toEqual(["user", "assistant", "toolResult"]);
+		expect(calls[1]!.toolCallIds).toEqual(["mutate-1"]);
+		expect(replacementExecutions).toEqual(["executed"]);
+	});
+
+	it("preserves callback context authority and isolates refreshed live arrays", async () => {
+		const callbackExecutions: string[] = [];
+		const callbackTool = makeHarnessTool(callbackExecutions, undefined, "callback_notice");
+		const liveTool = makeHarnessTool([], undefined, "live_notice");
+		const livePrompt = [{ id: "live", text: "live prompt" }];
+		const { fn, calls } = createRecordingStreamFn([
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "mutate-1", name: "read", arguments: { path: "a.ts" } }],
+				"toolUse",
+			),
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "callback-1", name: "callback_notice", arguments: { note: "callback" } }],
+				"toolUse",
+			),
+			makeTextAssistantMessage("done"),
+		]);
+
+		let agentRef!: Agent;
+		let callbackCalls = 0;
+		const mutatorTool = makeReadTool(async () => {
+			agentRef.state.systemPrompt = livePrompt;
+			agentRef.state.tools = [liveTool];
+			agentRef.state.messages.push({ role: "user", content: "state-only message", timestamp: Date.now() });
+			return { content: [{ type: "text", text: "mutated" }], details: undefined };
+		});
+		const agent = new Agent({
+			initialState: { systemPrompt: "initial prompt", model: testModel, tools: [mutatorTool] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+			prepareNextTurn: async (ctx) => {
+				callbackCalls++;
+				if (callbackCalls > 1) return undefined;
+
+				expect(ctx.context.systemPrompt).not.toBe(agentRef.state.systemPrompt);
+				expect(ctx.context.tools).not.toBe(agentRef.state.tools);
+				expect(ctx.context.messages).not.toContainEqual(expect.objectContaining({ content: "state-only message" }));
+				if (Array.isArray(ctx.context.systemPrompt)) {
+					ctx.context.systemPrompt.push({ id: "callback-mutation", text: "mutated copy" });
+				}
+				ctx.context.tools?.push(callbackTool);
+				return {
+					context: {
+						systemPrompt: "callback prompt",
+						messages: [{ role: "user", content: "callback-only message", timestamp: Date.now() }],
+						tools: [callbackTool],
+					},
+				};
+			},
+		});
+		agentRef = agent;
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls[1]!.systemPrompt).toBe("callback prompt");
+		expect(calls[1]!.toolNames).toEqual(["callback_notice"]);
+		expect(calls[1]!.messageRoles).toEqual(["user"]);
+		expect(calls[1]!.messageTexts).toEqual(["callback-only message"]);
+		expect(callbackExecutions).toEqual(["callback"]);
+		expect(agent.state.systemPrompt).toEqual([{ id: "live", text: "live prompt" }]);
+		expect(agent.state.tools.map((tool) => tool.name)).toEqual(["live_notice"]);
+	});
+
 	it("routes the next intra-run LLM call to a model changed mid-run", async () => {
 		const { fn, calls } = createRecordingStreamFn([
 			makeAssistantMessage(
@@ -222,6 +357,33 @@ describe("Agent.runHarnessTool", () => {
 		expect(calls).toHaveLength(2);
 		expect(calls[0]!.model.id).toBe(testModel.id);
 		expect(calls[1]!.model.id).toBe(secondModel.id);
+	});
+
+	it("preserves an explicit prepareNextTurn model update", async () => {
+		const { fn, calls } = createRecordingStreamFn([
+			makeAssistantMessage(
+				[{ type: "toolCall", id: "real-1", name: "read", arguments: { path: "a.ts" } }],
+				"toolUse",
+			),
+			makeTextAssistantMessage("done"),
+		]);
+
+		let agentRef!: Agent;
+		const readTool = makeReadTool(async () => {
+			agentRef.state.model = secondModel;
+			return { content: [{ type: "text", text: "ok" }], details: undefined };
+		});
+		const agent = new Agent({
+			initialState: { model: testModel, tools: [readTool] },
+			streamFn: fn,
+			getApiKey: async () => "key",
+			prepareNextTurn: async () => ({ model: testModel }),
+		});
+		agentRef = agent;
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls.map((call) => call.model.id)).toEqual([testModel.id, testModel.id]);
 	});
 
 	it("refreshes effort for the next intra-run provider request", async () => {

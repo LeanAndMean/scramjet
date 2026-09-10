@@ -44,6 +44,7 @@ import type {
 	MessageEndEventResult,
 	MessageRenderer,
 	ProviderConfig,
+	ProviderRequestToolInventoryEvent,
 	RegisteredCommand,
 	RegisteredTool,
 	ReplacedSessionContext,
@@ -1067,6 +1068,22 @@ export class ExtensionRunner {
 		}
 
 		return currentPayload;
+	}
+
+	// SCRAMJET-DIVERGENCE: isolate immutable final-schema observations from extension mutation (#524).
+	async emitProviderRequestToolInventory(
+		model: ProviderRequestToolInventoryEvent["model"],
+		requestContextToolNames: readonly string[],
+		inventory: ProviderRequestToolInventoryEvent["inventory"],
+	): Promise<void> {
+		if (this.skipStale("provider_request_tool_inventory")) return;
+		const event: ProviderRequestToolInventoryEvent = Object.freeze({
+			type: "provider_request_tool_inventory",
+			model: Object.freeze({ ...model }),
+			requestContextToolNames: Object.freeze([...requestContextToolNames]),
+			inventory: deepFreeze(structuredClone(inventory)),
+		});
+		await this.emit(event);
 	}
 
 	async emitBeforeAgentStart(

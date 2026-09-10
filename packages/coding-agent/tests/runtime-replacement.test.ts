@@ -2,8 +2,13 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
-import type { AssistantMessage, UserMessage } from "@leanandmean/ai";
-import { createAssistantMessageEventStream } from "@leanandmean/ai";
+import type { AssistantMessage, Context, Model, UserMessage } from "@leanandmean/ai";
+import {
+	createAssistantMessageEventStream,
+	flattenSystemPrompt,
+	inspectProviderRequestToolInventory,
+} from "@leanandmean/ai";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import {
@@ -12,17 +17,42 @@ import {
 	createAgentSessionRuntime,
 } from "../src/core/agent-session-runtime.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
-import type { SessionStartEvent } from "../src/core/extensions/index.js";
+import { defineTool, type SessionStartEvent } from "../src/core/extensions/index.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader, RequiredBuiltinInitError } from "../src/core/resource-loader.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
 
+const testModel: Model<"openai-completions"> = {
+	id: "model-a",
+	name: "Model A",
+	api: "openai-completions",
+	provider: "provider-a",
+	baseUrl: "https://example.test",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1_050_000,
+};
+
+const RUN_COMPOSITION_MARKER = "RUNTIME INSTANCE CONTRIBUTION";
+const RUNTIME_TOOL_NAME = "runtime_tool";
+const RUNTIME_TOOL_GUIDANCE = "Runtime tool guidance";
+
+const runtimeTool = defineTool({
+	name: RUNTIME_TOOL_NAME,
+	label: RUNTIME_TOOL_NAME,
+	description: "Runtime replacement parity tool",
+	promptSnippet: RUNTIME_TOOL_GUIDANCE,
+	parameters: Type.Object({}),
+	execute: async () => ({ content: [{ type: "text", text: "ok" }], details: undefined }),
+});
+
 function assistantText(text: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
-		api: "openai-chat",
+		api: "openai-completions",
 		provider: "provider-a",
 		model: "model-a",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -55,8 +85,14 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 	mkdirSync(sessionDir, { recursive: true });
 	mkdirSync(importDir, { recursive: true });
 
+	const captures: Array<{
+		systemPrompt: string;
+		toolNames: string[];
+		inventory: ReturnType<typeof inspectProviderRequestToolInventory>;
+	}> = [];
 	const settingsManager = SettingsManager.inMemory();
 	const authStorage = AuthStorage.inMemory();
+	authStorage.setRuntimeApiKey("provider-a", "fake");
 	const modelRegistry = ModelRegistry.inMemory(authStorage);
 
 	// Real session lifecycle events are observed through a required builtin: session_shutdown fires
@@ -67,6 +103,9 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 		agentDir,
 		settingsManager,
 		builtinInit: (pi) => {
+			pi.on("before_agent_start", () => ({
+				systemPromptSection: { id: "test:runtime-instance", text: `\n\n${RUN_COMPOSITION_MARKER}` },
+			}));
 			pi.on("session_shutdown", () => {
 				events.push("session_shutdown");
 			});
@@ -79,10 +118,24 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 
 	function makeSession(sessionManager: SessionManager, sessionStartEvent?: SessionStartEvent): AgentSession {
 		const agent = new Agent({
-			initialState: { systemPrompt: "", model: null as any, tools: [] },
-			streamFn() {
-				return createAssistantMessageEventStream(assistantText("ok"));
+			initialState: { systemPrompt: "", model: testModel, tools: [] },
+			streamFn(_model, context: Context) {
+				const toolNames = (context.tools ?? []).map((tool) => tool.name).sort();
+				const payload = {
+					tools: (context.tools ?? []).map((tool) => ({ function: { name: tool.name } })),
+				};
+				captures.push({
+					systemPrompt: flattenSystemPrompt(context.systemPrompt),
+					toolNames,
+					inventory: inspectProviderRequestToolInventory(testModel.api, payload),
+				});
+				const message = assistantText("ok");
+				const stream = createAssistantMessageEventStream();
+				stream.push({ type: "start", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+				return stream;
 			},
+			getApiKey: async () => "fake",
 		});
 		return new AgentSession({
 			agent,
@@ -92,6 +145,8 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 			settingsManager,
 			sessionManager,
 			resourceLoader,
+			customTools: [runtimeTool],
+			initialActiveToolNames: [RUNTIME_TOOL_NAME],
 			sessionStartEvent,
 		});
 	}
@@ -139,6 +194,7 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 		rebindCalls,
 		beforeInvalidateCalls,
 		createdSessions,
+		captures,
 		initialServices: runtime.services,
 		setMode: (m: "succeed" | "throw") => {
 			mode = m;
@@ -147,6 +203,16 @@ async function buildFixture(opts?: { initialInMemory?: boolean }) {
 }
 
 type Fixture = Awaited<ReturnType<typeof buildFixture>>;
+
+function expectReplacementParity(fx: Fixture): void {
+	const capture = fx.captures.at(-1);
+	expect(capture).toBeDefined();
+	expect(fx.runtime.session.getActiveToolNames()).toEqual([RUNTIME_TOOL_NAME]);
+	expect(capture?.toolNames).toEqual([RUNTIME_TOOL_NAME]);
+	expect(capture?.inventory).toEqual({ status: "observed", toolNames: [RUNTIME_TOOL_NAME] });
+	expect(capture?.systemPrompt).toContain(RUNTIME_TOOL_GUIDANCE);
+	expect(capture?.systemPrompt).toContain(RUN_COMPOSITION_MARKER);
+}
 
 const replacementCases: Array<{ name: string; invoke: (fx: Fixture) => Promise<{ cancelled: boolean }> }> = [
 	{ name: "newSession", invoke: (fx) => fx.runtime.newSession() },
@@ -167,6 +233,42 @@ const replacementCases: Array<{ name: string; invoke: (fx: Fixture) => Promise<{
 		},
 	},
 ];
+
+describe("AgentSessionRuntime — prompt composition isolation", () => {
+	for (const { name, invoke } of replacementCases) {
+		it(`${name}: the replacement AgentSession starts without the prior run composition`, async () => {
+			const fx = await buildFixture();
+			const before = fx.runtime.session;
+			await before.prompt("prime composition");
+			expect(before.systemPrompt).toContain(RUN_COMPOSITION_MARKER);
+
+			await invoke(fx);
+
+			expect(fx.runtime.session).not.toBe(before);
+			expect(fx.runtime.session.systemPrompt).not.toContain(RUN_COMPOSITION_MARKER);
+			await fx.runtime.session.prompt("verify replacement parity");
+			expectReplacementParity(fx);
+		});
+	}
+
+	it("fork: the replacement AgentSession starts without the prior run composition", async () => {
+		const fx = await buildFixture({ initialInMemory: true });
+		const before = fx.runtime.session;
+		await before.prompt("prime composition");
+		expect(before.systemPrompt).toContain(RUN_COMPOSITION_MARKER);
+		const userEntry = before.sessionManager
+			.getBranch()
+			.find((entry) => entry.type === "message" && entry.message.role === "user");
+		if (!userEntry) throw new Error("expected persisted user entry");
+
+		await fx.runtime.fork(userEntry.id, { position: "at" });
+
+		expect(fx.runtime.session).not.toBe(before);
+		expect(fx.runtime.session.systemPrompt).not.toContain(RUN_COMPOSITION_MARKER);
+		await fx.runtime.session.prompt("verify replacement parity");
+		expectReplacementParity(fx);
+	});
+});
 
 describe("AgentSessionRuntime — atomic replacement (Stage 3)", () => {
 	describe("failed candidate preparation preserves the live runtime", () => {

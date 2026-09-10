@@ -3,6 +3,7 @@ import { Agent, type AgentMessage, type ThinkingLevel } from "@leanandmean/agent
 import {
 	type CacheRetention,
 	clampThinkingLevel,
+	inspectProviderRequestToolInventory,
 	type Message,
 	type Model,
 	streamSimple,
@@ -374,6 +375,17 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	};
 
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
+	// SCRAMJET-DIVERGENCE: per-session runner handoff from beforeProviderCall to streamFn (#524).
+	// Precondition: this is per-session closure state (not shared across sessions), and requests
+	// are serialized by runWithLifecycle, so beforeProviderCall runs immediately before streamFn
+	// for the same request and sets a fresh binding that streamFn consumes synchronously at entry.
+	// Capturing the runner at beforeProviderCall time (not extensionRunnerRef.current at streamFn
+	// entry) is deliberate: if a reload swaps the runner across the intervening convertToLlm await,
+	// onPayload's requestRunner !== extensionRunnerRef.current check suppresses the observation
+	// rather than emitting it onto the replacement runner. The object wrapper (not the runner
+	// directly) encodes "beforeProviderCall ran", distinguishing a captured undefined runner from
+	// "no capture" (streamFn then falls back to the current runner).
+	let requestRunnerBinding: { runner?: ExtensionRunner } | undefined;
 
 	agent = new Agent({
 		initialState: {
@@ -384,6 +396,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
+			const routedModelIdentity = { provider: model.provider, id: model.id, api: model.api } as const;
+			const requestContextToolNames = (context.tools ?? []).map((tool) => tool.name);
+			const binding = requestRunnerBinding;
+			requestRunnerBinding = undefined;
+			const requestRunner = binding ? binding.runner : extensionRunnerRef.current;
+			const incomingOnPayload = options?.onPayload;
 			const auth = await modelRegistry.getApiKeyAndHeaders(model);
 			if (!auth.ok) {
 				throw new Error(auth.error);
@@ -404,6 +422,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				timeoutMs: options?.timeoutMs ?? providerRetrySettings.timeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+				// SCRAMJET-DIVERGENCE: compose the public callback, payload hooks, and observation on one runner (#524).
+				onPayload: async (payload, payloadModel) => {
+					const callbackResult = await incomingOnPayload?.(payload, payloadModel);
+					const callbackPayload = callbackResult === undefined ? payload : callbackResult;
+					if (requestRunner !== extensionRunnerRef.current) return callbackPayload;
+					const finalPayload = requestRunner?.hasHandlers("before_provider_request")
+						? await requestRunner.emitBeforeProviderRequest(callbackPayload, payloadModel)
+						: callbackPayload;
+					if (
+						requestRunner === extensionRunnerRef.current &&
+						requestRunner?.hasHandlers("provider_request_tool_inventory")
+					) {
+						await requestRunner.emitProviderRequestToolInventory(
+							routedModelIdentity,
+							requestContextToolNames,
+							inspectProviderRequestToolInventory(routedModelIdentity.api, finalPayload),
+						);
+					}
+					return finalPayload;
+				},
 				headers:
 					attributionHeaders || auth.headers || options?.headers
 						? { ...attributionHeaders, ...auth.headers, ...options?.headers }
@@ -411,16 +449,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		},
 		beforeProviderCall: async (context, model) => {
-			const runner = extensionRunnerRef.current;
+			const binding = { runner: extensionRunnerRef.current };
+			requestRunnerBinding = binding;
+			const runner = binding.runner;
 			if (!runner?.hasHandlers("before_provider_call")) return context;
 			return runner.emitBeforeProviderCall(context, model);
-		},
-		onPayload: async (payload, model) => {
-			const runner = extensionRunnerRef.current;
-			if (!runner?.hasHandlers("before_provider_request")) {
-				return payload;
-			}
-			return runner.emitBeforeProviderRequest(payload, model);
 		},
 		onResponse: async (response, _model) => {
 			const runner = extensionRunnerRef.current;
