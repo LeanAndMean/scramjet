@@ -263,6 +263,44 @@ describe("subagent tool — failure reporting", () => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
+	it("passes long tasks through stdin instead of process arguments", async () => {
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			[
+				'const fs = require("node:fs");',
+				'const task = fs.readFileSync(0, "utf8");',
+				"const payload = {",
+				"  argv: process.argv.slice(2),",
+				"  taskLength: task.length,",
+				"  taskMatches: /^Task: x+$/.test(task),",
+				"};",
+				"process.stdout.write(JSON.stringify({",
+				'  type: "message_end",',
+				'  message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(payload) }] },',
+				'}) + "\\n");',
+			].join("\n"),
+		);
+		const tool = registeredSubagentTool();
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{
+				agent: "test-agent",
+				task: "x".repeat(4096),
+				agentScope: "project",
+				confirmProjectAgents: false,
+			},
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		const payload = JSON.parse(textContent(result));
+		expect(payload.argv.every((arg: string) => arg.length < 1000)).toBe(true);
+		expect(payload.taskLength).toBe(4102);
+		expect(payload.taskMatches).toBe(true);
+	});
+
 	it("includes stderr in parallel failure summaries", async () => {
 		process.argv[1] = writeFakeInvocation(
 			tmpDir,
@@ -453,7 +491,8 @@ describe("subagent tool — chain mode", () => {
 	it("substitutes {previous} placeholder with prior step output", async () => {
 		process.argv[1] = writeFakeInvocation(
 			tmpDir,
-			`const task = process.argv[process.argv.length - 1];
+			`const fs = require("node:fs");
+			const task = fs.readFileSync(0, "utf8");
 			const match = task.match(/Task: (.*)/);
 			const text = match ? match[1] : task;
 			process.stdout.write(${JSON.stringify("")}+JSON.stringify({
