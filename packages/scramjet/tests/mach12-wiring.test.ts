@@ -10,7 +10,18 @@ import type { NextStepPolicy } from "../src/types.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
 const SCRAMJET_AGENTS_DIR = resolve(HERE, "..", "scramjet", "agents");
+const RESPONSIBILITY_SCENARIOS_PATH = resolve(HERE, "fixtures", "responsibility-architecture-scenarios.json");
 const SET_NAME = "mach12";
+
+interface ResponsibilityScenario {
+	id: string;
+	domain: string;
+	targetSurface: "architecture-planning" | "plan-review" | "runtime-pr-review" | "independent-assessment";
+	input: string;
+	requiredOutcomes: string[];
+	prohibitedOutcomes: string[];
+	tags: string[];
+}
 
 interface WiringRow {
 	basename: string;
@@ -591,6 +602,34 @@ describe("mach12 command-surface issue routing", () => {
 		expect(evidence).toContain("scramjet:command-set-explorer");
 		expect(assessment).toContain("scramjet:independent-command-assessor");
 		expect(assessment).toContain("mach12:independent-assessor");
+	});
+});
+
+describe("responsibility architecture scenario fixture", () => {
+	const scenarios = JSON.parse(readFileSync(RESPONSIBILITY_SCENARIOS_PATH, "utf-8")) as ResponsibilityScenario[];
+
+	it("covers unrelated domains, every target phase, shared inversion, and the proportional skip", () => {
+		expect(scenarios.length).toBeGreaterThanOrEqual(6);
+		expect(new Set(scenarios.map(({ id }) => id)).size).toBe(scenarios.length);
+		expect(new Set(scenarios.map(({ domain }) => domain)).size).toBe(scenarios.length);
+		expect(new Set(scenarios.map(({ targetSurface }) => targetSurface))).toEqual(
+			new Set(["architecture-planning", "plan-review", "runtime-pr-review", "independent-assessment"]),
+		);
+		expect(scenarios.some(({ tags }) => tags.includes("shared-inversion"))).toBe(true);
+		expect(scenarios.some(({ tags }) => tags.includes("proportional-skip"))).toBe(true);
+	});
+
+	it.each(scenarios)("$id has exact input and complete goal-level predicates", (scenario) => {
+		expect(scenario.id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+		expect(scenario.domain).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+		expect(scenario.input.trim()).toBe(scenario.input);
+		expect(scenario.input.length).toBeGreaterThan(0);
+		expect(scenario.requiredOutcomes.length).toBeGreaterThan(0);
+		expect(scenario.prohibitedOutcomes.length).toBeGreaterThan(0);
+		for (const predicate of [...scenario.requiredOutcomes, ...scenario.prohibitedOutcomes]) {
+			expect(predicate.trim()).toBe(predicate);
+			expect(predicate).toMatch(/[.!?]$/);
+		}
 	});
 });
 
