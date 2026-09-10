@@ -149,6 +149,30 @@ describe("generated catalog - Azure independent input limits", () => {
 	});
 });
 
+describe("generated catalog - Copilot independent input limits", () => {
+	it.each([
+		["claude-fable-5", 936000, 1000000],
+		["claude-opus-4.7", 936000, 1000000],
+		["claude-opus-4.8", 936000, 1000000],
+		["claude-sonnet-5", 936000, 1000000],
+		["gemini-3.5-flash", 936000, 1000000],
+		["gpt-5.4", 922000, 1050000],
+		["gpt-5.4-mini", 272000, 400000],
+		["gpt-5.5", 922000, 1050000],
+		["gpt-5.6-luna", 922000, 1050000],
+		["gpt-5.6-sol", 922000, 1050000],
+		["gpt-5.6-terra", 922000, 1050000],
+		["gpt-6-astra", 872000, 1000000],
+		["mai-code-1-flash-picker", 128000, 256000],
+	] as const)("keeps %s input constraints scoped to Copilot", (id, maxInputTokens, contextWindow) => {
+		expect(getModel("github-copilot", id)).toMatchObject({ maxInputTokens, contextWindow });
+	});
+
+	it("does not transfer an account's smaller GPT-5.3-Codex tier", () => {
+		expect(getModel("github-copilot", "gpt-5.3-codex")).not.toHaveProperty("maxInputTokens");
+	});
+});
+
 describe("generated catalog - joint endpoint constraints", () => {
 	it("preserves the captured Qwen3-14B endpoint combinations", () => {
 		expect(getModel("openrouter", "qwen/qwen3-14b")).toMatchObject({

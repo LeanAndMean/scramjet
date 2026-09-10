@@ -4218,6 +4218,7 @@ export const MODELS = {
 				cacheWrite: 12.5,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 64000,
 		} satisfies Model<"openai-completions">,
 		"claude-haiku-4.5": {
@@ -4295,6 +4296,7 @@ export const MODELS = {
 				cacheWrite: 6.25,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 32000,
 		} satisfies Model<"anthropic-messages">,
 		"claude-opus-4.8": {
@@ -4315,6 +4317,7 @@ export const MODELS = {
 				cacheWrite: 6.25,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 64000,
 		} satisfies Model<"anthropic-messages">,
 		"claude-sonnet-4": {
@@ -4391,6 +4394,7 @@ export const MODELS = {
 				cacheWrite: 2.5,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 64000,
 		} satisfies Model<"openai-completions">,
 		"gemini-2.5-pro": {
@@ -4467,6 +4471,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 936000,
 			maxTokens: 64000,
 		} satisfies Model<"openai-completions">,
 		"gpt-4.1": {
@@ -4581,6 +4586,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.4-mini": {
@@ -4600,6 +4606,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 400000,
+			maxInputTokens: 272000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.4-nano": {
@@ -4638,6 +4645,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-luna": {
@@ -4657,6 +4665,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-sol": {
@@ -4676,6 +4685,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-5.6-terra": {
@@ -4695,6 +4705,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 1050000,
+			maxInputTokens: 922000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"gpt-6-astra": {
@@ -4714,6 +4725,7 @@ export const MODELS = {
 				cacheWrite: 12.5,
 			},
 			contextWindow: 1000000,
+			maxInputTokens: 872000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-responses">,
 		"kimi-k2.7-code": {
@@ -4752,6 +4764,7 @@ export const MODELS = {
 				cacheWrite: 0,
 			},
 			contextWindow: 256000,
+			maxInputTokens: 128000,
 			maxTokens: 128000,
 		} satisfies Model<"openai-completions">,
 	},

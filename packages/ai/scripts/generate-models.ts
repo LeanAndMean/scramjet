@@ -1632,6 +1632,28 @@ async function generateModels() {
 	);
 	if (copilotGpt53Codex) copilotGpt53Codex.contextWindow = 1000000;
 
+	// SCRAMJET-DIVERGENCE: Versioned Copilot metadata and CAPI errors define independent prompt ceilings.
+	const copilotInputLimits: Record<string, number> = {
+		"claude-fable-5": 936000,
+		"claude-opus-4.7": 936000,
+		"claude-opus-4.8": 936000,
+		"claude-sonnet-5": 936000,
+		"gemini-3.5-flash": 936000,
+		"gpt-5.4": 922000,
+		"gpt-5.4-mini": 272000,
+		"gpt-5.5": 922000,
+		"gpt-5.6-luna": 922000,
+		"gpt-5.6-sol": 922000,
+		"gpt-5.6-terra": 922000,
+		"gpt-6-astra": 872000,
+		"mai-code-1-flash-picker": 128000,
+	};
+	for (const model of allModels) {
+		if (model.provider === "github-copilot" && copilotInputLimits[model.id] !== undefined) {
+			model.maxInputTokens = copilotInputLimits[model.id];
+		}
+	}
+
 	if (!allModels.some((m) => m.provider === "openai" && m.id === "gpt-5.4")) {
 		allModels.push({
 			id: "gpt-5.4",

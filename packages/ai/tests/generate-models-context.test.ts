@@ -35,14 +35,34 @@ async function generate(
 	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 	vi.spyOn(console, "log").mockImplementation(() => {});
 	const models = Object.fromEntries(
-		["gpt-5.3-codex", "gpt-5.4", "gpt-5.5", "gpt-6-astra", "gpt-5-pro", "claude-sonnet-4", "claude-sonnet-4-5"].map(
-			(id) => [
-				id,
-				id === "gpt-5-pro"
-					? { ...feedModel(id, 400000), limit: { context: 400000, output: 272000 } }
-					: feedModel(id, id.startsWith("claude") ? 1000000 : 1050000),
-			],
-		),
+		[
+			"gpt-5.3-codex",
+			"gpt-5.4",
+			"gpt-5.4-mini",
+			"gpt-5.5",
+			"gpt-5.6-luna",
+			"gpt-5.6-sol",
+			"gpt-5.6-terra",
+			"gpt-6-astra",
+			"gpt-5-pro",
+			"mai-code-1-flash-picker",
+			"claude-sonnet-4",
+			"claude-sonnet-4-5",
+		].map((id) => [
+			id,
+			id === "gpt-5-pro"
+				? { ...feedModel(id, 400000), limit: { context: 400000, output: 272000 } }
+				: feedModel(
+						id,
+						id === "gpt-5.4-mini"
+							? 400000
+							: id === "mai-code-1-flash-picker"
+								? 256000
+								: id.startsWith("claude")
+									? 1000000
+									: 1050000,
+					),
+		]),
 	);
 	const fetch = vi.fn(async (url: string) => {
 		if (url === options.failedCatalog) return { ok: false, status: 503 };
@@ -267,11 +287,31 @@ describe("real generator context corrections", () => {
 			expect(models["azure-openai-responses"][id].maxInputTokens).toBe(922000);
 			expect(models["openai-codex"][id]).not.toHaveProperty("maxInputTokens");
 		}
+		const copilotInputLimits = {
+			"claude-fable-5": 936000,
+			"claude-opus-4.7": 936000,
+			"claude-opus-4.8": 936000,
+			"claude-sonnet-5": 936000,
+			"gemini-3.5-flash": 936000,
+			"gpt-5.4": 922000,
+			"gpt-5.4-mini": 272000,
+			"gpt-5.5": 922000,
+			"gpt-5.6-luna": 922000,
+			"gpt-5.6-sol": 922000,
+			"gpt-5.6-terra": 922000,
+			"gpt-6-astra": 872000,
+			"mai-code-1-flash-picker": 128000,
+		};
 		if (present) {
+			for (const [id, maxInputTokens] of Object.entries(copilotInputLimits)) {
+				expect(models["github-copilot"][id].maxInputTokens, id).toBe(maxInputTokens);
+			}
 			expect(models["azure-openai-responses"]["gpt-5.5"]).not.toHaveProperty("maxInputTokens");
 			expect(models["azure-openai-responses"]["gpt-5-pro"].maxTokens).toBe(128000);
 			expect(models.openai["gpt-5-pro"].maxTokens).toBe(272000);
 		}
+		expect(models["github-copilot"]["gpt-6-astra"].maxInputTokens).toBe(872000);
+		expect(models["github-copilot"]["gpt-5.3-codex"]).not.toHaveProperty("maxInputTokens");
 		expect(models["vercel-ai-gateway"]["openai/gpt-5.4"].contextWindow).toBe(2000000);
 		expect(models.openai["gpt-5.4"].name).toBe(present ? "Feed gpt-5.4" : "GPT-5.4");
 	});
