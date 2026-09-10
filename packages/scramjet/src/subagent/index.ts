@@ -342,8 +342,6 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 			tmpPromptPath = tmp.filePath;
 			args.push("--append-system-prompt", tmpPromptPath);
 		}
-
-		args.push(`Task: ${task}`);
 		let wasAborted = false;
 
 		const exitCode = await new Promise<number>((resolve) => {
@@ -351,10 +349,11 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 			const proc = spawn(invocation.command, invocation.args, {
 				cwd: cwd ?? defaultCwd,
 				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: ["pipe", "pipe", "pipe"],
 			});
 			let buffer = "";
 			let exited = false;
+			let stdinFailed = false;
 			let killTimer: ReturnType<typeof setTimeout> | undefined;
 
 			const processLine = (line: string) => {
@@ -395,6 +394,12 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 				}
 			};
 
+			proc.stdin.on("error", (err) => {
+				stdinFailed = true;
+				currentResult.stderr += `Failed to send task: ${err.message}\n`;
+			});
+			proc.stdin.end(`Task: ${task}`, "utf8");
+
 			proc.stdout.on("data", (data) => {
 				buffer += data.toString();
 				const lines = buffer.split("\n");
@@ -412,7 +417,7 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 				if (buffer.trim()) processLine(buffer);
 				const signalName = signal ?? signalNameFromExitCode(code);
 				if (signalName) currentResult.stderr += `Process killed by ${signalName}\n`;
-				resolve(code ?? (signal ? 1 : 0));
+				resolve(stdinFailed ? 1 : (code ?? (signal ? 1 : 0)));
 			});
 
 			proc.on("error", (err) => {
