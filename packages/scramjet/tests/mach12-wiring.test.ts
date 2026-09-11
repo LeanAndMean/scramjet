@@ -10,7 +10,18 @@ import type { NextStepPolicy } from "../src/types.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
 const SCRAMJET_AGENTS_DIR = resolve(HERE, "..", "scramjet", "agents");
+const RESPONSIBILITY_SCENARIOS_PATH = resolve(HERE, "fixtures", "responsibility-architecture-scenarios.json");
 const SET_NAME = "mach12";
+
+interface ResponsibilityScenario {
+	id: string;
+	domain: string;
+	targetSurface: "architecture-planning" | "plan-review" | "runtime-pr-review" | "independent-assessment";
+	input: string;
+	requiredOutcomes: string[];
+	prohibitedOutcomes: string[];
+	tags: string[];
+}
 
 interface WiringRow {
 	basename: string;
@@ -489,6 +500,98 @@ describe("mach12 command-surface issue routing", () => {
 		expect(architect).toMatch(/bounded exploration and current-source evidence/i);
 	});
 
+	it("derives code architecture from a contextual responsibility model before implementation structure", () => {
+		const architect = readFileSync(join(MACH12_AGENTS_DIR, "mach12:code-architect.md"), "utf-8");
+		const responsibility = architect.indexOf("establish a compact responsibility model");
+		const placement = architect.indexOf("before selecting components, interfaces, or files", responsibility);
+		const blueprint = architect.indexOf("**3. Complete Implementation Blueprint**");
+
+		expect(responsibility).toBeGreaterThan(-1);
+		expect(placement).toBeGreaterThan(responsibility);
+		expect(blueprint).toBeGreaterThan(placement);
+		expect(architect).toMatch(
+			/essential product responsibilities and stable policies or invariants[^.]*authoritative owners/i,
+		);
+		expect(architect).toMatch(/critical or replaceable[^.]*intended dependency direction/i);
+		expect(architect).toMatch(/trace every proposed component and file back to it/i);
+		expect(architect).toMatch(
+			/Replaceable supporting mechanisms must not become authorities or required dependencies/,
+		);
+		expect(architect).toMatch(/rather than prescribing universal layers, diagrams, or matrices/i);
+		expect(architect).toContain("**Responsibility Model** (when architecture is material)");
+		expect(architect).toMatch(/Using that model when architecture is material[^.]*patterns found in every case/i);
+	});
+
+	it("makes issue planning own one responsibility model and cross-option structural coherence", () => {
+		const architecture = section(command("issue-plan"), "## Step 6:", "## Step 7:");
+		const commonModel = architecture.indexOf("establish one common responsibility model");
+		const placement = architecture.indexOf("before selecting components, interfaces, or files", commonModel);
+		const alternatives = architecture.indexOf("For code architecture, the three alternatives are:");
+		const comparison = architecture.indexOf("compare every code option against it");
+
+		expect(commonModel).toBeGreaterThan(-1);
+		expect(placement).toBeGreaterThan(commonModel);
+		expect(alternatives).toBeGreaterThan(placement);
+		expect(comparison).toBeGreaterThan(alternatives);
+		expect(architecture).toMatch(/Carry this model in every code-architect brief/i);
+		expect(architecture).toMatch(/when material code architecture established a common responsibility model/i);
+		expect(architecture).toMatch(
+			/Discard an option with a material ownership, criticality, replaceability, or dependency-direction defect/i,
+		);
+		expect(architecture).toMatch(/if every option shares one, correct the architecture rather than asking the user/i);
+		expect(architecture).toMatch(/do not require named layers, a diagram, or a matrix/i);
+		expect(architecture).toMatch(
+			/Otherwise retain the existing minimum-sufficient comparison without manufacturing a responsibility artifact/i,
+		);
+
+		const exploration = section(command("issue-plan"), "## Step 4:", "## Step 5:");
+		expect(exploration).toMatch(/Skip the mapper only when[^.]*clearly mechanical/i);
+		expect(exploration).toMatch(/owner and location are unambiguous/i);
+	});
+
+	it("preserves selected responsibility decisions without making the plan contract design authority", () => {
+		const contract = command("plan-comment-contract");
+		expect(contract).toMatch(
+			/material responsibility ownership[^;]*stable policy or invariants[^;]*criticality and replaceability judgments[^;]*intended dependency direction[^;]*prohibited authority inversions/i,
+		);
+		expect(contract).toContain("Preserve responsibility decisions already selected by the caller");
+		expect(contract).toMatch(
+			/does not\s+select architecture or require a new heading, layer vocabulary, diagram, matrix, or artifact schema/i,
+		);
+	});
+
+	it("makes runtime plan review originate structural-coherence defects without prescribing topology", () => {
+		const review = section(command("issue-review"), "## Step 5:", "## Step 6:");
+		expect(review).toMatch(/essential responsibilities[^.]*stable policies and invariants[^.]*authoritative owners/i);
+		expect(review).toMatch(/critical from replaceable[^.]*removed or replaced/i);
+		expect(review).toMatch(/locally plausible options[^.]*share[^.]*defect[^.]*plan defect/i);
+		expect(review).toMatch(/rather than requiring named layers or preferred topology/i);
+	});
+
+	it("makes the general code reviewer own observable material structural defects", () => {
+		const reviewer = readFileSync(join(MACH12_AGENTS_DIR, "mach12:code-reviewer.md"), "utf-8");
+		expect(reviewer).toMatch(/materially alters system structure[^.]*observable whole-system/i);
+		expect(reviewer).toMatch(/authority, coupling, removability, or dependency-direction defects/i);
+		expect(reviewer).toMatch(
+			/essential responsibilities[^.]*stable policies or invariants[^.]*authoritative owners/i,
+		);
+		expect(reviewer).toMatch(/critical behavior[^.]*independent of replaceable mechanisms/i);
+		expect(reviewer).toMatch(/missing architecture prose[^.]*preferred topology are not findings/i);
+		expect(reviewer).toContain("**Only report issues with confidence >= 80.**");
+	});
+
+	it("makes the runtime assessor judge supplied structural corrections by whole-system effect", () => {
+		const assessor = readFileSync(join(MACH12_AGENTS_DIR, "mach12:independent-assessor.md"), "utf-8");
+		expect(assessor).toMatch(/for each supplied structural finding[^.]*re-derive both axes/i);
+		expect(assessor).toMatch(
+			/combined system:[^.]*responsibility, policy or invariant ownership, cohesion, replaceability, or dependency defect/i,
+		);
+		expect(assessor).toMatch(
+			/proposed correction improves the whole system's responsibilities, layering, replaceability, and dependency structure/i,
+		);
+		expect(assessor).toMatch(/do not generate fresh findings or expand scope/i);
+	});
+
 	it("references one holistic command reviewer and one independent command assessor", () => {
 		const content = command("issue-review");
 		const evidence = section(content, "## Step 4:", "## Step 5:");
@@ -499,6 +602,34 @@ describe("mach12 command-surface issue routing", () => {
 		expect(evidence).toContain("scramjet:command-set-explorer");
 		expect(assessment).toContain("scramjet:independent-command-assessor");
 		expect(assessment).toContain("mach12:independent-assessor");
+	});
+});
+
+describe("responsibility architecture scenario fixture", () => {
+	const scenarios = JSON.parse(readFileSync(RESPONSIBILITY_SCENARIOS_PATH, "utf-8")) as ResponsibilityScenario[];
+
+	it("covers unrelated domains, every target phase, shared inversion, and the proportional skip", () => {
+		expect(scenarios.length).toBeGreaterThanOrEqual(6);
+		expect(new Set(scenarios.map(({ id }) => id)).size).toBe(scenarios.length);
+		expect(new Set(scenarios.map(({ domain }) => domain)).size).toBe(scenarios.length);
+		expect(new Set(scenarios.map(({ targetSurface }) => targetSurface))).toEqual(
+			new Set(["architecture-planning", "plan-review", "runtime-pr-review", "independent-assessment"]),
+		);
+		expect(scenarios.some(({ tags }) => tags.includes("shared-inversion"))).toBe(true);
+		expect(scenarios.some(({ tags }) => tags.includes("proportional-skip"))).toBe(true);
+	});
+
+	it.each(scenarios)("$id has exact input and complete goal-level predicates", (scenario) => {
+		expect(scenario.id).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+		expect(scenario.domain).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+		expect(scenario.input.trim()).toBe(scenario.input);
+		expect(scenario.input.length).toBeGreaterThan(0);
+		expect(scenario.requiredOutcomes.length).toBeGreaterThan(0);
+		expect(scenario.prohibitedOutcomes.length).toBeGreaterThan(0);
+		for (const predicate of [...scenario.requiredOutcomes, ...scenario.prohibitedOutcomes]) {
+			expect(predicate.trim()).toBe(predicate);
+			expect(predicate).toMatch(/[.!?]$/);
+		}
 	});
 });
 
@@ -551,6 +682,19 @@ describe("mach12 command-surface implementation and PR review routing", () => {
 		expect(review).toContain("scramjet:command-reviewer");
 		expect(review).toContain("scramjet:instruction-semantics-analyzer");
 		expect(review).toContain("scramjet:command-set-explorer");
+	});
+
+	it("assigns material runtime structural review to the general code reviewer proportionally", () => {
+		const review = section(command("pr-review"), "## Step 3:", "## Step 4:");
+		expect(review).toMatch(/mach12:code-reviewer[^.]*general correctness/i);
+		expect(review).toMatch(/select it whenever runtime changes materially alter/i);
+		expect(review).toMatch(
+			/policy or invariant ownership, component responsibility, replaceability, or dependency direction/i,
+		);
+		expect(review).toMatch(/owns structural-coherence findings/i);
+		expect(review).toMatch(
+			/proportional for local or mechanical changes[^;]*no material responsibility or dependency decision/i,
+		);
 	});
 
 	it("references the disjoint command and runtime assessors", () => {

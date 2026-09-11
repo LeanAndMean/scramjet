@@ -19,6 +19,7 @@ const DIRECTIVE_ANCHORS: Record<string, string> = {
 	"defer to user judgment": "defer to user judgement about whether a task is too large",
 	"exploratory questions don't trigger implementation": "For exploratory questions",
 	"ordinary planning structural evidence": "Before producing a non-trivial file-level implementation plan",
+	"responsibility-first architecture": "essential responsibilities and stable policy or invariants",
 	"prefer editing existing files": "Prefer editing existing files to creating new ones.",
 	"avoid security vulnerabilities": "OWASP top 10",
 	"scope discipline / smallest correct change": "beyond what the task requires",
@@ -108,11 +109,25 @@ describe("registerBaseDirectives", () => {
 		);
 		expect(text).toMatch(/When the mapper is unavailable,[\s\S]*without dispatching a substitute/);
 		expect(text).toMatch(
-			/Skip mapping when current authority establishes that the work is mechanical,[\s\S]*owner and location are unambiguous,[\s\S]*changes no shared, exported, public, serialized, cross-owner, or dependency contract/,
+			/Skip mapping and architecture ceremony when current authority establishes that the work is mechanical,[\s\S]*owner and location are unambiguous,[\s\S]*changes no shared, exported, public, serialized, cross-owner, or dependency contract/,
 		);
 		expect(text).toContain(
 			"Do not trigger it for a short exploratory response that does not provide a file-level plan.",
 		);
+	});
+
+	it("establishes responsibility and dependency structure before implementation placement", async () => {
+		const { list } = captureHandler();
+		const result = (await list[0]({ systemPrompt: "BASE PROMPT" })) as BeforeAgentStartResult;
+		const text = result.systemPromptSection.text;
+		const responsibility = text.indexOf("essential responsibilities and stable policy or invariants");
+		const placement = text.indexOf("before selecting components, interfaces, or files", responsibility);
+
+		expect(responsibility).toBeGreaterThan(-1);
+		expect(placement).toBeGreaterThan(responsibility);
+		expect(text).toMatch(/authoritative owners[^.]*criticality and replaceability[^.]*dependency direction/i);
+		expect(text).toMatch(/Replaceable supporting mechanisms must not become authorities or required dependencies/);
+		expect(text).toMatch(/topology and vocabulary contextual rather than imposing universal layers/);
 	});
 
 	// Covers the packageRoot() walk and doc-pointer construction the anchor table

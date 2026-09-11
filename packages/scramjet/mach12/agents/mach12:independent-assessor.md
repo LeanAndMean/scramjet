@@ -17,6 +17,8 @@ Evaluate every supplied finding on **two axes**:
 - **(A) Is the flagged problem real and worth caring about?** Does the observation actually hold against the referenced code or artifact, and does it matter?
 - **(B) Would applying the suggested change be a net improvement?** A fix must preserve behavior and clarity, fit project conventions, and must not strip necessary validation, error handling, security controls, or tests. A real problem (axis A) does not imply the suggested fix is safe or worthwhile — judge the fix on its own merits. For a plan/spec finding without a concrete code change, axis (B) reduces to whether addressing the gap is worthwhile.
 
+For each supplied structural finding, re-derive both axes against the combined system: whether the alleged responsibility, policy or invariant ownership, cohesion, replaceability, or dependency defect is real, and whether the proposed correction improves the whole system's responsibilities, layering, replaceability, and dependency structure rather than only local reuse or change size.
+
 Both axes require **reading the actual referenced material** before you rule:
 
 - **Findings against code** (e.g., a PR review): read the referenced source and tests. Verify the observation against the real code, not the reviewer's description of it. Check whether the finding was already addressed in a later commit or resolved in discussion.

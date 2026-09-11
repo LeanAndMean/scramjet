@@ -1,0 +1,113 @@
+[
+  {
+    "id": "compiler-optional-diagnostics",
+    "domain": "compiler-runtime",
+    "targetSurface": "architecture-planning",
+    "input": "Design a compiler pipeline that must parse, validate, optimize, and emit executable output. An optional diagnostics package already formats source spans and stores traversal metadata, so the proposed design routes semantic validation through that package to reuse its tree walk. Deployments may omit diagnostics entirely but must preserve compilation semantics.",
+    "requiredOutcomes": [
+      "Identify compilation semantics as essential behavior owned independently of optional diagnostics.",
+      "Keep diagnostics removable without changing parse, validation, optimization, or emission semantics.",
+      "Direct dependencies from diagnostics toward stable compiler-owned facts or interfaces rather than from essential compilation into diagnostics."
+    ],
+    "prohibitedOutcomes": [
+      "Make the diagnostics package authoritative for semantic validation because it contains reusable traversal logic.",
+      "Require diagnostics to be installed for successful compilation."
+    ],
+    "tags": ["replaceable-mechanism"]
+  },
+  {
+    "id": "checkout-presentation-policy",
+    "domain": "commerce-checkout",
+    "targetSurface": "architecture-planning",
+    "input": "Design checkout support for promotional eligibility, tax calculation, and a web screen. The current proposal places promotion eligibility and tax rounding in view-model callbacks because those values are displayed there, while a batch-order API must produce the same decisions without loading any presentation code.",
+    "requiredOutcomes": [
+      "Assign promotional eligibility and tax rounding to an authoritative responsibility shared by interactive and batch entry points.",
+      "Treat presentation as a consumer and translator of checkout decisions rather than their owner.",
+      "Preserve identical checkout policy when the web screen is replaced or absent."
+    ],
+    "prohibitedOutcomes": [
+      "Keep commerce policy in presentation callbacks for implementation convenience.",
+      "Require the batch-order API to invoke presentation code to obtain business decisions."
+    ],
+    "tags": ["policy-ownership"]
+  },
+  {
+    "id": "authorization-cache-authority",
+    "domain": "access-control",
+    "targetSurface": "plan-review",
+    "input": "Review a plan for an authorization service. The durable grant store is updated transactionally, while a rebuildable permission index accelerates reads. The plan makes the index the source consulted for every allow or deny decision and treats missing entries as revocations, but index refresh can lag and the entire index can be deleted and rebuilt.",
+    "requiredOutcomes": [
+      "Identify the mismatch between rebuildable index state and authoritative authorization decisions.",
+      "Require authorization semantics to remain correct during index lag, loss, or replacement.",
+      "Treat the shared authority inversion as a material plan defect rather than a documentation preference."
+    ],
+    "prohibitedOutcomes": [
+      "Approve the plan because the index is faster than the durable grant store.",
+      "Treat naming the index as a cache as sufficient correction without changing authority or failure behavior."
+    ],
+    "tags": ["derived-state"]
+  },
+  {
+    "id": "shipping-adapter-business-rules",
+    "domain": "fulfillment-integration",
+    "targetSurface": "runtime-pr-review",
+    "input": "Review a runtime change that adds a second shipping provider. Each provider adapter now decides whether hazardous goods may ship, how addresses are normalized for eligibility, and which fallback service level applies. The order system calls whichever adapter is configured and has no provider-independent ownership of those rules.",
+    "requiredOutcomes": [
+      "Report the observable coupling of stable fulfillment policy to replaceable provider adapters.",
+      "Distinguish provider translation and capabilities from provider-independent hazardous-goods, eligibility, and fallback policy.",
+      "Explain the whole-system consequence of replacing a provider or comparing providers under inconsistent rules."
+    ],
+    "prohibitedOutcomes": [
+      "Accept adapter-owned business behavior merely because each provider has different wire formats.",
+      "Demand a preferred named layer or framework instead of identifying the concrete authority and dependency defect."
+    ],
+    "tags": ["integration-boundary"]
+  },
+  {
+    "id": "shared-utility-cohesion-assessment",
+    "domain": "account-lifecycle",
+    "targetSurface": "independent-assessment",
+    "input": "Assess supplied finding F1: A shared account helper combines password-strength policy, welcome-email rendering, audit serialization, and retry timing; both account creation and password reset depend on the whole helper. The proposed correction separates authoritative password policy from replaceable notification, audit, and retry mechanisms, leaving callers dependent only on the responsibilities they use. Determine whether F1 is real and whether the correction improves the combined system. Do not originate other findings.",
+    "requiredOutcomes": [
+      "Adjudicate only supplied finding F1 on both problem reality and correction value.",
+      "Evaluate cohesion, policy ownership, replaceability, and dependency effects across the combined account system.",
+      "Judge whether the correction preserves authoritative password behavior while making supporting mechanisms independently replaceable."
+    ],
+    "prohibitedOutcomes": [
+      "Invent additional findings beyond F1.",
+      "Approve or reject the correction solely by counting modules, lines, or duplicated code."
+    ],
+    "tags": ["cohesion", "supplied-finding"]
+  },
+  {
+    "id": "plugin-options-shared-inversion",
+    "domain": "document-storage",
+    "targetSurface": "plan-review",
+    "input": "Review three candidate designs for document retention. Option A imports the filesystem plugin into retention policy to reuse date parsing. Option B imports the object-storage plugin into retention policy to reuse expiration calculations. Option C creates a shared plugin base that owns retention deadlines and is imported by both policy and plugins. Plugins are optional deployment choices, but every option makes retention semantics depend on plugin implementation structure.",
+    "requiredOutcomes": [
+      "Recognize that all candidate designs share the same dependency inversion despite differing component shapes.",
+      "Reject the shared structural defect before asking the user to choose among the options.",
+      "Require retention policy and deadlines to have provider-independent authority that optional plugins consume or translate."
+    ],
+    "prohibitedOutcomes": [
+      "Present A, B, and C as ordinary equivalent trade-offs without correcting their common defect.",
+      "Prefer the shared plugin base solely because it removes duplication."
+    ],
+    "tags": ["shared-inversion", "plugin-boundary"]
+  },
+  {
+    "id": "local-label-copy-change",
+    "domain": "administrative-ui-copy",
+    "targetSurface": "runtime-pr-review",
+    "input": "Review a change that replaces the visible label ‘Postal code’ with ‘ZIP code’ in one locale-specific address form. The owning template and translation entry are already unambiguous, no behavior or data contract changes, and no shared, exported, serialized, cross-owner, or dependency boundary is affected.",
+    "requiredOutcomes": [
+      "Treat the change as local and mechanical under the proportional skip path.",
+      "Review the concrete copy change without manufacturing an architecture artifact or responsibility model."
+    ],
+    "prohibitedOutcomes": [
+      "Require layer decomposition, a dependency diagram, or a responsibility matrix.",
+      "Dispatch architecture analysis solely because the repository contains multiple components."
+    ],
+    "tags": ["proportional-skip"]
+  }
+]
