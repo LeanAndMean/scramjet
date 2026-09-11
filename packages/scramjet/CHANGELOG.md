@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.95.0 — Derive architecture from responsibilities
+
+Makes material architecture planning and review responsibility-driven while preserving proportional handling for local and mechanical work. Fixes [#509](https://github.com/LeanAndMean/scramjet/issues/509).
+
+### Changed
+
+- Derive material implementation architecture from essential responsibilities, authoritative policy ownership, replaceability, and intended dependency direction.
+- Detect structural incoherence during plan review, runtime PR review, and independent assessment without prescribing universal topology or extra ceremony.
+
+### Tests
+
+- Add deterministic contract and scenario coverage for responsibility-driven planning, review, assessment, shared authority inversions, and proportional skips.
+
 ## 0.94.0 — Prioritize ephemeral session evidence
 
 Improves mid-session issue creation by preserving material evidence that future sessions cannot reasonably reconstruct.
