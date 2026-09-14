@@ -246,6 +246,8 @@ Each tree has its own `.seed-manifest.json`. On upgrades, files that still match
 
 If a package manager skips `postinstall` and an entire seeded destination is missing, Scramjet uses that set's copy from the installed package read-only for the current session. Mach 12 and Scramjet fall back independently. Package-backed sets retain global precedence, but Scramjet never merges package files into an existing, partial, or otherwise user-owned destination. This fallback makes bundled commands immediately available; it does not create the durable, editable seeded copies or their manifests.
 
+When an existing managed seed's manifest version differs from the running Scramjet package, Scramjet continues using that seed without modifying it and warns that bundled commands or agents may be unavailable or out of date. Preserve any local edits before following the warning's recovery command.
+
 To restore those copies, run the lifecycle script from the installed `@leanandmean/scramjet` package and restart Scramjet:
 
 ```sh

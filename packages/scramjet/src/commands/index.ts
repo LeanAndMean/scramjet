@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
 import { parseAutonomyRecommendations, validateRecommendations } from "../autonomy-settings.js";
 import { packageRoot } from "../docs-registry.js";
@@ -24,6 +24,44 @@ type Inspection = {
 };
 
 const BUNDLED_SETS = ["mach12", "scramjet"] as const;
+
+function isSafeManifestPath(filePath: string, destination: string): boolean {
+	if (!filePath || filePath.includes("\0") || filePath.includes("\\") || isAbsolute(filePath)) return false;
+	if (normalize(filePath) !== filePath || filePath.split("/").some((part) => !part || part === "." || part === ".."))
+		return false;
+	const fromDestination = relative(resolve(destination), resolve(destination, filePath));
+	return fromDestination !== "" && !fromDestination.startsWith(`..${sep}`) && !isAbsolute(fromDestination);
+}
+
+function readManagedSeedVersion(destination: string): string | null {
+	try {
+		const metadata: unknown = JSON.parse(readFileSync(join(destination, ".seed-manifest.json"), "utf8"));
+		if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+		const { version, files } = metadata as { version?: unknown; files?: unknown };
+		if (typeof version !== "string" || !files || typeof files !== "object" || Array.isArray(files)) return null;
+		if (
+			!Object.entries(files).every(
+				([filePath, hash]) =>
+					isSafeManifestPath(filePath, destination) && typeof hash === "string" && /^[a-f0-9]{64}$/i.test(hash),
+			)
+		)
+			return null;
+		return version;
+	} catch {
+		return null;
+	}
+}
+
+function readRunningPackageVersion(bundledRoot: string): string | null {
+	try {
+		const metadata: unknown = JSON.parse(readFileSync(join(bundledRoot, "package.json"), "utf8"));
+		if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+		const { name, version } = metadata as { name?: unknown; version?: unknown };
+		return name === "@leanandmean/scramjet" && typeof version === "string" && version ? version : null;
+	} catch {
+		return null;
+	}
+}
 
 function filterPublicationDefaults(
 	recommendations: AutonomyRecommendations,
@@ -126,7 +164,21 @@ function selectBundledSet(
 ): { set?: SelectedSet; diagnostic?: string; classification: string } {
 	const destination = join(globalDir, name);
 	try {
-		inspection.lstat(destination);
+		const destinationStat = inspection.lstat(destination);
+		const seedVersion =
+			destinationStat.isDirectory() && !destinationStat.isSymbolicLink()
+				? readManagedSeedVersion(destination)
+				: null;
+		const packageVersion = readRunningPackageVersion(bundledRoot);
+		if (seedVersion !== null && packageVersion !== null && seedVersion !== packageVersion) {
+			const diagnostic = `bundled ${name} seed version ${seedVersion} does not match running Scramjet ${packageVersion}; commands or agents may be unavailable or out of date. Preserve any local edits, run node "${join(bundledRoot, "scripts", "postinstall.js")}", and restart Scramjet.`;
+			warnings.push(`[scramjet/discovery] ${diagnostic}`);
+			return {
+				set: { name, dir: destination, scope: "global", source: "destination" },
+				diagnostic,
+				classification: `destination-version-mismatch:${seedVersion}:${packageVersion}`,
+			};
+		}
 		return { set: { name, dir: destination, scope: "global", source: "destination" }, classification: "destination" };
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;

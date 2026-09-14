@@ -3,6 +3,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	readlinkSync,
 	rmSync,
 	symlinkSync,
@@ -533,6 +534,105 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		);
 		expect(fallbackWrites).toHaveLength(2);
 		expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("scripts/postinstall.js"));
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it("warns when an existing bundled seed version differs from the running package", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-stale-seed-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		const destination = join(globalDir, "mach12");
+		const manifestPath = join(destination, ".seed-manifest.json");
+		mkdirSync(join(destination, "commands"), { recursive: true });
+		mkdirSync(join(globalDir, "scramjet"), { recursive: true });
+		mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
+		mkdirSync(join(bundledRoot, "scripts"), { recursive: true });
+		writeFileSync(join(destination, "commands", "mach12:seeded.md"), "---\n---\nSeeded.");
+		writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:package-only.md"), "---\n---\nPackage.");
+		writeFileSync(
+			join(bundledRoot, "package.json"),
+			JSON.stringify({ name: "@leanandmean/scramjet", version: "0.95.0" }),
+		);
+		writeFileSync(manifestPath, JSON.stringify({ version: "0.43.5", files: {} }));
+		const originalManifest = readFileSync(manifestPath, "utf8");
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		const notify = vi.fn();
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: true });
+		const discover = () =>
+			handlers.get("resources_discover")![0]?.(
+				{ type: "resources_discover", cwd: join(sandbox, "project"), reason: "startup" },
+				{ hasUI: true, ui: { notify } },
+			);
+
+		discover();
+		discover();
+
+		expect(state.registry.has("mach12:seeded")).toBe(true);
+		expect(state.registry.has("mach12:package-only")).toBe(false);
+		expect(readFileSync(manifestPath, "utf8")).toBe(originalManifest);
+		const warnings = appended
+			.filter((entry) => (entry.data as any).level === "warn")
+			.map((entry) => (entry.data as any).message)
+			.join("\n");
+		expect(warnings).toContain("mach12");
+		expect(warnings).toContain("0.43.5");
+		expect(warnings).toContain("0.95.0");
+		expect(warnings).toContain("commands or agents may be unavailable");
+		expect(warnings).toContain(`node "${join(bundledRoot, "scripts", "postinstall.js")}"`);
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledWith(expect.stringContaining("0.43.5"), "warning");
+		const mismatchWarningCount = () =>
+			appended.filter(
+				(entry) =>
+					(entry.data as any).level === "warn" && String((entry.data as any).message).includes("seed version"),
+			).length;
+		expect(mismatchWarningCount()).toBe(2);
+
+		writeFileSync(manifestPath, JSON.stringify({ version: "0.95.0", files: {} }));
+		discover();
+		expect(mismatchWarningCount()).toBe(2);
+		expect(notify).toHaveBeenCalledTimes(1);
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it.each(["invalid-manifest", "healthy-symlink"])("does not diagnose a %s as a stale managed seed", (form) => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-unmanaged-seed-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		const destination = join(globalDir, "mach12");
+		mkdirSync(globalDir, { recursive: true });
+		mkdirSync(join(globalDir, "scramjet"));
+		mkdirSync(bundledRoot);
+		writeFileSync(
+			join(bundledRoot, "package.json"),
+			JSON.stringify({ name: "@leanandmean/scramjet", version: "0.95.0" }),
+		);
+		if (form === "invalid-manifest") {
+			mkdirSync(destination);
+			writeFileSync(
+				join(destination, ".seed-manifest.json"),
+				JSON.stringify({ version: "0.43.5", files: { "../outside": "a".repeat(64) } }),
+			);
+		} else {
+			const target = join(sandbox, "linked-mach12");
+			mkdirSync(target);
+			writeFileSync(join(target, ".seed-manifest.json"), JSON.stringify({ version: "0.43.5", files: {} }));
+			symlinkSync(target, destination);
+		}
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers, appended } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		const notify = vi.fn();
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: true });
+		handlers.get("resources_discover")![0]?.(
+			{ type: "resources_discover", cwd: join(sandbox, "project"), reason: "startup" },
+			{ hasUI: true, ui: { notify } },
+		);
+
+		expect(JSON.stringify(appended)).not.toContain("seed version");
+		expect(notify).not.toHaveBeenCalled();
 		rmSync(sandbox, { recursive: true, force: true });
 	});
 
