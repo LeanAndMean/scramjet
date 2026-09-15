@@ -651,7 +651,11 @@ exit 1
 		for (const { name, version } of INVENTORY) {
 			expect(state.packages[name].versions).toContain(version);
 			expect(state.packages[name].distTags).toEqual({ latest: version, scramjet: "preserved" });
+			expect(result.stdout).toContain(`${name}@${version}: publish command accepted after`);
+			expect(result.stdout).toContain(`${name}@${version}: post-publish metadata observed after`);
 		}
+		expect(result.stdout).toContain("publication summary: accepted and observed:");
+		expect(result.stdout).toContain("final verification: pending");
 	});
 
 	it.each(["registry-preflight", "publish"])("rejects a present target before publication in %s", (mode) => {
@@ -737,6 +741,15 @@ exit 1
 		expect(result.stderr).toContain("Do not retry publication");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(result.stderr).toContain("publish failed");
+		expect(result.stderr).toContain(`accepted and observed: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(result.stderr).toContain(`acceptance ambiguous: ${INVENTORY[1].name}@${INVENTORY[1].version}`);
+		expect(result.stderr).toContain(
+			`unattempted: ${INVENTORY.slice(2)
+				.map(({ name, version }) => `${name}@${version}`)
+				.join(", ")}`,
+		);
+		expect(result.stderr).toContain("failed phase: publish command");
+		expect(result.stderr).toContain("final verification: not completed");
 		const calls = publishCalls(readState(statePath));
 		expect(calls.map((args) => args[args.indexOf("-w") + 1])).toEqual(
 			INVENTORY.slice(0, 2).map(({ workspace }) => workspace),
@@ -934,6 +947,15 @@ exit 1
 		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(result.stderr).toContain(`accepted but unobserved: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(result.stderr).toContain(
+			`unattempted: ${INVENTORY.slice(1)
+				.map(({ name, version }) => `${name}@${version}`)
+				.join(", ")}`,
+		);
+		expect(result.stderr).toContain("failed phase: post-publish metadata observation");
+		expect(result.stderr).toContain("budget 600000ms");
+		expect(result.stderr).toContain("final verification: not completed");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
@@ -1008,6 +1030,7 @@ exit 1
 		expect(state.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
 		expect(state.calls).toContainEqual(["installed-scramjet", "--help"]);
 		expect(publishCalls(state)).toHaveLength(0);
+		expect(result.stdout).toContain("final verification: completed");
 		expectVerificationPathsRemoved(state);
 	});
 
@@ -1027,6 +1050,8 @@ exit 1
 		const result = runHelper("verify", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain(message);
+		expect(result.stderr).toContain(`failed phase: ${_label === "CLI" ? "installed CLI probe" : _label}`);
+		expect(result.stderr).toContain("final verification: not completed");
 		const finalState = readState(statePath);
 		expect(finalState.calls.some(([command]) => command === "installed-scramjet")).toBe(cliRan);
 		expectVerificationPathsRemoved(finalState);
