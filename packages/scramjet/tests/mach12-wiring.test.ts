@@ -1828,10 +1828,9 @@ describe("mach12 ordinary PR readiness", () => {
 	});
 });
 
-// F18: Verify that the bundled mach12 agent files are complete and parseable,
-// and that the agent-bridge can wire them without warnings. A name mismatch
-// between a command's subagent reference and the shipped agent filename would
-// produce a "subagent not found" at runtime but silently pass unit tests.
+// F18: Verify that the bundled mach12 agent files are complete and parseable.
+// A name mismatch between a command's subagent reference and the shipped agent
+// filename would produce a "subagent not found" at runtime but silently pass unit tests.
 describe("mach12 wiring — bundled agent set (F18)", () => {
 	it("ships exactly the expected set of agent files", () => {
 		const found = readdirSync(MACH12_AGENTS_DIR)

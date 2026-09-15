@@ -1,9 +1,9 @@
 import {
+	existsSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	readlinkSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -519,12 +519,22 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(state.registry.has("scramjet:legacy-only")).toBe(false);
 		expect(state.registry.has("global:custom")).toBe(true);
 		expect(state.registry.has("project:custom")).toBe(true);
-		expect(state.agentRegistry.get("mach12:package-agent")?.filePath).toContain(bundledRoot);
-		expect(state.agentRegistry.get("scramjet:package-agent")?.filePath).toContain(bundledRoot);
+		expect(state.agentRegistry.get("mach12:package-agent")).toMatchObject({
+			filePath: expect.stringContaining(bundledRoot),
+			setName: "mach12",
+			source: "package",
+			description: "Package agent",
+			systemPrompt: "Agent.",
+		});
+		expect(state.agentRegistry.get("scramjet:package-agent")).toMatchObject({
+			filePath: expect.stringContaining(bundledRoot),
+			setName: "scramjet",
+			source: "package",
+		});
 		expect(state.agentRegistry.has("mach12:legacy-agent")).toBe(false);
 		expect(state.agentRegistry.has("scramjet:legacy-agent")).toBe(false);
-		expect(state.agentRegistry.has("global:custom-agent")).toBe(true);
-		expect(state.agentRegistry.has("project:custom-agent")).toBe(true);
+		expect(state.agentRegistry.get("global:custom-agent")?.source).toBe("global");
+		expect(state.agentRegistry.get("project:custom-agent")?.source).toBe("project");
 		expect(state.autonomyRecommendations.get("mach12")?.edges["mach12:shared"]).toEqual({
 			"mach12:package-only": "chain",
 		});
@@ -534,6 +544,27 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(result.skillPaths).toEqual([join(bundledRoot, "skills")]);
 		expect(result.promptPaths).toEqual([...state.registry.values()].map((def) => def.filePath));
 		for (const [file, content] of legacyBefore) expect(readFileSync(file, "utf-8")).toBe(content);
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it("does not create an agent bridge during discovery", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-no-agent-bridge-"));
+		const bundledRoot = join(sandbox, "package");
+		const agentFile = join(bundledRoot, "mach12", "agents", "mach12:agent.md");
+		mkdirSync(dirname(agentFile), { recursive: true });
+		writeFileSync(agentFile, "---\nname: mach12:agent\ndescription: Agent\n---\nPackage.");
+		mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:command.md"), "---\n---\nCommand.");
+		const { pi, handlers } = recordingPi();
+		registerCommandLoader(pi, freshState({ logger: createLogger(pi) }), { bundledRoot });
+
+		handlers.get("resources_discover")![0]?.({
+			type: "resources_discover",
+			cwd: join(sandbox, "project"),
+			reason: "startup",
+		});
+
+		expect(existsSync(join(agentDirSandbox, "agents"))).toBe(false);
 		rmSync(sandbox, { recursive: true, force: true });
 	});
 
@@ -682,6 +713,9 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		mkdirSync(join(bundledRoot, "scramjet", "agents"), { recursive: true });
 		const packageAgent = join(bundledRoot, "scramjet", "agents", "scramjet:agent.md");
 		writeFileSync(packageAgent, "---\nname: scramjet:agent\ndescription: Agent\n---\nPackage.");
+		const bridgeBlocker = join(agentDirSandbox, "agents", "scramjet:agent.md");
+		mkdirSync(dirname(bridgeBlocker), { recursive: true });
+		writeFileSync(bridgeBlocker, "foreign content");
 		process.env.SCRAMJET_CACHE = globalDir;
 		const { pi, handlers } = recordingPi();
 		const state = freshState({ logger: createLogger(pi) });
@@ -697,7 +731,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(state.registry.has("mach12:seeded")).toBe(false);
 		expect(state.registry.has("mach12:package")).toBe(true);
 		expect(state.registry.has("scramjet:package")).toBe(true);
-		expect(readlinkSync(join(agentDirSandbox, "agents", "scramjet:agent.md"))).toBe(packageAgent);
+		expect(readFileSync(bridgeBlocker, "utf8")).toBe("foreign content");
 		expect(notify).not.toHaveBeenCalled();
 
 		const destinationAgent = join(globalDir, "scramjet", "agents", "scramjet:agent.md");
@@ -708,13 +742,13 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		discover();
 		expect(state.registry.has("scramjet:seeded")).toBe(false);
 		expect(state.registry.has("scramjet:package")).toBe(true);
-		expect(readlinkSync(join(agentDirSandbox, "agents", "scramjet:agent.md"))).toBe(packageAgent);
+		expect(readFileSync(bridgeBlocker, "utf8")).toBe("foreign content");
 		expect(notify).not.toHaveBeenCalled();
 
 		rmSync(join(globalDir, "scramjet"), { recursive: true });
 		discover();
 		expect(state.registry.has("scramjet:package")).toBe(true);
-		expect(readlinkSync(join(agentDirSandbox, "agents", "scramjet:agent.md"))).toBe(packageAgent);
+		expect(readFileSync(bridgeBlocker, "utf8")).toBe("foreign content");
 		expect(notify).not.toHaveBeenCalled();
 		rmSync(sandbox, { recursive: true, force: true });
 	});
@@ -832,17 +866,21 @@ You are an explorer.`;
 		if (!result.ok) return;
 		expect(result.def).toEqual({
 			name: "mach12:code-explorer",
-			filePath: "/abs/mach12:code-explorer.md",
 			description: "A codebase exploration agent",
+			tools: ["read", "grep", "find"],
+			systemPrompt: "You are an explorer.",
+			filePath: "/abs/mach12:code-explorer.md",
+			setName: "mach12",
+			source: "global",
 		});
 	});
 
-	it("leaves description unset when absent", () => {
+	it("rejects an absent description", () => {
 		const content = "---\nname: mach12:bare\n---\nBody.";
 		const result = parseAgentFile("/abs/mach12:bare.md", content, SET);
-		expect(result.ok).toBe(true);
-		if (!result.ok) return;
-		expect(result.def.description).toBeUndefined();
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error).toContain("name and description");
 	});
 
 	it("trims whitespace from name and description", () => {
@@ -871,7 +909,7 @@ You are an explorer.`;
 	});
 
 	it("rejects frontmatter names outside the containing set namespace", () => {
-		const content = "---\nname: other:agent\n---\nBody.";
+		const content = "---\nname: other:agent\ndescription: Wrong namespace\n---\nBody.";
 		const result = parseAgentFile("/abs/mach12:agent.md", content, SET);
 		expect(result.ok).toBe(false);
 		if (result.ok) return;
@@ -902,12 +940,12 @@ You are an explorer.`;
 		expect(result.error).toContain("name");
 	});
 
-	it("ignores an empty-string description", () => {
+	it("rejects an empty-string description", () => {
 		const content = "---\nname: mach12:x\ndescription: ''\n---\nBody.";
 		const result = parseAgentFile("/abs/mach12:x.md", content, SET);
-		expect(result.ok).toBe(true);
-		if (!result.ok) return;
-		expect(result.def.description).toBeUndefined();
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error).toContain("name and description");
 	});
 });
 
@@ -921,7 +959,7 @@ describe("buildAgentRegistry — collision and skip semantics", () => {
 		return { filePath: `/fake/${setName}/${file}`, content, setName, scope };
 	}
 
-	const minimal = "---\nname: mach12:test\n---\nBody.";
+	const minimal = "---\nname: mach12:test\ndescription: Test agent\n---\nBody.";
 
 	it("returns an empty registry and no warnings for empty input", () => {
 		const out = buildAgentRegistry([]);
@@ -937,8 +975,8 @@ describe("buildAgentRegistry — collision and skip semantics", () => {
 
 	it("registers multiple non-colliding agents", () => {
 		const out = buildAgentRegistry([
-			agentEntry("mach12", "mach12:a.md", "---\nname: mach12:a\n---\nBody."),
-			agentEntry("mach12", "mach12:b.md", "---\nname: mach12:b\n---\nBody."),
+			agentEntry("mach12", "mach12:a.md", "---\nname: mach12:a\ndescription: Agent A\n---\nBody."),
+			agentEntry("mach12", "mach12:b.md", "---\nname: mach12:b\ndescription: Agent B\n---\nBody."),
 		]);
 		expect(out.agentRegistry.size).toBe(2);
 	});
@@ -957,9 +995,9 @@ describe("buildAgentRegistry — collision and skip semantics", () => {
 
 	it("logs and skips malformed agents but keeps valid ones", () => {
 		const out = buildAgentRegistry([
-			agentEntry("mach12", "mach12:good.md", "---\nname: mach12:good\n---\nBody."),
+			agentEntry("mach12", "mach12:good.md", "---\nname: mach12:good\ndescription: Good\n---\nBody."),
 			agentEntry("mach12", "mach12:bad.md", "---\ndescription: no name\n---\nBody."),
-			agentEntry("mach12", "mach12:also-good.md", "---\nname: mach12:also-good\n---\nBody."),
+			agentEntry("mach12", "mach12:also-good.md", "---\nname: mach12:also-good\ndescription: Also good\n---\nBody."),
 		]);
 		expect(out.agentRegistry.size).toBe(2);
 		expect(out.agentRegistry.has("mach12:good")).toBe(true);
@@ -1038,7 +1076,14 @@ describe("registerCommandLoader — agent discovery integration", () => {
 		const handler = handlers.get("resources_discover")![0];
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "startup" });
 		const firstSize = state.agentRegistry.size;
-		(state.agentRegistry as Map<string, AgentDef>).set("ghost:agent", { name: "ghost:agent", filePath: "/nope" });
+		(state.agentRegistry as Map<string, AgentDef>).set("ghost:agent", {
+			name: "ghost:agent",
+			description: "Ghost",
+			systemPrompt: "",
+			filePath: "/nope",
+			setName: "ghost",
+			source: "global",
+		});
 		handler?.({ type: "resources_discover", cwd: join(FIXTURES, "loader-project"), reason: "reload" });
 		expect(state.agentRegistry.size).toBe(firstSize);
 		expect(state.agentRegistry.has("ghost:agent")).toBe(false);

@@ -12,7 +12,6 @@ import type {
 	PublicationTool,
 	ScramjetState,
 } from "../types.js";
-import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
 type Scope = "global" | "project";
@@ -110,7 +109,13 @@ function collectEntries(sets: SelectedSet[], subdir: string, warnings: string[])
 			if (fileEntry.isDirectory || !fileEntry.name.endsWith(".md")) continue;
 			const filePath = join(dir, fileEntry.name);
 			try {
-				entries.push({ filePath, content: readFileSync(filePath, "utf-8"), setName: set.name, scope: set.scope });
+				entries.push({
+					filePath,
+					content: readFileSync(filePath, "utf-8"),
+					setName: set.name,
+					scope: set.scope,
+					source: set.source,
+				});
 			} catch (err) {
 				const code = (err as NodeJS.ErrnoException).code;
 				warnings.push(
@@ -243,22 +248,8 @@ export function registerCommandLoader(
 			}
 			state.autonomyRecommendations = recommendations;
 
-			const bridge = ensureAgentBridge(agentRegistry, [
-				globalDir,
-				projectDir,
-				...BUNDLED_SETS.map((name) => join(bundledRoot, name)),
-			]);
-			if (bridge.created.length > 0 && bridge.targetDir !== null)
-				state.logger.debug("discovery", `bridged ${bridge.created.length} agent(s) into ${bridge.targetDir}`);
-			if (bridge.pruned.length > 0 && bridge.targetDir !== null)
-				state.logger.debug(
-					"discovery",
-					`pruned ${bridge.pruned.length} stale agent symlink(s) from ${bridge.targetDir}`,
-				);
-
 			for (const warning of discoveryWarnings) state.logger.warn("discovery", warning);
-			for (const warning of [...warnings, ...agentWarnings, ...bridge.warnings])
-				state.logger.warn("discovery", warning);
+			for (const warning of [...warnings, ...agentWarnings]) state.logger.warn("discovery", warning);
 
 			const publicationWarnings = discoveryWarnings.filter((warning) => /publication/i.test(warning));
 			const publicationWarningSignature = publicationWarnings.join("\0");

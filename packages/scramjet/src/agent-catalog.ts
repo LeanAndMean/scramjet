@@ -5,7 +5,7 @@ export function buildAgentCatalogBlock(registry: AgentRegistry): string {
 	if (registry.size === 0) return "";
 	const entries = [...registry.entries()]
 		.sort(([a], [b]) => a.localeCompare(b))
-		.map(([name, def]) => (def.description ? `- ${name}: ${def.description}` : `- ${name}`))
+		.map(([name, def]) => `- ${name}: ${def.description}`)
 		.join("\n");
 	return `# Available subagents\n\nThe following agents can be dispatched via the \`subagent\` tool:\n\n${entries}`;
 }

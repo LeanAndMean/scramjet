@@ -8,7 +8,14 @@ import { StringEnum } from "@leanandmean/ai";
 import { type ExtensionAPI, getMarkdownTheme, type ThemeColor, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
-import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import type { AgentRegistry } from "../types.js";
+import {
+	AGENT_SCOPES,
+	type AgentConfig,
+	type AgentScope,
+	discoverAgents,
+	type ExecutableAgentSource,
+} from "./agents.js";
 
 const THINKING_LEVEL_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -136,7 +143,7 @@ interface UsageStats {
 
 interface SingleResult {
 	agent: string;
-	agentSource: "user" | "project" | "unknown";
+	agentSource: ExecutableAgentSource | "unknown";
 	task: string;
 	exitCode: number;
 	messages: Message[];
@@ -493,7 +500,7 @@ const SubagentParams = Type.Object({
 	effort: Type.Optional(EffortSchema),
 });
 
-export function registerSubagentTool(pi: ExtensionAPI) {
+export function registerSubagentTool(pi: ExtensionAPI, getAgentRegistry?: () => AgentRegistry) {
 	const getParentLevel = (): ThinkingLevel | undefined => {
 		try {
 			return pi.getThinkingLevel();
@@ -530,7 +537,23 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
-			const discovery = discoverAgents(ctx.cwd, agentScope);
+			let registry: AgentRegistry | undefined;
+			try {
+				registry = getAgentRegistry?.();
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return {
+					content: [{ type: "text", text: `Agent registry unavailable: ${message}` }],
+					details: {
+						mode: "single",
+						agentScope,
+						projectAgentsDir: null,
+						results: [],
+					},
+					isError: true,
+				};
+			}
+			const discovery = discoverAgents(ctx.cwd, agentScope, registry);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
@@ -561,7 +584,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				};
 			}
 
-			if ((agentScope === "project" || agentScope === "both") && confirmProjectAgents && ctx.hasUI) {
+			if (confirmProjectAgents && ctx.hasUI) {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
@@ -573,10 +596,12 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 				if (projectAgentsRequested.length > 0) {
 					const names = projectAgentsRequested.map((a) => a.name).join(", ");
-					const dir = discovery.projectAgentsDir ?? "(unknown)";
+					const dirs = [...new Set(projectAgentsRequested.map((agent) => path.dirname(agent.filePath)))].join(
+						", ",
+					);
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						`Agents: ${names}\nSource: ${dirs}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
 					);
 					if (!ok)
 						return {

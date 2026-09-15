@@ -118,7 +118,7 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 	registerToolVisibilityDiagnostics(pi, state);
 	registerSubagentOutputAdvisor(pi, state);
 	registerAutoContinue(pi, state);
-	registerSubagentTool(pi);
+	registerSubagentTool(pi, () => state.agentRegistry);
 	registerAutopilotCommand(pi, state);
 	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);
