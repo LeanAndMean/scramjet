@@ -157,7 +157,12 @@ function packagedSet(
 			);
 			return undefined;
 		}
-		inspection.readdir(commandsDir);
+		if (inspection.readdir(commandsDir).length === 0) {
+			warnings.push(
+				`[scramjet/discovery] bundled package command set commands path ${commandsDir} is empty; reinstall Scramjet`,
+			);
+			return undefined;
+		}
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
 		warnings.push(
