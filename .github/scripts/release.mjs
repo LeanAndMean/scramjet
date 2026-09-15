@@ -11,7 +11,7 @@ const REGISTRY_URL = "https://registry.npmjs.org/";
 const WORKFLOW_PATH = ".github/workflows/release.yml";
 export const READ_TIMEOUT_MS = 60_000;
 export const PUBLISH_TIMEOUT_MS = 10 * 60_000;
-export const POST_PUBLISH_ATTEMPTS = 31;
+export const POST_PUBLISH_BUDGET_MS = 10 * 60_000;
 export const POST_PUBLISH_DELAY_MS = 10_000;
 const INVENTORY = [
 	["packages/tui", "@leanandmean/tui"],
@@ -168,8 +168,8 @@ export function validateIdentity(inventory, env = process.env, git = (args) => r
 	return { ref: expectedRef, sha: env.GITHUB_SHA };
 }
 
-function npmJson(args, description) {
-	return parseJson(run("npm", [...args, "--registry", REGISTRY_URL]), description);
+function npmJson(args, description, timeout = READ_TIMEOUT_MS) {
+	return parseJson(run("npm", [...args, "--registry", REGISTRY_URL], { timeout }), description);
 }
 
 function requireVersions(value, name) {
@@ -187,16 +187,13 @@ function requireDistTags(value, name) {
 	return value;
 }
 
-function readAttestations(pkg) {
+function readAttestations(pkg, timeout = READ_TIMEOUT_MS) {
 	const description = `${pkg.name}@${pkg.version} attestations`;
-	const output = run("npm", [
-		"view",
-		`${pkg.name}@${pkg.version}`,
-		"dist.attestations",
-		"--json",
-		"--registry",
-		REGISTRY_URL,
-	]);
+	const output = run(
+		"npm",
+		["view", `${pkg.name}@${pkg.version}`, "dist.attestations", "--json", "--registry", REGISTRY_URL],
+		{ timeout },
+	);
 	if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
 	return parseJson(output, description);
 }
@@ -257,23 +254,36 @@ function tagsEqual(left, right) {
 }
 
 export async function pollRead(description, operation, dependencies = {}) {
-	const attempts = dependencies.attempts ?? POST_PUBLISH_ATTEMPTS;
+	const budgetMs = dependencies.budgetMs ?? POST_PUBLISH_BUDGET_MS;
 	const delayMs = dependencies.delayMs ?? POST_PUBLISH_DELAY_MS;
+	const now = dependencies.now ?? (() => performance.now());
 	const sleep = dependencies.sleep ?? ((duration) => new Promise((resolveSleep) => setTimeout(resolveSleep, duration)));
 	const retryIf = dependencies.retryIf ?? (() => true);
+	const startedAt = now();
+	let observations = 0;
 	let lastError;
-	for (let attempt = 1; attempt <= attempts; attempt += 1) {
+	while (true) {
+		const elapsedMs = now() - startedAt;
+		const remainingMs = budgetMs - elapsedMs;
+		if (observations > 0 && remainingMs <= 0) break;
+		observations += 1;
 		try {
-			return await operation();
+			return await operation({ remainingMs: () => Math.max(0, budgetMs - (now() - startedAt)) });
 		} catch (error) {
 			if (!retryIf(error)) throw error;
 			lastError = error;
-			if (attempt === attempts) break;
-			console.log(`${description} not ready (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms`);
-			await sleep(delayMs);
 		}
+		const afterOperationMs = now() - startedAt;
+		const remainingAfterOperationMs = budgetMs - afterOperationMs;
+		if (remainingAfterOperationMs <= 0) break;
+		const sleepMs = Math.min(delayMs, remainingAfterOperationMs);
+		console.log(`${description} not ready (observation ${observations}); retrying in ${sleepMs}ms`);
+		await sleep(sleepMs);
 	}
-	fail(`${description} did not converge after ${attempts} attempts: ${lastError?.message ?? String(lastError)}`);
+	const elapsedMs = Math.max(0, now() - startedAt);
+	fail(
+		`${description} did not converge within ${budgetMs}ms after ${elapsedMs}ms and ${observations} observations: ${lastError?.message ?? String(lastError)}`,
+	);
 }
 
 function npmErrorCode(error) {
@@ -376,48 +386,44 @@ export async function publish(inventory, dependencies = {}) {
 		publishPackage(pkg);
 		publicationBegan = true;
 		try {
-			const publishedTags = await pollRead(
-				`${pkg.name}@${pkg.version} registry visibility`,
-				async () => {
+			await pollRead(
+				`${pkg.name}@${pkg.version} post-publish metadata`,
+				async ({ remainingMs }) => {
+					const readTimeout = () => {
+						const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
+						if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
+						return timeout;
+					};
 					const publishedVersions = requireVersions(
-						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
+						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`, readTimeout()),
 						pkg.name,
 					);
 					if (!publishedVersions.includes(pkg.version)) {
 						throw registryPropagationError(`${pkg.name}@${pkg.version} was not visible after publish`);
 					}
 					const tags = requireDistTags(
-						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
+						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`, readTimeout()),
 						pkg.name,
 					);
 					if (tags.latest !== pkg.version) {
 						throw registryPropagationError(`${pkg.name} latest did not move to ${pkg.version}`);
 					}
-					return tags;
-				},
-				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
-			);
-			const beforeNonLatest = { ...pkg.distTags };
-			const afterNonLatest = { ...publishedTags };
-			delete beforeNonLatest.latest;
-			delete afterNonLatest.latest;
-			if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
-			await pollRead(
-				`${pkg.name}@${pkg.version} attestation metadata`,
-				async () => {
-					const output = run("npm", [
-						"view",
-						`${pkg.name}@${pkg.version}`,
-						"dist.attestations.url",
-						"--json",
-						"--registry",
-						REGISTRY_URL,
-					]);
+					const beforeNonLatest = { ...pkg.distTags };
+					const afterNonLatest = { ...tags };
+					delete beforeNonLatest.latest;
+					delete afterNonLatest.latest;
+					if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
+					const output = run(
+						"npm",
+						["view", `${pkg.name}@${pkg.version}`, "dist.attestations.url", "--json", "--registry", REGISTRY_URL],
+						{ timeout: readTimeout() },
+					);
 					if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
 					const url = parseJson(output, `${pkg.name}@${pkg.version} attestation URL`);
 					if (typeof url !== "string") fail(`${pkg.name}@${pkg.version} attestation URL must be a string`);
+					if (url.length === 0) throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
 				},
-				{ ...dependencies.pollDependencies, retryIf: isTransientReadError },
+				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
 			);
 		} catch (error) {
 			throw new Error(
@@ -442,22 +448,27 @@ export async function verify(inventory, dependencies = {}) {
 		for (const pkg of inventory) {
 			await pollRead(
 				`${pkg.name}@${pkg.version} verification metadata`,
-				async () => {
+				async ({ remainingMs }) => {
+					const readTimeout = () => {
+						const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
+						if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
+						return timeout;
+					};
 					const versions = requireVersions(
-						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`),
+						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`, readTimeout()),
 						pkg.name,
 					);
 					if (!versions.includes(pkg.version)) {
 						throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
 					}
 					const distTags = requireDistTags(
-						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`),
+						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`, readTimeout()),
 						pkg.name,
 					);
 					if (distTags.latest !== pkg.version) {
 						throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
 					}
-					requireAttestations(readAttestations(pkg), pkg);
+					requireAttestations(readAttestations(pkg, readTimeout()), pkg);
 				},
 				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
 			);

@@ -216,7 +216,7 @@ function initialState(): FakeState {
 }
 
 function runHelper(mode: string, statePath: string, args = mode === "preflight" ? [SHA] : []) {
-	const script = ["publish", "registry-preflight", "verify"].includes(mode)
+	const script = ["publish", "publish-and-verify", "registry-preflight", "verify"].includes(mode)
 		? join(dirname(statePath), "runner.mjs")
 		: HELPER;
 	return spawnSync(process.execPath, [script, mode, ...args], {
@@ -530,8 +530,18 @@ describe("release helper registry preflight and publication", () => {
 try {
   const inventory = loadInventory();
   validateIdentity(inventory);
-  if (process.argv[2] === "publish") await publish(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
-  else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
+  let elapsedMs = 0;
+  const pollDependencies = {
+    budgetMs: 600_000,
+    delayMs: 10_000,
+    now: () => elapsedMs,
+    sleep: async (duration) => { elapsedMs += duration; },
+  };
+  if (process.argv[2] === "publish") await publish(inventory, { pollDependencies });
+  else if (process.argv[2] === "publish-and-verify") {
+    await publish(inventory, { pollDependencies });
+    await verify(inventory, { pollDependencies });
+  } else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies });
   else preflight(inventory);
 } catch (error) {
   console.error("release: " + error.message);
@@ -745,6 +755,23 @@ exit 1
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
+	it("continues the release when metadata appears after 31 stale observations", () => {
+		const state = initialState();
+		state.visibilityDelays = { [INVENTORY[1].name]: 31 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish-and-verify", statePath);
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		const finalState = readState(statePath);
+		expect(publishCalls(finalState).map((args) => args[args.indexOf("-w") + 1])).toEqual(
+			INVENTORY.map(({ workspace }) => workspace),
+		);
+		expect(Object.values(finalState.publicationCounts ?? {})).toEqual(INVENTORY.map(() => 1));
+		expect(finalState.calls.some(([command]) => command === "install")).toBe(true);
+		expect(finalState.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(finalState.calls).toContainEqual(["installed-scramjet", "--help"]);
+	});
+
 	it("polls multi-minute version and attestation-metadata visibility through publication", () => {
 		const state = initialState();
 		const first = INVENTORY[0].name;
@@ -753,8 +780,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} attestation metadata not ready`);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} post-publish metadata not ready`);
 		const finalState = readState(statePath);
 		expect(finalState.publicationCounts?.[first]).toBe(1);
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
@@ -767,7 +793,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} post-publish metadata not ready`);
 		const finalState = readState(statePath);
 		expect(finalState.publicationCounts?.[first]).toBe(1);
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
@@ -790,6 +816,22 @@ exit 1
 		);
 		expect(calls).toHaveLength(3);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	it("retries an empty attestation URL within the shared package budget", () => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = {
+			name: first.name,
+			field: "dist.attestations.url",
+			output: JSON.stringify(""),
+			remaining: 1,
+		};
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
+		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
 	it("fails malformed attestation metadata without retrying", () => {
@@ -821,7 +863,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first.name}@${first.version} registry visibility not ready`);
+		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
@@ -839,7 +881,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first.name}@${first.version} registry visibility not ready`);
+		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
@@ -885,11 +927,11 @@ exit 1
 
 	it("stops after registry visibility polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.visibilityDelays = { [INVENTORY[0].name]: 31 };
+		state.visibilityDelays = { [INVENTORY[0].name]: 60 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
+		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
@@ -897,11 +939,11 @@ exit 1
 
 	it("stops after latest-tag polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.tagVisibilityDelays = { [INVENTORY[0].name]: 31 };
+		state.tagVisibilityDelays = { [INVENTORY[0].name]: 60 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
+		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
@@ -909,15 +951,15 @@ exit 1
 
 	it("stops after attestation-metadata polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.attestationDelays = { [INVENTORY[0].name]: 31 };
+		state.attestationDelays = { [INVENTORY[0].name]: 60 };
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("attestation metadata did not converge after 31 attempts");
+		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
-	});
+	}, 10_000);
 
 	function publishedState(): FakeState {
 		const state = initialState();
@@ -1022,21 +1064,25 @@ describe("release operation bounds and post-publish polling", () => {
 
 	it("uses the production polling interval by default", async () => {
 		let attempts = 0;
-		const sleep = vi.fn(async () => {});
+		let elapsedMs = 0;
+		const sleep = vi.fn(async (duration: number) => {
+			elapsedMs += duration;
+		});
 		await pollRead(
 			"published package",
 			async () => {
 				attempts += 1;
 				if (attempts === 1) throw new Error("not ready");
 			},
-			{ sleep },
+			{ now: () => elapsedMs, sleep },
 		);
 		expect(sleep).toHaveBeenCalledOnce();
 		expect(sleep).toHaveBeenCalledWith(10_000);
 	});
 
-	it("tolerates delayed registry visibility", async () => {
+	it("tolerates delayed registry visibility within one elapsed budget", async () => {
 		let attempts = 0;
+		let elapsedMs = 0;
 		const result = await pollRead(
 			"published package",
 			async () => {
@@ -1045,24 +1091,63 @@ describe("release operation bounds and post-publish polling", () => {
 				if (attempts === 2) throw new DOMException("fetch timed out", "TimeoutError");
 				return "verified";
 			},
-			{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+			{
+				budgetMs: 30,
+				delayMs: 10,
+				now: () => elapsedMs,
+				sleep: async (duration) => {
+					elapsedMs += duration;
+				},
+				retryIf: isTransientReadError,
+			},
 		);
 		expect(result).toBe("verified");
 		expect(attempts).toBe(3);
 	});
 
-	it("fails after the bounded read attempts are exhausted", async () => {
-		let attempts = 0;
+	it("does not start another read after an operation consumes the budget", async () => {
+		let elapsedMs = 0;
+		const reads: string[] = [];
 		await expect(
 			pollRead(
 				"published package",
-				async () => {
-					attempts += 1;
+				async ({ remainingMs }) => {
+					reads.push("versions");
+					elapsedMs = 10;
+					if (remainingMs() <= 0) throw new DOMException("budget expired", "TimeoutError");
+					reads.push("dist-tags");
+				},
+				{ budgetMs: 10, now: () => elapsedMs, sleep: async () => {}, retryIf: isTransientReadError },
+			),
+		).rejects.toThrow(/after 10ms and 1 observations: budget expired/);
+		expect(reads).toEqual(["versions"]);
+	});
+
+	it("clamps sleep and operation context to the remaining budget", async () => {
+		let elapsedMs = 0;
+		const remaining: number[] = [];
+		const sleeps: number[] = [];
+		await expect(
+			pollRead(
+				"published package",
+				async ({ remainingMs }) => {
+					remaining.push(remainingMs());
+					elapsedMs += 6;
 					throw new DOMException("still missing", "TimeoutError");
 				},
-				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+				{
+					budgetMs: 25,
+					delayMs: 10,
+					now: () => elapsedMs,
+					sleep: async (duration) => {
+						sleeps.push(duration);
+						elapsedMs += duration;
+					},
+					retryIf: isTransientReadError,
+				},
 			),
-		).rejects.toThrow(/did not converge after 3 attempts: still missing/);
-		expect(attempts).toBe(3);
+		).rejects.toThrow(/within 25ms after 25ms and 2 observations: still missing/);
+		expect(remaining).toEqual([25, 9]);
+		expect(sleeps).toEqual([10, 3]);
 	});
 });
