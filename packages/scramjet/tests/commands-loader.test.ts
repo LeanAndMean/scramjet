@@ -656,6 +656,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		["file", "not a directory"],
 		["dangling", "ENOENT"],
 		["empty", "is empty"],
+		["commandless", "is empty"],
 		["missing-commands", "ENOENT"],
 		["inaccessible", "EACCES"],
 	] as const)("rejects a %s packaged source without disrupting sibling or project discovery", (form, diagnostic) => {
@@ -677,7 +678,8 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 			symlinkSync(join(sandbox, "missing"), source);
 		}
 		if (form === "empty" || form === "inaccessible") mkdirSync(source, { recursive: true });
-		if (form === "missing-commands") {
+		if (form === "commandless" || form === "missing-commands") {
+			if (form === "commandless") mkdirSync(join(source, "commands"), { recursive: true });
 			mkdirSync(join(source, "agents"), { recursive: true });
 			writeFileSync(
 				join(source, "agents", "mach12:orphan.md"),
