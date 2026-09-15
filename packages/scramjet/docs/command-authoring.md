@@ -10,7 +10,7 @@ A command-set directory owns one namespace. Every command filename in `<set>/com
 
 The names and namespaces `mach12` and `scramjet` are reserved for package-owned bundled sets. Global or project sets with either directory name are ignored; their commands, agents, and defaults cannot replace or extend the installed product resources. Create custom sets under another name.
 
-To fork bundled behavior, use a differently named set and update all identity-bearing references consistently: the set directory, command filenames, agent filenames, agent frontmatter names, delegated command names, next-step targets, and applicable autonomy-default keys. Scramjet does not provide overlays or compatibility aliases. Legacy reserved-name trees are left untouched and may produce evidence-bounded migration guidance, but they are never executed.
+To fork bundled behavior, use a differently named set and update all identity-bearing references consistently: the set directory, command filenames, agent filenames, agent frontmatter names, delegated command names, next-step targets, references that invoke copied-and-renamed agents, and applicable autonomy-default keys. References to package agents that the fork does not copy may intentionally remain unchanged. Scramjet does not provide overlays or compatibility aliases. Legacy reserved-name trees are left untouched and may produce evidence-bounded migration guidance, but they are never executed.
 
 ### Agent definitions
 

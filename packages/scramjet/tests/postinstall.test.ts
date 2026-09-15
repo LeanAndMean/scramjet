@@ -147,18 +147,51 @@ describe("scripts/postinstall.js", () => {
 		expect(pathExists(extensionDir)).toBe(false);
 	});
 
-	it("preserves every other manual directory", () => {
-		mkdirSync(extensionDir, { recursive: true });
-		symlinkSync(join(OLD_SUBAGENT_EXAMPLE, "index.ts"), join(extensionDir, "index.ts"));
-		symlinkSync(join(OLD_SUBAGENT_EXAMPLE, "agents.ts"), join(extensionDir, "agents.ts"));
-		writeFileSync(join(extensionDir, "custom.ts"), "custom");
+	it.each(["extra .DS_Store", "regular file", "dangling symlink", "foreign-target symlink"])(
+		"preserves a manual directory containing the %s variant",
+		(variant) => {
+			mkdirSync(extensionDir, { recursive: true });
+			symlinkSync(join(OLD_SUBAGENT_EXAMPLE, "agents.ts"), join(extensionDir, "agents.ts"));
+			const indexPath = join(extensionDir, "index.ts");
+			switch (variant) {
+				case "extra .DS_Store":
+					symlinkSync(join(OLD_SUBAGENT_EXAMPLE, "index.ts"), indexPath);
+					writeFileSync(join(extensionDir, ".DS_Store"), "metadata");
+					break;
+				case "regular file":
+					writeFileSync(indexPath, "user content");
+					break;
+				case "dangling symlink":
+					symlinkSync(join(workDir, "missing-index.ts"), indexPath);
+					break;
+				case "foreign-target symlink":
+					writeFileSync(join(workDir, "foreign-index.ts"), "foreign");
+					symlinkSync(join(workDir, "foreign-index.ts"), indexPath);
+					break;
+			}
 
-		const result = runScript({ XDG_DATA_HOME: xdgHome, HOME: fakeHome });
+			const result = runScript({ XDG_DATA_HOME: xdgHome, HOME: fakeHome });
 
-		expect(result.status).toBe(0);
-		expect(result.stderr).toContain("Preserving");
-		expect(readFileSync(join(extensionDir, "custom.ts"), "utf-8")).toBe("custom");
-	});
+			expect(result.status).toBe(0);
+			expect(result.stderr).toContain("Preserving");
+			expect(pathExists(extensionDir)).toBe(true);
+			switch (variant) {
+				case "extra .DS_Store":
+					expect(readFileSync(join(extensionDir, ".DS_Store"), "utf-8")).toBe("metadata");
+					break;
+				case "regular file":
+					expect(readFileSync(indexPath, "utf-8")).toBe("user content");
+					break;
+				case "dangling symlink":
+					expect(readlinkSync(indexPath)).toBe(join(workDir, "missing-index.ts"));
+					break;
+				case "foreign-target symlink":
+					expect(readlinkSync(indexPath)).toBe(join(workDir, "foreign-index.ts"));
+					expect(readFileSync(join(workDir, "foreign-index.ts"), "utf-8")).toBe("foreign");
+					break;
+			}
+		},
+	);
 
 	it("preserves a regular file at the extension path", () => {
 		mkdirSync(dirname(extensionDir), { recursive: true });

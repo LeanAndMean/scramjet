@@ -24,9 +24,7 @@ function symlinkTargets(path, expected) {
 }
 
 function isDeprecatedManualDirectory(path) {
-	const entries = readdirSync(path)
-		.filter((entry) => entry !== ".DS_Store")
-		.sort();
+	const entries = readdirSync(path).sort();
 	if (entries.length !== deprecatedFiles.length) return false;
 	if (!deprecatedFiles.every((file, index) => entries[index] === file)) return false;
 	return deprecatedFiles.every((file) => symlinkTargets(join(path, file), join(deprecatedExample, file)));

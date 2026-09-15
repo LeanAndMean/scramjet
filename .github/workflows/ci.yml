@@ -85,13 +85,30 @@ jobs:
           INSTALLED_SMOKE=$(mktemp -d)
           INSTALLED_STDOUT=$(mktemp)
           INSTALLED_STDERR=$(mktemp)
+          INSTALLED_STATUS=0
           HOME="$INSTALLED_SMOKE/home" \
             XDG_DATA_HOME="$INSTALLED_SMOKE/data" \
             SCRAMJET_CODING_AGENT_DIR="$INSTALLED_SMOKE/agent" \
             node .github/scripts/installed-runtime-smoke.mjs "$INSTALLED_ROOT" "$INSTALLED_SMOKE" \
-            >"$INSTALLED_STDOUT" 2>"$INSTALLED_STDERR"
-          jq -e '.agentCatalog == true and .subagentRegistry == true and .migrationWarning == true' "$INSTALLED_STDOUT"
-          grep -qF 'legacy bundled command set' "$INSTALLED_STDERR"
+            >"$INSTALLED_STDOUT" 2>"$INSTALLED_STDERR" || INSTALLED_STATUS=$?
+          show_installed_smoke_output() {
+            cat "$INSTALLED_STDOUT"
+            cat "$INSTALLED_STDERR" >&2
+          }
+          if [ "$INSTALLED_STATUS" -ne 0 ]; then
+            show_installed_smoke_output
+            exit "$INSTALLED_STATUS"
+          fi
+          jq -e '.agentCatalog == true and .subagentRegistry == true and .migrationWarning == true' "$INSTALLED_STDOUT" || {
+            status=$?
+            show_installed_smoke_output
+            exit "$status"
+          }
+          grep -qF 'legacy bundled command set' "$INSTALLED_STDERR" || {
+            status=$?
+            show_installed_smoke_output
+            exit "$status"
+          }
           XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --help >/dev/null
           "$PREFIX/bin/scramjet-command-lint" --help >/dev/null
           LINT_FIXTURE=$(mktemp -d)

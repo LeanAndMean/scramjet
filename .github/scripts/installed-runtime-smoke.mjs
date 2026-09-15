@@ -6,14 +6,18 @@ import {
 	readdirSync,
 	readFileSync,
 	readlinkSync,
+	realpathSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [packageRoot, workDir] = process.argv.slice(2);
-if (!packageRoot || !workDir) throw new Error("usage: installed-runtime-smoke.mjs <installed-package-root> <work-dir>");
+const [packageRootArg, workDir] = process.argv.slice(2);
+if (!packageRootArg || !workDir) {
+	throw new Error("usage: installed-runtime-smoke.mjs <installed-package-root> <work-dir>");
+}
+const packageRoot = realpathSync(packageRootArg);
 
 const dataRoot = join(workDir, "data");
 const home = join(workDir, "home");

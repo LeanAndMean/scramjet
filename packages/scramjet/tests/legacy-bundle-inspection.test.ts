@@ -275,6 +275,8 @@ describe("formatLegacyBundleWarning", () => {
 		expect(warning).toContain("agent filenames");
 		expect(warning).toContain("frontmatter names");
 		expect(warning).toContain("delegation and next-step references");
+		expect(warning).toContain("references that invoke copied agents");
+		expect(warning).toContain("references to uncopied package agents may remain");
 		expect(warning).toContain("default keys");
 		expect(warning).toContain("command lint checks commands only");
 		expect(warning).toContain("reload Scramjet to validate agents");

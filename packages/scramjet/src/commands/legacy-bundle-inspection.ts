@@ -311,7 +311,8 @@ export function formatLegacyBundleWarning(inspection: LegacyBundleInspection): s
 	return (
 		`Ignored legacy bundled command set at ${inspection.legacyPath}; package resources are active and this path was left untouched. ` +
 		`${evidence} To preserve customizations, fork under a different set name: rename command filenames and agent filenames, ` +
-		`make agent frontmatter names match the new namespace, update delegation and next-step references and applicable default keys, ` +
-		`then reload Scramjet to validate agents. Scramjet command lint checks commands only; it does not validate agents.`
+		`make agent frontmatter names match the new namespace, update delegation and next-step references, update references that ` +
+		`invoke copied agents (references to uncopied package agents may remain), update applicable default keys, then reload ` +
+		`Scramjet to validate agents. Scramjet command lint checks commands only; it does not validate agents.`
 	);
 }

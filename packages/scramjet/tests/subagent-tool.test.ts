@@ -294,18 +294,25 @@ describe("subagent tool — registered-agent authority", () => {
 			"Loose body.",
 		);
 		const registered = writeRegisteredAgent(tmpDir, "mach12:authoritative", "package", "Stale registered body.");
+		registered.model = "stale-model";
 		const registry = new Map([[registered.name, registered]]);
 		fs.writeFileSync(
 			registered.filePath,
-			"---\nname: mach12:authoritative\ndescription: Registered mach12:authoritative\ntools: read,bash\n---\n\nFresh registered body.",
+			"---\nname: mach12:authoritative\ndescription: Registered mach12:authoritative\ntools: grep\nmodel: fresh-model\n---\n\nFresh registered body.",
 		);
 		process.argv[1] = writeFakeInvocation(
 			tmpDir,
 			[
 				'const fs = require("node:fs");',
-				'const index = process.argv.indexOf("--append-system-prompt");',
-				'const prompt = index < 0 ? "" : fs.readFileSync(process.argv[index + 1], "utf8");',
-				'process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: prompt }] } }) + "\\n");',
+				'const promptIndex = process.argv.indexOf("--append-system-prompt");',
+				'const toolsIndex = process.argv.indexOf("--tools");',
+				'const modelIndex = process.argv.indexOf("--model");',
+				"const invocation = {",
+				'  prompt: promptIndex < 0 ? "" : fs.readFileSync(process.argv[promptIndex + 1], "utf8"),',
+				'  tools: toolsIndex < 0 ? "" : process.argv[toolsIndex + 1],',
+				'  model: modelIndex < 0 ? "" : process.argv[modelIndex + 1],',
+				"};",
+				'process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(invocation) }] } }) + "\\n");',
 			].join("\n"),
 		);
 		const tool = registeredSubagentTool(() => registry);
@@ -318,9 +325,12 @@ describe("subagent tool — registered-agent authority", () => {
 			{ cwd: tmpDir, hasUI: false },
 		);
 
-		expect(textContent(result)).toContain("Fresh registered body.");
-		expect(textContent(result)).not.toContain("Stale registered body.");
-		expect(textContent(result)).not.toContain("Loose body.");
+		const invocation = JSON.parse(textContent(result));
+		expect(invocation.prompt).toContain("Fresh registered body.");
+		expect(invocation.prompt).not.toContain("Stale registered body.");
+		expect(invocation.prompt).not.toContain("Loose body.");
+		expect(invocation.tools).toBe("grep");
+		expect(invocation.model).toBe("fresh-model");
 		expect(result.details.results[0].agentSource).toBe("package");
 	});
 
