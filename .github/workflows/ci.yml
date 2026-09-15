@@ -23,7 +23,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        # --ignore-scripts skips postinstall; command-set seeding has a dedicated smoke test.
+        # postinstall cleanup has a dedicated isolated smoke test.
         run: npm ci --ignore-scripts
 
       - name: Type-check
@@ -70,6 +70,7 @@ jobs:
           grep -qF 'package/scripts/postinstall.js' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/commands/mach12:issue-create.md' "$TARBALL_CONTENTS"
           grep -qF 'package/mach12/agents/mach12:code-explorer.md' "$TARBALL_CONTENTS"
+          grep -qF 'package/mach12/agents/mach12:structural-mapper.md' "$TARBALL_CONTENTS"
           grep -qxF 'package/skills/writing-scramjet-commands/SKILL.md' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/set.yaml' "$TARBALL_CONTENTS"
           grep -qF 'package/scramjet/commands/scramjet:troubleshoot.md' "$TARBALL_CONTENTS"
@@ -79,10 +80,18 @@ jobs:
             "$PACK_DIR"/leanandmean-agent-*.tgz \
             "$PACK_DIR"/leanandmean-coding-agent-*.tgz \
             "$SCRAMJET_TARBALL"
-          test ! -e "$PREFIX/data/scramjet/mach12"
-          test ! -e "$PREFIX/data/scramjet/scramjet"
-          test ! -e "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
-          test ! -e "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
+          INSTALLED_ROOT="$PREFIX/lib/node_modules/@leanandmean/scramjet"
+          test -f "$INSTALLED_ROOT/dist/index.js"
+          INSTALLED_SMOKE=$(mktemp -d)
+          INSTALLED_STDOUT=$(mktemp)
+          INSTALLED_STDERR=$(mktemp)
+          HOME="$INSTALLED_SMOKE/home" \
+            XDG_DATA_HOME="$INSTALLED_SMOKE/data" \
+            SCRAMJET_CODING_AGENT_DIR="$INSTALLED_SMOKE/agent" \
+            node .github/scripts/installed-runtime-smoke.mjs "$INSTALLED_ROOT" "$INSTALLED_SMOKE" \
+            >"$INSTALLED_STDOUT" 2>"$INSTALLED_STDERR"
+          jq -e '.agentCatalog == true and .subagentRegistry == true and .migrationWarning == true' "$INSTALLED_STDOUT"
+          grep -qF 'legacy bundled command set' "$INSTALLED_STDERR"
           XDG_DATA_HOME="$PREFIX/data" "$PREFIX/bin/scramjet" --help >/dev/null
           "$PREFIX/bin/scramjet-command-lint" --help >/dev/null
           LINT_FIXTURE=$(mktemp -d)
@@ -142,34 +151,31 @@ jobs:
           }
           NODE
           jq -e 'select(.id == "commands" and .type == "response" and .command == "get_commands" and .success == true) | (.data.commands | any(.name == "mach12:issue-create") and any(.name == "scramjet:troubleshoot"))' "$RPC_STDOUT"
-          grep -qF 'using packaged mach12 command set read-only' "$RPC_STDERR"
-          grep -qF 'using packaged scramjet command set read-only' "$RPC_STDERR"
-          grep -qF 'scripts/postinstall.js' "$RPC_STDERR"
           test ! -e "$PREFIX/data/scramjet/mach12"
           test ! -e "$PREFIX/data/scramjet/scramjet"
-          test ! -e "$PREFIX/data/scramjet/mach12/.seed-manifest.json"
-          test ! -e "$PREFIX/data/scramjet/scramjet/.seed-manifest.json"
-          rm -rf "$PACK_DIR" "$PREFIX" "$LINT_FIXTURE" "$TARBALL_CONTENTS" "$RPC_STDOUT" "$RPC_STDERR"
+          rm -rf "$PACK_DIR" "$PREFIX" "$LINT_FIXTURE" "$TARBALL_CONTENTS" "$RPC_STDOUT" "$RPC_STDERR" \
+            "$INSTALLED_SMOKE" "$INSTALLED_STDOUT" "$INSTALLED_STDERR"
 
-      - name: postinstall script smoke
-        # Run the postinstall script directly against a temporary
-        # XDG_DATA_HOME and verify both bundled sets and manifests.
+      - name: postinstall cleanup smoke
         run: |
           set -euo pipefail
           TMP=$(mktemp -d)
-          XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
-          test -d "$TMP/scramjet/mach12/commands"
-          test -d "$TMP/scramjet/mach12/agents"
-          test -f "$TMP/scramjet/mach12/commands/mach12:issue-create.md"
-          test -f "$TMP/scramjet/mach12/.seed-manifest.json"
-          test -d "$TMP/scramjet/scramjet/commands"
-          test -f "$TMP/scramjet/scramjet/set.yaml"
-          test -f "$TMP/scramjet/scramjet/commands/scramjet:troubleshoot.md"
-          test -f "$TMP/scramjet/scramjet/.seed-manifest.json"
-          # Second run: same-version short-circuit preserves user additions.
-          echo "user edit" > "$TMP/scramjet/mach12/USER-MARKER"
-          echo "user edit" > "$TMP/scramjet/scramjet/USER-MARKER"
-          XDG_DATA_HOME="$TMP" node packages/scramjet/scripts/postinstall.js
-          test -f "$TMP/scramjet/mach12/USER-MARKER"
-          test -f "$TMP/scramjet/scramjet/USER-MARKER"
+          HOME_DIR="$TMP/home"
+          DATA_DIR="$TMP/data"
+          LEGACY="$DATA_DIR/scramjet/mach12"
+          EXTENSIONS="$HOME_DIR/.scramjet/agent/extensions"
+          mkdir -p "$LEGACY/commands" "$EXTENSIONS"
+          printf 'legacy bytes\0unchanged' > "$LEGACY/commands/mach12:legacy.md"
+          ln -s "$TMP/outside" "$LEGACY/linked"
+          printf 'outside\n' > "$TMP/outside"
+          ln -s "$(pwd)/packages/coding-agent/examples/extensions/subagent" "$EXTENSIONS/subagent"
+          BEFORE_FILE=$(shasum -a 256 "$LEGACY/commands/mach12:legacy.md")
+          BEFORE_OUTSIDE=$(shasum -a 256 "$TMP/outside")
+          BEFORE_LINK=$(readlink "$LEGACY/linked")
+          HOME="$HOME_DIR" XDG_DATA_HOME="$DATA_DIR" node packages/scramjet/scripts/postinstall.js
+          test ! -e "$EXTENSIONS/subagent"
+          test "$BEFORE_FILE" = "$(shasum -a 256 "$LEGACY/commands/mach12:legacy.md")"
+          test "$BEFORE_OUTSIDE" = "$(shasum -a 256 "$TMP/outside")"
+          test "$BEFORE_LINK" = "$(readlink "$LEGACY/linked")"
+          test ! -e "$DATA_DIR/scramjet/scramjet"
           rm -rf "$TMP"

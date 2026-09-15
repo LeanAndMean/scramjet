@@ -31,7 +31,7 @@ scramjet
 
 At startup, Scramjet may show a notice when npm reports a newer release. For globally package-manager-managed installations, `scramjet update` resolves one current npm release, installs that exact version, and verifies the managed package metadata before reporting success. Source installations should pull the latest source and reinstall from that checkout. Offline and failed checks remain silent.
 
-Scramjet ships with the product-owned **Scramjet** operational set and **Mach 12**, a starting point for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: drop command files into `$XDG_DATA_HOME/scramjet/` (global) or `.scramjet/` (per-project) and they become a command set.
+Scramjet ships with the product-owned **Scramjet** operational set and **Mach 12**, a starting point for the issue → plan → review → implement → PR → ship methodology. The harness also supports your own processes: create a non-reserved set and place commands in `$XDG_DATA_HOME/scramjet/<set>/commands/<set>:<command>.md` (global) or `.scramjet/<set>/commands/<set>:<command>.md` (per-project).
 
 Try it:
 
@@ -237,30 +237,15 @@ For command work, Mach 12 uses the minimum relevant Scramjet role: exploration f
 
 ## Bundled command-set installation
 
-The npm `postinstall` script seeds both bundled sets into `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/`:
+The `mach12` and `scramjet` sets are product-owned resources loaded directly from the installed `@leanandmean/scramjet` package. Installing or updating the package updates those commands, agents, and autonomy defaults as one release unit; `postinstall` does not copy them into a data directory.
 
-- `mach12/` contains the development methodology and specialized agents.
-- `scramjet/` contains product operational commands such as `scramjet:troubleshoot`.
+The set names and namespaces `mach12` and `scramjet` are reserved. Global or project directories with either name are ignored and never replace, extend, or merge with the packaged sets. Other set names remain user-owned and load from `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/<set>/` or `.scramjet/<set>/`.
 
-Each tree has its own `.seed-manifest.json`. On upgrades, files that still match the previous manifest are updated, while edited and user-added files are preserved. Legacy unmanifested Mach 12 installs are backed up and migrated. By contrast, an unmanifested or invalid-manifest `scramjet/` tree, or any `scramjet/` symlink, is treated as user-owned and left unchanged; the installer warns that manual installation is required rather than adopting the tree.
+To customize a bundled set, copy the material you need into a differently named set and consistently rename its directory, command filenames, agent filenames and frontmatter names, delegation and next-step references, and applicable autonomy-default keys. This explicit fork then follows the ordinary user-owned discovery rules rather than impersonating product resources.
 
-If a package manager skips `postinstall` and an entire seeded destination is missing, Scramjet uses that set's copy from the installed package read-only for the current session. Mach 12 and Scramjet fall back independently. Package-backed sets retain global precedence, but Scramjet never merges package files into an existing, partial, or otherwise user-owned destination. This fallback makes bundled commands immediately available; it does not create the durable, editable seeded copies or their manifests.
+Older installations may have legacy `mach12` or `scramjet` trees in global or project data locations. Scramjet leaves every such path untouched and never executes it. When available seed-manifest evidence proves local changes, removals, or additions—or when provenance is too incomplete for safe classification—startup emits migration guidance for a manual comparison and explicit fork. A valid clean legacy seed stays quiet. The inspector does not follow symlinks, does not claim edits without evidence, and stores no acknowledgement; guidance can recur while migration-relevant paths remain.
 
-To restore those copies, run the lifecycle script from the installed `@leanandmean/scramjet` package and restart Scramjet:
-
-```sh
-node "/path/to/node_modules/@leanandmean/scramjet/scripts/postinstall.js"
-```
-
-Use the exact installed-package path shown in Scramjet's fallback warning. Preserve any existing destination before changing it; the recovery script intentionally does not adopt every user-owned tree.
-
-For local development, symlink each source tree into the data directory so Markdown edits are live. If installation already seeded either destination as a real directory, first move it aside and preserve any edits; `ln -sfn` does not replace an existing directory.
-
-```sh
-mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet"
-ln -sfn "$PWD/packages/scramjet/mach12" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12"
-ln -sfn "$PWD/packages/scramjet/scramjet" "${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/scramjet"
-```
+In a source checkout, bundled Markdown is consumed directly from `packages/scramjet/mach12` and `packages/scramjet/scramjet`; no data-directory symlinks or postinstall recovery step is needed.
 
 ## Platform support
 
@@ -271,7 +256,7 @@ ln -sfn "$PWD/packages/scramjet/scramjet" "${XDG_DATA_HOME:-$HOME/.local/share}/
 | Windows (WSL) | yes |
 | Windows (native) | no |
 
-`npm install` succeeds on native Windows but skips bundled command-set seeding. Install inside WSL for full functionality.
+`npm install` succeeds on native Windows. Install inside WSL for the supported runtime environment.
 
 ## Uninstall
 
@@ -279,7 +264,7 @@ ln -sfn "$PWD/packages/scramjet/scramjet" "${XDG_DATA_HOME:-$HOME/.local/share}/
 npm uninstall -g @leanandmean/scramjet
 ```
 
-The seeded command-set directories are left in place so edits survive package removal. Remove `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/mach12` and `${XDG_DATA_HOME:-$HOME/.local/share}/scramjet/scramjet` manually for a clean uninstall, after preserving any local changes you want to keep.
+Package-owned bundled resources are removed with the package. User-created command sets and ignored legacy bundled paths remain untouched; remove those separately only after preserving any content you need.
 
 ## Routing Pi through a proxy
 
