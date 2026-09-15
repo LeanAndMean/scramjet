@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.95.1 — Include PR comments in release notes
+
+Ensures release notes account for material implementation and scope changes recorded in the pull-request conversation. Fixes [#538](https://github.com/LeanAndMean/scramjet/issues/538).
+
+### Changed
+
+- Require complete chronological top-level PR comments before drafting release notes.
+- Synthesize release notes from PR, issue, comment, commit, and repository evidence.
+
+### Tests
+
+- Add command-contract coverage for retrieval order, completeness failures, and evidence synthesis.
+
 ## 0.95.0 — Derive architecture from responsibilities
 
 Makes material architecture planning and review responsibility-driven while preserving proportional handling for local and mechanical work. Fixes [#509](https://github.com/LeanAndMean/scramjet/issues/509).
