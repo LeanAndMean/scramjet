@@ -263,7 +263,7 @@ describe("formatLegacyBundleWarning", () => {
 			signature: "signature",
 		};
 
-		const warning = formatLegacyBundleWarning(inspection);
+		const warning = formatLegacyBundleWarning(inspection, true);
 
 		expect(warning).toContain("/legacy/mach12");
 		expect(warning).toContain("package resources are active");
@@ -281,5 +281,47 @@ describe("formatLegacyBundleWarning", () => {
 		expect(warning).toContain("command lint checks commands only");
 		expect(warning).toContain("reload Scramjet to validate agents");
 		expect(warning).not.toContain("local agent");
+	});
+
+	it("omits uncertainty guidance for proven-only findings", () => {
+		const inspection: LegacyBundleInspection = {
+			legacyPath: "/legacy/mach12",
+			scope: "global",
+			manifestVersion: "0.43.5",
+			modified: ["commands/mach12:edited.md"],
+			removed: [],
+			localOnly: [],
+			ambiguous: [],
+			errors: [],
+			actionable: true,
+			signature: "signature",
+		};
+
+		const warning = formatLegacyBundleWarning(inspection, true);
+
+		expect(warning).toContain("Proven local changes");
+		expect(warning).not.toContain("Uncertain");
+		expect(warning).not.toContain("Compare manually");
+	});
+
+	it("does not claim rejected package resources are active", () => {
+		const inspection: LegacyBundleInspection = {
+			legacyPath: "/legacy/mach12",
+			scope: "global",
+			modified: [],
+			removed: [],
+			localOnly: [],
+			ambiguous: [],
+			errors: [{ code: "manifest-missing" }],
+			actionable: true,
+			signature: "signature",
+		};
+
+		const warning = formatLegacyBundleWarning(inspection, false);
+
+		expect(warning).toContain("package resources for this set are unavailable");
+		expect(warning).toContain("reinstall Scramjet");
+		expect(warning).toContain("remains non-authoritative");
+		expect(warning).not.toContain("package resources are active");
 	});
 });

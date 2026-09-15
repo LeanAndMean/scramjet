@@ -292,7 +292,7 @@ function uncertainty(error: LegacyInspectionError): string {
 	}
 }
 
-export function formatLegacyBundleWarning(inspection: LegacyBundleInspection): string {
+export function formatLegacyBundleWarning(inspection: LegacyBundleInspection, packageAvailable: boolean): string {
 	const proven = [
 		paths("modified", inspection.modified),
 		paths("removed", inspection.removed),
@@ -301,15 +301,18 @@ export function formatLegacyBundleWarning(inspection: LegacyBundleInspection): s
 	const uncertain = [
 		paths("current-package collisions requiring manual comparison", inspection.ambiguous),
 		...inspection.errors.map(uncertainty),
-	];
+	].filter((value): value is string => Boolean(value));
 	const evidence = [
 		proven.length > 0 ? `Proven local changes: ${proven.join(" ")}` : undefined,
 		uncertain.length > 0 ? `Uncertain: ${uncertain.join("; ")}. Compare manually before migration.` : undefined,
 	]
 		.filter((value): value is string => Boolean(value))
 		.join(" ");
+	const authority = packageAvailable
+		? "package resources are active and this path was left untouched"
+		: "package resources for this set are unavailable; reinstall Scramjet. This path was left untouched and remains non-authoritative; no legacy fallback was used";
 	return (
-		`Ignored legacy bundled command set at ${inspection.legacyPath}; package resources are active and this path was left untouched. ` +
+		`Ignored legacy bundled command set at ${inspection.legacyPath}; ${authority}. ` +
 		`${evidence} To preserve customizations, fork under a different set name: rename command filenames and agent filenames, ` +
 		`make agent frontmatter names match the new namespace, update delegation and next-step references, update references that ` +
 		`invoke copied agents (references to uncopied package agents may remain), update applicable default keys, then reload ` +

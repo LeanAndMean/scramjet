@@ -656,6 +656,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		["file", "not a directory"],
 		["dangling", "ENOENT"],
 		["empty", "is empty"],
+		["missing-commands", "ENOENT"],
 		["inaccessible", "EACCES"],
 	] as const)("rejects a %s packaged source without disrupting sibling or project discovery", (form, diagnostic) => {
 		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-rejection-"));
@@ -676,6 +677,13 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 			symlinkSync(join(sandbox, "missing"), source);
 		}
 		if (form === "empty" || form === "inaccessible") mkdirSync(source, { recursive: true });
+		if (form === "missing-commands") {
+			mkdirSync(join(source, "agents"), { recursive: true });
+			writeFileSync(
+				join(source, "agents", "mach12:orphan.md"),
+				"---\nname: mach12:orphan\ndescription: Orphan\n---\nAgent.",
+			);
+		}
 		process.env.SCRAMJET_CACHE = globalDir;
 		const { pi, handlers, appended } = recordingPi();
 		const state = freshState({ logger: createLogger(pi) });
@@ -696,7 +704,47 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(state.registry.has("mach12:fallback")).toBe(false);
 		expect(state.registry.has("scramjet:fallback")).toBe(true);
 		expect(state.registry.has("local:project")).toBe(true);
+		expect(state.agentRegistry.has("mach12:orphan")).toBe(false);
 		expect(JSON.stringify(appended)).toContain(diagnostic);
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it("updates legacy warning authority wording when a rejected package set recovers", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-legacy-package-availability-"));
+		const globalDir = join(sandbox, "global");
+		const bundledRoot = join(sandbox, "package");
+		const cwd = join(sandbox, "project");
+		mkdirSync(join(bundledRoot, "mach12", "agents"), { recursive: true });
+		mkdirSync(join(bundledRoot, "scramjet", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "scramjet", "commands", "scramjet:package.md"), "---\n---\nPackage.");
+		mkdirSync(join(globalDir, "mach12", "commands"), { recursive: true });
+		writeFileSync(join(globalDir, "mach12", "commands", "mach12:legacy.md"), "Legacy.");
+		process.env.SCRAMJET_CACHE = globalDir;
+		const { pi, handlers } = recordingPi();
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn(), setHasUI: vi.fn() };
+		const state = freshState({ logger });
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: false });
+		const discover = () =>
+			handlers.get("resources_discover")![0]?.({ type: "resources_discover", cwd, reason: "reload" });
+		const migrationWarnings = () =>
+			logger.warn.mock.calls
+				.map(([, message]) => String(message))
+				.filter((message) => message.includes("Ignored legacy bundled command set"));
+
+		discover();
+		expect(state.registry.has("mach12:legacy")).toBe(false);
+		expect(state.registry.has("scramjet:package")).toBe(true);
+		expect(migrationWarnings()).toHaveLength(1);
+		expect(migrationWarnings()[0]).toContain("package resources for this set are unavailable");
+		expect(migrationWarnings()[0]).toContain("remains non-authoritative");
+		expect(migrationWarnings()[0]).not.toContain("package resources are active");
+
+		mkdirSync(join(bundledRoot, "mach12", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "mach12", "commands", "mach12:package.md"), "---\n---\nPackage.");
+		discover();
+		expect(state.registry.has("mach12:package")).toBe(true);
+		expect(migrationWarnings()).toHaveLength(2);
+		expect(migrationWarnings()[1]).toContain("package resources are active");
 		rmSync(sandbox, { recursive: true, force: true });
 	});
 
@@ -829,10 +877,9 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 	it("keeps discovered package state when one legacy inspection fails", () => {
 		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-legacy-inspector-failure-"));
 		const bundledRoot = join(sandbox, "package");
-		for (const setName of ["mach12", "scramjet"]) {
-			mkdirSync(join(bundledRoot, setName, "commands"), { recursive: true });
-			writeFileSync(join(bundledRoot, setName, "commands", `${setName}:package.md`), "---\n---\nPackage.");
-		}
+		mkdirSync(join(bundledRoot, "mach12", "agents"), { recursive: true });
+		mkdirSync(join(bundledRoot, "scramjet", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "scramjet", "commands", "scramjet:package.md"), "---\n---\nPackage.");
 		const { pi, handlers } = recordingPi();
 		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn(), setHasUI: vi.fn() };
 		const state = freshState({ logger });
@@ -855,13 +902,17 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 			{ hasUI: true, ui: { notify } },
 		);
 
-		expect(result.promptPaths).toHaveLength(2);
-		expect(state.registry.has("mach12:package")).toBe(true);
+		expect(result.promptPaths).toHaveLength(1);
+		expect(state.registry.has("mach12:package")).toBe(false);
 		expect(state.registry.has("scramjet:package")).toBe(true);
 		expect(legacyInspector).toHaveBeenCalledTimes(8);
-		expect(
-			logger.warn.mock.calls.filter(([, message]) => String(message).includes("Could not inspect ignored legacy")),
-		).toHaveLength(1);
+		const inspectionWarnings = logger.warn.mock.calls
+			.map(([, message]) => String(message))
+			.filter((message) => message.includes("Could not inspect ignored legacy"));
+		expect(inspectionWarnings).toHaveLength(1);
+		expect(inspectionWarnings[0]).toContain("package resources for this set are unavailable");
+		expect(inspectionWarnings[0]).toContain("remains non-authoritative");
+		expect(inspectionWarnings[0]).not.toContain("package resources remain active");
 		expect(logger.warn.mock.calls.some(([, message]) => String(message).includes("could not display"))).toBe(true);
 		rmSync(sandbox, { recursive: true, force: true });
 	});

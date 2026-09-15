@@ -150,6 +150,14 @@ function packagedSet(
 			warnings.push(`[scramjet/discovery] bundled package command set ${source} is empty; reinstall Scramjet`);
 			return undefined;
 		}
+		const commandsDir = join(source, "commands");
+		if (!inspection.stat(commandsDir).isDirectory()) {
+			warnings.push(
+				`[scramjet/discovery] bundled package command set commands path ${commandsDir} is not a directory; reinstall Scramjet`,
+			);
+			return undefined;
+		}
+		inspection.readdir(commandsDir);
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
 		warnings.push(
@@ -202,11 +210,11 @@ export function registerCommandLoader(
 			const discoveryWarnings: string[] = [];
 			const globalDir = globalRoot();
 			const projectDir = join(event.cwd, ".scramjet");
+			const packagedSets = new Map(
+				BUNDLED_SETS.map((name) => [name, packagedSet(name, bundledRoot, inspection, discoveryWarnings)]),
+			);
 			const selectedSets = [
-				...BUNDLED_SETS.flatMap((name) => {
-					const set = packagedSet(name, bundledRoot, inspection, discoveryWarnings);
-					return set ? [set] : [];
-				}),
+				...[...packagedSets.values()].filter((set): set is SelectedSet => set !== undefined),
 				...enumerateSets(globalDir, "global", "global", discoveryWarnings),
 				...enumerateSets(projectDir, "project", "project", discoveryWarnings),
 			];
@@ -266,16 +274,20 @@ export function registerCommandLoader(
 			] as const) {
 				for (const name of BUNDLED_SETS) {
 					const legacyPath = join(root, name);
+					const packageAvailable = packagedSets.get(name) !== undefined;
+					const authority = packageAvailable
+						? "package resources remain active and the legacy path was left untouched"
+						: "package resources for this set are unavailable; reinstall Scramjet. The legacy path was left untouched and remains non-authoritative; no legacy fallback was used";
 					let signature: string;
 					let warning: string;
 					try {
 						const finding = legacyInspector({ legacyPath, packagePath: join(bundledRoot, name), scope });
 						if (!finding?.actionable) continue;
-						signature = finding.signature;
-						warning = formatLegacyBundleWarning(finding);
+						signature = `${packageAvailable}:${finding.signature}`;
+						warning = formatLegacyBundleWarning(finding, packageAvailable);
 					} catch {
-						signature = `inspection-failed:${resolve(legacyPath)}`;
-						warning = `Could not inspect ignored legacy bundled command set at ${legacyPath}; package resources remain active and the legacy path was left untouched. Compare it manually before migration.`;
+						signature = `${packageAvailable}:inspection-failed:${resolve(legacyPath)}`;
+						warning = `Could not inspect ignored legacy bundled command set at ${legacyPath}; ${authority}. Compare it manually before migration.`;
 					}
 					if (warnedLegacySignatures.has(signature)) continue;
 					warnedLegacySignatures.add(signature);

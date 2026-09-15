@@ -289,16 +289,16 @@ describe("subagent tool — registered-agent authority", () => {
 	it("uses the registry-selected definition instead of a loose same-name file", async () => {
 		writeProjectAgent(
 			tmpDir,
-			"mach12:authoritative.md",
-			["name: mach12:authoritative", "description: Loose agent"],
+			"custom:authoritative.md",
+			["name: custom:authoritative", "description: Loose agent"],
 			"Loose body.",
 		);
-		const registered = writeRegisteredAgent(tmpDir, "mach12:authoritative", "package", "Stale registered body.");
+		const registered = writeRegisteredAgent(tmpDir, "custom:authoritative", "global", "Stale registered body.");
 		registered.model = "stale-model";
 		const registry = new Map([[registered.name, registered]]);
 		fs.writeFileSync(
 			registered.filePath,
-			"---\nname: mach12:authoritative\ndescription: Registered mach12:authoritative\ntools: grep\nmodel: fresh-model\n---\n\nFresh registered body.",
+			"---\nname: custom:authoritative\ndescription: Registered custom:authoritative\ntools: grep\nmodel: fresh-model\n---\n\nFresh registered body.",
 		);
 		process.argv[1] = writeFakeInvocation(
 			tmpDir,
@@ -331,7 +331,7 @@ describe("subagent tool — registered-agent authority", () => {
 		expect(invocation.prompt).not.toContain("Loose body.");
 		expect(invocation.tools).toBe("grep");
 		expect(invocation.model).toBe("fresh-model");
-		expect(result.details.results[0].agentSource).toBe("package");
+		expect(result.details.results[0].agentSource).toBe("global");
 	});
 
 	it.each(["user", "project", "both"] as const)(
@@ -405,22 +405,22 @@ describe("subagent tool — registered-agent authority", () => {
 	it.each([
 		[
 			"missing file",
-			() => fs.rmSync(path.join(tmpDir, "mach12:authoritative.md")),
+			() => fs.rmSync(path.join(tmpDir, "custom:authoritative.md")),
 			"failed to read registered agent",
 		],
 		[
 			"invalid file",
-			() => fs.writeFileSync(path.join(tmpDir, "mach12:authoritative.md"), "---\nname: [broken\n---\nBody."),
+			() => fs.writeFileSync(path.join(tmpDir, "custom:authoritative.md"), "---\nname: [broken\n---\nBody."),
 			"registered agent is invalid",
 		],
 	] as const)(
 		"reports a registered %s without falling back to a loose same-name file",
 		async (_case, breakFile, diagnostic) => {
-			writeProjectAgent(tmpDir, "mach12:authoritative.md", [
-				"name: mach12:authoritative",
+			writeProjectAgent(tmpDir, "custom:authoritative.md", [
+				"name: custom:authoritative",
 				"description: Loose agent",
 			]);
-			const registered = writeRegisteredAgent(tmpDir, "mach12:authoritative");
+			const registered = writeRegisteredAgent(tmpDir, "custom:authoritative", "global");
 			breakFile();
 			const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
 
@@ -439,11 +439,11 @@ describe("subagent tool — registered-agent authority", () => {
 	);
 
 	it("reports registered identity changes without falling back to a loose same-name file", async () => {
-		writeProjectAgent(tmpDir, "mach12:authoritative.md", ["name: mach12:authoritative", "description: Loose agent"]);
-		const registered = writeRegisteredAgent(tmpDir, "mach12:authoritative");
+		writeProjectAgent(tmpDir, "custom:authoritative.md", ["name: custom:authoritative", "description: Loose agent"]);
+		const registered = writeRegisteredAgent(tmpDir, "custom:authoritative", "global");
 		fs.writeFileSync(
 			registered.filePath,
-			"---\nname: mach12:changed\ndescription: Changed identity\n---\nChanged body.",
+			"---\nname: custom:changed\ndescription: Changed identity\n---\nChanged body.",
 		);
 		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
 
