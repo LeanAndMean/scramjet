@@ -12,6 +12,11 @@ import type {
 	PublicationTool,
 	ScramjetState,
 } from "../types.js";
+import {
+	formatLegacyBundleWarning,
+	inspectLegacyBundle,
+	type LegacyBundleInspectionOptions,
+} from "./legacy-bundle-inspection.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
 type Scope = "global" | "project";
@@ -173,7 +178,12 @@ function globalRoot(): string {
 export function registerCommandLoader(
 	pi: ExtensionAPI,
 	state: ScramjetState,
-	dependencies: { bundledRoot?: string; inspection?: Partial<Inspection>; interactiveOutput?: boolean } = {},
+	dependencies: {
+		bundledRoot?: string;
+		inspection?: Partial<Inspection>;
+		interactiveOutput?: boolean;
+		legacyInspector?: (options: LegacyBundleInspectionOptions) => ReturnType<typeof inspectLegacyBundle>;
+	} = {},
 ): void {
 	const bundledRoot = dependencies.bundledRoot ?? packageRoot();
 	const interactiveOutput = dependencies.interactiveOutput ?? Boolean(process.stdout.isTTY);
@@ -181,6 +191,8 @@ export function registerCommandLoader(
 		stat: dependencies.inspection?.stat ?? statSync,
 		readdir: dependencies.inspection?.readdir ?? readdirSync,
 	};
+	const legacyInspector = dependencies.legacyInspector ?? inspectLegacyBundle;
+	const warnedLegacySignatures = new Set<string>();
 	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
@@ -247,6 +259,36 @@ export function registerCommandLoader(
 				}
 			}
 			state.autonomyRecommendations = recommendations;
+
+			for (const [scope, root] of [
+				["global", globalDir],
+				["project", projectDir],
+			] as const) {
+				for (const name of BUNDLED_SETS) {
+					const legacyPath = join(root, name);
+					let signature: string;
+					let warning: string;
+					try {
+						const finding = legacyInspector({ legacyPath, packagePath: join(bundledRoot, name), scope });
+						if (!finding?.actionable) continue;
+						signature = finding.signature;
+						warning = formatLegacyBundleWarning(finding);
+					} catch {
+						signature = `inspection-failed:${resolve(legacyPath)}`;
+						warning = `Could not inspect ignored legacy bundled command set at ${legacyPath}; package resources remain active and the legacy path was left untouched. Compare it manually before migration.`;
+					}
+					if (warnedLegacySignatures.has(signature)) continue;
+					warnedLegacySignatures.add(signature);
+					state.logger.warn("discovery", warning);
+					if (ctx?.hasUI && interactiveOutput) {
+						try {
+							ctx.ui.notify(warning, "warning");
+						} catch {
+							state.logger.warn("discovery", `could not display legacy migration warning for ${legacyPath}`);
+						}
+					}
+				}
+			}
 
 			for (const warning of discoveryWarnings) state.logger.warn("discovery", warning);
 			for (const warning of [...warnings, ...agentWarnings]) state.logger.warn("discovery", warning);
