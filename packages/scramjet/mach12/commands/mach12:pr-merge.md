@@ -87,7 +87,15 @@ Reacquire all applicable contribution and release authority before drafting by d
 
 Resolve every policy-owned tag, version, target, preflight, and downstream verification requirement from the returned source paths. If authority is absent or leaves a detail unspecified, use current repository evidence and established release style without inventing an ecosystem-specific gate. Repositories without applicable release authority retain generic release behavior.
 
-Read recent releases for style consistency and gather the PR, linked-issue, and commit context needed for accurate notes. For linked issues, delegate to `/mach12:gh-issue-read <issue-number> --marker mach12-plan`; continue without linked issues when none exist. User context may choose or modify the optional title and notes, but cannot override policy-owned tag, version, target, preflight, or proof requirements.
+Read recent releases for style consistency. Before linked-issue retrieval or release-note drafting, delegate to:
+
+```
+/mach12:gh-pr-read <pr-number>
+```
+
+Require its complete chronological top-level PR conversation. If it reports incomplete or malformed history, stop release-note drafting; never treat partial comments as complete.
+
+For linked issues, delegate to `/mach12:gh-issue-read <issue-number> --marker mach12-plan`; continue without linked issues when none exist. Draft from the PR title and body, complete top-level comments, linked issues, commits, and current repository evidence. Material implementation or scope changes recorded in comments must inform the notes when the PR body is stale; comments supplement rather than automatically override the other evidence. User context may choose or modify the optional title and notes, but cannot override policy-owned tag, version, target, preflight, or proof requirements.
 
 Before asking for approval, explain that release creation is immutable and can trigger irreversible, nontransactional publication. Identify any mandatory authority-defined read-only preflight and its consequences of failure or ambiguity; when none applies, say so rather than inventing one. Also identify the downstream proof outcomes that release creation does not itself establish. Present the exact draft with:
 
