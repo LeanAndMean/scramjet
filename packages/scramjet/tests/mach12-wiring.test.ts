@@ -272,14 +272,18 @@ describe("mach12 PR merge — release evidence contract", () => {
 	it("requires complete PR conversation before release drafting", () => {
 		const prRead = release.indexOf("/mach12:gh-pr-read <pr-number>");
 		const issueRead = release.indexOf("/mach12:gh-issue-read <issue-number>");
+		const releaseDraft = release.indexOf("Draft from the PR title and body");
 		const exactDraft = release.indexOf("Present the exact draft");
 
 		expect(prRead).toBeGreaterThan(-1);
 		expect(prRead).toBeLessThan(issueRead);
+		expect(prRead).toBeLessThan(releaseDraft);
 		expect(prRead).toBeLessThan(exactDraft);
 		expect(release).toMatch(/complete chronological top-level (?:PR )?conversation/i);
 		expect(release).toMatch(/incomplete or malformed history[^.]*stop[^.]*draft/i);
-		expect(release).toMatch(/PR title and body[^.]*comments[^.]*linked issues[^.]*commits[^.]*current repository evidence/i);
+		expect(release).toMatch(
+			/PR title and body[^.]*comments[^.]*linked issues[^.]*commits[^.]*current repository evidence/i,
+		);
 		expect(release).toMatch(/material implementation or scope changes[^.]*comments[^.]*stale/i);
 	});
 });
