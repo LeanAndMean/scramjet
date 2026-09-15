@@ -162,7 +162,11 @@ export function parseAgentFile(filePath: string, content: string, setName: strin
 	if (typeof name !== "string" || name.trim() === "") {
 		return { ok: false, error: `${fileName}: missing required "name" field in frontmatter` };
 	}
-	const def: AgentDef = { name: name.trim(), filePath };
+	const normalizedName = name.trim();
+	if (!normalizedName.startsWith(expectedPrefix)) {
+		return { ok: false, error: `${fileName}: name must start with "${expectedPrefix}"` };
+	}
+	const def: AgentDef = { name: normalizedName, filePath };
 	const description = parsed.frontmatter.description;
 	if (typeof description === "string" && description.trim() !== "") def.description = description.trim();
 	return { ok: true, def };

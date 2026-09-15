@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, type Stats, statSync } from "node:fs";
+import { readdirSync, readFileSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
@@ -16,9 +16,8 @@ import { ensureAgentBridge } from "./agent-bridge.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
 type Scope = "global" | "project";
-type SelectedSet = { name: string; dir: string; scope: Scope; source: "destination" | "package" | "project" };
+type SelectedSet = { name: string; dir: string; scope: Scope; source: "package" | "global" | "project" };
 type Inspection = {
-	lstat(path: string): Stats;
 	stat(path: string): Stats;
 	readdir(path: string): string[];
 };
@@ -56,7 +55,11 @@ function filterPublicationDefaults(
 	return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
-function safeReaddir(dir: string, warnings: string[]): { name: string; isDirectory: boolean }[] {
+function safeReaddir(
+	dir: string,
+	warnings: string[],
+	excludedNames: readonly string[] = [],
+): { name: string; isDirectory: boolean }[] {
 	let raw: import("node:fs").Dirent[];
 	try {
 		raw = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[];
@@ -67,33 +70,35 @@ function safeReaddir(dir: string, warnings: string[]): { name: string; isDirecto
 		}
 		return [];
 	}
-	return raw.map((e) => {
-		const name = String(e.name);
-		let isDirectory = e.isDirectory();
-		if (e.isSymbolicLink()) {
-			try {
-				isDirectory = statSync(join(dir, name)).isDirectory();
-			} catch (err) {
-				const code = (err as NodeJS.ErrnoException).code;
-				if (code === "ENOENT") {
-					warnings.push(
-						`[scramjet/discovery] symlink ${join(dir, name)} has a missing target; if you migrated from the single-repo layout, remove the old symlink and re-run: ln -sfn "$(pwd)/packages/scramjet/mach12" "${join(dir, name)}"`,
-					);
-				} else {
-					warnings.push(
-						`[scramjet/discovery] could not stat symlink ${join(dir, name)} (${code ?? "unknown"}: ${(err as Error).message}); treating as non-directory`,
-					);
+	return raw
+		.filter((entry) => !excludedNames.includes(String(entry.name)))
+		.map((e) => {
+			const name = String(e.name);
+			let isDirectory = e.isDirectory();
+			if (e.isSymbolicLink()) {
+				try {
+					isDirectory = statSync(join(dir, name)).isDirectory();
+				} catch (err) {
+					const code = (err as NodeJS.ErrnoException).code;
+					if (code === "ENOENT") {
+						warnings.push(
+							`[scramjet/discovery] symlink ${join(dir, name)} has a missing target; if you migrated from the single-repo layout, remove the old symlink and re-run: ln -sfn "$(pwd)/packages/scramjet/mach12" "${join(dir, name)}"`,
+						);
+					} else {
+						warnings.push(
+							`[scramjet/discovery] could not stat symlink ${join(dir, name)} (${code ?? "unknown"}: ${(err as Error).message}); treating as non-directory`,
+						);
+					}
+					isDirectory = false;
 				}
-				isDirectory = false;
 			}
-		}
-		return { name, isDirectory };
-	});
+			return { name, isDirectory };
+		});
 }
 
 function enumerateSets(root: string, scope: Scope, source: SelectedSet["source"], warnings: string[]): SelectedSet[] {
-	return safeReaddir(root, warnings)
-		.filter((entry) => entry.isDirectory && (scope === "project" || !BUNDLED_SETS.includes(entry.name as any)))
+	return safeReaddir(root, warnings, BUNDLED_SETS)
+		.filter((entry) => entry.isDirectory)
 		.map((entry) => ({ name: entry.name, dir: join(root, entry.name), scope, source }));
 }
 
@@ -117,52 +122,32 @@ function collectEntries(sets: SelectedSet[], subdir: string, warnings: string[])
 	return entries;
 }
 
-function selectBundledSet(
+function packagedSet(
 	name: (typeof BUNDLED_SETS)[number],
-	globalDir: string,
 	bundledRoot: string,
 	inspection: Inspection,
 	warnings: string[],
-): { set?: SelectedSet; diagnostic?: string; classification: string } {
-	const destination = join(globalDir, name);
-	try {
-		inspection.lstat(destination);
-		return { set: { name, dir: destination, scope: "global", source: "destination" }, classification: "destination" };
-	} catch (err) {
-		const code = (err as NodeJS.ErrnoException).code;
-		if (code !== "ENOENT") {
-			const diagnostic = `could not inspect bundled command-set destination ${destination} (${code ?? "unknown"}: ${(err as Error).message}); package fallback was not used`;
-			warnings.push(`[scramjet/discovery] ${diagnostic}`);
-			return { diagnostic, classification: `destination-${code ?? "unknown"}` };
-		}
-	}
-
+): SelectedSet | undefined {
 	const source = join(bundledRoot, name);
 	try {
 		if (!inspection.stat(source).isDirectory()) {
-			const diagnostic = `bundled package source ${source} is not a directory; ${destination} remains unavailable`;
-			warnings.push(`[scramjet/discovery] ${diagnostic}`);
-			return { diagnostic, classification: "source-not-directory" };
+			warnings.push(
+				`[scramjet/discovery] bundled package command set ${source} is not a directory; reinstall Scramjet`,
+			);
+			return undefined;
 		}
 		if (inspection.readdir(source).length === 0) {
-			const diagnostic = `bundled package source ${source} is empty; ${destination} remains unavailable`;
-			warnings.push(`[scramjet/discovery] ${diagnostic}`);
-			return { diagnostic, classification: "source-empty" };
+			warnings.push(`[scramjet/discovery] bundled package command set ${source} is empty; reinstall Scramjet`);
+			return undefined;
 		}
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
-		const diagnostic = `could not use bundled package source ${source} (${code ?? "unknown"}: ${(err as Error).message}); ${destination} remains unavailable`;
-		warnings.push(`[scramjet/discovery] ${diagnostic}`);
-		return { diagnostic, classification: `source-${code ?? "unknown"}` };
+		warnings.push(
+			`[scramjet/discovery] could not use bundled package command set ${source} (${code ?? "unknown"}: ${(err as Error).message}); reinstall Scramjet`,
+		);
+		return undefined;
 	}
-
-	const diagnostic = `bundled destination ${destination} is missing; using packaged ${name} command set read-only from ${source}. To restore durable editable copies, run node "${join(bundledRoot, "scripts", "postinstall.js")}" and restart Scramjet.`;
-	warnings.push(`[scramjet/discovery] ${diagnostic}`);
-	return {
-		set: { name, dir: source, scope: "global", source: "package" },
-		diagnostic,
-		classification: "fallback",
-	};
+	return { name, dir: source, scope: "global", source: "package" };
 }
 
 export function commandFingerprint(content: string): string {
@@ -188,11 +173,9 @@ export function registerCommandLoader(
 	const bundledRoot = dependencies.bundledRoot ?? packageRoot();
 	const interactiveOutput = dependencies.interactiveOutput ?? Boolean(process.stdout.isTTY);
 	const inspection: Inspection = {
-		lstat: dependencies.inspection?.lstat ?? lstatSync,
 		stat: dependencies.inspection?.stat ?? statSync,
 		readdir: dependencies.inspection?.readdir ?? readdirSync,
 	};
-	let lastNotificationSignature = "";
 	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
@@ -202,12 +185,12 @@ export function registerCommandLoader(
 			const discoveryWarnings: string[] = [];
 			const globalDir = globalRoot();
 			const projectDir = join(event.cwd, ".scramjet");
-			const bundled = BUNDLED_SETS.map((name) =>
-				selectBundledSet(name, globalDir, bundledRoot, inspection, discoveryWarnings),
-			);
 			const selectedSets = [
-				...bundled.flatMap((result) => (result.set ? [result.set] : [])),
-				...enumerateSets(globalDir, "global", "destination", discoveryWarnings),
+				...BUNDLED_SETS.flatMap((name) => {
+					const set = packagedSet(name, bundledRoot, inspection, discoveryWarnings);
+					return set ? [set] : [];
+				}),
+				...enumerateSets(globalDir, "global", "global", discoveryWarnings),
 				...enumerateSets(projectDir, "project", "project", discoveryWarnings),
 			];
 
@@ -290,16 +273,6 @@ export function registerCommandLoader(
 					"warning",
 				);
 			lastPublicationWarningSignature = publicationWarningSignature;
-
-			const visibleDiagnostics = bundled.flatMap((result) => (result.diagnostic ? [result.diagnostic] : []));
-			const signature = bundled.map((result) => result.classification).join("|");
-			if (visibleDiagnostics.length > 0) {
-				const message = visibleDiagnostics.join("\n");
-				if (ctx?.hasUI && interactiveOutput && signature !== lastNotificationSignature)
-					ctx.ui.notify(message, "warning");
-				else if (ctx?.hasUI && !interactiveOutput) process.stderr.write(`[scramjet/discovery] ${message}\n`);
-			}
-			lastNotificationSignature = visibleDiagnostics.length > 0 ? signature : "";
 
 			return { skillPaths, promptPaths: [...registry.values()].map((def) => def.filePath), themePaths };
 		} catch (err) {
