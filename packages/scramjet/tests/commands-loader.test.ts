@@ -656,7 +656,12 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		["file", "not a directory"],
 		["dangling", "ENOENT"],
 		["empty", "is empty"],
-		["commandless", "is empty"],
+		["commandless", "contains no usable commands"],
+		["non-markdown-command", "contains no usable commands"],
+		["directory-command", "contains no usable commands"],
+		["unreadable-command", "contains no usable commands"],
+		["malformed-command", "malformed frontmatter"],
+		["misnamespaced-command", "filename must start with"],
 		["missing-commands", "ENOENT"],
 		["inaccessible", "EACCES"],
 	] as const)("rejects a %s packaged source without disrupting sibling or project discovery", (form, diagnostic) => {
@@ -678,8 +683,26 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 			symlinkSync(join(sandbox, "missing"), source);
 		}
 		if (form === "empty" || form === "inaccessible") mkdirSync(source, { recursive: true });
-		if (form === "commandless" || form === "missing-commands") {
-			if (form === "commandless") mkdirSync(join(source, "commands"), { recursive: true });
+		if (
+			[
+				"commandless",
+				"non-markdown-command",
+				"directory-command",
+				"unreadable-command",
+				"malformed-command",
+				"misnamespaced-command",
+				"missing-commands",
+			].includes(form)
+		) {
+			if (form !== "missing-commands") mkdirSync(join(source, "commands"), { recursive: true });
+			if (form === "non-markdown-command") writeFileSync(join(source, "commands", ".DS_Store"), "metadata");
+			if (form === "directory-command") mkdirSync(join(source, "commands", "mach12:nested.md"));
+			if (form === "unreadable-command")
+				writeFileSync(join(source, "commands", "mach12:unreadable.md"), "---\n---\nCommand.");
+			if (form === "malformed-command")
+				writeFileSync(join(source, "commands", "mach12:malformed.md"), "---\ninvalid: [\n---\nCommand.");
+			if (form === "misnamespaced-command")
+				writeFileSync(join(source, "commands", "other:command.md"), "---\n---\nCommand.");
 			mkdirSync(join(source, "agents"), { recursive: true });
 			writeFileSync(
 				join(source, "agents", "mach12:orphan.md"),
@@ -699,7 +722,15 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 								return lstatSync(path);
 							},
 						}
-					: undefined,
+					: form === "unreadable-command"
+						? {
+								readFile(path) {
+									if (path.endsWith("mach12:unreadable.md"))
+										throw Object.assign(new Error("denied"), { code: "EACCES" });
+									return readFileSync(path, "utf-8");
+								},
+							}
+						: undefined,
 		});
 		handlers.get("resources_discover")![0]?.({ type: "resources_discover", cwd, reason: "startup" });
 
@@ -892,7 +923,7 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		process.env.SCRAMJET_CACHE = join(sandbox, "global");
 		registerCommandLoader(pi, state, { bundledRoot, legacyInspector, interactiveOutput: true });
 		const handler = handlers.get("resources_discover")![0];
-		const notify = vi.fn(() => {
+		const notify = vi.fn().mockImplementationOnce(() => {
 			throw new Error("display failed");
 		});
 		const result = handler?.(
@@ -915,7 +946,14 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(inspectionWarnings[0]).toContain("package resources for this set are unavailable");
 		expect(inspectionWarnings[0]).toContain("remains non-authoritative");
 		expect(inspectionWarnings[0]).not.toContain("package resources remain active");
-		expect(logger.warn.mock.calls.some(([, message]) => String(message).includes("could not display"))).toBe(true);
+		expect(notify).toHaveBeenCalledTimes(2);
+		const displayFailure = logger.warn.mock.calls.find(([, message]) =>
+			String(message).includes("could not display"),
+		);
+		expect(displayFailure?.[2]).toEqual({
+			legacyPath: join(sandbox, "global", "mach12"),
+			cause: "display failed",
+		});
 		rmSync(sandbox, { recursive: true, force: true });
 	});
 

@@ -16,6 +16,7 @@ export interface AgentConfig {
 	systemPrompt: string;
 	source: ExecutableAgentSource;
 	filePath: string;
+	diagnostics?: string[];
 }
 
 export interface ParsedAgent {
@@ -171,7 +172,8 @@ function loadRegisteredAgent(def: AgentDef, diagnostics: string[]): AgentConfig 
 		diagnostics.push(`${def.filePath}: registered agent is invalid (${parsed.error})`);
 		return undefined;
 	}
-	diagnostics.push(...parsed.diagnostics);
+	const invocationDiagnostics = [...parsed.diagnostics];
+	diagnostics.push(...invocationDiagnostics);
 	const expectedPrefix = `${def.setName}:`;
 	const fileName = path.basename(def.filePath, ".md");
 	if (
@@ -182,7 +184,12 @@ function loadRegisteredAgent(def: AgentDef, diagnostics: string[]): AgentConfig 
 		diagnostics.push(`${def.filePath}: registered identity changed from ${def.name}`);
 		return undefined;
 	}
-	return { ...parsed.agent, source: def.source, filePath: def.filePath };
+	return {
+		...parsed.agent,
+		source: def.source,
+		filePath: def.filePath,
+		...(invocationDiagnostics.length > 0 ? { diagnostics: invocationDiagnostics } : {}),
+	};
 }
 
 export function discoverAgents(cwd: string, scope: AgentScope, registeredAgents?: AgentRegistry): AgentDiscoveryResult {

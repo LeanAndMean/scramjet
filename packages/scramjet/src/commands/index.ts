@@ -24,7 +24,9 @@ type SelectedSet = { name: string; dir: string; scope: Scope; source: "package" 
 type Inspection = {
 	stat(path: string): Stats;
 	readdir(path: string): string[];
+	readFile(path: string): string;
 };
+type PackagedSet = { set: SelectedSet; commandEntries: FileEntry[] };
 
 const BUNDLED_SETS = ["mach12", "scramjet"] as const;
 
@@ -106,7 +108,12 @@ function enumerateSets(root: string, scope: Scope, source: SelectedSet["source"]
 		.map((entry) => ({ name: entry.name, dir: join(root, entry.name), scope, source }));
 }
 
-function collectEntries(sets: SelectedSet[], subdir: string, warnings: string[]): FileEntry[] {
+function collectEntries(
+	sets: SelectedSet[],
+	subdir: string,
+	warnings: string[],
+	readFile: (path: string) => string = (path) => readFileSync(path, "utf-8"),
+): FileEntry[] {
 	const entries: FileEntry[] = [];
 	for (const set of sets) {
 		const dir = join(set.dir, subdir);
@@ -116,7 +123,7 @@ function collectEntries(sets: SelectedSet[], subdir: string, warnings: string[])
 			try {
 				entries.push({
 					filePath,
-					content: readFileSync(filePath, "utf-8"),
+					content: readFile(filePath),
 					setName: set.name,
 					scope: set.scope,
 					source: set.source,
@@ -137,7 +144,7 @@ function packagedSet(
 	bundledRoot: string,
 	inspection: Inspection,
 	warnings: string[],
-): SelectedSet | undefined {
+): PackagedSet | undefined {
 	const source = join(bundledRoot, name);
 	try {
 		if (!inspection.stat(source).isDirectory()) {
@@ -157,12 +164,7 @@ function packagedSet(
 			);
 			return undefined;
 		}
-		if (inspection.readdir(commandsDir).length === 0) {
-			warnings.push(
-				`[scramjet/discovery] bundled package command set commands path ${commandsDir} is empty; reinstall Scramjet`,
-			);
-			return undefined;
-		}
+		inspection.readdir(commandsDir);
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
 		warnings.push(
@@ -170,7 +172,17 @@ function packagedSet(
 		);
 		return undefined;
 	}
-	return { name, dir: source, scope: "global", source: "package" };
+	const set: SelectedSet = { name, dir: source, scope: "global", source: "package" };
+	const commandEntries = collectEntries([set], "commands", warnings, inspection.readFile);
+	const validation = buildRegistry(commandEntries);
+	if (validation.registry.size === 0) {
+		warnings.push(...validation.warnings);
+		warnings.push(
+			`[scramjet/discovery] bundled package command set commands path ${join(source, "commands")} contains no usable commands; reinstall Scramjet`,
+		);
+		return undefined;
+	}
+	return { set, commandEntries };
 }
 
 export function commandFingerprint(content: string): string {
@@ -203,9 +215,11 @@ export function registerCommandLoader(
 	const inspection: Inspection = {
 		stat: dependencies.inspection?.stat ?? statSync,
 		readdir: dependencies.inspection?.readdir ?? readdirSync,
+		readFile: dependencies.inspection?.readFile ?? ((path) => readFileSync(path, "utf-8")),
 	};
 	const legacyInspector = dependencies.legacyInspector ?? inspectLegacyBundle;
-	const warnedLegacySignatures = new Set<string>();
+	const journaledLegacySignatures = new Set<string>();
+	const displayedLegacySignatures = new Set<string>();
 	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
@@ -215,16 +229,23 @@ export function registerCommandLoader(
 			const discoveryWarnings: string[] = [];
 			const globalDir = globalRoot();
 			const projectDir = join(event.cwd, ".scramjet");
-			const packagedSets = new Map(
+			const packagedSources = new Map(
 				BUNDLED_SETS.map((name) => [name, packagedSet(name, bundledRoot, inspection, discoveryWarnings)]),
 			);
-			const selectedSets = [
-				...[...packagedSets.values()].filter((set): set is SelectedSet => set !== undefined),
+			const packagedSets = new Map(BUNDLED_SETS.map((name) => [name, packagedSources.get(name)?.set]));
+			const customSets = [
 				...enumerateSets(globalDir, "global", "global", discoveryWarnings),
 				...enumerateSets(projectDir, "project", "project", discoveryWarnings),
 			];
+			const selectedSets = [
+				...[...packagedSets.values()].filter((set): set is SelectedSet => set !== undefined),
+				...customSets,
+			];
 
-			const commandEntries = collectEntries(selectedSets, "commands", discoveryWarnings);
+			const commandEntries = [
+				...BUNDLED_SETS.flatMap((name) => packagedSources.get(name)?.commandEntries ?? []),
+				...collectEntries(customSets, "commands", discoveryWarnings),
+			];
 			const { registry, warnings } = buildRegistry(commandEntries);
 			state.registry = registry;
 			const entriesByPath = new Map(commandEntries.map((entry) => [entry.filePath, entry]));
@@ -294,14 +315,19 @@ export function registerCommandLoader(
 						signature = `${packageAvailable}:inspection-failed:${resolve(legacyPath)}`;
 						warning = `Could not inspect ignored legacy bundled command set at ${legacyPath}; ${authority}. Compare it manually before migration.`;
 					}
-					if (warnedLegacySignatures.has(signature)) continue;
-					warnedLegacySignatures.add(signature);
-					state.logger.warn("discovery", warning);
-					if (ctx?.hasUI && interactiveOutput) {
+					if (!journaledLegacySignatures.has(signature)) {
+						state.logger.warn("discovery", warning);
+						journaledLegacySignatures.add(signature);
+					}
+					if (ctx?.hasUI && interactiveOutput && !displayedLegacySignatures.has(signature)) {
 						try {
 							ctx.ui.notify(warning, "warning");
-						} catch {
-							state.logger.warn("discovery", `could not display legacy migration warning for ${legacyPath}`);
+							displayedLegacySignatures.add(signature);
+						} catch (err) {
+							state.logger.warn("discovery", `could not display legacy migration warning for ${legacyPath}`, {
+								legacyPath,
+								cause: err instanceof Error ? err.message : String(err),
+							});
 						}
 					}
 				}

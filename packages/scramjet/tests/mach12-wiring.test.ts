@@ -143,9 +143,9 @@ function stripHints(policy: NextStepPolicy | null): NextStepPolicy | null {
 
 const MACH12_AGENTS_DIR = resolve(HERE, "..", "mach12", "agents");
 
-// F18: The expected list of bundled mach12 agents. A name-mismatch between
-// a command's subagent reference and the bridged filename would slip through
-// CI without this explicit pin. If you add/rename an agent, update here.
+// F18: The expected list of bundled mach12 agents. A name mismatch between
+// a command's subagent reference and the registered package-agent filename would
+// slip through CI without this explicit pin. If you add/rename an agent, update here.
 const EXPECTED_AGENTS = [
 	"mach12:code-architect",
 	"mach12:code-explorer",

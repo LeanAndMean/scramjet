@@ -16,7 +16,7 @@ To fork bundled behavior, use a differently named set and update all identity-be
 
 An agent is a Markdown file whose body becomes the child agent's system prompt. YAML frontmatter must contain non-empty string `name` and `description` values. Optional `tools` is a comma-separated string: trimmed non-empty entries form the child tool allowlist, while an absent or empty value leaves tools unrestricted. A non-string `tools` value is diagnosed and ignored. Optional `model` is a trimmed non-empty string; a non-string value is diagnosed and ignored.
 
-Registry and catalog discovery use the same executable-agent parser as invocation-time rereading. Each invocation rereads the registry-selected file and preserves its identity, containing set, and package/global/project provenance. A read, parse, identity, set, or provenance mismatch fails visibly rather than falling back to a loose same-name agent. Loose user and project agents remain supported under non-reserved identities, but cannot replace a registered definition.
+Registry and catalog discovery use the same executable-agent parser as invocation-time rereading. Each invocation rereads the registry-selected file, revalidates its identity and namespace, and preserves its registry-assigned containing set and package/global/project provenance. A read, parse, or identity failure surfaces visibly rather than falling back to a loose same-name agent. Loose user and project agents remain supported under non-reserved identities, but cannot replace a registered definition.
 
 `scramjet-command-lint` validates command Markdown only. It does not validate agent definitions; agent failures surface through runtime discovery or reload diagnostics.
 

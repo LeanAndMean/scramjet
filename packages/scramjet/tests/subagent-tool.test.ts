@@ -120,6 +120,8 @@ describe("registerSubagentTool — registration", () => {
 
 		expect(tools).toHaveLength(1);
 		expect(tools[0].name).toBe("subagent");
+		expect(tools[0].description).toContain("Registered command-set agents remain available under every scope");
+		expect(JSON.stringify(tools[0].parameters)).toContain("Which loose agent directories to use");
 		expect(typeof tools[0].renderCall).toBe("function");
 		expect(typeof tools[0].renderResult).toBe("function");
 	});
@@ -332,6 +334,48 @@ describe("subagent tool — registered-agent authority", () => {
 		expect(invocation.tools).toBe("grep");
 		expect(invocation.model).toBe("fresh-model");
 		expect(result.details.results[0].agentSource).toBe("global");
+	});
+
+	it("surfaces fresh registered metadata diagnostics before and after successful execution", async () => {
+		const registered = writeRegisteredAgent(tmpDir, "custom:diagnosed", "global");
+		fs.writeFileSync(
+			registered.filePath,
+			[
+				"---",
+				"name: custom:diagnosed",
+				"description: Registered custom:diagnosed",
+				"tools:",
+				"  - read",
+				"model:",
+				"  - stale-model",
+				"---",
+				"Fresh body.",
+			].join("\n"),
+		);
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			`process.stdout.write(${JSON.stringify(`${assistantEvent("completed")}\n`)});`,
+		);
+		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
+		const onUpdate = vi.fn();
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: registered.name, task: "run", agentScope: "user" },
+			undefined,
+			onUpdate,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(onUpdate.mock.calls[0][0].content[0].text).toContain("ignoring non-string tools frontmatter");
+		expect(onUpdate.mock.calls[0][0].content[0].text).toContain("ignoring non-string model frontmatter");
+		expect(textContent(result)).toContain("ignoring non-string tools frontmatter");
+		expect(textContent(result)).toContain("ignoring non-string model frontmatter");
+		expect(textContent(result)).toContain("completed");
+		expect(renderToolResult(tool, result, false, { agent: registered.name, task: "run" })).toContain(
+			"Agent invocation warnings",
+		);
 	});
 
 	it.each(["user", "project", "both"] as const)(
