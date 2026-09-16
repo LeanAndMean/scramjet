@@ -71,10 +71,17 @@ export interface CommandDef {
 
 export type CommandRegistry = ReadonlyMap<string, CommandDef>;
 
+export type AgentSource = "package" | "global" | "project";
+
 export interface AgentDef {
 	name: string;
+	description: string;
+	tools?: string[];
+	model?: string;
+	systemPrompt: string;
 	filePath: string;
-	description?: string;
+	setName: string;
+	source: AgentSource;
 }
 
 export type AgentRegistry = ReadonlyMap<string, AgentDef>;

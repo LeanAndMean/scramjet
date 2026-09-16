@@ -558,6 +558,16 @@ export async function verify(inventory, dependencies = {}) {
 			env,
 			timeout: PUBLISH_TIMEOUT_MS,
 		});
+		phase = "installed runtime smoke";
+		const packageRoot = join(project, "node_modules", "@leanandmean", "scramjet");
+		const smokeRoot = join(root, "installed-runtime-smoke");
+		const runInstalledRuntimeSmoke = dependencies.runInstalledRuntimeSmoke ?? ((installedRoot, workDir) => {
+			run(process.execPath, [join(REPO_ROOT, ".github", "scripts", "installed-runtime-smoke.mjs"), installedRoot, workDir], {
+				env,
+				timeout: PUBLISH_TIMEOUT_MS,
+			});
+		});
+		runInstalledRuntimeSmoke(packageRoot, smokeRoot);
 		phase = "installed CLI probe";
 		try {
 			run(join(project, "node_modules", ".bin", "scramjet"), ["--help"], { cwd: project, env });

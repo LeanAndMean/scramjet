@@ -3,8 +3,20 @@ import { buildAgentCatalogBlock, registerAgentCatalog } from "../src/agent-catal
 import type { AgentRegistry } from "../src/types.js";
 import { freshState, recordingPi } from "./helpers.js";
 
-function makeRegistry(...entries: [string, string?][]): AgentRegistry {
-	return new Map(entries.map(([name, description]) => [name, { name, filePath: `/agents/${name}.md`, description }]));
+function makeRegistry(...entries: [string, string][]): AgentRegistry {
+	return new Map(
+		entries.map(([name, description]) => [
+			name,
+			{
+				name,
+				description,
+				systemPrompt: "Agent body.",
+				filePath: `/agents/${name}.md`,
+				setName: name.split(":", 1)[0],
+				source: "package" as const,
+			},
+		]),
+	);
 }
 
 describe("buildAgentCatalogBlock", () => {
@@ -18,13 +30,6 @@ describe("buildAgentCatalogBlock", () => {
 		expect(block).toContain("# Available subagents");
 		expect(block).toContain("- mach12:code-architect: Designs");
 		expect(block).toContain("- mach12:code-explorer: Explores code");
-	});
-
-	it("includes name only when description is missing", () => {
-		const registry = makeRegistry(["my-agent"]);
-		const block = buildAgentCatalogBlock(registry);
-		expect(block).toContain("- my-agent");
-		expect(block).not.toContain("- my-agent:");
 	});
 
 	it("sorts agents alphabetically", () => {

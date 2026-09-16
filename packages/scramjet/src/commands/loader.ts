@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import { parseFrontmatter } from "@leanandmean/coding-agent";
-import type { AgentDef, AgentRegistry, CommandDef, CommandRegistry } from "../types.js";
+import { parseExecutableAgent } from "../subagent/agents.js";
+import type { AgentDef, AgentRegistry, AgentSource, CommandDef, CommandRegistry } from "../types.js";
 import { parseNextStepPolicy } from "./parse-next-step.js";
 
 // Source of a discovered command/agent file. Currently used only to
@@ -13,6 +14,7 @@ export interface FileEntry {
 	content: string;
 	setName: string;
 	scope: FileScope;
+	source?: AgentSource;
 }
 
 export type LoadResult = { ok: true; def: CommandDef; warnings?: string[] } | { ok: false; error: string };
@@ -134,14 +136,19 @@ export function buildRegistry(entries: FileEntry[]): RegistryBuildResult {
 
 export type AgentFileEntry = FileEntry;
 
-export type AgentLoadResult = { ok: true; def: AgentDef } | { ok: false; error: string };
+export type AgentLoadResult = { ok: true; def: AgentDef; warnings?: string[] } | { ok: false; error: string };
 
 interface AgentRegistryBuildResult {
 	agentRegistry: AgentRegistry;
 	warnings: string[];
 }
 
-export function parseAgentFile(filePath: string, content: string, setName: string): AgentLoadResult {
+export function parseAgentFile(
+	filePath: string,
+	content: string,
+	setName: string,
+	source: AgentSource = "global",
+): AgentLoadResult {
 	const fileName = basename(filePath);
 	if (!fileName.endsWith(".md")) {
 		return { ok: false, error: `${fileName}: not a markdown file` };
@@ -150,33 +157,26 @@ export function parseAgentFile(filePath: string, content: string, setName: strin
 	if (!fileName.slice(0, -".md".length).startsWith(expectedPrefix)) {
 		return { ok: false, error: `${fileName}: filename must start with "${expectedPrefix}"` };
 	}
-	const normalized = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-	let parsed: { frontmatter: Record<string, unknown>; body: string };
-	try {
-		parsed = parseFrontmatter(normalized);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return { ok: false, error: `${fileName}: malformed frontmatter — ${message}` };
+	const parsed = parseExecutableAgent(filePath, content);
+	if (!parsed.ok) return { ok: false, error: parsed.error };
+	if (!parsed.agent.name.startsWith(expectedPrefix)) {
+		return { ok: false, error: `${fileName}: name must start with "${expectedPrefix}"` };
 	}
-	const name = parsed.frontmatter.name;
-	if (typeof name !== "string" || name.trim() === "") {
-		return { ok: false, error: `${fileName}: missing required "name" field in frontmatter` };
-	}
-	const def: AgentDef = { name: name.trim(), filePath };
-	const description = parsed.frontmatter.description;
-	if (typeof description === "string" && description.trim() !== "") def.description = description.trim();
-	return { ok: true, def };
+	const def: AgentDef = { ...parsed.agent, filePath, setName, source };
+	return parsed.diagnostics.length > 0 ? { ok: true, def, warnings: parsed.diagnostics } : { ok: true, def };
 }
 
 export function buildAgentRegistry(entries: AgentFileEntry[]): AgentRegistryBuildResult {
 	const agentRegistry = new Map<string, AgentDef>();
 	const warnings: string[] = [];
 	for (const entry of entries) {
-		const result = parseAgentFile(entry.filePath, entry.content, entry.setName);
+		const source = entry.source ?? (entry.scope === "project" ? "project" : "global");
+		const result = parseAgentFile(entry.filePath, entry.content, entry.setName, source);
 		if (!result.ok) {
 			warnings.push(`skipping agent ${entry.filePath}: ${result.error}`);
 			continue;
 		}
+		warnings.push(...(result.warnings ?? []));
 		const existing = agentRegistry.get(result.def.name);
 		if (existing) {
 			warnings.push(

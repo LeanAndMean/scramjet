@@ -1,9 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@leanandmean/coding-agent";
+import type { AgentDef, AgentRegistry, AgentSource } from "../types.js";
 
 export const AGENT_SCOPES = ["user", "project", "both"] as const;
 export type AgentScope = (typeof AGENT_SCOPES)[number];
+export type LooseAgentSource = "user" | "project";
+export type ExecutableAgentSource = AgentSource | LooseAgentSource;
 
 export interface AgentConfig {
 	name: string;
@@ -11,9 +14,22 @@ export interface AgentConfig {
 	tools?: string[];
 	model?: string;
 	systemPrompt: string;
-	source: "user" | "project";
+	source: ExecutableAgentSource;
 	filePath: string;
+	diagnostics?: string[];
 }
+
+export interface ParsedAgent {
+	name: string;
+	description: string;
+	tools?: string[];
+	model?: string;
+	systemPrompt: string;
+}
+
+export type AgentParseResult =
+	| { ok: true; agent: ParsedAgent; diagnostics: string[] }
+	| { ok: false; error: string; diagnostics: string[] };
 
 export interface AgentDiscoveryResult {
 	agents: AgentConfig[];
@@ -21,16 +37,64 @@ export interface AgentDiscoveryResult {
 	diagnostics: string[];
 }
 
+const RESERVED_PREFIXES = ["mach12:", "scramjet:"] as const;
+
 function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics: string[]): AgentConfig[] {
+function hasReservedIdentity(name: string): boolean {
+	return RESERVED_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+export function parseExecutableAgent(filePath: string, content: string): AgentParseResult {
+	const normalized = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+	let parsed: { frontmatter: Record<string, unknown>; body: string };
+	try {
+		parsed = parseFrontmatter<Record<string, unknown>>(normalized);
+	} catch (err) {
+		return { ok: false, error: `${filePath}: invalid YAML frontmatter (${errorMessage(err)})`, diagnostics: [] };
+	}
+
+	const name = typeof parsed.frontmatter.name === "string" ? parsed.frontmatter.name.trim() : "";
+	const description = typeof parsed.frontmatter.description === "string" ? parsed.frontmatter.description.trim() : "";
+	if (!name || !description) {
+		return {
+			ok: false,
+			error: `${filePath}: frontmatter must include string name and description`,
+			diagnostics: [],
+		};
+	}
+
+	const diagnostics: string[] = [];
+	const tools =
+		typeof parsed.frontmatter.tools === "string"
+			? parsed.frontmatter.tools
+					.split(",")
+					.map((tool) => tool.trim())
+					.filter(Boolean)
+			: undefined;
+	if (parsed.frontmatter.tools !== undefined && typeof parsed.frontmatter.tools !== "string") {
+		diagnostics.push(`${filePath}: ignoring non-string tools frontmatter`);
+	}
+	const model =
+		typeof parsed.frontmatter.model === "string" && parsed.frontmatter.model.trim()
+			? parsed.frontmatter.model.trim()
+			: undefined;
+	if (parsed.frontmatter.model !== undefined && typeof parsed.frontmatter.model !== "string") {
+		diagnostics.push(`${filePath}: ignoring non-string model frontmatter`);
+	}
+
+	const agent: ParsedAgent = { name, description, systemPrompt: parsed.body };
+	if (tools && tools.length > 0) agent.tools = tools;
+	if (model) agent.model = model;
+	return { ok: true, agent, diagnostics };
+}
+
+function loadAgentsFromDir(dir: string, source: LooseAgentSource, diagnostics: string[]): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
-	if (!fs.existsSync(dir)) {
-		return agents;
-	}
+	if (!fs.existsSync(dir)) return agents;
 
 	let entries: fs.Dirent[];
 	try {
@@ -45,6 +109,12 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
 
 		const filePath = path.join(dir, entry.name);
+		const fileName = entry.name.slice(0, -".md".length);
+		if (hasReservedIdentity(fileName)) {
+			diagnostics.push(`${filePath}: reserved agent filename cannot be loaded from loose agent directories`);
+			continue;
+		}
+
 		let content: string;
 		try {
 			content = fs.readFileSync(filePath, "utf-8");
@@ -53,48 +123,18 @@ function loadAgentsFromDir(dir: string, source: "user" | "project", diagnostics:
 			continue;
 		}
 
-		let parsed: { frontmatter: Record<string, unknown>; body: string };
-		try {
-			parsed = parseFrontmatter<Record<string, unknown>>(content);
-		} catch (err) {
-			diagnostics.push(`${filePath}: invalid YAML frontmatter (${errorMessage(err)})`);
+		const parsed = parseExecutableAgent(filePath, content);
+		if (!parsed.ok) {
+			diagnostics.push(parsed.error);
+			continue;
+		}
+		diagnostics.push(...parsed.diagnostics);
+		if (hasReservedIdentity(parsed.agent.name)) {
+			diagnostics.push(`${filePath}: reserved agent identity cannot be loaded from loose agent directories`);
 			continue;
 		}
 
-		const { frontmatter, body } = parsed;
-		const name = typeof frontmatter.name === "string" ? frontmatter.name.trim() : "";
-		const description = typeof frontmatter.description === "string" ? frontmatter.description.trim() : "";
-
-		if (!name || !description) {
-			diagnostics.push(`${filePath}: frontmatter must include string name and description`);
-			continue;
-		}
-
-		const tools =
-			typeof frontmatter.tools === "string"
-				? frontmatter.tools
-						.split(",")
-						.map((t) => t.trim())
-						.filter(Boolean)
-				: undefined;
-		if (frontmatter.tools !== undefined && typeof frontmatter.tools !== "string") {
-			diagnostics.push(`${filePath}: ignoring non-string tools frontmatter`);
-		}
-		const model =
-			typeof frontmatter.model === "string" && frontmatter.model.trim() ? frontmatter.model.trim() : undefined;
-		if (frontmatter.model !== undefined && typeof frontmatter.model !== "string") {
-			diagnostics.push(`${filePath}: ignoring non-string model frontmatter`);
-		}
-
-		agents.push({
-			name,
-			description,
-			tools: tools && tools.length > 0 ? tools : undefined,
-			model,
-			systemPrompt: body,
-			source,
-			filePath,
-		});
+		agents.push({ ...parsed.agent, source, filePath });
 	}
 
 	return agents;
@@ -119,7 +159,40 @@ function findNearestProjectAgentsDir(cwd: string, diagnostics: string[]): string
 	}
 }
 
-export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
+function loadRegisteredAgent(def: AgentDef, diagnostics: string[]): AgentConfig | undefined {
+	let content: string;
+	try {
+		content = fs.readFileSync(def.filePath, "utf-8");
+	} catch (err) {
+		diagnostics.push(`${def.filePath}: failed to read registered agent (${errorMessage(err)})`);
+		return undefined;
+	}
+	const parsed = parseExecutableAgent(def.filePath, content);
+	if (!parsed.ok) {
+		diagnostics.push(`${def.filePath}: registered agent is invalid (${parsed.error})`);
+		return undefined;
+	}
+	const invocationDiagnostics = [...parsed.diagnostics];
+	diagnostics.push(...invocationDiagnostics);
+	const expectedPrefix = `${def.setName}:`;
+	const fileName = path.basename(def.filePath, ".md");
+	if (
+		parsed.agent.name !== def.name ||
+		!fileName.startsWith(expectedPrefix) ||
+		!parsed.agent.name.startsWith(expectedPrefix)
+	) {
+		diagnostics.push(`${def.filePath}: registered identity changed from ${def.name}`);
+		return undefined;
+	}
+	return {
+		...parsed.agent,
+		source: def.source,
+		filePath: def.filePath,
+		...(invocationDiagnostics.length > 0 ? { diagnostics: invocationDiagnostics } : {}),
+	};
+}
+
+export function discoverAgents(cwd: string, scope: AgentScope, registeredAgents?: AgentRegistry): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
 	const diagnostics: string[] = [];
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd, diagnostics);
@@ -127,7 +200,6 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user", diagnostics);
 	const projectAgents =
 		scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project", diagnostics);
-
 	const agentMap = new Map<string, AgentConfig>();
 
 	if (scope === "both") {
@@ -137,6 +209,12 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		for (const agent of userAgents) agentMap.set(agent.name, agent);
 	} else {
 		for (const agent of projectAgents) agentMap.set(agent.name, agent);
+	}
+
+	for (const def of registeredAgents?.values() ?? []) {
+		agentMap.delete(def.name);
+		const agent = loadRegisteredAgent(def, diagnostics);
+		if (agent) agentMap.set(agent.name, agent);
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir, diagnostics };

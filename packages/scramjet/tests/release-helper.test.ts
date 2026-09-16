@@ -74,9 +74,10 @@ interface FakeState {
 	wrongAttestationPredicate?: string;
 	installFailure?: boolean;
 	auditFailure?: boolean;
+	runtimeSmokeFailure?: boolean;
 	cliFailure?: boolean;
 	installedVersionOverrides?: Record<string, string>;
-	verificationPaths?: { project: string; cache: string; home: string; xdg: string };
+	verificationPaths?: { project: string; cache: string; home: string; xdg: string; smoke?: string };
 }
 
 const FAKE_NPM = `#!/usr/bin/env node
@@ -604,13 +605,21 @@ try {
     now: () => elapsedMs,
     sleep: async (duration) => { elapsedMs += duration; },
   };
+  const runInstalledRuntimeSmoke = (packageRoot, workDir) => {
+    const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+    state.calls.push(["installed-runtime-smoke", packageRoot, workDir]);
+    state.verificationPaths.smoke = workDir;
+    writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+    if (state.runtimeSmokeFailure) throw Object.assign(new Error("runtime smoke failed"), { stderr: "runtime smoke failed" });
+  };
   if (process.argv[2] === "publish") await publish(inventory, { pollDependencies });
   else if (process.argv[2] === "publish-and-verify") {
     await publish(inventory, { pollDependencies });
-    await verify(inventory, { pollDependencies });
+    await verify(inventory, { pollDependencies, runInstalledRuntimeSmoke });
   } else if (process.argv[2] === "verify-delayed") {
     await verify(inventory, {
       pollDependencies,
+      runInstalledRuntimeSmoke,
       readVerificationMetadata: (pkg) => {
         const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
         state.calls.push(["verification-metadata", pkg.name]);
@@ -620,7 +629,7 @@ try {
         if (remaining > 0) throw Object.assign(new Error(pkg.name + " is not visible"), { code: "REGISTRY_PROPAGATION" });
       },
     });
-  } else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies });
+  } else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies, runInstalledRuntimeSmoke });
   else preflight(inventory);
 } catch (error) {
   console.error("release: " + error.message);
@@ -865,6 +874,7 @@ exit 1
 		expectVerificationPathsRemoved(finalState);
 		expect(finalState.calls.some(([command]) => command === "install")).toBe(true);
 		expect(finalState.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(finalState.calls.some(([command]) => command === "installed-runtime-smoke")).toBe(true);
 		expect(finalState.calls).toContainEqual(["installed-scramjet", "--help"]);
 	});
 
@@ -1163,6 +1173,13 @@ exit 1
 		expect(install).toContain(`@leanandmean/scramjet@${SCRAMJET_VERSION}`);
 		expect(install).toContain("--ignore-scripts=false");
 		expect(state.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		const smokeIndex = state.calls.findIndex(([command]) => command === "installed-runtime-smoke");
+		const cliIndex = state.calls.findIndex(([command]) => command === "installed-scramjet");
+		expect(smokeIndex).toBeGreaterThan(state.calls.findIndex(([command]) => command === "audit"));
+		expect(cliIndex).toBeGreaterThan(smokeIndex);
+		expect(state.calls[smokeIndex][1]).toBe(
+			join(state.verificationPaths!.project, "node_modules", "@leanandmean", "scramjet"),
+		);
 		expect(state.calls).toContainEqual(["installed-scramjet", "--help"]);
 		expect(publishCalls(state)).toHaveLength(0);
 		expect(result.stdout).toContain("final verification: completed");
@@ -1187,6 +1204,7 @@ exit 1
 		}
 		expect(finalState.calls.some(([command]) => command === "install")).toBe(true);
 		expect(finalState.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(finalState.calls.some(([command]) => command === "installed-runtime-smoke")).toBe(true);
 		expect(finalState.calls).toContainEqual(["installed-scramjet", "--help"]);
 		expect(publishCalls(finalState)).toHaveLength(0);
 		expect(result.stdout).toContain("final verification: completed");
@@ -1202,6 +1220,7 @@ exit 1
 			false,
 		],
 		["signature audit", { auditFailure: true }, "audit failed", false],
+		["installed runtime smoke", { runtimeSmokeFailure: true }, "runtime smoke failed", false],
 		["CLI", { cliFailure: true }, "installed scramjet --help failed", true],
 	] as const)("fails %s verification and removes all owned temporary state", (_label, overrides, message, cliRan) => {
 		const state = Object.assign(publishedState(), overrides);

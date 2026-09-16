@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.95.2 — Make bundled command sets package-owned
+
+Makes installed package resources authoritative while preserving legacy customizations as read-only migration evidence. Fixes [#537](https://github.com/LeanAndMean/scramjet/issues/537).
+
+### Changed
+
+- Load bundled Mach 12 and Scramjet commands, agents, and autonomy defaults exclusively from the installed package under reserved namespaces.
+- Route subagent execution through registered agent definitions and retire mutable command-set seeding and agent-bridge management.
+- Document package-owned resources, explicit differently named forks, and migration behavior.
+
+### Fixed
+
+- Prevent stale legacy bundled copies from hiding current package commands, agents, or defaults while preserving legacy bytes unchanged.
+
+### Tests
+
+- Add package-authority, registry execution, migration-diagnostic, postinstall-preservation, and packed-runtime acceptance coverage.
+
 ## 0.95.1 — Include PR comments in release notes
 
 Ensures release notes account for material implementation and scope changes recorded in the pull-request conversation. Fixes [#538](https://github.com/LeanAndMean/scramjet/issues/538).
