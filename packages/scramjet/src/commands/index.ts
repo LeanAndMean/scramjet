@@ -144,43 +144,44 @@ function packagedSet(
 	bundledRoot: string,
 	inspection: Inspection,
 	warnings: string[],
+	packageWarnings: string[],
 ): PackagedSet | undefined {
 	const source = join(bundledRoot, name);
+	const reject = (warning: string): undefined => {
+		warnings.push(warning);
+		packageWarnings.push(warning);
+		return undefined;
+	};
 	try {
 		if (!inspection.stat(source).isDirectory()) {
-			warnings.push(
+			return reject(
 				`[scramjet/discovery] bundled package command set ${source} is not a directory; reinstall Scramjet`,
 			);
-			return undefined;
 		}
 		if (inspection.readdir(source).length === 0) {
-			warnings.push(`[scramjet/discovery] bundled package command set ${source} is empty; reinstall Scramjet`);
-			return undefined;
+			return reject(`[scramjet/discovery] bundled package command set ${source} is empty; reinstall Scramjet`);
 		}
 		const commandsDir = join(source, "commands");
 		if (!inspection.stat(commandsDir).isDirectory()) {
-			warnings.push(
+			return reject(
 				`[scramjet/discovery] bundled package command set commands path ${commandsDir} is not a directory; reinstall Scramjet`,
 			);
-			return undefined;
 		}
 		inspection.readdir(commandsDir);
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
-		warnings.push(
+		return reject(
 			`[scramjet/discovery] could not use bundled package command set ${source} (${code ?? "unknown"}: ${(err as Error).message}); reinstall Scramjet`,
 		);
-		return undefined;
 	}
 	const set: SelectedSet = { name, dir: source, scope: "global", source: "package" };
 	const commandEntries = collectEntries([set], "commands", warnings, inspection.readFile);
 	const validation = buildRegistry(commandEntries);
 	if (validation.registry.size === 0) {
 		warnings.push(...validation.warnings);
-		warnings.push(
+		return reject(
 			`[scramjet/discovery] bundled package command set commands path ${join(source, "commands")} contains no usable commands; reinstall Scramjet`,
 		);
-		return undefined;
 	}
 	return { set, commandEntries };
 }
@@ -220,6 +221,7 @@ export function registerCommandLoader(
 	const legacyInspector = dependencies.legacyInspector ?? inspectLegacyBundle;
 	const journaledLegacySignatures = new Set<string>();
 	const displayedLegacySignatures = new Set<string>();
+	let lastPackageWarningSignature = "";
 	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
@@ -227,10 +229,14 @@ export function registerCommandLoader(
 		const themePaths = [join(packageRoot(), "themes")];
 		try {
 			const discoveryWarnings: string[] = [];
+			const packageWarnings: string[] = [];
 			const globalDir = globalRoot();
 			const projectDir = join(event.cwd, ".scramjet");
 			const packagedSources = new Map(
-				BUNDLED_SETS.map((name) => [name, packagedSet(name, bundledRoot, inspection, discoveryWarnings)]),
+				BUNDLED_SETS.map((name) => [
+					name,
+					packagedSet(name, bundledRoot, inspection, discoveryWarnings, packageWarnings),
+				]),
 			);
 			const packagedSets = new Map(BUNDLED_SETS.map((name) => [name, packagedSources.get(name)?.set]));
 			const customSets = [
@@ -335,6 +341,24 @@ export function registerCommandLoader(
 
 			for (const warning of discoveryWarnings) state.logger.warn("discovery", warning);
 			for (const warning of [...warnings, ...agentWarnings]) state.logger.warn("discovery", warning);
+
+			const packageWarningSignature = packageWarnings.join("\0");
+			if (
+				packageWarnings.length > 0 &&
+				ctx?.hasUI &&
+				interactiveOutput &&
+				packageWarningSignature !== lastPackageWarningSignature
+			) {
+				try {
+					ctx.ui.notify(packageWarnings.join("\n"), "warning");
+					lastPackageWarningSignature = packageWarningSignature;
+				} catch (err) {
+					state.logger.warn("discovery", "could not display bundled package corruption warning", {
+						cause: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+			if (packageWarnings.length === 0) lastPackageWarningSignature = "";
 
 			const publicationWarnings = discoveryWarnings.filter((warning) => /publication/i.test(warning));
 			const publicationWarningSignature = publicationWarnings.join("\0");

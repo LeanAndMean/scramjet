@@ -742,6 +742,68 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		rmSync(sandbox, { recursive: true, force: true });
 	});
 
+	it("shows one interactive warning for unchanged packaged-set corruption", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-warning-"));
+		const bundledRoot = join(sandbox, "package");
+		const cwd = join(sandbox, "project");
+		mkdirSync(join(bundledRoot, "scramjet", "commands"), { recursive: true });
+		writeFileSync(join(bundledRoot, "scramjet", "commands", "scramjet:healthy.md"), "---\n---\nHealthy.");
+		const { pi, handlers } = recordingPi();
+		const state = freshState({ logger: createLogger(pi) });
+		const notify = vi.fn();
+		registerCommandLoader(pi, state, { bundledRoot, interactiveOutput: true });
+		const event = { type: "resources_discover" as const, cwd, reason: "reload" as const };
+		const ctx = { hasUI: true, ui: { notify } };
+
+		handlers.get("resources_discover")![0]?.(event, ctx);
+		handlers.get("resources_discover")![0]?.(event, ctx);
+
+		const packageNotices = notify.mock.calls.filter(([message]) =>
+			String(message).includes("bundled package command set"),
+		);
+		expect(packageNotices).toHaveLength(1);
+		expect(packageNotices[0]?.[0]).toContain(join(bundledRoot, "mach12"));
+		expect(packageNotices[0]?.[0]).toContain("reinstall Scramjet");
+		expect(state.registry.has("scramjet:healthy")).toBe(true);
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
+	it("keeps healthy discovery and retries when package warning display fails", () => {
+		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-package-warning-failure-"));
+		const bundledRoot = join(sandbox, "package");
+		const cwd = join(sandbox, "project");
+		mkdirSync(join(bundledRoot, "scramjet", "commands"), { recursive: true });
+		const healthyCommand = join(bundledRoot, "scramjet", "commands", "scramjet:healthy.md");
+		writeFileSync(healthyCommand, "---\n---\nHealthy.");
+		const { pi, handlers } = recordingPi();
+		const logger = { warn: vi.fn(), debug: vi.fn(), lifecycle: vi.fn(), setHasUI: vi.fn() };
+		const state = freshState({ logger });
+		const notify = vi.fn().mockImplementationOnce(() => {
+			throw new Error("display failed");
+		});
+		registerCommandLoader(pi, state, {
+			bundledRoot,
+			interactiveOutput: true,
+			legacyInspector: () => undefined,
+		});
+		const event = { type: "resources_discover" as const, cwd, reason: "reload" as const };
+		const ctx = { hasUI: true, ui: { notify } };
+
+		const first = handlers.get("resources_discover")![0]?.(event, ctx) as { promptPaths: string[] };
+		const second = handlers.get("resources_discover")![0]?.(event, ctx) as { promptPaths: string[] };
+		handlers.get("resources_discover")![0]?.(event, ctx);
+
+		expect(first.promptPaths).toContain(healthyCommand);
+		expect(second.promptPaths).toContain(healthyCommand);
+		expect(
+			notify.mock.calls.filter(([message]) => String(message).includes("bundled package command set")),
+		).toHaveLength(2);
+		expect(logger.warn).toHaveBeenCalledWith("discovery", "could not display bundled package corruption warning", {
+			cause: "display failed",
+		});
+		rmSync(sandbox, { recursive: true, force: true });
+	});
+
 	it("updates legacy warning authority wording when a rejected package set recovers", () => {
 		const sandbox = mkdtempSync(join(tmpdir(), "scramjet-legacy-package-availability-"));
 		const globalDir = join(sandbox, "global");
@@ -946,7 +1008,12 @@ describe("registerCommandLoader — fixture-backed integration", () => {
 		expect(inspectionWarnings[0]).toContain("package resources for this set are unavailable");
 		expect(inspectionWarnings[0]).toContain("remains non-authoritative");
 		expect(inspectionWarnings[0]).not.toContain("package resources remain active");
-		expect(notify).toHaveBeenCalledTimes(2);
+		expect(
+			notify.mock.calls.filter(([message]) => String(message).includes("Could not inspect ignored legacy")),
+		).toHaveLength(2);
+		expect(
+			notify.mock.calls.filter(([message]) => String(message).includes("bundled package command set")),
+		).toHaveLength(1);
 		const displayFailure = logger.warn.mock.calls.find(([, message]) =>
 			String(message).includes("could not display"),
 		);

@@ -136,6 +136,7 @@ for (const handler of handlers.get("before_agent_start") ?? []) {
 const agentCatalog = sections.find((section) => section.id === "scramjet:agent-catalog")?.text ?? "";
 const commandCatalog = sections.find((section) => section.id === "scramjet:command-catalog")?.text ?? "";
 if (!agentCatalog.includes("mach12:structural-mapper")) throw new Error("packaged structural mapper missing from agent catalog");
+if (!agentCatalog.includes("scramjet:command-reviewer")) throw new Error("packaged command reviewer missing from agent catalog");
 if (agentCatalog.includes("mach12:legacy-only")) throw new Error("legacy-only agent entered the agent catalog");
 if (commandCatalog.includes("mach12:legacy-only")) throw new Error("legacy-only command entered the command catalog");
 
@@ -145,6 +146,9 @@ const subagentResult = await subagent.execute("installed-runtime-smoke", {}, und
 const subagentText = subagentResult.content?.map((item) => item.text ?? "").join("\n") ?? "";
 if (!subagentText.includes("mach12:structural-mapper (package)")) {
 	throw new Error(`packaged structural mapper missing from subagent discovery: ${subagentText}`);
+}
+if (!subagentText.includes("scramjet:command-reviewer (package)")) {
+	throw new Error(`packaged command reviewer missing from subagent discovery: ${subagentText}`);
 }
 if (subagentText.includes("mach12:legacy-only")) throw new Error("legacy-only agent entered subagent discovery");
 
