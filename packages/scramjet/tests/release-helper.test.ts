@@ -77,7 +77,14 @@ interface FakeState {
 	runtimeSmokeFailure?: boolean;
 	cliFailure?: boolean;
 	installedVersionOverrides?: Record<string, string>;
-	verificationPaths?: { project: string; cache: string; home: string; xdg: string; smoke?: string };
+	verificationPaths?: {
+		project: string;
+		cache: string;
+		home: string;
+		xdg: string;
+		smoke?: string;
+		packageRoot?: string;
+	};
 }
 
 const FAKE_NPM = `#!/usr/bin/env node
@@ -552,7 +559,7 @@ describe("release helper registry preflight and publication", () => {
 		chmodSync(join(workDir, "npm"), 0o755);
 		writeFileSync(
 			join(workDir, "runner.mjs"),
-			`import { readFileSync, writeFileSync } from "node:fs";
+			`import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import childProcess from "node:child_process";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { runInNewContext } from "node:vm";
@@ -609,6 +616,7 @@ try {
     const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
     state.calls.push(["installed-runtime-smoke", packageRoot, workDir]);
     state.verificationPaths.smoke = workDir;
+    state.verificationPaths.packageRoot = realpathSync(packageRoot);
     writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
     if (state.runtimeSmokeFailure) throw Object.assign(new Error("runtime smoke failed"), { stderr: "runtime smoke failed" });
   };
@@ -1177,7 +1185,7 @@ exit 1
 		const cliIndex = state.calls.findIndex(([command]) => command === "installed-scramjet");
 		expect(smokeIndex).toBeGreaterThan(state.calls.findIndex(([command]) => command === "audit"));
 		expect(cliIndex).toBeGreaterThan(smokeIndex);
-		expect(state.calls[smokeIndex][1]).toBe(
+		expect(state.verificationPaths!.packageRoot).toBe(
 			join(state.verificationPaths!.project, "node_modules", "@leanandmean", "scramjet"),
 		);
 		expect(state.calls).toContainEqual(["installed-scramjet", "--help"]);
