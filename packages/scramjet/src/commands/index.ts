@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync, type Stats, statSync } from "node:fs";
+import { readdirSync, readFileSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@leanandmean/coding-agent";
@@ -12,16 +12,21 @@ import type {
 	PublicationTool,
 	ScramjetState,
 } from "../types.js";
-import { ensureAgentBridge } from "./agent-bridge.js";
+import {
+	formatLegacyBundleWarning,
+	inspectLegacyBundle,
+	type LegacyBundleInspectionOptions,
+} from "./legacy-bundle-inspection.js";
 import { buildAgentRegistry, buildRegistry, type FileEntry } from "./loader.js";
 
 type Scope = "global" | "project";
-type SelectedSet = { name: string; dir: string; scope: Scope; source: "destination" | "package" | "project" };
+type SelectedSet = { name: string; dir: string; scope: Scope; source: "package" | "global" | "project" };
 type Inspection = {
-	lstat(path: string): Stats;
 	stat(path: string): Stats;
 	readdir(path: string): string[];
+	readFile(path: string): string;
 };
+type PackagedSet = { set: SelectedSet; commandEntries: FileEntry[] };
 
 const BUNDLED_SETS = ["mach12", "scramjet"] as const;
 
@@ -56,7 +61,11 @@ function filterPublicationDefaults(
 	return Object.keys(filtered).length > 0 ? filtered : undefined;
 }
 
-function safeReaddir(dir: string, warnings: string[]): { name: string; isDirectory: boolean }[] {
+function safeReaddir(
+	dir: string,
+	warnings: string[],
+	excludedNames: readonly string[] = [],
+): { name: string; isDirectory: boolean }[] {
 	let raw: import("node:fs").Dirent[];
 	try {
 		raw = readdirSync(dir, { withFileTypes: true }) as import("node:fs").Dirent[];
@@ -67,37 +76,44 @@ function safeReaddir(dir: string, warnings: string[]): { name: string; isDirecto
 		}
 		return [];
 	}
-	return raw.map((e) => {
-		const name = String(e.name);
-		let isDirectory = e.isDirectory();
-		if (e.isSymbolicLink()) {
-			try {
-				isDirectory = statSync(join(dir, name)).isDirectory();
-			} catch (err) {
-				const code = (err as NodeJS.ErrnoException).code;
-				if (code === "ENOENT") {
-					warnings.push(
-						`[scramjet/discovery] symlink ${join(dir, name)} has a missing target; if you migrated from the single-repo layout, remove the old symlink and re-run: ln -sfn "$(pwd)/packages/scramjet/mach12" "${join(dir, name)}"`,
-					);
-				} else {
-					warnings.push(
-						`[scramjet/discovery] could not stat symlink ${join(dir, name)} (${code ?? "unknown"}: ${(err as Error).message}); treating as non-directory`,
-					);
+	return raw
+		.filter((entry) => !excludedNames.includes(String(entry.name)))
+		.map((e) => {
+			const name = String(e.name);
+			let isDirectory = e.isDirectory();
+			if (e.isSymbolicLink()) {
+				try {
+					isDirectory = statSync(join(dir, name)).isDirectory();
+				} catch (err) {
+					const code = (err as NodeJS.ErrnoException).code;
+					if (code === "ENOENT") {
+						warnings.push(
+							`[scramjet/discovery] symlink ${join(dir, name)} has a missing target; if you migrated from the single-repo layout, remove the old symlink and re-run: ln -sfn "$(pwd)/packages/scramjet/mach12" "${join(dir, name)}"`,
+						);
+					} else {
+						warnings.push(
+							`[scramjet/discovery] could not stat symlink ${join(dir, name)} (${code ?? "unknown"}: ${(err as Error).message}); treating as non-directory`,
+						);
+					}
+					isDirectory = false;
 				}
-				isDirectory = false;
 			}
-		}
-		return { name, isDirectory };
-	});
+			return { name, isDirectory };
+		});
 }
 
 function enumerateSets(root: string, scope: Scope, source: SelectedSet["source"], warnings: string[]): SelectedSet[] {
-	return safeReaddir(root, warnings)
-		.filter((entry) => entry.isDirectory && (scope === "project" || !BUNDLED_SETS.includes(entry.name as any)))
+	return safeReaddir(root, warnings, BUNDLED_SETS)
+		.filter((entry) => entry.isDirectory)
 		.map((entry) => ({ name: entry.name, dir: join(root, entry.name), scope, source }));
 }
 
-function collectEntries(sets: SelectedSet[], subdir: string, warnings: string[]): FileEntry[] {
+function collectEntries(
+	sets: SelectedSet[],
+	subdir: string,
+	warnings: string[],
+	readFile: (path: string) => string = (path) => readFileSync(path, "utf-8"),
+): FileEntry[] {
 	const entries: FileEntry[] = [];
 	for (const set of sets) {
 		const dir = join(set.dir, subdir);
@@ -105,7 +121,13 @@ function collectEntries(sets: SelectedSet[], subdir: string, warnings: string[])
 			if (fileEntry.isDirectory || !fileEntry.name.endsWith(".md")) continue;
 			const filePath = join(dir, fileEntry.name);
 			try {
-				entries.push({ filePath, content: readFileSync(filePath, "utf-8"), setName: set.name, scope: set.scope });
+				entries.push({
+					filePath,
+					content: readFile(filePath),
+					setName: set.name,
+					scope: set.scope,
+					source: set.source,
+				});
 			} catch (err) {
 				const code = (err as NodeJS.ErrnoException).code;
 				warnings.push(
@@ -117,52 +139,51 @@ function collectEntries(sets: SelectedSet[], subdir: string, warnings: string[])
 	return entries;
 }
 
-function selectBundledSet(
+function packagedSet(
 	name: (typeof BUNDLED_SETS)[number],
-	globalDir: string,
 	bundledRoot: string,
 	inspection: Inspection,
 	warnings: string[],
-): { set?: SelectedSet; diagnostic?: string; classification: string } {
-	const destination = join(globalDir, name);
-	try {
-		inspection.lstat(destination);
-		return { set: { name, dir: destination, scope: "global", source: "destination" }, classification: "destination" };
-	} catch (err) {
-		const code = (err as NodeJS.ErrnoException).code;
-		if (code !== "ENOENT") {
-			const diagnostic = `could not inspect bundled command-set destination ${destination} (${code ?? "unknown"}: ${(err as Error).message}); package fallback was not used`;
-			warnings.push(`[scramjet/discovery] ${diagnostic}`);
-			return { diagnostic, classification: `destination-${code ?? "unknown"}` };
-		}
-	}
-
+	packageWarnings: string[],
+): PackagedSet | undefined {
 	const source = join(bundledRoot, name);
+	const reject = (warning: string): undefined => {
+		warnings.push(warning);
+		packageWarnings.push(warning);
+		return undefined;
+	};
 	try {
 		if (!inspection.stat(source).isDirectory()) {
-			const diagnostic = `bundled package source ${source} is not a directory; ${destination} remains unavailable`;
-			warnings.push(`[scramjet/discovery] ${diagnostic}`);
-			return { diagnostic, classification: "source-not-directory" };
+			return reject(
+				`[scramjet/discovery] bundled package command set ${source} is not a directory; reinstall Scramjet`,
+			);
 		}
 		if (inspection.readdir(source).length === 0) {
-			const diagnostic = `bundled package source ${source} is empty; ${destination} remains unavailable`;
-			warnings.push(`[scramjet/discovery] ${diagnostic}`);
-			return { diagnostic, classification: "source-empty" };
+			return reject(`[scramjet/discovery] bundled package command set ${source} is empty; reinstall Scramjet`);
 		}
+		const commandsDir = join(source, "commands");
+		if (!inspection.stat(commandsDir).isDirectory()) {
+			return reject(
+				`[scramjet/discovery] bundled package command set commands path ${commandsDir} is not a directory; reinstall Scramjet`,
+			);
+		}
+		inspection.readdir(commandsDir);
 	} catch (err) {
 		const code = (err as NodeJS.ErrnoException).code;
-		const diagnostic = `could not use bundled package source ${source} (${code ?? "unknown"}: ${(err as Error).message}); ${destination} remains unavailable`;
-		warnings.push(`[scramjet/discovery] ${diagnostic}`);
-		return { diagnostic, classification: `source-${code ?? "unknown"}` };
+		return reject(
+			`[scramjet/discovery] could not use bundled package command set ${source} (${code ?? "unknown"}: ${(err as Error).message}); reinstall Scramjet`,
+		);
 	}
-
-	const diagnostic = `bundled destination ${destination} is missing; using packaged ${name} command set read-only from ${source}. To restore durable editable copies, run node "${join(bundledRoot, "scripts", "postinstall.js")}" and restart Scramjet.`;
-	warnings.push(`[scramjet/discovery] ${diagnostic}`);
-	return {
-		set: { name, dir: source, scope: "global", source: "package" },
-		diagnostic,
-		classification: "fallback",
-	};
+	const set: SelectedSet = { name, dir: source, scope: "global", source: "package" };
+	const commandEntries = collectEntries([set], "commands", warnings, inspection.readFile);
+	const validation = buildRegistry(commandEntries);
+	if (validation.registry.size === 0) {
+		warnings.push(...validation.warnings);
+		return reject(
+			`[scramjet/discovery] bundled package command set commands path ${join(source, "commands")} contains no usable commands; reinstall Scramjet`,
+		);
+	}
+	return { set, commandEntries };
 }
 
 export function commandFingerprint(content: string): string {
@@ -183,16 +204,24 @@ function globalRoot(): string {
 export function registerCommandLoader(
 	pi: ExtensionAPI,
 	state: ScramjetState,
-	dependencies: { bundledRoot?: string; inspection?: Partial<Inspection>; interactiveOutput?: boolean } = {},
+	dependencies: {
+		bundledRoot?: string;
+		inspection?: Partial<Inspection>;
+		interactiveOutput?: boolean;
+		legacyInspector?: (options: LegacyBundleInspectionOptions) => ReturnType<typeof inspectLegacyBundle>;
+	} = {},
 ): void {
 	const bundledRoot = dependencies.bundledRoot ?? packageRoot();
 	const interactiveOutput = dependencies.interactiveOutput ?? Boolean(process.stdout.isTTY);
 	const inspection: Inspection = {
-		lstat: dependencies.inspection?.lstat ?? lstatSync,
 		stat: dependencies.inspection?.stat ?? statSync,
 		readdir: dependencies.inspection?.readdir ?? readdirSync,
+		readFile: dependencies.inspection?.readFile ?? ((path) => readFileSync(path, "utf-8")),
 	};
-	let lastNotificationSignature = "";
+	const legacyInspector = dependencies.legacyInspector ?? inspectLegacyBundle;
+	const journaledLegacySignatures = new Set<string>();
+	const displayedLegacySignatures = new Set<string>();
+	let lastPackageWarningSignature = "";
 	let lastPublicationWarningSignature = "";
 
 	pi.on("resources_discover", (event, ctx) => {
@@ -200,18 +229,29 @@ export function registerCommandLoader(
 		const themePaths = [join(packageRoot(), "themes")];
 		try {
 			const discoveryWarnings: string[] = [];
+			const packageWarnings: string[] = [];
 			const globalDir = globalRoot();
 			const projectDir = join(event.cwd, ".scramjet");
-			const bundled = BUNDLED_SETS.map((name) =>
-				selectBundledSet(name, globalDir, bundledRoot, inspection, discoveryWarnings),
+			const packagedSources = new Map(
+				BUNDLED_SETS.map((name) => [
+					name,
+					packagedSet(name, bundledRoot, inspection, discoveryWarnings, packageWarnings),
+				]),
 			);
-			const selectedSets = [
-				...bundled.flatMap((result) => (result.set ? [result.set] : [])),
-				...enumerateSets(globalDir, "global", "destination", discoveryWarnings),
+			const packagedSets = new Map(BUNDLED_SETS.map((name) => [name, packagedSources.get(name)?.set]));
+			const customSets = [
+				...enumerateSets(globalDir, "global", "global", discoveryWarnings),
 				...enumerateSets(projectDir, "project", "project", discoveryWarnings),
 			];
+			const selectedSets = [
+				...[...packagedSets.values()].filter((set): set is SelectedSet => set !== undefined),
+				...customSets,
+			];
 
-			const commandEntries = collectEntries(selectedSets, "commands", discoveryWarnings);
+			const commandEntries = [
+				...BUNDLED_SETS.flatMap((name) => packagedSources.get(name)?.commandEntries ?? []),
+				...collectEntries(customSets, "commands", discoveryWarnings),
+			];
 			const { registry, warnings } = buildRegistry(commandEntries);
 			state.registry = registry;
 			const entriesByPath = new Map(commandEntries.map((entry) => [entry.filePath, entry]));
@@ -260,22 +300,65 @@ export function registerCommandLoader(
 			}
 			state.autonomyRecommendations = recommendations;
 
-			const bridge = ensureAgentBridge(agentRegistry, [
-				globalDir,
-				projectDir,
-				...BUNDLED_SETS.map((name) => join(bundledRoot, name)),
-			]);
-			if (bridge.created.length > 0 && bridge.targetDir !== null)
-				state.logger.debug("discovery", `bridged ${bridge.created.length} agent(s) into ${bridge.targetDir}`);
-			if (bridge.pruned.length > 0 && bridge.targetDir !== null)
-				state.logger.debug(
-					"discovery",
-					`pruned ${bridge.pruned.length} stale agent symlink(s) from ${bridge.targetDir}`,
-				);
+			for (const [scope, root] of [
+				["global", globalDir],
+				["project", projectDir],
+			] as const) {
+				for (const name of BUNDLED_SETS) {
+					const legacyPath = join(root, name);
+					const packageAvailable = packagedSets.get(name) !== undefined;
+					const authority = packageAvailable
+						? "package resources remain active and the legacy path was left untouched"
+						: "package resources for this set are unavailable; reinstall Scramjet. The legacy path was left untouched and remains non-authoritative; no legacy fallback was used";
+					let signature: string;
+					let warning: string;
+					try {
+						const finding = legacyInspector({ legacyPath, packagePath: join(bundledRoot, name), scope });
+						if (!finding?.actionable) continue;
+						signature = `${packageAvailable}:${finding.signature}`;
+						warning = formatLegacyBundleWarning(finding, packageAvailable);
+					} catch {
+						signature = `${packageAvailable}:inspection-failed:${resolve(legacyPath)}`;
+						warning = `Could not inspect ignored legacy bundled command set at ${legacyPath}; ${authority}. Compare it manually before migration.`;
+					}
+					if (!journaledLegacySignatures.has(signature)) {
+						state.logger.warn("discovery", warning);
+						journaledLegacySignatures.add(signature);
+					}
+					if (ctx?.hasUI && interactiveOutput && !displayedLegacySignatures.has(signature)) {
+						try {
+							ctx.ui.notify(warning, "warning");
+							displayedLegacySignatures.add(signature);
+						} catch (err) {
+							state.logger.warn("discovery", `could not display legacy migration warning for ${legacyPath}`, {
+								legacyPath,
+								cause: err instanceof Error ? err.message : String(err),
+							});
+						}
+					}
+				}
+			}
 
 			for (const warning of discoveryWarnings) state.logger.warn("discovery", warning);
-			for (const warning of [...warnings, ...agentWarnings, ...bridge.warnings])
-				state.logger.warn("discovery", warning);
+			for (const warning of [...warnings, ...agentWarnings]) state.logger.warn("discovery", warning);
+
+			const packageWarningSignature = packageWarnings.join("\0");
+			if (
+				packageWarnings.length > 0 &&
+				ctx?.hasUI &&
+				interactiveOutput &&
+				packageWarningSignature !== lastPackageWarningSignature
+			) {
+				try {
+					ctx.ui.notify(packageWarnings.join("\n"), "warning");
+					lastPackageWarningSignature = packageWarningSignature;
+				} catch (err) {
+					state.logger.warn("discovery", "could not display bundled package corruption warning", {
+						cause: err instanceof Error ? err.message : String(err),
+					});
+				}
+			}
+			if (packageWarnings.length === 0) lastPackageWarningSignature = "";
 
 			const publicationWarnings = discoveryWarnings.filter((warning) => /publication/i.test(warning));
 			const publicationWarningSignature = publicationWarnings.join("\0");
@@ -290,16 +373,6 @@ export function registerCommandLoader(
 					"warning",
 				);
 			lastPublicationWarningSignature = publicationWarningSignature;
-
-			const visibleDiagnostics = bundled.flatMap((result) => (result.diagnostic ? [result.diagnostic] : []));
-			const signature = bundled.map((result) => result.classification).join("|");
-			if (visibleDiagnostics.length > 0) {
-				const message = visibleDiagnostics.join("\n");
-				if (ctx?.hasUI && interactiveOutput && signature !== lastNotificationSignature)
-					ctx.ui.notify(message, "warning");
-				else if (ctx?.hasUI && !interactiveOutput) process.stderr.write(`[scramjet/discovery] ${message}\n`);
-			}
-			lastNotificationSignature = visibleDiagnostics.length > 0 ? signature : "";
 
 			return { skillPaths, promptPaths: [...registry.values()].map((def) => def.filePath), themePaths };
 		} catch (err) {

@@ -3,8 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initScramjet } from "../src/index.js";
-import { discoverAgents } from "../src/subagent/agents.js";
+import { discoverAgents, parseExecutableAgent } from "../src/subagent/agents.js";
 import { getPiInvocation, registerSubagentTool } from "../src/subagent/index.js";
+import type { AgentDef, AgentRegistry } from "../src/types.js";
 import { recordingPi } from "./helpers.js";
 
 function writeProjectAgent(tmpDir: string, fileName: string, frontmatter: string[], body = "Agent body.") {
@@ -30,10 +31,33 @@ function assistantEvent(text: string, extra: Record<string, unknown> = {}): stri
 	});
 }
 
-function registeredSubagentTool() {
+function registeredSubagentTool(getAgentRegistry?: () => AgentRegistry) {
 	const { pi, tools } = recordingPi();
-	registerSubagentTool(pi);
+	registerSubagentTool(pi, getAgentRegistry);
 	return tools[0];
+}
+
+function writeRegisteredAgent(
+	tmpDir: string,
+	name: string,
+	source: AgentDef["source"] = "package",
+	body = "Registered body.",
+): AgentDef {
+	const setName = name.split(":", 1)[0];
+	const filePath = path.join(tmpDir, `${name}.md`);
+	fs.writeFileSync(
+		filePath,
+		["---", `name: ${name}`, `description: Registered ${name}`, "tools: read,bash", "---", "", body].join("\n"),
+	);
+	return {
+		name,
+		description: `Registered ${name}`,
+		tools: ["read", "bash"],
+		systemPrompt: body,
+		filePath,
+		setName,
+		source,
+	};
 }
 
 function textContent(result: any): string {
@@ -96,6 +120,8 @@ describe("registerSubagentTool — registration", () => {
 
 		expect(tools).toHaveLength(1);
 		expect(tools[0].name).toBe("subagent");
+		expect(tools[0].description).toContain("Registered command-set agents remain available under every scope");
+		expect(JSON.stringify(tools[0].parameters)).toContain("Which loose agent directories to use");
 		expect(typeof tools[0].renderCall).toBe("function");
 		expect(typeof tools[0].renderResult).toBe("function");
 	});
@@ -129,7 +155,7 @@ describe("discoverAgents — empty directory", () => {
 	});
 });
 
-describe("discoverAgents — bundled Scramjet command specialists", () => {
+describe("parseExecutableAgent — bundled Scramjet command specialists", () => {
 	let tmpDir: string;
 	let sourceFiles: string[];
 
@@ -148,14 +174,15 @@ describe("discoverAgents — bundled Scramjet command specialists", () => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("loads every specialist through production discovery with the exact read-only tool posture", () => {
-		const result = discoverAgents(tmpDir, "project");
-
-		expect(result.diagnostics).toEqual([]);
-		expect(result.agents).toHaveLength(sourceFiles.length);
-		for (const agent of result.agents) {
-			expect(agent.tools).toEqual(["read", "grep", "find", "ls"]);
-			expect(agent.systemPrompt.trim()).not.toBe("");
+	it("loads every specialist through the shared parser with the exact read-only tool posture", () => {
+		for (const file of sourceFiles) {
+			const filePath = path.join(tmpDir, ".scramjet", "agents", file);
+			const result = parseExecutableAgent(filePath, fs.readFileSync(filePath, "utf8"));
+			expect(result.ok).toBe(true);
+			if (!result.ok) continue;
+			expect(result.diagnostics).toEqual([]);
+			expect(result.agent.tools).toEqual(["read", "grep", "find", "ls"]);
+			expect(result.agent.systemPrompt.trim()).not.toBe("");
 		}
 	});
 });
@@ -244,6 +271,280 @@ describe("discoverAgents — malformed frontmatter", () => {
 
 		expect(result.agents.map((agent) => agent.name)).toEqual(["valid"]);
 		expect(result.diagnostics).toEqual([expect.stringContaining("broken.md: invalid YAML frontmatter")]);
+	});
+});
+
+describe("subagent tool — registered-agent authority", () => {
+	let tmpDir: string;
+	let origArgv1: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "scramjet-registered-agent-test-"));
+		origArgv1 = process.argv[1];
+	});
+
+	afterEach(() => {
+		process.argv[1] = origArgv1;
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("uses the registry-selected definition instead of a loose same-name file", async () => {
+		writeProjectAgent(
+			tmpDir,
+			"custom:authoritative.md",
+			["name: custom:authoritative", "description: Loose agent"],
+			"Loose body.",
+		);
+		const registered = writeRegisteredAgent(tmpDir, "custom:authoritative", "global", "Stale registered body.");
+		registered.model = "stale-model";
+		const registry = new Map([[registered.name, registered]]);
+		fs.writeFileSync(
+			registered.filePath,
+			"---\nname: custom:authoritative\ndescription: Registered custom:authoritative\ntools: grep\nmodel: fresh-model\n---\n\nFresh registered body.",
+		);
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			[
+				'const fs = require("node:fs");',
+				'const promptIndex = process.argv.indexOf("--append-system-prompt");',
+				'const toolsIndex = process.argv.indexOf("--tools");',
+				'const modelIndex = process.argv.indexOf("--model");',
+				"const invocation = {",
+				'  prompt: promptIndex < 0 ? "" : fs.readFileSync(process.argv[promptIndex + 1], "utf8"),',
+				'  tools: toolsIndex < 0 ? "" : process.argv[toolsIndex + 1],',
+				'  model: modelIndex < 0 ? "" : process.argv[modelIndex + 1],',
+				"};",
+				'process.stdout.write(JSON.stringify({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: JSON.stringify(invocation) }] } }) + "\\n");',
+			].join("\n"),
+		);
+		const tool = registeredSubagentTool(() => registry);
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: registered.name, task: "run", agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		const invocation = JSON.parse(textContent(result));
+		expect(invocation.prompt).toContain("Fresh registered body.");
+		expect(invocation.prompt).not.toContain("Stale registered body.");
+		expect(invocation.prompt).not.toContain("Loose body.");
+		expect(invocation.tools).toBe("grep");
+		expect(invocation.model).toBe("fresh-model");
+		expect(result.details.results[0].agentSource).toBe("global");
+	});
+
+	it("surfaces fresh registered metadata diagnostics before and after successful execution", async () => {
+		const registered = writeRegisteredAgent(tmpDir, "custom:diagnosed", "global");
+		fs.writeFileSync(
+			registered.filePath,
+			[
+				"---",
+				"name: custom:diagnosed",
+				"description: Registered custom:diagnosed",
+				"tools:",
+				"  - read",
+				"model:",
+				"  - stale-model",
+				"---",
+				"Fresh body.",
+			].join("\n"),
+		);
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			`process.stdout.write(${JSON.stringify(`${assistantEvent("completed")}\n`)});`,
+		);
+		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
+		const onUpdate = vi.fn();
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: registered.name, task: "run", agentScope: "user" },
+			undefined,
+			onUpdate,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(onUpdate.mock.calls[0][0].content[0].text).toContain("ignoring non-string tools frontmatter");
+		expect(onUpdate.mock.calls[0][0].content[0].text).toContain("ignoring non-string model frontmatter");
+		expect(textContent(result)).toContain("ignoring non-string tools frontmatter");
+		expect(textContent(result)).toContain("ignoring non-string model frontmatter");
+		expect(textContent(result)).toContain("completed");
+		expect(renderToolResult(tool, result, false, { agent: registered.name, task: "run" })).toContain(
+			"Agent invocation warnings",
+		);
+	});
+
+	it.each(["user", "project", "both"] as const)(
+		"exposes registered package agents under %s loose scope",
+		async (agentScope) => {
+			const registered = writeRegisteredAgent(tmpDir, "mach12:available");
+			const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
+
+			const result = await tool.execute("tool-call-id", { agentScope }, undefined, undefined, {
+				cwd: tmpDir,
+				hasUI: false,
+			});
+			expect(textContent(result)).toContain("mach12:available (package)");
+		},
+	);
+
+	it("reads the replacement registry map on each execution", async () => {
+		const first = writeRegisteredAgent(tmpDir, "mach12:first");
+		const second = writeRegisteredAgent(tmpDir, "mach12:second");
+		let registry: AgentRegistry = new Map([[first.name, first]]);
+		const tool = registeredSubagentTool(() => registry);
+		registry = new Map([[second.name, second]]);
+
+		const result = await tool.execute("tool-call-id", {}, undefined, undefined, { cwd: tmpDir, hasUI: false });
+
+		expect(textContent(result)).toContain("mach12:second (package)");
+		expect(textContent(result)).not.toContain("mach12:first");
+	});
+
+	it("uses registered provenance for project confirmation", async () => {
+		const registered = writeRegisteredAgent(tmpDir, "custom:project-agent", "project");
+		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
+		const confirm = vi.fn().mockResolvedValue(false);
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: registered.name, task: "run", agentScope: "user" },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: true, ui: { confirm } },
+		);
+
+		expect(confirm).toHaveBeenCalledWith("Run project-local agents?", expect.stringContaining(registered.name));
+		expect(textContent(result)).toContain("not approved");
+	});
+
+	it.each(["package", "global"] as const)("does not confirm registered %s agents", async (source) => {
+		const registered = writeRegisteredAgent(tmpDir, `custom:${source}-agent`, source);
+		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
+		const confirm = vi.fn(() => {
+			throw new Error("confirmation should not run");
+		});
+		process.argv[1] = writeFakeInvocation(
+			tmpDir,
+			`process.stdout.write(${JSON.stringify(`${assistantEvent("done")}\n`)});`,
+		);
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: registered.name, task: "run", agentScope: "project" },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: true, ui: { confirm } },
+		);
+
+		expect(confirm).not.toHaveBeenCalled();
+		expect(textContent(result)).toBe("done");
+		expect(result.details.results[0].agentSource).toBe(source);
+	});
+
+	it.each([
+		[
+			"missing file",
+			() => fs.rmSync(path.join(tmpDir, "custom:authoritative.md")),
+			"failed to read registered agent",
+		],
+		[
+			"invalid file",
+			() => fs.writeFileSync(path.join(tmpDir, "custom:authoritative.md"), "---\nname: [broken\n---\nBody."),
+			"registered agent is invalid",
+		],
+	] as const)(
+		"reports a registered %s without falling back to a loose same-name file",
+		async (_case, breakFile, diagnostic) => {
+			writeProjectAgent(tmpDir, "custom:authoritative.md", [
+				"name: custom:authoritative",
+				"description: Loose agent",
+			]);
+			const registered = writeRegisteredAgent(tmpDir, "custom:authoritative", "global");
+			breakFile();
+			const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
+
+			const result = await tool.execute(
+				"tool-call-id",
+				{ agent: registered.name, task: "run", agentScope: "project", confirmProjectAgents: false },
+				undefined,
+				undefined,
+				{ cwd: tmpDir, hasUI: false },
+			);
+
+			expect(result.isError).toBe(true);
+			expect(textContent(result)).toContain("Unknown agent");
+			expect(textContent(result)).toContain(diagnostic);
+		},
+	);
+
+	it("reports registered identity changes without falling back to a loose same-name file", async () => {
+		writeProjectAgent(tmpDir, "custom:authoritative.md", ["name: custom:authoritative", "description: Loose agent"]);
+		const registered = writeRegisteredAgent(tmpDir, "custom:authoritative", "global");
+		fs.writeFileSync(
+			registered.filePath,
+			"---\nname: custom:changed\ndescription: Changed identity\n---\nChanged body.",
+		);
+		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: registered.name, task: "run", agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(result.isError).toBe(true);
+		expect(textContent(result)).toContain("Unknown agent");
+		expect(textContent(result)).toContain("registered identity changed");
+	});
+
+	it("reports registry callback failures without using a loose agent", async () => {
+		writeProjectAgent(tmpDir, "safe-agent.md", ["name: safe-agent", "description: Loose agent"]);
+		const tool = registeredSubagentTool(() => {
+			throw new Error("registry unavailable");
+		});
+
+		const result = await tool.execute(
+			"tool-call-id",
+			{ agent: "safe-agent", task: "run", agentScope: "project", confirmProjectAgents: false },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: false },
+		);
+
+		expect(result.isError).toBe(true);
+		expect(textContent(result)).toContain("registry unavailable");
+	});
+
+	it("rejects reserved loose identities from both filenames and frontmatter", () => {
+		writeProjectAgent(tmpDir, "mach12:filename.md", ["name: ordinary", "description: Reserved filename"]);
+		writeProjectAgent(tmpDir, "ordinary.md", ["name: scramjet:identity", "description: Reserved identity"]);
+
+		const result = discoverAgents(tmpDir, "project");
+
+		expect(result.agents).toEqual([]);
+		expect(result.diagnostics).toEqual([
+			expect.stringContaining("mach12:filename.md: reserved agent filename"),
+			expect.stringContaining("ordinary.md: reserved agent identity"),
+		]);
+	});
+
+	it("does not mutate an existing loose-agent directory", () => {
+		const agentsDir = path.join(tmpDir, ".scramjet", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		const blocker = path.join(agentsDir, "mach12:blocked.md");
+		fs.writeFileSync(blocker, "foreign content");
+		const registered = writeRegisteredAgent(tmpDir, "mach12:blocked");
+
+		discoverAgents(tmpDir, "project", new Map([[registered.name, registered]]));
+
+		expect(fs.readFileSync(blocker, "utf8")).toBe("foreign content");
 	});
 });
 

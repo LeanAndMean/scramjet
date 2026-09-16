@@ -143,9 +143,9 @@ function stripHints(policy: NextStepPolicy | null): NextStepPolicy | null {
 
 const MACH12_AGENTS_DIR = resolve(HERE, "..", "mach12", "agents");
 
-// F18: The expected list of bundled mach12 agents. A name-mismatch between
-// a command's subagent reference and the bridged filename would slip through
-// CI without this explicit pin. If you add/rename an agent, update here.
+// F18: The expected list of bundled mach12 agents. A name mismatch between
+// a command's subagent reference and the registered package-agent filename would
+// slip through CI without this explicit pin. If you add/rename an agent, update here.
 const EXPECTED_AGENTS = [
 	"mach12:code-architect",
 	"mach12:code-explorer",
@@ -1851,10 +1851,9 @@ describe("mach12 ordinary PR readiness", () => {
 	});
 });
 
-// F18: Verify that the bundled mach12 agent files are complete and parseable,
-// and that the agent-bridge can wire them without warnings. A name mismatch
-// between a command's subagent reference and the shipped agent filename would
-// produce a "subagent not found" at runtime but silently pass unit tests.
+// F18: Verify that the bundled mach12 agent files are complete and parseable.
+// A name mismatch between a command's subagent reference and the shipped agent
+// filename would produce a "subagent not found" at runtime but silently pass unit tests.
 describe("mach12 wiring — bundled agent set (F18)", () => {
 	it("ships exactly the expected set of agent files", () => {
 		const found = readdirSync(MACH12_AGENTS_DIR)

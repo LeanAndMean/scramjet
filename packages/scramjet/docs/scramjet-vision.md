@@ -33,7 +33,7 @@ Workflows emerge from relationships owned by individual commands, not from a cen
 
 ### User-owned command sets
 
-Users should be able to add, edit, remove, share, and organize commands as ordinary local content. Scramjet may ship useful command sets, but product-owned examples must not displace user ownership or prevent local adaptation.
+Users should be able to add, edit, remove, share, and organize their own commands as ordinary local content. Product-owned bundled sets remain coherent parts of the installed Scramjet release rather than mutable copies in user data. Local adaptation stays available through explicitly named user-created sets and forks, which coexist with the bundled product without replacing its reserved identities.
 
 ### Composability
 

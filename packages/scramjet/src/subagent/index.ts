@@ -8,7 +8,14 @@ import { StringEnum } from "@leanandmean/ai";
 import { type ExtensionAPI, getMarkdownTheme, type ThemeColor, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
-import { AGENT_SCOPES, type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import type { AgentRegistry } from "../types.js";
+import {
+	AGENT_SCOPES,
+	type AgentConfig,
+	type AgentScope,
+	discoverAgents,
+	type ExecutableAgentSource,
+} from "./agents.js";
 
 const THINKING_LEVEL_ORDER: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -136,7 +143,7 @@ interface UsageStats {
 
 interface SingleResult {
 	agent: string;
-	agentSource: "user" | "project" | "unknown";
+	agentSource: ExecutableAgentSource | "unknown";
 	task: string;
 	exitCode: number;
 	messages: Message[];
@@ -146,6 +153,7 @@ interface SingleResult {
 	stopReason?: string;
 	errorMessage?: string;
 	step?: number;
+	diagnostics?: string[];
 }
 
 interface SubagentDetails {
@@ -153,6 +161,20 @@ interface SubagentDetails {
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
+}
+
+function formatInvocationDiagnostics(results: SingleResult | SingleResult[]): string {
+	const diagnostics = [
+		...new Set((Array.isArray(results) ? results : [results]).flatMap((result) => result.diagnostics ?? [])),
+	];
+	return diagnostics.length === 0
+		? ""
+		: `Agent invocation warnings:\n${diagnostics.map((diagnostic) => `- ${diagnostic}`).join("\n")}`;
+}
+
+function withInvocationDiagnostics(output: string, results: SingleResult | SingleResult[]): string {
+	const diagnostics = formatInvocationDiagnostics(results);
+	return diagnostics ? `${diagnostics}\n\n${output}` : output;
 }
 
 function getFinalOutput(messages: Message[]): string {
@@ -198,6 +220,10 @@ function isResultError(r: SingleResult): boolean {
 
 function getResultOutput(r: SingleResult): string {
 	return r.errorMessage || r.stderr || getFinalOutput(r.messages) || "(no output)";
+}
+
+function getResultOutputWithDiagnostics(r: SingleResult): string {
+	return withInvocationDiagnostics(getResultOutput(r), r);
 }
 
 function aggregateUsage(results: SingleResult[]) {
@@ -324,17 +350,27 @@ async function runSingleAgent(opts: RunSingleAgentOptions): Promise<SingleResult
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model: agent.model,
 		step,
+		diagnostics: agent.diagnostics,
 	};
 
 	const emitUpdate = () => {
 		if (onUpdate) {
 			onUpdate({
-				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
+				content: [
+					{
+						type: "text",
+						text: withInvocationDiagnostics(
+							getFinalOutput(currentResult.messages) || "(running...)",
+							currentResult,
+						),
+					},
+				],
 				details: makeDetails([currentResult]),
 			});
 		}
 	};
 
+	if (currentResult.diagnostics?.length) emitUpdate();
 	try {
 		if (agent.systemPrompt.trim()) {
 			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
@@ -476,7 +512,8 @@ const ChainItem = Type.Object({
 });
 
 const AgentScopeSchema = StringEnum(AGENT_SCOPES, {
-	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
+	description:
+		'Which loose agent directories to use. Default: "user". Use "both" to include project-local loose agents. Registered command-set agents remain available under every scope.',
 	default: "user",
 });
 
@@ -493,7 +530,7 @@ const SubagentParams = Type.Object({
 	effort: Type.Optional(EffortSchema),
 });
 
-export function registerSubagentTool(pi: ExtensionAPI) {
+export function registerSubagentTool(pi: ExtensionAPI, getAgentRegistry?: () => AgentRegistry) {
 	const getParentLevel = (): ThinkingLevel | undefined => {
 		try {
 			return pi.getThinkingLevel();
@@ -521,8 +558,9 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
 			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
-			'Default agent scope is "user" (from ~/.scramjet/agent/agents).',
-			'To enable project-local agents in .scramjet/agents, set agentScope: "both" (or "project").',
+			'Default loose-agent scope is "user" (from ~/.scramjet/agent/agents).',
+			'To enable loose project-local agents in .scramjet/agents, set agentScope: "both" (or "project").',
+			"Registered command-set agents remain available under every scope; project-provenance confirmation still applies.",
 		].join(" "),
 		parameters: SubagentParams,
 		promptSnippet:
@@ -530,7 +568,23 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			const agentScope: AgentScope = params.agentScope ?? "user";
-			const discovery = discoverAgents(ctx.cwd, agentScope);
+			let registry: AgentRegistry | undefined;
+			try {
+				registry = getAgentRegistry?.();
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return {
+					content: [{ type: "text", text: `Agent registry unavailable: ${message}` }],
+					details: {
+						mode: "single",
+						agentScope,
+						projectAgentsDir: null,
+						results: [],
+					},
+					isError: true,
+				};
+			}
+			const discovery = discoverAgents(ctx.cwd, agentScope, registry);
 			const agents = discovery.agents;
 			const confirmProjectAgents = params.confirmProjectAgents ?? true;
 
@@ -561,7 +615,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				};
 			}
 
-			if ((agentScope === "project" || agentScope === "both") && confirmProjectAgents && ctx.hasUI) {
+			if (confirmProjectAgents && ctx.hasUI) {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
@@ -573,10 +627,12 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 				if (projectAgentsRequested.length > 0) {
 					const names = projectAgentsRequested.map((a) => a.name).join(", ");
-					const dir = discovery.projectAgentsDir ?? "(unknown)";
+					const dirs = [...new Set(projectAgentsRequested.map((agent) => path.dirname(agent.filePath)))].join(
+						", ",
+					);
 					const ok = await ctx.ui.confirm(
 						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						`Agents: ${names}\nSource: ${dirs}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
 					);
 					if (!ok)
 						return {
@@ -633,7 +689,7 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							content: [
 								{
 									type: "text",
-									text: `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutput(result)}`,
+									text: `Chain stopped at step ${i + 1} (${step.agent}): ${getResultOutputWithDiagnostics(result)}`,
 								},
 							],
 							details: makeDetails("chain")(results),
@@ -643,7 +699,15 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					previousOutput = getFinalOutput(result.messages);
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
+					content: [
+						{
+							type: "text",
+							text: withInvocationDiagnostics(
+								getFinalOutput(results[results.length - 1].messages) || "(no output)",
+								results,
+							),
+						},
+					],
 					details: makeDetails("chain")(results),
 				};
 			}
@@ -715,7 +779,9 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				const successCount = results.filter((r) => !isResultError(r)).length;
 				const summaries = results.map((r) => {
 					const failed = isResultError(r);
-					const output = failed ? getResultOutput(r) : getFinalOutput(r.messages) || "(no output)";
+					const output = failed
+						? getResultOutputWithDiagnostics(r)
+						: withInvocationDiagnostics(getFinalOutput(r.messages) || "(no output)", r);
 					return `[${r.agent}] ${failed ? "failed" : "completed"}: ${output}`;
 				});
 				const parallelResult = {
@@ -748,14 +814,22 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 				if (isResultError(result)) {
 					return {
 						content: [
-							{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${getResultOutput(result)}` },
+							{
+								type: "text",
+								text: `Agent ${result.stopReason || "failed"}: ${getResultOutputWithDiagnostics(result)}`,
+							},
 						],
 						details: makeDetails("single")([result]),
 						isError: true,
 					};
 				}
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+					content: [
+						{
+							type: "text",
+							text: withInvocationDiagnostics(getFinalOutput(result.messages) || "(no output)", result),
+						},
+					],
 					details: makeDetails("single")([result]),
 				};
 			}
@@ -864,6 +938,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					container.addChild(new Text(header, 0, 0));
 					if (isError && r.errorMessage)
 						container.addChild(new Text(theme.fg("error", `Error: ${r.errorMessage}`), 0, 0));
+					const diagnostics = formatInvocationDiagnostics(r);
+					if (diagnostics) container.addChild(new Text(theme.fg("warning", diagnostics), 0, 0));
 					container.addChild(new Spacer(1));
 					container.addChild(new Text(theme.fg("muted", "─── Task ───"), 0, 0));
 					container.addChild(new Text(theme.fg("dim", r.task), 0, 0));
@@ -897,6 +973,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 
 				let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}${modelTag(r.model)}${effortTag(singleEffort)}`;
 				if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
+				const diagnostics = formatInvocationDiagnostics(r);
+				if (diagnostics) text += `\n${theme.fg("warning", diagnostics)}`;
 				if (isError && r.errorMessage) text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
 				else if (isError && r.stderr) text += `\n${theme.fg("error", r.stderr.trim())}`;
 				else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
@@ -942,6 +1020,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						const diagnostics = formatInvocationDiagnostics(r);
+						if (diagnostics) container.addChild(new Text(theme.fg("warning", diagnostics), 0, 0));
 
 						for (const item of displayItems) {
 							if (item.type === "toolCall") {
@@ -987,6 +1067,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					const isError = isResultError(r);
 					const stepEffort = context.args?.chain?.[i]?.effort;
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(stepEffort)}`;
+					const diagnostics = formatInvocationDiagnostics(r);
+					if (diagnostics) text += `\n${theme.fg("warning", diagnostics)}`;
 					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
 					else if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
 					else text += `\n${renderDisplayItems(displayItems, 5)}`;
@@ -1039,6 +1121,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 							),
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
+						const diagnostics = formatInvocationDiagnostics(r);
+						if (diagnostics) container.addChild(new Text(theme.fg("warning", diagnostics), 0, 0));
 
 						for (const item of displayItems) {
 							if (item.type === "toolCall") {
@@ -1085,6 +1169,8 @@ export function registerSubagentTool(pi: ExtensionAPI) {
 					const isError = isResultError(r);
 					const taskEffort = context.args?.tasks?.[i]?.effort;
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}${modelTag(r.model)}${effortTag(taskEffort)}`;
+					const diagnostics = formatInvocationDiagnostics(r);
+					if (diagnostics) text += `\n${theme.fg("warning", diagnostics)}`;
 					if (isError) text += `\n${theme.fg("error", getResultOutput(r).trim())}`;
 					else if (displayItems.length === 0) {
 						const output = r.exitCode === EXIT_CODE_RUNNING ? "(running...)" : "(no output)";
