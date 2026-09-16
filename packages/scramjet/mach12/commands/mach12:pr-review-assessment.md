@@ -79,6 +79,8 @@ For each linked issue, delegate to `/mach12:gh-issue-read <issue-number>` so its
 
 "Independent" here means the assessment is independent of the **review author's conclusions** -- each assessor re-derives its verdicts from the actual artifacts rather than trusting the reviewer's framing. It does **not** mean the main agent forms classifications first.
 
+Before dependent adjudication, establish whether structural evidence supplied by the review or another available artifact remains current and covers each assigned finding's affected responsibilities, dependencies, contracts, and consumers. Reuse supported portions after checking freshness and task coverage separately against current source and relevant intervening changes. Use focused parent investigation when sufficient; dispatch a bounded `mach12:structural-mapper` only for targeted supplementation or correction when structural isolation or compression is useful. Missing material coverage limits the affected conclusion. Mapping remains descriptive, does not pre-classify findings or endorse corrections, and does not replace each assessor's independent reading of material source claims.
+
 Give every finding exactly one verdict owner based on its alleged behavior:
 
 - Command-surface findings go to `scramjet:independent-command-assessor`.
@@ -87,7 +89,7 @@ Give every finding exactly one verdict owner based on its alleged behavior:
 
 Use at most two assessors and never ask either assessor to classify an empty family or reclassify the other's items. The command assessor classifies only assigned command findings. The parent validates identifiers and combines the disjoint dispositions without changing them.
 
-Every brief must include the review text; verified PR and issue authority; the complete chronological PR conversation; relevant parent observations; exact assigned identifiers and surface partition; selection reason; caller taxonomy; expected output; and, for coaching, framing, instruction-justification, or user-gate findings, the claimed acceptable reason, real-use evidence, exact user decision, and context presented before purported approval. For command findings, pass the claim and cited evidence without the reviewer's proposed correction when they can be separated, and require the assessor to load `writing-scramjet-commands`. Do not ask assessors to re-fetch artifacts. A replacement assessor requires authoritative compatibility with the same responsibility, posture, context, output, and handoff. Missing required output blocks a complete assessment. Assessors are read-only; the parent owns tooling, interaction, merging, and publication.
+Every brief must include the review text; verified PR and issue authority; the complete chronological PR conversation; selected structural facts with citations, scope, source-state context, uncertainties and uncovered questions; relevant parent observations; exact assigned identifiers and surface partition; selection reason; caller taxonomy; expected output; and, for coaching, framing, instruction-justification, or user-gate findings, the claimed acceptable reason, real-use evidence, exact user decision, and context presented before purported approval. For command findings, pass the claim and cited evidence without the reviewer's proposed correction when they can be separated, and require the assessor to load `writing-scramjet-commands`. Do not ask assessors to re-fetch artifacts. A replacement assessor requires authoritative compatibility with the same responsibility, posture, context, output, and handoff. Missing required output blocks a complete assessment. Assessors are read-only; the parent owns tooling, interaction, merging, and publication.
 
 Each assessor brief should instruct it to:
 
@@ -112,6 +114,7 @@ Prepare the assessment body. It must include:
 - A reference to the review comment it is assessing (link to the specific comment URL recorded in Step 2).
 - Each finding with its classification and reasoning. Mark any **Regression** finding distinctly (e.g., "Sn -- Regression -- do not apply") so the human and future sessions see it was actively rejected as harmful rather than overlooked.
 - One compact assessment-method item naming the selected assessors, assigned partitions, and material evidence limitations.
+- Fix-relevant verified structural additions or corrections, when any were needed, as a concise descriptive handoff with their citations, scope, source-state context, uncertainties, and uncovered questions; reference the exact review rather than copying its structural map.
 - A bounded follow-up plan at the end, grouping accepted identifiers and affected surfaces. Do not invent correction designs for command findings.
 - Model attribution at the bottom -- use the model attribution from the Model Identity section of your system prompt (e.g., "Assessed by <model name>").
 

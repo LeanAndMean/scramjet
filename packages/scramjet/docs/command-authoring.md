@@ -512,7 +512,7 @@ The bundled command sets ship read-only agents for command and planning work. An
 
 Available planning and command-authoring specialists include:
 
-- `mach12:structural-mapper` produces task-scoped current-state evidence about responsibilities, dependencies, contracts, consumers, and evidence limits for implementation planning.
+- `mach12:structural-mapper` produces task-scoped current-state evidence about responsibilities, dependencies, contracts, consumers, and evidence limits for planning, review, assessment, and correction work.
 - `scramjet:command-set-explorer` compresses large multi-command definitions into a map of edges, context, artifacts, and owners.
 - `scramjet:command-architect` designs or substantially revises the minimum generalized plan.
 - `scramjet:instruction-semantics-analyzer` handles narrow contradictions, ambiguity, impossible ordering, and authority conflicts.
@@ -520,7 +520,7 @@ Available planning and command-authoring specialists include:
 - `scramjet:command-reviewer` provides one independent holistic review after authoring.
 - `scramjet:independent-command-assessor` adjudicates another review's supplied findings without designing fixes.
 
-`mach12:structural-mapper` is the canonical replacement for the former `scramjet:structural-mapper` name; name-based external consumers must migrate.
+`mach12:structural-mapper` is the canonical replacement for the former `scramjet:structural-mapper` name; name-based external consumers must migrate. Callers may reuse supported portions of available evidence after establishing freshness and task coverage separately against current authority, refreshing changed or uncovered portions before dependent conclusions. Mapping remains descriptive and does not inherit design, finding, or verdict authority.
 
 Use the minimum role that benefits from isolation. A material command instruction, responsibility, handoff, framing, or user-gate change receives holistic command review. The semantics analyzer may act alone only for narrow analysis or a clarification that adds no procedure, responsibility, or gate; use both only for explicitly disjoint questions. Add the explorer only when context compression is necessary, and run it before review.
 
