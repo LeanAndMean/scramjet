@@ -514,7 +514,9 @@ describe("mach12 command-surface issue routing", () => {
 		expect(issueReview).toMatch(/selected structural evidence[^.]*citations and evidence limits/i);
 
 		const prReview = command("pr-review");
-		expect(prReview).toMatch(/mapping remains descriptive[^.]*does not pre-classify findings or endorse corrections/i);
+		expect(prReview).toMatch(
+			/mapping remains descriptive[^.]*does not pre-classify findings or endorse corrections/i,
+		);
 		expect(prReview).toMatch(/descriptive handoff separate from F\/S findings/i);
 
 		const assessment = command("pr-review-assessment");
