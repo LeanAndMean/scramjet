@@ -484,35 +484,39 @@ function commandFailureDetail(error) {
 export async function verify(inventory, dependencies = {}) {
 	let root;
 	let phase = "metadata";
+	const observed = [];
+	const refs = (packages) => packages.map(({ name, version }) => `${name}@${version}`).join(", ") || "none";
+	const readVerificationMetadata = dependencies.readVerificationMetadata ?? ((pkg, { remainingMs }) => {
+		const readTimeout = () => {
+			const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
+			if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
+			return timeout;
+		};
+		const versions = requireVersions(
+			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`, readTimeout()),
+			pkg.name,
+		);
+		if (!versions.includes(pkg.version)) {
+			throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
+		}
+		const distTags = requireDistTags(
+			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`, readTimeout()),
+			pkg.name,
+		);
+		if (distTags.latest !== pkg.version) {
+			throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
+		}
+		requireAttestations(readAttestations(pkg, readTimeout()), pkg);
+	});
 	try {
 		for (const pkg of inventory) {
 			phase = `metadata for ${pkg.name}@${pkg.version}`;
 			await pollRead(
 				`${pkg.name}@${pkg.version} verification metadata`,
-				async ({ remainingMs }) => {
-					const readTimeout = () => {
-						const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
-						if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
-						return timeout;
-					};
-					const versions = requireVersions(
-						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`, readTimeout()),
-						pkg.name,
-					);
-					if (!versions.includes(pkg.version)) {
-						throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
-					}
-					const distTags = requireDistTags(
-						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`, readTimeout()),
-						pkg.name,
-					);
-					if (distTags.latest !== pkg.version) {
-						throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
-					}
-					requireAttestations(readAttestations(pkg, readTimeout()), pkg);
-				},
+				(context) => readVerificationMetadata(pkg, context),
 				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
 			);
+			observed.push(pkg);
 		}
 
 		phase = "install";
@@ -560,7 +564,7 @@ export async function verify(inventory, dependencies = {}) {
 		console.log("final verification: completed");
 	} catch (error) {
 		throw new Error(
-			`Published release verification failed; publication state is ambiguous. Inspect registry state read-only and prepare another five-fresh forward release. failed phase: ${phase}; final verification: not completed. Cause: ${commandFailureDetail(error)}`,
+			`Published release verification failed. Verification metadata observed: ${refs(observed)}. Inspect registry state read-only and prepare another five-fresh forward release. failed phase: ${phase}; final verification: not completed. Cause: ${commandFailureDetail(error)}`,
 			{ cause: error },
 		);
 	} finally {

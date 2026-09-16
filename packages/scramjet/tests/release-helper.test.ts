@@ -64,6 +64,7 @@ interface FakeState {
 	publicationCounts?: Record<string, number>;
 	prePublishLatest?: Record<string, string>;
 	visibilityDelays?: Record<string, number>;
+	verificationVisibilityDelays?: Record<string, number>;
 	tagVisibilityDelays?: Record<string, number>;
 	attestationDelays?: Record<string, number>;
 	missingAttestation?: string;
@@ -215,8 +216,13 @@ function initialState(): FakeState {
 	};
 }
 
-function runHelper(mode: string, statePath: string, args = mode === "preflight" ? [SHA] : []) {
-	const script = ["publish", "publish-and-verify", "registry-preflight", "verify"].includes(mode)
+function runHelper(
+	mode: string,
+	statePath: string,
+	args = mode === "preflight" ? [SHA] : [],
+	environment: Record<string, string> = {},
+) {
+	const script = ["publish", "publish-and-verify", "registry-preflight", "verify", "verify-delayed"].includes(mode)
 		? join(dirname(statePath), "runner.mjs")
 		: HELPER;
 	return spawnSync(process.execPath, [script, mode, ...args], {
@@ -225,6 +231,7 @@ function runHelper(mode: string, statePath: string, args = mode === "preflight" 
 		env: {
 			...process.env,
 			...RELEASE_ENV,
+			...environment,
 			PATH: `${dirname(statePath)}:${process.env.PATH}`,
 			FAKE_NPM_STATE: statePath,
 		},
@@ -237,6 +244,19 @@ function readState(path: string): FakeState {
 
 function publishCalls(state: FakeState): string[][] {
 	return state.calls.filter(([command]) => command === "publish");
+}
+
+function expectFirstPackageObservationFailureSummary(stderr: string) {
+	expect(stderr).toContain("accepted and observed: none");
+	expect(stderr).toContain(`accepted but unobserved: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+	expect(stderr).toContain(
+		`unattempted: ${INVENTORY.slice(1)
+			.map(({ name, version }) => `${name}@${version}`)
+			.join(", ")}`,
+	);
+	expect(stderr).toContain("failed phase: post-publish metadata observation");
+	expect(stderr).toContain("final verification: not completed");
+	expect(stderr).not.toContain("acceptance ambiguous:");
 }
 
 describe("release helper package and event validation", () => {
@@ -526,14 +546,15 @@ describe("release helper registry preflight and publication", () => {
 		chmodSync(join(workDir, "npm"), 0o755);
 		writeFileSync(
 			join(workDir, "runner.mjs"),
-			`import { loadInventory, preflight, publish, validateIdentity, verify } from ${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))};
+			`import { readFileSync, writeFileSync } from "node:fs";
+import { loadInventory, preflight, publish, validateIdentity, verify } from ${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))};
 try {
   const inventory = loadInventory();
   validateIdentity(inventory);
   let elapsedMs = 0;
   const pollDependencies = {
     budgetMs: 600_000,
-    delayMs: 10_000,
+    delayMs: Number(process.env.POLL_DELAY_MS ?? 10_000),
     now: () => elapsedMs,
     sleep: async (duration) => { elapsedMs += duration; },
   };
@@ -541,6 +562,18 @@ try {
   else if (process.argv[2] === "publish-and-verify") {
     await publish(inventory, { pollDependencies });
     await verify(inventory, { pollDependencies });
+  } else if (process.argv[2] === "verify-delayed") {
+    await verify(inventory, {
+      pollDependencies,
+      readVerificationMetadata: (pkg) => {
+        const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+        state.calls.push(["verification-metadata", pkg.name]);
+        const remaining = state.verificationVisibilityDelays?.[pkg.name] ?? 0;
+        if (remaining > 0) state.verificationVisibilityDelays[pkg.name] = remaining - 1;
+        writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+        if (remaining > 0) throw Object.assign(new Error(pkg.name + " is not visible"), { code: "REGISTRY_PROPAGATION" });
+      },
+    });
   } else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies });
   else preflight(inventory);
 } catch (error) {
@@ -765,14 +798,15 @@ exit 1
 		expect(result.stderr).toContain("non-latest dist-tags changed");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
-	it("continues the release when metadata appears after 31 stale observations", () => {
+	it("continues the release after a delay beyond the former observation window", () => {
 		const state = initialState();
-		state.visibilityDelays = { [INVENTORY[1].name]: 31 };
+		state.visibilityDelays = { [INVENTORY[1].name]: 4 };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish-and-verify", statePath);
+		const result = runHelper("publish-and-verify", statePath, [], { POLL_DELAY_MS: "120000" });
 		expect(result.stderr).toBe("");
 		expect(result.status).toBe(0);
 		const finalState = readState(statePath);
@@ -788,10 +822,10 @@ exit 1
 	it("polls multi-minute version and attestation-metadata visibility through publication", () => {
 		const state = initialState();
 		const first = INVENTORY[0].name;
-		state.visibilityDelays = { [first]: 18 };
-		state.attestationDelays = { [first]: 18 };
+		state.visibilityDelays = { [first]: 3 };
+		state.attestationDelays = { [first]: 3 };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
+		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "60000" });
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} post-publish metadata not ready`);
 		const finalState = readState(statePath);
@@ -824,6 +858,7 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("publication state is ambiguous");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === field,
 		);
@@ -855,6 +890,7 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("attestation URL must be a string");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) =>
 				args[0] === "view" && args[1] === `${first.name}@${first.version}` && args[2] === "dist.attestations.url",
@@ -931,6 +967,7 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("publication state is ambiguous");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === "versions",
 		);
@@ -1011,7 +1048,12 @@ exit 1
 			const result = runHelper("verify", statePath);
 			expect(result.status).not.toBe(0);
 			expect(result.stderr).toContain(`${INVENTORY[2].name}@${INVENTORY[2].version} ${message}`);
-			expect(result.stderr).toContain("publication state is ambiguous");
+			expect(result.stderr).toContain(
+				`Verification metadata observed: ${INVENTORY.slice(0, 2)
+					.map(({ name, version }) => `${name}@${version}`)
+					.join(", ")}`,
+			);
+			expect(result.stderr).not.toContain("publication state is ambiguous");
 			expect(result.stderr).toContain("another five-fresh forward release");
 			expect(readState(statePath).calls.some((args) => args[0] === "audit")).toBe(false);
 		},
@@ -1034,6 +1076,30 @@ exit 1
 		expectVerificationPathsRemoved(state);
 	});
 
+	it("completes standalone verification after more than 31 stale metadata observations", () => {
+		const state = publishedState();
+		state.verificationVisibilityDelays = { [INVENTORY[0].name]: 32 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify-delayed", statePath);
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		const finalState = readState(statePath);
+		expect(
+			finalState.calls.filter(
+				([command, name]) => command === "verification-metadata" && name === INVENTORY[0].name,
+			),
+		).toHaveLength(33);
+		for (const { name } of INVENTORY.slice(1)) {
+			expect(finalState.calls).toContainEqual(["verification-metadata", name]);
+		}
+		expect(finalState.calls.some(([command]) => command === "install")).toBe(true);
+		expect(finalState.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(finalState.calls).toContainEqual(["installed-scramjet", "--help"]);
+		expect(publishCalls(finalState)).toHaveLength(0);
+		expect(result.stdout).toContain("final verification: completed");
+		expectVerificationPathsRemoved(finalState);
+	});
+
 	it.each([
 		["install", { installFailure: true }, "install failed", false],
 		[
@@ -1050,6 +1116,10 @@ exit 1
 		const result = runHelper("verify", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain(message);
+		expect(result.stderr).toContain(
+			`Verification metadata observed: ${INVENTORY.map(({ name, version }) => `${name}@${version}`).join(", ")}`,
+		);
+		expect(result.stderr).not.toContain("publication state is ambiguous");
 		expect(result.stderr).toContain(`failed phase: ${_label === "CLI" ? "installed CLI probe" : _label}`);
 		expect(result.stderr).toContain("final verification: not completed");
 		const finalState = readState(statePath);
@@ -1128,6 +1198,29 @@ describe("release operation bounds and post-publish polling", () => {
 		);
 		expect(result).toBe("verified");
 		expect(attempts).toBe(3);
+	});
+
+	it("permits more than 31 observations within the elapsed budget", async () => {
+		let attempts = 0;
+		let elapsedMs = 0;
+		await pollRead(
+			"published package",
+			async () => {
+				attempts += 1;
+				if (attempts <= 32) throw Object.assign(new Error("not visible"), { code: "ETIMEDOUT" });
+			},
+			{
+				budgetMs: 600_000,
+				delayMs: 10_000,
+				now: () => elapsedMs,
+				sleep: async (duration) => {
+					elapsedMs += duration;
+				},
+				retryIf: isTransientReadError,
+			},
+		);
+		expect(attempts).toBe(33);
+		expect(elapsedMs).toBe(320_000);
 	});
 
 	it("does not start another read after an operation consumes the budget", async () => {
