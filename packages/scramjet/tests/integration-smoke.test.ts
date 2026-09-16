@@ -16,7 +16,7 @@ import { createLogger } from "../src/logger.js";
 import { registerToolCallAdvisor } from "../src/tool-scope-advisory.js";
 import type { CommandDef, NextStepPolicy, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
-import { derivedPhase, freshState, lifecycleFor, logMessages, recordingPi } from "./helpers.js";
+import { derivedPhase, freshState, lifecycleFor, logMessages, noOpTerminalIndicators, recordingPi } from "./helpers.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MACH12_COMMANDS_DIR = resolve(HERE, "..", "mach12", "commands");
@@ -584,7 +584,7 @@ describe("integration smoke — lifecycle event sequences", () => {
 	function wireAll(bag: ReturnType<typeof lifecyclePi>, state: ScramjetState) {
 		registerHistory(bag.pi, state);
 		registerCommandStatusTool(bag.pi, state);
-		registerUserInputTool(bag.pi, state);
+		registerUserInputTool(bag.pi, state, noOpTerminalIndicators());
 		registerAutoContinue(bag.pi, state);
 	}
 

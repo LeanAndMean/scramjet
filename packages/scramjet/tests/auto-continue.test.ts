@@ -21,7 +21,14 @@ import { createLogger } from "../src/logger.js";
 import { buildProbeMessage } from "../src/next-step.js";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
-import { derivedPhase, freshState, lifecycleFor, logMessages as logMessagesAll, recordingPi } from "./helpers.js";
+import {
+	derivedPhase,
+	freshState,
+	lifecycleFor,
+	logMessages as logMessagesAll,
+	noOpTerminalIndicators,
+	recordingPi,
+} from "./helpers.js";
 
 let previousKeybindings: KeybindingsManager;
 
@@ -2324,7 +2331,7 @@ describe("get_scramjet_user_input after probe self-heal (bug #128)", () => {
 		state.logger = createLogger(bag.pi);
 		const ctxBag = fakeCtx({ hasUI: true, isStreaming: () => bag.pi.isStreaming });
 		registerCommandStatusTool(bag.pi, state);
-		registerUserInputTool(bag.pi, state);
+		registerUserInputTool(bag.pi, state, noOpTerminalIndicators());
 		registerAutoContinue(bag.pi, state);
 		registerHistory(bag.pi, state);
 		const userInputTool = bag.tools.find((t: any) => t.name === "get_scramjet_user_input");
@@ -2375,7 +2382,7 @@ describe("multi-path probe integration", () => {
 		state.logger = createLogger(bag.pi);
 		const ctxBag = fakeCtx({ hasUI, isStreaming: () => bag.pi.isStreaming });
 		registerCommandStatusTool(bag.pi, state);
-		registerUserInputTool(bag.pi, state);
+		registerUserInputTool(bag.pi, state, noOpTerminalIndicators());
 		registerAutoContinue(bag.pi, state);
 		registerHistory(bag.pi, state);
 		const statusTool = bag.tools.find((t: any) => t.name === "report_scramjet_command_status");
@@ -4305,7 +4312,7 @@ describe("issue 352 — actual-journal replay characterization", () => {
 		state.logger = createLogger(bag.pi);
 		const ctxBag = fakeCtx({ hasUI: true, isStreaming: () => bag.pi.isStreaming });
 		registerHistory(bag.pi, state);
-		registerUserInputTool(bag.pi, state);
+		registerUserInputTool(bag.pi, state, noOpTerminalIndicators());
 		registerCommandStatusTool(bag.pi, state);
 		registerAutoContinue(bag.pi, state);
 		const userInputTool = bag.tools.find((t: any) => t.name === "get_scramjet_user_input");
