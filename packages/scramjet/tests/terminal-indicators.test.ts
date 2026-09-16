@@ -1,5 +1,36 @@
-import { describe, expect, it } from "vitest";
-import { shouldRingBell, titleForPhase } from "../src/terminal-indicators.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTerminalIndicators, shouldRingBell, titleForPhase } from "../src/terminal-indicators.js";
+import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+	vi.restoreAllMocks();
+	for (const directory of temporaryDirectories.splice(0)) {
+		rmSync(directory, { recursive: true, force: true });
+	}
+});
+
+function indicatorFixture(preferences?: string) {
+	const bag = recordingPi();
+	bag.pi.getSessionName = () => "session";
+	const state = freshState();
+	if (preferences !== undefined) {
+		const directory = mkdtempSync(join(tmpdir(), "scramjet-terminal-indicators-"));
+		temporaryDirectories.push(directory);
+		state.preferencesPath = join(directory, "preferences.yaml");
+		writeFileSync(state.preferencesPath, preferences);
+	}
+	const setTitle = vi.fn();
+	const setTitleProvider = vi.fn();
+	const ctx = { hasUI: true, ui: { setTitle, setTitleProvider } };
+	const indicators = createTerminalIndicators(bag.pi, state);
+	indicators.register();
+	return { ...bag, state, ctx, setTitle, setTitleProvider, indicators };
+}
 
 describe("shouldRingBell", () => {
 	const baseArgs = {
@@ -58,6 +89,105 @@ describe("shouldRingBell", () => {
 
 	it("returns true when exactly at cooldown boundary", () => {
 		expect(shouldRingBell({ ...baseArgs, lastBellMs: 5_000, nowMs: 10_000 })).toBe(true);
+	});
+});
+
+describe("createTerminalIndicators", () => {
+	it("shows waiting during an active choice and resumes the working title", async () => {
+		const fixture = indicatorFixture();
+		await fixture.emit("session_start", {}, fixture.ctx);
+		await fixture.emit("agent_start", {}, fixture.ctx);
+
+		const lease = fixture.indicators.beginChoice(fixture.ctx);
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^○ scramjet/);
+
+		lease.complete("resume-work");
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^● scramjet/);
+	});
+
+	it("waits for every overlapping lease and ignores duplicate completion", async () => {
+		const fixture = indicatorFixture();
+		await fixture.emit("agent_start", {}, fixture.ctx);
+		const first = fixture.indicators.beginChoice(fixture.ctx);
+		const second = fixture.indicators.beginChoice(fixture.ctx);
+
+		first.complete("resume-work");
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^○ scramjet/);
+		second.complete("resume-work");
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^● scramjet/);
+		const callCount = fixture.setTitle.mock.calls.length;
+		second.complete("derive-lifecycle");
+		expect(fixture.setTitle).toHaveBeenCalledTimes(callCount);
+	});
+
+	it("keeps direct and provider titles consistent", async () => {
+		const fixture = indicatorFixture();
+		await fixture.emit("session_start", {}, fixture.ctx);
+		await fixture.emit("agent_start", {}, fixture.ctx);
+		const provider = fixture.setTitleProvider.mock.calls[0][0] as () => string | undefined;
+
+		const lease = fixture.indicators.beginChoice(fixture.ctx);
+		expect(provider()).toBe(fixture.setTitle.mock.calls.at(-1)?.[0]);
+		lease.complete("resume-work");
+		expect(provider()).toBe(fixture.setTitle.mock.calls.at(-1)?.[0]);
+	});
+
+	it("derives from lifecycle after a terminating choice until agent end", async () => {
+		const fixture = indicatorFixture();
+		await fixture.emit("session_start", {}, fixture.ctx);
+		await fixture.emit("agent_start", {}, fixture.ctx);
+		const provider = fixture.setTitleProvider.mock.calls[0][0] as () => string | undefined;
+		const lease = fixture.indicators.beginChoice(fixture.ctx);
+		fixture.state.lifecycle = lifecycleFor("dormant");
+
+		lease.complete("derive-lifecycle");
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^○ scramjet/);
+		expect(provider()).toMatch(/^○ scramjet/);
+		fixture.state.lifecycle = lifecycleFor("running");
+		expect(provider()).toMatch(/^● scramjet/);
+		await fixture.emit("agent_end", {}, fixture.ctx);
+		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^● scramjet/);
+	});
+
+	it("clears stale leases at session and run boundaries", async () => {
+		const fixture = indicatorFixture();
+		await fixture.emit("session_start", {}, fixture.ctx);
+		await fixture.emit("agent_start", {}, fixture.ctx);
+		const provider = fixture.setTitleProvider.mock.calls[0][0] as () => string | undefined;
+		const staleFromTree = fixture.indicators.beginChoice(fixture.ctx);
+		await fixture.emit("session_tree", {}, fixture.ctx);
+		await fixture.emit("agent_start", {}, fixture.ctx);
+		staleFromTree.complete("derive-lifecycle");
+		expect(provider()).toMatch(/^● scramjet/);
+
+		const staleFromEnd = fixture.indicators.beginChoice(fixture.ctx);
+		fixture.state.lifecycle = lifecycleFor("idle");
+		await fixture.emit("agent_end", {}, fixture.ctx);
+		staleFromEnd.complete("resume-work");
+		expect(provider()).toMatch(/^○ scramjet/);
+	});
+
+	it("does not set titles when the preference is disabled", async () => {
+		const fixture = indicatorFixture("title_indicator: false\nbell: false\n");
+		await fixture.emit("session_start", {}, fixture.ctx);
+		await fixture.emit("agent_start", {}, fixture.ctx);
+		const lease = fixture.indicators.beginChoice(fixture.ctx);
+		lease.complete("resume-work");
+
+		expect(fixture.setTitle).not.toHaveBeenCalled();
+		const provider = fixture.setTitleProvider.mock.calls[0][0] as () => string | undefined;
+		expect(provider()).toBeUndefined();
+	});
+
+	it("does not write BEL while choices begin or complete", async () => {
+		const fixture = indicatorFixture("title_indicator: true\nbell: true\n");
+		const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+		await fixture.emit("agent_start", {}, fixture.ctx);
+
+		const lease = fixture.indicators.beginChoice(fixture.ctx);
+		lease.complete("resume-work");
+
+		expect(write).not.toHaveBeenCalled();
 	});
 });
 
