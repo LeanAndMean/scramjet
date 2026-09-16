@@ -6,7 +6,7 @@ import { initScramjet } from "../src/index.js";
 import { discoverAgents, parseExecutableAgent } from "../src/subagent/agents.js";
 import { getPiInvocation, registerSubagentTool } from "../src/subagent/index.js";
 import type { AgentDef, AgentRegistry } from "../src/types.js";
-import { recordingPi } from "./helpers.js";
+import { noOpTerminalIndicators, recordingPi } from "./helpers.js";
 
 function writeProjectAgent(tmpDir: string, fileName: string, frontmatter: string[], body = "Agent body.") {
 	const agentsDir = path.join(tmpDir, ".scramjet", "agents");
@@ -31,9 +31,9 @@ function assistantEvent(text: string, extra: Record<string, unknown> = {}): stri
 	});
 }
 
-function registeredSubagentTool(getAgentRegistry?: () => AgentRegistry) {
+function registeredSubagentTool(getAgentRegistry?: () => AgentRegistry, terminalIndicators = noOpTerminalIndicators()) {
 	const { pi, tools } = recordingPi();
-	registerSubagentTool(pi, getAgentRegistry);
+	registerSubagentTool(pi, terminalIndicators, getAgentRegistry);
 	return tools[0];
 }
 
@@ -116,7 +116,7 @@ function failedParallelRenderResult() {
 describe("registerSubagentTool — registration", () => {
 	it("registers exactly one tool named 'subagent' with renderCall and renderResult", () => {
 		const { pi, tools } = recordingPi();
-		registerSubagentTool(pi);
+		registerSubagentTool(pi, noOpTerminalIndicators());
 
 		expect(tools).toHaveLength(1);
 		expect(tools[0].name).toBe("subagent");
@@ -405,21 +405,56 @@ describe("subagent tool — registered-agent authority", () => {
 		expect(textContent(result)).not.toContain("mach12:first");
 	});
 
-	it("uses registered provenance for project confirmation", async () => {
+	it("uses registered provenance for project confirmation and marks only the unresolved wait", async () => {
 		const registered = writeRegisteredAgent(tmpDir, "custom:project-agent", "project");
-		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]));
-		const confirm = vi.fn().mockResolvedValue(false);
+		let resolveConfirmation!: (approved: boolean) => void;
+		const confirmation = new Promise<boolean>((resolve) => {
+			resolveConfirmation = resolve;
+		});
+		const complete = vi.fn();
+		const beginChoice = vi.fn(() => ({ complete }));
+		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]), {
+			beginChoice,
+			register() {},
+		});
+		const confirm = vi.fn(async () => confirmation);
 
-		const result = await tool.execute(
+		const execution = tool.execute(
 			"tool-call-id",
 			{ agent: registered.name, task: "run", agentScope: "user" },
 			undefined,
 			undefined,
 			{ cwd: tmpDir, hasUI: true, ui: { confirm } },
 		);
+		await vi.waitFor(() => expect(beginChoice).toHaveBeenCalledOnce());
+		expect(complete).not.toHaveBeenCalled();
 
+		resolveConfirmation(false);
+		const result = await execution;
 		expect(confirm).toHaveBeenCalledWith("Run project-local agents?", expect.stringContaining(registered.name));
+		expect(complete).toHaveBeenCalledOnce();
+		expect(complete).toHaveBeenCalledWith("resume-work");
 		expect(textContent(result)).toContain("not approved");
+	});
+
+	it("restores the working title when project-agent confirmation fails", async () => {
+		const registered = writeRegisteredAgent(tmpDir, "custom:project-agent", "project");
+		const complete = vi.fn();
+		const tool = registeredSubagentTool(() => new Map([[registered.name, registered]]), {
+			beginChoice: () => ({ complete }),
+			register() {},
+		});
+		const failure = tool.execute(
+			"tool-call-id",
+			{ agent: registered.name, task: "run", agentScope: "user" },
+			undefined,
+			undefined,
+			{ cwd: tmpDir, hasUI: true, ui: { confirm: async () => Promise.reject(new Error("UI failed")) } },
+		);
+
+		await expect(failure).rejects.toThrow("UI failed");
+		expect(complete).toHaveBeenCalledOnce();
+		expect(complete).toHaveBeenCalledWith("resume-work");
 	});
 
 	it.each(["package", "global"] as const)("does not confirm registered %s agents", async (source) => {
@@ -1433,7 +1468,7 @@ describe("renderResult model and effort", () => {
 		pi.getThinkingLevel = () => {
 			throw new Error("no thinking level available");
 		};
-		registerSubagentTool(pi);
+		registerSubagentTool(pi, noOpTerminalIndicators());
 		const tool = tools[0];
 
 		const callRendered = renderToolCall(tool, { agent: "explorer", task: "Explore", effort: "xhigh" });
@@ -1448,7 +1483,7 @@ describe("renderResult model and effort", () => {
 		pi.getThinkingLevel = () => {
 			throw new Error("no thinking level available");
 		};
-		registerSubagentTool(pi);
+		registerSubagentTool(pi, noOpTerminalIndicators());
 		const tool = tools[0];
 
 		const callRendered = renderToolCall(tool, { agent: "explorer", task: "Explore" });

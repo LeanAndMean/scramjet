@@ -19,6 +19,7 @@ import {
 import { activeCommandName } from "../src/lifecycle.js";
 import { createLogger } from "../src/logger.js";
 import { buildProbeMessage } from "../src/next-step.js";
+import { createTerminalIndicators } from "../src/terminal-indicators.js";
 import type { CommandDef, CommandStatusPayload, NextStepPolicy, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
 import {
@@ -1180,6 +1181,30 @@ describe("registerAutoContinue — two-phase command-status protocol", () => {
 			expect(ctxBag.customComponents).toHaveLength(1);
 			expect(ctxBag.customComponents[0].render(80).join("\n")).toContain("/b:ok");
 			expect(ctxBag.dispatched).toEqual([]);
+		});
+
+		it("keeps the waiting title while completed next-step selection is unresolved", async () => {
+			const def = defWithPolicy("a:cmd", { mode: "closed", candidates: [{ name: "b:ok" }] });
+			const state = runningState(def, { enabled: true });
+			const { bag, ctxBag, report } = bootstrap(state);
+			const setTitle = vi.fn();
+			bag.pi.getSessionName = () => undefined;
+			ctxBag.ctx.ui.setTitle = setTitle;
+			ctxBag.ctx.ui.setTitleProvider = vi.fn();
+			const terminalIndicators = createTerminalIndicators(bag.pi, state);
+			terminalIndicators.register();
+			await bag.emit("session_start", {}, ctxBag.ctx);
+			await bag.emit("agent_start", {}, ctxBag.ctx);
+
+			await simulateTwoTurns(bag, ctxBag, report, {
+				status: "completed",
+				summary: "s",
+				next_steps: [{ message: "/b:ok", reason: "review can continue" }],
+				recommended_next_step: 0,
+			});
+
+			expect(ctxBag.customComponents).toHaveLength(1);
+			expect(setTitle.mock.calls.at(-1)?.[0]).toMatch(/^○ scramjet/);
 		});
 
 		it("closed valid recommendation + no UI dispatches immediately", async () => {

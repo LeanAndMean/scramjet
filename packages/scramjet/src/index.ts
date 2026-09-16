@@ -112,14 +112,14 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 	});
 
 	registerCommandStatusTool(pi, state);
-	registerForgePublication(pi, state);
+	registerForgePublication(pi, state, terminalIndicators);
 	registerUserInputTool(pi, state, terminalIndicators);
 	registerDelegateTool(pi, state);
 	registerToolCallAdvisor(pi, state);
 	registerToolVisibilityDiagnostics(pi, state);
 	registerSubagentOutputAdvisor(pi, state);
 	registerAutoContinue(pi, state);
-	registerSubagentTool(pi, () => state.agentRegistry);
+	registerSubagentTool(pi, terminalIndicators, () => state.agentRegistry);
 	registerAutopilotCommand(pi, state);
 	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);

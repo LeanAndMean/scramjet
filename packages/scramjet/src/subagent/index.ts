@@ -8,6 +8,7 @@ import { StringEnum } from "@leanandmean/ai";
 import { type ExtensionAPI, getMarkdownTheme, type ThemeColor, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
+import type { TerminalIndicatorCoordinator } from "../terminal-indicators.js";
 import type { AgentRegistry } from "../types.js";
 import {
 	AGENT_SCOPES,
@@ -530,7 +531,11 @@ const SubagentParams = Type.Object({
 	effort: Type.Optional(EffortSchema),
 });
 
-export function registerSubagentTool(pi: ExtensionAPI, getAgentRegistry?: () => AgentRegistry) {
+export function registerSubagentTool(
+	pi: ExtensionAPI,
+	terminalIndicators: TerminalIndicatorCoordinator,
+	getAgentRegistry?: () => AgentRegistry,
+) {
 	const getParentLevel = (): ThinkingLevel | undefined => {
 		try {
 			return pi.getThinkingLevel();
@@ -630,10 +635,16 @@ export function registerSubagentTool(pi: ExtensionAPI, getAgentRegistry?: () => 
 					const dirs = [...new Set(projectAgentsRequested.map((agent) => path.dirname(agent.filePath)))].join(
 						", ",
 					);
-					const ok = await ctx.ui.confirm(
-						"Run project-local agents?",
-						`Agents: ${names}\nSource: ${dirs}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-					);
+					const choiceLease = terminalIndicators.beginChoice(ctx);
+					let ok: boolean;
+					try {
+						ok = await ctx.ui.confirm(
+							"Run project-local agents?",
+							`Agents: ${names}\nSource: ${dirs}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+						);
+					} finally {
+						choiceLease.complete("resume-work");
+					}
 					if (!ok)
 						return {
 							content: [{ type: "text", text: "Canceled: project-local agents not approved." }],

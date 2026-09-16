@@ -21,6 +21,7 @@ import {
 	resolveForgeOrigin,
 	sameRepository,
 } from "./forge-publication-provider.js";
+import type { TerminalIndicatorCoordinator } from "./terminal-indicators.js";
 import type { PublicationTool, ScramjetState } from "./types.js";
 import { PUBLICATION_TOOLS } from "./types.js";
 
@@ -41,7 +42,11 @@ type PublicationDetails = {
 } & PublicationOutcomeDetails;
 type ApprovalResult = "approved" | "cancelled" | "stale";
 
-export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState): void {
+export function registerForgePublication(
+	pi: ExtensionAPI,
+	state: ScramjetState,
+	terminalIndicators: TerminalIndicatorCoordinator,
+): void {
 	let sessionEpoch = 0;
 	let runtimeLive = true;
 	let activeApproval: ((result: ApprovalResult) => void) | undefined;
@@ -210,6 +215,7 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 				let approval: ApprovalResult = "approved";
 				if (policy === "require-approval") {
 					let removeApprovalAbort = () => {};
+					const choiceLease = terminalIndicators.beginChoice(ctx);
 					try {
 						approval = await ctx.ui!.custom<ApprovalResult>(
 							(tui, theme, _keybindings, done) => {
@@ -251,6 +257,8 @@ export function registerForgePublication(pi: ExtensionAPI, state: ScramjetState)
 							},
 							repository,
 						);
+					} finally {
+						choiceLease.complete("resume-work");
 					}
 					removeApprovalAbort();
 					if (approval === undefined) {
