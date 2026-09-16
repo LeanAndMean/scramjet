@@ -268,7 +268,10 @@ export async function pollRead(description, operation, dependencies = {}) {
 		if (observations > 0 && remainingMs <= 0) break;
 		observations += 1;
 		try {
-			return await operation({ remainingMs: () => Math.max(0, budgetMs - (now() - startedAt)) });
+			const result = await operation({ remainingMs: () => Math.max(0, budgetMs - (now() - startedAt)) });
+			if (now() - startedAt < budgetMs) return result;
+			lastError = new Error("observation completed after the budget expired");
+			break;
 		} catch (error) {
 			if (!retryIf(error)) throw error;
 			lastError = error;
@@ -466,7 +469,7 @@ export async function publish(inventory, dependencies = {}) {
 				`failed phase: ${phase}; elapsed ${elapsed()}ms; budget ${POST_PUBLISH_BUDGET_MS}ms`,
 				"final verification: not completed",
 			].filter(Boolean);
-			throw new Error(`${error?.message ?? String(error)}\nPublication summary: ${details.join("; ")}`, { cause: error });
+			throw new Error(`${error?.message ?? String(error)}\nDo not retry publication; inspect registry state read-only and prepare another five-fresh forward release.\nPublication summary: ${details.join("; ")}`, { cause: error });
 		}
 		throw error;
 	}
