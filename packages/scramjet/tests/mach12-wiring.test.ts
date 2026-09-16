@@ -473,7 +473,7 @@ describe("mach12 command-surface issue routing", () => {
 
 		expect(mapper).toBeGreaterThan(-1);
 		expect(mapper).toBeLessThan(architect);
-		expect(exploration).toMatch(/skip[^.]*mapper[^.]*mechanical/i);
+		expect(exploration).toMatch(/skip[^.]*structural packet[^.]*mechanical/i);
 		expect(exploration).toMatch(/owner and location[^.]*unambiguous/i);
 		expect(exploration).toMatch(/no shared, exported, public, serialized, cross-owner, or dependency contract/i);
 		expect(exploration).toMatch(/initial[^.]*maximum of seven subagent calls/i);
@@ -492,6 +492,55 @@ describe("mach12 command-surface issue routing", () => {
 		expect(architecture).toMatch(/reserved eighth call[^.]*same `mach12:structural-mapper`/i);
 		expect(architecture).toMatch(/do not automatically re-dispatch[^.]*architect/i);
 		expect(architecture).toMatch(/report incomplete evidence[^.]*exceed/i);
+	});
+
+	it("reuses structural evidence only after separate freshness and task-coverage checks", () => {
+		const planning = section(command("issue-plan"), "## Step 4:", "## Step 5:");
+		expect(planning).toMatch(/reuse supported portions/i);
+		expect(planning).toMatch(/freshness and task coverage[^.]*separately/i);
+		expect(planning).toMatch(/relevant uncommitted changes/i);
+		expect(planning).toMatch(/matching revision[^.]*proves neither/i);
+
+		for (const basename of ["issue-review", "pr-review", "pr-review-assessment", "pr-review-fix"]) {
+			const content = command(basename);
+			expect(content, basename).toMatch(/reuse supported (?:portions|evidence)/i);
+			expect(content, basename).toContain("mach12:structural-mapper");
+		}
+	});
+
+	it("hands selected structural evidence to review, assessment, fixing, and implementation without verdict transfer", () => {
+		const issueReview = command("issue-review");
+		expect(issueReview).toMatch(/mapping[^.]*does not classify plan defects/i);
+		expect(issueReview).toMatch(/selected structural evidence[^.]*citations and evidence limits/i);
+
+		const prReview = command("pr-review");
+		expect(prReview).toMatch(
+			/mapping remains descriptive[^.]*does not pre-classify findings or endorse corrections/i,
+		);
+		expect(prReview).toMatch(/descriptive handoff separate from F\/S findings/i);
+
+		const assessment = command("pr-review-assessment");
+		expect(assessment).toMatch(/does not replace each assessor's independent reading/i);
+		expect(assessment).toMatch(
+			/additions or corrections[^.]*citations, scope, source-state context, uncertainties, and uncovered questions/i,
+		);
+		expect(assessment).toMatch(/reference the exact review rather than copying its structural map/i);
+
+		const fix = command("pr-review-fix");
+		expect(fix).toMatch(/finding-validation evidence[^.]*does not[^.]*proposed correction/i);
+		expect(fix).toContain("scramjet:command-set-explorer");
+		expect(fix).toMatch(
+			/selected structural evidence with citations, scope, source-state context, uncertainties and uncovered questions/i,
+		);
+
+		const implementation = command("issue-implement");
+		expect(implementation).toContain("mach12:structural-mapper");
+		expect(implementation).toContain("mach12:code-explorer");
+		expect(implementation).toContain("scramjet:command-set-explorer");
+		expect(implementation).toMatch(/do not dispatch multiple roles for equivalent evidence/i);
+		expect(implementation).toMatch(
+			/selected structural evidence with citations, scope, source-state context, uncertainties and uncovered questions/i,
+		);
 	});
 
 	it("narrows explorers when a structural packet is supplied", () => {
@@ -568,7 +617,7 @@ describe("mach12 command-surface issue routing", () => {
 		);
 
 		const exploration = section(command("issue-plan"), "## Step 4:", "## Step 5:");
-		expect(exploration).toMatch(/Skip the mapper only when[^.]*clearly mechanical/i);
+		expect(exploration).toMatch(/Skip a structural packet only when[^.]*clearly mechanical/i);
 		expect(exploration).toMatch(/owner and location are unambiguous/i);
 	});
 
@@ -578,8 +627,9 @@ describe("mach12 command-surface issue routing", () => {
 			/material responsibility ownership[^;]*stable policy or invariants[^;]*criticality and replaceability judgments[^;]*intended dependency direction[^;]*prohibited authority inversions/i,
 		);
 		expect(contract).toContain("Preserve responsibility decisions already selected by the caller");
+		expect(contract).toMatch(/source citations[^;]*scope[^;]*source-state context[^;]*evidence limits/i);
 		expect(contract).toMatch(
-			/does not\s+select architecture or require a new heading, layer vocabulary, diagram, matrix, or artifact schema/i,
+			/does not\s+select architecture or require a raw evidence packet, new heading, layer vocabulary, diagram, matrix, or artifact schema/i,
 		);
 	});
 
@@ -1894,6 +1944,9 @@ describe("mach12 wiring — bundled agent set (F18)", () => {
 			expect(mapper.body).toContain(section);
 		}
 		expect(mapper.body).toContain("Verify material supplied claims and documentation against current source");
+		expect(mapper.body).toMatch(/establish freshness and task coverage separately/i);
+		expect(mapper.body).toMatch(/reuse supported portions[^.]*without recreating equivalent evidence/i);
+		expect(mapper.body).toMatch(/source identities and timestamps[^.]*provenance[^.]*validity certificates/i);
 		expect(mapper.body).toContain("unknowable external consumers");
 		expect(mapper.body).toContain("do not design a replacement architecture");
 		expect(mapper.body).toContain("Do not mutate, execute project tools, publish, delegate, interact with the user");

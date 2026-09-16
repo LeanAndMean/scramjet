@@ -72,19 +72,21 @@ Record these as **project review criteria** -- they serve as benchmarks when ass
 
 ## Step 4: Explore the codebase
 
-Classify the plan as command-only, code-only, or mixed before dispatching review evidence:
+Before dependent review, establish whether available structural evidence is current and covers the plan's affected responsibilities, dependencies, contracts, and consumers across the combined proposed change. Reuse supported portions after checking freshness and task coverage separately against current source, relevant intervening changes, and applicable uncommitted work. Investigate changed or uncovered portions; a matching revision, recent timestamp, or prior mapper invocation is not sufficient by itself. Use focused parent investigation when sufficient, or dispatch a bounded `mach12:structural-mapper` when structural isolation or compression is useful. Mapping replaces equivalent architecture, ownership, dependency, integration-boundary, and contract-consumer exploration; it does not classify plan defects.
+
+Classify the plan as command-only, code-only, or mixed before dispatching the remaining review evidence:
 
 - **Command-only** plans change executable natural-language surfaces: command or agent Markdown, frontmatter, next-step or delegation contracts, tool scopes, prompt artifacts, command-facing documentation, or tests whose subject is model interpretation. Plans adding or materially altering instructions, responsibility, handoffs, framing, or user gates require one `scramjet:command-reviewer`. Use `scramjet:instruction-semantics-analyzer` alone only for narrow analysis or a clarification that adds no procedure, responsibility, or gate; use both only for explicitly disjoint questions. Add `scramjet:command-set-explorer` first only when a large multi-command set must be compressed before review.
-- **Code-only** plans retain the six existing Mach 12 exploration lenses: files referenced in the plan, architecture and patterns, gaps, risks and pitfalls, alternative approaches, and test infrastructure.
+- **Code-only** plans use focused code exploration for execution flow, affected files, behavioral gaps, risks and pitfalls, alternative approaches, and test infrastructure not established by structural evidence.
 - **Mixed** plans use the minimum command reviewer and relevant code lenses with disjoint briefs and file/claim partitions; command specialists replace analogous code lenses rather than being added beside the full code suite.
 
 During parent-owned exploration, identify project-provided tools relevant to the plan's affected artifacts from repository guidance, manifests, adjacent scripts, CI configuration, and established usage. Establish each tool's authority; classify its relevance as required verification, advisory analysis, or irrelevant, and its execution effect as non-mutating or mutating generation/formatting. Inspect unfamiliar scripts before use; do not install missing tools or run mutating modes without authorization. Run applicable non-mutating checks when their current evidence is needed for the review, and record exact commands, outputs, and limitations. Treat failures as evidence rather than automatic root-cause findings, warnings as bounded diagnostics rather than new scope, and clean output as insufficient behavioral proof.
 
-The review evidence plus assessment pass is capped at seven subagent calls across both families, primarily for code-heavy or mixed work. Command-only work normally uses one reviewer and one independent assessor, with an explorer added only for context compression. A better-fit installed agent may replace an advisory role only when authoritative repository or command guidance establishes compatibility with its responsibility, read-only posture, context needs, output, and handoff.
+The structural and review evidence plus assessment pass is capped at seven subagent calls across both families, primarily for code-heavy or mixed work. A mapper counts within this ceiling and is descriptive evidence, not another reviewer. Command-only work normally uses one reviewer and one independent assessor, with an explorer or mapper added only when its distinct context isolation is needed. A better-fit installed agent may replace an advisory role only when authoritative repository or command guidance establishes compatibility with its responsibility, read-only posture, context needs, output, and handoff.
 
 Record each selected agent and its evidence-based reason. Missing required output narrows the conclusion; never substitute another agent merely to fill a category. Command specialists load the `writing-scramjet-commands` skill as their shared authoring authority.
 
-Every brief must include the task-relevant issue authority and decisions, current plan, user context, project criteria, verified project-tool evidence, relevant parent observations, exact surface partition, expected cited output, and any claimed coaching/exception evidence plus the exact context presented before user approval. Pass focused material rather than an indiscriminate transcript. When an explorer is needed, run it before the reviewer and give the reviewer its compressed map; otherwise dispatch independent evidence tasks in one parallel batch.
+Every brief must include the task-relevant issue authority and decisions, current plan, user context, project criteria, verified project-tool evidence, selected structural facts with citations, scope, source-state context, uncertainties and uncovered questions, relevant parent observations, exact surface partition, expected cited output, and any claimed coaching/exception evidence plus the exact context presented before user approval. Pass focused material rather than an indiscriminate transcript. When an explorer is needed, run it before the reviewer and give the reviewer its compressed map; otherwise dispatch independent evidence tasks in one parallel batch.
 
 ## Step 5: Review the plan
 
@@ -144,7 +146,7 @@ The selected assessor owns classification: do **not** pre-classify its assigned 
 - The issue title/body and full comment stream.
 - The current implementation plan.
 - The project review criteria from Step 3.
-- The key codebase evidence relevant to its assigned surface from Step 4.
+- The key codebase and selected structural evidence relevant to its assigned surface from Step 4, including citations and evidence limits.
 - Its assigned initial F/S findings from Step 5, exact command/runtime partition, and evidence-based selection reason.
 - For coaching, framing, instruction-justification, or user-gate findings: the claimed acceptable reason, real-use evidence, exact user decision, and context presented before purported approval.
 

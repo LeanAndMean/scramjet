@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.96.0 — Reuse current structural evidence across Mach 12
+
+Improves Mach 12 workflows by reusing current structural evidence without transferring decision or verdict authority. Fixes [#544](https://github.com/LeanAndMean/scramjet/issues/544).
+
+### Changed
+
+- Reuse supported structural evidence across planning, review, assessment, correction, and implementation after separate freshness and task-coverage checks.
+- Refresh changed or uncovered owners, dependencies, contracts, and consumers before dependent conclusions.
+- Preserve cited structural context across command handoffs while keeping mapping descriptive.
+
+### Tests
+
+- Add wiring coverage for evidence freshness, task coverage, handoff context, and mapper neutrality.
+
 ## 0.95.3 — Improve release visibility reliability
 
 Makes release outcomes explicit and keeps registry observation bounded without risking duplicate publication. Fixes [#541](https://github.com/LeanAndMean/scramjet/issues/541).
