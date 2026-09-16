@@ -60,19 +60,31 @@ interface FakeState {
 	publishFailure?: string;
 	race?: string;
 	unexpectedTagChange?: string;
+	laterTagChange?: string;
+	registryReadMs?: Record<string, number>;
+	registryTimeouts?: Array<{ field: string; timeout: number; elapsedMs: number }>;
 	versionQueries?: Record<string, number>;
 	publicationCounts?: Record<string, number>;
 	prePublishLatest?: Record<string, string>;
 	visibilityDelays?: Record<string, number>;
+	verificationVisibilityDelays?: Record<string, number>;
 	tagVisibilityDelays?: Record<string, number>;
 	attestationDelays?: Record<string, number>;
 	missingAttestation?: string;
 	wrongAttestationPredicate?: string;
 	installFailure?: boolean;
 	auditFailure?: boolean;
+	runtimeSmokeFailure?: boolean;
 	cliFailure?: boolean;
 	installedVersionOverrides?: Record<string, string>;
-	verificationPaths?: { project: string; cache: string; home: string; xdg: string };
+	verificationPaths?: {
+		project: string;
+		cache: string;
+		home: string;
+		xdg: string;
+		smoke?: string;
+		packageRoot?: string;
+	};
 }
 
 const FAKE_NPM = `#!/usr/bin/env node
@@ -154,6 +166,7 @@ if (args[0] === "publish") {
   pkg.versions.push(target.version);
   pkg.distTags.latest = target.version;
   if (state.unexpectedTagChange === target.name) pkg.distTags.scramjet = target.version;
+  if (state.laterTagChange) state.packages[state.laterTagChange].distTags.scramjet = "changed";
   save(); process.stdout.write("published"); process.exit(0);
 }
 if (args[0] === "install") {
@@ -215,8 +228,13 @@ function initialState(): FakeState {
 	};
 }
 
-function runHelper(mode: string, statePath: string, args = mode === "preflight" ? [SHA] : []) {
-	const script = ["publish", "registry-preflight", "verify"].includes(mode)
+function runHelper(
+	mode: string,
+	statePath: string,
+	args = mode === "preflight" ? [SHA] : [],
+	environment: Record<string, string> = {},
+) {
+	const script = ["publish", "publish-and-verify", "registry-preflight", "verify", "verify-delayed"].includes(mode)
 		? join(dirname(statePath), "runner.mjs")
 		: HELPER;
 	return spawnSync(process.execPath, [script, mode, ...args], {
@@ -225,8 +243,10 @@ function runHelper(mode: string, statePath: string, args = mode === "preflight" 
 		env: {
 			...process.env,
 			...RELEASE_ENV,
+			...environment,
 			PATH: `${dirname(statePath)}:${process.env.PATH}`,
 			FAKE_NPM_STATE: statePath,
+			FAKE_NPM_SCRIPT: join(dirname(statePath), "npm"),
 		},
 	});
 }
@@ -237,6 +257,19 @@ function readState(path: string): FakeState {
 
 function publishCalls(state: FakeState): string[][] {
 	return state.calls.filter(([command]) => command === "publish");
+}
+
+function expectFirstPackageObservationFailureSummary(stderr: string) {
+	expect(stderr).toContain("accepted and observed: none");
+	expect(stderr).toContain(`accepted but unobserved: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+	expect(stderr).toContain(
+		`unattempted: ${INVENTORY.slice(1)
+			.map(({ name, version }) => `${name}@${version}`)
+			.join(", ")}`,
+	);
+	expect(stderr).toContain("failed phase: post-publish metadata observation");
+	expect(stderr).toContain("final verification: not completed");
+	expect(stderr).not.toContain("acceptance ambiguous:");
 }
 
 describe("release helper package and event validation", () => {
@@ -526,12 +559,85 @@ describe("release helper registry preflight and publication", () => {
 		chmodSync(join(workDir, "npm"), 0o755);
 		writeFileSync(
 			join(workDir, "runner.mjs"),
-			`import { loadInventory, preflight, publish, validateIdentity, verify } from ${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))};
+			`import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import childProcess from "node:child_process";
+import { createRequire, syncBuiltinESMExports } from "node:module";
+import { runInNewContext } from "node:vm";
+let elapsedMs = 0;
+if (process.env.IN_PROCESS_NPM === "1") {
+  const realExec = childProcess.execFileSync;
+  childProcess.execFileSync = (command, args, options) => {
+    if (command === "git") return realExec(command, args, options);
+    const cli = command.endsWith("/node_modules/.bin/scramjet");
+    if (command !== "npm" && !cli) throw new Error("Unexpected fixture command: " + command);
+    const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+    if (command === "npm" && args[0] === "view" && Object.values(state.publicationCounts ?? {}).some(count => count > 0)) {
+      state.registryTimeouts ??= [];
+      state.registryTimeouts.push({ field: args[2], timeout: options.timeout, elapsedMs });
+      elapsedMs += state.registryReadMs?.[args[2]] ?? 0;
+      writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+    }
+    let stdout = "";
+    let stderr = "";
+    let status = 0;
+    const exited = {};
+    const source = readFileSync(cli ? command : process.env.FAKE_NPM_SCRIPT, "utf8");
+    try {
+      runInNewContext(source, {
+        require: createRequire(import.meta.url),
+        console: { error: message => { stderr += message; } },
+        process: {
+          argv: [process.execPath, command, ...args],
+          env: { ...process.env, ...options.env },
+          cwd: () => options.cwd,
+          stdout: { write: text => { stdout += text; } },
+          exit: code => { status = code; throw exited; },
+        },
+      });
+    } catch (error) {
+      if (error !== exited) throw error;
+    }
+    if (status !== 0) throw Object.assign(new Error("fixture command failed"), { status, stdout, stderr });
+    return stdout;
+  };
+  syncBuiltinESMExports();
+}
+const { loadInventory, preflight, publish, validateIdentity, verify } = await import(${JSON.stringify(new URL("../../../.github/scripts/release.mjs", import.meta.url))});
 try {
   const inventory = loadInventory();
   validateIdentity(inventory);
-  if (process.argv[2] === "publish") await publish(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
-  else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies: { delayMs: 0, sleep: async () => {} } });
+  const pollDependencies = {
+    budgetMs: 600_000,
+    delayMs: Number(process.env.POLL_DELAY_MS ?? 10_000),
+    now: () => elapsedMs,
+    sleep: async (duration) => { elapsedMs += duration; },
+  };
+  const runInstalledRuntimeSmoke = (packageRoot, workDir) => {
+    const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+    state.calls.push(["installed-runtime-smoke", packageRoot, workDir]);
+    state.verificationPaths.smoke = workDir;
+    state.verificationPaths.packageRoot = realpathSync(packageRoot);
+    writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+    if (state.runtimeSmokeFailure) throw Object.assign(new Error("runtime smoke failed"), { stderr: "runtime smoke failed" });
+  };
+  if (process.argv[2] === "publish") await publish(inventory, { pollDependencies });
+  else if (process.argv[2] === "publish-and-verify") {
+    await publish(inventory, { pollDependencies });
+    await verify(inventory, { pollDependencies, runInstalledRuntimeSmoke });
+  } else if (process.argv[2] === "verify-delayed") {
+    await verify(inventory, {
+      pollDependencies,
+      runInstalledRuntimeSmoke,
+      readVerificationMetadata: (pkg) => {
+        const state = JSON.parse(readFileSync(process.env.FAKE_NPM_STATE, "utf8"));
+        state.calls.push(["verification-metadata", pkg.name]);
+        const remaining = state.verificationVisibilityDelays?.[pkg.name] ?? 0;
+        if (remaining > 0) state.verificationVisibilityDelays[pkg.name] = remaining - 1;
+        writeFileSync(process.env.FAKE_NPM_STATE, JSON.stringify(state));
+        if (remaining > 0) throw Object.assign(new Error(pkg.name + " is not visible"), { code: "REGISTRY_PROPAGATION" });
+      },
+    });
+  } else if (process.argv[2] === "verify") await verify(inventory, { pollDependencies, runInstalledRuntimeSmoke });
   else preflight(inventory);
 } catch (error) {
   console.error("release: " + error.message);
@@ -641,7 +747,11 @@ exit 1
 		for (const { name, version } of INVENTORY) {
 			expect(state.packages[name].versions).toContain(version);
 			expect(state.packages[name].distTags).toEqual({ latest: version, scramjet: "preserved" });
+			expect(result.stdout).toContain(`${name}@${version}: publish command accepted after`);
+			expect(result.stdout).toContain(`${name}@${version}: post-publish metadata observed after`);
 		}
+		expect(result.stdout).toContain("publication summary: accepted and observed:");
+		expect(result.stdout).toContain("final verification: pending");
 	});
 
 	it.each(["registry-preflight", "publish"])("rejects a present target before publication in %s", (mode) => {
@@ -727,6 +837,15 @@ exit 1
 		expect(result.stderr).toContain("Do not retry publication");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(result.stderr).toContain("publish failed");
+		expect(result.stderr).toContain(`accepted and observed: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(result.stderr).toContain(`acceptance ambiguous: ${INVENTORY[1].name}@${INVENTORY[1].version}`);
+		expect(result.stderr).toContain(
+			`unattempted: ${INVENTORY.slice(2)
+				.map(({ name, version }) => `${name}@${version}`)
+				.join(", ")}`,
+		);
+		expect(result.stderr).toContain("failed phase: publish command");
+		expect(result.stderr).toContain("final verification: not completed");
 		const calls = publishCalls(readState(statePath));
 		expect(calls.map((args) => args[args.indexOf("-w") + 1])).toEqual(
 			INVENTORY.slice(0, 2).map(({ workspace }) => workspace),
@@ -742,32 +861,97 @@ exit 1
 		expect(result.stderr).toContain("non-latest dist-tags changed");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
-	it("polls multi-minute version and attestation-metadata visibility through publication", () => {
+	it("publishes all five packages and verifies after more than 31 stale publication reads", () => {
+		const state = initialState();
+		state.visibilityDelays = { [INVENTORY[1].name]: 32 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish-and-verify", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		const finalState = readState(statePath);
+		expect(publishCalls(finalState).map((args) => args[args.indexOf("-w") + 1])).toEqual(
+			INVENTORY.map(({ workspace }) => workspace),
+		);
+		expect(Object.values(finalState.publicationCounts ?? {})).toEqual(INVENTORY.map(() => 1));
+		expect(finalState.versionQueries?.[INVENTORY[1].name]).toBe(36);
+		expect(result.stdout).toContain("final verification: completed");
+		expectVerificationPathsRemoved(finalState);
+		expect(finalState.calls.some(([command]) => command === "install")).toBe(true);
+		expect(finalState.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(finalState.calls.some(([command]) => command === "installed-runtime-smoke")).toBe(true);
+		expect(finalState.calls).toContainEqual(["installed-scramjet", "--help"]);
+	});
+
+	it("shares one deadline across version and attestation visibility", () => {
 		const state = initialState();
 		const first = INVENTORY[0].name;
-		state.visibilityDelays = { [first]: 18 };
-		state.attestationDelays = { [first]: 18 };
+		state.visibilityDelays = { [first]: 3 };
+		state.attestationDelays = { [first]: 2 };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
-		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} attestation metadata not ready`);
+		const result = runHelper("publish-and-verify", statePath, [], {
+			IN_PROCESS_NPM: "1",
+			POLL_DELAY_MS: "120000",
+		});
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("within 600000ms after 600000ms and 5 observations");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		const finalState = readState(statePath);
-		expect(finalState.publicationCounts?.[first]).toBe(1);
-		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
+		expect(finalState.visibilityDelays?.[first]).toBe(0);
+		expect(finalState.attestationDelays?.[first]).toBe(0);
+		expect(publishCalls(finalState)).toHaveLength(1);
+		expect(finalState.calls.some(([command]) => command === "install")).toBe(false);
+	});
+
+	it("forwards the shrinking shared remainder to actual registry subprocess options", () => {
+		const state = initialState();
+		state.visibilityDelays = { [INVENTORY[0].name]: 1 };
+		state.registryReadMs = { versions: 10000, "dist-tags": 10000, "dist.attestations.url": 1000 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath, [], { IN_PROCESS_NPM: "1", POLL_DELAY_MS: "550000" });
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		const finalState = readState(statePath);
+		expect(finalState.registryTimeouts?.slice(0, 4)).toEqual([
+			{ field: "versions", timeout: 60000, elapsedMs: 0 },
+			{ field: "versions", timeout: 40000, elapsedMs: 560000 },
+			{ field: "dist-tags", timeout: 30000, elapsedMs: 570000 },
+			{ field: "dist.attestations.url", timeout: 20000, elapsedMs: 580000 },
+		]);
+		expect(publishCalls(finalState)).toHaveLength(5);
+	});
+
+	it("reports forward-only recovery for later pre-publish tag validation failures", () => {
+		const state = initialState();
+		state.laterTagChange = INVENTORY[1].name;
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath, [], { IN_PROCESS_NPM: "1" });
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(`${INVENTORY[1].name} dist-tags changed after preflight`);
+		expect(result.stderr).toContain("Do not retry publication");
+		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(result.stderr).toContain(`accepted and observed: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(result.stderr).toContain(
+			`unattempted: ${INVENTORY.slice(1)
+				.map(({ name, version }) => `${name}@${version}`)
+				.join(", ")}`,
+		);
+		expect(result.stderr).toContain("failed phase: pre-publish validation");
+		expect(result.stderr).toContain("final verification: not completed");
+		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
 	it("polls multi-minute latest-tag visibility through publication", () => {
 		const state = initialState();
 		const first = INVENTORY[0].name;
-		state.tagVisibilityDelays = { [first]: 18 };
+		state.tagVisibilityDelays = { [first]: 3 };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
+		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "60000" });
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} registry visibility not ready`);
+		expect(result.stdout).toContain(`${first}@${INVENTORY[0].version} post-publish metadata not ready`);
 		const finalState = readState(statePath);
 		expect(finalState.publicationCounts?.[first]).toBe(1);
 		expect(publishCalls(finalState)).toHaveLength(INVENTORY.length);
@@ -785,11 +969,28 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("publication state is ambiguous");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === field,
 		);
 		expect(calls).toHaveLength(3);
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
+	});
+
+	it("retries an empty attestation URL within the shared package budget", () => {
+		const first = INVENTORY[0];
+		const state = initialState();
+		state.failureAfterPublish = {
+			name: first.name,
+			field: "dist.attestations.url",
+			output: JSON.stringify(""),
+			remaining: 1,
+		};
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("publish", statePath);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
+		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
 	it("fails malformed attestation metadata without retrying", () => {
@@ -800,6 +1001,7 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("attestation URL must be a string");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) =>
 				args[0] === "view" && args[1] === `${first.name}@${first.version}` && args[2] === "dist.attestations.url",
@@ -821,7 +1023,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first.name}@${first.version} registry visibility not ready`);
+		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
@@ -839,7 +1041,7 @@ exit 1
 		writeFileSync(statePath, JSON.stringify(state));
 		const result = runHelper("publish", statePath);
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain(`${first.name}@${first.version} registry visibility not ready`);
+		expect(result.stdout).toContain(`${first.name}@${first.version} post-publish metadata not ready`);
 		expect(publishCalls(readState(statePath))).toHaveLength(INVENTORY.length);
 	});
 
@@ -876,6 +1078,7 @@ exit 1
 		const result = runHelper("publish", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("publication state is ambiguous");
+		expectFirstPackageObservationFailureSummary(result.stderr);
 		const calls = readState(statePath).calls.filter(
 			(args) => args[0] === "view" && args[1] === first.name && args[2] === "versions",
 		);
@@ -885,23 +1088,32 @@ exit 1
 
 	it("stops after registry visibility polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.visibilityDelays = { [INVENTORY[0].name]: 31 };
+		state.visibilityDelays = { [INVENTORY[0].name]: 2 };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
+		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "300000" });
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
+		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
+		expect(result.stderr).toContain(`accepted but unobserved: ${INVENTORY[0].name}@${INVENTORY[0].version}`);
+		expect(result.stderr).toContain(
+			`unattempted: ${INVENTORY.slice(1)
+				.map(({ name, version }) => `${name}@${version}`)
+				.join(", ")}`,
+		);
+		expect(result.stderr).toContain("failed phase: post-publish metadata observation");
+		expect(result.stderr).toContain("budget 600000ms");
+		expect(result.stderr).toContain("final verification: not completed");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
 	});
 
 	it("stops after latest-tag polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.tagVisibilityDelays = { [INVENTORY[0].name]: 31 };
+		state.tagVisibilityDelays = { [INVENTORY[0].name]: 2 };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
+		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "300000" });
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("registry visibility did not converge after 31 attempts");
+		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
@@ -909,15 +1121,15 @@ exit 1
 
 	it("stops after attestation-metadata polling is exhausted without republishing or continuing", () => {
 		const state = initialState();
-		state.attestationDelays = { [INVENTORY[0].name]: 31 };
+		state.attestationDelays = { [INVENTORY[0].name]: 2 };
 		writeFileSync(statePath, JSON.stringify(state));
-		const result = runHelper("publish", statePath);
+		const result = runHelper("publish", statePath, [], { POLL_DELAY_MS: "300000" });
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("attestation metadata did not converge after 31 attempts");
+		expect(result.stderr).toContain("post-publish metadata did not converge within 600000ms");
 		expect(result.stderr).toContain("publication state is ambiguous");
 		expect(result.stderr).toContain("another five-fresh forward release");
 		expect(publishCalls(readState(statePath))).toHaveLength(1);
-	});
+	}, 10_000);
 
 	function publishedState(): FakeState {
 		const state = initialState();
@@ -944,10 +1156,15 @@ exit 1
 		"requires an exact %s even when native signature audit would succeed",
 		(_label, override, message) => {
 			writeFileSync(statePath, JSON.stringify(Object.assign(publishedState(), override)));
-			const result = runHelper("verify", statePath);
+			const result = runHelper("verify", statePath, [], { POLL_DELAY_MS: "300000" });
 			expect(result.status).not.toBe(0);
 			expect(result.stderr).toContain(`${INVENTORY[2].name}@${INVENTORY[2].version} ${message}`);
-			expect(result.stderr).toContain("publication state is ambiguous");
+			expect(result.stderr).toContain(
+				`Verification metadata observed: ${INVENTORY.slice(0, 2)
+					.map(({ name, version }) => `${name}@${version}`)
+					.join(", ")}`,
+			);
+			expect(result.stderr).not.toContain("publication state is ambiguous");
 			expect(result.stderr).toContain("another five-fresh forward release");
 			expect(readState(statePath).calls.some((args) => args[0] === "audit")).toBe(false);
 		},
@@ -964,9 +1181,42 @@ exit 1
 		expect(install).toContain(`@leanandmean/scramjet@${SCRAMJET_VERSION}`);
 		expect(install).toContain("--ignore-scripts=false");
 		expect(state.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		const smokeIndex = state.calls.findIndex(([command]) => command === "installed-runtime-smoke");
+		const cliIndex = state.calls.findIndex(([command]) => command === "installed-scramjet");
+		expect(smokeIndex).toBeGreaterThan(state.calls.findIndex(([command]) => command === "audit"));
+		expect(cliIndex).toBeGreaterThan(smokeIndex);
+		expect(state.verificationPaths!.packageRoot).toBe(
+			join(state.verificationPaths!.project, "node_modules", "@leanandmean", "scramjet"),
+		);
 		expect(state.calls).toContainEqual(["installed-scramjet", "--help"]);
 		expect(publishCalls(state)).toHaveLength(0);
+		expect(result.stdout).toContain("final verification: completed");
 		expectVerificationPathsRemoved(state);
+	});
+
+	it("completes standalone verification after more than 31 stale metadata observations", () => {
+		const state = publishedState();
+		state.verificationVisibilityDelays = { [INVENTORY[0].name]: 32 };
+		writeFileSync(statePath, JSON.stringify(state));
+		const result = runHelper("verify-delayed", statePath);
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+		const finalState = readState(statePath);
+		expect(
+			finalState.calls.filter(
+				([command, name]) => command === "verification-metadata" && name === INVENTORY[0].name,
+			),
+		).toHaveLength(33);
+		for (const { name } of INVENTORY.slice(1)) {
+			expect(finalState.calls).toContainEqual(["verification-metadata", name]);
+		}
+		expect(finalState.calls.some(([command]) => command === "install")).toBe(true);
+		expect(finalState.calls).toContainEqual(["audit", "signatures", "--registry", "https://registry.npmjs.org/"]);
+		expect(finalState.calls.some(([command]) => command === "installed-runtime-smoke")).toBe(true);
+		expect(finalState.calls).toContainEqual(["installed-scramjet", "--help"]);
+		expect(publishCalls(finalState)).toHaveLength(0);
+		expect(result.stdout).toContain("final verification: completed");
+		expectVerificationPathsRemoved(finalState);
 	});
 
 	it.each([
@@ -978,6 +1228,7 @@ exit 1
 			false,
 		],
 		["signature audit", { auditFailure: true }, "audit failed", false],
+		["installed runtime smoke", { runtimeSmokeFailure: true }, "runtime smoke failed", false],
 		["CLI", { cliFailure: true }, "installed scramjet --help failed", true],
 	] as const)("fails %s verification and removes all owned temporary state", (_label, overrides, message, cliRan) => {
 		const state = Object.assign(publishedState(), overrides);
@@ -985,6 +1236,12 @@ exit 1
 		const result = runHelper("verify", statePath);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain(message);
+		expect(result.stderr).toContain(
+			`Verification metadata observed: ${INVENTORY.map(({ name, version }) => `${name}@${version}`).join(", ")}`,
+		);
+		expect(result.stderr).not.toContain("publication state is ambiguous");
+		expect(result.stderr).toContain(`failed phase: ${_label === "CLI" ? "installed CLI probe" : _label}`);
+		expect(result.stderr).toContain("final verification: not completed");
 		const finalState = readState(statePath);
 		expect(finalState.calls.some(([command]) => command === "installed-scramjet")).toBe(cliRan);
 		expectVerificationPathsRemoved(finalState);
@@ -992,6 +1249,29 @@ exit 1
 });
 
 describe("release operation bounds and post-publish polling", () => {
+	beforeEach(() => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+	});
+	afterEach(() => vi.restoreAllMocks());
+
+	it.each([10, 11])("rejects a successful read completing at or past its deadline: %ims", async (completedAt) => {
+		let elapsedMs = 0;
+		const operation = vi.fn(async () => {
+			elapsedMs = completedAt;
+			return "too late";
+		});
+		const sleep = vi.fn();
+		await expect(
+			pollRead("published package", operation, {
+				budgetMs: 10,
+				now: () => elapsedMs,
+				sleep,
+				retryIf: isTransientReadError,
+			}),
+		).rejects.toThrow(/did not converge within 10ms/);
+		expect(operation).toHaveBeenCalledOnce();
+		expect(sleep).not.toHaveBeenCalled();
+	});
 	it("terminates a bounded external read", () => {
 		expect(() => run(process.execPath, ["-e", "setTimeout(() => {}, 1000)"], { timeout: 10 })).toThrow();
 	});
@@ -1022,21 +1302,25 @@ describe("release operation bounds and post-publish polling", () => {
 
 	it("uses the production polling interval by default", async () => {
 		let attempts = 0;
-		const sleep = vi.fn(async () => {});
+		let elapsedMs = 0;
+		const sleep = vi.fn(async (duration: number) => {
+			elapsedMs += duration;
+		});
 		await pollRead(
 			"published package",
 			async () => {
 				attempts += 1;
 				if (attempts === 1) throw new Error("not ready");
 			},
-			{ sleep },
+			{ now: () => elapsedMs, sleep },
 		);
 		expect(sleep).toHaveBeenCalledOnce();
 		expect(sleep).toHaveBeenCalledWith(10_000);
 	});
 
-	it("tolerates delayed registry visibility", async () => {
+	it("tolerates delayed registry visibility within one elapsed budget", async () => {
 		let attempts = 0;
+		let elapsedMs = 0;
 		const result = await pollRead(
 			"published package",
 			async () => {
@@ -1045,24 +1329,86 @@ describe("release operation bounds and post-publish polling", () => {
 				if (attempts === 2) throw new DOMException("fetch timed out", "TimeoutError");
 				return "verified";
 			},
-			{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+			{
+				budgetMs: 30,
+				delayMs: 10,
+				now: () => elapsedMs,
+				sleep: async (duration) => {
+					elapsedMs += duration;
+				},
+				retryIf: isTransientReadError,
+			},
 		);
 		expect(result).toBe("verified");
 		expect(attempts).toBe(3);
 	});
 
-	it("fails after the bounded read attempts are exhausted", async () => {
+	it("permits more than 31 observations within the elapsed budget", async () => {
 		let attempts = 0;
+		let elapsedMs = 0;
+		await pollRead(
+			"published package",
+			async () => {
+				attempts += 1;
+				if (attempts <= 32) throw Object.assign(new Error("not visible"), { code: "ETIMEDOUT" });
+			},
+			{
+				budgetMs: 600_000,
+				delayMs: 10_000,
+				now: () => elapsedMs,
+				sleep: async (duration) => {
+					elapsedMs += duration;
+				},
+				retryIf: isTransientReadError,
+			},
+		);
+		expect(attempts).toBe(33);
+		expect(elapsedMs).toBe(320_000);
+	});
+
+	it("does not start another read after an operation consumes the budget", async () => {
+		let elapsedMs = 0;
+		const reads: string[] = [];
 		await expect(
 			pollRead(
 				"published package",
-				async () => {
-					attempts += 1;
+				async ({ remainingMs }) => {
+					reads.push("versions");
+					elapsedMs = 10;
+					if (remainingMs() <= 0) throw new DOMException("budget expired", "TimeoutError");
+					reads.push("dist-tags");
+				},
+				{ budgetMs: 10, now: () => elapsedMs, sleep: async () => {}, retryIf: isTransientReadError },
+			),
+		).rejects.toThrow(/after 10ms and 1 observations: budget expired/);
+		expect(reads).toEqual(["versions"]);
+	});
+
+	it("clamps sleep and operation context to the remaining budget", async () => {
+		let elapsedMs = 0;
+		const remaining: number[] = [];
+		const sleeps: number[] = [];
+		await expect(
+			pollRead(
+				"published package",
+				async ({ remainingMs }) => {
+					remaining.push(remainingMs());
+					elapsedMs += 6;
 					throw new DOMException("still missing", "TimeoutError");
 				},
-				{ attempts: 3, delayMs: 0, sleep: async () => {}, retryIf: isTransientReadError },
+				{
+					budgetMs: 25,
+					delayMs: 10,
+					now: () => elapsedMs,
+					sleep: async (duration) => {
+						sleeps.push(duration);
+						elapsedMs += duration;
+					},
+					retryIf: isTransientReadError,
+				},
 			),
-		).rejects.toThrow(/did not converge after 3 attempts: still missing/);
-		expect(attempts).toBe(3);
+		).rejects.toThrow(/within 25ms after 25ms and 2 observations: still missing/);
+		expect(remaining).toEqual([25, 9]);
+		expect(sleeps).toEqual([10, 3]);
 	});
 });

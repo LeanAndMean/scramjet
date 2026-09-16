@@ -11,7 +11,7 @@ const REGISTRY_URL = "https://registry.npmjs.org/";
 const WORKFLOW_PATH = ".github/workflows/release.yml";
 export const READ_TIMEOUT_MS = 60_000;
 export const PUBLISH_TIMEOUT_MS = 10 * 60_000;
-export const POST_PUBLISH_ATTEMPTS = 31;
+export const POST_PUBLISH_BUDGET_MS = 10 * 60_000;
 export const POST_PUBLISH_DELAY_MS = 10_000;
 const INVENTORY = [
 	["packages/tui", "@leanandmean/tui"],
@@ -168,8 +168,8 @@ export function validateIdentity(inventory, env = process.env, git = (args) => r
 	return { ref: expectedRef, sha: env.GITHUB_SHA };
 }
 
-function npmJson(args, description) {
-	return parseJson(run("npm", [...args, "--registry", REGISTRY_URL]), description);
+function npmJson(args, description, timeout = READ_TIMEOUT_MS) {
+	return parseJson(run("npm", [...args, "--registry", REGISTRY_URL], { timeout }), description);
 }
 
 function requireVersions(value, name) {
@@ -187,16 +187,13 @@ function requireDistTags(value, name) {
 	return value;
 }
 
-function readAttestations(pkg) {
+function readAttestations(pkg, timeout = READ_TIMEOUT_MS) {
 	const description = `${pkg.name}@${pkg.version} attestations`;
-	const output = run("npm", [
-		"view",
-		`${pkg.name}@${pkg.version}`,
-		"dist.attestations",
-		"--json",
-		"--registry",
-		REGISTRY_URL,
-	]);
+	const output = run(
+		"npm",
+		["view", `${pkg.name}@${pkg.version}`, "dist.attestations", "--json", "--registry", REGISTRY_URL],
+		{ timeout },
+	);
 	if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
 	return parseJson(output, description);
 }
@@ -257,23 +254,39 @@ function tagsEqual(left, right) {
 }
 
 export async function pollRead(description, operation, dependencies = {}) {
-	const attempts = dependencies.attempts ?? POST_PUBLISH_ATTEMPTS;
+	const budgetMs = dependencies.budgetMs ?? POST_PUBLISH_BUDGET_MS;
 	const delayMs = dependencies.delayMs ?? POST_PUBLISH_DELAY_MS;
+	const now = dependencies.now ?? (() => performance.now());
 	const sleep = dependencies.sleep ?? ((duration) => new Promise((resolveSleep) => setTimeout(resolveSleep, duration)));
 	const retryIf = dependencies.retryIf ?? (() => true);
+	const startedAt = now();
+	let observations = 0;
 	let lastError;
-	for (let attempt = 1; attempt <= attempts; attempt += 1) {
+	while (true) {
+		const elapsedMs = now() - startedAt;
+		const remainingMs = budgetMs - elapsedMs;
+		if (observations > 0 && remainingMs <= 0) break;
+		observations += 1;
 		try {
-			return await operation();
+			const result = await operation({ remainingMs: () => Math.max(0, budgetMs - (now() - startedAt)) });
+			if (now() - startedAt < budgetMs) return result;
+			lastError = new Error("observation completed after the budget expired");
+			break;
 		} catch (error) {
 			if (!retryIf(error)) throw error;
 			lastError = error;
-			if (attempt === attempts) break;
-			console.log(`${description} not ready (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms`);
-			await sleep(delayMs);
 		}
+		const afterOperationMs = now() - startedAt;
+		const remainingAfterOperationMs = budgetMs - afterOperationMs;
+		if (remainingAfterOperationMs <= 0) break;
+		const sleepMs = Math.min(delayMs, remainingAfterOperationMs);
+		console.log(`${description} not ready (observation ${observations}); retrying in ${sleepMs}ms`);
+		await sleep(sleepMs);
 	}
-	fail(`${description} did not converge after ${attempts} attempts: ${lastError?.message ?? String(lastError)}`);
+	const elapsedMs = Math.max(0, now() - startedAt);
+	fail(
+		`${description} did not converge within ${budgetMs}ms after ${elapsedMs}ms and ${observations} observations: ${lastError?.message ?? String(lastError)}`,
+	);
 }
 
 function npmErrorCode(error) {
@@ -353,79 +366,114 @@ export function publishPackage(pkg, command = run, timeoutMs = PUBLISH_TIMEOUT_M
 
 export async function publish(inventory, dependencies = {}) {
 	const plan = preflight(inventory);
-	let publicationBegan = false;
-	for (const pkg of plan) {
-		const currentVersions = requireVersions(
-			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions before publish`),
-			pkg.name,
-		);
-		if (currentVersions.includes(pkg.version)) {
-			const recovery = publicationBegan
-				? "; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release"
-				: "";
-			fail(`${pkg.name}@${pkg.version} appeared after preflight${recovery}`);
-		}
-		const currentTags = requireDistTags(
-			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags before publish`),
-			pkg.name,
-		);
-		if (!tagsEqual(currentTags, pkg.distTags)) fail(`${pkg.name} dist-tags changed after preflight`);
-		if (typeof currentTags.latest !== "string" || compareVersions(pkg.version, currentTags.latest) <= 0) {
-			fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
-		}
-		publishPackage(pkg);
-		publicationBegan = true;
-		try {
-			const publishedTags = await pollRead(
-				`${pkg.name}@${pkg.version} registry visibility`,
-				async () => {
-					const publishedVersions = requireVersions(
-						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`),
-						pkg.name,
-					);
-					if (!publishedVersions.includes(pkg.version)) {
-						throw registryPropagationError(`${pkg.name}@${pkg.version} was not visible after publish`);
-					}
-					const tags = requireDistTags(
-						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`),
-						pkg.name,
-					);
-					if (tags.latest !== pkg.version) {
-						throw registryPropagationError(`${pkg.name} latest did not move to ${pkg.version}`);
-					}
-					return tags;
-				},
-				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
+	const now = dependencies.pollDependencies?.now ?? (() => performance.now());
+	const startedAt = now();
+	const accepted = [];
+	const observed = [];
+	let currentIndex = 0;
+	let ambiguous;
+	let phase = "pre-publish validation";
+	const elapsed = () => Math.max(0, Math.round(now() - startedAt));
+	const refs = (packages) => packages.map(({ name, version }) => `${name}@${version}`).join(", ") || "none";
+	try {
+		for (const [index, pkg] of plan.entries()) {
+			currentIndex = index;
+			phase = "pre-publish validation";
+			const currentVersions = requireVersions(
+				npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions before publish`),
+				pkg.name,
 			);
-			const beforeNonLatest = { ...pkg.distTags };
-			const afterNonLatest = { ...publishedTags };
-			delete beforeNonLatest.latest;
-			delete afterNonLatest.latest;
-			if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
-			await pollRead(
-				`${pkg.name}@${pkg.version} attestation metadata`,
-				async () => {
-					const output = run("npm", [
-						"view",
-						`${pkg.name}@${pkg.version}`,
-						"dist.attestations.url",
-						"--json",
-						"--registry",
-						REGISTRY_URL,
-					]);
-					if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
-					const url = parseJson(output, `${pkg.name}@${pkg.version} attestation URL`);
-					if (typeof url !== "string") fail(`${pkg.name}@${pkg.version} attestation URL must be a string`);
-				},
-				{ ...dependencies.pollDependencies, retryIf: isTransientReadError },
+			if (currentVersions.includes(pkg.version)) {
+				const recovery = accepted.length > 0
+					? "; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release"
+					: "";
+				fail(`${pkg.name}@${pkg.version} appeared after preflight${recovery}`);
+			}
+			const currentTags = requireDistTags(
+				npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags before publish`),
+				pkg.name,
 			);
-		} catch (error) {
-			throw new Error(
-				`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release. Cause: ${error?.message ?? String(error)}`,
-				{ cause: error },
-			);
+			if (!tagsEqual(currentTags, pkg.distTags)) fail(`${pkg.name} dist-tags changed after preflight`);
+			if (typeof currentTags.latest !== "string" || compareVersions(pkg.version, currentTags.latest) <= 0) {
+				fail(`${pkg.name}@${pkg.version} is not newer than latest ${currentTags.latest}`);
+			}
+			phase = "publish command";
+			try {
+				publishPackage(pkg);
+			} catch (error) {
+				ambiguous = pkg;
+				throw error;
+			}
+			accepted.push(pkg);
+			const acceptedAt = now();
+			console.log(`${pkg.name}@${pkg.version}: publish command accepted after ${elapsed()}ms`);
+			phase = "post-publish metadata observation";
+			try {
+				await pollRead(
+					`${pkg.name}@${pkg.version} post-publish metadata`,
+					async ({ remainingMs }) => {
+						const readTimeout = () => {
+							const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
+							if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
+							return timeout;
+						};
+						const publishedVersions = requireVersions(
+							npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions after publish`, readTimeout()),
+							pkg.name,
+						);
+						if (!publishedVersions.includes(pkg.version)) {
+							throw registryPropagationError(`${pkg.name}@${pkg.version} was not visible after publish`);
+						}
+						const tags = requireDistTags(
+							npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags after publish`, readTimeout()),
+							pkg.name,
+						);
+						if (tags.latest !== pkg.version) {
+							throw registryPropagationError(`${pkg.name} latest did not move to ${pkg.version}`);
+						}
+						const beforeNonLatest = { ...pkg.distTags };
+						const afterNonLatest = { ...tags };
+						delete beforeNonLatest.latest;
+						delete afterNonLatest.latest;
+						if (!tagsEqual(beforeNonLatest, afterNonLatest)) fail(`${pkg.name} non-latest dist-tags changed during publish`);
+						const output = run(
+							"npm",
+							["view", `${pkg.name}@${pkg.version}`, "dist.attestations.url", "--json", "--registry", REGISTRY_URL],
+							{ timeout: readTimeout() },
+						);
+						if (output === "") throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+						const url = parseJson(output, `${pkg.name}@${pkg.version} attestation URL`);
+						if (typeof url !== "string") fail(`${pkg.name}@${pkg.version} attestation URL must be a string`);
+						if (url.length === 0) throw registryPropagationError(`${pkg.name}@${pkg.version} has no attestation URL`);
+					},
+					{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
+				);
+			} catch (error) {
+				throw new Error(
+					`Post-publish verification for ${pkg.name}@${pkg.version} failed; publication state is ambiguous. Do not retry publication; inspect registry state read-only and prepare another five-fresh forward release. Cause: ${error?.message ?? String(error)}`,
+					{ cause: error },
+				);
+			}
+			observed.push(pkg);
+			console.log(`${pkg.name}@${pkg.version}: post-publish metadata observed after ${Math.max(0, Math.round(now() - acceptedAt))}ms`);
 		}
+	} catch (error) {
+		if (accepted.length > 0 || ambiguous !== undefined) {
+			const acceptedUnobserved = accepted.filter((pkg) => !observed.includes(pkg));
+			const unattempted = plan.slice(currentIndex + (ambiguous === undefined && acceptedUnobserved.length === 0 ? 0 : 1));
+			const details = [
+				`accepted and observed: ${refs(observed)}`,
+				ambiguous === undefined ? null : `acceptance ambiguous: ${refs([ambiguous])}`,
+				acceptedUnobserved.length === 0 ? null : `accepted but unobserved: ${refs(acceptedUnobserved)}`,
+				`unattempted: ${refs(unattempted)}`,
+				`failed phase: ${phase}; elapsed ${elapsed()}ms; budget ${POST_PUBLISH_BUDGET_MS}ms`,
+				"final verification: not completed",
+			].filter(Boolean);
+			throw new Error(`${error?.message ?? String(error)}\nDo not retry publication; inspect registry state read-only and prepare another five-fresh forward release.\nPublication summary: ${details.join("; ")}`, { cause: error });
+		}
+		throw error;
 	}
+	console.log(`publication summary: accepted and observed: ${refs(observed)}; final verification: pending`);
 }
 
 function commandFailureDetail(error) {
@@ -438,31 +486,43 @@ function commandFailureDetail(error) {
 
 export async function verify(inventory, dependencies = {}) {
 	let root;
+	let phase = "metadata";
+	const observed = [];
+	const refs = (packages) => packages.map(({ name, version }) => `${name}@${version}`).join(", ") || "none";
+	const readVerificationMetadata = dependencies.readVerificationMetadata ?? ((pkg, { remainingMs }) => {
+		const readTimeout = () => {
+			const timeout = Math.floor(Math.min(READ_TIMEOUT_MS, remainingMs()));
+			if (timeout <= 0) throw registryPropagationError(`${pkg.name}@${pkg.version} observation budget expired`);
+			return timeout;
+		};
+		const versions = requireVersions(
+			npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`, readTimeout()),
+			pkg.name,
+		);
+		if (!versions.includes(pkg.version)) {
+			throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
+		}
+		const distTags = requireDistTags(
+			npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`, readTimeout()),
+			pkg.name,
+		);
+		if (distTags.latest !== pkg.version) {
+			throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
+		}
+		requireAttestations(readAttestations(pkg, readTimeout()), pkg);
+	});
 	try {
 		for (const pkg of inventory) {
+			phase = `metadata for ${pkg.name}@${pkg.version}`;
 			await pollRead(
 				`${pkg.name}@${pkg.version} verification metadata`,
-				async () => {
-					const versions = requireVersions(
-						npmJson(["view", pkg.name, "versions", "--json"], `${pkg.name} versions during verification`),
-						pkg.name,
-					);
-					if (!versions.includes(pkg.version)) {
-						throw registryPropagationError(`${pkg.name}@${pkg.version} is not visible`);
-					}
-					const distTags = requireDistTags(
-						npmJson(["view", pkg.name, "dist-tags", "--json"], `${pkg.name} dist-tags during verification`),
-						pkg.name,
-					);
-					if (distTags.latest !== pkg.version) {
-						throw registryPropagationError(`${pkg.name} latest is not ${pkg.version}`);
-					}
-					requireAttestations(readAttestations(pkg), pkg);
-				},
+				(context) => readVerificationMetadata(pkg, context),
 				{ ...dependencies.pollDependencies, retryIf: isRegistryVisibilityRetryError },
 			);
+			observed.push(pkg);
 		}
 
+		phase = "install";
 		root = mkdtempSync(join(tmpdir(), "scramjet-release-verification-"));
 		const project = join(root, "project");
 		const cache = join(root, "cache");
@@ -484,6 +544,7 @@ export async function verify(inventory, dependencies = {}) {
 			],
 			{ cwd: project, env, timeout: PUBLISH_TIMEOUT_MS },
 		);
+		phase = "installed closure";
 		for (const pkg of inventory) {
 			const manifestPath = join(project, "node_modules", pkg.name, "package.json");
 			const manifest = requireObject(parseJson(readFileSync(manifestPath, "utf8"), manifestPath), manifestPath);
@@ -491,19 +552,32 @@ export async function verify(inventory, dependencies = {}) {
 				fail(`${pkg.name} installed version must be exactly ${pkg.version}`);
 			}
 		}
+		phase = "signature audit";
 		run("npm", ["audit", "signatures", "--registry", REGISTRY_URL], {
 			cwd: project,
 			env,
 			timeout: PUBLISH_TIMEOUT_MS,
 		});
+		phase = "installed runtime smoke";
+		const packageRoot = join(project, "node_modules", "@leanandmean", "scramjet");
+		const smokeRoot = join(root, "installed-runtime-smoke");
+		const runInstalledRuntimeSmoke = dependencies.runInstalledRuntimeSmoke ?? ((installedRoot, workDir) => {
+			run(process.execPath, [join(REPO_ROOT, ".github", "scripts", "installed-runtime-smoke.mjs"), installedRoot, workDir], {
+				env,
+				timeout: PUBLISH_TIMEOUT_MS,
+			});
+		});
+		runInstalledRuntimeSmoke(packageRoot, smokeRoot);
+		phase = "installed CLI probe";
 		try {
 			run(join(project, "node_modules", ".bin", "scramjet"), ["--help"], { cwd: project, env });
 		} catch (error) {
 			throw new Error(`installed scramjet --help failed: ${commandFailureDetail(error)}`, { cause: error });
 		}
+		console.log("final verification: completed");
 	} catch (error) {
 		throw new Error(
-			`Published release verification failed; publication state is ambiguous. Inspect registry state read-only and prepare another five-fresh forward release. Cause: ${commandFailureDetail(error)}`,
+			`Published release verification failed. Verification metadata observed: ${refs(observed)}. Inspect registry state read-only and prepare another five-fresh forward release. failed phase: ${phase}; final verification: not completed. Cause: ${commandFailureDetail(error)}`,
 			{ cause: error },
 		);
 	} finally {

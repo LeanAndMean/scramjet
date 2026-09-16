@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.95.3 — Improve release visibility reliability
+
+Makes release outcomes explicit and keeps registry observation bounded without risking duplicate publication. Fixes [#541](https://github.com/LeanAndMean/scramjet/issues/541).
+
+### Changed
+
+- Bound post-publish and final-verification registry observation by elapsed time, including command latency and retry delays.
+- Report accepted, observed, unattempted, and final-verification package state separately after publication failures.
+- Verify package-owned commands, agents, migration guidance, and legacy-state preservation in the installed release.
+
+### Fixed
+
+- Preserve exactly-once publication while handling delayed version, tag, and attestation visibility within one package deadline.
+- Reject successful observations that complete at or after their deadline.
+
+### Tests
+
+- Add deterministic coverage for delayed visibility, deadline enforcement, release evidence, installed-runtime verification, and cleanup.
+
 ## 0.95.2 — Make bundled command sets package-owned
 
 Makes installed package resources authoritative while preserving legacy customizations as read-only migration evidence. Fixes [#537](https://github.com/LeanAndMean/scramjet/issues/537).
