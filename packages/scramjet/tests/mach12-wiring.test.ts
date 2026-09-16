@@ -265,6 +265,29 @@ describe("mach12 wiring — bundled command set", () => {
 	);
 });
 
+describe("mach12 PR merge — release evidence contract", () => {
+	const prMerge = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-merge.md`), "utf-8");
+	const release = prMerge.slice(prMerge.indexOf("## Step 5:"), prMerge.indexOf("## Step 6:"));
+
+	it("requires complete PR conversation before release drafting", () => {
+		const prRead = release.indexOf("/mach12:gh-pr-read <pr-number>");
+		const issueRead = release.indexOf("/mach12:gh-issue-read <issue-number>");
+		const releaseDraft = release.indexOf("Draft from the PR title and body");
+		const exactDraft = release.indexOf("Present the exact draft");
+
+		expect(prRead).toBeGreaterThan(-1);
+		expect(prRead).toBeLessThan(issueRead);
+		expect(prRead).toBeLessThan(releaseDraft);
+		expect(prRead).toBeLessThan(exactDraft);
+		expect(release).toMatch(/complete chronological top-level (?:PR )?conversation/i);
+		expect(release).toMatch(/incomplete or malformed history[^.]*stop[^.]*draft/i);
+		expect(release).toMatch(
+			/PR title and body[^.]*comments[^.]*linked issues[^.]*commits[^.]*current repository evidence/i,
+		);
+		expect(release).toMatch(/material implementation or scope changes[^.]*comments[^.]*stale/i);
+	});
+});
+
 describe("mach12 PR review fix — proportional architecture contract", () => {
 	const prReviewFix = readFileSync(join(MACH12_COMMANDS_DIR, `${SET_NAME}:pr-review-fix.md`), "utf-8");
 	const step4 = prReviewFix.slice(prReviewFix.indexOf("## Step 4:"), prReviewFix.indexOf("## Step 5:"));
