@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { capThinkingLevel, registerSubagentTool } from "../src/subagent/index.js";
-import { recordingPi } from "./helpers.js";
+import { noOpTerminalIndicators, recordingPi } from "./helpers.js";
 
 describe("capThinkingLevel", () => {
 	it("returns requested when below parent", () => {
@@ -74,7 +74,7 @@ function writeFakeInvocation(tmpDir: string, script: string): string {
 function registeredSubagentTool(thinkingLevel = "high") {
 	const { pi, tools } = recordingPi();
 	pi.getThinkingLevel = () => thinkingLevel;
-	registerSubagentTool(pi);
+	registerSubagentTool(pi, noOpTerminalIndicators());
 	return tools[0];
 }
 

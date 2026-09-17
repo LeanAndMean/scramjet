@@ -6,7 +6,7 @@ import { visibleWidth } from "@leanandmean/tui";
 import { describe, expect, it, vi } from "vitest";
 import { resetCache } from "../src/autonomy-settings.js";
 import { registerForgePublication } from "../src/forge-publication.js";
-import { freshState, recordingPi } from "./helpers.js";
+import { freshState, noOpTerminalIndicators, recordingPi } from "./helpers.js";
 
 initTheme(undefined, false);
 
@@ -57,15 +57,51 @@ async function guardedExec(command: string, args: string[]) {
 	return execResult("", 1);
 }
 
-async function registered() {
+async function registered(terminalIndicators = noOpTerminalIndicators()) {
 	const bag = recordingPi();
 	bag.pi.exec = vi.fn(guardedExec);
 	const state = freshState();
-	registerForgePublication(bag.pi, state);
+	registerForgePublication(bag.pi, state, terminalIndicators);
 	return { ...bag, state, tool: bag.tools.find((candidate) => candidate.name === "create_issue") };
 }
 
 describe("create_issue approval", () => {
+	it("shows waiting only while publication approval is unresolved", async () => {
+		let resolveApproval!: (result: "cancelled") => void;
+		const approval = new Promise<"cancelled">((resolve) => {
+			resolveApproval = resolve;
+		});
+		const complete = vi.fn();
+		const beginChoice = vi.fn(() => ({ complete }));
+		const { tool } = await registered({ beginChoice, register() {} });
+		const custom = vi.fn(async () => approval);
+
+		const publication = tool.execute("call", { title: "t", body: "b" }, undefined, undefined, context(custom));
+		await vi.waitFor(() => expect(beginChoice).toHaveBeenCalledOnce());
+		expect(complete).not.toHaveBeenCalled();
+
+		resolveApproval("cancelled");
+		await publication;
+		expect(complete).toHaveBeenCalledOnce();
+		expect(complete).toHaveBeenCalledWith("resume-work");
+	});
+
+	it("restores the working title when publication approval UI fails", async () => {
+		const complete = vi.fn();
+		const { tool } = await registered({ beginChoice: () => ({ complete }), register() {} });
+		await tool.execute(
+			"call",
+			{ title: "t", body: "b" },
+			undefined,
+			undefined,
+			context(async () => {
+				throw new Error("preview failed");
+			}),
+		);
+		expect(complete).toHaveBeenCalledOnce();
+		expect(complete).toHaveBeenCalledWith("resume-work");
+	});
+
 	it("renders compact facts and reconstructs the expanded proposal from call arguments", async () => {
 		const { tools } = await registered();
 		const tool = tools.find((candidate) => candidate.name === "create_pr");
@@ -257,7 +293,7 @@ describe("create_issue approval", () => {
 					}),
 				);
 			});
-			registerForgePublication(bag.pi, freshState());
+			registerForgePublication(bag.pi, freshState(), noOpTerminalIndicators());
 			const tool = bag.tools.find(
 				(candidate) => candidate.name === (kind === "alias" ? "create_issue" : "add_issue_comment"),
 			);
@@ -284,7 +320,7 @@ describe("create_issue approval", () => {
 				);
 			return execResult(JSON.stringify({ full_name: "other/repo", html_url: "https://github.com/other/repo" }));
 		});
-		registerForgePublication(bag.pi, freshState());
+		registerForgePublication(bag.pi, freshState(), noOpTerminalIndicators());
 		const tool = bag.tools.find((candidate) => candidate.name === "create_issue");
 		const custom = async (factory: any) => {
 			let answer: unknown;
@@ -335,7 +371,7 @@ describe("create_issue approval", () => {
 	it("preflights both PR branches before approval and rejects unprefixed GitLab drafts", async () => {
 		const bag = recordingPi();
 		bag.pi.exec = vi.fn().mockResolvedValueOnce(execResult("https://gitlab.com/group/project.git\n"));
-		registerForgePublication(bag.pi, freshState());
+		registerForgePublication(bag.pi, freshState(), noOpTerminalIndicators());
 		const tool = bag.tools.find((candidate) => candidate.name === "create_pr");
 		const outcome = await tool.execute(
 			"call",
@@ -356,7 +392,7 @@ describe("create_issue approval", () => {
 			if (command === "git" && args[0] === "ls-remote") return execResult(`abc\t${args.at(-1)}\n`);
 			return execResult("", 1);
 		});
-		registerForgePublication(githubBag.pi, freshState());
+		registerForgePublication(githubBag.pi, freshState(), noOpTerminalIndicators());
 		const githubTool = githubBag.tools.find((candidate) => candidate.name === "create_pr");
 		await githubTool.execute(
 			"call",
@@ -395,7 +431,7 @@ describe("create_issue approval", () => {
 		] as const) {
 			const bag = recordingPi();
 			bag.pi.exec = vi.fn().mockResolvedValue(execResult("https://gitlab.com/group/project.git\n"));
-			registerForgePublication(bag.pi, freshState());
+			registerForgePublication(bag.pi, freshState(), noOpTerminalIndicators());
 			const tool = bag.tools.find((candidate) => candidate.name === "create_pr");
 			const outcome = await tool.execute(
 				"call",

@@ -19,6 +19,7 @@ import {
 } from "./lifecycle.js";
 import { MultiLineSelectList } from "./multi-line-select.js";
 import { createSelectorEffortControl } from "./selector-effort.js";
+import type { ChoiceCompletionDisposition, ChoiceIndicatorCoordinator } from "./terminal-indicators.js";
 import type { ScramjetState } from "./types.js";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
@@ -74,7 +75,11 @@ type UserInputOption = Static<typeof USER_INPUT_OPTION_SCHEMA>;
 const _schemaMatchesParams = (params: Static<typeof USER_INPUT_SCHEMA>): UserInputParams => params;
 const _paramsMatchSchema = (params: UserInputParams): Static<typeof USER_INPUT_SCHEMA> => params;
 
-export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
+export function registerUserInputTool(
+	pi: ExtensionAPI,
+	state: ScramjetState,
+	terminalIndicators: ChoiceIndicatorCoordinator,
+) {
 	pi.registerTool({
 		name: "get_scramjet_user_input",
 		label: "Get Scramjet User Input",
@@ -156,62 +161,76 @@ export function registerUserInputTool(pi: ExtensionAPI, state: ScramjetState) {
 				details: Record<string, unknown>;
 				cancelled: boolean;
 			};
-			let result: InteractionResult | undefined;
+			let choiceDisposition: ChoiceCompletionDisposition = "resume-work";
+			const choiceLease = terminalIndicators.beginChoice(ctx);
 			try {
-				switch (params.type) {
-					case "confirm":
-						result = await handleConfirm(ctx as ExtensionContext, ctx.model, pi);
-						break;
-					case "select":
-						result = await handleSelect(
-							params.options ?? [],
-							params.recommended,
-							ctx as ExtensionContext,
-							ctx.model,
-							pi,
-						);
-						break;
-					default:
-						return {
-							content: [{ type: "text", text: `Unknown interaction type: ${params.type}` }],
-							details: { error: "unknown-type", type: params.type },
-						};
+				let result: InteractionResult | undefined;
+				try {
+					switch (params.type) {
+						case "confirm":
+							result = await handleConfirm(ctx as ExtensionContext, ctx.model, pi);
+							break;
+						case "select":
+							result = await handleSelect(
+								params.options ?? [],
+								params.recommended,
+								ctx as ExtensionContext,
+								ctx.model,
+								pi,
+							);
+							break;
+						default:
+							return {
+								content: [{ type: "text", text: `Unknown interaction type: ${params.type}` }],
+								details: { error: "unknown-type", type: params.type },
+							};
+					}
+				} catch (error) {
+					if (!lifecycleUnchanged()) {
+						choiceDisposition = "derive-lifecycle";
+						return staleResult(expectedCommand, expectedGeneration, state);
+					}
+					if (wasProbing) state.rearmProbeWatchdog?.();
+					const message = error instanceof Error ? error.message : String(error);
+					return {
+						content: [{ type: "text", text: `UI interaction failed: ${message}` }],
+						details: { error: "ui-error", message },
+					};
 				}
-			} catch (error) {
-				if (!lifecycleUnchanged()) return staleResult(expectedCommand, expectedGeneration, state);
-				if (wasProbing) state.rearmProbeWatchdog?.();
-				const message = error instanceof Error ? error.message : String(error);
-				return {
-					content: [{ type: "text", text: `UI interaction failed: ${message}` }],
-					details: { error: "ui-error", message },
-				};
-			}
 
-			if (!lifecycleUnchanged()) return staleResult(expectedCommand, expectedGeneration, state);
+				if (!lifecycleUnchanged()) {
+					choiceDisposition = "derive-lifecycle";
+					return staleResult(expectedCommand, expectedGeneration, state);
+				}
 
-			// Post-interaction lifecycle transitions
-			if (wasProbing && result) {
+				if (result.cancelled) choiceDisposition = "derive-lifecycle";
+
+				// Post-interaction lifecycle transitions
+				if (wasProbing && result) {
+					if (result.cancelled) {
+						grantCancellationResume(pi, state, ctx);
+					} else {
+						// Success during probe → resume with probe re-armed, preserving continueCount
+						resumeAfterProbeInput(state);
+					}
+				}
+
+				pi.appendEntry(USER_INPUT_TYPE, {
+					interactionType: params.type,
+					message: params.message,
+					...result.details,
+				});
+
+				const toolResult = { content: result.content, details: result.details };
 				if (result.cancelled) {
-					grantCancellationResume(pi, state, ctx);
-				} else {
-					// Success during probe → resume with probe re-armed, preserving continueCount
-					resumeAfterProbeInput(state);
+					if (!wasProbing) grantCancellationResume(pi, state, ctx);
+					return { ...toolResult, terminate: true };
 				}
+
+				return toolResult;
+			} finally {
+				choiceLease.complete(choiceDisposition);
 			}
-
-			pi.appendEntry(USER_INPUT_TYPE, {
-				interactionType: params.type,
-				message: params.message,
-				...result.details,
-			});
-
-			const toolResult = { content: result.content, details: result.details };
-			if (result.cancelled) {
-				if (!wasProbing) grantCancellationResume(pi, state, ctx);
-				return { ...toolResult, terminate: true };
-			}
-
-			return toolResult;
 		},
 	});
 }

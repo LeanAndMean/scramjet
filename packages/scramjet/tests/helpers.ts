@@ -1,7 +1,12 @@
 import type { ThinkingLevel } from "@leanandmean/agent";
 import { createLifecycle, type LifecycleHolder, type LifecycleState } from "../src/lifecycle.js";
 import { createLogger, SCRAMJET_LOG_TYPE } from "../src/logger.js";
+import type { TerminalIndicatorCoordinator } from "../src/terminal-indicators.js";
 import type { CommandStatusRestingPayload, ScramjetState } from "../src/types.js";
+
+export function noOpTerminalIndicators(): TerminalIndicatorCoordinator {
+	return { beginChoice: () => ({ complete() {} }), register() {} };
+}
 
 export function freshState(overrides: Partial<ScramjetState> = {}): ScramjetState {
 	return {
