@@ -19,7 +19,7 @@ import {
 } from "./lifecycle.js";
 import { MultiLineSelectList } from "./multi-line-select.js";
 import { createSelectorEffortControl } from "./selector-effort.js";
-import type { ChoiceCompletionDisposition, TerminalIndicatorCoordinator } from "./terminal-indicators.js";
+import type { ChoiceCompletionDisposition, ChoiceIndicatorCoordinator } from "./terminal-indicators.js";
 import type { ScramjetState } from "./types.js";
 
 export const USER_INPUT_TYPE = "scramjet:user-input";
@@ -78,7 +78,7 @@ const _paramsMatchSchema = (params: UserInputParams): Static<typeof USER_INPUT_S
 export function registerUserInputTool(
 	pi: ExtensionAPI,
 	state: ScramjetState,
-	terminalIndicators: TerminalIndicatorCoordinator,
+	terminalIndicators: ChoiceIndicatorCoordinator,
 ) {
 	pi.registerTool({
 		name: "get_scramjet_user_input",
@@ -203,6 +203,8 @@ export function registerUserInputTool(
 					return staleResult(expectedCommand, expectedGeneration, state);
 				}
 
+				if (result.cancelled) choiceDisposition = "derive-lifecycle";
+
 				// Post-interaction lifecycle transitions
 				if (wasProbing && result) {
 					if (result.cancelled) {
@@ -222,7 +224,6 @@ export function registerUserInputTool(
 				const toolResult = { content: result.content, details: result.details };
 				if (result.cancelled) {
 					if (!wasProbing) grantCancellationResume(pi, state, ctx);
-					choiceDisposition = "derive-lifecycle";
 					return { ...toolResult, terminate: true };
 				}
 

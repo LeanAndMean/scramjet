@@ -149,22 +149,35 @@ describe("createTerminalIndicators", () => {
 		expect(fixture.setTitle.mock.calls.at(-1)?.[0]).toMatch(/^● scramjet/);
 	});
 
-	it("clears stale leases at session and run boundaries", async () => {
+	it.each(["session_start", "session_tree", "agent_start", "agent_end"])(
+		"clears stale leases at the %s boundary",
+		async (eventName) => {
+			const fixture = indicatorFixture();
+			await fixture.emit("session_start", {}, fixture.ctx);
+			await fixture.emit("agent_start", {}, fixture.ctx);
+			fixture.state.lifecycle = lifecycleFor("running");
+			const staleLease = fixture.indicators.beginChoice(fixture.ctx);
+			const provider = fixture.setTitleProvider.mock.calls.at(-1)?.[0] as () => string | undefined;
+
+			await fixture.emit(eventName, {}, fixture.ctx);
+			expect(provider()).toMatch(/^● scramjet/);
+			staleLease.complete("derive-lifecycle");
+			expect(provider()).toMatch(/^● scramjet/);
+		},
+	);
+
+	it("clears lifecycle-derived settlement at the agent_start boundary", async () => {
 		const fixture = indicatorFixture();
 		await fixture.emit("session_start", {}, fixture.ctx);
 		await fixture.emit("agent_start", {}, fixture.ctx);
 		const provider = fixture.setTitleProvider.mock.calls[0][0] as () => string | undefined;
-		const staleFromTree = fixture.indicators.beginChoice(fixture.ctx);
-		await fixture.emit("session_tree", {}, fixture.ctx);
-		await fixture.emit("agent_start", {}, fixture.ctx);
-		staleFromTree.complete("derive-lifecycle");
-		expect(provider()).toMatch(/^● scramjet/);
-
-		const staleFromEnd = fixture.indicators.beginChoice(fixture.ctx);
-		fixture.state.lifecycle = lifecycleFor("idle");
-		await fixture.emit("agent_end", {}, fixture.ctx);
-		staleFromEnd.complete("resume-work");
+		const staleLease = fixture.indicators.beginChoice(fixture.ctx);
+		fixture.state.lifecycle = lifecycleFor("dormant");
+		staleLease.complete("derive-lifecycle");
 		expect(provider()).toMatch(/^○ scramjet/);
+
+		await fixture.emit("agent_start", {}, fixture.ctx);
+		expect(provider()).toMatch(/^● scramjet/);
 	});
 
 	it("does not set titles when the preference is disabled", async () => {

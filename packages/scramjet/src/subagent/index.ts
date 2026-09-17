@@ -8,7 +8,7 @@ import { StringEnum } from "@leanandmean/ai";
 import { type ExtensionAPI, getMarkdownTheme, type ThemeColor, withFileMutationQueue } from "@leanandmean/coding-agent";
 import { Container, Markdown, Spacer, Text } from "@leanandmean/tui";
 import { Type } from "typebox";
-import type { TerminalIndicatorCoordinator } from "../terminal-indicators.js";
+import type { ChoiceIndicatorCoordinator } from "../terminal-indicators.js";
 import type { AgentRegistry } from "../types.js";
 import {
 	AGENT_SCOPES,
@@ -533,7 +533,7 @@ const SubagentParams = Type.Object({
 
 export function registerSubagentTool(
 	pi: ExtensionAPI,
-	terminalIndicators: TerminalIndicatorCoordinator,
+	terminalIndicators: ChoiceIndicatorCoordinator,
 	getAgentRegistry?: () => AgentRegistry,
 ) {
 	const getParentLevel = (): ThinkingLevel | undefined => {

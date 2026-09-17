@@ -21,7 +21,7 @@ import {
 	resolveForgeOrigin,
 	sameRepository,
 } from "./forge-publication-provider.js";
-import type { TerminalIndicatorCoordinator } from "./terminal-indicators.js";
+import type { ChoiceIndicatorCoordinator } from "./terminal-indicators.js";
 import type { PublicationTool, ScramjetState } from "./types.js";
 import { PUBLICATION_TOOLS } from "./types.js";
 
@@ -45,7 +45,7 @@ type ApprovalResult = "approved" | "cancelled" | "stale";
 export function registerForgePublication(
 	pi: ExtensionAPI,
 	state: ScramjetState,
-	terminalIndicators: TerminalIndicatorCoordinator,
+	terminalIndicators: ChoiceIndicatorCoordinator,
 ): void {
 	let sessionEpoch = 0;
 	let runtimeLive = true;

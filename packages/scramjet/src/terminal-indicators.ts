@@ -44,8 +44,11 @@ export interface TerminalIndicatorContext {
 	ui: { setTitle(title: string): void };
 }
 
-export interface TerminalIndicatorCoordinator {
+export interface ChoiceIndicatorCoordinator {
 	beginChoice(ctx: TerminalIndicatorContext): ChoiceLease;
+}
+
+export interface TerminalIndicatorCoordinator extends ChoiceIndicatorCoordinator {
 	register(): void;
 }
 

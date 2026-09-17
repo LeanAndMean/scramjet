@@ -659,6 +659,38 @@ describe("registerUserInputTool — choice title integration", () => {
 		expect(titles.slice(waitingTitleIndex).some((title) => title.startsWith("● "))).toBe(false);
 	});
 
+	it("keeps the lifecycle-derived title when cancellation journaling fails", async () => {
+		const titles: string[] = [];
+		let titleProvider: (() => string | undefined) | undefined;
+		const state = freshState({ lifecycle: lifecycleFor("probing", "mach12:test") });
+		const { emit, execute, pi } = toolFor(state, true);
+		const appendEntry = pi.appendEntry;
+		pi.appendEntry = (type: string, data: unknown) => {
+			if (type === USER_INPUT_TYPE) throw new Error("disk full");
+			appendEntry(type, data);
+		};
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setTitle: (title: string) => titles.push(title),
+				setTitleProvider: (provider: () => string | undefined) => {
+					titleProvider = provider;
+				},
+				custom: () => Promise.resolve(null),
+				notify: () => {},
+			},
+		};
+		await emit("session_start", {}, ctx);
+		await emit("agent_start", {}, ctx);
+
+		await expect(execute({ type: "confirm", message: "Continue?" }, ctx)).rejects.toThrow("disk full");
+
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(titles.at(-1)).toMatch(/^○ /);
+		expect(titleProvider?.()).toMatch(/^○ /);
+	});
+
 	it("restores working after a UI error", async () => {
 		const titles: string[] = [];
 		const state = freshState({ lifecycle: lifecycleFor("running") });
@@ -944,6 +976,31 @@ describe("registerUserInputTool — structured input effort", () => {
 });
 
 describe("registerUserInputTool — freetext interaction", () => {
+	it("uses lifecycle parking without acquiring a choice title", async () => {
+		const titles: string[] = [];
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+		const { emit, execute } = toolFor(state, true);
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setTitle: (title: string) => titles.push(title),
+				setTitleProvider: () => {},
+			},
+		};
+		await emit("session_start", {}, ctx);
+		await emit("agent_start", {}, ctx);
+		const titleCount = titles.length;
+
+		const result = await execute({ type: "freetext", message: "Release title?" }, ctx);
+
+		expect(result.terminate).toBe(true);
+		expect(isParkedForInput(state.lifecycle)).toBe(true);
+		expect(titles).toHaveLength(titleCount);
+		expect(titles.at(-1)).toMatch(/^● /);
+		await emit("agent_end", {}, ctx);
+		expect(titles.at(-1)).toMatch(/^○ /);
+	});
+
 	it.each(["running", "probing"] as const)("terminates and parks from %s", async (phase) => {
 		const state = freshState({ lifecycle: lifecycleFor(phase) });
 		const { execute } = toolFor(state);
