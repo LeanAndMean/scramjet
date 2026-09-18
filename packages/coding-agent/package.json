@@ -1,6 +1,6 @@
 {
   "name": "@leanandmean/coding-agent",
-  "version": "0.74.1-scramjet.53",
+  "version": "0.74.1-scramjet.54",
   "publishConfig": {
     "access": "public"
   },
@@ -37,9 +37,9 @@
     "test": "vitest --run --passWithNoTests"
   },
   "dependencies": {
-    "@leanandmean/agent": "0.74.1-scramjet.32",
-    "@leanandmean/ai": "0.74.1-scramjet.28",
-    "@leanandmean/tui": "0.74.1-scramjet.25",
+    "@leanandmean/agent": "0.74.1-scramjet.33",
+    "@leanandmean/ai": "0.74.1-scramjet.29",
+    "@leanandmean/tui": "0.74.1-scramjet.26",
     "@silvia-odwyer/photon-node": "^0.3.4",
     "chalk": "^5.5.0",
     "dictionary-en": "^4.0.0",
