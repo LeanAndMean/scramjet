@@ -99,6 +99,7 @@ async function generate(
 	present: boolean,
 	options: {
 		invalidContext?: number;
+		omittedCopilotCorrection?: string;
 		endpointError?: boolean;
 		failedCatalog?: string;
 		expectFailure?: boolean;
@@ -219,10 +220,9 @@ async function generate(
 						models: {
 							"gpt-5.2-codex": feedModel("gpt-5.2-codex", 400000),
 							...Object.fromEntries(
-								Object.keys(copilotAdditions).map((id) => [
-									id,
-									feedModel(id, id === "gemini-3.8-flash" ? 1000000 : 200000),
-								]),
+								Object.keys(copilotAdditions)
+									.filter((id) => id !== options.omittedCopilotCorrection)
+									.map((id) => [id, feedModel(id, id === "gemini-3.8-flash" ? 1000000 : 200000)]),
 							),
 							"deprecated-copilot-candidate": feedModel("deprecated-copilot-candidate", 200000, {
 								status: "deprecated",
@@ -323,6 +323,7 @@ describe("real generator context corrections", () => {
 				},
 				...expected,
 			});
+			expect(models[id].thinkingLevelMap).toEqual(expected.thinkingLevelMap);
 			if (expected.api === "openai-completions") {
 				expect(models[id].compat).toEqual({
 					supportsStore: false,
@@ -335,6 +336,14 @@ describe("real generator context corrections", () => {
 		}
 		expect(models["deprecated-copilot-candidate"]).toBeUndefined();
 		expect(models["no-tools-copilot-candidate"]).toBeUndefined();
+	});
+
+	it("rejects a missing corrected GitHub Copilot candidate before writing", async () => {
+		await generate(true, {
+			omittedCopilotCorrection: "kimi-k3",
+			expectFailure: true,
+			expectedError: "Missing corrected GitHub Copilot candidates: kimi-k3",
+		});
 	});
 
 	it.each([true, false])("preserves route scope with feed-present=%s", async (present) => {

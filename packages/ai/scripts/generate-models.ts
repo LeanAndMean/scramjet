@@ -71,7 +71,7 @@ const COPILOT_STATIC_HEADERS = {
 	"X-GitHub-Api-Version": "2026-06-01",
 } as const;
 
-// SCRAMJET-DIVERGENCE: Exact Copilot route metadata supersedes stale aggregate feed values (issue 477).
+// SCRAMJET-DIVERGENCE: Exact Copilot routing, limits, and effort metadata plus scalar price estimates (issue 477).
 const COPILOT_MODEL_CORRECTIONS = {
 	"claude-fable-5.1": {
 		api: "openai-completions",
@@ -1131,7 +1131,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 
 				// Claude 4.x models route to Anthropic Messages API
 				const isCopilotClaude4 = /^claude-(haiku|sonnet|opus)-4([.\-]|$)/.test(modelId);
-				// gpt-5 models and GPT-6 Astra require responses API, others use completions
+				// GPT-5, GPT-6 Astra, OSWE, and corrected models declared for Responses route there.
 				const needsResponsesApi =
 					modelId.startsWith("gpt-5") ||
 					modelId === "gpt-6-astra" ||
@@ -1362,6 +1362,7 @@ async function generateModels() {
 	}
 
 	// Temporary overrides until upstream model metadata is corrected.
+	const matchedCopilotCorrectionIds = new Set<string>();
 	for (const candidate of allModels) {
 		if (candidate.provider === "amazon-bedrock" && candidate.id.includes("anthropic.claude-opus-4-6-v1")) {
 			candidate.cost.cacheRead = 0.5;
@@ -1422,6 +1423,7 @@ async function generateModels() {
 			candidate.maxTokens = 64000;
 		}
 		if (candidate.provider === "github-copilot" && COPILOT_CORRECTED_MODEL_IDS.has(candidate.id)) {
+			matchedCopilotCorrectionIds.add(candidate.id);
 			const correction = COPILOT_MODEL_CORRECTIONS[candidate.id as keyof typeof COPILOT_MODEL_CORRECTIONS];
 			candidate.name = candidate.id;
 			candidate.api = correction.api;
@@ -1480,6 +1482,12 @@ async function generateModels() {
 
 	}
 
+	const missingCopilotCorrectionIds = [...COPILOT_CORRECTED_MODEL_IDS].filter(
+		(id) => !matchedCopilotCorrectionIds.has(id),
+	);
+	if (missingCopilotCorrectionIds.length > 0) {
+		throw new Error(`Missing corrected GitHub Copilot candidates: ${missingCopilotCorrectionIds.join(", ")}`);
+	}
 
 	// Add missing EU Opus 4.6 profile
 	if (!allModels.some((m) => m.provider === "amazon-bedrock" && m.id === "eu.anthropic.claude-opus-4-6-v1")) {
