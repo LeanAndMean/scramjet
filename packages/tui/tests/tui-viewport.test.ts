@@ -38,6 +38,24 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
 describe("viewport interactions", () => {
+	it("reveals offscreen input cursors without overriding later coalesced pointer navigation", async () => {
+		const editor = { render: () => [`${CURSOR_MARKER}editor`], invalidate() {}, handleInput: vi.fn() };
+		const { tui, terminal, frame, text } = await setup([
+			{ component: new Rows(Array(20).fill("before")) },
+			{ component: editor },
+			{ component: new Rows(Array(20).fill("after")) },
+		]);
+		tui.setFocus(editor);
+		terminal.sendInput("a");
+		await frame();
+		expect(text()).toContain("editor");
+		terminal.sendInput("b");
+		terminal.sendInput(mouse(64, 2, 2));
+		const offset = tui.getViewportState()!.offset;
+		await frame();
+		expect(tui.getViewportState()!.offset).toBe(offset);
+		expect(text()).not.toContain("editor");
+	});
 	it("restores the normal buffer across repeated stop/start without replay or mode leakage", async () => {
 		const { tui, terminal, frame } = await setup([{ component: new Rows(["candidate"]) }]);
 		const mark = terminal.markWrites();

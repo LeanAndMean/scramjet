@@ -31,9 +31,22 @@ interface InteractiveInternals {
 	widgetContainerBelow: Container;
 	footer: Container;
 	handleEvent(event: AgentSessionEvent): Promise<void>;
+	configureRetainedViewport(): void;
+	clearTranscript(): void;
+	handleReloadCommand(): Promise<void>;
+	handleExtensionNewSession(): Promise<{ cancelled: boolean }>;
+	renderCurrentSessionState(): void;
+	setToolsExpanded(expanded: boolean): void;
+	toggleThinkingBlockVisibility(): void;
+	updatePendingMessagesDisplay(): void;
 }
 
-export async function createProductionInteractiveHarness(columns = 60, rows = 24, extension?: ExtensionFactory) {
+export async function createProductionInteractiveHarness(
+	columns = 60,
+	rows = 24,
+	extension?: ExtensionFactory,
+	viewport = false,
+) {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-interactive-test-"));
 	const terminal = new HeadlessTerminal(columns, rows);
 	const authStorage = AuthStorage.inMemory();
@@ -88,8 +101,9 @@ export async function createProductionInteractiveHarness(columns = 60, rows = 24
 	} finally {
 		keybindings.mockRestore();
 	}
-	await mode.init();
 	const internals = mode as unknown as InteractiveInternals;
+	if (viewport) internals.configureRetainedViewport();
+	await mode.init();
 	if (!extensionUI) throw new Error("Production extension UI was not bound");
 	extensionUI.setWorkingIndicator({ frames: ["⠋"] });
 	return {
@@ -101,7 +115,7 @@ export async function createProductionInteractiveHarness(columns = 60, rows = 24
 		// Await the real UI consumer; session subscriptions do not await async listeners.
 		emit: (event: AgentSessionEvent) => internals.handleEvent(event),
 		async frame() {
-			await internals.ui.commitNow({ requireFlush: true });
+			await internals.ui.renderNow({ requireFlush: true });
 			return terminal.visibleLines();
 		},
 		async dispose() {

@@ -407,6 +407,28 @@ export class InteractiveMode {
 		initTheme(this.settingsManager.getTheme(), true);
 	}
 
+	// SCRAMJET-DIVERGENCE: private candidate entry point until native rollout gates pass.
+	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: Invoked only by candidate fixtures before activation.
+	private configureRetainedViewport(): void {
+		this.ui.configureViewport({
+			getBlocks: () =>
+				this.ui.children.flatMap((component) => {
+					if (
+						component instanceof Container &&
+						(component === this.committedChatContainer || component === this.chatContainer)
+					) {
+						return component.children.map((child) => ({
+							component: child,
+							finalized: component === this.committedChatContainer,
+						}));
+					}
+					return [{ component, finalized: false }];
+				}),
+			keybindings: this.keybindings,
+			copy: copyToClipboard,
+		});
+	}
+
 	// SCRAMJET-DIVERGENCE: finalized transcript components are promoted atomically into append-only history (#389).
 	private promoteFinalizedChatPrefix(): void {
 		let promoted = false;
@@ -418,7 +440,10 @@ export class InteractiveMode {
 			this.committedChatContainer.addChild(child);
 			promoted = true;
 		}
-		if (promoted) this.ui.commit();
+		if (promoted) {
+			if (this.ui.getViewportState()) this.ui.requestRender();
+			else this.ui.commit();
+		}
 	}
 
 	private setChatComponentMutable(component: Component, mutable: boolean): void {
@@ -435,6 +460,7 @@ export class InteractiveMode {
 	}
 
 	private clearTranscript(): void {
+		if (this.ui.getViewportState()) this.ui.resetViewport();
 		this.pendingToolFinalizations = new Set();
 		const tools = new Set([
 			...this.pendingTools.values(),
@@ -699,7 +725,7 @@ export class InteractiveMode {
 
 		this.ui.addChild(this.committedChatContainer);
 		this.ui.addChild(this.chatContainer);
-		this.ui.setLiveRegionStart(this.chatContainer);
+		if (!this.ui.getViewportState()) this.ui.setLiveRegionStart(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer
@@ -3772,21 +3798,18 @@ export class InteractiveMode {
 	}
 
 	private toggleThinkingBlockVisibility(): void {
-		this.hideThinkingBlock = !this.hideThinkingBlock;
-		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
-
-		// Rebuild chat from session messages
-		this.rebuildChatFromMessages();
-
-		// If streaming, re-add the streaming component with updated visibility and re-render
-		if (this.streamingComponent && this.streamingMessage) {
-			this.streamingComponent.setHideThinkingBlock(this.hideThinkingBlock);
-			this.streamingComponent.updateContent(this.streamingMessage);
-			this.chatContainer.addChild(this.streamingComponent);
-			this.setChatComponentMutable(this.streamingComponent, true);
-		}
-
+		this.setThinkingBlockVisibility(!this.hideThinkingBlock);
 		this.showStatus(`Thinking blocks: ${this.hideThinkingBlock ? "hidden" : "visible"}`);
+	}
+
+	// SCRAMJET-DIVERGENCE: presentation changes retain live tools and browsing identities.
+	private setThinkingBlockVisibility(hidden: boolean): void {
+		this.hideThinkingBlock = hidden;
+		this.settingsManager.setHideThinkingBlock(hidden);
+		for (const child of [...this.committedChatContainer.children, ...this.chatContainer.children]) {
+			if (child instanceof AssistantMessageComponent) child.setHideThinkingBlock(hidden);
+		}
+		this.ui.rebuild();
 	}
 
 	private openExternalEditor(): void {
@@ -4174,16 +4197,7 @@ export class InteractiveMode {
 							this.ui.requestRender();
 						}
 					},
-					onHideThinkingBlockChange: (hidden) => {
-						this.hideThinkingBlock = hidden;
-						this.settingsManager.setHideThinkingBlock(hidden);
-						for (const child of [...this.committedChatContainer.children, ...this.chatContainer.children]) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setHideThinkingBlock(hidden);
-							}
-						}
-						this.rebuildChatFromMessages();
-					},
+					onHideThinkingBlockChange: (hidden) => this.setThinkingBlockVisibility(hidden),
 					onCollapseChangelogChange: (collapsed) => {
 						this.settingsManager.setCollapseChangelog(collapsed);
 					},

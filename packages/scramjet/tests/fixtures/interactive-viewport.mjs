@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { renameSync, writeFileSync } from "node:fs";
-import { release, platform } from "node:os";
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { release, platform, tmpdir } from "node:os";
+import { join } from "node:path";
 import { ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
 
 const help = `Retained TUI candidate interaction fixture for #551; NOT production activation.
 Run from the repository after npm run build:
   node packages/scramjet/tests/fixtures/interactive-viewport.mjs
-No models, extensions, settings files, or existing clipboard reads.
+No models, personal extensions, personal settings, or existing clipboard reads.
 Copy actions overwrite the clipboard with selected synthetic text.
 Requires at least 60 columns and 12 rows. Ctrl+Q exits and restores the shell.
 
@@ -27,7 +28,11 @@ Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
 11. Ctrl+Q restores the original shell buffer and terminal modes.
 Record emulator/OS/multiplexer versions and configuration with observed results.
 Counters prove receipt only, not desktop interaction or clipboard acceptance.
-Production composition, graphics, approval and temporary handoffs remain later work.`;
+Use --production for the actual InteractiveMode composition with eight synthetic
+subagent cards, queues, widgets, editor and footer. Ctrl+N advances one child,
+Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked.
+The default mode retains the Stage 3 desktop driver's fixed-row protocol.
+Graphics, approval and temporary handoffs remain later work.`;
 if (process.argv.includes("--help")) {
 	console.log(help);
 	process.exit(0);
@@ -35,6 +40,9 @@ if (process.argv.includes("--help")) {
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an interactive terminal; use --help");
 if (process.stdout.columns < 60 || process.stdout.rows < 12) throw new Error("Resize to at least 60 columns and 12 rows");
 
+if (process.argv.includes("--production")) {
+	await runProduction();
+} else {
 const lines = Array.from({ length: 200 }, (_, i) => `ROW-${String(i + 1).padStart(3, "0")} synthetic café 界 e\u0301 text`);
 const evidence = { candidate: true, platform: platform(), release: release(), term: process.env.TERM,
 	terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX),
@@ -131,3 +139,101 @@ await tui.renderNow({ requireFlush: true });
 tui.scrollViewportTo(0);
 await tui.renderNow({ requireFlush: true });
 record();
+}
+
+async function runProduction() {
+	const directory = mkdtempSync(join(tmpdir(), "scramjet-production-viewport-"));
+	process.env.SCRAMJET_CODING_AGENT_DIR = directory;
+	process.env.SCRAMJET_OFFLINE = "1";
+	const { Agent } = await import("../../../agent/dist/index.js");
+	const { AgentSession, AuthStorage, ModelRegistry, SessionManager, SettingsManager, InteractiveMode } = await import("../../../coding-agent/dist/index.js");
+	const { createAgentSessionServices } = await import("../../../coding-agent/dist/core/agent-session-services.js");
+	const { createAgentSessionRuntime } = await import("../../../coding-agent/dist/core/agent-session-runtime.js");
+	const { stopThemeWatcher } = await import("../../../coding-agent/dist/modes/interactive/theme/theme.js");
+	const { registerSubagentTool } = await import("../../dist/subagent/index.js");
+	const { Text } = await import("../../../tui/dist/index.js");
+	const authStorage = AuthStorage.inMemory();
+	let extensionUI;
+	const services = await createAgentSessionServices({
+		cwd: directory, agentDir: directory, authStorage,
+		settingsManager: SettingsManager.inMemory({ theme: "pi-dark", quietStartup: true, compaction: { enabled: false }, retry: { enabled: false } }),
+		modelRegistry: ModelRegistry.inMemory(authStorage),
+		resourceLoaderOptions: { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+			builtinInit(pi) {
+				registerSubagentTool(pi, { beginChoice: () => ({ complete() {} }) });
+				pi.on("session_start", (_event, ctx) => { extensionUI = ctx.ui; });
+			},
+		},
+	});
+	const runtime = await createAgentSessionRuntime(async ({ sessionManager }) => ({
+		services, diagnostics: services.diagnostics,
+		session: new AgentSession({ ...services, sessionManager, initialActiveToolNames: [], agent: new Agent({ streamFn() { throw new Error("Fixture must not invoke models"); } }) }),
+	}), { cwd: directory, agentDir: directory, sessionManager: SessionManager.inMemory(directory) });
+	const terminal = new ProcessTerminal();
+	const mode = new InteractiveMode(runtime, { terminal });
+	mode.configureRetainedViewport();
+	let stopped = false;
+	let finish;
+	const lifetime = new Promise((resolve) => { finish = resolve; });
+	const tasks = Array.from({ length: 8 }, (_, i) => ({ agent: `child-${i + 1}`, task: `Synthetic task ${i + 1}` }));
+	let completed = 0;
+	const before = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
+	let sequence = Promise.resolve();
+	function record() {
+		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
+		if (!target) return;
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, completed, stopped, viewport: mode.ui.getViewportState(), editor: extensionUI?.getEditorText() }));
+		renameSync(`${target}.tmp`, target);
+	}
+	async function update() {
+		const result = { content: [{ type: "text", text: "Synthetic batch" }], details: {
+			mode: "parallel", agentScope: "user", projectAgentsDir: null,
+			results: tasks.map((task, i) => ({ ...task, agentSource: "user", exitCode: i < completed ? 0 : -1,
+				messages: i < completed + 4 ? [{ role: "assistant", content: [{ type: "text", text: `CARD-${i + 1} synthetic café 界 é\n${Array.from({ length: 16 }, (_, n) => `child-${i + 1} detail-${n}`).join("\n")}` }] }] : [],
+				stderr: "", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			})),
+		} };
+		if (completed === 8) {
+			await mode.handleEvent({ type: "tool_execution_end", toolCallId: "batch", result, isError: false });
+			await mode.handleEvent({ type: "agent_end", messages: [] });
+		} else await mode.handleEvent({ type: "tool_execution_update", toolCallId: "batch", partialResult: result });
+		await mode.ui.renderNow({ requireFlush: true });
+		record();
+	}
+	const timer = setInterval(record, 50);
+	const stop = () => { if (!stopped) { stopped = true; mode.stop(); finish(); } };
+	process.once("SIGINT", stop);
+	process.once("SIGTERM", stop);
+	process.once("SIGHUP", stop);
+	mode.ui.addInputListener((data) => {
+		if (data === "\x11") { stop(); return { consume: true }; }
+		if (data === "\x0e") {
+			sequence = sequence.then(async () => { if (completed < 8 && !stopped) { completed++; await update(); } }).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
+			return { consume: true };
+		}
+	});
+	try {
+		await mode.init();
+		extensionUI.setHeader(() => new Text("Production candidate: Ctrl+N advances; Ctrl+O expands; Ctrl+Q exits", 0, 0));
+		extensionUI.setWorkingIndicator({ frames: ["⠋"] });
+		extensionUI.setWidget("above", ["ABOVE editor"]);
+		extensionUI.setWidget("below", ["BELOW editor"], { placement: "belowEditor" });
+		extensionUI.setEditorText("Synthetic editor");
+		await runtime.session.steer("Synthetic queued message");
+		mode.updatePendingMessagesDisplay();
+		await mode.handleEvent({ type: "agent_start" });
+		await mode.handleEvent({ type: "tool_execution_start", toolCallId: "batch", toolName: "subagent", args: { tasks } });
+		await update();
+		await lifetime;
+	} finally {
+		stop();
+		clearInterval(timer);
+		await sequence;
+		await runtime.dispose();
+		stopThemeWatcher();
+		const after = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
+		record();
+		rmSync(directory, { recursive: true, force: true });
+		if (before !== after) throw new Error("Production fixture did not restore terminal state");
+	}
+}

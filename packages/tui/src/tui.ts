@@ -269,6 +269,7 @@ export class TUI extends Container {
 	private stopped = false;
 	private viewport: RetainedViewport | undefined;
 	private viewportHadImages = false;
+	private viewportRevealFocus = false;
 	private started = false;
 	private removeViewportInput?: () => void;
 
@@ -314,12 +315,17 @@ export class TUI extends Container {
 		if (!this.terminal.setViewportMode) throw new Error("Terminal must support viewport mode");
 		this.viewport?.cancelInteraction();
 		this.removeViewportInput?.();
+		this.viewportRevealFocus = false;
 		this.viewport = new RetainedViewport(options, () => this.requestRender());
 		this.removeViewportInput = this.addInputListener((data) => {
 			const overlayFocused = this.overlayStack.some(
 				(entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry),
 			);
-			return this.viewport?.handleInput(data, overlayFocused, this.hasOverlay()) ? { consume: true } : undefined;
+			if (this.viewport?.handleInput(data, overlayFocused, this.hasOverlay())) {
+				this.viewportRevealFocus = false;
+				return { consume: true };
+			}
+			return undefined;
 		});
 		if (this.started) this.enterViewportMode();
 		this.requestRender(true);
@@ -334,11 +340,13 @@ export class TUI extends Container {
 	}
 
 	scrollViewportTo(offset: number, anchorScreenRow = 0): void {
+		this.viewportRevealFocus = false;
 		this.viewport?.scrollTo(offset, anchorScreenRow);
 		this.requestRender();
 	}
 
 	resetViewport(): void {
+		this.viewportRevealFocus = false;
 		this.viewport?.reset();
 		this.requestRender(true);
 	}
@@ -613,6 +621,7 @@ export class TUI extends Container {
 		this.started = false;
 		this.renderRequested = false;
 		this.viewport?.cancelInteraction();
+		this.viewportRevealFocus = false;
 		if (this.viewport) this.terminal.setViewportMode?.(false);
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
@@ -753,6 +762,8 @@ export class TUI extends Container {
 			if (isKeyRelease(data) && !this.focusedComponent.wantsKeyRelease) {
 				return;
 			}
+			// SCRAMJET-DIVERGENCE: only dispatched keyboard input may reveal an offscreen cursor.
+			if (this.viewport && !this.hasOverlay()) this.viewportRevealFocus = true;
 			this.focusedComponent.handleInput(data);
 			this.requestRender();
 		}
@@ -1315,6 +1326,13 @@ export class TUI extends Container {
 		const height = this.terminal.rows;
 		const contentWidth = Math.max(1, width - 1);
 		const logical = viewport.update(contentWidth, height);
+		if (this.viewportRevealFocus) {
+			this.viewportRevealFocus = false;
+			const cursorRow = logical.findIndex((line) => line.includes(CURSOR_MARKER));
+			const { offset } = viewport.state;
+			if (cursorRow >= 0 && cursorRow < offset) viewport.scrollTo(cursorRow);
+			else if (cursorRow >= offset + height) viewport.scrollTo(cursorRow - height + 1);
+		}
 		const frame = viewport.slice(logical, contentWidth, this.hasOverlay());
 		let lines = frame.lines;
 		while (lines.length < height) lines.push("");

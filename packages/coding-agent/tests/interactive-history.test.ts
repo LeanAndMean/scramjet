@@ -1217,6 +1217,210 @@ describe("interactive assistant history", () => {
 	});
 });
 
+describe("production retained viewport", () => {
+	let h: Awaited<ReturnType<typeof createProductionInteractiveHarness>>;
+	beforeEach(async () => {
+		h = await createProductionInteractiveHarness(60, 12, undefined, true);
+	});
+	afterEach(async () => {
+		await h.dispose();
+	});
+
+	it("keeps exact intermediate widget and working rows in the production projection", async () => {
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setEditorText("EDITOR");
+		h.extensionUI.setWidget("above", ["ABOVE"]);
+		h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+		await h.emit({ type: "agent_start" });
+		const textRows = async () => (await h.frame()).map((row) => row.slice(0, 59).trimEnd());
+		const expected = [
+			"HEADER",
+			"",
+			" ⠋ Working...",
+			"",
+			" ABOVE",
+			"─".repeat(59),
+			"EDITOR",
+			"─".repeat(59),
+			" BELOW",
+			"FOOTER",
+			"",
+			"",
+		];
+		expect(await textRows()).toEqual(expected);
+		h.extensionUI.setWidget("above", ["ABOVE", "GROW"]);
+		expect(await textRows()).toEqual([...expected.slice(0, 5), " GROW", ...expected.slice(5, -1)]);
+		h.extensionUI.setWidget("above", ["ABOVE"]);
+		expect(await textRows()).toEqual(expected);
+		await h.emit({ type: "agent_end", messages: [] });
+		h.extensionUI.setWidget("above", undefined);
+		h.extensionUI.setWidget("below", undefined);
+		expect(await textRows()).toEqual([
+			"HEADER",
+			"",
+			"─".repeat(59),
+			"EDITOR",
+			"─".repeat(59),
+			"FOOTER",
+			...Array(6).fill(""),
+		]);
+	});
+
+	it("reveals the editor cursor on typing even beneath tall trailing widgets, but not passive updates", async () => {
+		h.extensionUI.setWidget("below", () => new Text(Array(30).fill("TRAILING").join("\n"), 0, 0), {
+			placement: "belowEditor",
+		});
+		expect((await h.frame()).join("\n")).not.toContain("EDIT-ME");
+		h.extensionUI.setEditorText("EDIT-ME");
+		expect((await h.frame()).join("\n")).not.toContain("EDIT-ME");
+		h.terminal.sendInput("!");
+		const typed = await h.frame();
+		expect(typed.join("\n")).toContain("EDIT-ME!");
+		expect(typed[h.terminal.cursorPosition().row]).toContain("EDIT-ME!");
+		const offset = h.internals.ui.getViewportState()!.offset;
+		await h.emit({ type: "agent_start" });
+		await h.frame();
+		expect(h.internals.ui.getViewportState()!.followingTail).toBe(false);
+		expect(h.internals.ui.getViewportState()!.offset).toBeGreaterThanOrEqual(offset);
+		h.terminal.sendInput("\x1b[<64;10;3M");
+		await h.frame();
+		expect(h.extensionUI.getEditorText()).toBe("EDIT-ME!");
+	});
+
+	it("preserves running tools and assistant identity when toggling thinking presentation", async () => {
+		const message = assistant("ANSWER");
+		message.content.unshift({ type: "thinking", thinking: "PRIVATE-THOUGHT" });
+		await h.emit({ type: "message_start", message });
+		await h.emit({ type: "message_end", message });
+		await h.emit({ type: "tool_execution_start", toolCallId: "pending", toolName: "unknown", args: {} });
+		const committed = [...h.internals.committedChatContainer.children];
+		const pending = [...h.internals.chatContainer.children];
+		h.internals.toggleThinkingBlockVisibility();
+		await h.frame();
+		expect(h.internals.committedChatContainer.children.slice(0, committed.length)).toEqual(committed);
+		expect(h.internals.chatContainer.children.slice(0, pending.length)).toEqual(pending);
+		expect(h.internals.committedChatContainer.render(59).join("\n")).not.toContain("PRIVATE-THOUGHT");
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "pending",
+			result: { content: [{ type: "text", text: "DONE" }] },
+			isError: false,
+		});
+		expect(h.internals.committedChatContainer.children).toContain(pending[0]);
+	});
+
+	it("keeps reverse-completed tools ordered and anchored through progress, queues, reflow and promotion", async () => {
+		const { ui, chatContainer, committedChatContainer } = h.internals;
+		await h.emit({ type: "agent_start" });
+		for (const id of ["first", "second"]) {
+			await h.emit({ type: "tool_execution_start", toolCallId: id, toolName: "unknown", args: {} });
+		}
+		const [first, second] = chatContainer.children;
+		const text = Array.from(
+			{ length: 45 },
+			(_, i) => `ANCHOR-${String(i).padStart(2, "0")} labelled content for wrapped reflow`,
+		).join("\n");
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "first",
+			toolName: "unknown",
+			args: {},
+			partialResult: { content: [{ type: "text", text }] },
+		});
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "second",
+			result: { content: [{ type: "text", text: "SECOND-FAILED" }] },
+			isError: true,
+		});
+		await h.frame();
+		expect(chatContainer.children).toEqual([first, second]);
+		expect(committedChatContainer.children).not.toContain(second);
+		const logical = ui.render(59);
+		const target = logical.findIndex((row) => row.includes("ANCHOR-20"));
+		expect(target).toBeGreaterThan(0);
+		ui.scrollViewportTo(target);
+		expect((await h.frame())[0]).toContain("ANCHOR-20");
+		await h.session.steer("QUEUED-STEER");
+		await h.session.followUp("QUEUED-FOLLOWUP");
+		h.internals.updatePendingMessagesDisplay();
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "first",
+			toolName: "unknown",
+			args: {},
+			partialResult: { content: [{ type: "text", text: `INSERTED\n${text}\nAPPENDED` }] },
+		});
+		expect((await h.frame())[0]).toContain("ANCHOR-20");
+		for (const width of [38, 72, 60]) {
+			h.terminal.resize(width, 12);
+			expect((await h.frame())[0]).toContain("ANCHOR-20");
+		}
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "first",
+			result: { content: [{ type: "text", text: `INSERTED\n${text}\nAPPENDED` }] },
+			isError: false,
+		});
+		expect((await h.frame())[0]).toContain("ANCHOR-20");
+		expect(committedChatContainer.children).toEqual([first, second]);
+		expect(chatContainer.children).toEqual([]);
+		const renderFirst = vi.spyOn(first, "render");
+		await h.frame();
+		expect(renderFirst).not.toHaveBeenCalled();
+		ui.scrollViewportTo(Number.MAX_SAFE_INTEGER);
+		const bottom = (await h.frame()).join("\n");
+		expect(bottom).toContain("QUEUED-STEER");
+		expect(bottom).toContain("QUEUED-FOLLOWUP");
+		expect(
+			committedChatContainer
+				.render(59)
+				.join("\n")
+				.match(/SECOND-FAILED/g),
+		).toHaveLength(1);
+	});
+
+	it.each(["aborted", "error"] as const)("retains a single %s result during a failed turn", async (reason) => {
+		const message = assistant("PARTIAL", reason);
+		message.content.push({ type: "toolCall", id: "pending", name: "unknown", arguments: {} });
+		message.errorMessage = reason === "aborted" ? "Operation aborted" : "Provider failed";
+		await h.emit({ type: "agent_start" });
+		await h.emit({ type: "message_start", message });
+		await h.emit({ type: "tool_execution_start", toolCallId: "pending", toolName: "unknown", args: {} });
+		await h.emit({ type: "message_end", message });
+		await h.emit({ type: "agent_end", messages: [] });
+		await h.frame();
+		expect(h.internals.chatContainer.children).toHaveLength(0);
+		expect(
+			h.internals.committedChatContainer.render(59).join("\n").match(new RegExp(message.errorMessage, "g")),
+		).toHaveLength(1);
+	});
+
+	it.each(["clear", "new session", "tree", "reload"])(
+		"discards held selection, gestures and anchors on %s",
+		async (replacement) => {
+			await h.emit({ type: "message_start", message: assistant(Array(40).fill("OLD-CONTENT").join("\n")) });
+			await h.emit({ type: "message_end", message: assistant(Array(40).fill("OLD-CONTENT").join("\n")) });
+			await h.frame();
+			h.internals.ui.scrollViewportTo(2);
+			await h.frame();
+			h.terminal.sendInput("\x1b[<0;2;2M");
+			h.terminal.sendInput("\x1b[<32;8;3M");
+			expect((await h.frame()).join("\n")).toContain("Selection held");
+			if (replacement === "new session") await h.internals.handleExtensionNewSession();
+			else if (replacement === "tree") h.internals.renderCurrentSessionState();
+			else if (replacement === "reload") await h.internals.handleReloadCommand();
+			else h.internals.clearTranscript();
+			const rows = await h.frame();
+			expect(rows.join("\n")).not.toMatch(/OLD-CONTENT|Selection held|updates pending/);
+			expect(h.internals.ui.getViewportState()!.followingTail).toBe(true);
+			h.terminal.sendInput("\x1b[<32;8;1M");
+			expect((await h.frame()).join("\n")).not.toContain("Selection held");
+		},
+	);
+});
+
 describe("production interactive composition", () => {
 	it("mounts every production region and characterizes widget transition spacing", async () => {
 		const h = await createProductionInteractiveHarness(60, 24);
