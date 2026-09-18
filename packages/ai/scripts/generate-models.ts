@@ -148,7 +148,11 @@ const COPILOT_MODEL_CORRECTIONS = {
 } as const;
 
 const COPILOT_CORRECTED_MODEL_IDS = new Set<string>(Object.keys(COPILOT_MODEL_CORRECTIONS));
-const COPILOT_RESPONSES_MODEL_IDS = new Set(["grok-4.5", "grok-4.6", "mai-code-1.1-flash"]);
+const COPILOT_RESPONSES_MODEL_IDS = new Set(
+	Object.entries(COPILOT_MODEL_CORRECTIONS)
+		.filter(([, correction]) => correction.api === "openai-responses")
+		.map(([id]) => id),
+);
 
 const KIMI_STATIC_HEADERS = {
 	"User-Agent": "KimiCLI/1.5",
@@ -1419,6 +1423,7 @@ async function generateModels() {
 		}
 		if (candidate.provider === "github-copilot" && COPILOT_CORRECTED_MODEL_IDS.has(candidate.id)) {
 			const correction = COPILOT_MODEL_CORRECTIONS[candidate.id as keyof typeof COPILOT_MODEL_CORRECTIONS];
+			candidate.name = candidate.id;
 			candidate.api = correction.api;
 			candidate.baseUrl = "https://api.individual.githubcopilot.com";
 			candidate.reasoning = true;

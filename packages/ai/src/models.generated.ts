@@ -4225,7 +4225,7 @@ export const MODELS = {
 		} satisfies Model<"openai-completions">,
 		"claude-fable-5.1": {
 			id: "claude-fable-5.1",
-			name: "Feed claude-fable-5.1",
+			name: "claude-fable-5.1",
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4345,7 +4345,7 @@ export const MODELS = {
 		} satisfies Model<"anthropic-messages">,
 		"claude-opus-5": {
 			id: "claude-opus-5",
-			name: "Feed claude-opus-5",
+			name: "claude-opus-5",
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4520,7 +4520,7 @@ export const MODELS = {
 		} satisfies Model<"openai-completions">,
 		"gemini-3.6-flash": {
 			id: "gemini-3.6-flash",
-			name: "Feed gemini-3.6-flash",
+			name: "gemini-3.6-flash",
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4541,7 +4541,7 @@ export const MODELS = {
 		} satisfies Model<"openai-completions">,
 		"gemini-3.7-flash": {
 			id: "gemini-3.7-flash",
-			name: "Feed gemini-3.7-flash",
+			name: "gemini-3.7-flash",
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4562,7 +4562,7 @@ export const MODELS = {
 		} satisfies Model<"openai-completions">,
 		"gemini-3.8-flash": {
 			id: "gemini-3.8-flash",
-			name: "Feed gemini-3.8-flash",
+			name: "gemini-3.8-flash",
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4837,7 +4837,7 @@ export const MODELS = {
 		} satisfies Model<"openai-responses">,
 		"grok-4.5": {
 			id: "grok-4.5",
-			name: "Feed grok-4.5",
+			name: "grok-4.5",
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4857,7 +4857,7 @@ export const MODELS = {
 		} satisfies Model<"openai-responses">,
 		"grok-4.6": {
 			id: "grok-4.6",
-			name: "Feed grok-4.6",
+			name: "grok-4.6",
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4896,7 +4896,7 @@ export const MODELS = {
 		} satisfies Model<"openai-completions">,
 		"kimi-k3": {
 			id: "kimi-k3",
-			name: "Feed kimi-k3",
+			name: "kimi-k3",
 			api: "openai-completions",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",
@@ -4937,7 +4937,7 @@ export const MODELS = {
 		} satisfies Model<"openai-completions">,
 		"mai-code-1.1-flash": {
 			id: "mai-code-1.1-flash",
-			name: "Feed mai-code-1.1-flash",
+			name: "mai-code-1.1-flash",
 			api: "openai-responses",
 			provider: "github-copilot",
 			baseUrl: "https://api.individual.githubcopilot.com",

@@ -326,6 +326,7 @@ describe("generated catalog - GitHub Copilot additions", () => {
 			const model = getModel("github-copilot", id);
 			expect(model).toMatchObject({
 				id,
+				name: id,
 				provider: "github-copilot",
 				api,
 				reasoning: true,

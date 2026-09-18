@@ -309,6 +309,7 @@ describe("real generator context corrections", () => {
 		for (const [id, expected] of Object.entries(copilotAdditions)) {
 			expect(models[id], id).toMatchObject({
 				id,
+				name: id,
 				provider: "github-copilot",
 				baseUrl: "https://api.individual.githubcopilot.com",
 				reasoning: true,
