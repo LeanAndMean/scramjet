@@ -11,6 +11,7 @@ import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
+import { RetainedViewport, type ViewportOptions, type ViewportState } from "./viewport.js";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 
@@ -259,6 +260,8 @@ export class TUI extends Container {
 	private previousViewportTop = 0; // Track previous viewport top for resize-aware cursor moves
 	private fullRedrawCount = 0;
 	private stopped = false;
+	private viewport: RetainedViewport | undefined;
+	private viewportHadImages = false;
 
 	// SCRAMJET-DIVERGENCE: append-only history and a bounded mutable canvas preserve terminal scrollback (#389).
 	private liveRegionStart: Component | undefined;
@@ -296,7 +299,33 @@ export class TUI extends Container {
 		return this.fullRedrawCount;
 	}
 
+	// SCRAMJET-DIVERGENCE: opt-in retained rendering stays independent of native-history modes.
+	configureViewport(options: ViewportOptions): void {
+		if (this.liveRegionStart) throw new Error("Cannot configure a viewport with a committed live region");
+		this.viewport = new RetainedViewport(options);
+		this.requestRender(true);
+	}
+
+	getViewportState(): ViewportState | undefined {
+		return this.viewport?.state;
+	}
+
+	scrollViewport(lines: number): void {
+		if (this.viewport) this.scrollViewportTo(this.viewport.state.offset + lines);
+	}
+
+	scrollViewportTo(offset: number, anchorScreenRow = 0): void {
+		this.viewport?.scrollTo(offset, anchorScreenRow);
+		this.requestRender();
+	}
+
+	resetViewport(): void {
+		this.viewport?.reset();
+		this.requestRender(true);
+	}
+
 	setLiveRegionStart(component: Component): void {
+		if (this.viewport) throw new Error("Cannot configure a committed live region with a viewport");
 		if (!this.children.includes(component)) {
 			throw new Error("Live region start must be a direct TUI child");
 		}
@@ -318,22 +347,29 @@ export class TUI extends Container {
 	async commitNow(options?: { requireFlush?: boolean }): Promise<void> {
 		if (!this.liveRegionStart) throw new Error("Cannot commit without a live region");
 		if (this.stopped) throw new Error("Cannot commit a stopped TUI");
-		if (this.renderTimer) {
-			clearTimeout(this.renderTimer);
-			this.renderTimer = undefined;
-		}
 		this.commitRequested = true;
-		this.renderRequested = false;
-		this.lastRenderAt = performance.now();
 		try {
-			this.doRender();
+			await this.renderNow();
 			if (options?.requireFlush && !this.terminal.flush)
 				throw new Error("Terminal flush is required for committed output");
-			await this.terminal.flush?.();
 		} catch (error) {
 			this.commitRequested = false;
 			throw error;
 		}
+	}
+
+	async renderNow(options?: { requireFlush?: boolean }): Promise<void> {
+		if (this.stopped) throw new Error("Cannot render a stopped TUI");
+		if (this.renderTimer) {
+			clearTimeout(this.renderTimer);
+			this.renderTimer = undefined;
+		}
+		this.renderRequested = false;
+		this.lastRenderAt = performance.now();
+		this.doRender();
+		if (options?.requireFlush && !this.terminal.flush)
+			throw new Error("Terminal flush is required for rendered output");
+		await this.terminal.flush?.();
 	}
 
 	rebuild(): void {
@@ -479,7 +515,8 @@ export class TUI extends Container {
 	}
 
 	override invalidate(): void {
-		super.invalidate();
+		if (this.viewport) this.viewport.invalidate(true);
+		else super.invalidate();
 		for (const overlay of this.overlayStack) overlay.component.invalidate?.();
 	}
 
@@ -559,7 +596,7 @@ export class TUI extends Container {
 		const renderedLineCount = this.liveRegionStart
 			? this.committedLines.length + this.previousLiveLines.length
 			: this.previousLines.length;
-		if (renderedLineCount > 0) {
+		if (!this.viewport && renderedLineCount > 0) {
 			const targetRow = renderedLineCount; // Line after the last content
 			const lineDiff = targetRow - this.hardwareCursorRow;
 			if (lineDiff > 0) {
@@ -576,6 +613,7 @@ export class TUI extends Container {
 
 	requestRender(force = false): void {
 		if (force) {
+			this.viewport?.invalidate();
 			this.previousLines = [];
 			this.committedLines = [];
 			this.previousLiveLines = [];
@@ -739,7 +777,7 @@ export class TUI extends Container {
 		overlayHeight: number,
 		termWidth: number,
 		termHeight: number,
-	): { width: number; row: number; col: number; maxHeight: number | undefined } {
+	): { width: number; row: number; col: number; maxHeight: number | undefined; availableHeight: number } {
 		const opt = options ?? {};
 
 		// Parse margin (clamp to non-negative)
@@ -831,7 +869,7 @@ export class TUI extends Container {
 		row = Math.max(marginTop, Math.min(row, termHeight - marginBottom - effectiveHeight));
 		col = Math.max(marginLeft, Math.min(col, termWidth - marginRight - width));
 
-		return { width, row, col, maxHeight };
+		return { width, row, col, maxHeight, availableHeight: availHeight };
 	}
 
 	private resolveAnchorRow(anchor: OverlayAnchor, height: number, availHeight: number, marginTop: number): number {
@@ -869,7 +907,7 @@ export class TUI extends Container {
 	}
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
-	private compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
+	private compositeOverlays(lines: string[], termWidth: number, termHeight: number, bounded = false): string[] {
 		if (this.overlayStack.length === 0) return lines;
 		const result = [...lines];
 
@@ -884,14 +922,15 @@ export class TUI extends Container {
 
 			// Get layout with height=0 first to determine width and maxHeight
 			// (width and maxHeight don't depend on overlay height)
-			const { width, maxHeight } = this.resolveOverlayLayout(options, 0, termWidth, termHeight);
+			const { width, maxHeight, availableHeight } = this.resolveOverlayLayout(options, 0, termWidth, termHeight);
 
 			// Render component at calculated width
 			let overlayLines = component.render(width);
 
 			// Apply maxHeight if specified
-			if (maxHeight !== undefined && overlayLines.length > maxHeight) {
-				overlayLines = overlayLines.slice(0, maxHeight);
+			const limit = bounded ? Math.min(maxHeight ?? termHeight, availableHeight, termHeight) : maxHeight;
+			if (limit !== undefined && overlayLines.length > limit) {
+				overlayLines = overlayLines.slice(0, limit);
 			}
 
 			// Get final row/col with actual overlay height
@@ -904,7 +943,7 @@ export class TUI extends Container {
 		// Pad to at least terminal height so overlays have screen-relative positions.
 		// Excludes maxLinesRendered: the historical high-water mark caused self-reinforcing
 		// inflation that pushed content into scrollback on terminal widen.
-		const workingHeight = Math.max(result.length, termHeight, minLinesNeeded);
+		const workingHeight = bounded ? termHeight : Math.max(result.length, termHeight, minLinesNeeded);
 
 		// Extend result with empty lines if content is too short for overlay placement or working area
 		while (result.length < workingHeight) {
@@ -1233,8 +1272,56 @@ export class TUI extends Container {
 		this.previousViewportTop = 0;
 	}
 
+	private doViewportRender(): void {
+		const viewport = this.viewport!;
+		const width = this.terminal.columns;
+		const height = this.terminal.rows;
+		const contentWidth = Math.max(1, width - 1);
+		const logical = viewport.update(contentWidth, height);
+		const frame = viewport.slice(logical, contentWidth, this.hasOverlay());
+		let lines = frame.lines;
+		while (lines.length < height) lines.push("");
+		if (
+			this.overlayStack.some((entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry))
+		) {
+			lines = lines.map((line) => line.replaceAll(CURSOR_MARKER, ""));
+		}
+		lines = this.compositeOverlays(lines, contentWidth, height, true);
+		const cursor = this.extractCursorPosition(lines, height);
+		lines = this.applyLineResets(lines.map((line) => line.replaceAll(CURSOR_MARKER, "")));
+		const reset = TUI.SEGMENT_RESET;
+		lines = lines.map((line, row) => {
+			if (visibleWidth(line) > contentWidth)
+				throw new Error(`Rendered viewport row ${row} exceeds content width ${contentWidth}`);
+			return width > 1
+				? line + " ".repeat(contentWidth - visibleWidth(line)) + reset + viewport.scrollbar(row)
+				: line;
+		});
+		const resized = width !== this.previousWidth || height !== this.previousHeight;
+		let buffer = `\x1b[?2026h${this.deleteKittyImages(this.previousKittyImageIds)}`;
+		for (let row = 0; row < height; row++) {
+			if (resized || this.viewportHadImages || frame.images.length > 0 || lines[row] !== this.previousLines[row]) {
+				buffer += `\x1b[${row + 1};1H\x1b[2K${lines[row]}`;
+			}
+		}
+		for (const image of frame.images) buffer += `\x1b[${image.row + 1};${image.col + 1}H${image.sequence}`;
+		if (cursor) buffer += `\x1b[${cursor.row + 1};${Math.min(cursor.col, contentWidth - 1) + 1}H`;
+		buffer += cursor && this.showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
+		buffer += "\x1b[?2026l";
+		this.terminal.write(buffer);
+		this.previousLines = lines;
+		this.previousKittyImageIds = this.collectKittyImageIds(frame.images.map((image) => image.sequence));
+		this.viewportHadImages = frame.images.length > 0;
+		this.previousWidth = width;
+		this.previousHeight = height;
+	}
+
 	private doRender(): void {
 		if (this.stopped) return;
+		if (this.viewport) {
+			this.doViewportRender();
+			return;
+		}
 		if (this.liveRegionStart && !this.children.includes(this.liveRegionStart)) {
 			this.resetDetachedLiveRegion();
 		}

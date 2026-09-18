@@ -18,6 +18,18 @@ At the TUI API level, `setLiveRegionStart(component)` selects the first direct c
 
 Overlays remain screen-relative and are composed over the bounded live canvas. Closing an overlay or autocomplete restores the underlying live rows without mutating committed history.
 
+### Opt-in retained viewport candidate
+
+`TUI.configureViewport({ getBlocks })` selects an independent, experimental rendering path; production interactive mode still uses committed history. `getBlocks()` returns the ordered projection of existing component instances as `{ component, finalized?, revision? }`. Each component must occur once. Finalization changes cache eligibility, not identity or transcript ownership. Increment `revision` when a finalized block changes; `tui.invalidate()` invalidates projected components and all retained render caches. Width changes and `rebuild()` refresh caches without resetting the reader's anchor. Call `resetViewport()` only for genuine content/session replacement.
+
+The candidate retains all logical rows, renders components at terminal width minus one, and paints a bounded slice using absolute screen coordinates. The reserved last column displays a scrollbar; at a one-column terminal there is no scrollbar. `scrollViewport(delta)` and `scrollViewportTo(offset, anchorScreenRow = 0)` provide programmatic navigation. Scrolling to the bottom resumes tail-following; output updates and resize clamping do not. `getViewportState()` returns a snapshot of offset, total rows, height, and tail-following state. Overlays remain screen-relative, and cursor/IME positioning uses the visible slice rather than the document tail.
+
+Anchors use ordered row correspondence, then visible grapheme correspondence across reflow and restyling. Comparison ignores ANSI, whitespace, and wrap boundaries without altering displayed rows or their spacing. The anchored grapheme retains its chosen screen-row offset where geometry permits. Deletion falls back to surviving content in the same block, then the nearest surviving adjacent block (following block wins ties). Blank-only blocks preserve a clamped row ordinal; arbitrary width-dependent or repeated/whitespace-only content cannot promise exact semantic source identity.
+
+`renderNow({ requireFlush: true })` renders immediately and rejects if the terminal cannot flush or flushing fails. It is independent of `commitNow()`, whose committed-history preconditions and flush guarantee remain unchanged. Viewport and committed live-region configuration are mutually exclusive.
+
+This is rendering infrastructure, not an activated interaction mode. The opt-in caller currently owns the bounded alternate-screen surface and its restoration. Pointer input, selection/copy, production integration, final-exit transcript output, and terminal handoffs are not yet implemented for this candidate. Built-in Kitty/iTerm2 placements are re-anchored to absolute rows only when their full extent fits; clipped spans show a placeholder. Base images are withheld with a placeholder while overlays are visible. Oversized-image fitting, custom graphics envelopes, and native graphics verification remain pending; do not use the candidate as a production graphics replacement yet.
+
 ## Component Interface
 
 All components implement:
