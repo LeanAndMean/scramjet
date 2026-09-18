@@ -177,6 +177,19 @@ try:
         return (first["x"] + (column - 0.5) * first["width"],
                 first["y"] + (row - 0.5) * first["height"])
 
+    if not is_mac:
+        mouse("down", *cell(10, 3))
+        mouse("up", *cell(10, 3))
+        if not wait_for(lambda: bool(state().get("lastMouse"))):
+            raise RuntimeError("Desktop calibration click did not reach the fixture")
+        observed = state()["lastMouse"]
+        report["pointerCalibration"] = {"initialCell": dict(first), "observed": observed}
+        first["x"] += (10 - observed["x"]) * first["width"]
+        first["y"] += (3 - observed["y"]) * first["height"]
+        mouse("down", *cell(10, 3))
+        mouse("up", *cell(10, 3))
+        if not check("desktopCellTargetVerified", lambda: state()["lastMouse"]["x"] == 10 and state()["lastMouse"]["y"] == 3):
+            raise RuntimeError("Desktop cell targeting remains uncalibrated")
     screenshot("startup")
     mouse("move", *cell(10, 3))
     events("wheel", -3)
@@ -193,10 +206,12 @@ try:
     expected = "ROW-001 synthetic café 界 e\u0301 text"
     mouse("rightDown", *cell(10, 1))
     mouse("rightUp", *cell(10, 1))
-    check("rightClickRequestsCopy", lambda: state().get("rightCopy", 0) > 0)
+    right_copied = check("rightClickRequestsCopy", lambda: state().get("rightCopy", 0) > 0)
     check("rightClickClipboardExactUnicode", lambda: clipboard() == expected)
     screenshot("right-click")
-    key("escape")
+    if not right_copied:
+        key("escape")
+        time.sleep(0.6)
     seed_clipboard("SCRAMJET-PROBE-SENTINEL")
     key("copy")
     check("controlCCopiesSelection", lambda: state().get("keyCopy", 0) > 0 and clipboard() == expected)
