@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.97.1 — Keep idle freetext prompts visible
+
+Keeps idle freetext questions visible after tool execution so users know where to reply. Fixes [#543](https://github.com/LeanAndMean/scramjet/issues/543).
+
+### Fixed
+
+- Retain idle freetext prompts in completed tool rows with a clear standard-editor reply cue.
+- Preserve parked-command rendering while leaving malformed freetext result details empty.
+
+### Tests
+
+- Add compositor and result-detail coverage for idle and parked freetext outcomes.
+
 ## 0.97.0 — Show waiting state during interactive choices
 
 Keeps the terminal title aligned with user attention while Scramjet waits for an interactive choice. Fixes [#546](https://github.com/LeanAndMean/scramjet/issues/546).

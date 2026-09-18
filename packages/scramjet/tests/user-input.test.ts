@@ -220,6 +220,34 @@ describe("registerUserInputTool — registration", () => {
 		expect(occurrences).toBe(1);
 	});
 
+	it("keeps an idle freetext prompt visible after execution", () => {
+		const { tool } = toolFor();
+		const component = new ToolExecutionComponent(
+			"get_scramjet_user_input",
+			"call-id",
+			{ type: "freetext", message: "What release title should I use?" },
+			undefined,
+			tool,
+			{ requestRender: () => {} } as any,
+			process.cwd(),
+		);
+		component.markExecutionStarted();
+		component.setArgsComplete();
+		component.updateResult(
+			{
+				content: [{ type: "text", text: JSON.stringify({ parked: false }) }],
+				details: { type: "freetext", parked: false },
+				isError: false,
+			},
+			false,
+		);
+
+		const output = visibleText(component.render(120).join("\n"));
+		expect(output.split("What release title should I use?")).toHaveLength(2);
+		expect(output).toContain("Reply in the standard editor");
+		expect(output).not.toContain("Parked for reply");
+	});
+
 	it("has the expected schema shape with type enum and flat optional fields", () => {
 		const { tool } = toolFor();
 		const params = tool.parameters;
@@ -358,6 +386,23 @@ describe("registerUserInputTool — renderResult", () => {
 
 		expect(output).toContain("What should the title be?");
 		expect(output).toContain("Parked for reply");
+	});
+
+	it.each([
+		["missing", undefined],
+		["non-boolean", "yes"],
+	])("falls back to empty output for %s freetext parked details", (_label, parked) => {
+		const { tool } = toolFor();
+		const output = renderResultText(
+			tool,
+			{
+				content: [{ type: "text", text: JSON.stringify({ parked }) }],
+				details: { type: "freetext", parked },
+			},
+			{ type: "freetext", message: "What should the title be?" },
+		);
+
+		expect(output).toBe("");
 	});
 
 	it("renders the tool text for error details", () => {
@@ -1030,6 +1075,7 @@ describe("registerUserInputTool — idle phase behavior", () => {
 
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ parked: false });
+		expect(result.details).toEqual({ type: "freetext", parked: false });
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.activeCommand).toBeNull();
 		expect(state.lifecycle.probeArmed).toBe(false);

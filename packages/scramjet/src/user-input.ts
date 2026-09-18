@@ -441,13 +441,11 @@ function renderUserInputResult(result: AgentToolResult<unknown>, args: Partial<U
 	}
 
 	if (details.type === "freetext") {
-		if (details.parked === true) {
-			const container = new Container();
-			if (message) container.addChild(new Markdown(message, 0, 0, getMarkdownTheme()));
-			container.addChild(new Text("Parked for reply", 0, 0));
-			return container;
-		}
-		return new Text("", 0, 0);
+		if (typeof details.parked !== "boolean") return new Text("", 0, 0);
+		const container = new Container();
+		if (message) container.addChild(new Markdown(message, 0, 0, getMarkdownTheme()));
+		container.addChild(new Text(details.parked ? "Parked for reply" : "Reply in the standard editor", 0, 0));
+		return container;
 	}
 
 	return new Text("", 0, 0);
