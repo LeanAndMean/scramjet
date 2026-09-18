@@ -16,7 +16,7 @@ root = Path.cwd()
 state_path = output / "fixture.json"
 driver = output / "desktop-events"
 report = {"scope": "Apple Terminal desktop feasibility, not production viewport acceptance", "checks": {}}
-window_id = None
+terminal_started = False
 
 
 def run(*args, **kwargs):
@@ -25,10 +25,6 @@ def run(*args, **kwargs):
 
 def clipboard():
     return subprocess.run(["pbpaste"], text=True, capture_output=True, check=True, timeout=10).stdout
-
-
-def apple(script, *args):
-    return run("osascript", "-e", script, *args)
 
 
 def events(*args):
@@ -89,18 +85,12 @@ try:
         f"stty -g > {shlex.quote(str(output / 'stty-after.txt'))}",
         "printf 'SCRAMJET RESTORED SHELL\\n'",
     ]) + "\n")
-    window_id = apple('''on run argv
-        tell application "Terminal"
-            activate
-            set targetTab to do script (item 1 of argv)
-            set current settings of targetTab to settings set "Basic"
-            set font name of current settings of targetTab to "Menlo"
-            set font size of current settings of targetTab to 14
-            set number of columns of front window to 80
-            set number of rows of front window to 24
-            return id of front window
-        end tell
-    end run''', f"/bin/bash {shlex.quote(str(launcher))}")
+    run("open", "-a", "Terminal")
+    terminal_started = True
+    time.sleep(2)
+    subprocess.run(["pbcopy"], input=f"/bin/bash {shlex.quote(str(launcher))}", text=True, check=True, timeout=10)
+    events("key", 9, 1048576)
+    events("key", 36, 0)
     if not wait_for(lambda: bool(state()), timeout=30):
         raise RuntimeError("Terminal did not start the fixture in a TTY")
     time.sleep(1)
@@ -155,12 +145,10 @@ except Exception as error:
         report["stderr"] = error.stderr
     screenshot("failure")
 finally:
-    if window_id:
+    if terminal_started:
         try:
             events("key", 12, 262144)
-            apple('''on run argv
-                tell application "Terminal" to close window id (item 1 of argv as integer)
-            end run''', window_id)
+            events("key", 13, 1048576)
         except Exception as error:
             report["cleanupError"] = str(error)
     report["passed"] = bool(report["checks"]) and all(item["passed"] for item in report["checks"].values()) and "error" not in report and "cleanupError" not in report
