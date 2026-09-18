@@ -99,12 +99,14 @@ try:
     areas = [item for item in geometry if item["role"] == "AXTextArea"]
     if len(areas) != 1:
         raise RuntimeError(f"Expected one Terminal AXTextArea; observed {len(areas)}")
-    area = areas[0]
+    first = areas[0].get("firstCell")
+    if not first or first["y"] < 0 or first["width"] <= 0 or first["height"] <= 0:
+        raise RuntimeError(f"No usable AX character bounds for visible ROW-001: {first}")
     columns, rows = state()["columns"], state()["rows"]
 
     def cell(column, row):
-        return (area["x"] + (column - 0.5) * area["width"] / columns,
-                area["y"] + (row - 0.5) * area["height"] / rows)
+        return (first["x"] + (column - 0.5) * first["width"],
+                first["y"] + (row - 0.5) * first["height"])
 
     screenshot("startup")
     mouse("move", *cell(10, 3))

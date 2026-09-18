@@ -23,7 +23,24 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
         var dimensions = CGSize.zero
         AXValueGetValue(position as! AXValue, .cgPoint, &point)
         AXValueGetValue(size as! AXValue, .cgSize, &dimensions)
-        result.append(["role": role, "x": point.x, "y": point.y, "width": dimensions.width, "height": dimensions.height])
+        if ["AXWindow", "AXScrollArea", "AXTextArea"].contains(role) {
+            var item: [String: Any] = ["role": role, "x": point.x, "y": point.y, "width": dimensions.width, "height": dimensions.height]
+            if role == "AXTextArea", let text = attribute(element, kAXValueAttribute) as? String {
+                let marker = (text as NSString).range(of: "ROW-001")
+                if marker.location != NSNotFound {
+                    var range = CFRange(location: marker.location, length: 1)
+                    let parameter = AXValueCreate(.cfRange, &range)!
+                    var bounds: CFTypeRef?
+                    if AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, parameter, &bounds) == .success,
+                       let bounds = bounds, CFGetTypeID(bounds) == AXValueGetTypeID() {
+                        var rect = CGRect.zero
+                        AXValueGetValue(bounds as! AXValue, .cgRect, &rect)
+                        item["firstCell"] = ["x": rect.origin.x, "y": rect.origin.y, "width": rect.width, "height": rect.height]
+                    }
+                }
+            }
+            result.append(item)
+        }
     }
     for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
         result += geometry(child, depth: depth + 1)
