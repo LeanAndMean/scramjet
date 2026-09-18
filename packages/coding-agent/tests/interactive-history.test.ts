@@ -33,6 +33,7 @@ import { AssistantMessageComponent } from "../src/modes/interactive/components/a
 import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
+import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 function assistant(text: string, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
 	return {
@@ -1213,5 +1214,60 @@ describe("interactive assistant history", () => {
 		await render(terminal);
 
 		expect(terminal.bufferLines().join("\n").match(new RegExp(expected, "g"))).toHaveLength(1);
+	});
+});
+
+describe("production interactive composition", () => {
+	it("mounts every production region and characterizes widget transition spacing", async () => {
+		const h = await createProductionInteractiveHarness(60, 24);
+		try {
+			const p = h.internals;
+			expect(p.ui.children).toEqual([
+				p.headerContainer,
+				p.committedChatContainer,
+				p.chatContainer,
+				p.pendingMessagesContainer,
+				p.statusContainer,
+				p.widgetContainerAbove,
+				p.editorContainer,
+				p.widgetContainerBelow,
+				p.footer,
+			]);
+			h.extensionUI.setEditorText("EDITOR");
+			h.extensionUI.setWidget("above", ["ABOVE"]);
+			h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+			await h.emit({ type: "agent_start" });
+			const appeared = await h.frame();
+			const expected = [
+				"",
+				" ⠋ Working...",
+				"",
+				" ABOVE",
+				"─".repeat(60),
+				"EDITOR",
+				"─".repeat(60),
+				" BELOW",
+				h.session.sessionManager.getCwd(),
+				"?/0 (?)                                    (unknown) unknown",
+				...Array<string>(14).fill(""),
+			];
+			expect(appeared.map((row) => row.trimEnd())).toEqual(expected);
+			h.extensionUI.setWidget("above", ["ABOVE", "GROW"]);
+			const grown = await h.frame();
+			expect(grown.map((row) => row.trimEnd())).toEqual([
+				...expected.slice(0, 4),
+				" GROW",
+				...expected.slice(4, -1),
+			]);
+			h.extensionUI.setWidget("above", ["ABOVE"]);
+			const shrunk = await h.frame();
+			expect(shrunk).toEqual(appeared);
+			h.extensionUI.setWidget("above", undefined);
+			h.extensionUI.setWidget("below", undefined);
+			const removed = await h.frame();
+			expect(removed.join("\n")).not.toMatch(/ABOVE|BELOW|GROW/);
+		} finally {
+			await h.dispose();
+		}
 	});
 });
