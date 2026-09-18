@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { renameSync, writeFileSync } from "node:fs";
 import { release, platform } from "node:os";
 import { StringDecoder } from "node:string_decoder";
@@ -50,11 +51,15 @@ let cursor = 0;
 let stopped = false;
 let copying = false;
 let lastMouse;
+let termiosBefore;
+let termiosAfter;
+const mouseSamples = [];
+const ttyState = () => execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 const evidencePath = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 function record() {
 	if (!evidencePath) return;
 	writeFileSync(`${evidencePath}.tmp`, JSON.stringify({ ...evidence, columns: process.stdout.columns,
-		rows: process.stdout.rows, offset, selection, lastMouse, editor, stopped }));
+		rows: process.stdout.rows, offset, selection, lastMouse, mouseSamples, editor, stopped, termiosBefore, termiosAfter }));
 	renameSync(`${evidencePath}.tmp`, evidencePath);
 }
 const height = () => Math.max(1, process.stdout.rows - 3);
@@ -135,6 +140,7 @@ function stop() {
 	process.stdin.pause();
 	process.stdin.off("data", receive);
 	input.destroy();
+	if (evidencePath) termiosAfter = ttyState();
 	record();
 	console.log(JSON.stringify(evidence, null, 2));
 	console.log("Add manual observations and exact emulator/multiplexer versions. Missing results are not passes.");
@@ -159,6 +165,7 @@ input.on("data", (data) => {
 		const [, code, column, row, action] = mouse;
 		const [button, x, y] = [Number(code), Number(column), Number(row)];
 		lastMouse = { button, x, y, action };
+		if (evidencePath) { mouseSamples.push(lastMouse); if (mouseSamples.length > 64) mouseSamples.shift(); }
 		if (x < 1 || x > process.stdout.columns || y < 1 || y > height()) return;
 		if (button === 64 || button === 65) { offset += button === 64 ? -3 : 3; evidence.wheel++; }
 		else if (action === "m") gesture = undefined;
@@ -184,6 +191,7 @@ process.once("SIGHUP", stop);
 process.once("uncaughtException", (error) => { stop(); console.error(error); process.exitCode = 1; });
 process.once("exit", stop);
 process.stdout.on("resize", paint);
+if (evidencePath) termiosBefore = ttyState();
 process.stdin.setRawMode(true);
 process.stdin.on("data", receive);
 process.stdin.resume();

@@ -223,7 +223,7 @@ try:
     screenshot("keyboard")
     key("exit")
     check("orderlyExit", lambda: state().get("stopped") is True and (output / "stty-after.txt").exists())
-    check("termiosRestored", lambda: (output / "stty-after.txt").exists() and (output / "stty-before.txt").read_text() == (output / "stty-after.txt").read_text())
+    check("termiosRestored", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))
     screenshot("restored")
 except Exception as error:
     report["error"] = str(error)
