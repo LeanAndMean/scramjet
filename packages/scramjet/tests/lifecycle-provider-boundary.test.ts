@@ -24,7 +24,7 @@ import { COMMAND_START_TYPE, registerHistory } from "../src/history.js";
 import { activeCommandName, beginProbe, startCommand } from "../src/lifecycle.js";
 import type { CommandDef, ScramjetState } from "../src/types.js";
 import { registerUserInputTool } from "../src/user-input.js";
-import { derivedPhase, freshState } from "./helpers.js";
+import { derivedPhase, freshState, noOpTerminalIndicators } from "./helpers.js";
 
 // issue 352 (Stage 2): prove the provider-boundary invariant through real public
 // operations. Stage 1 pinned replayHistory() in isolation; this file stands up a
@@ -146,7 +146,7 @@ async function makeFixture(
 					};
 				},
 			});
-			registerUserInputTool(inputPi, state);
+			registerUserInputTool(inputPi, state, noOpTerminalIndicators());
 			if (opts.autoContinue) registerAutoContinue(pi, state);
 			// Test-local deterministic compaction output — no network. Mirrors an extension
 			// that supplies compaction content via session_before_compact.

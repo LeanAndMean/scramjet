@@ -16,7 +16,7 @@ import {
 } from "@leanandmean/coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { registerForgePublication } from "../src/forge-publication.js";
-import { freshState } from "./helpers.js";
+import { freshState, noOpTerminalIndicators } from "./helpers.js";
 
 const model: Model<"openai-chat"> = {
 	id: "test-model",
@@ -96,7 +96,7 @@ describe("forge publication session persistence", () => {
 				state.autonomyRecommendations = new Map([
 					["mach12", { edges: {}, publications: { "mach12:issue-create": { create_issue: "auto-approve" } } }],
 				]);
-				registerForgePublication(pi, state);
+				registerForgePublication(pi, state, noOpTerminalIndicators());
 			};
 			const resourceLoader = new DefaultResourceLoader({
 				cwd,

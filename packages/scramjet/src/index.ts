@@ -28,7 +28,7 @@ import { registerSubagentTool } from "./subagent/index.js";
 import { registerSubagentOutputAdvisor } from "./subagent-output-advisor.js";
 import { registerSubdirContext } from "./subdir-context.js";
 import { registerSuggestNextStepsTool } from "./suggest-next-steps.js";
-import { registerTerminalIndicators } from "./terminal-indicators.js";
+import { createTerminalIndicators } from "./terminal-indicators.js";
 import { registerToolCallAdvisor } from "./tool-scope-advisory.js";
 import { registerToolVisibilityDiagnostics } from "./tool-visibility-diagnostics.js";
 import type { ScramjetState } from "./types.js";
@@ -104,6 +104,7 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 		freetextAwaitingReply: false,
 		logger,
 	};
+	const terminalIndicators = createTerminalIndicators(pi, state);
 
 	pi.on("session_start", (_event, ctx) => {
 		logger.setHasUI(ctx.hasUI);
@@ -111,14 +112,14 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 	});
 
 	registerCommandStatusTool(pi, state);
-	registerForgePublication(pi, state);
-	registerUserInputTool(pi, state);
+	registerForgePublication(pi, state, terminalIndicators);
+	registerUserInputTool(pi, state, terminalIndicators);
 	registerDelegateTool(pi, state);
 	registerToolCallAdvisor(pi, state);
 	registerToolVisibilityDiagnostics(pi, state);
 	registerSubagentOutputAdvisor(pi, state);
 	registerAutoContinue(pi, state);
-	registerSubagentTool(pi, () => state.agentRegistry);
+	registerSubagentTool(pi, terminalIndicators, () => state.agentRegistry);
 	registerAutopilotCommand(pi, state);
 	registerScramjetCommand(pi, state);
 	registerClearAlias(pi);
@@ -138,5 +139,5 @@ export function initScramjet(pi: ExtensionAPI, updateNotifierDependencies?: Upda
 	registerSubdirContext(pi, state);
 	// Must follow registerAutoContinue — hooks fire in registration order, and
 	// indicators read lifecycle state set by auto-continue's agent_end handler.
-	registerTerminalIndicators(pi, state);
+	terminalIndicators.register();
 }

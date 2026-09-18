@@ -9,8 +9,9 @@ import {
 	USER_INPUT_PARKED_TYPE,
 } from "../src/history.js";
 import { isDormant, isParkedForInput, isProbeDue, isProbeInFlight } from "../src/lifecycle.js";
+import { createTerminalIndicators } from "../src/terminal-indicators.js";
 import { registerUserInputTool, USER_INPUT_TYPE } from "../src/user-input.js";
-import { freshState, lifecycleFor, recordingPi } from "./helpers.js";
+import { freshState, lifecycleFor, noOpTerminalIndicators, recordingPi } from "./helpers.js";
 
 initTheme(undefined, false);
 
@@ -60,14 +61,17 @@ type UserInputParams = {
 	placeholder?: string;
 };
 
-function toolFor(state = freshState()) {
-	const { pi, tools, handlers } = recordingPi();
-	registerUserInputTool(pi, state);
+function toolFor(state = freshState(), withTerminalIndicators = false) {
+	const { pi, tools, handlers, emit } = recordingPi();
+	pi.getSessionName = () => undefined;
+	const terminalIndicators = withTerminalIndicators ? createTerminalIndicators(pi, state) : noOpTerminalIndicators();
+	registerUserInputTool(pi, state, terminalIndicators);
+	terminalIndicators.register();
 	const tool = tools.find((t: any) => t.name === "get_scramjet_user_input");
 	if (!tool) throw new Error("get_scramjet_user_input tool not registered");
 	const execute = (params: UserInputParams, ctx?: unknown) =>
 		tool.execute("call-id", params, undefined, undefined, ctx) as Promise<any>;
-	return { state, pi, tools, handlers, tool, execute };
+	return { state, pi, tools, handlers, emit, tool, execute };
 }
 
 function mockUICtx(customResult: unknown = null, inputResult: string | undefined = undefined) {
@@ -630,6 +634,159 @@ describe("registerUserInputTool — non-terminating results", () => {
 	});
 });
 
+describe("registerUserInputTool — choice title integration", () => {
+	const choiceCases = [
+		["confirm Yes", { type: "confirm", message: "Continue?" }, "yes"],
+		["confirm No", { type: "confirm", message: "Continue?" }, "no"],
+		["select", { type: "select", message: "Pick", options: [{ value: "a", label: "A" }] }, "a"],
+	] as const;
+
+	it.each(choiceCases)(
+		"shows waiting while %s is unresolved and resumes working after success",
+		async (_name, params, value) => {
+			let resolveChoice: (result: string) => void = () => {};
+			const titles: string[] = [];
+			const state = freshState({ lifecycle: lifecycleFor("running") });
+			const { emit, execute } = toolFor(state, true);
+			const ctx = {
+				hasUI: true,
+				ui: {
+					setTitle: (title: string) => titles.push(title),
+					setTitleProvider: () => {},
+					custom: () =>
+						new Promise<string>((resolve) => {
+							resolveChoice = resolve;
+						}),
+				},
+			};
+			await emit("agent_start", {}, ctx);
+
+			const resultPromise = execute(params, ctx);
+			await Promise.resolve();
+			expect(titles.at(-1)).toMatch(/^○ /);
+
+			resolveChoice(value);
+			await resultPromise;
+			expect(titles.at(-1)).toMatch(/^● /);
+		},
+	);
+
+	it.each([
+		["confirm", { type: "confirm", message: "Continue?" }],
+		["select", { type: "select", message: "Pick", options: [{ value: "a", label: "A" }] }],
+	] as const)("keeps waiting after cancelled %s input", async (_name, params) => {
+		let resolveChoice: (result: null) => void = () => {};
+		const titles: string[] = [];
+		const state = freshState({ lifecycle: lifecycleFor("running") });
+		const { emit, execute } = toolFor(state, true);
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setTitle: (title: string) => titles.push(title),
+				setTitleProvider: () => {},
+				custom: () =>
+					new Promise<null>((resolve) => {
+						resolveChoice = resolve;
+					}),
+				notify: () => {},
+			},
+		};
+		await emit("agent_start", {}, ctx);
+
+		const resultPromise = execute(params, ctx);
+		await Promise.resolve();
+		const waitingTitleIndex = titles.length - 1;
+		expect(titles[waitingTitleIndex]).toMatch(/^○ /);
+
+		resolveChoice(null);
+		await resultPromise;
+		expect(titles.slice(waitingTitleIndex)).toEqual(expect.arrayContaining([expect.stringMatching(/^○ /)]));
+		expect(titles.slice(waitingTitleIndex).some((title) => title.startsWith("● "))).toBe(false);
+	});
+
+	it("keeps the lifecycle-derived title when cancellation journaling fails", async () => {
+		const titles: string[] = [];
+		let titleProvider: (() => string | undefined) | undefined;
+		const state = freshState({ lifecycle: lifecycleFor("probing", "mach12:test") });
+		const { emit, execute, pi } = toolFor(state, true);
+		const appendEntry = pi.appendEntry;
+		pi.appendEntry = (type: string, data: unknown) => {
+			if (type === USER_INPUT_TYPE) throw new Error("disk full");
+			appendEntry(type, data);
+		};
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setTitle: (title: string) => titles.push(title),
+				setTitleProvider: (provider: () => string | undefined) => {
+					titleProvider = provider;
+				},
+				custom: () => Promise.resolve(null),
+				notify: () => {},
+			},
+		};
+		await emit("session_start", {}, ctx);
+		await emit("agent_start", {}, ctx);
+
+		await expect(execute({ type: "confirm", message: "Continue?" }, ctx)).rejects.toThrow("disk full");
+
+		expect(isDormant(state.lifecycle)).toBe(true);
+		expect(state.lifecycle.cancellationResumeEligible).toBe(true);
+		expect(titles.at(-1)).toMatch(/^○ /);
+		expect(titleProvider?.()).toMatch(/^○ /);
+	});
+
+	it("restores working after a UI error", async () => {
+		const titles: string[] = [];
+		const state = freshState({ lifecycle: lifecycleFor("running") });
+		const { emit, execute } = toolFor(state, true);
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setTitle: (title: string) => titles.push(title),
+				setTitleProvider: () => {},
+				custom: () => Promise.reject(new Error("UI crashed")),
+			},
+		};
+		await emit("agent_start", {}, ctx);
+
+		const result = await execute({ type: "confirm", message: "Continue?" }, ctx);
+
+		expect(result.details.error).toBe("ui-error");
+		expect(titles).toEqual(expect.arrayContaining([expect.stringMatching(/^○ /)]));
+		expect(titles.at(-1)).toMatch(/^● /);
+	});
+
+	it("derives the title from lifecycle after a stale result", async () => {
+		let resolveChoice: (result: string) => void = () => {};
+		const titles: string[] = [];
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+		const { emit, execute } = toolFor(state, true);
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setTitle: (title: string) => titles.push(title),
+				setTitleProvider: () => {},
+				custom: () =>
+					new Promise<string>((resolve) => {
+						resolveChoice = resolve;
+					}),
+			},
+		};
+		await emit("agent_start", {}, ctx);
+
+		const resultPromise = execute({ type: "confirm", message: "Continue?" }, ctx);
+		await Promise.resolve();
+		state.lifecycle = lifecycleFor("dormant", "mach12:other");
+		state.lifecycleGeneration++;
+		resolveChoice("yes");
+		const result = await resultPromise;
+
+		expect(result.details.error).toBe("stale-result");
+		expect(titles.at(-1)).toMatch(/^○ /);
+	});
+});
+
 describe("registerUserInputTool — confirm interaction", () => {
 	it("returns confirmed: true when user selects Yes", async () => {
 		const { execute } = toolFor(freshState({ lifecycle: lifecycleFor("running") }));
@@ -864,6 +1021,31 @@ describe("registerUserInputTool — structured input effort", () => {
 });
 
 describe("registerUserInputTool — freetext interaction", () => {
+	it("uses lifecycle parking without acquiring a choice title", async () => {
+		const titles: string[] = [];
+		const state = freshState({ lifecycle: lifecycleFor("running", "mach12:test") });
+		const { emit, execute } = toolFor(state, true);
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setTitle: (title: string) => titles.push(title),
+				setTitleProvider: () => {},
+			},
+		};
+		await emit("session_start", {}, ctx);
+		await emit("agent_start", {}, ctx);
+		const titleCount = titles.length;
+
+		const result = await execute({ type: "freetext", message: "Release title?" }, ctx);
+
+		expect(result.terminate).toBe(true);
+		expect(isParkedForInput(state.lifecycle)).toBe(true);
+		expect(titles).toHaveLength(titleCount);
+		expect(titles.at(-1)).toMatch(/^● /);
+		await emit("agent_end", {}, ctx);
+		expect(titles.at(-1)).toMatch(/^○ /);
+	});
+
 	it.each(["running", "probing"] as const)("terminates and parks from %s", async (phase) => {
 		const state = freshState({ lifecycle: lifecycleFor(phase) });
 		const { execute } = toolFor(state);

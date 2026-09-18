@@ -1,6 +1,6 @@
 {
 	"name": "@leanandmean/ai",
-	"version": "0.74.1-scramjet.25",
+	"version": "0.74.1-scramjet.27",
 	"publishConfig": {
 		"access": "public"
 	},

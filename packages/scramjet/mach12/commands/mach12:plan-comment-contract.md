@@ -58,6 +58,7 @@ architecture summary or file list:
 - interfaces and data shapes;
 - ownership and correlation rules;
 - material responsibility ownership, stable policy or invariants, criticality and replaceability judgments, intended dependency direction, and prohibited authority inversions;
+- task-relevant structural evidence with necessary source citations, scope, source-state context, unresolved questions, and evidence limits;
 - event and mutation ordering;
 - persistence and failure semantics;
 - rollback, atomicity, and retry boundaries;
@@ -71,7 +72,7 @@ architecture summary or file list:
 Retain concise rationale for the selected design and rejected alternatives only where it prevents re-litigation or guards
 against a plausible wrong implementation. Preserve exact commands, paths, or inventories when their specificity is part
 of the implementation contract. Preserve responsibility decisions already selected by the caller; this contract does not
-select architecture or require a new heading, layer vocabulary, diagram, matrix, or artifact schema.
+select architecture or require a raw evidence packet, new heading, layer vocabulary, diagram, matrix, or artifact schema.
 
 ## Step 4: Compress without losing contracts
 

@@ -33,11 +33,30 @@ export function titleForPhase(phase: string, sessionName: string | undefined, cw
 	return `${indicator} scramjet - ${cwdBasename}`;
 }
 
-// Must be registered AFTER registerAutoContinue so auto-continue's agent_end
-// fires first and updates lifecycle/timers before this handler reads them.
-export function registerTerminalIndicators(pi: ExtensionAPI, state: ScramjetState): void {
+export type ChoiceCompletionDisposition = "resume-work" | "derive-lifecycle";
+
+export interface ChoiceLease {
+	complete(disposition: ChoiceCompletionDisposition): void;
+}
+
+export interface TerminalIndicatorContext {
+	hasUI: boolean;
+	ui: { setTitle(title: string): void };
+}
+
+export interface ChoiceIndicatorCoordinator {
+	beginChoice(ctx: TerminalIndicatorContext): ChoiceLease;
+}
+
+export interface TerminalIndicatorCoordinator extends ChoiceIndicatorCoordinator {
+	register(): void;
+}
+
+export function createTerminalIndicators(pi: ExtensionAPI, state: ScramjetState): TerminalIndicatorCoordinator {
 	let lastBellMs = 0;
 	let agentIsRunning = false;
+	let deriveFromLifecycle = false;
+	const activeChoices = new Set<symbol>();
 
 	function safeLoadPreferences(): Preferences {
 		try {
@@ -50,6 +69,8 @@ export function registerTerminalIndicators(pi: ExtensionAPI, state: ScramjetStat
 	}
 
 	function currentPhase(): string {
+		if (activeChoices.size > 0) return "waiting";
+		if (deriveFromLifecycle) return derivePhaseLabel(state.lifecycle);
 		if (agentIsRunning) return "running";
 		return derivePhaseLabel(state.lifecycle);
 	}
@@ -60,57 +81,85 @@ export function registerTerminalIndicators(pi: ExtensionAPI, state: ScramjetStat
 		return titleForPhase(currentPhase(), pi.getSessionName(), path.basename(process.cwd()));
 	}
 
-	function setTitleForPhase(
-		ctx: { hasUI: boolean; ui: { setTitle(t: string): void } },
-		phase: string,
-		prefs: Preferences,
-	) {
+	function setTitleForPhase(ctx: TerminalIndicatorContext, phase: string, prefs: Preferences) {
 		if (!ctx.hasUI) return;
 		if (!prefs.title_indicator) return;
 		ctx.ui.setTitle(titleForPhase(phase, pi.getSessionName(), path.basename(process.cwd())));
 	}
 
-	pi.on("session_start", (_event, ctx) => {
-		agentIsRunning = false;
-		if (ctx.hasUI) {
-			ctx.ui.setTitleProvider(titleProvider);
-		}
-	});
+	function setCurrentTitle(ctx: TerminalIndicatorContext): void {
+		setTitleForPhase(ctx, currentPhase(), safeLoadPreferences());
+	}
 
-	pi.on("session_tree", (_event, ctx) => {
-		agentIsRunning = false;
-		setTitleForPhase(ctx, "idle", safeLoadPreferences());
-	});
+	function clearTransientState(): void {
+		activeChoices.clear();
+		deriveFromLifecycle = false;
+	}
 
-	pi.on("agent_start", (_event, ctx) => {
-		agentIsRunning = true;
-		setTitleForPhase(ctx, "running", safeLoadPreferences());
-	});
+	function beginChoice(ctx: TerminalIndicatorContext): ChoiceLease {
+		const id = Symbol();
+		activeChoices.add(id);
+		setCurrentTitle(ctx);
+		return {
+			complete(disposition) {
+				if (!activeChoices.delete(id)) return;
+				if (disposition === "derive-lifecycle") deriveFromLifecycle = true;
+				setCurrentTitle(ctx);
+			},
+		};
+	}
 
-	pi.on("agent_end", (_event, ctx) => {
-		agentIsRunning = false;
-		const prefs = safeLoadPreferences();
-		const phase = derivePhaseLabel(state.lifecycle);
-		setTitleForPhase(ctx, phase, prefs);
+	// Must be registered AFTER registerAutoContinue so auto-continue's agent_end
+	// fires first and updates lifecycle/timers before this handler reads them.
+	function register(): void {
+		pi.on("session_start", (_event, ctx) => {
+			agentIsRunning = false;
+			clearTransientState();
+			if (ctx.hasUI) {
+				ctx.ui.setTitleProvider(titleProvider);
+			}
+		});
 
-		const isTTY = process.stdout.isTTY === true;
-		const isDispatchScheduled = state.lifecycleTimers?.isDispatchScheduled() ?? false;
-		const isProbeScheduled = state.lifecycleTimers?.isProbeScheduled() ?? false;
-		const now = Date.now();
+		pi.on("session_tree", (_event, ctx) => {
+			agentIsRunning = false;
+			clearTransientState();
+			setTitleForPhase(ctx, "idle", safeLoadPreferences());
+		});
 
-		if (
-			shouldRingBell({
-				bellEnabled: prefs.bell,
-				isTTY,
-				isDispatchScheduled,
-				isProbeScheduled,
-				phase,
-				lastBellMs,
-				nowMs: now,
-			})
-		) {
-			process.stdout.write("\x07");
-			lastBellMs = now;
-		}
-	});
+		pi.on("agent_start", (_event, ctx) => {
+			clearTransientState();
+			agentIsRunning = true;
+			setTitleForPhase(ctx, "running", safeLoadPreferences());
+		});
+
+		pi.on("agent_end", (_event, ctx) => {
+			agentIsRunning = false;
+			clearTransientState();
+			const prefs = safeLoadPreferences();
+			const phase = derivePhaseLabel(state.lifecycle);
+			setTitleForPhase(ctx, phase, prefs);
+
+			const isTTY = process.stdout.isTTY === true;
+			const isDispatchScheduled = state.lifecycleTimers?.isDispatchScheduled() ?? false;
+			const isProbeScheduled = state.lifecycleTimers?.isProbeScheduled() ?? false;
+			const now = Date.now();
+
+			if (
+				shouldRingBell({
+					bellEnabled: prefs.bell,
+					isTTY,
+					isDispatchScheduled,
+					isProbeScheduled,
+					phase,
+					lastBellMs,
+					nowMs: now,
+				})
+			) {
+				process.stdout.write("\x07");
+				lastBellMs = now;
+			}
+		});
+	}
+
+	return { beginChoice, register };
 }
