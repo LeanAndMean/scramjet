@@ -71,6 +71,89 @@ const COPILOT_STATIC_HEADERS = {
 	"X-GitHub-Api-Version": "2026-06-01",
 } as const;
 
+// SCRAMJET-DIVERGENCE: Exact Copilot routing, limits, and effort metadata plus scalar price estimates (issue 477).
+const COPILOT_MODEL_CORRECTIONS = {
+	"claude-fable-5.1": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
+	"claude-opus-5": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
+	"kimi-k3": {
+		api: "openai-completions",
+		contextWindow: 1048576,
+		maxInputTokens: 917504,
+		maxTokens: 131072,
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, medium: null, xhigh: null, max: "max" },
+	},
+	"gemini-3.6-flash": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, xhigh: null, max: null },
+	},
+	"gemini-3.7-flash": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+	"gemini-3.8-flash": {
+		api: "openai-completions",
+		contextWindow: 1048576,
+		maxInputTokens: 983040,
+		maxTokens: 65536,
+		cost: { input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+	"grok-4.5": {
+		api: "openai-responses",
+		contextWindow: 500000,
+		maxInputTokens: 372000,
+		maxTokens: 128000,
+		cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+	"grok-4.6": {
+		api: "openai-responses",
+		contextWindow: 500000,
+		maxInputTokens: 372000,
+		maxTokens: 128000,
+		cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: null },
+	},
+	"mai-code-1.1-flash": {
+		api: "openai-responses",
+		contextWindow: 256000,
+		maxInputTokens: 128000,
+		maxTokens: 128000,
+		cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+} as const;
+
+const COPILOT_CORRECTED_MODEL_IDS = new Set<string>(Object.keys(COPILOT_MODEL_CORRECTIONS));
+const COPILOT_RESPONSES_MODEL_IDS = new Set(
+	Object.entries(COPILOT_MODEL_CORRECTIONS)
+		.filter(([, correction]) => correction.api === "openai-responses")
+		.map(([id]) => id),
+);
+
 const KIMI_STATIC_HEADERS = {
 	"User-Agent": "KimiCLI/1.5",
 } as const;
@@ -1048,9 +1131,12 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 
 				// Claude 4.x models route to Anthropic Messages API
 				const isCopilotClaude4 = /^claude-(haiku|sonnet|opus)-4([.\-]|$)/.test(modelId);
-				// gpt-5 models and GPT-6 Astra require responses API, others use completions
+				// GPT-5, GPT-6 Astra, OSWE, and corrected models declared for Responses route there.
 				const needsResponsesApi =
-					modelId.startsWith("gpt-5") || modelId === "gpt-6-astra" || modelId.startsWith("oswe");
+					modelId.startsWith("gpt-5") ||
+					modelId === "gpt-6-astra" ||
+					modelId.startsWith("oswe") ||
+					COPILOT_RESPONSES_MODEL_IDS.has(modelId);
 
 				const api: Api = isCopilotClaude4
 					? "anthropic-messages"
@@ -1084,7 +1170,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						compat: {
 							supportsStore: false,
 							supportsDeveloperRole: false,
-							supportsReasoningEffort: false,
+							supportsReasoningEffort: COPILOT_CORRECTED_MODEL_IDS.has(modelId),
 						},
 					} : {}),
 				};
@@ -1276,6 +1362,7 @@ async function generateModels() {
 	}
 
 	// Temporary overrides until upstream model metadata is corrected.
+	const matchedCopilotCorrectionIds = new Set<string>();
 	for (const candidate of allModels) {
 		if (candidate.provider === "amazon-bedrock" && candidate.id.includes("anthropic.claude-opus-4-6-v1")) {
 			candidate.cost.cacheRead = 0.5;
@@ -1335,6 +1422,21 @@ async function generateModels() {
 			candidate.contextWindow = 1000000;
 			candidate.maxTokens = 64000;
 		}
+		if (candidate.provider === "github-copilot" && COPILOT_CORRECTED_MODEL_IDS.has(candidate.id)) {
+			matchedCopilotCorrectionIds.add(candidate.id);
+			const correction = COPILOT_MODEL_CORRECTIONS[candidate.id as keyof typeof COPILOT_MODEL_CORRECTIONS];
+			candidate.name = candidate.id;
+			candidate.api = correction.api;
+			candidate.baseUrl = "https://api.individual.githubcopilot.com";
+			candidate.reasoning = true;
+			candidate.input = ["text", "image"];
+			candidate.cost = { ...correction.cost };
+			candidate.contextWindow = correction.contextWindow;
+			candidate.maxInputTokens = correction.maxInputTokens;
+			candidate.maxTokens = correction.maxTokens;
+			candidate.thinkingLevelMap = { ...correction.thinkingLevelMap };
+			candidate.headers = { ...COPILOT_STATIC_HEADERS };
+		}
 		if (candidate.provider === "together" && candidate.id === "zai-org/GLM-5.2") {
 			candidate.contextWindow = 1000000;
 		}
@@ -1380,6 +1482,12 @@ async function generateModels() {
 
 	}
 
+	const missingCopilotCorrectionIds = [...COPILOT_CORRECTED_MODEL_IDS].filter(
+		(id) => !matchedCopilotCorrectionIds.has(id),
+	);
+	if (missingCopilotCorrectionIds.length > 0) {
+		throw new Error(`Missing corrected GitHub Copilot candidates: ${missingCopilotCorrectionIds.join(", ")}`);
+	}
 
 	// Add missing EU Opus 4.6 profile
 	if (!allModels.some((m) => m.provider === "amazon-bedrock" && m.id === "eu.anthropic.claude-opus-4-6-v1")) {

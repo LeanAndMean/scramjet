@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { listModels } from "../src/cli/list-models.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { ModelRegistry } from "../src/core/model-registry.js";
 
@@ -35,6 +36,55 @@ function expectInvalidConfig(config: unknown, fragments: string[]): void {
 		expect(error).toContain(fragment);
 	}
 }
+
+describe("GitHub Copilot catalog visibility", () => {
+	const additionIds = [
+		"claude-fable-5.1",
+		"claude-opus-5",
+		"kimi-k3",
+		"gemini-3.6-flash",
+		"gemini-3.7-flash",
+		"gemini-3.8-flash",
+		"grok-4.5",
+		"grok-4.6",
+		"mai-code-1.1-flash",
+	];
+
+	it("keeps additions cataloged without auth and available with configured Copilot auth", () => {
+		const withoutAuth = ModelRegistry.create(AuthStorage.inMemory());
+		const withAuth = ModelRegistry.create(
+			AuthStorage.inMemory({ "github-copilot": { type: "api_key", key: "synthetic-test-key" } }),
+		);
+		for (const id of additionIds) {
+			expect(withoutAuth.getAll().some((model) => model.provider === "github-copilot" && model.id === id)).toBe(
+				true,
+			);
+			expect(
+				withoutAuth.getAvailable().some((model) => model.provider === "github-copilot" && model.id === id),
+			).toBe(false);
+			expect(withAuth.getAvailable().some((model) => model.provider === "github-copilot" && model.id === id)).toBe(
+				true,
+			);
+		}
+	});
+
+	it("prints new and retained Copilot IDs through the real CLI listing", async () => {
+		const registry = ModelRegistry.create(
+			AuthStorage.inMemory({ "github-copilot": { type: "api_key", key: "synthetic-test-key" } }),
+		);
+		const lines: string[] = [];
+		const originalLog = console.log;
+		console.log = (...args) => lines.push(args.join(" "));
+		try {
+			await listModels(registry, "github-copilot");
+		} finally {
+			console.log = originalLog;
+		}
+		const output = lines.join("\n");
+		for (const id of additionIds) expect(output).toContain(id);
+		expect(output).toContain("gpt-6-astra");
+	});
+});
 
 describe("AnthropicMessagesCompat models.json validation", () => {
 	it("accepts supportsTemperature and forceAdaptiveThinking on provider-level compat", () => {

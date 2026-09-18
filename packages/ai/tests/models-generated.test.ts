@@ -235,6 +235,128 @@ describe("generated catalog - OpenRouter independent input constraints", () => {
 	});
 });
 
+describe("generated catalog - GitHub Copilot additions", () => {
+	const additions = [
+		[
+			"claude-fable-5.1",
+			"openai-completions",
+			1000000,
+			936000,
+			64000,
+			{ input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+			["low", "medium", "high", "xhigh", "max"],
+		],
+		[
+			"claude-opus-5",
+			"openai-completions",
+			1000000,
+			936000,
+			64000,
+			{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+			["low", "medium", "high", "xhigh", "max"],
+		],
+		[
+			"kimi-k3",
+			"openai-completions",
+			1048576,
+			917504,
+			131072,
+			{ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+			["low", "high", "max"],
+		],
+		[
+			"gemini-3.6-flash",
+			"openai-completions",
+			1000000,
+			936000,
+			64000,
+			{ input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+			["minimal", "low", "medium", "high"],
+		],
+		[
+			"gemini-3.7-flash",
+			"openai-completions",
+			1000000,
+			936000,
+			64000,
+			{ input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+			["low", "medium", "high"],
+		],
+		[
+			"gemini-3.8-flash",
+			"openai-completions",
+			1048576,
+			983040,
+			65536,
+			{ input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+			["low", "medium", "high"],
+		],
+		[
+			"grok-4.5",
+			"openai-responses",
+			500000,
+			372000,
+			128000,
+			{ input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+			["low", "medium", "high"],
+		],
+		[
+			"grok-4.6",
+			"openai-responses",
+			500000,
+			372000,
+			128000,
+			{ input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+			["low", "medium", "high", "xhigh"],
+		],
+		[
+			"mai-code-1.1-flash",
+			"openai-responses",
+			256000,
+			128000,
+			128000,
+			{ input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+			["low", "medium", "high"],
+		],
+	] as const;
+
+	it.each(additions)(
+		"ships %s with its verified contract",
+		(id, api, contextWindow, maxInputTokens, maxTokens, cost, levels) => {
+			const model = getModel("github-copilot", id);
+			expect(model).toMatchObject({
+				id,
+				name: id,
+				provider: "github-copilot",
+				api,
+				reasoning: true,
+				input: ["text", "image"],
+				cost,
+				contextWindow,
+				maxInputTokens,
+				maxTokens,
+				headers: { "X-GitHub-Api-Version": "2026-06-01" },
+			});
+			expect(getSupportedThinkingLevels(model)).toEqual(levels);
+			if (api === "openai-completions") {
+				expect(model.compat).toMatchObject({
+					supportsStore: false,
+					supportsDeveloperRole: false,
+					supportsReasoningEffort: true,
+				});
+			} else {
+				expect(model.compat).toBeUndefined();
+			}
+		},
+	);
+
+	it("adds each approved ID exactly once while retaining an existing model", () => {
+		const ids = getModels("github-copilot").map((model) => model.id);
+		for (const [id] of additions) expect(ids.filter((candidate) => candidate === id)).toHaveLength(1);
+		expect(ids).toContain("gpt-6-astra");
+	});
+});
+
 describe("generated catalog - Anthropic Opus 4.8", () => {
 	const model = getModel("anthropic", "claude-opus-4-8");
 
