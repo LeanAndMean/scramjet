@@ -893,6 +893,7 @@ describe("registerUserInputTool — idle phase behavior", () => {
 
 		const parsed = JSON.parse(result.content[0].text);
 		expect(parsed).toEqual({ parked: false });
+		expect(result.details).toEqual({ type: "freetext", parked: false });
 		expect(result.terminate).toBe(true);
 		expect(state.lifecycle.activeCommand).toBeNull();
 		expect(state.lifecycle.probeArmed).toBe(false);
