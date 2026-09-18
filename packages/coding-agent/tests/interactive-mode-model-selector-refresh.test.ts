@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { AuthStorage } from "../src/core/auth-storage.js";
+import { ModelRegistry } from "../src/core/model-registry.js";
+import { ModelSelectorComponent } from "../src/modes/interactive/components/model-selector.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
+import { initTheme } from "../src/modes/interactive/theme/theme.js";
+
+initTheme("pi-dark");
 
 interface Deferred {
 	promise: Promise<void>;
@@ -53,6 +59,29 @@ async function showModelSelector(mode: Record<string, any>): Promise<void> {
 async function showModelsSelector(mode: Record<string, any>): Promise<void> {
 	await mode.showModelsSelector();
 }
+
+describe("GitHub Copilot selector visibility", () => {
+	it("loads new and retained IDs into the unscoped selector with configured auth", async () => {
+		const registry = ModelRegistry.create(
+			AuthStorage.inMemory({ "github-copilot": { type: "api_key", key: "synthetic-test-key" } }),
+		);
+		const current = registry.find("github-copilot", "gpt-6-astra")!;
+		const selector = new ModelSelectorComponent(
+			{ requestRender: vi.fn() } as any,
+			current,
+			{ setDefaultModelAndProvider: vi.fn() } as any,
+			registry,
+			[],
+			vi.fn(),
+			vi.fn(),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const ids = (selector as any).allModels.map((item: { id: string }) => item.id);
+		for (const id of ["claude-fable-5.1", "kimi-k3", "grok-4.6", "mai-code-1.1-flash", "gpt-6-astra"]) {
+			expect(ids).toContain(id);
+		}
+	});
+});
 
 describe("deferred model-selector preparation", () => {
 	it("lets Escape cancel a pending selector without opening it", async () => {
