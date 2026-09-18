@@ -81,7 +81,6 @@ export async function createProductionInteractiveHarness(columns = 60, rows = 24
 		}),
 		{ cwd: directory, agentDir: directory, sessionManager: SessionManager.inMemory(directory) },
 	);
-	vi.useFakeTimers();
 	const keybindings = vi.spyOn(KeybindingsManager, "create").mockImplementation(() => new KeybindingsManager());
 	let mode: InteractiveMode;
 	try {
@@ -92,6 +91,7 @@ export async function createProductionInteractiveHarness(columns = 60, rows = 24
 	await mode.init();
 	const internals = mode as unknown as InteractiveInternals;
 	if (!extensionUI) throw new Error("Production extension UI was not bound");
+	extensionUI.setWorkingIndicator({ frames: ["⠋"] });
 	return {
 		terminal,
 		mode,
@@ -101,14 +101,11 @@ export async function createProductionInteractiveHarness(columns = 60, rows = 24
 		// Await the real UI consumer; session subscriptions do not await async listeners.
 		emit: (event: AgentSessionEvent) => internals.handleEvent(event),
 		async frame() {
-			await vi.advanceTimersByTimeAsync(20);
-			await terminal.flush();
+			await internals.ui.commitNow({ requireFlush: true });
 			return terminal.visibleLines();
 		},
 		async dispose() {
 			mode.stop();
-			await vi.advanceTimersByTimeAsync(20);
-			vi.useRealTimers();
 			await runtime.dispose();
 			stopThemeWatcher();
 			onThemeChange(() => {});

@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-if os.environ.get("GITHUB_ACTIONS") != "true" or sys.platform != "darwin":
+if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" or sys.platform != "darwin":
     raise SystemExit("This probe is restricted to disposable GitHub-hosted macOS jobs")
 
 output = Path(sys.argv[1]).resolve()
@@ -153,7 +153,9 @@ finally:
             events("key", 13, 1048576)
         except Exception as error:
             report["cleanupError"] = str(error)
-    report["passed"] = bool(report["checks"]) and all(item["passed"] for item in report["checks"].values()) and "error" not in report and "cleanupError" not in report
+    report["passed"] = (bool(report["checks"]) and all(item["passed"] for item in report["checks"].values())
+                        and bool(report.get("screenshots")) and all(item["exit"] == 0 for item in report["screenshots"].values())
+                        and "error" not in report and "cleanupError" not in report)
     (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
