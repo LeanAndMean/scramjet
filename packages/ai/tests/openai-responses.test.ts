@@ -7,6 +7,32 @@ import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMe
 const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
 const openaiModel = getModel("openai", "gpt-6-astra");
 const copilotModel = getModel("github-copilot", "gpt-6-astra");
+const copilotHeaders = copilotModel.headers;
+
+function copilotResponsesModel(
+	id: string,
+	thinkingLevelMap: Model<"openai-responses">["thinkingLevelMap"],
+): Model<"openai-responses"> {
+	return {
+		...copilotModel,
+		id,
+		name: id,
+		thinkingLevelMap,
+	};
+}
+
+const grok46Model = copilotResponsesModel("grok-4.6", {
+	off: null,
+	minimal: null,
+	xhigh: "xhigh",
+	max: null,
+});
+const maiModel = copilotResponsesModel("mai-code-1.1-flash", {
+	off: null,
+	minimal: null,
+	xhigh: null,
+	max: null,
+});
 const apiKey = "test-key";
 
 const context: Context = {
@@ -203,6 +229,33 @@ describe.each([
 
 	it("streams a tool call and continues after its result", async () => {
 		await assertToolContinuation(model);
+	});
+});
+
+describe("GitHub Copilot exact Responses model contracts", () => {
+	it.each([
+		[grok46Model, "xhigh", "xhigh"],
+		[grok46Model, "minimal", "low"],
+		[maiModel, "high", "high"],
+		[maiModel, "xhigh", "high"],
+	] as const)("maps $0.id $1 to $2", async (model, reasoning, expected) => {
+		const requests = stubFetch([completedResponse()]);
+		await streamSimpleOpenAIResponses(model, context, {
+			apiKey,
+			reasoning: reasoning as ModelThinkingLevel,
+		}).result();
+		expect((await requestBody(requests[0])).reasoning).toEqual(expect.objectContaining({ effort: expected }));
+	});
+
+	it("streams a MAI tool call and continues with Copilot headers", async () => {
+		const requests = await assertToolContinuation(maiModel);
+		expect(requests[0].url).toBe("https://api.individual.githubcopilot.com/responses");
+		for (const [name, value] of Object.entries(copilotHeaders ?? {})) {
+			expect(requests[0].headers.get(name)).toBe(value);
+		}
+		expect(requests[0].headers.get("openai-intent")).toBe("conversation-edits");
+		expect(requests[0].headers.get("x-initiator")).toBe("user");
+		expect(requests[1].headers.get("x-initiator")).toBe("agent");
 	});
 });
 

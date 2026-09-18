@@ -7,16 +7,93 @@ const initialExitCode = process.exitCode;
 const { writeFileSync } = vi.hoisted(() => ({ writeFileSync: vi.fn() }));
 vi.mock("fs", async (importOriginal) => ({ ...(await importOriginal<typeof import("fs")>()), writeFileSync }));
 
-function feedModel(id: string, context: number) {
+function feedModel(id: string, context: number, overrides: Record<string, unknown> = {}) {
 	return {
 		id,
 		name: `Feed ${id}`,
 		tool_call: true,
 		reasoning: true,
 		limit: { context, output: 128000 },
+		modalities: { input: ["text", "image"] },
 		provider: { npm: id.startsWith("claude") ? "@ai-sdk/anthropic" : "@ai-sdk/openai" },
+		...overrides,
 	};
 }
+
+const copilotAdditions = {
+	"claude-fable-5.1": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
+	"claude-opus-5": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
+	"kimi-k3": {
+		api: "openai-completions",
+		contextWindow: 1048576,
+		maxInputTokens: 917504,
+		maxTokens: 131072,
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, medium: null, xhigh: null, max: "max" },
+	},
+	"gemini-3.6-flash": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, xhigh: null, max: null },
+	},
+	"gemini-3.7-flash": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 936000,
+		maxTokens: 64000,
+		cost: { input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+	"gemini-3.8-flash": {
+		api: "openai-completions",
+		contextWindow: 1048576,
+		maxInputTokens: 983040,
+		maxTokens: 65536,
+		cost: { input: 0.75, output: 3.75, cacheRead: 0.07, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+	"grok-4.5": {
+		api: "openai-responses",
+		contextWindow: 500000,
+		maxInputTokens: 372000,
+		maxTokens: 128000,
+		cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+	"grok-4.6": {
+		api: "openai-responses",
+		contextWindow: 500000,
+		maxInputTokens: 372000,
+		maxTokens: 128000,
+		cost: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: null },
+	},
+	"mai-code-1.1-flash": {
+		api: "openai-responses",
+		contextWindow: 256000,
+		maxInputTokens: 128000,
+		maxTokens: 128000,
+		cost: { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: null, max: null },
+	},
+} as const;
 
 async function generate(
 	present: boolean,
@@ -141,6 +218,18 @@ async function generate(
 					"github-copilot": {
 						models: {
 							"gpt-5.2-codex": feedModel("gpt-5.2-codex", 400000),
+							...Object.fromEntries(
+								Object.keys(copilotAdditions).map((id) => [
+									id,
+									feedModel(id, id === "gemini-3.8-flash" ? 1000000 : 200000),
+								]),
+							),
+							"deprecated-copilot-candidate": feedModel("deprecated-copilot-candidate", 200000, {
+								status: "deprecated",
+							}),
+							"no-tools-copilot-candidate": feedModel("no-tools-copilot-candidate", 200000, {
+								tool_call: false,
+							}),
 							...(present
 								? {
 										...models,
@@ -215,6 +304,38 @@ afterEach(() => {
 });
 
 describe("real generator context corrections", () => {
+	it("emits exact verified GitHub Copilot additions", async () => {
+		const models = (await generate(true))!["github-copilot"];
+		for (const [id, expected] of Object.entries(copilotAdditions)) {
+			expect(models[id], id).toMatchObject({
+				id,
+				provider: "github-copilot",
+				baseUrl: "https://api.individual.githubcopilot.com",
+				reasoning: true,
+				input: ["text", "image"],
+				headers: {
+					"User-Agent": "GitHubCopilotChat/0.35.0",
+					"Editor-Version": "vscode/1.107.0",
+					"Editor-Plugin-Version": "copilot-chat/0.35.0",
+					"Copilot-Integration-Id": "vscode-chat",
+					"X-GitHub-Api-Version": "2026-06-01",
+				},
+				...expected,
+			});
+			if (expected.api === "openai-completions") {
+				expect(models[id].compat).toEqual({
+					supportsStore: false,
+					supportsDeveloperRole: false,
+					supportsReasoningEffort: true,
+				});
+			} else {
+				expect(models[id]).not.toHaveProperty("compat");
+			}
+		}
+		expect(models["deprecated-copilot-candidate"]).toBeUndefined();
+		expect(models["no-tools-copilot-candidate"]).toBeUndefined();
+	});
+
 	it.each([true, false])("preserves route scope with feed-present=%s", async (present) => {
 		const models = (await generate(present))!;
 		expect(models.together["zai-org/GLM-5.2"].contextWindow).toBe(1000000);
