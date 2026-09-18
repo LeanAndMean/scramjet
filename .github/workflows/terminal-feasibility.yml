@@ -1,0 +1,38 @@
+name: Native terminal feasibility
+
+on:
+  push:
+    branches: [feature/issue-551-transient-tui-layout]
+    paths:
+      - .github/workflows/terminal-feasibility.yml
+      - .github/scripts/macos-terminal-*
+      - packages/scramjet/tests/fixtures/interactive-viewport.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apple-terminal:
+    runs-on: macos-15
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Probe native Apple Terminal
+        run: python3 .github/scripts/macos-terminal-probe.py "$RUNNER_TEMP/terminal-evidence"
+      - name: Preserve feasibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-terminal-feasibility
+          path: ${{ runner.temp }}/terminal-evidence
+          if-no-files-found: error
+          retention-days: 7

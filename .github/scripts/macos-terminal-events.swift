@@ -1,0 +1,68 @@
+import AppKit
+import ApplicationServices
+import Foundation
+
+func emit(_ value: Any) {
+    let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+    print(String(data: data, encoding: .utf8)!)
+}
+
+func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+}
+
+func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
+    if depth > 10 { return [] }
+    var result: [[String: Any]] = []
+    if let role = attribute(element, kAXRoleAttribute) as? String,
+       let position = attribute(element, kAXPositionAttribute),
+       let size = attribute(element, kAXSizeAttribute),
+       CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() {
+        var point = CGPoint.zero
+        var dimensions = CGSize.zero
+        AXValueGetValue(position as! AXValue, .cgPoint, &point)
+        AXValueGetValue(size as! AXValue, .cgSize, &dimensions)
+        result.append(["role": role, "x": point.x, "y": point.y, "width": dimensions.width, "height": dimensions.height])
+    }
+    for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+        result += geometry(child, depth: depth + 1)
+    }
+    return result
+}
+
+let args = CommandLine.arguments
+switch args[1] {
+case "capabilities":
+    emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
+          "screenCapture": CGPreflightScreenCaptureAccess()])
+case "geometry":
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else {
+        fatalError("Terminal is not running")
+    }
+    emit(geometry(AXUIElementCreateApplication(app.processIdentifier)))
+case "key":
+    let code = CGKeyCode(args[2])!
+    let flags = CGEventFlags(rawValue: UInt64(args[3])!)
+    for down in [true, false] {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
+        event.flags = flags
+        event.post(tap: .cghidEventTap)
+        usleep(50_000)
+    }
+case "mouse":
+    let point = CGPoint(x: Double(args[3])!, y: Double(args[4])!)
+    let actions: [String: (CGEventType, CGMouseButton)] = [
+        "move": (.mouseMoved, .left), "down": (.leftMouseDown, .left),
+        "drag": (.leftMouseDragged, .left), "up": (.leftMouseUp, .left),
+        "rightDown": (.rightMouseDown, .right), "rightUp": (.rightMouseUp, .right)
+    ]
+    let (kind, button) = actions[args[2]]!
+    CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: point, mouseButton: button)!.post(tap: .cghidEventTap)
+case "wheel":
+    let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
+                        wheel1: Int32(args[2])!, wheel2: 0, wheel3: 0)!
+    event.post(tap: .cghidEventTap)
+default:
+    fatalError("Unknown event operation")
+}

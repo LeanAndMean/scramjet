@@ -1,3 +1,4 @@
+import { renameSync, writeFileSync } from "node:fs";
 import { release, platform } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { StdinBuffer, truncateToWidth, visibleWidth } from "../../../tui/dist/index.js";
@@ -48,6 +49,14 @@ let editor = "";
 let cursor = 0;
 let stopped = false;
 let copying = false;
+let lastMouse;
+const evidencePath = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
+function record() {
+	if (!evidencePath) return;
+	writeFileSync(`${evidencePath}.tmp`, JSON.stringify({ ...evidence, columns: process.stdout.columns,
+		rows: process.stdout.rows, offset, selection, lastMouse, editor, stopped }));
+	renameSync(`${evidencePath}.tmp`, evidencePath);
+}
 const height = () => Math.max(1, process.stdout.rows - 3);
 const maximum = () => Math.max(0, lines.length - height());
 function point(x, y) {
@@ -99,6 +108,7 @@ function paint() {
 	output += `\x1b[2K${truncateToWidth(status, width)}\r\n\x1b[2K${truncateToWidth(navigation, width)}\r\n`;
 	output += `\x1b[2KEditor: ${editor.slice(0, width - 8)}`;
 	process.stdout.write(output);
+	record();
 }
 async function copy(kind) {
 	const text = selectedText();
@@ -125,6 +135,7 @@ function stop() {
 	process.stdin.pause();
 	process.stdin.off("data", receive);
 	input.destroy();
+	record();
 	console.log(JSON.stringify(evidence, null, 2));
 	console.log("Add manual observations and exact emulator/multiplexer versions. Missing results are not passes.");
 }
@@ -147,6 +158,7 @@ input.on("data", (data) => {
 		if (process.stdout.columns < 60 || process.stdout.rows < 12) return;
 		const [, code, column, row, action] = mouse;
 		const [button, x, y] = [Number(code), Number(column), Number(row)];
+		lastMouse = { button, x, y, action };
 		if (x < 1 || x > process.stdout.columns || y < 1 || y > height()) return;
 		if (button === 64 || button === 65) { offset += button === 64 ? -3 : 3; evidence.wheel++; }
 		else if (action === "m") gesture = undefined;
