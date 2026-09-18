@@ -311,6 +311,7 @@ export class TUI extends Container {
 	// SCRAMJET-DIVERGENCE: opt-in retained rendering stays independent of native-history modes.
 	configureViewport(options: ViewportOptions): void {
 		if (this.liveRegionStart) throw new Error("Cannot configure a viewport with a committed live region");
+		if (!this.terminal.setViewportMode) throw new Error("Terminal must support viewport mode");
 		this.viewport?.cancelInteraction();
 		this.removeViewportInput?.();
 		this.viewport = new RetainedViewport(options, () => this.requestRender());
@@ -551,8 +552,10 @@ export class TUI extends Container {
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
-		if (this.viewport) this.enterViewportMode();
-		this.previousLines = [];
+		if (this.viewport) {
+			this.enterViewportMode();
+			this.previousLines = [];
+		}
 		this.terminal.hideCursor();
 		this.queryCellSize();
 		this.requestRender();
@@ -1307,6 +1310,7 @@ export class TUI extends Container {
 
 	private doViewportRender(): void {
 		const viewport = this.viewport!;
+		if (this.hasOverlay()) viewport.cancelInteraction();
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 		const contentWidth = Math.max(1, width - 1);

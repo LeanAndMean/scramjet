@@ -234,6 +234,33 @@ describe("viewport interactions", () => {
 		}
 	});
 
+	it("stops edge autoscroll when an overlay takes over the screen", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const { tui, terminal, frame } = await setup(
+			[{ component: new Rows(Array.from({ length: 50 }, (_, i) => `row-${i}`)) }],
+			31,
+			5,
+		);
+		tui.scrollViewportTo(10);
+		await frame();
+		terminal.sendInput(mouse(0, 1, 2));
+		terminal.sendInput(mouse(32, 6, 5));
+		tui.showOverlay(new Rows(["modal"]));
+		await frame();
+		const offset = tui.getViewportState()?.offset;
+		await vi.advanceTimersByTimeAsync(250);
+		expect(tui.getViewportState()?.offset).toBe(offset);
+	});
+
+	it("rejects an unsupported terminal before configuring or starting viewport protocols", () => {
+		const terminal = new HeadlessTerminal();
+		Object.defineProperty(terminal, "setViewportMode", { value: undefined });
+		const tui = new TUI(terminal);
+		expect(() => tui.configureViewport({ getBlocks: () => [] })).toThrow("Terminal must support viewport mode");
+		expect(tui.getViewportState()).toBeUndefined();
+		expect(terminal.writes).toEqual([]);
+	});
+
 	it("consumes malformed, out-of-bounds and unsupported pointer events without editor dispatch", async () => {
 		const { tui, terminal } = await setup([{ component: new Rows(["one"]) }]);
 		const handleInput = vi.fn();
