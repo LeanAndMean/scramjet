@@ -30,7 +30,7 @@ $title = "ScramjetProbe-$PID"
 $window = $null
 $handle = [IntPtr]::Zero
 $heldButtons = 0
-$report = [ordered]@{ scope = 'Windows Terminal / WSL native desktop feasibility'; checks = [ordered]@{} }
+$report = [ordered]@{ scope = 'Windows Terminal / WSL actual retained TUI candidate interactions'; checks = [ordered]@{} }
 $statePath = Join-Path $OutputDirectory 'fixture.json'
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 
@@ -115,6 +115,7 @@ try {
     $rect = $textElement.Current.BoundingRectangle
     $columns = (State).columns
     $rows = (State).rows
+    [void](Check 'actualCandidateConfigured' { (State).candidate -eq $true -and (State).totalRows -eq 203 })
     $cellWidth = [Math]::Floor($rect.Width / $columns)
     $first = @(($rect.X + ($rect.Width % $columns) / 2), ($rect.Y + ($rect.Height % $rows) / 2), 0, ([Math]::Floor($rect.Height / $rows)))
     if ($cellWidth -le 0 -or $first[3] -le 0) { throw 'Terminal grid bounds unavailable' }
@@ -136,7 +137,7 @@ try {
     Mouse 2048 $point[0] $point[1] -360
     [void](Check 'desktopWheelScrollsDocument' { (State).wheel -gt 0 -and (State).offset -gt 0 })
     Screenshot 'wheel'
-    Drag (Cell $columns 1) (Cell $columns ($rows - 3))
+    Drag (Cell $columns 1) (Cell $columns $rows)
     [void](Check 'desktopThumbDragReachesEnd' { (State).thumbDrag -gt 0 -and (State).offset -eq (200 - ($rows - 3)) })
     $point = Cell $columns 1
     Mouse 2 $point[0] $point[1]
@@ -152,6 +153,10 @@ try {
     [void](Check 'rightClickRequestsCopy' { (State).rightCopy -gt 0 })
     [void](Check 'rightClickClipboardExactUnicode' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
     Screenshot 'right-click'
+    Mouse 8 $point[0] $point[1]
+    Mouse 16 $point[0] $point[1]
+    [void](Check 'rightWithoutSelectionDoesNotCopyOrPaste' { (State).rightWithoutSelection -gt 0 -and (State).rightCopy -eq 1 -and (State).editor -ceq '' })
+    Drag (Cell 1 1) (Cell 60 1)
     [System.Windows.Forms.Clipboard]::SetText('SCRAMJET-PROBE-SENTINEL')
     Key 67 @(17)
     [void](Check 'controlCCopiesSelection' { (State).keyCopy -gt 0 -and [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
@@ -177,7 +182,7 @@ try {
     }
     [void][ProbeDesktop]::SetCursorPos($previousPointer.X, $previousPointer.Y)
     [void][ProbeDesktop]::SetForegroundWindow($previousWindow)
-    $report.passed = $report.checks.Count -eq 12 -and @($report.checks.Values | Where-Object { -not $_.passed }).Count -eq 0 -and -not $report.Contains('error') -and -not $report.Contains('cleanupError')
+    $report.passed = $report.checks.Count -eq 14 -and @($report.checks.Values | Where-Object { -not $_.passed }).Count -eq 0 -and -not $report.Contains('error') -and -not $report.Contains('cleanupError')
     [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'report.json'), ($report | ConvertTo-Json -Depth 10))
     $report | ConvertTo-Json -Depth 10
 }

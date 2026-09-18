@@ -18,7 +18,7 @@ output.mkdir(parents=True, exist_ok=True)
 root = Path.cwd()
 state_path = output / "fixture.json"
 driver = output / "desktop-events"
-report = {"scope": "Native terminal desktop feasibility, not production viewport acceptance", "tmux": with_tmux, "checks": {}}
+report = {"scope": "Actual retained TUI candidate interactions; not production activation", "tmux": with_tmux, "checks": {}}
 terminal_started = False
 window_id = None
 terminal_process = None
@@ -153,6 +153,7 @@ try:
         raise RuntimeError("Terminal did not start the fixture in a TTY")
     time.sleep(1)
     columns, rows = state()["columns"], state()["rows"]
+    check("actualCandidateConfigured", lambda: state().get("candidate") is True and state().get("totalRows") == 203)
     if is_mac:
         geometry = json.loads(events("geometry"))
         areas = [item for item in geometry if item["role"] == "AXTextArea"]
@@ -195,7 +196,7 @@ try:
     events("wheel", -3)
     check("desktopWheelScrollsDocument", lambda: state().get("wheel", 0) > 0 and state().get("offset", 0) > 0)
     screenshot("wheel")
-    drag(cell(columns, 1), cell(columns, rows - 3))
+    drag(cell(columns, 1), cell(columns, rows))
     check("desktopThumbDragReachesEnd", lambda: state().get("thumbDrag", 0) > 0 and state().get("offset") == 200 - (rows - 3))
     mouse("down", *cell(columns, 1))
     mouse("up", *cell(columns, 1))
@@ -212,6 +213,10 @@ try:
     if not right_copied:
         key("escape")
         time.sleep(0.6)
+    mouse("rightDown", *cell(10, 1))
+    mouse("rightUp", *cell(10, 1))
+    check("rightWithoutSelectionDoesNotCopyOrPaste", lambda: state().get("rightWithoutSelection", 0) > 0 and state().get("rightCopy") == 1 and state().get("editor") == "")
+    drag(cell(1, 1), cell(60, 1))
     seed_clipboard("SCRAMJET-PROBE-SENTINEL")
     key("copy")
     check("controlCCopiesSelection", lambda: state().get("keyCopy", 0) > 0 and clipboard() == expected)

@@ -61,6 +61,9 @@ export class HeadlessTerminal implements TerminalContract {
 	}
 	setProgress(): void {}
 	holdOscInput(): void {}
+	setViewportMode(enabled: boolean): void {
+		this.write(enabled ? "\x1b[?1049h\x1b[?1002h\x1b[?1006h" : "\x1b[?1002l\x1b[?1006l\x1b[?1049l");
+	}
 
 	async flush(): Promise<void> {
 		await this.pending;

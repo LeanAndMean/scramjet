@@ -1,199 +1,133 @@
 import { execFileSync } from "node:child_process";
 import { renameSync, writeFileSync } from "node:fs";
 import { release, platform } from "node:os";
-import { StringDecoder } from "node:string_decoder";
-import { StdinBuffer, truncateToWidth, visibleWidth } from "../../../tui/dist/index.js";
+import { ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
 
-const help = `Isolated terminal protocol proof for #551; NOT the production viewport.
+const help = `Retained TUI candidate interaction fixture for #551; NOT production activation.
 Run from the repository after npm run build:
   node packages/scramjet/tests/fixtures/interactive-viewport.mjs
 No models, extensions, settings files, or existing clipboard reads.
 Copy actions overwrite the clipboard with selected synthetic text.
 Requires at least 60 columns and 12 rows. Ctrl+Q exits and restores the shell.
 
-Record terminal name/version, OS/version, relevant terminal configuration,
-and tmux version/configuration (if present) alongside the printed counters.
-1. Wheel/trackpad up/down: labelled rows should move without typing arrows.
-2. Drag the rightmost thumb to the beginning/middle/end of the 200-row document.
-3. Drag-select synthetic Unicode text without modifiers; right-click selection.
-4. Paste into a scratch desktop editor; compare exact Unicode text and line breaks.
-5. Paste back here: only equality is recorded, never pasted content.
-6. Repeat copying with Ctrl+C. Right-click with no selection: record menu behavior.
-7. Type and use left/right/backspace: editor text should coexist with pointer input.
-8. Resize, then Ctrl+Q: original shell buffer, cursor, and cooked input should return.
-Record each expected/observed result, including missing reports or failed copy.
-Counters prove input receipt only; they do not prove desktop interaction success.
-This proof does not cover production reflow, live-card anchoring, graphics,
-selection edge autoscroll, suspension, or external-editor handoffs.`;
+Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
+1. Wheel/trackpad: labelled rows move without typing arrows.
+2. Drag the rightmost thumb to the beginning/middle/end; click the track.
+3. Drag-select Unicode without modifiers, including across the screen edge.
+4. Right-click selection; independently compare exact desktop clipboard text.
+5. Select again and Ctrl+C; successful copying clears the selection.
+6. Paste back here: only equality is recorded, never pasted content.
+7. Detached PageUp/PageDown/Home/End/Escape browse; other keys reveal the editor.
+8. Type and use arrows/backspace; at-tail PageUp belongs to the focused component.
+9. Right-click without selection does nothing in the application; terminal menus
+   are emulator-owned and cannot see application selection.
+10. Ctrl+U changes a synthetic row while selecting: held text/highlight remain,
+    pending updates are indicated; clear/copy reconciles. Resize cancels selection.
+11. Ctrl+Q restores the original shell buffer and terminal modes.
+Record emulator/OS/multiplexer versions and configuration with observed results.
+Counters prove receipt only, not desktop interaction or clipboard acceptance.
+Production composition, graphics, approval and temporary handoffs remain later work.`;
 if (process.argv.includes("--help")) {
 	console.log(help);
 	process.exit(0);
 }
-if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an interactive terminal; use --help for instructions");
+if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an interactive terminal; use --help");
 if (process.stdout.columns < 60 || process.stdout.rows < 12) throw new Error("Resize to at least 60 columns and 12 rows");
 
 const lines = Array.from({ length: 200 }, (_, i) => `ROW-${String(i + 1).padStart(3, "0")} synthetic café 界 e\u0301 text`);
-const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const input = new StdinBuffer();
-const decoder = new StringDecoder("utf8");
-const oldRaw = process.stdin.isRaw;
-const evidence = { platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM,
-	terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), wheel: 0, thumbDrag: 0,
-	selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0 };
-let offset = 0;
-let selection;
-let gesture;
+const evidence = { candidate: true, platform: platform(), release: release(), term: process.env.TERM,
+	terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX),
+	wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0,
+	copyErrors: 0, pasteMatches: 0, pasteMismatches: 0 };
 let copied;
-let status = "Read --help first. Copy overwrites clipboard. Ctrl+Q exits.";
+let copyKind;
+let status = "Candidate viewport; copy replaces clipboard; Ctrl+Q exits.";
 let editor = "";
 let cursor = 0;
 let stopped = false;
-let copying = false;
 let lastMouse;
 let termiosBefore;
 let termiosAfter;
+let thumbGesture = false;
 const mouseSamples = [];
 const ttyState = () => execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 const evidencePath = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
+const terminal = new ProcessTerminal();
+const tui = new TUI(terminal);
 function record() {
 	if (!evidencePath) return;
-	writeFileSync(`${evidencePath}.tmp`, JSON.stringify({ ...evidence, columns: process.stdout.columns,
-		rows: process.stdout.rows, offset, selection, lastMouse, mouseSamples, editor, stopped, termiosBefore, termiosAfter }));
+	const viewport = tui.getViewportState();
+	writeFileSync(`${evidencePath}.tmp`, JSON.stringify({ ...evidence, columns: terminal.columns, rows: terminal.rows,
+		offset: viewport?.offset, totalRows: viewport?.totalRows, followingTail: viewport?.followingTail,
+		lastMouse, mouseSamples, editor, stopped, termiosBefore, termiosAfter }));
 	renameSync(`${evidencePath}.tmp`, evidencePath);
 }
-const height = () => Math.max(1, process.stdout.rows - 3);
-const maximum = () => Math.max(0, lines.length - height());
-function point(x, y) {
-	const row = Math.max(0, Math.min(lines.length - 1, offset + y - 1));
-	let column = 0;
-	let index = 0;
-	for (const { segment } of segments.segment(lines[row])) {
-		if (column + visibleWidth(segment) > x - 1) break;
-		column += visibleWidth(segment);
-		index += segment.length;
+const content = { invalidate() {}, render: (width) => lines.map((line) => truncateToWidth(line, width)) };
+const controls = {
+	invalidate() {},
+	render: (width) => [status, "Wheel/drag to browse; select then right-click/Ctrl+C; Ctrl+Q exits", `Editor: ${editor}`].map((line) => truncateToWidth(line, width)),
+	handleInput(data) {
+		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+			const text = data.slice(6, -6);
+			if (copied !== undefined && text === copied) { evidence.pasteMatches++; status = "Synthetic clipboard round-trip MATCH."; }
+			else { evidence.pasteMismatches++; status = "Clipboard mismatch; content not recorded."; }
+		} else if (data === "\x1b[D") cursor = Math.max(0, cursor - 1);
+		else if (data === "\x1b[C") cursor = Math.min(editor.length, cursor + 1);
+		else if (data === "\x7f" && cursor > 0) { editor = editor.slice(0, cursor - 1) + editor.slice(cursor); cursor--; }
+		else if (/^[\x20-\x7e]$/.test(data)) { editor = editor.slice(0, cursor) + data + editor.slice(cursor); cursor++; }
 	}
-	return { row, index };
-}
-function ordered() {
-	if (!selection) return undefined;
-	const { start, end } = selection;
-	return start.row < end.row || (start.row === end.row && start.index <= end.index) ? [start, end] : [end, start];
-}
-function selectedText() {
-	const range = ordered();
-	if (!range) return "";
-	const [start, end] = range;
-	return lines.slice(start.row, end.row + 1).map((line, i) =>
-		line.slice(i === 0 ? start.index : 0, start.row + i === end.row ? end.index : undefined)).join("\n");
-}
-function paint() {
-	if (stopped) return;
-	if (process.stdout.columns < 60 || process.stdout.rows < 12) {
-		process.stdout.write(`\x1b[H\x1b[2J${truncateToWidth("Resize to 60x12 or larger; Ctrl+Q exits", Math.max(1, process.stdout.columns - 1))}`);
-		return;
+};
+tui.addInputListener((data) => {
+	if (data === "\x11") { stop(); return { consume: true }; }
+	if (data === "\x15") { lines[0] = "ROW-001 updated synthetic content"; tui.requestRender(); return { consume: true }; }
+	if (data === "\x03") copyKind = "keyCopy";
+	const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+	if (mouse) {
+		const [button, x, y] = mouse.slice(1, 4).map(Number);
+		lastMouse = { button, x, y, action: mouse[4] };
+		mouseSamples.push(lastMouse);
+		if (mouseSamples.length > 64) mouseSamples.shift();
+		if (button === 64 || button === 65) evidence.wheel++;
+		if (button === 0 && mouse[4] === "M") thumbGesture = x === terminal.columns;
+		if (button === 32) evidence[thumbGesture ? "thumbDrag" : "selectionDrag"]++;
+		if (button === 2 && mouse[4] === "M") { copyKind = "rightCopy"; evidence.rightWithoutSelection++; }
+		if (mouse[4] === "m") thumbGesture = false;
 	}
-	offset = Math.max(0, Math.min(maximum(), offset));
-	const range = ordered();
-	const thumb = Math.round(offset / Math.max(1, maximum()) * (height() - 1));
-	let output = "\x1b[H";
-	for (let y = 0; y < height(); y++) {
-		const row = offset + y;
-		const plain = lines[row] ?? "";
-		let text = plain;
-		if (range && row >= range[0].row && row <= range[1].row) {
-			const start = row === range[0].row ? range[0].index : 0;
-			const end = row === range[1].row ? range[1].index : plain.length;
-			text = `${plain.slice(0, start)}\x1b[7m${plain.slice(start, end)}\x1b[0m${plain.slice(end)}`;
-		}
-		output += `\x1b[2K${text}\x1b[${y + 1};${process.stdout.columns}H${y === thumb ? "█" : "│"}\r\n`;
+});
+tui.configureViewport({
+	getBlocks: () => [{ component: content }, { component: controls }],
+	async copy(text) {
+		const kind = copyKind;
+		try {
+			await copyToClipboard(text);
+			copied = text;
+			evidence[kind]++;
+			if (kind === "rightCopy") evidence.rightWithoutSelection--;
+			status = "Copy requested; verify desktop equality. OSC 52 emission is not proof.";
+		} catch (error) { evidence.copyErrors++; throw error; }
 	}
-	const width = Math.max(1, process.stdout.columns - 1);
-	const navigation = `Rows ${offset + 1}-${Math.min(lines.length, offset + height())}/200; right-click/Ctrl+C copy; Ctrl+Q exit`;
-	output += `\x1b[2K${truncateToWidth(status, width)}\r\n\x1b[2K${truncateToWidth(navigation, width)}\r\n`;
-	output += `\x1b[2KEditor: ${editor.slice(0, width - 8)}`;
-	process.stdout.write(output);
-	record();
-}
-async function copy(kind) {
-	const text = selectedText();
-	if (!text || copying) return;
-	copying = true;
-	try {
-		await copyToClipboard(text);
-		copied = text;
-		evidence[kind]++;
-		status = "Copy requested; verify desktop paste, then paste here. OSC 52 is not proof.";
-	} catch {
-		evidence.copyErrors++;
-		status = "Copy failed; selection retained.";
-	} finally {
-		copying = false;
-		paint();
-	}
-}
+});
+tui.setFocus(controls);
+const recordTimer = setInterval(record, 50);
 function stop() {
 	if (stopped) return;
 	stopped = true;
-	process.stdout.write("\x1b[?1002l\x1b[?1006l\x1b[?2004l\x1b[0m\x1b[?25h\x1b[?1049l");
-	process.stdin.setRawMode(oldRaw);
-	process.stdin.pause();
-	process.stdin.off("data", receive);
-	input.destroy();
+	clearInterval(recordTimer);
+	tui.stop();
 	if (evidencePath) termiosAfter = ttyState();
 	record();
 	console.log(JSON.stringify(evidence, null, 2));
-	console.log("Add manual observations and exact emulator/multiplexer versions. Missing results are not passes.");
+	console.log("Candidate checks only; missing environment or behavioral evidence is not a pass.");
 }
-function receive(data) { input.process(decoder.write(data)); }
-input.on("paste", (text) => {
-	if (copied !== undefined && text === copied) {
-		evidence.pasteMatches++;
-		status = "Synthetic clipboard round-trip MATCH.";
-	} else {
-		evidence.pasteMismatches++;
-		status = "Clipboard round-trip mismatch or no preceding copy; content not recorded.";
-	}
-	paint();
-});
-input.on("data", (data) => {
-	if (data === "\x11") return stop();
-	if (data === "\x03") { void copy("keyCopy"); return; }
-	const mouse = /^\x1b\[<(\d{1,3});(\d{1,5});(\d{1,5})([Mm])$/.exec(data);
-	if (mouse) {
-		if (process.stdout.columns < 60 || process.stdout.rows < 12) return;
-		const [, code, column, row, action] = mouse;
-		const [button, x, y] = [Number(code), Number(column), Number(row)];
-		lastMouse = { button, x, y, action };
-		if (evidencePath) { mouseSamples.push(lastMouse); if (mouseSamples.length > 64) mouseSamples.shift(); }
-		if (x < 1 || x > process.stdout.columns || y < 1 || y > height()) return;
-		if (button === 64 || button === 65) { offset += button === 64 ? -3 : 3; evidence.wheel++; }
-		else if (action === "m") gesture = undefined;
-		else if (button === 2) {
-			if (selectedText()) void copy("rightCopy");
-			else { evidence.rightWithoutSelection++; status = "Right button received without selection; no paste action."; }
-		} else if (button === 0) {
-			if (x === process.stdout.columns) gesture = "thumb";
-			else { gesture = "selection"; selection = { start: point(x, y), end: point(x, y) }; }
-		}
-		if (gesture === "thumb" && (button === 0 || button === 32)) {
-			offset = Math.round((y - 1) / Math.max(1, height() - 1) * maximum()); evidence.thumbDrag++;
-		} else if (gesture === "selection" && button === 32) { selection.end = point(x, y); evidence.selectionDrag++; }
-	} else if (data === "\x1b[D") cursor = Math.max(0, cursor - 1);
-	else if (data === "\x1b[C") cursor = Math.min(editor.length, cursor + 1);
-	else if (data === "\x7f" && cursor > 0) { editor = editor.slice(0, cursor - 1) + editor.slice(cursor); cursor--; }
-	else if (/^[\x20-\x7e]$/.test(data)) { editor = editor.slice(0, cursor) + data + editor.slice(cursor); cursor++; }
-	paint();
-});
 process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
 process.once("SIGHUP", stop);
 process.once("uncaughtException", (error) => { stop(); console.error(error); process.exitCode = 1; });
 process.once("exit", stop);
-process.stdout.on("resize", paint);
 if (evidencePath) termiosBefore = ttyState();
-process.stdin.setRawMode(true);
-process.stdin.on("data", receive);
-process.stdin.resume();
-process.stdout.write("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?25l");
-paint();
+tui.start();
+await tui.renderNow({ requireFlush: true });
+tui.scrollViewportTo(0);
+await tui.renderNow({ requireFlush: true });
+record();

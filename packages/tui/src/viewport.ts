@@ -1,8 +1,10 @@
 // SCRAMJET-DIVERGENCE: retained component rows and content-relative reading anchors.
 import { diffArrays } from "diff";
+import { getKeybindings, type KeybindingsManager } from "./keybindings.js";
+import { isKeyRelease, matchesKey } from "./keys.js";
 import { isImageLine } from "./terminal-image.js";
 import type { Component } from "./tui.js";
-import { extractAnsiCode, getSegmenter, truncateToWidth, visibleWidth } from "./utils.js";
+import { extractAnsiCode, getSegmenter, sliceByColumn, truncateToWidth, visibleWidth } from "./utils.js";
 
 export interface ViewportBlock {
 	component: Component;
@@ -13,6 +15,8 @@ export interface ViewportBlock {
 
 export interface ViewportOptions {
 	getBlocks(): readonly ViewportBlock[];
+	keybindings?: KeybindingsManager;
+	copy?(text: string): Promise<void>;
 }
 
 export interface ViewportState {
@@ -114,6 +118,24 @@ function mapAnchor(anchor: Anchor, old: RenderedBlock, next: RenderedBlock): Anc
 	return rows ? { ...anchor, row: rows.position, grapheme: 0 } : undefined;
 }
 
+interface SelectionPoint {
+	row: number;
+	column: number;
+}
+
+function plainText(line: string): string {
+	let result = "";
+	for (let i = 0; i < line.length; ) {
+		const ansi = extractAnsiCode(line, i);
+		if (ansi) i += ansi.length;
+		else {
+			const char = line[i++];
+			if (char >= " " && !(char >= "\x7f" && char <= "\x9f")) result += char;
+		}
+	}
+	return result;
+}
+
 interface ImagePlacement {
 	sequence: string;
 	row: number;
@@ -156,8 +178,209 @@ export class RetainedViewport {
 	private height = 0;
 	private totalRows = 0;
 	private followingTail = true;
+	private width = 0;
+	private screenHeight = 0;
+	private logical: string[] = [];
+	private selection: { start: SelectionPoint; end: SelectionPoint } | undefined;
+	private pendingUpdates = false;
+	private copyError: string | undefined;
+	private copying = false;
+	private gesture:
+		| { kind: "thumb"; grab: number; travel: number; maximum: number }
+		| { kind: "selection" }
+		| undefined;
+	private edgeTimer: ReturnType<typeof setInterval> | undefined;
+	private edgeDirection = 0;
+	private pointerColumn = 0;
 
-	constructor(private readonly options: ViewportOptions) {}
+	constructor(
+		private readonly options: ViewportOptions,
+		private readonly requestRender: () => void = () => {},
+	) {}
+
+	get notice(): string | undefined {
+		if (!this.selection) return undefined;
+		if (this.copyError) return `Copy failed: ${this.copyError}; selection retained`;
+		if (this.copying) return "Copying selection…";
+		return this.pendingUpdates ? "updates pending; Esc clears" : "Selection held; Esc clears";
+	}
+
+	cancelInteraction(): void {
+		this.endGesture();
+		this.selection = undefined;
+		this.copyError = undefined;
+		this.copying = false;
+		this.pendingUpdates = false;
+	}
+
+	private endGesture(): void {
+		this.gesture = undefined;
+		if (this.edgeTimer) clearInterval(this.edgeTimer);
+		this.edgeTimer = undefined;
+	}
+
+	private point(x: number, y: number): SelectionPoint {
+		const row = Math.max(0, Math.min(this.totalRows - 1, this.offset + Math.min(y, this.height - 1)));
+		const text = plainText(this.logical[row] ?? "");
+		let column = 0;
+		for (const { segment } of getSegmenter().segment(text)) {
+			const size = visibleWidth(segment);
+			if (column + size > x) break;
+			column += size;
+		}
+		return { row, column };
+	}
+
+	private selectionRange(): [SelectionPoint, SelectionPoint] | undefined {
+		if (!this.selection) return undefined;
+		const { start, end } = this.selection;
+		return start.row < end.row || (start.row === end.row && start.column <= end.column) ? [start, end] : [end, start];
+	}
+
+	private selectedText(): string {
+		const range = this.selectionRange();
+		if (!range) return "";
+		const [start, end] = range;
+		return this.logical
+			.slice(start.row, end.row + 1)
+			.map((line, index) => {
+				if (isImageLine(line)) return "";
+				const left = index === 0 ? start.column : 0;
+				const right = start.row + index === end.row ? end.column : visibleWidth(line);
+				return plainText(sliceByColumn(line, left, Math.max(0, right - left), true));
+			})
+			.join("\n");
+	}
+
+	private async copySelection(): Promise<void> {
+		const text = this.selectedText();
+		if (!text || this.copying) return;
+		const selection = this.selection;
+		this.copying = true;
+		this.endGesture();
+		try {
+			if (!this.options.copy) throw new Error("No clipboard callback configured");
+			await this.options.copy(text);
+			if (this.selection !== selection) return;
+			this.cancelInteraction();
+		} catch (error) {
+			if (this.selection !== selection) return;
+			this.copyError = plainText(error instanceof Error ? error.message : String(error));
+			this.copying = false;
+		}
+		this.requestRender();
+	}
+
+	handleInput(data: string, overlayFocused: boolean, overlayVisible: boolean): boolean {
+		if (data.startsWith("\x1b[<") || data.startsWith("\x1b[M")) {
+			if (overlayVisible) {
+				this.endGesture();
+				return true;
+			}
+			const match = /^\x1b\[<(\d{1,3});(\d{1,5});(\d{1,5})([Mm])$/.exec(data);
+			if (!match) return true;
+			const [button, x, y] = match.slice(1, 4).map(Number);
+			if (x < 1 || x > this.width + 1 || y < 1 || y > this.screenHeight) return true;
+			if (match[4] === "m") {
+				const wasThumb = this.gesture?.kind === "thumb";
+				this.endGesture();
+				if (wasThumb) this.scrollTo(this.offset);
+				if (this.selection && !this.selectedText()) this.cancelInteraction();
+				this.requestRender();
+				return true;
+			}
+			if (button === 64 || button === 65) {
+				this.scrollTo(this.offset + (button === 64 ? -3 : 3));
+			} else if (button === 2) {
+				void this.copySelection();
+			} else if (button === 0) {
+				this.endGesture();
+				if (x === this.width + 1) {
+					this.cancelInteraction();
+					this.height = this.screenHeight;
+					const { size, top } = this.thumb();
+					const grab = y - 1 >= top && y - 1 < top + size ? y - 1 - top : Math.floor(size / 2);
+					this.gesture = { kind: "thumb", grab, travel: this.height - size, maximum: this.maxOffset };
+					this.dragThumb(y - 1);
+				} else if (y <= this.height && this.totalRows > 0 && this.screenHeight > 1) {
+					this.cancelInteraction();
+					const point = this.point(x - 1, y - 1);
+					this.selection = { start: point, end: point };
+					this.followingTail = false;
+					this.anchor = this.anchorAt(this.offset, 0);
+					this.height = Math.max(1, this.screenHeight - 1);
+					if (point.row >= this.offset + this.height) this.scrollTo(this.offset + 1);
+					this.gesture = { kind: "selection" };
+				}
+			} else if (button === 32) {
+				if (this.gesture?.kind === "thumb") this.dragThumb(y - 1);
+				else if (this.gesture?.kind === "selection" && this.selection) {
+					this.pointerColumn = Math.min(x - 1, this.width);
+					this.selection.end = this.point(this.pointerColumn, y - 1);
+					this.edgeDirection = y >= this.height ? 1 : y === 1 ? -1 : 0;
+					if (!this.edgeTimer)
+						this.edgeTimer = setInterval(() => {
+							if (!this.selection || !this.edgeDirection) return;
+							this.scrollTo(this.offset + this.edgeDirection);
+							this.selection.end = this.point(this.pointerColumn, this.edgeDirection > 0 ? this.height - 1 : 0);
+							this.requestRender();
+						}, 80);
+				}
+			}
+			this.requestRender();
+			return true;
+		}
+		if (overlayFocused || isKeyRelease(data) || /^\x1b\[\d+;\d+;\d+t$/.test(data)) return false;
+		if (this.selectedText() && (this.options.keybindings ?? getKeybindings()).matches(data, "tui.input.copy")) {
+			void this.copySelection();
+			this.requestRender();
+			return true;
+		}
+		const detached = !this.followingTail;
+		if (matchesKey(data, "escape") && this.selection) {
+			this.cancelInteraction();
+			this.scrollTo(this.maxOffset);
+			this.requestRender();
+			return true;
+		}
+		if (detached) {
+			if (matchesKey(data, "pageUp")) this.scrollTo(this.offset - this.height);
+			else if (matchesKey(data, "pageDown")) this.scrollTo(this.offset + this.height);
+			else if (matchesKey(data, "home")) this.scrollTo(0);
+			else {
+				this.cancelInteraction();
+				this.scrollTo(this.maxOffset);
+				this.requestRender();
+				return matchesKey(data, "end") || matchesKey(data, "escape");
+			}
+			this.requestRender();
+			return true;
+		}
+		if (this.selection) {
+			this.cancelInteraction();
+			this.requestRender();
+		}
+		return false;
+	}
+
+	private dragThumb(row: number): void {
+		if (this.gesture?.kind !== "thumb") return;
+		const { grab, travel, maximum } = this.gesture;
+		this.scrollTo(Math.round((Math.max(0, Math.min(travel, row - grab)) / Math.max(1, travel)) * maximum));
+	}
+
+	private thumb(): { size: number; top: number } {
+		if (this.gesture?.kind === "thumb") {
+			const { travel, maximum } = this.gesture;
+			return { size: this.height - travel, top: Math.round((this.offset / Math.max(1, maximum)) * travel) };
+		}
+		const size = Math.min(
+			this.height,
+			Math.max(1, Math.floor((this.height * this.height) / Math.max(1, this.totalRows))),
+		);
+		const top = Math.round((this.offset / Math.max(1, this.maxOffset)) * (this.height - size));
+		return { size, top };
+	}
 
 	get state(): ViewportState {
 		return { offset: this.offset, height: this.height, totalRows: this.totalRows, followingTail: this.followingTail };
@@ -169,6 +392,8 @@ export class RetainedViewport {
 	}
 
 	reset(): void {
+		this.cancelInteraction();
+		this.logical = [];
 		this.blocks = [];
 		this.anchor = undefined;
 		this.offset = 0;
@@ -199,6 +424,10 @@ export class RetainedViewport {
 	}
 
 	update(width: number, height: number): string[] {
+		if (width !== this.width || height !== this.screenHeight) this.cancelInteraction();
+		this.width = width;
+		this.screenHeight = height;
+		this.height = this.selection ? Math.max(1, height - 1) : Math.max(0, height);
 		const previous = new Map(this.blocks.map((block) => [block.component, block]));
 		const next = new Map<Component, RenderedBlock>();
 		let start = 0;
@@ -217,9 +446,14 @@ export class RetainedViewport {
 			next.set(block.component, { ...block, lines, start, width, generation: this.generation });
 			start += lines.length;
 		}
+		if (this.selection) {
+			const latest = [...next.values()].flatMap((block) => block.lines);
+			this.pendingUpdates =
+				latest.length !== this.logical.length || latest.some((line, i) => line !== this.logical[i]);
+			return this.logical;
+		}
 		this.totalRows = start;
-		this.height = Math.max(0, height);
-		if (!this.followingTail && this.anchor) {
+		if (this.gesture?.kind !== "thumb" && !this.followingTail && this.anchor) {
 			const anchor = this.anchor;
 			const old = previous.get(anchor.component);
 			const current = next.get(anchor.component);
@@ -249,10 +483,14 @@ export class RetainedViewport {
 			}
 		}
 		this.blocks = [...next.values()];
-		this.offset = this.followingTail ? this.maxOffset : Math.max(0, Math.min(this.offset, this.maxOffset));
+		this.offset =
+			this.followingTail && this.gesture?.kind !== "thumb"
+				? this.maxOffset
+				: Math.max(0, Math.min(this.offset, this.maxOffset));
 		if (!this.followingTail && !this.anchor) this.anchor = this.anchorAt(this.offset, 0);
 		const lines: string[] = [];
 		for (const block of this.blocks) for (const line of block.lines) lines.push(line);
+		this.logical = lines;
 		return lines;
 	}
 
@@ -286,13 +524,25 @@ export class RetainedViewport {
 				lines[Math.max(0, top - this.offset)] = truncateToWidth(label, width);
 			}
 		}
+		const range = this.selectionRange();
+		if (range) {
+			const [start, end] = range;
+			for (let i = 0; i < lines.length; i++) {
+				const row = this.offset + i;
+				if (row < start.row || row > end.row) continue;
+				const left = row === start.row ? start.column : 0;
+				const right = row === end.row ? end.column : visibleWidth(lines[i]);
+				const selected = plainText(sliceByColumn(lines[i], left, Math.max(0, right - left), true));
+				lines[i] =
+					`${sliceByColumn(lines[i], 0, left, true)}\x1b[0m\x1b[7m${selected}\x1b[0m${sliceByColumn(lines[i], right, Math.max(0, width - right), true)}`;
+			}
+		}
 		return { lines, images };
 	}
 
 	scrollbar(row: number): string {
-		if (this.totalRows <= this.height) return " ";
-		const size = Math.max(1, Math.floor((this.height * this.height) / this.totalRows));
-		const top = Math.round((this.offset / this.maxOffset) * (this.height - size));
+		if (this.totalRows <= this.height || row >= this.height) return " ";
+		const { size, top } = this.thumb();
 		return row >= top && row < top + size ? "█" : "│";
 	}
 }

@@ -10,7 +10,14 @@ import { isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
-import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.js";
+import {
+	extractSegments,
+	normalizeTerminalOutput,
+	sliceByColumn,
+	sliceWithWidth,
+	truncateToWidth,
+	visibleWidth,
+} from "./utils.js";
 import { RetainedViewport, type ViewportOptions, type ViewportState } from "./viewport.js";
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
@@ -262,6 +269,8 @@ export class TUI extends Container {
 	private stopped = false;
 	private viewport: RetainedViewport | undefined;
 	private viewportHadImages = false;
+	private started = false;
+	private removeViewportInput?: () => void;
 
 	// SCRAMJET-DIVERGENCE: append-only history and a bounded mutable canvas preserve terminal scrollback (#389).
 	private liveRegionStart: Component | undefined;
@@ -302,7 +311,16 @@ export class TUI extends Container {
 	// SCRAMJET-DIVERGENCE: opt-in retained rendering stays independent of native-history modes.
 	configureViewport(options: ViewportOptions): void {
 		if (this.liveRegionStart) throw new Error("Cannot configure a viewport with a committed live region");
-		this.viewport = new RetainedViewport(options);
+		this.viewport?.cancelInteraction();
+		this.removeViewportInput?.();
+		this.viewport = new RetainedViewport(options, () => this.requestRender());
+		this.removeViewportInput = this.addInputListener((data) => {
+			const overlayFocused = this.overlayStack.some(
+				(entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry),
+			);
+			return this.viewport?.handleInput(data, overlayFocused, this.hasOverlay()) ? { consume: true } : undefined;
+		});
+		if (this.started) this.enterViewportMode();
 		this.requestRender(true);
 	}
 
@@ -520,12 +538,21 @@ export class TUI extends Container {
 		for (const overlay of this.overlayStack) overlay.component.invalidate?.();
 	}
 
+	private enterViewportMode(): void {
+		if (!this.terminal.setViewportMode) throw new Error("Terminal must support viewport mode");
+		this.terminal.setViewportMode(true);
+	}
+
 	start(): void {
+		if (this.started) return;
 		this.stopped = false;
+		this.started = true;
 		this.terminal.start(
 			(data) => this.handleInput(data),
 			() => this.requestRender(),
 		);
+		if (this.viewport) this.enterViewportMode();
+		this.previousLines = [];
 		this.terminal.hideCursor();
 		this.queryCellSize();
 		this.requestRender();
@@ -578,7 +605,12 @@ export class TUI extends Container {
 	}
 
 	stop(): void {
+		if (this.stopped) return;
 		this.stopped = true;
+		this.started = false;
+		this.renderRequested = false;
+		this.viewport?.cancelInteraction();
+		if (this.viewport) this.terminal.setViewportMode?.(false);
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
 			this.renderTimer = undefined;
@@ -612,6 +644,7 @@ export class TUI extends Container {
 	}
 
 	requestRender(force = false): void {
+		if (this.stopped) return;
 		if (force) {
 			this.viewport?.invalidate();
 			this.previousLines = [];
@@ -1281,6 +1314,7 @@ export class TUI extends Container {
 		const frame = viewport.slice(logical, contentWidth, this.hasOverlay());
 		let lines = frame.lines;
 		while (lines.length < height) lines.push("");
+		if (viewport.notice) lines[height - 1] = truncateToWidth(viewport.notice, contentWidth);
 		if (
 			this.overlayStack.some((entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry))
 		) {

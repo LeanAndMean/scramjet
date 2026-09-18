@@ -189,12 +189,30 @@ function parseUnmodifiedKittyPrintableCodepoint(sequence: string): number | unde
 	return codepoint >= 32 ? codepoint : undefined;
 }
 
-function extractCompleteSequences(buffer: string): { sequences: string[]; remainder: string } {
+function extractCompleteSequences(buffer: string): { sequences: string[]; remainder: string; discardMouse?: boolean } {
 	const sequences: string[] = [];
 	let pos = 0;
 
 	while (pos < buffer.length) {
 		const remaining = buffer.slice(pos);
+
+		// SCRAMJET-DIVERGENCE: bound recognized mouse packets and never emit malformed payload tails.
+		if (remaining.startsWith(`${ESC}[<`)) {
+			const end = remaining.slice(3).search(/[Mm\x1b]/);
+			if (end < 0)
+				return remaining.length > 32
+					? { sequences, remainder: "", discardMouse: true }
+					: { sequences, remainder: remaining };
+			const index = end + 3;
+			if (remaining[index] === ESC) {
+				pos += index;
+				continue;
+			}
+			const packet = remaining.slice(0, index + 1);
+			if (/^\x1b\[<\d{1,3};\d{1,5};\d{1,5}[Mm]$/.test(packet)) sequences.push(packet);
+			pos += packet.length;
+			continue;
+		}
 
 		// Try to extract a sequence starting at this position
 		if (remaining.startsWith(ESC)) {
@@ -279,6 +297,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	private pasteBuffer: string = "";
 	private pendingKittyPrintableCodepoint: number | undefined;
 	private _holdOsc: boolean = false;
+	private discardMouse = false;
+	private timedOutPrefix = "";
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
@@ -311,6 +331,17 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			return;
 		}
 
+		if (this.timedOutPrefix) {
+			const recovered = this.timedOutPrefix + str;
+			if (recovered.startsWith(`${ESC}[<`) || recovered === `${ESC}[`) str = recovered;
+			this.timedOutPrefix = "";
+		}
+		if (this.discardMouse) {
+			const end = str.search(/[Mm\x1b]/);
+			if (end < 0) return;
+			this.discardMouse = false;
+			str = str.slice(str[end] === ESC ? end : end + 1);
+		}
 		this.buffer += str;
 
 		if (this.pasteMode) {
@@ -371,6 +402,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 		const result = extractCompleteSequences(this.buffer);
 		this.buffer = result.remainder;
+		this.discardMouse = result.discardMouse ?? false;
 
 		for (const sequence of result.sequences) {
 			this.emitDataSequence(sequence);
@@ -411,7 +443,9 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			return [];
 		}
 
-		const sequences = [this.buffer];
+		this.timedOutPrefix = this.buffer === ESC || this.buffer === `${ESC}[` ? this.buffer : "";
+		this.discardMouse = this.buffer.startsWith(`${ESC}[<`);
+		const sequences = this.discardMouse ? [] : [this.buffer];
 		this.buffer = "";
 		this.pendingKittyPrintableCodepoint = undefined;
 		return sequences;
@@ -426,6 +460,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.pasteMode = false;
 		this.pasteBuffer = "";
 		this.pendingKittyPrintableCodepoint = undefined;
+		this.discardMouse = false;
+		this.timedOutPrefix = "";
 	}
 
 	getBuffer(): string {

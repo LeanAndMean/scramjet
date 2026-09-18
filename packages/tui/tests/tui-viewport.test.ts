@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Image } from "../src/components/image.js";
 import { Text } from "../src/components/text.js";
+import { KeybindingsManager, TUI_KEYBINDINGS } from "../src/keybindings.js";
 import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.js";
 import { type Component, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { sliceByColumn } from "../src/utils.js";
-import type { ViewportBlock } from "../src/viewport.js";
+import type { ViewportBlock, ViewportOptions } from "../src/viewport.js";
 import { HeadlessTerminal } from "./helpers/headless-terminal.js";
 
 class Rows implements Component {
@@ -17,13 +18,14 @@ const running: TUI[] = [];
 afterEach(() => {
 	for (const tui of running.splice(0)) tui.stop();
 	resetCapabilitiesCache();
+	vi.useRealTimers();
 });
 
-async function setup(blocks: ViewportBlock[], width = 21, height = 4) {
+async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: Partial<ViewportOptions> = {}) {
 	const terminal = new HeadlessTerminal(width, height);
-	terminal.write("shell sentinel\r\n\x1b[?1049h");
+	terminal.write("shell sentinel\r\n");
 	const tui = new TUI(terminal, true);
-	tui.configureViewport({ getBlocks: () => blocks });
+	tui.configureViewport({ getBlocks: () => blocks, ...options });
 	running.push(tui);
 	tui.start();
 	await tui.renderNow({ requireFlush: true });
@@ -32,6 +34,215 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4) {
 		terminal.visibleLines().map((line) => sliceByColumn(line, 0, terminal.columns - 1, true).trimEnd());
 	return { tui, terminal, frame, text };
 }
+
+const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
+
+describe("viewport interactions", () => {
+	it("restores the normal buffer across repeated stop/start without replay or mode leakage", async () => {
+		const { tui, terminal, frame } = await setup([{ component: new Rows(["candidate"]) }]);
+		const mark = terminal.markWrites();
+		tui.start();
+		expect(terminal.writesSince(mark)).toBe("");
+		tui.stop();
+		await terminal.flush();
+		expect(terminal.visibleLines()[0]).toBe("shell sentinel");
+		const stopped = terminal.markWrites();
+		tui.stop();
+		expect(terminal.writesSince(stopped)).toBe("");
+		tui.start();
+		await frame();
+		expect(terminal.visibleLines()[0]).toContain("candidate");
+	});
+	it("renders after restart even when a stale copy settles while stopped", async () => {
+		let resolve!: () => void;
+		const copy = vi.fn(
+			() =>
+				new Promise<void>((done) => {
+					resolve = done;
+				}),
+		);
+		const card = new Rows(["selected"]);
+		const { tui, terminal, frame } = await setup([{ component: card }], 31, 5, { copy });
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 9, 1));
+		terminal.sendInput(mouse(0, 9, 1, "m"));
+		await frame();
+		terminal.sendInput("\x03");
+		await frame();
+		tui.stop();
+		resolve();
+		await new Promise((done) => setTimeout(done, 30));
+		card.lines = ["resumed"];
+		tui.start();
+		await vi.waitFor(async () => {
+			await terminal.flush();
+			expect(terminal.visibleLines()[0]).toContain("resumed");
+		});
+	});
+
+	it("routes detached browsing keys without stealing editor or focused overlay input", async () => {
+		const { tui, terminal, frame } = await setup([
+			{ component: new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`)) },
+		]);
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		terminal.sendInput("\x1b[5~");
+		expect(handleInput).toHaveBeenLastCalledWith("\x1b[5~");
+		terminal.sendInput(mouse(64, 2, 2));
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(93);
+		handleInput.mockClear();
+		terminal.sendInput("\x1b[5~");
+		expect(tui.getViewportState()?.offset).toBe(89);
+		expect(handleInput).not.toHaveBeenCalled();
+		const overlayInput = vi.fn();
+		const overlay = tui.showOverlay({ render: () => ["modal"], invalidate() {}, handleInput: overlayInput });
+		terminal.sendInput("\x1b[5~");
+		expect(overlayInput).toHaveBeenCalledWith("\x1b[5~");
+		expect(tui.getViewportState()?.offset).toBe(89);
+		terminal.sendInput(mouse(64, 2, 2));
+		expect(overlayInput).toHaveBeenCalledTimes(1);
+		overlay.hide();
+		terminal.sendInput("\x1b[H");
+		expect(tui.getViewportState()?.offset).toBe(0);
+		terminal.sendInput("\x1b[F");
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		terminal.sendInput(mouse(64, 2, 2));
+		terminal.sendInput("\x1b");
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		expect(handleInput).not.toHaveBeenCalled();
+		terminal.sendInput(mouse(64, 2, 2));
+		terminal.sendInput("\x1b[A");
+		expect(tui.getViewportState()?.followingTail).toBe(true);
+		expect(handleInput).toHaveBeenLastCalledWith("\x1b[A");
+	});
+
+	it("keeps thumb mapping stable through growth and supports track clicks", async () => {
+		const card = new Rows(Array.from({ length: 100 }, (_, i) => `row-${i}`));
+		const { tui, terminal, frame } = await setup([{ component: card }], 21, 10);
+		tui.scrollViewportTo(0);
+		await frame();
+		terminal.sendInput(mouse(0, 21, 1));
+		card.lines.push(...Array.from({ length: 100 }, (_, i) => `new-${i}`));
+		await frame();
+		terminal.sendInput(mouse(32, 21, 6));
+		await frame();
+		expect(tui.getViewportState()?.offset).toBe(50);
+		terminal.sendInput(mouse(0, 21, 6, "m"));
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 50, totalRows: 200, followingTail: false });
+		terminal.sendInput(mouse(0, 21, 10));
+		terminal.sendInput(mouse(0, 21, 10, "m"));
+		await frame();
+		expect(tui.getViewportState()).toMatchObject({ offset: 190, followingTail: true });
+	});
+
+	it("copies exact ANSI-free wide/combining selection, reconciles updates, and leaves empty Ctrl+C alone", async () => {
+		const copy = vi.fn().mockResolvedValue(undefined);
+		const card = new Rows(["\x1b[31mcafé 界 e\u0301 text\x1b[0m", ...Array(8).fill("more")]);
+		const { tui, terminal, frame } = await setup([{ component: card }], 31, 5, { copy });
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		tui.scrollViewportTo(0);
+		await frame();
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 30, 1));
+		terminal.sendInput(mouse(0, 30, 1, "m"));
+		card.lines[0] = "changed";
+		await frame();
+		expect(terminal.visibleLines()[0]).toContain("café 界 e\u0301 text");
+		expect(terminal.visibleLines()[4]).toContain("updates pending");
+		expect(terminal.writes.join("")).toContain("\x1b[7m");
+		terminal.sendInput(mouse(2, 3, 1));
+		await frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("café 界 e\u0301 text");
+		await frame();
+		expect(terminal.visibleLines()[0]).toContain("changed");
+		terminal.sendInput("\x03");
+		expect(handleInput).toHaveBeenCalledExactlyOnceWith("\x03");
+		terminal.sendInput(mouse(2, 3, 1));
+		expect(copy).toHaveBeenCalledTimes(1);
+		expect(handleInput).toHaveBeenCalledTimes(1);
+	});
+
+	it("retains selection on copy failure, honors injected copy bindings, and rejects stale completion", async () => {
+		let resolve!: () => void;
+		const copy = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("clipboard unavailable"))
+			.mockImplementationOnce(
+				() =>
+					new Promise<void>((done) => {
+						resolve = done;
+					}),
+			);
+		const keybindings = new KeybindingsManager(TUI_KEYBINDINGS, { "tui.input.copy": "ctrl+y" });
+		const { tui, terminal, frame } = await setup(
+			[{ component: new Rows(["selected", "second", "third", "fourth"]) }],
+			61,
+			4,
+			{ copy, keybindings },
+		);
+		terminal.sendInput(mouse(0, 1, 1));
+		terminal.sendInput(mouse(32, 9, 1));
+		terminal.sendInput(mouse(0, 9, 1, "m"));
+		terminal.sendInput("\x19");
+		await frame();
+		await frame();
+		expect(copy).toHaveBeenCalledWith("selected");
+		expect(terminal.visibleLines()[3]).toContain("Copy failed: clipboard unavailable");
+		terminal.sendInput("\x19");
+		tui.resetViewport();
+		await frame();
+		resolve();
+		await frame();
+		expect(terminal.visibleLines().join("\n")).not.toContain("Copy failed");
+	});
+
+	it("selects across rows with edge autoscroll and cancels gestures on resize and stop", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		try {
+			const copy = vi.fn().mockResolvedValue(undefined);
+			const { tui, terminal, frame } = await setup(
+				[{ component: new Rows(Array.from({ length: 20 }, (_, i) => `row-${i}`)) }],
+				31,
+				5,
+				{ copy },
+			);
+			tui.scrollViewportTo(0);
+			await frame();
+			terminal.sendInput(mouse(0, 1, 2));
+			terminal.sendInput(mouse(32, 6, 5));
+			await vi.advanceTimersByTimeAsync(250);
+			expect(tui.getViewportState()!.offset).toBeGreaterThan(0);
+			terminal.sendInput(mouse(0, 6, 5, "m"));
+			const offset = tui.getViewportState()!.offset;
+			terminal.sendInput("\x03");
+			await frame();
+			expect(copy.mock.calls[0][0]).toBe(Array.from({ length: offset + 3 }, (_, i) => `row-${i + 1}`).join("\n"));
+			terminal.sendInput(mouse(0, 1, 1));
+			terminal.sendInput(mouse(32, 6, 5));
+			terminal.resize(25, 5);
+			await frame();
+			const resized = tui.getViewportState()?.offset;
+			await vi.advanceTimersByTimeAsync(250);
+			expect(tui.getViewportState()?.offset).toBe(resized);
+			tui.stop();
+			await vi.advanceTimersByTimeAsync(250);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("consumes malformed, out-of-bounds and unsupported pointer events without editor dispatch", async () => {
+		const { tui, terminal } = await setup([{ component: new Rows(["one"]) }]);
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		for (const data of ["\x1b[<", "\x1b[<1;x;2M", mouse(999, 1, 1), mouse(0, 0, 1), mouse(64, 99999, 1), "\x1b[Mabc"])
+			terminal.sendInput(data);
+		expect(handleInput).not.toHaveBeenCalled();
+	});
+});
 
 describe("retained viewport", () => {
 	it("retains tall mutable output, paints exact slices, and follows only an explicit return to the tail", async () => {
