@@ -47,7 +47,7 @@ def events(*args):
     action, *values = args
     if action == "mouse":
         kind, x, y = values
-        run("xdotool", "mousemove", "--sync", str(round(x)), str(round(y)))
+        run("xdotool", "mousemove", str(round(x)), str(round(y)))
         if kind in ("down", "rightDown"):
             run("xdotool", "mousedown", "3" if kind == "rightDown" else "1")
         elif kind in ("up", "rightUp"):
@@ -156,6 +156,9 @@ try:
         report["tmuxConfiguration"] = config.read_text()
         tmux_command = f"tmux -L scramjet-probe -f {shlex.quote(str(config))} new-session"
     if is_mac:
+        if terminal_kind == "iterm2":
+            run("defaults", "write", bundle, "ReportRightClick", "-bool", "true")
+            report["terminalConfiguration"] = {"ReportRightClick": True, "qualification": "Explicitly approved configuration; default-profile right-click opens the native menu"}
         opener = subprocess.Popen(["open", "-a", "iTerm" if terminal_kind == "iterm2" else "Terminal"])
         terminal_started = True
         for _ in range(20):
@@ -210,10 +213,6 @@ try:
             raise RuntimeError(f"Expected one Terminal AXTextArea; observed {len(areas)}")
         first = areas[0].get("firstCell")
     else:
-        windows = run("xdotool", "search", "--onlyvisible", "--name", "ScramjetProbe").splitlines()
-        if len(windows) != 1:
-            raise RuntimeError(f"Expected one fixture window; observed {windows}")
-        window_id = windows[0]
         run("xdotool", "windowactivate", "--sync", window_id)
         geometry = dict(line.split("=", 1) for line in run("xdotool", "getwindowgeometry", "--shell", window_id).splitlines())
         width, height = int(geometry["WIDTH"]), int(geometry["HEIGHT"])
@@ -276,6 +275,7 @@ try:
         key(name)
     check("keyboardEditingCoexists", lambda: state().get("editor") == "ac")
     screenshot("keyboard")
+    fixture_command("expand")
     mouse("down", *cell(columns, rows // 2))
     mouse("up", *cell(columns, rows // 2))
     check("longSessionMiddleReachable", lambda: 0.3 < state()["offset"] / (state()["totalRows"] - state()["height"]) < 0.7)
@@ -296,7 +296,6 @@ try:
     screenshot("selection-across-scroll")
     key("copy")
     check("scrolledSelectionClipboardExact", lambda: clipboard() == expected_multiline and state().get("notice") is None)
-    fixture_command("expand")
 
     def browse_cards(count):
         seen = set()
@@ -393,6 +392,8 @@ finally:
             if with_tmux:
                 subprocess.run(["tmux", "-L", "scramjet-probe", "kill-server"], capture_output=True, timeout=10)
             if terminal_process:
+                if terminal_process.poll() is None:
+                    terminal_process.terminate()
                 terminal_process.wait(timeout=10)
         except Exception as error:
             report["cleanupError"] = str(error)

@@ -14,7 +14,7 @@ out=$(mktemp -d -t scramjet-winprobe.XXXXXX)
   printf '#!/usr/bin/env bash\nset -eu\ncd %q\n' "$root"
   printf 'stty -g > %q\n' "$out/stty-before.txt"
   printf "printf 'SCRAMJET NORMAL BUFFER SENTINEL\\\\n'\n"
-  printf 'SCRAMJET_TUI_PROBE_EVIDENCE=%q %q %q\n' "$out/fixture.json" "$(command -v node)" "$root/packages/scramjet/tests/fixtures/interactive-viewport.mjs"
+  printf 'SCRAMJET_TUI_PROBE_EVIDENCE=%q %q %q --production --journey\n' "$out/fixture.json" "$(command -v node)" "$root/packages/scramjet/tests/fixtures/interactive-viewport.mjs"
   printf 'stty -g > %q\n' "$out/stty-after.txt"
   printf "printf 'SCRAMJET RESTORED SHELL\\\\n'\n"
   printf 'HISTFILE=/dev/null exec bash --noprofile --norc\n'

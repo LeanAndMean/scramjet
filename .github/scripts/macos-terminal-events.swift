@@ -91,6 +91,7 @@ case "key":
     for (flag, modifier) in modifiers where flags.contains(flag) {
         active.insert(flag)
         let event = CGEvent(keyboardEventSource: nil, virtualKey: modifier, keyDown: true)!
+        event.type = .flagsChanged
         event.flags = active
         event.post(tap: .cghidEventTap)
         usleep(20_000)
@@ -104,6 +105,7 @@ case "key":
     for (flag, modifier) in modifiers.reversed() where flags.contains(flag) {
         active.remove(flag)
         let event = CGEvent(keyboardEventSource: nil, virtualKey: modifier, keyDown: false)!
+        event.type = .flagsChanged
         event.flags = active
         event.post(tap: .cghidEventTap)
         usleep(20_000)
@@ -116,7 +118,9 @@ case "mouse":
         "rightDown": (.rightMouseDown, .right), "rightUp": (.rightMouseUp, .right)
     ]
     let (kind, button) = actions[args[2]]!
-    CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: point, mouseButton: button)!.post(tap: .cghidEventTap)
+    let event = CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: point, mouseButton: button)!
+    event.setIntegerValueField(.mouseEventClickState, value: 1)
+    event.post(tap: .cghidEventTap)
 case "wheel":
     let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
                         wheel1: Int32(args[2])!, wheel2: 0, wheel3: 0)!
