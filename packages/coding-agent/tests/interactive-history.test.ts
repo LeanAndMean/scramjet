@@ -224,6 +224,12 @@ describe("retained approval and exit safety", () => {
 			h.terminal.sendInput("\x1b[5;1:3~");
 			await h.frame();
 			expect(h.internals.ui.getViewportState()!.offset).toBe(0);
+			let overlayVisible = true;
+			const disappearingOverlay = h.internals.ui.showOverlay(new Text("TEMPORARY OVERLAY", 0, 0), {
+				visible: () => overlayVisible,
+			});
+			await h.frame();
+			overlayVisible = false;
 			h.terminal.sendInput("\r");
 			h.terminal.sendInput("\r");
 			expect(activate).not.toHaveBeenCalled();
@@ -232,6 +238,7 @@ describe("retained approval and exit safety", () => {
 			expect(h.terminal.visibleLines().join("\n")).toContain("APPROVE OR CANCEL");
 			h.terminal.sendInput("\r");
 			expect(activate).toHaveBeenCalledExactlyOnceWith("\r");
+			disappearingOverlay.hide();
 			finish("cancelled");
 			expect(await outcome).toBe("cancelled");
 		} finally {

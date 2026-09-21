@@ -756,6 +756,13 @@ export class TUI extends Container {
 			return;
 		}
 
+		// SCRAMJET-DIVERGENCE: input guards must see the recipient that will actually receive this event.
+		const focusedOverlay = this.overlayStack.find((o) => o.component === this.focusedComponent);
+		if (focusedOverlay && !this.isOverlayVisible(focusedOverlay)) {
+			const topVisible = this.getTopmostVisibleOverlay();
+			this.setFocus(topVisible?.component ?? focusedOverlay.preFocus);
+		}
+
 		if (this.inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.inputListeners) {
@@ -782,20 +789,6 @@ export class TUI extends Container {
 		if (matchesKey(data, "shift+ctrl+d") && this.onDebug) {
 			this.onDebug();
 			return;
-		}
-
-		// If focused component is an overlay, verify it's still visible
-		// (visibility can change due to terminal resize or visible() callback)
-		const focusedOverlay = this.overlayStack.find((o) => o.component === this.focusedComponent);
-		if (focusedOverlay && !this.isOverlayVisible(focusedOverlay)) {
-			// Focused overlay is no longer visible, redirect to topmost visible overlay
-			const topVisible = this.getTopmostVisibleOverlay();
-			if (topVisible) {
-				this.setFocus(topVisible.component);
-			} else {
-				// No visible overlays, restore to preFocus
-				this.setFocus(focusedOverlay.preFocus);
-			}
 		}
 
 		// Pass input to focused component (including Ctrl+C)

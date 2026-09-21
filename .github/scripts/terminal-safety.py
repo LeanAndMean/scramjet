@@ -103,13 +103,20 @@ try:
         time.sleep(3)
         report["updatePrompt"] = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Don't Check"))
         command = f"/bin/bash {shlex.quote(str(launcher))}"
-        run("osascript", "-e", f'tell application "iTerm"\nactivate\ncreate window with default profile command {json.dumps(command)}\nend tell')
+        run("pbcopy", input=command)
+        run(str(driver), "key", "9", "1048576")
+        run(str(driver), "key", "36", "0")
     else:
         report["version"] = run("kitty", "--version")
         config = output / "kitty.conf"
         config.write_text("font_size 12\ninitial_window_width 80c\ninitial_window_height 30c\nremember_window_size no\nconfirm_os_window_close 0\n")
         report["configuration"] = config.read_text()
-        child = subprocess.Popen(["kitty", "--config", str(config), "--title", "ScramjetSafety", "/bin/bash", str(launcher)], stderr=(output / "kitty.log").open("w"))
+        child = subprocess.Popen(["kitty", "--config", str(config), "--title", "ScramjetSafety", "/bin/bash", "--noprofile", "--norc"], stderr=(output / "kitty.log").open("w"))
+        time.sleep(2)
+        window = run("xdotool", "search", "--onlyvisible", "--name", "ScramjetSafety").splitlines()[-1]
+        run("xdotool", "windowactivate", "--sync", window)
+        run("xdotool", "type", "--clearmodifiers", "--delay", "1", f"/bin/bash {shlex.quote(str(launcher))}")
+        run("xdotool", "key", "Return")
     check("productionFixtureStarted", lambda: state().get("phase") == "image")
     check("nativeProtocolDetected", lambda: state().get("protocol") == ("iterm2" if mac else "kitty"))
     if not mac:
@@ -156,7 +163,13 @@ try:
     pgid = state()["pgid"]
     if pgid == os.getpgrp():
         raise RuntimeError("Fixture unexpectedly shares runner process group")
-    os.killpg(pgid, signal.SIGCONT)
+    if mac:
+        run("pbcopy", input="fg")
+        run(str(driver), "key", "9", "1048576")
+        run(str(driver), "key", "36", "0")
+    else:
+        run("xdotool", "type", "fg")
+        run("xdotool", "key", "Return")
     check("resumedCandidate", lambda: state().get("phase") == "resumed")
     key("1")
     count = pixels("resumed-image")
