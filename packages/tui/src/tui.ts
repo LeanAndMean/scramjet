@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
+import { stripVTControlCharacters } from "node:util";
 import { isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
@@ -52,6 +53,9 @@ export interface Component {
 	 * @returns Array of strings, each representing a line
 	 */
 	render(width: number): string[];
+
+	// SCRAMJET-DIVERGENCE: optional image bounds; text remains logically unbounded.
+	setViewportHeight?(height: number | undefined): void;
 
 	/**
 	 * Optional handler for keyboard input when component has focus
@@ -208,6 +212,11 @@ export interface OverlayHandle {
  */
 export class Container implements Component {
 	children: Component[] = [];
+	private viewportHeight?: number;
+
+	setViewportHeight(height: number | undefined): void {
+		this.viewportHeight = height;
+	}
 
 	addChild(component: Component): void {
 		this.children.push(component);
@@ -233,6 +242,7 @@ export class Container implements Component {
 	render(width: number): string[] {
 		const lines: string[] = [];
 		for (const child of this.children) {
+			child.setViewportHeight?.(this.viewportHeight);
 			const childLines = child.render(width);
 			for (const line of childLines) {
 				lines.push(line);
@@ -270,6 +280,7 @@ export class TUI extends Container {
 	private viewport: RetainedViewport | undefined;
 	private viewportHadImages = false;
 	private viewportRevealFocus = false;
+	private viewportRevealComponent?: Component;
 	private started = false;
 	private removeViewportInput?: () => void;
 
@@ -331,6 +342,23 @@ export class TUI extends Container {
 		this.requestRender(true);
 	}
 
+	// SCRAMJET-DIVERGENCE: safety controls use the painted block, not a scheduled scroll position.
+	isComponentVisible(component: Component): boolean {
+		return (
+			!this.stopped &&
+			this.previousWidth === this.terminal.columns &&
+			this.previousHeight === this.terminal.rows &&
+			!this.hasOverlay() &&
+			(this.viewport?.isComponentVisible(component) ?? false)
+		);
+	}
+
+	revealComponent(component: Component): void {
+		this.viewport?.cancelInteraction();
+		this.viewportRevealComponent = component;
+		this.requestRender();
+	}
+
 	getViewportState(): ViewportState | undefined {
 		return this.viewport?.state;
 	}
@@ -347,6 +375,7 @@ export class TUI extends Container {
 
 	resetViewport(): void {
 		this.viewportRevealFocus = false;
+		this.viewportRevealComponent = undefined;
 		this.viewport?.reset();
 		this.requestRender(true);
 	}
@@ -615,14 +644,19 @@ export class TUI extends Container {
 		return this.bgColorPromise;
 	}
 
-	stop(): void {
+	stop(options?: { transcript?: readonly Component[] }): void {
 		if (this.stopped) return;
 		this.stopped = true;
 		this.started = false;
 		this.renderRequested = false;
 		this.viewport?.cancelInteraction();
 		this.viewportRevealFocus = false;
-		if (this.viewport) this.terminal.setViewportMode?.(false);
+		this.viewportRevealComponent = undefined;
+		if (this.viewport) {
+			this.terminal.write(this.deleteKittyImages(this.previousKittyImageIds));
+			this.previousKittyImageIds.clear();
+			this.terminal.setViewportMode?.(false);
+		}
 		if (this.renderTimer) {
 			clearTimeout(this.renderTimer);
 			this.renderTimer = undefined;
@@ -653,6 +687,11 @@ export class TUI extends Container {
 
 		this.terminal.showCursor();
 		this.terminal.stop();
+		if (this.viewport && options?.transcript) {
+			const lines = options.transcript.flatMap((component) => component.render(this.terminal.columns));
+			const text = lines.map((line) => (isImageLine(line) ? "[Image]" : stripVTControlCharacters(line).trimEnd()));
+			if (text.length) this.terminal.write(`\r\n${text.join("\r\n")}\r\n`);
+		}
 	}
 
 	requestRender(force = false): void {
@@ -1326,6 +1365,10 @@ export class TUI extends Container {
 		const height = this.terminal.rows;
 		const contentWidth = Math.max(1, width - 1);
 		const logical = viewport.update(contentWidth, height);
+		if (this.viewportRevealComponent) {
+			viewport.revealComponent(this.viewportRevealComponent);
+			this.viewportRevealComponent = undefined;
+		}
 		if (this.viewportRevealFocus) {
 			this.viewportRevealFocus = false;
 			const cursorRow = logical.findIndex((line) => line.includes(CURSOR_MARKER));

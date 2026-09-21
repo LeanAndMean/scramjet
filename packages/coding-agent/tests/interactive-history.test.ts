@@ -184,6 +184,127 @@ function createInteractiveHarness(): {
 	};
 }
 
+describe("retained approval and exit safety", () => {
+	it("flushes complete retained context and consumes activation while controls are hidden", async () => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			const activate = vi.fn();
+			let finish!: (value: string) => void;
+			const pending = h.extensionUI.custom<string>(
+				(_ui, _theme, _kb, done) => {
+					finish = done;
+					return { render: () => ["APPROVE OR CANCEL"], invalidate() {}, handleInput: activate };
+				},
+				{
+					toolAttachedContext: {
+						toolCallId: "approval",
+						render: () => new Text(Array.from({ length: 40 }, (_, i) => `PAYLOAD-${i}`).join("\n"), 0, 0),
+					},
+				},
+			);
+			const outcome = pending.catch((error: Error) => error);
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			await h.frame();
+			expect(h.terminal.visibleLines().join("\n")).toContain("APPROVE OR CANCEL");
+			h.internals.ui.scrollViewportTo(0);
+			await h.frame();
+			expect(h.terminal.visibleLines().join("\n")).toContain("PAYLOAD-0");
+			h.terminal.sendInput("\r");
+			h.terminal.sendInput("\r");
+			expect(activate).not.toHaveBeenCalled();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			await h.frame();
+			expect(h.terminal.visibleLines().join("\n")).toContain("APPROVE OR CANCEL");
+			h.terminal.sendInput("\r");
+			expect(activate).toHaveBeenCalledExactlyOnceWith("\r");
+			finish("cancelled");
+			expect(await outcome).toBe("cancelled");
+		} finally {
+			await h.dispose();
+		}
+	});
+
+	it.each(["missing", "rejected", "cancelled", "replaced"])("fails closed across %s candidate flush", async (kind) => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		const flush = h.terminal.flush.bind(h.terminal);
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			Object.defineProperty(h.terminal, "flush", {
+				configurable: true,
+				value:
+					kind === "missing"
+						? undefined
+						: kind === "rejected"
+							? () => Promise.reject(new Error("flush failed"))
+							: () => gate,
+			});
+			let finish!: (result: string) => void;
+			const activate = vi.fn();
+			const dispose = vi.fn();
+			const pending = h.extensionUI.custom<string>(
+				(_tui, _theme, _kb, done) => {
+					finish = done;
+					return { render: () => ["LIVE"], invalidate() {}, handleInput: activate, dispose };
+				},
+				{ toolAttachedContext: { toolCallId: "approval", render: () => new Text("IMMUTABLE-CONTEXT", 0, 0) } },
+			);
+			const outcome = pending.catch((error: Error) => error.message);
+			await Promise.resolve();
+			await Promise.resolve();
+			h.terminal.sendInput("\r");
+			expect(activate).not.toHaveBeenCalled();
+			if (kind === "cancelled") finish("cancelled");
+			if (kind === "replaced") {
+				h.internals.clearTranscript();
+				h.extensionUI.setEditorText("NEW SESSION INPUT");
+			}
+			release();
+			const result = await outcome;
+			expect(result).toMatch(kind === "cancelled" ? /cancelled/ : /flush|replaced/);
+			h.terminal.sendInput("\r");
+			expect(activate).not.toHaveBeenCalled();
+			expect(dispose).toHaveBeenCalledOnce();
+			if (kind === "replaced") expect(h.extensionUI.getEditorText()).toBe("NEW SESSION INPUT");
+			if (kind !== "cancelled")
+				expect(h.internals.committedChatContainer.render(60).join("\n")).not.toContain("IMMUTABLE-CONTEXT");
+		} finally {
+			Object.defineProperty(h.terminal, "flush", { configurable: true, value: flush });
+			await h.dispose();
+		}
+	});
+
+	it("leaves one transcript on final stop but none on temporary handoff", async () => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		try {
+			h.internals.committedChatContainer.addChild(new Text("FINAL-TRANSCRIPT", 0, 0));
+			h.extensionUI.setWidget("temporary", ["TEMPORARY-WIDGET"]);
+			h.extensionUI.setEditorText("TEMPORARY-EDITOR");
+			await h.frame();
+			h.internals.ui.stop();
+			await h.terminal.flush();
+			expect(h.terminal.bufferLines().join("\n")).not.toContain("FINAL-TRANSCRIPT");
+			h.terminal.write("SHELL-BETWEEN-HANDOFFS\r\n");
+			h.internals.ui.start();
+			await h.frame();
+			h.mode.stop();
+			h.mode.stop();
+			await h.terminal.flush();
+			const normal = h.terminal.bufferLines().join("\n");
+			expect(normal).toContain("SHELL-BETWEEN-HANDOFFS");
+			expect(normal.match(/FINAL-TRANSCRIPT/g)).toHaveLength(1);
+			expect(normal).not.toContain("TEMPORARY-WIDGET");
+			expect(normal).not.toContain("TEMPORARY-EDITOR");
+		} finally {
+			await h.dispose();
+		}
+	});
+});
+
 describe("interactive assistant history", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();

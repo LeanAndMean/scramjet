@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { release, platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
+import { isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
 
 const help = `Retained TUI candidate interaction fixture for #551; NOT production activation.
@@ -32,15 +32,37 @@ Use --production for the actual InteractiveMode composition with eight synthetic
 subagent cards, queues, widgets, editor and footer. Ctrl+N advances one child,
 Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked.
 The default mode retains the Stage 3 desktop driver's fixed-row protocol.
-Graphics, approval and temporary handoffs remain later work.`;
+Use --safety for synthetic native image/approval/handoff checks. Keys 1/2 show or
+clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
+6 opens a synthetic external editor, 7 suspends (resume with fg/SIGCONT).
+--inspect-screenshot <png> counts synthetic magenta pixels using installed Photon.`;
 if (process.argv.includes("--help")) {
 	console.log(help);
+	process.exit(0);
+}
+if (process.argv.includes("--inspect-screenshot")) {
+	const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");
+	const photon = await loadPhoton();
+	const image = photon.PhotonImage.new_from_byteslice(readFileSync(process.argv[process.argv.indexOf("--inspect-screenshot") + 1]));
+	const pixels = image.get_raw_pixels();
+	const width = image.get_width();
+	let count = 0;
+	let left = width, right = 0, top = image.get_height(), bottom = 0;
+	for (let i = 0; i < pixels.length; i += 4) {
+		if (pixels[i] > 220 && pixels[i + 1] < 40 && pixels[i + 2] > 220) {
+			count++;
+			const x = (i / 4) % width, y = Math.floor(i / 4 / width);
+			left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+		}
+	}
+	image.free();
+	console.log(JSON.stringify({ count, left, right, top, bottom }));
 	process.exit(0);
 }
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an interactive terminal; use --help");
 if (process.stdout.columns < 60 || process.stdout.rows < 12) throw new Error("Resize to at least 60 columns and 12 rows");
 
-if (process.argv.includes("--production")) {
+if (process.argv.includes("--production") || process.argv.includes("--safety")) {
 	await runProduction();
 } else {
 const lines = Array.from({ length: 200 }, (_, i) => `ROW-${String(i + 1).padStart(3, "0")} synthetic café 界 e\u0301 text`);
@@ -177,12 +199,19 @@ async function runProduction() {
 	const lifetime = new Promise((resolve) => { finish = resolve; });
 	const tasks = Array.from({ length: 8 }, (_, i) => ({ agent: `child-${i + 1}`, task: `Synthetic task ${i + 1}` }));
 	let completed = 0;
+	const safety = process.argv.includes("--safety");
+	const safetyState = { protocol: undefined, phase: "starting", approved: 0, editorHandoffs: 0, suspends: 0 };
+	let imageTool;
+	let overlay;
+	let approval;
+	let approvalDone;
+	let safetyImage;
 	const before = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 	let sequence = Promise.resolve();
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, completed, stopped, viewport: mode.ui.getViewportState(), editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, completed, stopped, pid: process.pid, pgid: Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim()), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, viewport: mode.ui.getViewportState(), editor: extensionUI?.getEditorText() }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
@@ -206,12 +235,62 @@ async function runProduction() {
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
-		if (data === "\x11") { stop(); return { consume: true }; }
-		if (data === "\x0e") {
+		if (isKeyRelease(data)) return { consume: true };
+		if (matchesKey(data, "ctrl+q")) { stop(); return { consume: true }; }
+		const action = safety && ["1", "2", "3", "4", "5", "6", "7"].find((key) => matchesKey(data, key));
+		if (action) {
+			sequence = sequence.then(() => safetyAction(action)).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
+			return { consume: true };
+		}
+		if (matchesKey(data, "ctrl+n")) {
 			sequence = sequence.then(async () => { if (completed < 8 && !stopped) { completed++; await update(); } }).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
 			return { consume: true };
 		}
 	});
+	async function safetyAction(key) {
+		if (key === "1" || key === "2") {
+			if (overlay) { overlay.hide(); overlay = undefined; }
+			mode.ui.revealComponent(imageTool);
+			await mode.ui.renderNow({ requireFlush: true });
+			// The image is the final child, so a tail-aligned tool reveal exposes its full placement.
+			if (key === "2") mode.ui.scrollViewport(-3);
+			safetyState.phase = key === "1" ? "image" : "clipped";
+		} else if (key === "3") {
+			if (overlay) { overlay.hide(); overlay = undefined; safetyState.phase = "image"; }
+			else { overlay = mode.ui.showOverlay(new Text("OVERLAY WITHOUT GRAPHICS", 1, 1)); safetyState.phase = "overlay"; }
+		} else if (key === "4" && !approval) {
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			approval = extensionUI.custom((_tui, _theme, _kb, done) => {
+				approvalDone = done;
+				return { invalidate() {}, render: () => ["SYNTHETIC APPROVAL — Enter records a local counter only"], handleInput(data) {
+					if (matchesKey(data, "enter")) { safetyState.approved++; done("approved"); }
+				} };
+			}, { toolAttachedContext: { toolCallId: "approval", render: () => new Text(Array.from({ length: 60 }, (_, i) => `IMMUTABLE-SYNTHETIC-PAYLOAD-${i}`).join("\n"), 0, 0) } });
+			approval.catch((error) => { safetyState.error = error.message; record(); });
+			safetyState.phase = "approval";
+		} else if (key === "5") {
+			mode.ui.scrollViewportTo(0);
+			safetyState.phase = "browsing";
+		} else if (key === "6") {
+			const editor = join(directory, "editor.sh");
+			const receipt = join(directory, "handoff.txt");
+			writeFileSync(editor, `#!/bin/sh\nstty -g > '${receipt}'\nprintf 'SYNTHETIC EXTERNAL EDITOR\\n'\nprintf 'edited by synthetic external editor' > "$1"\n`, { mode: 0o700 });
+			process.env.VISUAL = editor;
+			mode.openExternalEditor();
+			safetyState.handoffTermios = readFileSync(receipt, "utf8").trim();
+			safetyState.editorHandoffs++;
+			safetyState.phase = "editor-return";
+		} else if (key === "7") {
+			safetyState.suspends++;
+			safetyState.phase = "suspending";
+			record();
+			process.once("SIGCONT", () => { safetyState.phase = "resumed"; setTimeout(record, 50); });
+			mode.handleCtrlZ();
+			return;
+		}
+		await mode.ui.renderNow({ requireFlush: true });
+		record();
+	}
 	try {
 		await mode.init();
 		extensionUI.setHeader(() => new Text("Production candidate: Ctrl+N advances; Ctrl+O expands; Ctrl+Q exits", 0, 0));
@@ -222,12 +301,30 @@ async function runProduction() {
 		await runtime.session.steer("Synthetic queued message");
 		mode.updatePendingMessagesDisplay();
 		await mode.handleEvent({ type: "agent_start" });
-		await mode.handleEvent({ type: "tool_execution_start", toolCallId: "batch", toolName: "subagent", args: { tasks } });
-		await update();
+		if (safety) {
+			const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");
+			const { getCapabilities } = await import("../../../tui/dist/index.js");
+			const photon = await loadPhoton();
+			const pixels = new Uint8Array(300 * 3000 * 4);
+			for (let i = 0; i < pixels.length; i += 4) { pixels[i] = 255; pixels[i + 2] = 255; pixels[i + 3] = 255; }
+			safetyImage = new photon.PhotonImage(pixels, 300, 3000);
+			safetyState.protocol = getCapabilities().images;
+			if (!safetyState.protocol) throw new Error("Native graphics protocol was not detected");
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "image", toolName: "unknown", args: {} });
+			imageTool = mode.pendingTools.get("image");
+			await mode.handleEvent({ type: "tool_execution_end", toolCallId: "image", isError: false,
+				result: { content: [{ type: "text", text: "NATIVE-IMAGE-TRANSCRIPT" }, { type: "image", mimeType: "image/png", data: Buffer.from(safetyImage.get_bytes()).toString("base64") }] } });
+			await safetyAction("1");
+		} else {
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "batch", toolName: "subagent", args: { tasks } });
+			await update();
+		}
 		await lifetime;
 	} finally {
 		stop();
 		clearInterval(timer);
+		approvalDone?.("cancelled");
+		safetyImage?.free();
 		await sequence;
 		await runtime.dispose();
 		stopThemeWatcher();

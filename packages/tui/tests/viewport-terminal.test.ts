@@ -68,6 +68,31 @@ describe("mouse transport framing", () => {
 });
 
 describe("candidate terminal modes", () => {
+	it("reenters the viewport and accepts pointer input during the resumed keyboard query", () => {
+		vi.useFakeTimers();
+		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		const terminal = new ProcessTerminal();
+		const input = vi.fn();
+		terminal.start(input, () => {});
+		process.stdin.emit("data", "\x1b[?0u");
+		expect(terminal.kittyProtocolActive).toBe(true);
+		terminal.stop();
+		terminal.start(input, () => {});
+		terminal.setViewportMode(true);
+		expect(terminal.kittyProtocolActive).toBe(false);
+		process.stdin.emit("data", "\x1b[<64;2;2M\x1b[?0u");
+		expect(input).toHaveBeenCalledExactlyOnceWith("\x1b[<64;2;2M");
+		expect(terminal.kittyProtocolActive).toBe(true);
+		const sequences = output.mock.calls.map(([value]) => value).join("");
+		expect(sequences.lastIndexOf("\x1b[?1049h")).toBeLessThan(sequences.lastIndexOf("\x1b[>7u"));
+		terminal.stop();
+		const count = output.mock.calls.length;
+		vi.advanceTimersByTime(200);
+		expect(output).toHaveBeenCalledTimes(count);
+	});
 	it("owns alternate screen and mouse modes idempotently, cancels keyboard fallback on stop", () => {
 		vi.useFakeTimers();
 		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);

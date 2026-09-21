@@ -2445,11 +2445,36 @@ export class InteractiveMode {
 			let component: Component & { dispose?(): void };
 			let attachedTool: ToolExecutionComponent | undefined;
 			let committedContext: Component | undefined;
+			let removeInputGuard: (() => void) | undefined;
+			let revealingControls = false;
 			let closed = false;
+			const attachmentCurrent = () =>
+				attachedTool &&
+				committedContext &&
+				this.pendingTools.get(options!.toolAttachedContext!.toolCallId) === attachedTool &&
+				this.chatContainer.children.includes(attachedTool) &&
+				this.committedChatContainer.children.includes(committedContext);
+			const fail = (error: unknown) => {
+				if (closed) return;
+				closed = true;
+				removeInputGuard?.();
+				const current = !attachedTool || this.chatContainer.children.includes(attachedTool);
+				attachedTool?.cancelCommittedContext();
+				if (committedContext) {
+					this.committedChatContainer.removeChild(committedContext);
+					this.ui.rebuild();
+				}
+				try {
+					component?.dispose?.();
+				} catch {}
+				if (!isOverlay && current) restoreEditor();
+				reject(error);
+			};
 
 			const close = (result: T) => {
 				if (closed) return;
 				closed = true;
+				removeInputGuard?.();
 				attachedTool?.detachCommittedContext();
 				if (isOverlay) this.ui.hideOverlay();
 				else restoreEditor();
@@ -2482,16 +2507,42 @@ export class InteractiveMode {
 						tool.attachCommittedContext(component);
 						this.ui.setFocus(null);
 						this.editorContainer.clear();
-						try {
-							await this.ui.commitNow({ requireFlush: true });
-						} catch (error) {
-							tool.cancelCommittedContext();
-							this.committedChatContainer.removeChild(committedContext);
-							committedContext = undefined;
-							this.ui.rebuild();
-							throw error;
-						}
+						const retained = this.ui.getViewportState() !== undefined;
+						if (retained) {
+							this.ui.revealComponent(tool);
+							await this.ui.renderNow({ requireFlush: true });
+						} else await this.ui.commitNow({ requireFlush: true });
 						if (closed) return;
+						if (!attachmentCurrent()) throw new Error("Tool-attached context was replaced before flush settled");
+						if (retained) {
+							if (!this.ui.isComponentVisible(tool))
+								throw new Error("Approval controls do not fit in the visible viewport");
+							// SCRAMJET-DIVERGENCE: navigation must reveal and flush controls before a later key can authorize.
+							removeInputGuard = this.ui.addInputListener(() => {
+								if (!attachmentCurrent()) {
+									fail(new Error("Tool-attached context is no longer current"));
+									return { consume: true };
+								}
+								if (revealingControls) return { consume: true };
+								if (this.ui.isComponentVisible(tool)) return undefined;
+								revealingControls = true;
+								this.ui.setFocus(null);
+								this.ui.revealComponent(tool);
+								void this.ui
+									.renderNow({ requireFlush: true })
+									.then(() => {
+										if (closed) return;
+										if (!attachmentCurrent())
+											throw new Error("Tool-attached context was replaced before flush settled");
+										if (!this.ui.isComponentVisible(tool))
+											throw new Error("Approval controls do not fit in the visible viewport");
+										revealingControls = false;
+										this.ui.setFocus(tool);
+									})
+									.catch(fail);
+								return { consume: true };
+							});
+						}
 						this.ui.setFocus(tool);
 						this.ui.requestRender();
 						return;
@@ -2520,21 +2571,7 @@ export class InteractiveMode {
 						this.ui.requestRender();
 					}
 				})
-				.catch((err) => {
-					if (closed) return;
-					attachedTool?.cancelCommittedContext();
-					if (committedContext) {
-						this.committedChatContainer.removeChild(committedContext);
-						this.ui.rebuild();
-					}
-					try {
-						component?.dispose?.();
-					} catch {
-						/* ignore dispose errors */
-					}
-					if (!isOverlay) restoreEditor();
-					reject(err);
-				});
+				.catch(fail);
 		});
 	}
 
@@ -3564,6 +3601,7 @@ export class InteractiveMode {
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
+		await this.ui.terminal.flush?.();
 		await this.runtimeHost.dispose();
 		process.exit(0);
 	}
@@ -5761,8 +5799,12 @@ export class InteractiveMode {
 			this.unsubscribe();
 		}
 		if (this.isInitialized) {
-			this.ui.stop();
 			this.isInitialized = false;
+			const transcript = [...this.committedChatContainer.children, ...this.chatContainer.children];
+			for (const component of transcript) {
+				if (component instanceof ToolExecutionComponent) component.detachCommittedContext();
+			}
+			this.ui.stop({ transcript });
 		}
 	}
 }

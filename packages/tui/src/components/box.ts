@@ -16,6 +16,12 @@ export class Box implements Component {
 	private paddingX: number;
 	private paddingY: number;
 	private bgFn?: (text: string) => string;
+	private viewportHeight?: number;
+
+	// SCRAMJET-DIVERGENCE: propagate image bounds without clipping text or stacked children.
+	setViewportHeight(height: number | undefined): void {
+		this.viewportHeight = height;
+	}
 
 	// Cache for rendered output
 	private cache?: RenderCache;
@@ -82,6 +88,7 @@ export class Box implements Component {
 		// Render all children
 		const childLines: string[] = [];
 		for (const child of this.children) {
+			child.setViewportHeight?.(this.viewportHeight);
 			const lines = child.render(contentWidth);
 			for (const line of lines) {
 				childLines.push(leftPad + line);

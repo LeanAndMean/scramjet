@@ -30,6 +30,7 @@ interface RenderedBlock extends ViewportBlock {
 	lines: string[];
 	start: number;
 	width: number;
+	height: number;
 	generation: number;
 }
 
@@ -181,6 +182,7 @@ export class RetainedViewport {
 	private width = 0;
 	private screenHeight = 0;
 	private logical: string[] = [];
+	private visibleComponents = new Set<Component>();
 	private selection: { start: SelectionPoint; end: SelectionPoint } | undefined;
 	private pendingUpdates = false;
 	private copyError: string | undefined;
@@ -395,6 +397,7 @@ export class RetainedViewport {
 		this.cancelInteraction();
 		this.logical = [];
 		this.blocks = [];
+		this.visibleComponents.clear();
 		this.anchor = undefined;
 		this.offset = 0;
 		this.totalRows = 0;
@@ -423,6 +426,15 @@ export class RetainedViewport {
 		return { component: block.component, row: localRow, grapheme: first?.grapheme ?? 0, screenRow };
 	}
 
+	isComponentVisible(component: Component): boolean {
+		return this.visibleComponents.has(component);
+	}
+
+	revealComponent(component: Component): void {
+		const block = this.blocks.find((block) => block.component === component);
+		if (block) this.scrollTo(block.start + Math.max(0, block.lines.length - this.height));
+	}
+
 	update(width: number, height: number): string[] {
 		if (width !== this.width || height !== this.screenHeight) this.cancelInteraction();
 		this.width = width;
@@ -438,12 +450,14 @@ export class RetainedViewport {
 				block.finalized &&
 				old?.finalized &&
 				old.width === width &&
+				old.height === height &&
 				old.generation === this.generation &&
 				old.revision === block.revision;
+			block.component.setViewportHeight?.(height);
 			let lines = reusable ? old.lines : [...block.component.render(width)];
 			if (old && lines.length === old.lines.length && lines.every((line, i) => line === old.lines[i]))
 				lines = old.lines;
-			next.set(block.component, { ...block, lines, start, width, generation: this.generation });
+			next.set(block.component, { ...block, lines, start, width, height, generation: this.generation });
 			start += lines.length;
 		}
 		if (this.selection) {
@@ -495,6 +509,17 @@ export class RetainedViewport {
 	}
 
 	slice(logical: string[], width: number, hideImages: boolean): { lines: string[]; images: ImagePlacement[] } {
+		this.visibleComponents = new Set(
+			this.blocks
+				.filter(
+					(block) =>
+						!this.selection &&
+						block.lines.length > 0 &&
+						block.start >= this.offset &&
+						block.start + block.lines.length <= this.offset + this.height,
+				)
+				.map((block) => block.component),
+		);
 		const lines = logical.slice(this.offset, this.offset + this.height);
 		const images: ImagePlacement[] = [];
 		for (let row = 0; row < logical.length; row++) {
@@ -516,11 +541,16 @@ export class RetainedViewport {
 				top >= this.offset &&
 				bottom <= this.offset + this.height &&
 				placement.col + placement.columns <= width &&
-				!hideImages
+				!hideImages &&
+				!this.selection
 			) {
 				images.push({ ...placement, row: top - this.offset });
 			} else {
-				const label = hideImages ? "[Image hidden by overlay]" : "[Image clipped; scroll to view]";
+				const label = hideImages
+					? "[Image hidden by overlay]"
+					: this.selection
+						? "[Image hidden by selection]"
+						: "[Image clipped; scroll to view]";
 				lines[Math.max(0, top - this.offset)] = truncateToWidth(label, width);
 			}
 		}

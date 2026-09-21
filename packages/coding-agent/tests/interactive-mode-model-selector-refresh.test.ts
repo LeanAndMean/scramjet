@@ -37,6 +37,8 @@ function harness(initialSession: ReturnType<typeof session>) {
 		pendingSelectorOpenGeneration: undefined,
 		showSelector: vi.fn(),
 		defaultEditor,
+		committedChatContainer: { children: [] },
+		chatContainer: { children: [] },
 		ui: { onDebug: undefined, stop: vi.fn(), terminal: { setProgress: vi.fn() } },
 		unregisterSignalHandlers: vi.fn(),
 		clearExtensionTerminalInputListeners: vi.fn(),

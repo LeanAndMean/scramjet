@@ -7,6 +7,7 @@ on:
       - .github/workflows/terminal-feasibility.yml
       - .github/scripts/macos-terminal-*
       - .github/scripts/terminal-probe.py
+      - .github/scripts/terminal-safety.py
       - packages/scramjet/tests/fixtures/interactive-viewport.mjs
   workflow_dispatch:
 
@@ -14,6 +15,51 @@ permissions:
   contents: read
 
 jobs:
+  native-safety:
+    name: native-safety (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Provision disposable Kitty desktop
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kitty xvfb xdotool openbox scrot
+      - name: Provision disposable iTerm2
+        if: runner.os == 'macOS'
+        run: brew install --cask iterm2
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Check iTerm2 graphics and handoffs
+        if: runner.os == 'macOS'
+        run: python3 .github/scripts/terminal-safety.py "$RUNNER_TEMP/terminal-safety"
+      - name: Check Kitty graphics and handoffs
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a -s '-screen 0 1280x900x24' dbus-run-session -- bash -c '
+            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+            python3 .github/scripts/terminal-safety.py "$RUNNER_TEMP/terminal-safety"
+          '
+      - name: Preserve native safety evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-safety-${{ matrix.os }}
+          path: ${{ runner.temp }}/terminal-safety
+          if-no-files-found: error
+          retention-days: 7
+
   native-terminal:
     name: native-terminal (${{ matrix.os }}, tmux=${{ matrix.tmux }})
     runs-on: ${{ matrix.os }}

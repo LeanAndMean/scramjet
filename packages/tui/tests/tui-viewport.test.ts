@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Box } from "../src/components/box.js";
 import { Image } from "../src/components/image.js";
 import { Text } from "../src/components/text.js";
 import { KeybindingsManager, TUI_KEYBINDINGS } from "../src/keybindings.js";
 import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.js";
-import { type Component, CURSOR_MARKER, TUI } from "../src/tui.js";
+import { type Component, Container, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { sliceByColumn } from "../src/utils.js";
 import type { ViewportBlock, ViewportOptions } from "../src/viewport.js";
 import { HeadlessTerminal } from "./helpers/headless-terminal.js";
@@ -526,6 +527,39 @@ describe("retained viewport", () => {
 	});
 
 	it.each(["kitty", "iterm2"] as const)(
+		"fits nested oversized %s images and refits finalized images on height resize",
+		async (protocol) => {
+			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
+			const image = new Image(
+				"aW1hZ2U=",
+				"image/png",
+				{ fallbackColor: (s) => s },
+				{ maxWidthCells: 60, imageId: 55 },
+				{ widthPx: 20, heightPx: 2000 },
+			);
+			const box = new Box(1, 1);
+			const container = new Container();
+			box.addChild(image);
+			container.addChild(box);
+			const { tui, terminal, frame } = await setup([{ component: container, finalized: true }], 61, 10);
+			const prefix = protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=";
+			expect(tui.getViewportState()!.totalRows).toBeLessThanOrEqual(12);
+			tui.scrollViewportTo(1);
+			let mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain(prefix);
+			if (protocol === "iterm2") expect(terminal.writesSince(mark)).toContain(";height=10:");
+			terminal.resize(61, 5);
+			await frame();
+			expect(tui.getViewportState()!.totalRows).toBeLessThanOrEqual(7);
+			tui.scrollViewportTo(1);
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain(prefix);
+		},
+	);
+
+	it.each(["kitty", "iterm2"] as const)(
 		"paints %s placements atomically at absolute rows and exposes clipped spans",
 		async (protocol) => {
 			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
@@ -552,6 +586,24 @@ describe("retained viewport", () => {
 			expect(terminal.writesSince(mark)).toContain(prefix);
 			expect(terminal.writesSince(mark)).toContain(`\x1b[2;1H${prefix}`);
 			expect(terminal.writesSince(mark)).not.toContain("\x1b[2A");
+			terminal.sendInput(mouse(0, 1, 1));
+			terminal.sendInput(mouse(32, 2, 1));
+			terminal.sendInput(mouse(0, 2, 1, "m"));
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).not.toContain(prefix);
+			expect(terminal.visibleLines().join("\n")).toContain("Image hidden by selection");
+			terminal.sendInput("\x1b");
+			tui.scrollViewportTo(2);
+			await frame();
+			const overlay = tui.showOverlay(new Text("overlay", 0, 0));
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).not.toContain(prefix);
+			overlay.hide();
+			mark = terminal.markWrites();
+			await frame();
+			expect(terminal.writesSince(mark)).toContain(prefix);
 			tui.scrollViewportTo(4);
 			mark = terminal.markWrites();
 			await frame();
