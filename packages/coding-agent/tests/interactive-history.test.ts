@@ -38,6 +38,7 @@ import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js
 import type { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
+import * as clipboard from "../src/utils/clipboard.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 function assistant(text: string, stopReason: AssistantMessage["stopReason"] = "stop"): AssistantMessage {
@@ -189,7 +190,108 @@ function createInteractiveHarness(): {
 	};
 }
 
+describe("retained transcript selection", () => {
+	it("copies the painted row when wheel and selection input arrive before repaint", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(undefined);
+		const tool = defineTool({
+			name: "selection_rows",
+			label: "Selection rows",
+			description: "Synthetic selection fixture",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [] }),
+			renderShell: "self",
+			renderCall: () =>
+				new Text(Array.from({ length: 80 }, (_, i) => `ROW-${String(i).padStart(2, "0")}`).join("\n"), 0, 0),
+		});
+		const h = await createProductionInteractiveHarness(32, 12, (pi) => pi.registerTool(tool));
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "selection", toolName: tool.name, args: {} });
+			await h.frame();
+			const target = h.internals.ui.render(31).findIndex((row) => row.includes("ROW-20"));
+			expect(target).toBeGreaterThanOrEqual(0);
+			h.internals.ui.scrollViewportTo(target);
+			const painted = await h.frame();
+			expect(painted[0].slice(0, 6)).toBe("ROW-20");
+			expect(painted[1].slice(0, 6)).toBe("ROW-21");
+			const mark = h.terminal.markWrites();
+			for (const data of ["\x1b[<64;2;2M", "\x1b[<0;1;2M", "\x1b[<32;7;2M", "\x1b[<0;7;2m", "\x1b[<2;2;2M"])
+				h.terminal.sendInput(data);
+			expect(h.terminal.writesSince(mark)).toBe("");
+			expect(copy).toHaveBeenCalledExactlyOnceWith("ROW-21");
+		} finally {
+			copy.mockRestore();
+			await h.dispose();
+		}
+	});
+});
+
 describe("retained approval and exit safety", () => {
+	it("dispatches to a capturing overlay while approval revelation awaits flush", async () => {
+		const h = await createProductionInteractiveHarness(60, 12);
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let finish: ((value: string) => void) | undefined;
+		let outcome: Promise<string | Error> | undefined;
+		let overlayFrame: Promise<void> | undefined;
+		let flushSpy: ReturnType<typeof vi.spyOn> | undefined;
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			const tool = h.internals.chatContainer.children[0];
+			const approvalInput = vi.fn();
+			outcome = h.extensionUI
+				.custom<string>(
+					(_ui, _theme, _kb, done) => {
+						finish = done;
+						return { render: () => ["APPROVE OR CANCEL"], invalidate() {}, handleInput: approvalInput };
+					},
+					{
+						toolAttachedContext: {
+							toolCallId: "approval",
+							render: () => new Text(Array.from({ length: 40 }, (_, i) => `PAYLOAD-${i}`).join("\n"), 0, 0),
+						},
+					},
+				)
+				.catch((error: Error) => error);
+			await vi.waitFor(() => expect(h.internals.ui.isComponentFocused(tool)).toBe(true));
+			expect(h.internals.ui.isComponentVisible(tool)).toBe(true);
+			h.internals.ui.scrollViewportTo(0);
+			await h.frame();
+			expect(h.internals.ui.isComponentVisible(tool)).toBe(false);
+			let entered!: () => void;
+			const flushEntered = new Promise<void>((resolve) => {
+				entered = resolve;
+			});
+			const flush = h.terminal.flush.bind(h.terminal);
+			flushSpy = vi.spyOn(h.terminal, "flush").mockImplementation(async () => {
+				entered();
+				await gate;
+				await flush();
+			});
+			h.terminal.sendInput("\r");
+			await flushEntered;
+			expect(approvalInput).not.toHaveBeenCalled();
+			const overlayInput = vi.fn();
+			const overlay = { render: () => ["CAPTURING OVERLAY"], invalidate() {}, handleInput: overlayInput };
+			const mark = h.terminal.markWrites();
+			h.internals.ui.showOverlay(overlay);
+			overlayFrame = h.internals.ui.renderNow({ requireFlush: true });
+			expect(h.terminal.writesSince(mark)).toContain("CAPTURING OVERLAY");
+			expect(h.internals.ui.isComponentFocused(overlay)).toBe(true);
+			h.terminal.sendInput("\r");
+			expect(approvalInput).not.toHaveBeenCalled();
+			expect(overlayInput).toHaveBeenCalledExactlyOnceWith("\r");
+		} finally {
+			finish?.("cancelled");
+			release();
+			await outcome;
+			await overlayFrame;
+			flushSpy?.mockRestore();
+			await h.dispose();
+		}
+	});
+
 	it("drains key releases before suspending the terminal", async () => {
 		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
 		let release!: () => void;

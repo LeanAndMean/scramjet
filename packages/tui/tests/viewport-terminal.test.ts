@@ -8,6 +8,24 @@ afterEach(() => {
 });
 
 describe("mouse transport framing", () => {
+	it("preserves a separately typed bracket after an expired Escape", () => {
+		vi.useFakeTimers();
+		const buffer = new StdinBuffer({ timeout: 10 });
+		const events: string[] = [];
+		buffer.on("data", (data) => events.push(data));
+		try {
+			buffer.process("\x1b");
+			vi.advanceTimersByTime(1000);
+			expect(events).toEqual(["\x1b"]);
+			buffer.process("[");
+			vi.advanceTimersByTime(20);
+			for (const character of "draft]") buffer.process(character);
+			expect(events).toEqual(["\x1b", "[", "d", "r", "a", "f", "t", "]"]);
+		} finally {
+			buffer.destroy();
+		}
+	});
+
 	it("frames every byte split of an SGR event", () => {
 		const event = "\x1b[<32;123;45M";
 		for (let split = 1; split < event.length; split++) {

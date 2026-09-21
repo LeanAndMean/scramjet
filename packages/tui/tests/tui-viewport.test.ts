@@ -3,7 +3,12 @@ import { Box } from "../src/components/box.js";
 import { Image } from "../src/components/image.js";
 import { Text } from "../src/components/text.js";
 import { KeybindingsManager, TUI_KEYBINDINGS } from "../src/keybindings.js";
-import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.js";
+import {
+	getCellDimensions,
+	resetCapabilitiesCache,
+	setCapabilities,
+	setCellDimensions,
+} from "../src/terminal-image.js";
 import { type Component, Container, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { sliceByColumn } from "../src/utils.js";
 import type { ViewportBlock, ViewportOptions } from "../src/viewport.js";
@@ -365,6 +370,42 @@ describe("viewport interactions", () => {
 });
 
 describe("retained viewport", () => {
+	it("deletes a built-in Kitty image when its overlay closes", async () => {
+		const dimensions = getCellDimensions();
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		setCellDimensions({ widthPx: 9, heightPx: 18 });
+		try {
+			const rows = Array.from({ length: 8 }, (_, i) => `transcript-${i}`);
+			const { tui, terminal, frame, text } = await setup([{ component: new Text(rows.join("\n"), 0, 0) }], 41, 8);
+			const image = new Image(
+				"iVBORw0KGgoAAAANSUhEUgAAADYAAAA2CAIAAAADJ/2KAAAARklEQVR4nO3OAQkAMAzAsPk3vctYD4EIyOxs3JwPFBUVFVsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSsUFSs+KD6jF7KD27HgqAAAAABJRU5ErkJggg==",
+				"image/png",
+				{ fallbackColor: (value) => value },
+				{ imageId: 55104, maxWidthCells: 6, maxHeightCells: 3 },
+			);
+			const mark = terminal.markWrites();
+			const overlay = tui.showOverlay(image, { row: 1, col: 2, width: 10, maxHeight: 3 });
+			await frame();
+			expect(terminal.writesSince(mark)).toMatch(/\x1b_Ga=T,[^;]*i=55104[^;]*;/);
+			const hiding = terminal.markWrites();
+			overlay.hide();
+			await frame();
+			expect(text()).toEqual(rows);
+			const deletions = [...terminal.writesSince(hiding).matchAll(/\x1b_G([^;\x1b]*)\x1b\\/g)]
+				.map((match) => new Map(match[1].split(",").map((parameter) => parameter.split("=") as [string, string])))
+				.filter((parameters) => parameters.get("a") === "d");
+			expect(
+				deletions.some(
+					(parameters) =>
+						["a", "A"].includes(parameters.get("d") ?? "") ||
+						(["i", "I"].includes(parameters.get("d") ?? "") && parameters.get("i") === "55104"),
+				),
+			).toBe(true);
+		} finally {
+			setCellDimensions(dimensions);
+		}
+	});
+
 	it("retains tall mutable output, paints exact slices, and follows only an explicit return to the tail", async () => {
 		const card = new Rows(Array.from({ length: 12 }, (_, i) => `card-${i}`));
 		const { tui, terminal, frame, text } = await setup([{ component: card }]);
