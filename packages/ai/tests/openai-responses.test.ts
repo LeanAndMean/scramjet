@@ -1,12 +1,18 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.js";
-import { streamSimpleOpenAIResponses } from "../src/providers/openai-responses.js";
+import { streamAzureOpenAIResponses } from "../src/providers/azure-openai-responses.js";
+import {
+	streamOpenAIResponses,
+	streamSimpleOpenAIResponses,
+	validateResponsesProviderFailure,
+} from "../src/providers/openai-responses.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
 
 const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
 const openaiModel = getModel("openai", "gpt-6-astra");
 const copilotModel = getModel("github-copilot", "gpt-6-astra");
+const azureModel = getModel("azure-openai-responses", "gpt-4");
 const copilotHeaders = copilotModel.headers;
 
 function copilotResponsesModel(
@@ -126,6 +132,13 @@ function toolCallResponse(): Response {
 	]);
 }
 
+function jsonError(status: number, error?: Record<string, unknown>): Response {
+	return new Response(error ? JSON.stringify({ error }) : undefined, {
+		status,
+		headers: { "content-type": "application/json" },
+	});
+}
+
 function stubFetch(responses: Response[]) {
 	const requests: Request[] = [];
 	const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -229,6 +242,252 @@ describe.each([
 
 	it("streams a tool call and continues after its result", async () => {
 		await assertToolContinuation(model);
+	});
+});
+
+describe("OpenAI Responses failure normalization", () => {
+	async function failureFrom(response: Response, model = openaiModel) {
+		stubFetch([response]);
+		return streamSimpleOpenAIResponses(model, context, { apiKey, maxRetries: 0 }).result();
+	}
+
+	function providerDetails(message: AssistantMessage) {
+		return message.diagnostics?.find((diagnostic) => diagnostic.type === "provider_failure")?.details;
+	}
+
+	it("normalizes a bare provider error without undefined placeholders", async () => {
+		const result = await failureFrom(sse([{ type: "error" }]));
+
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toBe("OpenAI Responses returned a malformed error event.");
+		expect(result.errorMessage).not.toContain("undefined");
+		expect(result.diagnostics).toEqual([
+			{
+				type: "provider_failure",
+				timestamp: expect.any(Number),
+				details: {
+					schemaVersion: 1,
+					layer: "openai_responses",
+					phase: "stream",
+					kind: "malformed_event",
+					category: "malformed_event",
+					retryDisposition: "unknown",
+					detailSource: "none",
+				},
+			},
+			{
+				type: "gateway_observability",
+				timestamp: expect.any(Number),
+				details: {
+					schemaVersion: 1,
+					layer: "gateway_service_internal",
+					outcome: "unobservable",
+					reason: "no_structured_evidence",
+				},
+			},
+		]);
+	});
+
+	it.each([
+		[
+			"top-level code",
+			{ type: "error", code: "rate_limit_exceeded", message: "sensitive provider prose" },
+			"rate_limit",
+			"transient",
+			"provider_code",
+			"OpenAI Responses request was rate limited.",
+		],
+		[
+			"message-only error",
+			{ type: "error", message: "request timeout at /sensitive/path" },
+			"timeout",
+			"transient",
+			"message_category",
+			"OpenAI Responses request timed out.",
+		],
+		[
+			"nested SDK-intercepted error",
+			{ type: "error", error: { code: "authentication_error", message: "secret-key-value" } },
+			"authentication",
+			"non_transient",
+			"provider_code",
+			"OpenAI Responses authentication failed.",
+		],
+	] as const)("normalizes a %s", async (_name, event, category, disposition, source, message) => {
+		const result = await failureFrom(sse([event]));
+
+		expect(result.errorMessage).toBe(message);
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({
+				schemaVersion: 1,
+				phase: "stream",
+				kind: "provider_event",
+				category,
+				retryDisposition: disposition,
+				detailSource: source,
+			}),
+		);
+	});
+
+	it.each([
+		[
+			"complete response.failed",
+			{ type: "response.failed", response: { error: { code: "content_filter", message: "private prompt" } } },
+			"content_rejection",
+			"provider_code",
+		],
+		[
+			"partial response.failed",
+			{ type: "response.failed", response: { incomplete_details: { reason: "server error in tenant secret" } } },
+			"server",
+			"message_category",
+		],
+		["empty response.failed", { type: "response.failed", response: {} }, "malformed_event", "none"],
+	] as const)("normalizes a %s", async (_name, event, category, source) => {
+		const result = await failureFrom(sse([event]));
+		expect(providerDetails(result)).toEqual(expect.objectContaining({ category, detailSource: source }));
+	});
+
+	it("gives context overflow precedence over conflicting transient evidence", async () => {
+		const result = await failureFrom(
+			sse([{ type: "error", code: "rate_limit_exceeded", message: "maximum context length exceeded" }]),
+		);
+
+		expect(result.errorMessage).toBe("OpenAI Responses context length was exceeded.");
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({ category: "context_overflow", retryDisposition: "non_transient" }),
+		);
+	});
+
+	it.each([
+		[jsonError(429), "rate_limit", "http_status"],
+		[
+			jsonError(400, { code: "invalid_request_error", message: "private request body" }),
+			"invalid_request",
+			"provider_code",
+		],
+	] as const)(
+		"normalizes request failures without a body or with SDK API fields",
+		async (response, category, source) => {
+			const result = await failureFrom(response);
+			expect(providerDetails(result)).toEqual(
+				expect.objectContaining({ phase: "request", kind: "http", category, detailSource: source }),
+			);
+		},
+	);
+
+	it("does not let request transport inference override context overflow", async () => {
+		const result = await streamOpenAIResponses(openaiModel, context, {
+			apiKey,
+			onPayload: async () => {
+				throw new TypeError("maximum context length exceeded");
+			},
+		}).result();
+
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({
+				phase: "request",
+				kind: "provider_event",
+				category: "context_overflow",
+				retryDisposition: "non_transient",
+			}),
+		);
+	});
+
+	it("normalizes request transport failures without retaining the thrown message", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => Promise.reject(new TypeError("private host and request details"))),
+		);
+
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 0 }).result();
+
+		expect(result.errorMessage).toBe("OpenAI Responses request failed during transport.");
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({ phase: "request", kind: "transport", category: "transport" }),
+		);
+		expect(JSON.stringify(result)).not.toContain("private host");
+	});
+
+	it("does not add failure diagnostics to a successful stream", async () => {
+		stubFetch([completedResponse()]);
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey }).result();
+		expect(result.diagnostics).toBeUndefined();
+	});
+
+	it("does not retain unrestricted provider data", async () => {
+		const sentinels = ["secret-header", "https://private.example/path", "resp_private", "/home/private/file"];
+		const result = await failureFrom(
+			sse([
+				{ type: "error", code: "unsupported_private_code", message: sentinels.join(" "), stack: "secret-stack" },
+			]),
+		);
+		const serialized = JSON.stringify(result);
+
+		for (const sentinel of sentinels) expect(serialized).not.toContain(sentinel);
+		expect(serialized).not.toContain("secret-stack");
+		expect(Object.keys(providerDetails(result) ?? {}).sort()).toEqual(
+			["category", "detailSource", "kind", "layer", "phase", "retryDisposition", "schemaVersion"].sort(),
+		);
+	});
+
+	it("normalizes custom shared-route failures", async () => {
+		const customModel = { ...openaiModel, provider: "custom-responses", baseUrl: "https://custom.example/v1" };
+		const result = await failureFrom(sse([{ type: "error", code: "server_error" }]), customModel);
+		expect(providerDetails(result)).toEqual(expect.objectContaining({ category: "server" }));
+	});
+
+	it("normalizes representative Azure failures", async () => {
+		stubFetch([sse([{ type: "error", code: "permission_denied" }])]);
+		const result = await streamAzureOpenAIResponses(azureModel, context, {
+			apiKey,
+			azureBaseUrl: "https://example.openai.azure.com/openai/v1",
+			maxRetries: 0,
+		}).result();
+		expect(providerDetails(result)).toEqual(
+			expect.objectContaining({ category: "permission", retryDisposition: "non_transient" }),
+		);
+	});
+
+	it("validates exactly one closed provider failure diagnostic", async () => {
+		const result = await failureFrom(sse([{ type: "error", code: "server_error" }]));
+		expect(validateResponsesProviderFailure(result.diagnostics)).toEqual({
+			status: "valid",
+			category: "server",
+			retryDisposition: "transient",
+		});
+		expect(validateResponsesProviderFailure(undefined)).toEqual({ status: "absent" });
+		expect(
+			validateResponsesProviderFailure([
+				{ type: "provider_failure", timestamp: 0, details: { ...providerDetails(result), extra: true } },
+			]),
+		).toEqual({ status: "malformed" });
+		expect(
+			validateResponsesProviderFailure([
+				{
+					type: "provider_failure",
+					timestamp: 0,
+					details: { ...providerDetails(result), kind: { toString: () => "provider_event" } },
+				},
+			]),
+		).toEqual({ status: "malformed" });
+		expect(
+			validateResponsesProviderFailure([
+				{
+					type: "provider_failure",
+					timestamp: 0,
+					details: {
+						...providerDetails(result),
+						providerCode: "rate_limit_exceeded",
+						category: "server",
+						detailSource: "provider_code",
+					},
+				},
+			]),
+		).toEqual({ status: "malformed" });
+		expect(validateResponsesProviderFailure([result.diagnostics![0], result.diagnostics![0]])).toEqual({
+			status: "duplicate",
+		});
 	});
 });
 

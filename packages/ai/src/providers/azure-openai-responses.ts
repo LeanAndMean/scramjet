@@ -13,7 +13,13 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
+import {
+	appendResponsesFailureDiagnostics,
+	convertResponsesMessages,
+	convertResponsesTools,
+	normalizeResponsesFailure,
+	processResponsesStream,
+} from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
@@ -82,6 +88,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			timestamp: Date.now(),
 		};
 
+		// SCRAMJET-DIVERGENCE: classify shared Responses failures at the request/stream boundary (#553).
+		let failurePhase: "request" | "stream" = "request";
 		try {
 			// Create Azure OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
@@ -100,6 +108,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
+			failurePhase = "stream";
 			await processResponsesStream(openaiStream, output, stream, model);
 
 			if (options?.signal?.aborted) {
@@ -119,7 +128,11 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			if (output.stopReason === "aborted") {
+				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			} else {
+				appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, failurePhase));
+			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
