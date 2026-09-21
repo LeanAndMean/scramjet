@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { release, platform, tmpdir } from "node:os";
 import { join } from "node:path";
-import { isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
+import { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
 
 const help = `Retained TUI candidate interaction fixture for #551; NOT production activation.
@@ -99,20 +99,22 @@ const controls = {
 	invalidate() {},
 	render: (width) => [status, "Wheel/drag to browse; select then right-click/Ctrl+C; Ctrl+Q exits", `Editor: ${editor}`].map((line) => truncateToWidth(line, width)),
 	handleInput(data) {
+		const printable = decodeKittyPrintable(data) ?? data;
 		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
 			const text = data.slice(6, -6);
 			if (copied !== undefined && text === copied) { evidence.pasteMatches++; status = "Synthetic clipboard round-trip MATCH."; }
 			else { evidence.pasteMismatches++; status = "Clipboard mismatch; content not recorded."; }
-		} else if (data === "\x1b[D") cursor = Math.max(0, cursor - 1);
-		else if (data === "\x1b[C") cursor = Math.min(editor.length, cursor + 1);
-		else if (data === "\x7f" && cursor > 0) { editor = editor.slice(0, cursor - 1) + editor.slice(cursor); cursor--; }
-		else if (/^[\x20-\x7e]$/.test(data)) { editor = editor.slice(0, cursor) + data + editor.slice(cursor); cursor++; }
+		} else if (matchesKey(data, "left")) cursor = Math.max(0, cursor - 1);
+		else if (matchesKey(data, "right")) cursor = Math.min(editor.length, cursor + 1);
+		else if (matchesKey(data, "backspace") && cursor > 0) { editor = editor.slice(0, cursor - 1) + editor.slice(cursor); cursor--; }
+		else if (/^[\x20-\x7e]$/.test(printable)) { editor = editor.slice(0, cursor) + printable + editor.slice(cursor); cursor++; }
 	}
 };
 tui.addInputListener((data) => {
-	if (data === "\x11") { stop(); return { consume: true }; }
-	if (data === "\x15") { lines[0] = "ROW-001 updated synthetic content"; tui.requestRender(); return { consume: true }; }
-	if (data === "\x03") copyKind = "keyCopy";
+	if (isKeyRelease(data)) return { consume: true };
+	if (matchesKey(data, "ctrl+q")) { void terminal.drainInput().then(stop); return { consume: true }; }
+	if (matchesKey(data, "ctrl+u")) { lines[0] = "ROW-001 updated synthetic content"; tui.requestRender(); return { consume: true }; }
+	if (matchesKey(data, "ctrl+c")) copyKind = "keyCopy";
 	const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
 	if (mouse) {
 		const [button, x, y] = mouse.slice(1, 4).map(Number);
