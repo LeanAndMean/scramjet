@@ -221,6 +221,9 @@ describe("retained approval and exit safety", () => {
 			h.internals.ui.scrollViewportTo(0);
 			await h.frame();
 			expect(h.terminal.visibleLines().join("\n")).toContain("PAYLOAD-0");
+			h.terminal.sendInput("\x1b[5;1:3~");
+			await h.frame();
+			expect(h.internals.ui.getViewportState()!.offset).toBe(0);
 			h.terminal.sendInput("\r");
 			h.terminal.sendInput("\r");
 			expect(activate).not.toHaveBeenCalled();

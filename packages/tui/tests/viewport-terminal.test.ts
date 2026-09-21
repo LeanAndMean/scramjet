@@ -68,6 +68,29 @@ describe("mouse transport framing", () => {
 });
 
 describe("candidate terminal modes", () => {
+	it("requests explicit viewport key events and restores keyboard stacks in their owning buffers", () => {
+		vi.useFakeTimers();
+		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		const terminal = new ProcessTerminal();
+		terminal.start(
+			() => {},
+			() => {},
+		);
+		process.stdin.emit("data", "\x1b[?0u");
+		output.mockClear();
+		terminal.setViewportMode(true);
+		terminal.stop();
+		const written = output.mock.calls.map(([value]) => value).join("");
+		expect(written).toContain("\x1b[<u\x1b[?1049h");
+		expect(written).toContain("\x1b[?1006h\x1b[>15u");
+		expect(written).toContain("\x1b[<u\x1b[?1002l");
+		expect(written).toContain("\x1b[?1049l\x1b[>7u");
+		expect(written.endsWith("\x1b[<u")).toBe(true);
+	});
+
 	it("reenters the viewport and accepts pointer input during the resumed keyboard query", () => {
 		vi.useFakeTimers();
 		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -87,7 +110,7 @@ describe("candidate terminal modes", () => {
 		expect(input).toHaveBeenCalledExactlyOnceWith("\x1b[<64;2;2M");
 		expect(terminal.kittyProtocolActive).toBe(true);
 		const sequences = output.mock.calls.map(([value]) => value).join("");
-		expect(sequences.lastIndexOf("\x1b[?1049h")).toBeLessThan(sequences.lastIndexOf("\x1b[>7u"));
+		expect(sequences.lastIndexOf("\x1b[?1049h")).toBeLessThan(sequences.lastIndexOf("\x1b[>15u"));
 		terminal.stop();
 		const count = output.mock.calls.length;
 		vi.advanceTimersByTime(200);

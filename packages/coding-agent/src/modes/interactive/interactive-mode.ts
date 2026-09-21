@@ -34,6 +34,7 @@ import {
 	type Component,
 	Container,
 	fuzzyFilter,
+	isKeyRelease,
 	Loader,
 	type LoaderIndicatorOptions,
 	Markdown,
@@ -2518,7 +2519,8 @@ export class InteractiveMode {
 							if (!this.ui.isComponentVisible(tool))
 								throw new Error("Approval controls do not fit in the visible viewport");
 							// SCRAMJET-DIVERGENCE: navigation must reveal and flush controls before a later key can authorize.
-							removeInputGuard = this.ui.addInputListener(() => {
+							removeInputGuard = this.ui.addInputListener((data) => {
+								if (isKeyRelease(data) || /^\x1b\[\d+;\d+;\d+t$/.test(data)) return undefined;
 								if (!attachmentCurrent()) {
 									fail(new Error("Tool-attached context is no longer current"));
 									return { consume: true };

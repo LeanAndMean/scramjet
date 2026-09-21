@@ -164,7 +164,8 @@ export class ProcessTerminal implements Terminal {
 					// Flag 2 = report event types (press/repeat/release)
 					// Flag 4 = report alternate keys (shifted key, base layout key)
 					// Base layout key enables shortcuts to work with non-Latin keyboard layouts
-					process.stdout.write("\x1b[>7u");
+					// SCRAMJET-DIVERGENCE: explicit Enter events prevent legacy release bytes from authorizing twice.
+					process.stdout.write(this.viewportMode ? "\x1b[>15u" : "\x1b[>7u");
 					return; // Don't forward protocol response to TUI
 				}
 			}
@@ -286,8 +287,11 @@ export class ProcessTerminal implements Terminal {
 	// SCRAMJET-DIVERGENCE: modes belong to the candidate's bounded surface, not ordinary terminal callers.
 	setViewportMode(enabled: boolean): void {
 		if (enabled === this.viewportMode) return;
+		// Kitty keeps separate keyboard stacks for the normal and alternate buffers.
+		if (this._kittyProtocolActive) this.write("\x1b[<u");
 		this.viewportMode = enabled;
 		this.write(enabled ? "\x1b[?1049h\x1b[?1002h\x1b[?1006h" : "\x1b[?1002l\x1b[?1006l\x1b[0m\x1b[?1049l");
+		if (this._kittyProtocolActive) this.write(enabled ? "\x1b[>15u" : "\x1b[>7u");
 	}
 
 	stop(): void {

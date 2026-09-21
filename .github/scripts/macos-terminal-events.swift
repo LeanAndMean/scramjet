@@ -70,6 +70,8 @@ case "geometry":
         fatalError("Terminal is not running")
     }
     emit(geometry(AXUIElementCreateApplication(app.processIdentifier)))
+case "press-pid":
+    emit(["pressed": pressButton(AXUIElementCreateApplication(pid_t(args[2])!), title: args[3])])
 case "press":
     let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
     emit(["applications": apps.map { $0.localizedName ?? "unknown" }, "pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])

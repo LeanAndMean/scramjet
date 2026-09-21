@@ -90,8 +90,13 @@ try:
         report["capabilities"] = json.loads(run(str(driver), "capabilities"))
         opener = subprocess.Popen(["open", "-a", "iTerm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         def opened():
-            report["gatekeeperOpen"] = json.loads(run(str(driver), "press", "com.apple.CoreServicesUIAgent", "Open"))
-            return report["gatekeeperOpen"]["pressed"] or opener.poll() is not None
+            agents = subprocess.run(["pgrep", "-x", "CoreServicesUIAgent"], capture_output=True, text=True, timeout=5).stdout.split()
+            report["gatekeeperAgents"] = agents
+            for pid in agents:
+                report["gatekeeperOpen"] = json.loads(run(str(driver), "press-pid", pid, "Open"))
+                if report["gatekeeperOpen"]["pressed"]:
+                    return True
+            return opener.poll() is not None
         if not wait(opened, seconds=20):
             raise RuntimeError("iTerm opening prompt could not be confirmed")
         opener.wait(timeout=30)
