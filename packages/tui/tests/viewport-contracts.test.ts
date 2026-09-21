@@ -251,6 +251,14 @@ describe("overwidth containment contracts", () => {
 		expect(f.text().some((line) => /clip|width|truncat/i.test(line))).toBe(false);
 	});
 
+	it("normalizes tabs before containing overwide rows", async () => {
+		const f = await mount(["safe"], 13, 6);
+		f.card.lines = ["ABC\tDEFGHIJKLMNOPQRSTUVWXYZ"];
+		await expect(f.frame()).resolves.toBeUndefined();
+		expect(f.text()[0]).toBe("ABC   DEFGHI");
+		expect(f.text().some((line) => /clip|width|truncat/i.test(line))).toBe(true);
+	});
+
 	it("copies displayed columns rather than an overwide middle-row suffix", async () => {
 		const card = new Rows(["START", wide, "END"]);
 		const copy = vi.fn(async (_text: string) => {});
