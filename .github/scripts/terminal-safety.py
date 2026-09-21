@@ -51,8 +51,15 @@ def key(name):
     if mac:
         codes = {"1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25, "enter": 36, "exit": 12}
         run(str(driver), "key", str(codes[name]), "262144" if name == "exit" else "0")
+    elif name == "enter":
+        run("xdotool", "keydown", "Return")
+        time.sleep(0.2)
+        report.setdefault("enterEvents", []).append({"down": state()})
+        run("xdotool", "keyup", "Return")
+        time.sleep(0.2)
+        report["enterEvents"][-1]["up"] = state()
     else:
-        run("xdotool", "key", "--clearmodifiers", {"enter": "Return", "exit": "ctrl+q"}.get(name, name))
+        run("xdotool", "key", "--clearmodifiers", {"exit": "ctrl+q"}.get(name, name))
     time.sleep(0.4)
 
 

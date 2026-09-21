@@ -71,7 +71,7 @@ case "geometry":
     }
     emit(geometry(AXUIElementCreateApplication(app.processIdentifier)))
 case "press":
-    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: args[2])
+    let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
     emit(["applications": apps.map { $0.localizedName ?? "unknown" }, "pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
 case "key":
     let code = CGKeyCode(args[2])!
