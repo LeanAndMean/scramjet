@@ -51,7 +51,7 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
 func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool {
     if depth > 12 { return false }
     if attribute(element, kAXRoleAttribute) as? String == "AXButton",
-       attribute(element, kAXTitleAttribute) as? String == title {
+       [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains(where: { attribute(element, $0) as? String == title }) {
         return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
     }
     for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
@@ -72,7 +72,7 @@ case "geometry":
     emit(geometry(AXUIElementCreateApplication(app.processIdentifier)))
 case "press":
     let apps = NSRunningApplication.runningApplications(withBundleIdentifier: args[2])
-    emit(["pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
+    emit(["applications": apps.map { $0.localizedName ?? "unknown" }, "pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
 case "key":
     let code = CGKeyCode(args[2])!
     let flags = CGEventFlags(rawValue: UInt64(args[3])!)

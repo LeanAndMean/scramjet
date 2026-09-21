@@ -204,6 +204,7 @@ async function runProduction() {
 	let imageTool;
 	let overlay;
 	let approval;
+	let approvalTool;
 	let approvalDone;
 	let safetyImage;
 	const before = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
@@ -235,6 +236,11 @@ async function runProduction() {
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
+		if (safety) {
+			safetyState.inputs ??= [];
+			safetyState.inputs.push({ data, offset: mode.ui.getViewportState()?.offset, visible: approvalTool && mode.ui.isComponentVisible(approvalTool), focused: approvalTool && mode.ui.isComponentFocused(approvalTool) });
+			if (safetyState.inputs.length > 30) safetyState.inputs.shift();
+		}
 		if (isKeyRelease(data)) return { consume: true };
 		if (matchesKey(data, "ctrl+q")) { stop(); return { consume: true }; }
 		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find((key) => matchesKey(data, key));
@@ -260,10 +266,11 @@ async function runProduction() {
 			else { overlay = mode.ui.showOverlay(new Text("OVERLAY WITHOUT GRAPHICS", 1, 1)); safetyState.phase = "overlay"; }
 		} else if (key === "4" && !approval) {
 			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			approvalTool = mode.pendingTools.get("approval");
 			approval = extensionUI.custom((_tui, _theme, _kb, done) => {
 				approvalDone = done;
 				return { invalidate() {}, render: () => ["SYNTHETIC APPROVAL — Enter records a local counter only"], handleInput(data) {
-					if (matchesKey(data, "enter")) { safetyState.approved++; done("approved"); }
+					if (matchesKey(data, "enter")) { safetyState.approved++; safetyState.activatedWith = data; done("approved"); }
 				} };
 			}, { toolAttachedContext: { toolCallId: "approval", render: () => new Text(Array.from({ length: 60 }, (_, i) => `IMMUTABLE-SYNTHETIC-PAYLOAD-${i}`).join("\n"), 0, 0) } });
 			approval.catch((error) => { safetyState.error = error.message; record(); });
