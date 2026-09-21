@@ -441,6 +441,47 @@ describe("AgentSession persisted retry authority", () => {
 		]);
 	});
 
+	it("consumes settlement for a triggered custom-message turn before the next prompt", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		await session.sendCustomMessage(
+			{ customType: "test", content: "hidden prompt", display: false },
+			{ triggerTurn: true },
+		);
+		await (session as any)._agentEventQueue;
+
+		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "assistant") throw new Error("next assistant append failed");
+			return appendMessage(message);
+		});
+
+		await expect(session.prompt("hello")).rejects.toThrow("next assistant append failed");
+	});
+
+	it("consumes settlement when a triggered custom-message prompt rejects after agent_end", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		const agentPrompt = session.agent.prompt.bind(session.agent);
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockImplementation(async (input: any, images?: any) => {
+			await agentPrompt(input, images);
+			throw new Error("post-agent-end failure");
+		});
+
+		await expect(
+			session.sendCustomMessage(
+				{ customType: "test", content: "hidden prompt", display: false },
+				{ triggerTurn: true },
+			),
+		).rejects.toThrow("post-agent-end failure");
+		promptSpy.mockRestore();
+
+		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "assistant") throw new Error("next assistant append failed");
+			return appendMessage(message);
+		});
+		await expect(session.prompt("next")).rejects.toThrow("next assistant append failed");
+	});
+
 	it("rejects prompt when the finalized assistant message cannot be persisted", async () => {
 		const { session } = await createFixture(() => assistantText("ok"));
 		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
@@ -467,15 +508,23 @@ describe("AgentSession persisted retry authority", () => {
 	});
 
 	it.each([
-		["structured non-transient", providerFailure("non_transient", "invalid_request"), "structured_non_transient"],
-		["structured unknown", providerFailure("unknown", "provider_error"), "structured_unknown"],
+		[
+			"structured non-transient",
+			providerFailure("non_transient", "invalid_request"),
+			"structured_non_transient",
+			"provider_failure",
+		],
+		["structured unknown", providerFailure("unknown", "provider_error"), "structured_unknown", "provider_failure"],
 		[
 			"malformed structured",
 			{
-				...assistantError("rate limit"),
-				diagnostics: [{ type: "provider_failure", timestamp: Date.now(), details: { secret: "sentinel" } }],
+				...assistantError("rate limit private provider prose"),
+				diagnostics: [
+					{ type: "provider_failure", timestamp: Date.now(), details: { secret: "private diagnostic sentinel" } },
+				],
 			},
 			"malformed_provider_diagnostic",
+			"none",
 		],
 		[
 			"duplicate structured",
@@ -487,14 +536,21 @@ describe("AgentSession persisted retry authority", () => {
 				],
 			},
 			"duplicate_provider_diagnostic",
+			"none",
 		],
-	] as const)("fails closed for %s evidence", async (_label, message, reason) => {
+	] as const)("fails closed for %s evidence", async (label, message, reason, evidence) => {
 		const { session, events } = await createFixture(() => message);
 
 		await session.prompt("hello");
 
 		expect(retryEvents(events)).toEqual([]);
-		expect(retryRecords(session)).toEqual([expect.objectContaining({ outcome: "not_attempted", reason })]);
+		const records = retryRecords(session);
+		expect(records).toEqual([{ schemaVersion: 1, outcome: "not_attempted", reason, evidence }]);
+		if (label === "malformed structured") {
+			const serialized = JSON.stringify(records);
+			expect(serialized).not.toContain("private provider prose");
+			expect(serialized).not.toContain("private diagnostic sentinel");
+		}
 	});
 
 	it("records disabled retry policy for every persisted error", async () => {
@@ -542,7 +598,12 @@ describe("AgentSession persisted retry authority", () => {
 		await expect(session.prompt("hello")).rejects.toThrow("terminal append failed");
 
 		expect(session.isRetrying).toBe(false);
-		expect(retryEvents(events).at(-1)).toMatchObject({ type: "auto_retry_end", success: false });
+		expect(retryEvents(events).at(-1)).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 1,
+			finalError: "Retry outcome persistence failed",
+		});
 	});
 
 	it("rejects settlement when continuation fails without a later agent_end", async () => {
@@ -568,6 +629,50 @@ describe("AgentSession persisted retry authority", () => {
 		expect(session.isRetrying).toBe(false);
 	});
 
+	it("cancels during the post-backoff handoff without continuing", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 1 });
+		const continueAgent = vi.spyOn(session.agent, "continue");
+		const nativeSetTimeout = globalThis.setTimeout;
+		let runHandoff: (() => void) | undefined;
+		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+			if (delay === 0 && !runHandoff) {
+				runHandoff = () => (callback as (...callbackArgs: unknown[]) => void)(...args);
+				return {} as ReturnType<typeof setTimeout>;
+			}
+			return nativeSetTimeout(callback, delay, ...args);
+		});
+		try {
+			const prompt = session.prompt("hello");
+			await vi.waitFor(() => expect(runHandoff).toBeDefined());
+
+			session.abortRetry();
+			runHandoff?.();
+			await prompt;
+
+			expect(continueAgent).not.toHaveBeenCalled();
+			expect(retryRecords(session)).toEqual([
+				{
+					schemaVersion: 1,
+					outcome: "scheduled",
+					evidence: "legacy_text",
+					attempt: 1,
+					maxAttempts: 3,
+					cumulativeErrors: 1,
+					delayMs: 1,
+				},
+				{
+					schemaVersion: 1,
+					outcome: "cancelled",
+					reason: "cancelled_during_backoff",
+					attempt: 1,
+					cumulativeErrors: 1,
+				},
+			]);
+		} finally {
+			setTimeoutSpy.mockRestore();
+		}
+	});
+
 	it("rejects disposal during backoff without continuing", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 10_000 });
 		const continueAgent = vi.spyOn(session.agent, "continue");
@@ -578,6 +683,36 @@ describe("AgentSession persisted retry authority", () => {
 		await expect(prompt).rejects.toThrow("disposed before retry settlement completed");
 		await vi.waitFor(() => expect(session.isRetrying).toBe(false));
 		expect(continueAgent).not.toHaveBeenCalled();
+	});
+
+	it("rejects disposal during the post-backoff handoff without continuing", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 1 });
+		const continueAgent = vi.spyOn(session.agent, "continue");
+		const nativeSetTimeout = globalThis.setTimeout;
+		let runHandoff: (() => void) | undefined;
+		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+			if (delay === 0 && !runHandoff) {
+				runHandoff = () => (callback as (...callbackArgs: unknown[]) => void)(...args);
+				return {} as ReturnType<typeof setTimeout>;
+			}
+			return nativeSetTimeout(callback, delay, ...args);
+		});
+		try {
+			const prompt = session.prompt("hello");
+			const rejection = prompt.catch((error: unknown) => error);
+			await vi.waitFor(() => expect(runHandoff).toBeDefined());
+
+			session.dispose();
+			runHandoff?.();
+			expect(await rejection).toEqual(
+				expect.objectContaining({ message: "AgentSession disposed before retry settlement completed." }),
+			);
+
+			expect(session.isRetrying).toBe(false);
+			expect(continueAgent).not.toHaveBeenCalled();
+		} finally {
+			setTimeoutSpy.mockRestore();
+		}
 	});
 
 	it("keeps retry records ordered on the branch and excluded from model context", async () => {
@@ -601,7 +736,7 @@ describe("AgentSession persisted retry authority", () => {
 describe("AgentSession retry bounding", () => {
 	it("single transient error retries and succeeds", async () => {
 		const { session, events } = await createFixture((i) => {
-			if (i === 0) return assistantError("Anthropic stream ended before message_stop");
+			if (i === 0) return assistantError("Anthropic stream ended before message_stop private provider prose");
 			return assistantText("ok");
 		});
 
@@ -611,10 +746,20 @@ describe("AgentSession retry bounding", () => {
 		expect(relevant).toHaveLength(2);
 		expect(relevant[0]).toMatchObject({ type: "auto_retry_start", attempt: 1, maxAttempts: 3 });
 		expect(relevant[1]).toMatchObject({ type: "auto_retry_end", success: true, attempt: 1 });
-		expect(retryRecords(session)).toEqual([
-			expect.objectContaining({ outcome: "scheduled", attempt: 1, cumulativeErrors: 1 }),
-			expect.objectContaining({ outcome: "succeeded", attemptsCompleted: 1, cumulativeErrors: 1 }),
+		const records = retryRecords(session);
+		expect(records).toEqual([
+			{
+				schemaVersion: 1,
+				outcome: "scheduled",
+				evidence: "legacy_text",
+				attempt: 1,
+				maxAttempts: 3,
+				cumulativeErrors: 1,
+				delayMs: 1,
+			},
+			{ schemaVersion: 1, outcome: "succeeded", attemptsCompleted: 1, cumulativeErrors: 1 },
 		]);
+		expect(JSON.stringify(records)).not.toContain("private provider prose");
 	});
 
 	it("burst cap (consecutive errors) gives up", async () => {

@@ -107,6 +107,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 
 		// SCRAMJET-DIVERGENCE: classify failures and observe SDK attempts at the request/stream boundary (#553).
 		let failurePhase: "request" | "stream" = "request";
+		let responseCallbackFailed = false;
 		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create OpenAI client
@@ -133,10 +134,15 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
 			sdkRequestObserver.markAccepted();
-			failurePhase = "stream";
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			try {
+				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			} catch (error) {
+				responseCallbackFailed = true;
+				throw error;
+			}
 			stream.push({ type: "start", partial: output });
 
+			failurePhase = "stream";
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
 				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
@@ -162,6 +168,8 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			if (output.stopReason === "aborted") {
 				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			} else if (responseCallbackFailed) {
+				output.errorMessage = "OpenAI Responses response callback failed.";
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,

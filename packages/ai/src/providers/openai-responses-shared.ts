@@ -341,6 +341,7 @@ function makeFailure(
 		(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
 	);
 	const status = top.status ?? nested.status;
+	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
 	let category: ResponsesFailureCategory;
 	let detailSource: ResponsesFailureDetailSource;
 	if (contextOverflow) {
@@ -353,7 +354,6 @@ function makeFailure(
 		category = categoryFromStatus(status) as ResponsesFailureCategory;
 		detailSource = "http_status";
 	} else {
-		const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
 		category = messageCategory ?? (kindHint === "malformed_event" ? "malformed_event" : "unknown");
 		detailSource = messageCategory ? "message_category" : "none";
 	}
@@ -371,6 +371,8 @@ function makeFailure(
 	const inferredTransport =
 		phase === "request" &&
 		status === undefined &&
+		providerCode === undefined &&
+		messageCategory === undefined &&
 		(errorName.includes("connection") || errorName.includes("timeout") || errorName === "typeerror");
 	if (inferredTransport && !contextOverflow) {
 		category = errorName.includes("timeout") ? "timeout" : "transport";
@@ -588,18 +590,41 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 	) {
 		return false;
 	}
+	if (kind === "malformed_event") {
+		return category === "malformed_event" && source === "none" && status === undefined && providerCode === undefined;
+	}
+	if (kind === "transport") {
+		if (details.phase !== "request" || status !== undefined || providerCode !== undefined) return false;
+		if (source === "none") return category === "transport" || category === "timeout";
+		return source === "message_category" && category === "transport";
+	}
 	if (kind === "http" && status === undefined) return false;
-	if (kind === "malformed_event" && (category !== "malformed_event" || source !== "none")) return false;
+	if (kind === "provider_event" && details.phase === "request" && status !== undefined) return false;
+	if (kind === "provider_event" && details.phase === "request" && category === "transport") return false;
 	if (source === "provider_code" || source === "provider_type") {
 		return (
 			typeof providerCode === "string" &&
 			PROVIDER_CODE_CATEGORIES[providerCode as ResponsesProviderCode] === category
 		);
 	}
-	if (source === "http_status") return categoryFromStatus(status as number | undefined) === category;
-	if (source === "none" && (providerCode !== undefined || status !== undefined)) return false;
-	if (source === "message_category" && providerCode !== undefined && category !== "context_overflow") return false;
-	return true;
+	if (source === "http_status") {
+		return providerCode === undefined && categoryFromStatus(status as number | undefined) === category;
+	}
+	if (source === "message_category") {
+		if (category === "provider_error" || category === "malformed_event" || category === "unknown") return false;
+		if (
+			providerCode !== undefined &&
+			(category !== "context_overflow" || providerCode === "context_length_exceeded")
+		) {
+			return false;
+		}
+		const statusCategory = categoryFromStatus(status as number | undefined);
+		return statusCategory === undefined || category === "context_overflow";
+	}
+	if (providerCode !== undefined) return false;
+	if (kind === "http") return category === "unknown" && categoryFromStatus(status as number | undefined) === undefined;
+	if (status !== undefined) return false;
+	return kind === "provider_event" && (category === "provider_error" || category === "unknown");
 }
 
 export function validateResponsesProviderFailure(

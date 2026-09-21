@@ -1635,9 +1635,7 @@ export class AgentSession {
 
 		acceptInput?.();
 		preflightResult?.(true);
-		this._runRetryCount = 0;
-		await this.agent.prompt(messages);
-		await this.waitForRetry();
+		await this._runAgentPrompt(messages);
 	}
 
 	/**
@@ -1839,7 +1837,7 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
-			await this.agent.prompt(appMessage);
+			await this._runAgentPrompt(appMessage);
 		} else {
 			this.agent.state.messages.push(appMessage);
 			this.sessionManager.appendCustomMessageEntry(
@@ -3037,7 +3035,12 @@ export class AgentSession {
 			this.sessionManager.appendCustomEntry("coding-agent:auto-retry", record);
 		} catch (error) {
 			if (terminal) {
-				const attempt = this._retryAttempt;
+				const attempt =
+					"attemptsCompleted" in record
+						? record.attemptsCompleted
+						: "attempt" in record
+							? record.attempt
+							: this._retryAttempt;
 				const wasActive = this._retryActive;
 				this._retryAttempt = 0;
 				this._retryActive = false;
@@ -3166,52 +3169,59 @@ export class AgentSession {
 			this.agent.state.messages = messages.slice(0, -1);
 		}
 
-		this._retryAbortController = new AbortController();
+		const retryController = new AbortController();
+		this._retryAbortController = retryController;
 		try {
-			await sleep(delayMs, this._retryAbortController.signal);
+			await sleep(delayMs, retryController.signal);
+			await sleep(0, retryController.signal);
 		} catch {
-			if (this._disposed) {
-				this._retryAttempt = 0;
-				this._retryActive = false;
-				this._retryAbortController = undefined;
-				throw new Error("AgentSession disposed before retry settlement completed.");
-			}
+			return this._finishCancelledRetry(retryController);
+		}
+		if (retryController.signal.aborted || this._disposed) {
+			return this._finishCancelledRetry(retryController);
+		}
+		if (this._retryAbortController === retryController) this._retryAbortController = undefined;
+
+		this.agent.continue().catch((error) => {
 			const attempt = this._retryAttempt;
-			this._retryAbortController = undefined;
-			this._appendAutoRetryRecord(
-				{
-					schemaVersion: 1,
-					outcome: "cancelled",
-					reason: "cancelled_during_backoff",
-					attempt: this._bounded(attempt),
-					cumulativeErrors: this._bounded(this._runRetryCount),
-				},
-				true,
-			);
 			this._retryAttempt = 0;
 			this._retryActive = false;
-			this._emit({ type: "auto_retry_end", success: false, attempt, finalError: "Retry cancelled" });
-			this._resolveRetry();
-			return false;
-		}
-		this._retryAbortController = undefined;
-
-		setTimeout(() => {
-			this.agent.continue().catch((error) => {
-				const attempt = this._retryAttempt;
-				this._retryAttempt = 0;
-				this._retryActive = false;
-				this._emit({
-					type: "auto_retry_end",
-					success: false,
-					attempt,
-					finalError: error instanceof Error ? error.message : String(error),
-				});
-				this._rejectRetry(this._reportRetryFailure(error));
+			this._emit({
+				type: "auto_retry_end",
+				success: false,
+				attempt,
+				finalError: error instanceof Error ? error.message : String(error),
 			});
-		}, 0);
+			this._rejectRetry(this._reportRetryFailure(error));
+		});
 
 		return true;
+	}
+
+	private _finishCancelledRetry(retryController: AbortController): false {
+		if (this._disposed) {
+			this._retryAttempt = 0;
+			this._retryActive = false;
+			if (this._retryAbortController === retryController) this._retryAbortController = undefined;
+			throw new Error("AgentSession disposed before retry settlement completed.");
+		}
+		const attempt = this._retryAttempt;
+		if (this._retryAbortController === retryController) this._retryAbortController = undefined;
+		this._appendAutoRetryRecord(
+			{
+				schemaVersion: 1,
+				outcome: "cancelled",
+				reason: "cancelled_during_backoff",
+				attempt: this._bounded(attempt),
+				cumulativeErrors: this._bounded(this._runRetryCount),
+			},
+			true,
+		);
+		this._retryAttempt = 0;
+		this._retryActive = false;
+		this._emit({ type: "auto_retry_end", success: false, attempt, finalError: "Retry cancelled" });
+		this._resolveRetry();
+		return false;
 	}
 
 	/**
@@ -3219,6 +3229,22 @@ export class AgentSession {
 	 */
 	abortRetry(): void {
 		this._retryAbortController?.abort();
+	}
+
+	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		this._runRetryCount = 0;
+		let promptFailure: { error: unknown } | undefined;
+		try {
+			await this.agent.prompt(messages);
+		} catch (error) {
+			promptFailure = { error };
+		}
+		try {
+			await this.waitForRetry();
+		} catch (error) {
+			if (!promptFailure) throw error;
+		}
+		if (promptFailure) throw promptFailure.error;
 	}
 
 	/**

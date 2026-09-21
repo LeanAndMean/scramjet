@@ -92,6 +92,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 
 		// SCRAMJET-DIVERGENCE: classify failures and observe SDK attempts at the request/stream boundary (#553).
 		let failurePhase: "request" | "stream" = "request";
+		let responseCallbackFailed = false;
 		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create Azure OpenAI client
@@ -109,10 +110,15 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
 			sdkRequestObserver.markAccepted();
-			failurePhase = "stream";
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			try {
+				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			} catch (error) {
+				responseCallbackFailed = true;
+				throw error;
+			}
 			stream.push({ type: "start", partial: output });
 
+			failurePhase = "stream";
 			await processResponsesStream(openaiStream, output, stream, model);
 
 			if (options?.signal?.aborted) {
@@ -135,6 +141,8 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			if (output.stopReason === "aborted") {
 				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			} else if (responseCallbackFailed) {
+				output.errorMessage = "OpenAI Responses response callback failed.";
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,

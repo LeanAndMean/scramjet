@@ -7,7 +7,10 @@ import {
 	streamSimpleOpenAIResponses,
 	validateResponsesProviderFailure,
 } from "../src/providers/openai-responses.js";
-import { createResponsesSdkRequestObserver } from "../src/providers/openai-responses-shared.js";
+import {
+	createResponsesSdkRequestObserver,
+	normalizeResponsesFailure,
+} from "../src/providers/openai-responses-shared.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
 
 const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -599,6 +602,30 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(JSON.stringify(result)).not.toContain("private host");
 	});
 
+	it.each([
+		["OpenAI", streamOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)(
+		"keeps %s response callback failures out of provider diagnostics",
+		async (_name, streamFn, model, extra) => {
+			const response = completedResponse();
+			stubFetch([response]);
+			const result = await streamFn(model as never, context, {
+				apiKey,
+				...extra,
+				onResponse: () => {
+					throw new Error("private callback rate limit sentinel");
+				},
+			} as never).result();
+
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toBe("OpenAI Responses response callback failed.");
+			expect(result.diagnostics).toBeUndefined();
+			expect(response.bodyUsed).toBe(false);
+			expect(JSON.stringify(result)).not.toContain("private callback rate limit sentinel");
+		},
+	);
+
 	it("does not add failure diagnostics to a successful stream", async () => {
 		stubFetch([completedResponse()]);
 		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey }).result();
@@ -637,6 +664,84 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(providerDetails(result)).toEqual(
 			expect.objectContaining({ category: "permission", retryDisposition: "non_transient" }),
 		);
+	});
+
+	it("accepts canonical provider failure builder outputs", () => {
+		const failures = [
+			normalizeResponsesFailure({ status: 429 }, "request"),
+			normalizeResponsesFailure({ status: 418 }, "request"),
+			normalizeResponsesFailure({ status: 418, message: "rate limit" }, "request"),
+			normalizeResponsesFailure(new TypeError("private transport failure"), "request"),
+			normalizeResponsesFailure({ code: "server_error" }, "stream"),
+			normalizeResponsesFailure({ message: "rate limit" }, "stream"),
+			normalizeResponsesFailure({ status: 400, message: "maximum context length exceeded" }, "request"),
+			normalizeResponsesFailure({}, "stream"),
+		];
+
+		for (const failure of failures) {
+			expect(
+				validateResponsesProviderFailure([{ type: "provider_failure", timestamp: 0, details: failure.diagnostic }]),
+			).toEqual({
+				status: "valid",
+				category: failure.diagnostic.category,
+				retryDisposition: failure.diagnostic.retryDisposition,
+			});
+		}
+	});
+
+	it("rejects noncanonical provider failure tuples", () => {
+		const base = normalizeResponsesFailure({ code: "server_error" }, "stream").diagnostic;
+		const malformed = [
+			{ ...base, kind: "transport", category: "transport", detailSource: "none" },
+			{
+				...base,
+				phase: "request",
+				kind: "transport",
+				category: "transport",
+				detailSource: "none",
+				httpStatus: 503,
+			},
+			{ ...base, kind: "http", detailSource: "http_status", providerCode: undefined },
+			{
+				...base,
+				kind: "http",
+				category: "server",
+				detailSource: "http_status",
+				httpStatus: 503,
+				providerCode: "server_error",
+			},
+			{
+				...base,
+				kind: "http",
+				category: "rate_limit",
+				retryDisposition: "transient",
+				detailSource: "message_category",
+				httpStatus: 400,
+				providerCode: undefined,
+			},
+			{ ...base, phase: "request", kind: "provider_event", httpStatus: 503 },
+			{
+				...base,
+				category: "rate_limit",
+				detailSource: "message_category",
+				providerCode: "rate_limit_exceeded",
+			},
+			{
+				...base,
+				kind: "malformed_event",
+				category: "malformed_event",
+				retryDisposition: "unknown",
+				detailSource: "none",
+				providerCode: "server_error",
+			},
+			{ ...base, category: "server", detailSource: "none", providerCode: undefined },
+		];
+
+		for (const details of malformed) {
+			expect(validateResponsesProviderFailure([{ type: "provider_failure", timestamp: 0, details }])).toEqual({
+				status: "malformed",
+			});
+		}
 	});
 
 	it("validates exactly one closed provider failure diagnostic", async () => {
