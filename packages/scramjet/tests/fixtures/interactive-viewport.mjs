@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { release, platform, tmpdir } from "node:os";
 import { join } from "node:path";
+import { stripVTControlCharacters as stripAnsi } from "node:util";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
 
@@ -187,6 +188,7 @@ async function runProduction() {
 		resourceLoaderOptions: { noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
 			builtinInit(pi) {
 				registerSubagentTool(pi, { beginChoice: () => ({ complete() {} }) });
+				pi.registerMessageRenderer("fixture-history", (message) => ({ invalidate() {}, render: (width) => message.content.split("\n").map((line) => truncateToWidth(line, width)) }));
 				pi.on("session_start", (_event, ctx) => { extensionUI = ctx.ui; });
 			},
 		},
@@ -202,7 +204,15 @@ async function runProduction() {
 	const lifetime = new Promise((resolve) => { finish = resolve; });
 	const tasks = Array.from({ length: 8 }, (_, i) => ({ agent: `child-${i + 1}`, task: `Synthetic task ${i + 1}` }));
 	let completed = 0;
+	let updates = 0;
 	const safety = process.argv.includes("--safety");
+	const journey = process.argv.includes("--journey");
+	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0 };
+	let copyKind;
+	let copied;
+	let thumbGesture = false;
+	let lastMouse;
+	let commandId = 0;
 	const safetyState = { protocol: undefined, phase: "starting", approved: 0, editorHandoffs: 0, suspends: 0 };
 	let imageTool;
 	let overlay;
@@ -212,17 +222,18 @@ async function runProduction() {
 	let safetyImage;
 	const before = execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
 	let sequence = Promise.resolve();
+	const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, completed, stopped, pid: process.pid, pgid: Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim()), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, viewport: mode.ui.getViewportState(), editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, completed, updates, commandId, stopped, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => stripAnsi(line).slice(0, -1).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
 		const result = { content: [{ type: "text", text: "Synthetic batch" }], details: {
 			mode: "parallel", agentScope: "user", projectAgentsDir: null,
 			results: tasks.map((task, i) => ({ ...task, agentSource: "user", exitCode: i < completed ? 0 : -1,
-				messages: i < completed + 4 ? [{ role: "assistant", content: [{ type: "text", text: `CARD-${i + 1} synthetic café 界 é\n${Array.from({ length: 16 }, (_, n) => `child-${i + 1} detail-${n}`).join("\n")}` }] }] : [],
+				messages: i < completed + 4 ? [{ role: "assistant", content: [{ type: "text", text: `CARD-${i + 1} synthetic café 界 é\n${Array.from({ length: 16 + (i === 0 ? updates : 0) }, (_, n) => `child-${i + 1} detail-${n}`).join("\n")}` }] }] : [],
 				stderr: "", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 			})),
 		} };
@@ -233,7 +244,27 @@ async function runProduction() {
 		await mode.ui.renderNow({ requireFlush: true });
 		record();
 	}
-	const timer = setInterval(record, 50);
+	const timer = setInterval(() => {
+		record();
+		const path = process.env.SCRAMJET_TUI_PROBE_EVIDENCE && `${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.command`;
+		if (!journey || !path || !existsSync(path)) return;
+		const command = JSON.parse(readFileSync(path, "utf8"));
+		if (command.id <= commandId) return;
+		commandId = command.id;
+		sequence = sequence.then(async () => {
+			if (command.action === "advance") { completed = Math.min(8, completed + 1); await update(); }
+			else if (command.action === "update") { updates++; await update(); }
+			else if (command.action === "expand") mode.setToolsExpanded(true);
+			else if (command.action === "editor") extensionUI.setEditorText("");
+			else if (command.action === "approval") await safetyAction("4");
+			else if (command.action === "external") await safetyAction("6");
+			else if (command.action === "suspend") await safetyAction("7");
+			else throw new Error(`Unknown fixture action: ${command.action}`);
+			await mode.ui.renderNow({ requireFlush: true });
+			safetyState.commandDone = command.id;
+			record();
+		}).catch((error) => { safetyState.error = error.message; record(); stop(); console.error(error); process.exitCode = 1; });
+	}, 50);
 	const stop = () => { if (!stopped) { stopped = true; mode.stop(); finish(); } };
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
@@ -243,6 +274,26 @@ async function runProduction() {
 			safetyState.inputs ??= [];
 			safetyState.inputs.push({ data, offset: mode.ui.getViewportState()?.offset, visible: approvalTool && mode.ui.isComponentVisible(approvalTool), focused: approvalTool && mode.ui.isComponentFocused(approvalTool) });
 			if (safetyState.inputs.length > 30) safetyState.inputs.shift();
+		}
+		if (journey) {
+			safetyState.inputs ??= [];
+			safetyState.inputs.push(data);
+			if (safetyState.inputs.length > 20) safetyState.inputs.shift();
+			if (matchesKey(data, "ctrl+c")) copyKind = "keyCopy";
+			const mouse = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
+			if (mouse) {
+				const [button, x, y] = mouse.slice(1, 4).map(Number);
+				lastMouse = { button, x, y, action: mouse[4] };
+				if (button === 64 || button === 65) interactions.wheel++;
+				if (button === 0 && mouse[4] === "M") thumbGesture = x === terminal.columns;
+				if (button === 32) interactions[thumbGesture ? "thumbDrag" : "selectionDrag"]++;
+				if (button === 2 && mouse[4] === "M") { copyKind = "rightCopy"; interactions.rightWithoutSelection++; }
+				if (mouse[4] === "m") thumbGesture = false;
+			}
+			if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+				interactions[data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
+				return { consume: true };
+			}
 		}
 		if (isKeyRelease(data)) return { consume: true };
 		if (matchesKey(data, "ctrl+q") || (safety && matchesKey(data, "0"))) { void terminal.drainInput().then(stop); return { consume: true }; }
@@ -268,6 +319,7 @@ async function runProduction() {
 			if (overlay) { overlay.hide(); overlay = undefined; safetyState.phase = "image"; }
 			else { overlay = mode.ui.showOverlay(new Text("OVERLAY WITHOUT GRAPHICS", 1, 1)); safetyState.phase = "overlay"; }
 		} else if (key === "4" && !approval) {
+			if (journey && completed !== 8) throw new Error("Finish the batch before opening sequential approval");
 			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
 			approvalTool = mode.pendingTools.get("approval");
 			approval = extensionUI.custom((_tui, _theme, _kb, done) => {
@@ -319,7 +371,21 @@ async function runProduction() {
 	mode.configureRetainedViewport();
 	try {
 		await mode.init();
-		extensionUI.setHeader(() => new Text("Production candidate: Ctrl+N advances; Ctrl+O expands; Ctrl+Q exits", 0, 0));
+		if (journey) {
+			const line = (i) => `ROW-${String(i).padStart(3, "0")} synthetic café 界 e\u0301 text`;
+			extensionUI.setHeader(() => ({ invalidate() {}, render: () => [line(1)] }));
+			mode.addMessageToChat({ role: "custom", customType: "fixture-history", content: Array.from({ length: 199 }, (_, i) => line(i + 2)).join("\n"), display: true, timestamp: 0 });
+			const copy = mode.ui.viewport.options.copy;
+			mode.ui.viewport.options.copy = async (text) => {
+				const kind = copyKind;
+				try {
+					await copy(text);
+					copied = text;
+					interactions[kind]++;
+					if (kind === "rightCopy") interactions.rightWithoutSelection--;
+				} catch (error) { interactions.copyErrors++; throw error; }
+			};
+		} else extensionUI.setHeader(() => new Text("Production candidate: Ctrl+N advances; Ctrl+O expands; Ctrl+Q exits", 0, 0));
 		extensionUI.setWorkingIndicator({ frames: ["⠋"] });
 		extensionUI.setWidget("above", ["ABOVE editor"]);
 		extensionUI.setWidget("below", ["BELOW editor"], { placement: "belowEditor" });
@@ -344,6 +410,7 @@ async function runProduction() {
 		} else {
 			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "batch", toolName: "subagent", args: { tasks } });
 			await update();
+			if (journey) { mode.ui.scrollViewportTo(0); await mode.ui.renderNow({ requireFlush: true }); record(); }
 		}
 		await lifetime;
 	} finally {

@@ -65,11 +65,19 @@ switch args[1] {
 case "capabilities":
     emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
           "screenCapture": CGPreflightScreenCaptureAccess()])
-case "geometry":
-    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal").first else {
+case "geometry", "resize":
+    guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier?.lowercased() == (args.count > 2 ? args[2].lowercased() : "com.apple.terminal") }) else {
         fatalError("Terminal is not running")
     }
-    emit(geometry(AXUIElementCreateApplication(app.processIdentifier)))
+    let application = AXUIElementCreateApplication(app.processIdentifier)
+    if args[1] == "resize" {
+        guard let window = (attribute(application, kAXWindowsAttribute) as? [AXUIElement])?.first else { fatalError("No window") }
+        var size = CGSize(width: Double(args[3])!, height: Double(args[4])!)
+        let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &size)!)
+        emit(["result": result.rawValue])
+    } else {
+        emit(geometry(application))
+    }
 case "press-pid":
     emit(["pressed": pressButton(AXUIElementCreateApplication(pid_t(args[2])!), title: args[3])])
 case "press":
