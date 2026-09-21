@@ -289,6 +289,47 @@ describe("retained approval and exit safety", () => {
 		}
 	});
 
+	it.each(["success", "failure", "replaced"])("settles late candidate image conversion across %s", async (kind) => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		let settle!: (value: { data: string; mimeType: string } | null) => void;
+		imageConversion.convertToPng.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					settle = resolve;
+				}),
+		);
+		try {
+			await h.emit({ type: "tool_execution_start", toolCallId: "image", toolName: "unknown", args: {} });
+			const tool = h.internals.chatContainer.children[0];
+			const result = { content: [{ type: "image", data: "synthetic-jpeg", mimeType: "image/jpeg" }] };
+			const ending = h.emit({ type: "tool_execution_end", toolCallId: "image", result, isError: false });
+			await h.frame();
+			expect(h.internals.committedChatContainer.children).not.toContain(tool);
+			if (kind === "replaced") h.internals.clearTranscript();
+			settle(kind === "failure" ? null : { data: "aW1hZ2U=", mimeType: "image/png" });
+			await ending;
+			await h.frame();
+			if (kind === "replaced") {
+				expect(h.internals.committedChatContainer.children).not.toContain(tool);
+				expect(h.internals.chatContainer.children).not.toContain(tool);
+			} else {
+				expect(h.internals.committedChatContainer.children.filter((child) => child === tool)).toHaveLength(1);
+				if (kind === "failure") expect(tool.render(59).join("\n")).toContain("[Image: [image/jpeg]]");
+				else {
+					h.internals.ui.revealComponent(tool);
+					const mark = h.terminal.markWrites();
+					await h.frame();
+					expect(h.terminal.writesSince(mark)).toContain("\x1b_Ga=T");
+				}
+			}
+		} finally {
+			await h.dispose();
+			resetCapabilitiesCache();
+			imageConversion.convertToPng.mockReset();
+		}
+	});
+
 	it("leaves one transcript on final stop but none on temporary handoff", async () => {
 		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
 		try {

@@ -34,7 +34,8 @@ Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked
 The default mode retains the Stage 3 desktop driver's fixed-row protocol.
 Use --safety for synthetic native image/approval/handoff checks. Keys 1/2 show or
 clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
-6 opens a synthetic external editor, 7 suspends (resume with fg/SIGCONT).
+6 opens a synthetic external editor, 7 suspends (resume with fg/SIGCONT),
+8 delivers a JPEG tool result through conversion/finalization, 9 invalidates it.
 --inspect-screenshot <png> counts synthetic magenta pixels using installed Photon.`;
 if (process.argv.includes("--help")) {
 	console.log(help);
@@ -193,7 +194,6 @@ async function runProduction() {
 	}), { cwd: directory, agentDir: directory, sessionManager: SessionManager.inMemory(directory) });
 	const terminal = new ProcessTerminal();
 	const mode = new InteractiveMode(runtime, { terminal });
-	mode.configureRetainedViewport();
 	let stopped = false;
 	let finish;
 	const lifetime = new Promise((resolve) => { finish = resolve; });
@@ -237,7 +237,7 @@ async function runProduction() {
 	mode.ui.addInputListener((data) => {
 		if (isKeyRelease(data)) return { consume: true };
 		if (matchesKey(data, "ctrl+q")) { stop(); return { consume: true }; }
-		const action = safety && ["1", "2", "3", "4", "5", "6", "7"].find((key) => matchesKey(data, key));
+		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find((key) => matchesKey(data, key));
 		if (action) {
 			sequence = sequence.then(() => safetyAction(action)).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
 			return { consume: true };
@@ -280,6 +280,21 @@ async function runProduction() {
 			safetyState.handoffTermios = readFileSync(receipt, "utf8").trim();
 			safetyState.editorHandoffs++;
 			safetyState.phase = "editor-return";
+		} else if (key === "8") {
+			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "jpeg", toolName: "unknown", args: {} });
+			imageTool = mode.pendingTools.get("jpeg");
+			safetyState.phase = "converting";
+			record();
+			const result = { content: [{ type: "text", text: "CONVERTED-IMAGE-TRANSCRIPT" }, { type: "image", mimeType: "image/jpeg", data: Buffer.from(safetyImage.get_bytes_jpeg(95)).toString("base64") }] };
+			await mode.handleEvent({ type: "tool_execution_update", toolCallId: "jpeg", partialResult: result });
+			await mode.handleEvent({ type: "tool_execution_end", toolCallId: "jpeg", result, isError: false });
+			mode.ui.revealComponent(imageTool);
+			safetyState.phase = "converted";
+		} else if (key === "9") {
+			imageTool.invalidate();
+			mode.ui.rebuild();
+			mode.ui.revealComponent(imageTool);
+			safetyState.phase = "invalidated";
 		} else if (key === "7") {
 			safetyState.suspends++;
 			safetyState.phase = "suspending";
@@ -291,6 +306,7 @@ async function runProduction() {
 		await mode.ui.renderNow({ requireFlush: true });
 		record();
 	}
+	mode.configureRetainedViewport();
 	try {
 		await mode.init();
 		extensionUI.setHeader(() => new Text("Production candidate: Ctrl+N advances; Ctrl+O expands; Ctrl+Q exits", 0, 0));

@@ -49,7 +49,7 @@ def check(name, predicate):
 
 def key(name):
     if mac:
-        codes = {"1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "enter": 36, "exit": 12}
+        codes = {"1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25, "enter": 36, "exit": 12}
         run(str(driver), "key", str(codes[name]), "262144" if name == "exit" else "0")
     else:
         run("xdotool", "key", "--clearmodifiers", {"enter": "Return", "exit": "ctrl+q"}.get(name, name))
@@ -81,9 +81,13 @@ try:
         report["version"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", "/Applications/iTerm.app/Contents/Info.plist")
         run("swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver))
         report["capabilities"] = json.loads(run(str(driver), "capabilities"))
-        run("open", "-a", "iTerm")
-        time.sleep(3)
-        report["gatekeeperOpen"] = json.loads(run(str(driver), "press", "com.apple.CoreServicesUIAgent", "Open"))
+        opener = subprocess.Popen(["open", "-a", "iTerm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def opened():
+            report["gatekeeperOpen"] = json.loads(run(str(driver), "press", "com.apple.CoreServicesUIAgent", "Open"))
+            return report["gatekeeperOpen"]["pressed"] or opener.poll() is not None
+        if not wait(opened, seconds=20):
+            raise RuntimeError("iTerm opening prompt could not be confirmed")
+        opener.wait(timeout=30)
         time.sleep(3)
         report["updatePrompt"] = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Don't Check"))
         command = f"/bin/bash {shlex.quote(str(launcher))}"
@@ -113,6 +117,13 @@ try:
     key("3")
     count = pixels("overlay-closed")
     check("imageRestoredAfterOverlay", lambda: count > 400)
+    key("8")
+    check("imageConversionSettled", lambda: state().get("phase") == "converted")
+    count = pixels("converted-image")
+    check("nativeImageVisibleAfterConversion", lambda: count > 400)
+    key("9")
+    count = pixels("invalidated-image")
+    check("nativeImageVisibleAfterInvalidation", lambda: count > 400)
     key("4")
     check("approvalInstalled", lambda: state().get("phase") == "approval" and not state().get("error"))
     key("5")
