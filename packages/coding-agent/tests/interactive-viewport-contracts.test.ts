@@ -5,6 +5,7 @@ import type { AssistantMessage } from "@leanandmean/ai";
 import { Text } from "@leanandmean/tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import * as clipboard from "../src/utils/clipboard.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 vi.mock("../src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
@@ -66,6 +67,62 @@ describe("retained interactive contracts", () => {
 		expect(h.extensionUI.getEditorText()).toBe("DRAFTx");
 		expect(frame.join("\n")).toContain("HISTORY-000");
 		expect(h.internals.ui.getViewportState()!.followingTail).toBe(false);
+	});
+
+	it("keeps a transcript selection from crossing into the dock", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+		const h = await setup();
+		await history(h);
+		h.internals.ui.scrollViewportTo(0);
+		const frame = await h.frame();
+		expect(frame.at(-1)).toContain("FIXTURE-FOOTER");
+		const height = h.internals.ui.getViewportState()!.height;
+		expect(height).toBeLessThan(h.terminal.rows);
+		h.terminal.sendInput("\x1b[<0;1;1M");
+		h.terminal.sendInput(`\x1b[<32;20;${h.terminal.rows}M`);
+		h.terminal.sendInput(`\x1b[<0;20;${h.terminal.rows}m`);
+		await h.frame();
+		h.terminal.sendInput("\x03");
+		await h.frame();
+		expect(copy).toHaveBeenCalledOnce();
+		const text = copy.mock.calls[0][0];
+		expect(text).toBe(
+			frame
+				.slice(0, height)
+				.map((line, index) => line.slice(0, index === height - 1 ? 19 : h.terminal.columns - 1))
+				.join("\n"),
+		);
+		expect(text).not.toContain("DRAFT");
+		expect(text).not.toContain("FIXTURE-FOOTER");
+	});
+
+	it("reclaims a safe scrolling layout for an oversized dock without losing draft text", async () => {
+		const h = await setup();
+		await history(h);
+		h.extensionUI.setWidget(
+			"large",
+			() => new Text(Array.from({ length: 40 }, (_, i) => `WIDGET-${i}`).join("\n"), 0, 0),
+		);
+		const frame = await h.frame();
+		expect(frame.join("\n")).toMatch(/dock.*(space|fit|suspend)/i);
+		expect(frame.join("\n")).toContain("DRAFT");
+		expect(h.extensionUI.getEditorText()).toBe("DRAFT");
+		const seen = new Set<number>();
+		for (let step = 0; step < 80; step++) {
+			for (const line of await h.frame()) {
+				const match = /WIDGET-(\d+)/.exec(line);
+				if (match) seen.add(Number(match[1]));
+			}
+			if (h.internals.ui.getViewportState()!.offset === 0) break;
+			h.terminal.sendInput(mouse(64));
+		}
+		expect([...seen].sort((a, b) => a - b)).toEqual(Array.from({ length: 40 }, (_, index) => index));
+		h.extensionUI.setWidget("large", undefined);
+		h.internals.ui.scrollViewportTo(0);
+		const restored = await h.frame();
+		expect(restored.join("\n")).toContain("HISTORY-000");
+		expect(restored.at(-1)).toContain("FIXTURE-FOOTER");
+		expect(restored.join("\n")).toContain("DRAFT");
 	});
 
 	it("enters transcript browsing from the tail using only the configured keyboard default", async () => {
@@ -149,6 +206,8 @@ describe("retained interactive contracts", () => {
 		{ rows: 40, percent: 10, count: 4 },
 		{ rows: 40, percent: 50, count: 20 },
 		{ rows: 10, percent: 30, count: 3 },
+		{ rows: 40, percent: 0, count: 4 },
+		{ rows: 40, percent: 100, count: 20 },
 	])("bounds input rows at $percent percent of $rows terminal rows", async ({ rows, percent, count }) => {
 		const h = await setup(rows, settings({ dockEditor: false, editorMaxHeightPercent: percent }));
 		const draft = Array.from({ length: 50 }, (_, i) => `INPUT-${String(i).padStart(3, "0")}`).join("\n");
