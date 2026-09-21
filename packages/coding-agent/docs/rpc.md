@@ -408,7 +408,7 @@ Response:
 
 #### abort_retry
 
-Abort an in-progress retry (cancel the delay and stop retrying).
+Abort an in-progress retry, whether it is waiting in backoff or running the retry continuation.
 
 ```json
 {"type": "abort_retry"}

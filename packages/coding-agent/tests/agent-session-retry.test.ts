@@ -362,6 +362,30 @@ describe("AgentSession context window", () => {
 			}),
 		]);
 	});
+
+	it("gives context overflow precedence over structured transient evidence", async () => {
+		const model = { ...testModel, maxInputTokens: 272_000 };
+		const overflow = {
+			...providerFailure("transient", "rate_limit"),
+			errorMessage: "Provider returned error: maximum context length is 272000 tokens",
+		};
+		const { session, events } = await createFixture((i) => (i === 0 ? overflow : assistantText("ok")), { model });
+
+		await session.prompt("hello");
+
+		await vi.waitFor(() => {
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+		});
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+		expect(retryRecords(session)).toEqual([
+			{
+				schemaVersion: 1,
+				outcome: "not_attempted",
+				reason: "context_overflow_compaction",
+				evidence: "context_overflow",
+			},
+		]);
+	});
 });
 
 describe("context migration recovery invariants", () => {
@@ -521,6 +545,49 @@ describe("AgentSession persisted retry authority", () => {
 		]);
 	});
 
+	it("retires a fire-and-forget continuation settlement before the next prompt", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		const continuationInput = { role: "user" as const, content: "continue", timestamp: Date.now() };
+		session.agent.state.messages.push(continuationInput);
+		session.sessionManager.appendMessage(continuationInput);
+
+		await session.agent.continue();
+		await (session as any)._agentEventQueue;
+
+		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "assistant") throw new Error("next assistant append failed");
+			return appendMessage(message);
+		});
+
+		await expect(session.prompt("hello")).rejects.toThrow("next assistant append failed");
+	});
+
+	it("keeps a reentrant retry-end prompt on its own settlement", async () => {
+		const { session } = await createFixture((i) =>
+			i === 0 ? assistantError("rate limit") : assistantText(i === 1 ? "retry succeeded" : "reentrant result"),
+		);
+		let reentrantPrompt: Promise<void> | undefined;
+		session.subscribe((event) => {
+			if (event.type !== "auto_retry_end" || !event.success || reentrantPrompt) return;
+			const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+			vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+				if (
+					message.role === "assistant" &&
+					message.content.some((block) => block.type === "text" && block.text === "reentrant result")
+				) {
+					throw new Error("reentrant assistant append failed");
+				}
+				return appendMessage(message);
+			});
+			reentrantPrompt = session.agent.waitForIdle().then(() => session.prompt("next"));
+			reentrantPrompt.catch(() => {});
+		});
+
+		await session.prompt("hello");
+		await expect(reentrantPrompt).rejects.toThrow("reentrant assistant append failed");
+	});
+
 	it("consumes settlement for a triggered custom-message turn before the next prompt", async () => {
 		const { session } = await createFixture(() => assistantText("ok"));
 		await session.sendCustomMessage(
@@ -664,6 +731,24 @@ describe("AgentSession persisted retry authority", () => {
 
 		expect(retryEvents(events)).toEqual([]);
 		expect(retryRecords(session)).toEqual([{ schemaVersion: 1, outcome: "not_attempted", reason, evidence }]);
+	});
+
+	it("uses legacy retry fallback when unrelated diagnostics are malformed", async () => {
+		const { session } = await createFixture((i) =>
+			i === 0
+				? {
+						...assistantError("rate limit"),
+						diagnostics: [null as never, {} as never, { type: "usage", timestamp: 0, details: { tokens: 1 } }],
+					}
+				: assistantText("ok"),
+		);
+
+		await session.prompt("hello");
+
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled", evidence: "legacy_text" }),
+			expect.objectContaining({ outcome: "succeeded" }),
+		]);
 	});
 
 	it("records disabled retry policy for every persisted error", async () => {
@@ -872,6 +957,49 @@ describe("AgentSession persisted retry authority", () => {
 		}
 	});
 
+	it("cancels an active retry continuation without recording success", async () => {
+		let continuationStarted: (() => void) | undefined;
+		const started = new Promise<void>((resolve) => {
+			continuationStarted = resolve;
+		});
+		let continuationAborted = false;
+		const { session, events } = await createFixture(() => assistantError("rate limit"), {
+			streamFn: (callIndex, signal) => {
+				const stream = createAssistantMessageEventStream();
+				if (callIndex === 0) {
+					const message = assistantError("rate limit");
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+					return stream;
+				}
+
+				continuationStarted?.();
+				const finishAborted = () => {
+					continuationAborted = true;
+					const message = { ...assistantError("aborted"), stopReason: "aborted" as const };
+					stream.push({ type: "error", reason: "aborted", error: message });
+				};
+				if (signal?.aborted) finishAborted();
+				else signal?.addEventListener("abort", finishAborted, { once: true });
+				return stream;
+			},
+		});
+		const prompt = session.prompt("hello");
+		await started;
+
+		session.abortRetry();
+		await prompt;
+
+		expect(continuationAborted).toBe(true);
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled" }),
+			expect.objectContaining({ outcome: "cancelled", reason: "cancelled_during_continuation" }),
+		]);
+		expect(retryRecords(session)).not.toContainEqual(expect.objectContaining({ outcome: "succeeded" }));
+		expect(retryEvents(events).at(-1)).toMatchObject({ type: "auto_retry_end", success: false, attempt: 1 });
+		expect(session.isRetrying).toBe(false);
+	});
+
 	it("records disposal during backoff without continuing", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 10_000 });
 		const continueAgent = vi.spyOn(session.agent, "continue");
@@ -1019,7 +1147,7 @@ describe("AgentSession persisted retry authority", () => {
 			if (event.type === "message_end" && event.message.role === "assistant") session.dispose();
 		});
 
-		await session.prompt("hello");
+		await expect(session.prompt("hello")).rejects.toThrow("disposed before retry settlement completed");
 
 		expect(
 			session.sessionManager
@@ -1074,16 +1202,27 @@ describe("AgentSession persisted retry authority", () => {
 
 		await session.prompt("hello");
 
-		const relevant = session.sessionManager
-			.getBranch()
+		const originalLeaf = session.sessionManager.getLeafId()!;
+		const originalBranch = session.sessionManager.getBranch(originalLeaf);
+		const relevant = originalBranch
 			.filter((entry) => entry.type === "custom" || (entry.type === "message" && entry.message.role === "assistant"))
 			.map((entry) =>
 				entry.type === "custom" ? (entry.data as { outcome: string }).outcome : entry.message.stopReason,
 			);
 		expect(relevant).toEqual(["error", "scheduled", "stop", "succeeded"]);
-		expect(session.sessionManager.buildSessionContext().messages.every((message) => message.role !== "custom")).toBe(
-			true,
-		);
+
+		const commonParent = originalBranch.find((entry) => entry.type === "message" && entry.message.role === "user")!;
+		session.sessionManager.branch(commonParent.id);
+		session.sessionManager.appendMessage(assistantText("sibling"));
+		const siblingBranch = session.sessionManager.getBranch();
+		expect(
+			siblingBranch.filter((entry) => entry.type === "custom" && entry.customType === "coding-agent:auto-retry"),
+		).toEqual([]);
+		expect(session.sessionManager.buildSessionContext().messages).toMatchObject([
+			{ role: "user" },
+			{ role: "assistant", content: [{ type: "text", text: "sibling" }] },
+		]);
+		expect(session.sessionManager.getBranch(originalLeaf)).toEqual(originalBranch);
 	});
 
 	it("keeps retry records durable and inert after reopening a disk-backed session", async () => {
@@ -1114,7 +1253,9 @@ describe("AgentSession persisted retry authority", () => {
 		expect(internal._retryAbortController).toBeUndefined();
 		expect(internal._retryAttempt).toBe(0);
 		expect(internal._runRetryCount).toBe(0);
-		expect(internal._retryPromise).toBeUndefined();
+		expect(internal._unsettledAgentRuns.size).toBe(0);
+		expect(internal._unsettledRetryChains.size).toBe(0);
+		expect(internal._pendingRetryContinuation).toBeUndefined();
 		await Promise.resolve();
 		expect(continueAgent).not.toHaveBeenCalled();
 		fresh.session.dispose();

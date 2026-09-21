@@ -426,14 +426,15 @@ describe("AgentSession harness-tool invocation", () => {
 			signalResult = resolve;
 		});
 		const internal = session as any;
-		const rejectRetry = vi.spyOn(internal, "_rejectRetry");
+		const completeAgentRun = vi.spyOn(internal, "_completeAgentRun");
 		const originalProcess = internal._processAgentEvent.bind(session);
-		internal._processAgentEvent = async (event: { type: string; message?: { role?: string; toolName?: string } }) => {
+		internal._processAgentEvent = async (...args: any[]) => {
+			const [event] = args as [{ type: string; message?: { role?: string; toolName?: string } }];
 			if (event.type === "message_end" && event.message?.role === "toolResult") {
 				signalResult();
 				await resultGate;
 			}
-			return originalProcess(event);
+			return originalProcess(...args);
 		};
 
 		const assistantError = new Error("assistant persistence failed");
@@ -460,7 +461,7 @@ describe("AgentSession harness-tool invocation", () => {
 
 		releaseResult();
 		expect((await outcome).error).toBe(assistantError);
-		expect(rejectRetry).not.toHaveBeenCalled();
+		expect(completeAgentRun).not.toHaveBeenCalled();
 
 		vi.restoreAllMocks();
 		await expect(session.prompt("after two harness persistence failures")).resolves.toBeUndefined();

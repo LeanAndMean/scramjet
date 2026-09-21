@@ -630,8 +630,7 @@ export function validateResponsesProviderFailure(diagnostics: unknown): Response
 	const matches: Record<string, unknown>[] = [];
 	for (const diagnostic of diagnostics) {
 		const candidate = recordOf(diagnostic);
-		if (!candidate || typeof candidate.type !== "string") return { status: "malformed" };
-		if (candidate.type === "provider_failure") matches.push(candidate);
+		if (candidate?.type === "provider_failure") matches.push(candidate);
 	}
 	if (matches.length === 0) return { status: "absent" };
 	if (matches.length > 1) return { status: "duplicate" };

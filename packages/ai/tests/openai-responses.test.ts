@@ -343,6 +343,24 @@ describe("OpenAI Responses failure normalization", () => {
 				observedAttemptCount: 1,
 			}),
 		);
+
+		stubFetch([jsonError(429), jsonError(400)]);
+		const terminalAfterRetry = await streamSimpleOpenAIResponses(openaiModel, context, {
+			apiKey,
+			maxRetries: 2,
+		}).result();
+		expect(sdkRetryDetails(terminalAfterRetry)).toEqual({
+			schemaVersion: 1,
+			layer: "openai_sdk_request",
+			outcome: "exhausted",
+			reason: "terminal_after_retry",
+			observedAttemptCount: 2,
+			attempts: [
+				{ ordinal: 0, result: "response", status: 429 },
+				{ ordinal: 1, result: "response", status: 400 },
+			],
+			truncated: false,
+		});
 	});
 
 	it("distinguishes accepted-stream failures from request retries", async () => {
@@ -544,6 +562,27 @@ describe("OpenAI Responses failure normalization", () => {
 		);
 	});
 
+	it("gives supported top-level evidence precedence over conflicting nested evidence", () => {
+		const result = normalizeResponsesFailure(
+			{
+				code: "rate_limit_exceeded",
+				error: { code: "authentication_error", message: "private nested provider prose" },
+			},
+			"stream",
+		);
+
+		expect(result.message).toBe("OpenAI Responses request was rate limited.");
+		expect(result.diagnostic).toEqual(
+			expect.objectContaining({
+				category: "rate_limit",
+				retryDisposition: "transient",
+				detailSource: "provider_code",
+				providerCode: "rate_limit_exceeded",
+			}),
+		);
+		expect(JSON.stringify(result)).not.toContain("private nested provider prose");
+	});
+
 	it.each([
 		[jsonError(429), "rate_limit", "http_status"],
 		[
@@ -650,6 +689,33 @@ describe("OpenAI Responses failure normalization", () => {
 			expect(result.diagnostics).toBeUndefined();
 			expect(response.bodyUsed).toBe(false);
 			expect(JSON.stringify(result)).not.toContain("private callback rate limit sentinel");
+		},
+	);
+
+	it.each([
+		["OpenAI", streamOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)(
+		"keeps %s response callback failures private when the callback also aborts",
+		async (_name, streamFn, model, extra) => {
+			const controller = new AbortController();
+			const response = completedResponse();
+			stubFetch([response]);
+			const result = await streamFn(model as never, context, {
+				apiKey,
+				...extra,
+				signal: controller.signal,
+				onResponse: () => {
+					controller.abort();
+					throw new Error("private aborted response callback sentinel");
+				},
+			} as never).result();
+
+			expect(result.stopReason).toBe("aborted");
+			expect(result.errorMessage).toBe("OpenAI Responses response callback failed.");
+			expect(result.diagnostics).toBeUndefined();
+			expect(response.bodyUsed).toBe(false);
+			expect(JSON.stringify(result)).not.toContain("private aborted response callback sentinel");
 		},
 	);
 
@@ -780,8 +846,8 @@ describe("OpenAI Responses failure normalization", () => {
 		});
 		expect(validateResponsesProviderFailure(undefined)).toEqual({ status: "absent" });
 		expect(validateResponsesProviderFailure({ type: "provider_failure" })).toEqual({ status: "malformed" });
-		for (const diagnostic of [null, "provider_failure", 1, true]) {
-			expect(validateResponsesProviderFailure([diagnostic])).toEqual({ status: "malformed" });
+		for (const diagnostic of [null, "provider_failure", 1, true, {}]) {
+			expect(validateResponsesProviderFailure([diagnostic])).toEqual({ status: "absent" });
 		}
 		expect(validateResponsesProviderFailure([{ type: "usage", timestamp: 0, details: { tokens: 1 } }])).toEqual({
 			status: "absent",

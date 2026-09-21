@@ -147,10 +147,10 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			if (payloadCallbackFailed) {
 				output.errorMessage = "OpenAI Responses payload callback failed.";
-			} else if (output.stopReason === "aborted") {
-				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			} else if (responseCallbackFailed) {
 				output.errorMessage = "OpenAI Responses response callback failed.";
+			} else if (output.stopReason === "aborted") {
+				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,
