@@ -125,7 +125,7 @@ type ResponsesProviderCode =
 	| "content_filter"
 	| "content_policy_violation";
 
-export interface ResponsesProviderFailureV1 extends Record<string, unknown> {
+export interface ResponsesProviderFailureV1 {
 	schemaVersion: 1;
 	layer: "openai_responses";
 	phase: "request" | "stream";
@@ -240,7 +240,7 @@ type ResponsesSdkRetryReason =
 	| "stream_already_accepted"
 	| "insufficient_evidence";
 
-export interface ResponsesSdkRetryV1 extends Record<string, unknown> {
+export interface ResponsesSdkRetryV1 {
 	schemaVersion: 1;
 	layer: "openai_sdk_request";
 	outcome: "recovered" | "exhausted" | "not_attempted";
@@ -538,7 +538,7 @@ export function appendResponsesSdkRetryDiagnostic(
 	if (!diagnostic) return;
 	output.diagnostics = [
 		...(output.diagnostics ?? []),
-		{ type: "sdk_request_retry", timestamp: Date.now(), details: diagnostic },
+		{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...diagnostic } },
 	];
 }
 
@@ -550,8 +550,8 @@ export function appendResponsesFailureDiagnostics(
 	output.errorMessage = failure.message;
 	output.diagnostics = [
 		...(output.diagnostics ?? []),
-		{ type: "provider_failure", timestamp: Date.now(), details: failure.diagnostic },
-		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: sdkRetry }] : []),
+		{ type: "provider_failure", timestamp: Date.now(), details: { ...failure.diagnostic } },
+		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...sdkRetry } }] : []),
 		{
 			type: "gateway_observability",
 			timestamp: Date.now(),

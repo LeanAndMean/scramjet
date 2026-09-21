@@ -670,11 +670,14 @@ export class AgentSession {
 			await this._processAgentEvent(event);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
-			if (event.type === "message_end" && event.message.role === "assistant") {
-				this._assistantPersistenceError = error;
+			if (ack) {
+				ack.reject(error);
+			} else {
+				if (event.type === "message_end" && event.message.role === "assistant") {
+					this._assistantPersistenceError = error;
+				}
+				this._rejectRetry(error);
 			}
-			this._rejectRetry(error);
-			if (ack) ack.reject(error);
 			throw err;
 		}
 		// Resolving here counts as "persisted" only because SessionManager persistence is synchronous
@@ -3239,12 +3242,21 @@ export class AgentSession {
 		} catch (error) {
 			promptFailure = { error };
 		}
+		let settlementFailure: { error: unknown } | undefined;
 		try {
 			await this.waitForRetry();
 		} catch (error) {
-			if (!promptFailure) throw error;
+			settlementFailure = { error };
+		}
+		if (promptFailure && settlementFailure) {
+			throw new AggregateError(
+				[promptFailure.error, settlementFailure.error],
+				"Agent prompt and retry settlement both failed.",
+				{ cause: promptFailure.error },
+			);
 		}
 		if (promptFailure) throw promptFailure.error;
+		if (settlementFailure) throw settlementFailure.error;
 	}
 
 	/**

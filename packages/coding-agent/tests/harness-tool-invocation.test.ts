@@ -408,6 +408,8 @@ describe("AgentSession harness-tool invocation", () => {
 		// rejects via the assistant branch of _harnessAckIdForEvent (the tool-result test only gates the
 		// result append).
 		await expect(session.invokeHarnessTool("harness_notice", { note: "boom" })).rejects.toBe(persistError);
+
+		await expect(session.prompt("after failed harness persistence")).resolves.toBeUndefined();
 	});
 
 	it("rejects a pending invocation on dispose and refuses post-dispose invocations", async () => {

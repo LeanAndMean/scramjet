@@ -494,6 +494,27 @@ describe("AgentSession persisted retry authority", () => {
 		expect(retryRecords(session)).toEqual([]);
 	});
 
+	it("preserves prompt and settlement failures when both reject", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		const promptError = new Error("provider run failed");
+		const settlementError = new Error("assistant append failed");
+		const agentPrompt = session.agent.prompt.bind(session.agent);
+		vi.spyOn(session.agent, "prompt").mockImplementation(async (input: any, images?: any) => {
+			await agentPrompt(input, images);
+			throw promptError;
+		});
+		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "assistant") throw settlementError;
+			return appendMessage(message);
+		});
+
+		const rejection = await session.prompt("hello").catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(AggregateError);
+		expect(rejection).toMatchObject({ cause: promptError, errors: [promptError, settlementError] });
+	});
+
 	it("uses valid structured transient evidence instead of message text", async () => {
 		const { session } = await createFixture((i) =>
 			i === 0 ? providerFailure("transient", "rate_limit") : assistantText("ok"),
