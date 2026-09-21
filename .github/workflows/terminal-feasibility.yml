@@ -100,7 +100,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xfce4-terminal xterm kitty xvfb xdotool openbox xclip scrot tmux
+          sudo apt-get install -y xfce4-terminal xterm kitty xvfb xdotool x11-utils openbox xclip scrot tmux
       - name: Provision disposable iTerm2
         if: matrix.terminal == 'iterm2'
         run: brew install --cask iterm2
