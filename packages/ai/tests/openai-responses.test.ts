@@ -498,6 +498,7 @@ describe("OpenAI Responses failure normalization", () => {
 			"rate_limit",
 			"transient",
 			"provider_code",
+			"rate_limit_exceeded",
 			"OpenAI Responses request was rate limited.",
 		],
 		[
@@ -506,6 +507,7 @@ describe("OpenAI Responses failure normalization", () => {
 			"timeout",
 			"transient",
 			"message_category",
+			undefined,
 			"OpenAI Responses request timed out.",
 		],
 		[
@@ -514,22 +516,26 @@ describe("OpenAI Responses failure normalization", () => {
 			"authentication",
 			"non_transient",
 			"provider_code",
+			"authentication_error",
 			"OpenAI Responses authentication failed.",
 		],
-	] as const)("normalizes a %s", async (_name, event, category, disposition, source, message) => {
+	] as const)("normalizes a %s", async (name, event, category, disposition, source, providerCode, message) => {
 		const result = await failureFrom(sse([event]));
 
 		expect(result.errorMessage).toBe(message);
-		expect(providerDetails(result)).toEqual(
-			expect.objectContaining({
-				schemaVersion: 1,
-				phase: "stream",
-				kind: "provider_event",
-				category,
-				retryDisposition: disposition,
-				detailSource: source,
-			}),
-		);
+		expect(providerDetails(result)).toEqual({
+			schemaVersion: 1,
+			layer: "openai_responses",
+			phase: "stream",
+			kind: "provider_event",
+			category,
+			retryDisposition: disposition,
+			detailSource: source,
+			...(providerCode ? { providerCode } : {}),
+		});
+		if (name === "nested SDK-intercepted error") {
+			expect(JSON.stringify(result)).not.toContain("secret-key-value");
+		}
 	});
 
 	it.each([

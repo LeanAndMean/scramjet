@@ -295,10 +295,23 @@ type AgentRunSettlement = {
 	assistantPersistenceError?: Error;
 };
 
+type AgentRunStartReservation = {
+	promise: Promise<AgentRunSettlement>;
+	resolve: (run: AgentRunSettlement) => void;
+	reject: (reason: Error) => void;
+	settled: boolean;
+	run?: AgentRunSettlement;
+};
+
 type AutoRetryEvidence = "provider_failure" | "legacy_text" | "context_overflow" | "none";
 // SCRAMJET-DIVERGENCE: closed, replay-inert retry decisions and outcomes preserve #553 evidence invariants.
 type AutoRetryRecord =
-	| { schemaVersion: 1; outcome: "not_attempted"; reason: "retry_disabled"; evidence: AutoRetryEvidence }
+	| {
+			schemaVersion: 1;
+			outcome: "not_attempted";
+			reason: "retry_disabled" | "session_disposed";
+			evidence: AutoRetryEvidence;
+	  }
 	| {
 			schemaVersion: 1;
 			outcome: "not_attempted";
@@ -416,7 +429,7 @@ export class AgentSession {
 	private _retryActive = false;
 	private _runRetryCount = 0;
 	private _activeAgentRunSettlement: AgentRunSettlement | undefined = undefined;
-	private _lastStartedAgentRunSettlement: AgentRunSettlement | undefined = undefined;
+	private _pendingAgentRunStart: AgentRunStartReservation | undefined = undefined;
 	private _pendingRetryContinuation: RetryChainSettlement | undefined = undefined;
 	private readonly _unsettledAgentRuns = new Set<AgentRunSettlement>();
 	private readonly _unsettledRetryChains = new Set<RetryChainSettlement>();
@@ -699,8 +712,14 @@ export class AgentSession {
 			promise.catch(() => {});
 			const run = { promise, resolve: resolveRun, reject: rejectRun, settled: false, chain };
 			this._activeAgentRunSettlement = run;
-			this._lastStartedAgentRunSettlement = run;
 			this._unsettledAgentRuns.add(run);
+			const reservation = this._pendingAgentRunStart;
+			if (reservation) {
+				this._pendingAgentRunStart = undefined;
+				reservation.run = run;
+				reservation.settled = true;
+				reservation.resolve(run);
+			}
 			return run;
 		}
 
@@ -732,10 +751,25 @@ export class AgentSession {
 		this._settleRetryChain(run.chain, error);
 	}
 
-	private _consumeLastStartedAgentRunSettlement(): AgentRunSettlement | undefined {
-		const run = this._lastStartedAgentRunSettlement;
-		this._lastStartedAgentRunSettlement = undefined;
-		return run;
+	private _reserveAgentRunStart(): AgentRunStartReservation {
+		if (this._pendingAgentRunStart) throw new Error("An Agent prompt is already waiting to start.");
+		let resolve!: (run: AgentRunSettlement) => void;
+		let reject!: (reason: Error) => void;
+		const promise = new Promise<AgentRunSettlement>((resolvePromise, rejectPromise) => {
+			resolve = resolvePromise;
+			reject = rejectPromise;
+		});
+		promise.catch(() => {});
+		const reservation = { promise, resolve, reject, settled: false };
+		this._pendingAgentRunStart = reservation;
+		return reservation;
+	}
+
+	private _rejectAgentRunStart(reservation: AgentRunStartReservation, error: Error): void {
+		if (reservation.settled) return;
+		reservation.settled = true;
+		if (this._pendingAgentRunStart === reservation) this._pendingAgentRunStart = undefined;
+		reservation.reject(error);
 	}
 
 	// SCRAMJET-DIVERGENCE: harness-tool persisted settlement (#341). Synchronous ownership keeps queued
@@ -1160,12 +1194,12 @@ export class AgentSession {
 		const retryDisposeError = new Error("AgentSession disposed before retry settlement completed.");
 		const unsettledRuns = [...this._unsettledAgentRuns];
 		const retryWasActive = this._retryActive;
-		const unclassifiedErrorWasPersisted = unsettledRuns.some(
+		const unclassifiedError = unsettledRuns.find(
 			(run) => run.persistedAssistantSnapshot?.stopReason === "error",
-		);
+		)?.persistedAssistantSnapshot;
 		if (retryWasActive) this.agent.abort();
-		if (retryWasActive || unclassifiedErrorWasPersisted) {
-			try {
+		try {
+			if (retryWasActive) {
 				this._appendAutoRetryRecord({
 					schemaVersion: 1,
 					outcome: "cancelled",
@@ -1173,16 +1207,25 @@ export class AgentSession {
 					attempt: this._bounded(this._retryAttempt),
 					cumulativeErrors: this._bounded(this._runRetryCount),
 				});
-			} catch (error) {
-				this._reportRetryFailure(error);
+			} else if (unclassifiedError) {
+				const classification = this._classifyRetry(unclassifiedError);
+				this._appendAutoRetryRecord({
+					schemaVersion: 1,
+					outcome: "not_attempted",
+					reason: "session_disposed",
+					evidence: classification.kind === "context_overflow" ? "context_overflow" : classification.evidence,
+				});
 			}
+		} catch (error) {
+			this._reportRetryFailure(error);
 		}
 		this._retryAbortController?.abort();
 		this._retryAbortController = undefined;
 		this._retryAttempt = 0;
 		this._retryActive = false;
 		this._activeAgentRunSettlement = undefined;
-		this._lastStartedAgentRunSettlement = undefined;
+		const pendingAgentRunStart = this._pendingAgentRunStart;
+		if (pendingAgentRunStart) this._rejectAgentRunStart(pendingAgentRunStart, retryDisposeError);
 		const pendingRetryContinuation = this._pendingRetryContinuation;
 		this._pendingRetryContinuation = undefined;
 		this._extensionRunner.invalidate(
@@ -1635,6 +1678,10 @@ export class AgentSession {
 				}
 			}
 
+			if (this._retryActive && !this.isStreaming) {
+				throw new Error("Automatic retry is in progress. Cancel the retry before starting another prompt.");
+			}
+
 			// Emit input event for extension interception (before skill/template expansion)
 			let currentText = text;
 			let currentImages = options?.images;
@@ -1964,6 +2011,9 @@ export class AgentSession {
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: SendMessageDeliverAs },
 	): Promise<void> {
+		if (options?.triggerTurn && this._retryActive && !this.isStreaming) {
+			throw new Error("Automatic retry is in progress. Cancel the retry before starting another prompt.");
+		}
 		const appMessage = {
 			role: "custom" as const,
 			customType: message.customType,
@@ -3415,18 +3465,29 @@ export class AgentSession {
 	}
 
 	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		if (this._retryActive) {
+			throw new Error("Automatic retry is in progress. Cancel the retry before starting another prompt.");
+		}
+		const start = this._reserveAgentRunStart();
 		this._runRetryCount = 0;
-		this._lastStartedAgentRunSettlement = undefined;
-		const prompt = this.agent.prompt(messages);
-		const settlement = this._consumeLastStartedAgentRunSettlement();
 		let promptFailure: { error: unknown } | undefined;
 		try {
-			await prompt;
+			await this.agent.prompt(messages);
 		} catch (error) {
 			promptFailure = { error };
 		}
+		if (!start.run && this._pendingAgentRunStart === start) {
+			const startError = promptFailure
+				? promptFailure.error instanceof Error
+					? promptFailure.error
+					: new Error(String(promptFailure.error))
+				: new Error("Agent prompt completed before agent_start.");
+			this._rejectAgentRunStart(start, startError);
+			if (promptFailure) throw promptFailure.error;
+		}
 		let settlementFailure: { error: unknown } | undefined;
 		try {
+			const settlement = await start.promise;
 			await this.waitForRetry(settlement);
 		} catch (error) {
 			settlementFailure = { error };

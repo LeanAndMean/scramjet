@@ -545,6 +545,71 @@ describe("AgentSession persisted retry authority", () => {
 		]);
 	});
 
+	it("binds a prompt delayed behind an idle harness invocation to its eventual run settlement", async () => {
+		let releaseHarness!: () => void;
+		const harnessGate = new Promise<void>((resolve) => {
+			releaseHarness = resolve;
+		});
+		let markHarnessStarted!: () => void;
+		const harnessStarted = new Promise<void>((resolve) => {
+			markHarnessStarted = resolve;
+		});
+		const gatedHarnessTool = defineTool({
+			name: "gated_harness_notice",
+			label: "Gated harness notice",
+			description: "A gated harness-only notice for testing.",
+			activation: "harness-only",
+			parameters: Type.Object({}),
+			execute: async () => {
+				markHarnessStarted();
+				await harnessGate;
+				return { content: [{ type: "text" as const, text: "noted" }], details: undefined };
+			},
+		});
+		const { session } = await createFixture(() => assistantText("provider result"), {
+			customTools: [gatedHarnessTool],
+		});
+		const harnessInvocation = session.invokeHarnessTool("gated_harness_notice", {});
+		await harnessStarted;
+
+		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (
+				message.role === "assistant" &&
+				message.content.some((block) => block.type === "text" && block.text === "provider result")
+			) {
+				throw new Error("delayed assistant append failed");
+			}
+			return appendMessage(message);
+		});
+
+		const prompt = session.prompt("hello");
+		await vi.waitFor(() => expect(session.isStreaming).toBe(true));
+		releaseHarness();
+
+		await harnessInvocation;
+		await expect(prompt).rejects.toThrow("delayed assistant append failed");
+		expect((session as any)._unsettledAgentRuns.size).toBe(0);
+		expect((session as any)._unsettledRetryChains.size).toBe(0);
+	});
+
+	it("clears a prompt start reservation when the Agent rejects before agent_start", async () => {
+		const { session } = await createFixture(() => assistantText("ok"));
+		const agentPrompt = session.agent.prompt.bind(session.agent);
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockRejectedValueOnce(new Error("pre-start failure"));
+
+		await expect(session.prompt("first")).rejects.toThrow("pre-start failure");
+		expect((session as any)._pendingAgentRunStart).toBeUndefined();
+		promptSpy.mockImplementation(agentPrompt);
+
+		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "assistant") throw new Error("next assistant append failed");
+			return appendMessage(message);
+		});
+		await expect(session.prompt("next")).rejects.toThrow("next assistant append failed");
+	});
+
 	it("retires a fire-and-forget continuation settlement before the next prompt", async () => {
 		const { session } = await createFixture(() => assistantText("ok"));
 		const continuationInput = { role: "user" as const, content: "continue", timestamp: Date.now() };
@@ -898,6 +963,70 @@ describe("AgentSession persisted retry authority", () => {
 		},
 	);
 
+	it("rejects an ordinary prompt while retry backoff owns the chain", async () => {
+		const { session } = await createFixture(
+			(i) => (i === 0 ? assistantError("rate limit") : assistantText("wrong run")),
+			{
+				baseDelayMs: 10_000,
+			},
+		);
+		const originalPrompt = session.prompt("first");
+		originalPrompt.catch(() => {});
+		await vi.waitFor(() => expect(session.isRetrying).toBe(true));
+		const agentPrompt = vi.spyOn(session.agent, "prompt");
+		const preflightResults: boolean[] = [];
+
+		const secondResult = await session
+			.prompt("second", { preflightResult: (accepted) => preflightResults.push(accepted) })
+			.catch((error: unknown) => error);
+		const retryCount = (session as any)._runRetryCount;
+		const recordsBeforeCleanup = retryRecords(session);
+		const retryStillActive = session.isRetrying;
+		if (retryStillActive) session.abortRetry();
+		else session.dispose();
+		await originalPrompt.catch(() => {});
+
+		expect(secondResult).toEqual(
+			expect.objectContaining({ message: expect.stringMatching(/automatic retry.*cancel/i) }),
+		);
+		expect(agentPrompt).not.toHaveBeenCalled();
+		expect(preflightResults).toEqual([false]);
+		expect(retryCount).toBe(1);
+		expect(recordsBeforeCleanup).toEqual([expect.objectContaining({ outcome: "scheduled" })]);
+		expect(retryStillActive).toBe(true);
+	});
+
+	it("rejects a triggered custom-message turn while retry backoff owns the chain", async () => {
+		const { session } = await createFixture(
+			(i) => (i === 0 ? assistantError("rate limit") : assistantText("wrong run")),
+			{
+				baseDelayMs: 10_000,
+			},
+		);
+		const originalPrompt = session.prompt("first");
+		originalPrompt.catch(() => {});
+		await vi.waitFor(() => expect(session.isRetrying).toBe(true));
+		const agentPrompt = vi.spyOn(session.agent, "prompt");
+
+		const triggeredResult = await session
+			.sendCustomMessage({ customType: "test", content: "hidden prompt", display: false }, { triggerTurn: true })
+			.catch((error: unknown) => error);
+		const retryCount = (session as any)._runRetryCount;
+		const recordsBeforeCleanup = retryRecords(session);
+		const retryStillActive = session.isRetrying;
+		if (retryStillActive) session.abortRetry();
+		else session.dispose();
+		await originalPrompt.catch(() => {});
+
+		expect(triggeredResult).toEqual(
+			expect.objectContaining({ message: expect.stringMatching(/automatic retry.*cancel/i) }),
+		);
+		expect(agentPrompt).not.toHaveBeenCalled();
+		expect(retryCount).toBe(1);
+		expect(recordsBeforeCleanup).toEqual([expect.objectContaining({ outcome: "scheduled" })]);
+		expect(retryStillActive).toBe(true);
+	});
+
 	it("records cancellation after a scheduled retry and settles", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 10_000 });
 		const prompt = session.prompt("hello");
@@ -1138,7 +1267,15 @@ describe("AgentSession persisted retry authority", () => {
 			.map((entry) =>
 				entry.type === "custom" ? (entry.data as { outcome: string }).outcome : entry.message.stopReason,
 			);
-		expect(relevant).toEqual(["error", "cancelled"]);
+		expect(relevant).toEqual(["error", "not_attempted"]);
+		expect(retryRecords(session)).toEqual([
+			{
+				schemaVersion: 1,
+				outcome: "not_attempted",
+				reason: "session_disposed",
+				evidence: "legacy_text",
+			},
+		]);
 	});
 
 	it("does not persist an assistant error after disposal during message_end", async () => {
