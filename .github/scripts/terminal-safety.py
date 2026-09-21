@@ -81,6 +81,11 @@ try:
         report["version"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", "/Applications/iTerm.app/Contents/Info.plist")
         run("swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver))
         report["capabilities"] = json.loads(run(str(driver), "capabilities"))
+        run("open", "-a", "iTerm")
+        time.sleep(3)
+        report["gatekeeperOpen"] = json.loads(run(str(driver), "press", "com.apple.CoreServicesUIAgent", "Open"))
+        time.sleep(3)
+        report["updatePrompt"] = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Don't Check"))
         command = f"/bin/bash {shlex.quote(str(launcher))}"
         run("osascript", "-e", f'tell application "iTerm"\nactivate\ncreate window with default profile command {json.dumps(command)}\nend tell')
     else:
@@ -94,6 +99,7 @@ try:
     if not mac:
         window = run("xdotool", "search", "--onlyvisible", "--name", "ScramjetSafety").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window)
+    key("1")
     count = pixels("fitted-image")
     check("nativeOversizedImageVisible", lambda: count > 400)
     key("2")

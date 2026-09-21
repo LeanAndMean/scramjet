@@ -207,6 +207,17 @@ describe("retained approval and exit safety", () => {
 			await new Promise((resolve) => setTimeout(resolve, 30));
 			await h.frame();
 			expect(h.terminal.visibleLines().join("\n")).toContain("APPROVE OR CANCEL");
+			const overlayInput = vi.fn();
+			const overlay = h.internals.ui.showOverlay({
+				render: () => ["CAPTURING OVERLAY"],
+				invalidate() {},
+				handleInput: overlayInput,
+			});
+			await h.frame();
+			h.terminal.sendInput("\r");
+			expect(overlayInput).toHaveBeenCalledExactlyOnceWith("\r");
+			expect(activate).not.toHaveBeenCalled();
+			overlay.hide();
 			h.internals.ui.scrollViewportTo(0);
 			await h.frame();
 			expect(h.terminal.visibleLines().join("\n")).toContain("PAYLOAD-0");

@@ -445,6 +445,10 @@ export class TUI extends Container {
 		this.requestRender();
 	}
 
+	isComponentFocused(component: Component): boolean {
+		return this.focusedComponent === component;
+	}
+
 	setFocus(component: Component | null): void {
 		// Clear focused flag on old component
 		if (isFocusable(this.focusedComponent)) {

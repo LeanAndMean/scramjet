@@ -2524,6 +2524,7 @@ export class InteractiveMode {
 									return { consume: true };
 								}
 								if (revealingControls) return { consume: true };
+								if (!this.ui.isComponentFocused(tool)) return undefined;
 								if (this.ui.isComponentVisible(tool)) return undefined;
 								revealingControls = true;
 								this.ui.setFocus(null);

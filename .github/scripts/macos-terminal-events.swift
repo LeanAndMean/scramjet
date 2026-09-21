@@ -48,6 +48,18 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
     return result
 }
 
+func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool {
+    if depth > 12 { return false }
+    if attribute(element, kAXRoleAttribute) as? String == "AXButton",
+       attribute(element, kAXTitleAttribute) as? String == title {
+        return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+    }
+    for child in attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] {
+        if pressButton(child, title: title, depth: depth + 1) { return true }
+    }
+    return false
+}
+
 let args = CommandLine.arguments
 switch args[1] {
 case "capabilities":
@@ -58,6 +70,9 @@ case "geometry":
         fatalError("Terminal is not running")
     }
     emit(geometry(AXUIElementCreateApplication(app.processIdentifier)))
+case "press":
+    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: args[2])
+    emit(["pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
 case "key":
     let code = CGKeyCode(args[2])!
     let flags = CGEventFlags(rawValue: UInt64(args[3])!)
