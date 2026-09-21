@@ -40,6 +40,7 @@ Use --safety for synthetic native image/approval/handoff checks. Keys 1/2 show o
 clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
 6 opens a synthetic external editor, 7 suspends (resume with fg/SIGCONT),
 8 delivers a JPEG tool result through conversion/finalization, 9 invalidates it.
+G shows a bounded image overlay; H shows a padded, clipped image overlay.
 0 exits the safety fixture through the same drain/stop path as Ctrl+Q.
 --inspect-screenshot <png> counts synthetic magenta pixels using installed Photon.`;
 if (process.argv.includes("--help")) {
@@ -279,6 +280,10 @@ async function runProduction() {
 	process.once("SIGTERM", stop);
 	process.once("SIGHUP", stop);
 	mode.ui.addInputListener((data) => {
+		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+			interactions[copied !== undefined && data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
+			return { consume: true };
+		}
 		if (safety) {
 			safetyState.inputs ??= [];
 			safetyState.inputs.push({ data, offset: mode.ui.getViewportState()?.offset, visible: approvalTool && mode.ui.isComponentVisible(approvalTool), focused: approvalTool && mode.ui.isComponentFocused(approvalTool) });
@@ -299,14 +304,10 @@ async function runProduction() {
 				if (button === 2 && mouse[4] === "M") { copyKind = "rightCopy"; interactions.rightWithoutSelection++; }
 				if (mouse[4] === "m") thumbGesture = false;
 			}
-			if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
-				interactions[data.slice(6, -6) === copied ? "pasteMatches" : "pasteMismatches"]++;
-				return { consume: true };
-			}
 		}
 		if (isKeyRelease(data)) return { consume: true };
 		if (matchesKey(data, "ctrl+q") || (safety && matchesKey(data, "0"))) { void terminal.drainInput().then(stop); return { consume: true }; }
-		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find((key) => matchesKey(data, key));
+		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9", "g", "h"].find((key) => matchesKey(data, key));
 		if (action) {
 			sequence = sequence.then(() => safetyAction(action)).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
 			return { consume: true };
@@ -327,6 +328,15 @@ async function runProduction() {
 		} else if (key === "3") {
 			if (overlay) { overlay.hide(); overlay = undefined; safetyState.phase = "image"; }
 			else { overlay = mode.ui.showOverlay(new Text("OVERLAY WITHOUT GRAPHICS", 1, 1)); safetyState.phase = "overlay"; }
+		} else if (key === "g" || key === "h") {
+			overlay?.hide();
+			const { Box, Image } = await import("../../../tui/dist/index.js");
+			const image = new Image(Buffer.from(safetyImage.get_bytes()).toString("base64"), "image/png", { fallbackColor: (text) => text });
+			const box = new Box(1, 1);
+			box.addChild(new Text("OVERLAY IMAGE", 0, 0));
+			box.addChild(image);
+			overlay = mode.ui.showOverlay(key === "g" ? image : box, { width: 40, maxHeight: 8, margin: 2 });
+			safetyState.phase = key === "g" ? "overlay-image" : "overlay-image-clipped";
 		} else if (key === "4" && !approval) {
 			if (journey && completed !== 8) throw new Error("Finish the batch before opening sequential approval");
 			await mode.handleEvent({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });

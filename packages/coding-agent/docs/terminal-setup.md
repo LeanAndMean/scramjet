@@ -12,11 +12,13 @@ Terminal-owned Copy/context menus cannot see application selection. A terminal o
 
 When detached, PageUp/PageDown browse and Home goes to the beginning; End/Escape return to the tail. Other keys return and reach the focused component. At the tail, normal editor/list bindings apply, and focused overlays retain keyboard precedence. See [keybindings.md](keybindings.md#transcript-browsing-precedence).
 
-Clipboard delivery uses the existing platform backend (for example `pbcopy`, `wl-copy`, `xclip`/`xsel`) or OSC 52 where appropriate. Terminals can reject OSC 52 without acknowledgement: a successful request alone is not proof that a desktop clipboard changed. Remote sessions, clipboard security policies and other profiles require their own verification.
+Clipboard delivery uses the existing platform backend (for example `pbcopy`, `wl-copy`, `xclip`/`xsel`) or OSC 52 where appropriate. Wayland copying awaits stdin completion and a successful `wl-copy` parent exit, with a five-second subprocess timeout; observable failure tries the existing X11/OSC 52 fallbacks before releasing selection. Terminals can reject OSC 52 without acknowledgement: a successful request alone is not proof that a desktop clipboard changed. Remote sessions, clipboard security policies and other profiles require their own verification.
 
 Orderly exit restores the shell's normal buffer and appends one readable plain-text transcript, excluding editor/widgets/temporary approval controls; images receive text labels. Suspension and external-editor handoffs restore normal terminal modes without dumping transcript copies. Crash cleanup prioritizes mode restoration; terminal loss cannot guarantee a flush. For a durable rich view, use `/export`—HTML rendering is unchanged.
 
 Built-in Kitty/iTerm2 images fit the viewport without changing retained source data. Partially visible placements and images behind overlays/selection show placeholders rather than painting through other regions; scroll to reveal the full placement or clear selection. Images remain disabled inside tmux. Custom graphics wrappers must forward the optional image-height bound described in [tui.md](tui.md); arbitrary graphics envelopes are not proven compatible.
+
+After an expired raw Escape/CSI prefix, active mouse reporting recognizes one immediately following mouse-shaped suffix even after a long idle gap. Matching suffixes are discarded rather than inserted or acted on; other typing is replayed, with incomplete candidates released after 10 ms. Consequently, identical mouse-shaped literal text in that position is consumed, and mouse suffixes themselves fragmented beyond 10 ms are not guaranteed recovery. Bracketed paste is kept separate. This bounded ambiguity policy avoids indefinitely withholding ordinary typing; it is not universal lossless framing over arbitrarily delayed connections.
 
 ### Native compatibility evidence
 

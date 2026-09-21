@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type SettingItem, SettingsList, type SettingsListTheme } from "../src/components/settings-list.js";
-import { type Component, CURSOR_MARKER, type Focusable } from "../src/tui.js";
+import { type Component, CURSOR_MARKER, type Focusable, TUI } from "../src/tui.js";
 import { visibleWidth } from "../src/utils.js";
+import { HeadlessTerminal } from "./helpers/headless-terminal.js";
 
 const theme: SettingsListTheme = {
 	label: (text) => text,
@@ -23,6 +24,64 @@ function list(items: SettingItem[], enableSearch = true): SettingsList {
 }
 
 describe("SettingsList search", () => {
+	it.each([false, true])(
+		"activates literal and CSI-u Space with search=%s through normal dispatch",
+		(enableSearch) => {
+			const changed = vi.fn();
+			const submenuInput = vi.fn();
+			const settings = new SettingsList(
+				[
+					{ id: "alpha", label: "Alpha", currentValue: "off", values: ["off", "on"] },
+					{ id: "gamma", label: "Gamma", currentValue: "off", values: ["off", "on"] },
+					{
+						id: "submenu",
+						label: "Submenu",
+						currentValue: "",
+						submenu: () => ({ render: () => [], invalidate() {}, handleInput: submenuInput }),
+					},
+				],
+				10,
+				theme,
+				changed,
+				() => {},
+				{ enableSearch },
+			);
+			const terminal = new HeadlessTerminal();
+			const tui = new TUI(terminal);
+			tui.addChild(settings);
+			tui.setFocus(settings);
+			tui.start();
+			try {
+				if (enableSearch) terminal.sendInput("g");
+				for (const data of ["\x1b[32;2u", "\x1b[32;5u", "\x1b[32;1:3u"]) terminal.sendInput(data);
+				expect(changed).not.toHaveBeenCalled();
+				terminal.sendInput(" ");
+				terminal.sendInput("\x1b[32u");
+				expect(changed.mock.calls).toEqual([
+					[enableSearch ? "gamma" : "alpha", "on"],
+					[enableSearch ? "gamma" : "alpha", "off"],
+				]);
+				tui.setFocus(
+					list(
+						[
+							{
+								id: "submenu",
+								label: "Submenu",
+								currentValue: "",
+								submenu: () => ({ render: () => [], invalidate() {}, handleInput: submenuInput }),
+							},
+						],
+						enableSearch,
+					),
+				);
+				terminal.sendInput("\r");
+				terminal.sendInput("\x1b[32u");
+				expect(submenuInput).toHaveBeenCalledExactlyOnceWith("\x1b[32u");
+			} finally {
+				tui.stop();
+			}
+		},
+	);
 	it("renders a discoverable search input and filters labels", () => {
 		const settings = list([
 			{ id: "alpha", label: "Alpha", currentValue: "on" },

@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { stripVTControlCharacters } from "node:util";
+import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js";
 import { isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
@@ -279,6 +280,7 @@ export class TUI extends Container {
 	private stopped = false;
 	private viewport: RetainedViewport | undefined;
 	private viewportHadImages = false;
+	private viewportHadOverlay = false;
 	private viewportRevealFocus = false;
 	private viewportRevealComponent?: Component;
 	private started = false;
@@ -344,13 +346,18 @@ export class TUI extends Container {
 
 	// SCRAMJET-DIVERGENCE: safety controls use the painted block, not a scheduled scroll position.
 	isComponentVisible(component: Component): boolean {
-		return (
-			!this.stopped &&
-			this.previousWidth === this.terminal.columns &&
-			this.previousHeight === this.terminal.rows &&
-			!this.hasOverlay() &&
-			(this.viewport?.isComponentVisible(component) ?? false)
-		);
+		return this.getComponentVisibility(component) === "visible";
+	}
+
+	getComponentVisibility(component: Component): "visible" | "occluded" | "outside" {
+		if (
+			this.stopped ||
+			this.previousWidth !== this.terminal.columns ||
+			this.previousHeight !== this.terminal.rows ||
+			!this.viewport?.isComponentVisible(component)
+		)
+			return "outside";
+		return this.hasOverlay() || this.viewportHadOverlay ? "occluded" : "visible";
 	}
 
 	revealComponent(component: Component): void {
@@ -447,6 +454,14 @@ export class TUI extends Container {
 
 	isComponentFocused(component: Component): boolean {
 		return this.focusedComponent === component;
+	}
+
+	// SCRAMJET-DIVERGENCE: asynchronous base-focus changes must preserve overlay ownership and restoration.
+	replaceFocus(expected: Component | null, component: Component | null): void {
+		for (const entry of this.overlayStack) {
+			if (entry.preFocus === expected) entry.preFocus = component;
+		}
+		if (this.focusedComponent === expected) this.setFocus(component);
 	}
 
 	setFocus(component: Component | null): void {
@@ -990,12 +1005,18 @@ export class TUI extends Container {
 	}
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
-	private compositeOverlays(lines: string[], termWidth: number, termHeight: number, bounded = false): string[] {
+	private compositeOverlays(
+		lines: string[],
+		termWidth: number,
+		termHeight: number,
+		bounded = false,
+		images: ImagePlacement[] = [],
+	): string[] {
 		if (this.overlayStack.length === 0) return lines;
 		const result = [...lines];
 
 		// Pre-render all visible overlays and calculate positions
-		const rendered: { overlayLines: string[]; row: number; col: number; w: number }[] = [];
+		const rendered: { overlayLines: string[]; row: number; col: number; w: number; images: ImagePlacement[] }[] = [];
 		let minLinesNeeded = result.length;
 
 		const visibleEntries = this.overlayStack.filter((e) => this.isOverlayVisible(e));
@@ -1007,19 +1028,22 @@ export class TUI extends Container {
 			// (width and maxHeight don't depend on overlay height)
 			const { width, maxHeight, availableHeight } = this.resolveOverlayLayout(options, 0, termWidth, termHeight);
 
-			// Render component at calculated width
-			let overlayLines = component.render(width);
-
-			// Apply maxHeight if specified
 			const limit = bounded ? Math.min(maxHeight ?? termHeight, availableHeight, termHeight) : maxHeight;
-			if (limit !== undefined && overlayLines.length > limit) {
+			component.setViewportHeight?.(bounded ? limit : undefined);
+			let overlayLines = component.render(width);
+			let overlayImages: ImagePlacement[] = [];
+			if (bounded) {
+				const frame = sliceImagePlacements(overlayLines, 0, limit!, width);
+				overlayLines = frame.lines;
+				overlayImages = frame.images;
+			} else if (limit !== undefined && overlayLines.length > limit) {
 				overlayLines = overlayLines.slice(0, limit);
 			}
 
 			// Get final row/col with actual overlay height
 			const { row, col } = this.resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
 
-			rendered.push({ overlayLines, row, col, w: width });
+			rendered.push({ overlayLines, row, col, w: width, images: overlayImages });
 			minLinesNeeded = Math.max(minLinesNeeded, row + overlayLines.length);
 		}
 
@@ -1036,7 +1060,28 @@ export class TUI extends Container {
 		const viewportStart = Math.max(0, workingHeight - termHeight);
 
 		// Composite each overlay
-		for (const { overlayLines, row, col, w } of rendered) {
+		for (const [index, { overlayLines, row, col, w, images: placements }] of rendered.entries()) {
+			for (const image of placements) {
+				const top = row + image.row;
+				const left = col + image.col;
+				const occluded = rendered
+					.slice(index + 1)
+					.some(
+						(higher) =>
+							top < higher.row + higher.overlayLines.length &&
+							top + image.rows > higher.row &&
+							left < higher.col + higher.w &&
+							left + image.columns > higher.col,
+					);
+				if (!occluded && top + image.rows <= termHeight && left + image.columns <= termWidth) {
+					images.push({ ...image, row: top, col: left });
+				} else {
+					overlayLines[image.row] = truncateToWidth(
+						occluded ? "[Image hidden by overlay]" : "[Image clipped; scroll to view]",
+						w,
+					);
+				}
+			}
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = viewportStart + row + i;
 				if (idx >= 0 && idx < result.length) {
@@ -1382,7 +1427,7 @@ export class TUI extends Container {
 		) {
 			lines = lines.map((line) => line.replaceAll(CURSOR_MARKER, ""));
 		}
-		lines = this.compositeOverlays(lines, contentWidth, height, true);
+		lines = this.compositeOverlays(lines, contentWidth, height, true, frame.images);
 		const cursor = this.extractCursorPosition(lines, height);
 		lines = this.applyLineResets(lines.map((line) => line.replaceAll(CURSOR_MARKER, "")));
 		const reset = TUI.SEGMENT_RESET;
@@ -1407,6 +1452,7 @@ export class TUI extends Container {
 		buffer += "\x1b[?2026l";
 		this.terminal.write(buffer);
 		viewport.markPainted();
+		this.viewportHadOverlay = this.hasOverlay();
 		this.previousLines = lines;
 		this.previousKittyImageIds = this.collectKittyImageIds([
 			...lines,

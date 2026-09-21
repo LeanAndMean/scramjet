@@ -16,6 +16,7 @@ const settingsSelector = vi.hoisted(() => ({
 		  }
 		| undefined,
 }));
+vi.mock("../src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
 vi.mock("../src/utils/image-convert.js", () => imageConversion);
 vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 	SettingsSelectorComponent: class {
@@ -226,6 +227,103 @@ describe("retained transcript selection", () => {
 });
 
 describe("retained approval and exit safety", () => {
+	it.each(["initial", "reveal"])(
+		"preserves overlay and underlying focus across %s approval flush settlement",
+		async (phase) => {
+			for (const settlement of ["success", "cancel", "reject", "replace"] as const) {
+				const h = await createProductionInteractiveHarness(60, 12);
+				let release!: () => void;
+				let rejectFlush!: (error: Error) => void;
+				const gate = new Promise<void>((resolve, reject) => {
+					release = resolve;
+					rejectFlush = reject;
+				});
+				let finish!: (value: string) => void;
+				let flushSpy: ReturnType<typeof vi.spyOn> | undefined;
+				let outcome: Promise<string | Error> | undefined;
+				try {
+					await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+					const tool = h.internals.chatContainer.children[0];
+					const activate = vi.fn();
+					const flush = h.terminal.flush.bind(h.terminal);
+					const gateFlush = () => {
+						flushSpy = vi.spyOn(h.terminal, "flush").mockImplementation(async () => {
+							await gate;
+							await flush();
+						});
+					};
+					if (phase === "initial") gateFlush();
+					let settled = false;
+					outcome = h.extensionUI
+						.custom<string>(
+							(_ui, _theme, _kb, done) => {
+								finish = done;
+								return { render: () => ["APPROVE OR CANCEL"], invalidate() {}, handleInput: activate };
+							},
+							{
+								toolAttachedContext: {
+									toolCallId: "approval",
+									render: () =>
+										new Text(Array.from({ length: 40 }, (_, i) => `PAYLOAD-${i}`).join("\n"), 0, 0),
+								},
+							},
+						)
+						.catch((error: Error) => error)
+						.then((result) => {
+							settled = true;
+							return result;
+						});
+					if (phase === "reveal") {
+						await vi.waitFor(() => expect(h.internals.ui.isComponentFocused(tool)).toBe(true));
+						h.internals.ui.scrollViewportTo(0);
+						await h.frame();
+						gateFlush();
+						h.terminal.sendInput("\r");
+					}
+					await vi.waitFor(() => expect(flushSpy).toHaveBeenCalled());
+					const input = vi.fn();
+					const overlayComponent = { render: () => ["OVERLAY"], invalidate() {}, handleInput: input };
+					const overlay = h.internals.ui.showOverlay(overlayComponent);
+					const overlayFrame = h.internals.ui.renderNow({ requireFlush: true }).catch(() => {});
+					if (settlement === "cancel") finish("cancelled");
+					if (settlement === "replace") {
+						h.internals.clearTranscript();
+						h.extensionUI.setEditorText("NEW SESSION");
+					}
+					if (settlement === "reject") rejectFlush(new Error("flush failed"));
+					else release();
+					await overlayFrame;
+					if (settlement !== "success") await outcome;
+					flushSpy?.mockRestore();
+					await h.frame();
+					expect(h.internals.ui.isComponentFocused(overlayComponent)).toBe(true);
+					h.terminal.sendInput("x");
+					expect(input).toHaveBeenCalledExactlyOnceWith("x");
+					expect(activate).not.toHaveBeenCalled();
+					overlay.hide();
+					if (settlement === "success") {
+						expect(settled).toBe(false);
+						h.terminal.sendInput("\r");
+						expect(activate).not.toHaveBeenCalled();
+						await vi.waitFor(() => expect(h.internals.ui.isComponentFocused(tool)).toBe(true));
+						await h.frame();
+						h.terminal.sendInput("\r");
+						expect(activate).toHaveBeenCalledExactlyOnceWith("\r");
+						finish("cancelled");
+					} else {
+						h.terminal.sendInput("z");
+						expect(h.extensionUI.getEditorText()).toBe(settlement === "replace" ? "NEW SESSION" : "z");
+					}
+				} finally {
+					finish?.("cancelled");
+					release();
+					await outcome;
+					flushSpy?.mockRestore();
+					await h.dispose();
+				}
+			}
+		},
+	);
 	it("dispatches to a capturing overlay while approval revelation awaits flush", async () => {
 		const h = await createProductionInteractiveHarness(60, 12);
 		let release!: () => void;
@@ -1572,7 +1670,12 @@ describe("production retained viewport", () => {
 		await h.session.followUp("FOLLOW");
 		h.internals.updatePendingMessagesDisplay();
 		await h.emit({ type: "agent_start" });
-		const queue = ["", " Steering: STEER", " Follow-up: FOLLOW", " ↳ Alt+Up to edit all queued messages"];
+		const queue = [
+			"",
+			" Steering: STEER",
+			" Follow-up: FOLLOW",
+			` ↳ ${process.platform === "darwin" ? "Option" : "Alt"}+Up to edit all queued messages`,
+		];
 		const working = ["", " ⠋ Working..."];
 		const editor = ["─".repeat(59), "E", "─".repeat(59)];
 		const check = async (
@@ -1974,6 +2077,7 @@ describe("production interactive composition", () => {
 	it("mounts every production region and characterizes widget transition spacing", async () => {
 		const h = await createProductionInteractiveHarness(60, 24);
 		try {
+			vi.spyOn(h.session.sessionManager, "getCwd").mockReturnValue("/synthetic-layout");
 			const p = h.internals;
 			expect(p.ui.getViewportState()).toMatchObject({ followingTail: true });
 			expect(p.ui.children).toEqual([
@@ -2002,8 +2106,8 @@ describe("production interactive composition", () => {
 				"EDITOR",
 				"─".repeat(59),
 				" BELOW",
-				h.session.sessionManager.getCwd(),
-				"?/0 (?)                                   (unknown) unknown",
+				"/synthetic-layout",
+				"?/0 (?)                                             unknown",
 				...Array<string>(14).fill(""),
 			];
 			expect(appeared.map((row) => row.trimEnd())).toEqual(expected);

@@ -49,7 +49,7 @@ def check(name, predicate):
 
 def key(name):
     if mac:
-        codes = {"1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25, "enter": 36, "exit": 29}
+        codes = {"1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25, "g": 5, "h": 4, "enter": 36, "exit": 29}
         run(str(driver), "key", str(codes[name]), "0")
     elif name == "enter":
         run("xdotool", "keydown", "Return")
@@ -70,6 +70,36 @@ def pixels(name):
     result = json.loads(run(shutil.which("node"), str(fixture), "--inspect-screenshot", str(path)))
     report.setdefault("pixels", {})[name] = result
     return result["count"]
+
+
+def cleanup_owned_resources():
+    errors = []
+    try:
+        fixture_state = state()
+        pgid = fixture_state.get("pgid")
+        if pgid and pgid != os.getpgrp() and not fixture_state.get("stopped"):
+            try:
+                os.killpg(pgid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+            else:
+                key("exit")
+    except Exception as error:
+        errors.append(f"fixture: {error}")
+    if child and child.poll() is None:
+        for label, operation in [("terminate", child.terminate), ("wait", lambda: child.wait(timeout=10))]:
+            try:
+                operation()
+            except ProcessLookupError:
+                pass
+            except Exception as error:
+                errors.append(f"{label}: {error}")
+    if errors:
+        report["cleanupError"] = "; ".join(errors)
+
+
+def report_passed():
+    return bool(report["checks"]) and all(c["passed"] for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
 
 
 try:
@@ -144,6 +174,15 @@ try:
     key("3")
     count = pixels("overlay-closed")
     check("imageRestoredAfterOverlay", lambda: count > 400)
+    key("g")
+    check("boundedOverlayRequested", lambda: state().get("phase") == "overlay-image")
+    count = pixels("bounded-overlay-image")
+    check("boundedOverlayImageVisible", lambda: count > 400)
+    key("h")
+    check("clippedOverlayRequested", lambda: state().get("phase") == "overlay-image-clipped")
+    count = pixels("clipped-overlay-image")
+    check("partialOverlayPlacementWithheld", lambda: count == 0 and any("[Image clipped; scroll to view]" in row for row in state().get("painted", [])))
+    key("3")
     key("8")
     check("imageConversionSettled", lambda: state().get("phase") == "converted")
     count = pixels("converted-image")
@@ -196,16 +235,8 @@ except Exception as error:
     except Exception as capture_error:
         report["captureError"] = str(capture_error)
 finally:
-    try:
-        if state().get("pgid") and state()["pgid"] != os.getpgrp():
-            os.killpg(state()["pgid"], signal.SIGCONT)
-        key("exit")
-        if child:
-            child.terminate()
-            child.wait(timeout=10)
-    except Exception as error:
-        report["cleanupError"] = str(error)
-    report["passed"] = bool(report["checks"]) and all(c["passed"] for c in report["checks"].values()) and "error" not in report
+    cleanup_owned_resources()
+    report["passed"] = report_passed()
     (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 sys.exit(0 if report["passed"] else 1)

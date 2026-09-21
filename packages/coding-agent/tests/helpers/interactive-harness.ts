@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Agent } from "@leanandmean/agent";
 import type { Container, TUI } from "@leanandmean/tui";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { HeadlessTerminal } from "../../../tui/tests/helpers/headless-terminal.js";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.js";
 import { createAgentSessionRuntime } from "../../src/core/agent-session-runtime.js";
@@ -16,8 +16,7 @@ import { SessionManager } from "../../src/core/session-manager.js";
 import { SettingsManager } from "../../src/core/settings-manager.js";
 import { InteractiveMode } from "../../src/modes/interactive/interactive-mode.js";
 import { onThemeChange, stopThemeWatcher } from "../../src/modes/interactive/theme/theme.js";
-
-vi.mock("../../src/utils/tools-manager.js", () => ({ ensureTool: async () => undefined }));
+import { ensureTool } from "../../src/utils/tools-manager.js";
 
 interface InteractiveInternals {
 	ui: TUI;
@@ -58,12 +57,14 @@ export async function createProductionInteractiveHarness(
 		retry: { enabled: false },
 	});
 	let extensionUI: ExtensionUIContext | undefined;
+	const modelRegistry = ModelRegistry.inMemory(authStorage);
+	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([]);
 	const services = await createAgentSessionServices({
 		cwd: directory,
 		agentDir: directory,
 		authStorage,
 		settingsManager,
-		modelRegistry: ModelRegistry.inMemory(authStorage),
+		modelRegistry,
 		resourceLoaderOptions: {
 			noExtensions: true,
 			noSkills: true,
@@ -108,8 +109,16 @@ export async function createProductionInteractiveHarness(
 		: vi
 				.spyOn(internals, "configureRetainedViewport")
 				.mockImplementation(() => internals.ui.setLiveRegionStart(internals.chatContainer));
+	expect(vi.isMockFunction(ensureTool)).toBe(true);
+	const provisioningCalls = vi.mocked(ensureTool).mock.calls.length;
 	try {
 		await mode.init();
+		expect(
+			vi
+				.mocked(ensureTool)
+				.mock.calls.slice(provisioningCalls)
+				.map(([name]) => name),
+		).toEqual(["fd", "rg"]);
 	} finally {
 		legacy?.mockRestore();
 	}

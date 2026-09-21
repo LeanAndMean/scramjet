@@ -146,6 +146,7 @@ export class ProcessTerminal implements Terminal {
 	 */
 	private setupStdinBuffer(): void {
 		this.stdinBuffer = new StdinBuffer({ timeout: 10 });
+		this.stdinBuffer.setMouseReporting(this.viewportMode);
 
 		// Kitty protocol response pattern: \x1b[?<flags>u
 		const kittyResponsePattern = /^\x1b\[\?(\d+)u$/;
@@ -291,6 +292,7 @@ export class ProcessTerminal implements Terminal {
 		// Kitty keeps separate keyboard stacks for the normal and alternate buffers.
 		if (this._kittyProtocolActive) this.write("\x1b[<u");
 		this.viewportMode = enabled;
+		this.stdinBuffer?.setMouseReporting(enabled);
 		this.write(enabled ? "\x1b[?1049h\x1b[?1002h\x1b[?1006h" : "\x1b[?1002l\x1b[?1006l\x1b[0m\x1b[?1049l");
 		if (this._kittyProtocolActive) this.write(enabled ? "\x1b[>15u" : "\x1b[>7u");
 	}

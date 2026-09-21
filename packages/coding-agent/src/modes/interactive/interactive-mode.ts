@@ -2433,11 +2433,11 @@ export class InteractiveMode {
 		const savedText = this.editor.getText();
 		const isOverlay = options?.overlay ?? false;
 
-		const restoreEditor = () => {
+		const restoreEditor = (restoreFocus = true) => {
 			this.editorContainer.clear();
 			this.editorContainer.addChild(this.editor);
 			this.editor.setText(savedText);
-			this.ui.setFocus(this.editor);
+			if (restoreFocus) this.ui.setFocus(this.editor);
 			this.ui.requestRender();
 		};
 
@@ -2447,6 +2447,14 @@ export class InteractiveMode {
 			let committedContext: Component | undefined;
 			let removeInputGuard: (() => void) | undefined;
 			let revealingControls = false;
+			let needsReveal = false;
+			const retained = this.ui.getViewportState() !== undefined;
+			const pendingFocus: Component = { render: () => [], invalidate() {} };
+			const restoreAttachedFocus = (current: boolean) => {
+				if (!retained) return;
+				this.ui.replaceFocus(pendingFocus, current ? this.editor : null);
+				if (attachedTool) this.ui.replaceFocus(attachedTool, current ? this.editor : null);
+			};
 			let closed = false;
 			const attachmentCurrent = () =>
 				attachedTool &&
@@ -2467,7 +2475,8 @@ export class InteractiveMode {
 				try {
 					component?.dispose?.();
 				} catch {}
-				if (!isOverlay && current) restoreEditor();
+				if (attachedTool) restoreAttachedFocus(current);
+				if (!isOverlay && current) restoreEditor(!attachedTool || !retained);
 				reject(error);
 			};
 
@@ -2476,8 +2485,10 @@ export class InteractiveMode {
 				closed = true;
 				removeInputGuard?.();
 				attachedTool?.detachCommittedContext();
+				const current = !attachedTool || this.chatContainer.children.includes(attachedTool);
+				if (attachedTool) restoreAttachedFocus(current);
 				if (isOverlay) this.ui.hideOverlay();
-				else if (!attachedTool || this.chatContainer.children.includes(attachedTool)) restoreEditor();
+				else if (current) restoreEditor(!attachedTool || !retained);
 				// Note: both branches above already call requestRender
 				resolve(result);
 				try {
@@ -2505,47 +2516,45 @@ export class InteractiveMode {
 						committedContext = attachment.render(this.ui, theme);
 						this.committedChatContainer.addChild(committedContext);
 						tool.attachCommittedContext(component);
-						this.ui.setFocus(null);
+						if (retained) this.ui.replaceFocus(this.editor, pendingFocus);
+						else this.ui.setFocus(null);
 						this.editorContainer.clear();
-						const retained = this.ui.getViewportState() !== undefined;
-						if (retained) {
-							this.ui.revealComponent(tool);
-							await this.ui.renderNow({ requireFlush: true });
-						} else await this.ui.commitNow({ requireFlush: true });
-						if (closed) return;
-						if (!attachmentCurrent()) throw new Error("Tool-attached context was replaced before flush settled");
-						if (retained) {
-							if (!this.ui.isComponentVisible(tool))
+						const reveal = async () => {
+							revealingControls = true;
+							this.ui.replaceFocus(tool, pendingFocus);
+							if (retained) {
+								this.ui.revealComponent(tool);
+								await this.ui.renderNow({ requireFlush: true });
+							} else await this.ui.commitNow({ requireFlush: true });
+							if (closed) return;
+							if (!attachmentCurrent())
+								throw new Error("Tool-attached context was replaced before flush settled");
+							const visibility = retained ? this.ui.getComponentVisibility(tool) : "visible";
+							if (visibility === "outside")
 								throw new Error("Approval controls do not fit in the visible viewport");
-							// SCRAMJET-DIVERGENCE: navigation must reveal and flush controls before a later key can authorize.
+							needsReveal = visibility === "occluded";
+							revealingControls = false;
+							if (retained) this.ui.replaceFocus(pendingFocus, tool);
+							else this.ui.setFocus(tool);
+						};
+						if (retained) {
+							// SCRAMJET-DIVERGENCE: occluded controls require a fresh reveal/flush, never overlay focus theft.
 							removeInputGuard = this.ui.addInputListener((data) => {
 								if (isKeyRelease(data) || /^\x1b\[\d+;\d+;\d+t$/.test(data)) return undefined;
+								if (!this.ui.isComponentFocused(tool) && !this.ui.isComponentFocused(pendingFocus))
+									return undefined;
 								if (!attachmentCurrent()) {
 									fail(new Error("Tool-attached context is no longer current"));
 									return { consume: true };
 								}
-								if (!this.ui.isComponentFocused(tool)) return undefined;
 								if (revealingControls) return { consume: true };
-								if (this.ui.isComponentVisible(tool)) return undefined;
-								revealingControls = true;
-								this.ui.setFocus(null);
-								this.ui.revealComponent(tool);
-								void this.ui
-									.renderNow({ requireFlush: true })
-									.then(() => {
-										if (closed) return;
-										if (!attachmentCurrent())
-											throw new Error("Tool-attached context was replaced before flush settled");
-										if (!this.ui.isComponentVisible(tool))
-											throw new Error("Approval controls do not fit in the visible viewport");
-										revealingControls = false;
-										this.ui.setFocus(tool);
-									})
-									.catch(fail);
+								if (!needsReveal && this.ui.isComponentVisible(tool)) return undefined;
+								if (!this.ui.hasOverlay()) void reveal().catch(fail);
 								return { consume: true };
 							});
 						}
-						this.ui.setFocus(tool);
+						await reveal();
+						if (closed) return;
 						this.ui.requestRender();
 						return;
 					}

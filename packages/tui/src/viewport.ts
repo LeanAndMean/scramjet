@@ -1,10 +1,11 @@
 // SCRAMJET-DIVERGENCE: retained component rows and content-relative reading anchors.
 import { diffArrays } from "diff";
+import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js";
 import { getKeybindings, type KeybindingsManager } from "./keybindings.js";
 import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
 import { isImageLine } from "./terminal-image.js";
 import type { Component } from "./tui.js";
-import { extractAnsiCode, getSegmenter, sliceByColumn, truncateToWidth, visibleWidth } from "./utils.js";
+import { extractAnsiCode, getSegmenter, sliceByColumn, visibleWidth } from "./utils.js";
 
 export interface ViewportBlock {
 	component: Component;
@@ -71,12 +72,15 @@ function correspondence(
 	old: string[],
 	next: string[],
 	position: number,
+	maxEditLength?: number,
 ): { position: number; exact: boolean } | undefined {
 	let oldIndex = 0;
 	let newIndex = 0;
 	let nearest: { position: number; exact: boolean } | undefined;
 	let distance = Infinity;
-	for (const change of diffArrays(old, next)) {
+	const changes = maxEditLength === undefined ? diffArrays(old, next) : diffArrays(old, next, { maxEditLength });
+	if (!changes) return undefined;
+	for (const change of changes) {
 		if (!change.added && !change.removed) {
 			const candidate = Math.max(oldIndex, Math.min(position, oldIndex + change.count - 1));
 			const delta = Math.abs(candidate - position);
@@ -94,7 +98,7 @@ function correspondence(
 
 function mapAnchor(anchor: Anchor, old: RenderedBlock, next: RenderedBlock): Anchor | undefined {
 	if (old.lines === next.lines) return anchor;
-	const rows = correspondence(old.lines, next.lines, anchor.row);
+	const rows = correspondence(old.lines, next.lines, anchor.row, 64);
 	if (rows?.exact) return { ...anchor, row: rows.position };
 
 	const oldTokens = comparison(old.lines);
@@ -135,40 +139,6 @@ function plainText(line: string): string {
 		}
 	}
 	return result;
-}
-
-interface ImagePlacement {
-	sequence: string;
-	row: number;
-	col: number;
-}
-
-// Only built-in placement envelopes provide enough geometry for atomic viewport painting.
-function imagePlacement(line: string, row: number): (ImagePlacement & { rows: number; columns: number }) | undefined {
-	const kitty = line.match(/\x1b_G([^;]+);[\s\S]*\x1b\\/);
-	if (kitty) {
-		const params = new Map(kitty[1].split(",").map((part) => part.split("=")) as [string, string][]);
-		if (params.get("C") !== "1") return undefined;
-		return {
-			sequence: kitty[0],
-			row,
-			col: visibleWidth(line.slice(0, kitty.index)),
-			rows: Number(params.get("r")),
-			columns: Number(params.get("c")),
-		};
-	}
-	const iterm = line.match(/(?:\x1b\[(\d+)A)?(\x1b\]1337;File=[^\x07]*\x07)/);
-	if (iterm) {
-		const up = Number(iterm[1] ?? 0);
-		return {
-			sequence: iterm[2],
-			row: row - up,
-			col: visibleWidth(line.slice(0, iterm.index)),
-			rows: up + 1,
-			columns: Number(iterm[2].match(/;width=(\d+);/)?.[1]),
-		};
-	}
-	return undefined;
 }
 
 export class RetainedViewport {
@@ -532,40 +502,13 @@ export class RetainedViewport {
 				)
 				.map((block) => block.component),
 		);
-		const lines = logical.slice(this.offset, this.offset + this.height);
-		const images: ImagePlacement[] = [];
-		for (let row = 0; row < logical.length; row++) {
-			if (!isImageLine(logical[row])) continue;
-			const placement = imagePlacement(logical[row], row);
-			const valid =
-				placement &&
-				Number.isSafeInteger(placement.rows) &&
-				placement.rows > 0 &&
-				Number.isSafeInteger(placement.columns) &&
-				placement.columns > 0 &&
-				placement.row >= 0;
-			const top = valid ? placement.row : row;
-			const bottom = valid ? top + placement.rows : row + 1;
-			if (top >= this.offset + this.height || bottom <= this.offset) continue;
-			if (row >= this.offset && row < this.offset + this.height) lines[row - this.offset] = "";
-			if (
-				valid &&
-				top >= this.offset &&
-				bottom <= this.offset + this.height &&
-				placement.col + placement.columns <= width &&
-				!hideImages &&
-				!this.selection
-			) {
-				images.push({ ...placement, row: top - this.offset });
-			} else {
-				const label = hideImages
-					? "[Image hidden by overlay]"
-					: this.selection
-						? "[Image hidden by selection]"
-						: "[Image clipped; scroll to view]";
-				lines[Math.max(0, top - this.offset)] = truncateToWidth(label, width);
-			}
-		}
+		const { lines, images } = sliceImagePlacements(
+			logical,
+			this.offset,
+			this.height,
+			width,
+			hideImages ? "[Image hidden by overlay]" : this.selection ? "[Image hidden by selection]" : undefined,
+		);
 		const range = this.selectionRange();
 		if (range) {
 			const [start, end] = range;

@@ -1,3 +1,4 @@
+import * as diff from "diff";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Box } from "../src/components/box.js";
 import { Image } from "../src/components/image.js";
@@ -11,8 +12,10 @@ import {
 } from "../src/terminal-image.js";
 import { type Component, Container, CURSOR_MARKER, TUI } from "../src/tui.js";
 import { sliceByColumn } from "../src/utils.js";
-import type { ViewportBlock, ViewportOptions } from "../src/viewport.js";
+import { RetainedViewport, type ViewportBlock, type ViewportOptions } from "../src/viewport.js";
 import { HeadlessTerminal } from "./helpers/headless-terminal.js";
+
+vi.mock("diff", { spy: true });
 
 class Rows implements Component {
 	readonly render = vi.fn((_width: number) => [...this.lines]);
@@ -370,6 +373,77 @@ describe("viewport interactions", () => {
 });
 
 describe("retained viewport", () => {
+	it("bounds raw-row search on a large padding-only resize without losing the content anchor", () => {
+		const text = new Text(Array.from({ length: 6000 }, (_, i) => `numbered line ${i}`).join("\n"), 0, 0);
+		const viewport = new RetainedViewport({ getBlocks: () => [{ component: text, finalized: true }] });
+		viewport.update(80, 24);
+		viewport.scrollTo(3000);
+		const search = vi.spyOn(diff, "diffArrays");
+		try {
+			const rows = viewport.update(79, 24);
+			expect(search.mock.calls[0][2]).toEqual({ maxEditLength: 64 });
+			expect(search.mock.results[0].value).toBeUndefined();
+			expect(viewport.state.offset).toBe(3000);
+			expect(rows[viewport.state.offset]).toBe("numbered line 3000".padEnd(79));
+		} finally {
+			search.mockRestore();
+		}
+	});
+
+	it.each(["kitty", "iterm2"] as const)(
+		"bounds %s overlay images and replaces partial nested placements before clipping",
+		async (protocol) => {
+			const dimensions = getCellDimensions();
+			setCapabilities({ images: protocol, trueColor: true, hyperlinks: true });
+			setCellDimensions({ widthPx: 9, heightPx: 18 });
+			try {
+				const image = new Image(
+					"aW1hZ2U=",
+					"image/png",
+					{ fallbackColor: (value) => value },
+					{ imageId: 55105 },
+					{ widthPx: 300, heightPx: 3000 },
+				);
+				const { tui, terminal, frame, text } = await setup([{ component: new Rows(Array(8).fill("base")) }], 41, 8);
+				let overlay = tui.showOverlay(image, { width: 40, margin: 1 });
+				let mark = terminal.markWrites();
+				await frame();
+				let output = terminal.writesSince(mark);
+				expect(output).toContain(protocol === "kitty" ? "r=6" : ";height=6:");
+				terminal.resize(41, 6);
+				mark = terminal.markWrites();
+				await frame();
+				output = terminal.writesSince(mark);
+				expect(output).toContain(protocol === "kitty" ? "r=4" : ";height=4:");
+				overlay.hide();
+				terminal.resize(41, 8);
+				const box = new Box(1, 1);
+				box.addChild(new Text("heading", 0, 0));
+				box.addChild(image);
+				overlay = tui.showOverlay(box, { width: 40, maxHeight: 6, row: 0, col: 0 });
+				mark = terminal.markWrites();
+				await frame();
+				output = terminal.writesSince(mark);
+				expect(output).not.toContain(protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=");
+				expect(text().join("\n")).toContain("[Image clipped; scroll to view]");
+				overlay.hide();
+				const lower = tui.showOverlay(image, { width: 40, maxHeight: 6, row: 0, col: 0 });
+				await frame();
+				const upper = tui.showOverlay(new Rows(["higher overlay"]), { width: 40, row: 2, col: 0 });
+				mark = terminal.markWrites();
+				await frame();
+				expect(terminal.writesSince(mark)).not.toContain(protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=");
+				expect(text()[2]).toBe("higher overlay");
+				upper.hide();
+				mark = terminal.markWrites();
+				await frame();
+				expect(terminal.writesSince(mark)).toContain(protocol === "kitty" ? "\x1b_Ga=T" : "\x1b]1337;File=");
+				lower.hide();
+			} finally {
+				setCellDimensions(dimensions);
+			}
+		},
+	);
 	it("deletes a built-in Kitty image when its overlay closes", async () => {
 		const dimensions = getCellDimensions();
 		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });

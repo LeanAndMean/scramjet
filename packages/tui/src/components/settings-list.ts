@@ -1,5 +1,6 @@
 import { fuzzyFilter } from "../fuzzy.js";
 import { getKeybindings } from "../keybindings.js";
+import { matchesKey } from "../keys.js";
 import { type Component, type Focusable, isFocusable } from "../tui.js";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils.js";
 import { Input } from "./input.js";
@@ -201,7 +202,8 @@ export class SettingsList implements Component, Focusable {
 		} else if (kb.matches(data, "tui.select.down")) {
 			if (displayItems.length === 0) return;
 			this.selectedIndex = this.selectedIndex === displayItems.length - 1 ? 0 : this.selectedIndex + 1;
-		} else if (kb.matches(data, "tui.select.confirm") || data === " ") {
+		} else if (kb.matches(data, "tui.select.confirm") || matchesKey(data, "space")) {
+			// SCRAMJET-DIVERGENCE: viewport keyboard negotiation encodes ordinary Space too.
 			this.activateItem();
 		} else if (kb.matches(data, "tui.select.cancel")) {
 			this.onCancel();

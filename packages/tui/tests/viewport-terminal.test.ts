@@ -8,6 +8,92 @@ afterEach(() => {
 });
 
 describe("mouse transport framing", () => {
+	it.each([30, 1000])("recovers complete mouse continuations after a %sms prefix gap only in mouse mode", (gap) => {
+		vi.useFakeTimers();
+		const event = "\x1b[<64;10;5M";
+		for (let split = 1; split < event.length; split++) {
+			const buffer = new StdinBuffer();
+			buffer.setMouseReporting(true);
+			const events: string[] = [];
+			buffer.on("data", (data) => events.push(data));
+			buffer.process(event.slice(0, split));
+			vi.advanceTimersByTime(gap);
+			buffer.process(`${event.slice(split)}z`);
+			expect(events).toEqual(split < 3 ? [event.slice(0, split), "z"] : ["z"]);
+			buffer.destroy();
+		}
+	});
+
+	it("replays speculative nonmouse text and incomplete candidates without reviving expired Escape", () => {
+		vi.useFakeTimers();
+		for (const prefix of ["\x1b", "\x1b["]) {
+			for (const suffix of ["[draft]", "<draft>", "<64;10;", "<1234;5;6M", "hello"]) {
+				const buffer = new StdinBuffer();
+				buffer.setMouseReporting(true);
+				const events: string[] = [];
+				buffer.on("data", (data) => events.push(data));
+				buffer.process(prefix);
+				vi.advanceTimersByTime(1000);
+				buffer.process(suffix);
+				vi.advanceTimersByTime(11);
+				expect(events).toEqual([prefix, ...suffix]);
+				buffer.destroy();
+			}
+		}
+	});
+
+	it("keeps paste opaque, bounds speculation and resets at fresh escapes, mode changes and clear", () => {
+		vi.useFakeTimers();
+		const buffer = new StdinBuffer();
+		buffer.setMouseReporting(true);
+		const data = vi.fn();
+		const paste = vi.fn();
+		buffer.on("data", data);
+		buffer.on("paste", paste);
+		const expire = () => {
+			buffer.process("\x1b[");
+			vi.advanceTimersByTime(30);
+			data.mockClear();
+		};
+		expire();
+		buffer.process("<64;");
+		buffer.process("\x1b[200~<64;10;5M\x1b[201~");
+		expect(data.mock.calls.flat()).toEqual([..."<64;"]);
+		expect(paste).toHaveBeenCalledExactlyOnceWith("<64;10;5M");
+		expire();
+		buffer.process("<64;");
+		buffer.process("\x1b[A");
+		expect(data.mock.calls.flat()).toEqual([..."<64;", "\x1b[A"]);
+		expire();
+		buffer.process("<64;");
+		buffer.setMouseReporting(false);
+		buffer.process("10;5M");
+		expect(data.mock.calls.flat()).toEqual([..."<64;10;5M"]);
+		buffer.setMouseReporting(true);
+		expire();
+		buffer.process("<64;");
+		buffer.clear();
+		buffer.process("text");
+		expect(data.mock.calls.flat()).toEqual([..."text"]);
+		buffer.destroy();
+	});
+
+	it("recovers a fragmented speculative suffix within the interval and replays it after the interval", () => {
+		vi.useFakeTimers();
+		for (const gap of [9, 11]) {
+			const buffer = new StdinBuffer();
+			buffer.setMouseReporting(true);
+			const data = vi.fn();
+			buffer.on("data", data);
+			buffer.process("\x1b[");
+			vi.advanceTimersByTime(30);
+			buffer.process("<64;");
+			vi.advanceTimersByTime(gap);
+			buffer.process("10;5M");
+			expect(data.mock.calls.flat()).toEqual(gap === 9 ? ["\x1b["] : ["\x1b[", ..."<64;10;5M"]);
+			buffer.destroy();
+		}
+	});
 	it("preserves a separately typed bracket after an expired Escape", () => {
 		vi.useFakeTimers();
 		const buffer = new StdinBuffer({ timeout: 10 });

@@ -6,6 +6,8 @@ import { sliceByColumn } from "../../tui/src/utils.js";
 import { registerSubagentTool } from "../src/subagent/index.js";
 import { noOpTerminalIndicators } from "./helpers.js";
 
+vi.mock("../../coding-agent/src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
+
 let harness: Awaited<ReturnType<typeof createProductionInteractiveHarness>> | undefined;
 
 afterEach(async () => {

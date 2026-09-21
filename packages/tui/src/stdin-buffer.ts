@@ -300,6 +300,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	private discardMouse = false;
 	private timedOutPrefix = "";
 	private timedOutPrefixExpiresAt = 0;
+	private mouseReporting = false;
+	private lateMouseCandidate = "";
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
@@ -332,7 +334,10 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			return;
 		}
 
-		if (this.timedOutPrefix) {
+		if (this.timedOutPrefix && this.mouseReporting) {
+			str = this.recoverLateMouse(str);
+			if (!str) return;
+		} else if (this.timedOutPrefix) {
 			const recovered = this.timedOutPrefix + str;
 			if (Date.now() < this.timedOutPrefixExpiresAt && (recovered.startsWith(`${ESC}[<`) || recovered === `${ESC}[`))
 				str = recovered;
@@ -424,6 +429,36 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 	}
 
+	// SCRAMJET-DIVERGENCE: late mouse-shaped continuations consume one credit; mismatches/timeouts replay only new bytes.
+	private recoverLateMouse(input: string): string {
+		for (let index = 0; index < input.length; index++) {
+			const candidate = this.timedOutPrefix + this.lateMouseCandidate + input[index];
+			if (/^\x1b\[<\d{1,3};\d{1,5};\d{1,5}[Mm]$/.test(candidate)) {
+				this.timedOutPrefix = "";
+				this.lateMouseCandidate = "";
+				return input.slice(index + 1);
+			}
+			if (!/^\x1b\[(?:<(?:\d{0,3}(?:;\d{0,5}(?:;\d{0,5})?)?)?)?$/.test(candidate)) {
+				for (const character of this.lateMouseCandidate) this.emitDataSequence(character);
+				this.timedOutPrefix = "";
+				this.lateMouseCandidate = "";
+				return input.slice(index);
+			}
+			this.lateMouseCandidate += input[index];
+		}
+		this.timeout = setTimeout(() => {
+			for (const sequence of this.flush()) this.emitDataSequence(sequence);
+		}, this.timeoutMs);
+		return "";
+	}
+
+	setMouseReporting(enabled: boolean): void {
+		if (enabled === this.mouseReporting) return;
+		if (this.lateMouseCandidate) for (const sequence of this.flush()) this.emitDataSequence(sequence);
+		this.timedOutPrefix = "";
+		this.mouseReporting = enabled;
+	}
+
 	private emitDataSequence(sequence: string): void {
 		const rawCodepoint = sequence.length === 1 ? sequence.codePointAt(0) : undefined;
 		if (rawCodepoint !== undefined && rawCodepoint === this.pendingKittyPrintableCodepoint) {
@@ -441,12 +476,18 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			this.timeout = null;
 		}
 
+		if (this.lateMouseCandidate) {
+			const sequences = [...this.lateMouseCandidate];
+			this.lateMouseCandidate = "";
+			this.timedOutPrefix = "";
+			return sequences;
+		}
 		if (this.buffer.length === 0) {
 			return [];
 		}
 
 		this.timedOutPrefix = this.buffer === ESC || this.buffer === `${ESC}[` ? this.buffer : "";
-		// SCRAMJET-DIVERGENCE: ambiguous prefixes get only one further framing interval for late mouse fragments.
+		// Standalone callers retain the short recovery window; active mouse reporting uses speculative replay.
 		this.timedOutPrefixExpiresAt = Date.now() + this.timeoutMs;
 		this.discardMouse = this.buffer.startsWith(`${ESC}[<`);
 		const sequences = this.discardMouse ? [] : [this.buffer];
@@ -466,6 +507,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.pendingKittyPrintableCodepoint = undefined;
 		this.discardMouse = false;
 		this.timedOutPrefix = "";
+		this.lateMouseCandidate = "";
 	}
 
 	getBuffer(): string {

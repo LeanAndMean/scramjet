@@ -88,16 +88,37 @@ export async function copyToClipboard(text: string): Promise<void> {
 					const isWayland = isWaylandSession();
 					if (isWayland && hasWaylandDisplay) {
 						try {
-							// Verify wl-copy exists (spawn errors are async and won't be caught)
-							execSync("which wl-copy", { stdio: "ignore" });
-							// wl-copy with execSync hangs due to fork behavior; use spawn instead
-							const proc = spawn("wl-copy", [], { stdio: ["pipe", "ignore", "ignore"] });
-							proc.stdin.on("error", () => {
-								// Ignore EPIPE errors if wl-copy exits early
+							// SCRAMJET-DIVERGENCE: await backend acceptance without execSync's daemon/fork hang.
+							await new Promise<void>((resolve, reject) => {
+								const proc = spawn("wl-copy", [], {
+									stdio: ["pipe", "ignore", "ignore"],
+									timeout: options.timeout,
+									killSignal: "SIGKILL",
+								});
+								let inputFinished = false;
+								let exited = false;
+								proc.on("error", reject);
+								proc.stdin.on("error", (error) => {
+									proc.kill("SIGKILL");
+									reject(error);
+								});
+								proc.once("exit", (code) => {
+									if (code !== 0) {
+										reject(new Error("wl-copy did not accept clipboard content"));
+										return;
+									}
+									exited = true;
+									if (inputFinished) resolve();
+								});
+								proc.stdin.end(text, (error?: Error | null) => {
+									if (error) {
+										reject(error);
+										return;
+									}
+									inputFinished = true;
+									if (exited) resolve();
+								});
 							});
-							proc.stdin.write(text);
-							proc.stdin.end();
-							proc.unref();
 							copied = true;
 						} catch {
 							if (hasX11Display) {
