@@ -66,7 +66,8 @@ def key(name):
     if is_mac:
         events("key", *mac[name])
     else:
-        run("xdotool", "key", "--clearmodifiers", linux.get(name, name))
+        binding = "shift+Insert" if terminal_kind == "xterm" and name == "paste" else linux.get(name, name)
+        run("xdotool", "key", "--clearmodifiers", binding)
     time.sleep(0.1)
 
 
@@ -190,7 +191,8 @@ try:
             report["terminalConfiguration"] = config.read_text()
             launch = ["kitty", "--config", str(config), "--title", "ScramjetProbe"]
         else:
-            launch = ["xterm", "-fa", "DejaVu Sans Mono", "-fs", "12", "-geometry", "80x24", "-T", "ScramjetProbe", "-xrm", "XTerm*allowWindowOps: true", "-e"]
+            report["terminalConfiguration"] = {"font": "DejaVu Sans Mono 12", "geometry": "80x24", "selectToClipboard": True, "paste": "Shift+Insert"}
+            launch = ["xterm", "-fa", "DejaVu Sans Mono", "-fs", "12", "-geometry", "80x24", "-T", "ScramjetProbe", "-xrm", "XTerm*selectToClipboard: true", "-e"]
         terminal_process = subprocess.Popen([*launch, "bash", "--noprofile", "--norc"], env={**os.environ, "XDG_CONFIG_HOME": str(config_home)})
         terminal_started = True
         if not wait_for(lambda: subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "ScramjetProbe"], capture_output=True, timeout=5).returncode == 0, timeout=15):
