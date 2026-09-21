@@ -282,6 +282,8 @@ export class TUI extends Container {
 	private viewportHadImages = false;
 	private viewportHadOverlay = false;
 	private viewportRevealFocus = false;
+	private viewportPaint: { flushed: boolean } | undefined;
+	private reportedViewportFlushFailure = false;
 	private viewportRevealComponent?: Component;
 	private started = false;
 	private removeViewportInput?: () => void;
@@ -327,6 +329,7 @@ export class TUI extends Container {
 		if (this.liveRegionStart) throw new Error("Cannot configure a viewport with a committed live region");
 		if (!this.terminal.setViewportMode) throw new Error("Terminal must support viewport mode");
 		this.viewport?.cancelInteraction();
+		this.viewportPaint = undefined;
 		this.removeViewportInput?.();
 		this.viewportRevealFocus = false;
 		this.viewport = new RetainedViewport(options, () => this.requestRender());
@@ -360,6 +363,25 @@ export class TUI extends Container {
 		return this.hasOverlay() || this.viewportHadOverlay ? "occluded" : "visible";
 	}
 
+	isViewportFrameFlushed(): boolean {
+		return (
+			!this.stopped &&
+			!!this.viewport &&
+			this.previousWidth === this.terminal.columns &&
+			this.previousHeight === this.terminal.rows &&
+			this.viewportPaint?.flushed === true
+		);
+	}
+
+	isComponentRenderComplete(component: Component): boolean {
+		return (
+			!this.stopped &&
+			this.previousWidth === this.terminal.columns &&
+			this.previousHeight === this.terminal.rows &&
+			this.viewport?.isComponentRenderComplete(component) === true
+		);
+	}
+
 	revealComponent(component: Component): void {
 		this.viewport?.cancelInteraction();
 		this.viewportRevealComponent = component;
@@ -381,6 +403,7 @@ export class TUI extends Container {
 	}
 
 	resetViewport(): void {
+		this.viewportPaint = undefined;
 		this.viewportRevealFocus = false;
 		this.viewportRevealComponent = undefined;
 		this.viewport?.reset();
@@ -429,10 +452,10 @@ export class TUI extends Container {
 		}
 		this.renderRequested = false;
 		this.lastRenderAt = performance.now();
-		this.doRender();
+		const flushing = this.doRender();
 		if (options?.requireFlush && !this.terminal.flush)
 			throw new Error("Terminal flush is required for rendered output");
-		await this.terminal.flush?.();
+		await (this.viewport ? flushing : this.terminal.flush?.());
 	}
 
 	rebuild(): void {
@@ -665,6 +688,7 @@ export class TUI extends Container {
 
 	stop(options?: { transcript?: readonly Component[] }): void {
 		if (this.stopped) return;
+		this.viewportPaint = undefined;
 		this.stopped = true;
 		this.started = false;
 		this.renderRequested = false;
@@ -716,6 +740,7 @@ export class TUI extends Container {
 	requestRender(force = false): void {
 		if (this.stopped) return;
 		if (force) {
+			this.viewportPaint = undefined;
 			this.viewport?.invalidate();
 			this.previousLines = [];
 			this.committedLines = [];
@@ -1400,7 +1425,7 @@ export class TUI extends Container {
 		this.previousViewportTop = 0;
 	}
 
-	private doViewportRender(): void {
+	private doViewportRender(): Promise<void> | undefined {
 		const viewport = this.viewport!;
 		if (this.hasOverlay()) viewport.cancelInteraction();
 		const width = this.terminal.columns;
@@ -1450,6 +1475,8 @@ export class TUI extends Container {
 		if (cursor) buffer += `\x1b[${cursor.row + 1};${Math.min(cursor.col, contentWidth - 1) + 1}H`;
 		buffer += cursor && this.showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
 		buffer += "\x1b[?2026l";
+		const paint = { flushed: false };
+		this.viewportPaint = paint;
 		this.terminal.write(buffer);
 		viewport.markPainted();
 		this.viewportHadOverlay = this.hasOverlay();
@@ -1461,14 +1488,35 @@ export class TUI extends Container {
 		this.viewportHadImages = hasImages;
 		this.previousWidth = width;
 		this.previousHeight = height;
+		if (!this.terminal.flush) return;
+		let flushing: Promise<void>;
+		try {
+			flushing = this.terminal.flush();
+		} catch (error) {
+			flushing = Promise.reject(error);
+		}
+		void flushing.then(
+			() => {
+				if (this.viewportPaint !== paint || this.stopped) return;
+				paint.flushed = true;
+				this.reportedViewportFlushFailure = false;
+			},
+			(error: unknown) => {
+				if (this.viewportPaint !== paint || this.stopped || this.reportedViewportFlushFailure) return;
+				this.reportedViewportFlushFailure = true;
+				const reason = stripVTControlCharacters(error instanceof Error ? error.message : String(error)).slice(
+					0,
+					200,
+				);
+				process.stderr.write(`Terminal output flush failed: ${reason}\n`);
+			},
+		);
+		return flushing;
 	}
 
-	private doRender(): void {
+	private doRender(): Promise<void> | undefined {
 		if (this.stopped) return;
-		if (this.viewport) {
-			this.doViewportRender();
-			return;
-		}
+		if (this.viewport) return this.doViewportRender();
 		if (this.liveRegionStart && !this.children.includes(this.liveRegionStart)) {
 			this.resetDetachedLiveRegion();
 		}

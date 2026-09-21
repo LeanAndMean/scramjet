@@ -20,6 +20,16 @@ state_path = output / "fixture.json"
 driver = output / "events"
 report = {"scope": "Production candidate safety and native graphics; not activation", "checks": {}, "exitInput": "fixture key 0 (synthetic Control-Q is not faithfully delivered by iTerm2)" if mac else "Control-Q"}
 child = None
+REQUIRED_CHECKS = {
+    "approvalInstalled", "boundedOverlayImageVisible", "boundedOverlayRequested",
+    "clippedOverlayRequested", "externalEditorReceivesRestoredTermios", "externalEditorRoundTrip",
+    "finalTermiosRestored", "hiddenControlsDoNotAuthorize", "imageConversionSettled",
+    "imageRestoredAfterOverlay", "nativeImageRestoredAfterResume", "nativeImageVisibleAfterConversion",
+    "nativeImageVisibleAfterInvalidation", "nativeOversizedImageVisible", "nativePlacementsCleanedUp",
+    "nativeProtocolDetected", "orderlyExit", "overlayClearsNativeImage", "partialOverlayPlacementWithheld",
+    "partialPlacementRequested", "partialPlacementWithheld", "processActuallySuspended",
+    "productionFixtureStarted", "resumedCandidate", "subsequentActivationAuthorizes", "suspendRequested",
+}
 
 
 def run(*args, **kwargs):
@@ -40,6 +50,8 @@ def wait(predicate, seconds=10):
 
 
 def check(name, predicate):
+    if name not in REQUIRED_CHECKS or name in report["checks"]:
+        raise RuntimeError(f"Unexpected or duplicate native check: {name}")
     passed = wait(predicate)
     report["checks"][name] = {"passed": passed, "fixture": state()}
     print(f"{name}: {passed}", flush=True)
@@ -99,7 +111,7 @@ def cleanup_owned_resources():
 
 
 def report_passed():
-    return bool(report["checks"]) and all(c["passed"] for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
+    return set(report["checks"]) == REQUIRED_CHECKS and all(c["passed"] for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
 
 
 try:

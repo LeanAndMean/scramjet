@@ -2529,6 +2529,17 @@ export class InteractiveMode {
 							if (closed) return;
 							if (!attachmentCurrent())
 								throw new Error("Tool-attached context was replaced before flush settled");
+							if (retained && !this.ui.isViewportFrameFlushed()) {
+								needsReveal = true;
+								revealingControls = false;
+								return;
+							}
+							if (
+								retained &&
+								(!this.ui.isComponentRenderComplete(committedContext!) ||
+									!this.ui.isComponentRenderComplete(tool))
+							)
+								throw new Error("Approval context or controls could not be rendered completely");
 							const visibility = retained ? this.ui.getComponentVisibility(tool) : "visible";
 							if (visibility === "outside")
 								throw new Error("Approval controls do not fit in the visible viewport");
@@ -2548,7 +2559,14 @@ export class InteractiveMode {
 									return { consume: true };
 								}
 								if (revealingControls) return { consume: true };
-								if (!needsReveal && this.ui.isComponentVisible(tool)) return undefined;
+								if (
+									!needsReveal &&
+									this.ui.isViewportFrameFlushed() &&
+									this.ui.isComponentVisible(tool) &&
+									this.ui.isComponentRenderComplete(committedContext!) &&
+									this.ui.isComponentRenderComplete(tool)
+								)
+									return undefined;
 								if (!this.ui.hasOverlay()) void reveal().catch(fail);
 								return { consume: true };
 							});

@@ -293,7 +293,11 @@ export class ProcessTerminal implements Terminal {
 		if (this._kittyProtocolActive) this.write("\x1b[<u");
 		this.viewportMode = enabled;
 		this.stdinBuffer?.setMouseReporting(enabled);
-		this.write(enabled ? "\x1b[?1049h\x1b[?1002h\x1b[?1006h" : "\x1b[?1002l\x1b[?1006l\x1b[0m\x1b[?1049l");
+		this.write(
+			enabled
+				? "\x1b[?1049h\x1b[?1004h\x1b[?1002h\x1b[?1006h"
+				: "\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[0m\x1b[?1049l",
+		);
 		if (this._kittyProtocolActive) this.write(enabled ? "\x1b[>15u" : "\x1b[>7u");
 	}
 

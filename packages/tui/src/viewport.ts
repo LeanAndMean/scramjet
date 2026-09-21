@@ -5,7 +5,14 @@ import { getKeybindings, type KeybindingsManager } from "./keybindings.js";
 import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
 import { isImageLine } from "./terminal-image.js";
 import type { Component } from "./tui.js";
-import { extractAnsiCode, getSegmenter, sliceByColumn, visibleWidth } from "./utils.js";
+import {
+	extractAnsiCode,
+	getSegmenter,
+	normalizeTerminalOutput,
+	sliceByColumn,
+	truncateToWidth,
+	visibleWidth,
+} from "./utils.js";
 
 export interface ViewportBlock {
 	component: Component;
@@ -29,6 +36,7 @@ export interface ViewportState {
 
 interface RenderedBlock extends ViewportBlock {
 	lines: string[];
+	complete: boolean;
 	start: number;
 	width: number;
 	height: number;
@@ -247,7 +255,13 @@ export class RetainedViewport {
 	}
 
 	handleInput(data: string, overlayFocused: boolean, overlayVisible: boolean): boolean {
-		if (isKeyModifier(data)) return true;
+		if (data === "\x1b[O") {
+			if (this.gesture?.kind === "selection") this.cancelInteraction();
+			else this.endGesture();
+			this.requestRender();
+			return true;
+		}
+		if (data === "\x1b[I" || isKeyModifier(data)) return true;
 		if (data.startsWith("\x1b[<") || data.startsWith("\x1b[M")) {
 			if (overlayVisible) {
 				this.endGesture();
@@ -256,7 +270,6 @@ export class RetainedViewport {
 			const match = /^\x1b\[<(\d{1,3});(\d{1,5});(\d{1,5})([Mm])$/.exec(data);
 			if (!match) return true;
 			const [button, x, y] = match.slice(1, 4).map(Number);
-			if (x < 1 || x > this.width + 1 || y < 1 || y > this.screenHeight) return true;
 			if (match[4] === "m") {
 				const wasThumb = this.gesture?.kind === "thumb";
 				this.endGesture();
@@ -265,6 +278,7 @@ export class RetainedViewport {
 				this.requestRender();
 				return true;
 			}
+			if (x < 1 || x > this.width + 1 || y < 1 || y > this.screenHeight) return true;
 			if (button === 64 || button === 65) {
 				this.scrollTo(this.offset + (button === 64 ? -3 : 3));
 			} else if (button === 2) {
@@ -298,7 +312,13 @@ export class RetainedViewport {
 					if (!this.edgeTimer)
 						this.edgeTimer = setInterval(() => {
 							if (!this.selection || !this.edgeDirection) return;
+							const previousOffset = this.offset;
 							this.scrollTo(this.offset + this.edgeDirection);
+							if (this.offset === previousOffset) {
+								clearInterval(this.edgeTimer);
+								this.edgeTimer = undefined;
+								return;
+							}
 							this.selection.end = this.point(
 								this.pointerColumn,
 								this.edgeDirection > 0 ? this.height - 1 : 0,
@@ -412,6 +432,11 @@ export class RetainedViewport {
 		return this.visibleComponents.has(component);
 	}
 
+	isComponentRenderComplete(component: Component): boolean {
+		const block = this.blocks.find((block) => block.component === component);
+		return !this.selection && block?.generation === this.generation && block.complete;
+	}
+
 	revealComponent(component: Component): void {
 		const block = this.blocks.find((block) => block.component === component);
 		if (block) this.scrollTo(block.start + Math.max(0, block.lines.length - this.height));
@@ -436,10 +461,20 @@ export class RetainedViewport {
 				old.generation === this.generation &&
 				old.revision === block.revision;
 			block.component.setViewportHeight?.(height);
-			let lines = reusable ? old.lines : [...block.component.render(width)];
+			let complete = reusable ? old.complete : true;
+			let lines = reusable
+				? old.lines
+				: block.component.render(width).map((line) => {
+						if (isImageLine(line)) return line;
+						const normalized = normalizeTerminalOutput(line).replaceAll("\t", "   ");
+						if (visibleWidth(normalized) <= width) return normalized;
+						complete = false;
+						return sliceByColumn(normalized, 0, width, true);
+					});
+			if (!reusable && !complete) lines.push(truncateToWidth("Clipped output: component exceeded width", width, ""));
 			if (old && lines.length === old.lines.length && lines.every((line, i) => line === old.lines[i]))
 				lines = old.lines;
-			next.set(block.component, { ...block, lines, start, width, height, generation: this.generation });
+			next.set(block.component, { ...block, lines, complete, start, width, height, generation: this.generation });
 			start += lines.length;
 		}
 		if (this.selection) {
