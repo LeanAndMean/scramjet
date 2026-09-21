@@ -15,8 +15,10 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import {
 	appendResponsesFailureDiagnostics,
+	appendResponsesSdkRetryDiagnostic,
 	convertResponsesMessages,
 	convertResponsesTools,
+	createResponsesSdkRequestObserver,
 	normalizeResponsesFailure,
 	processResponsesStream,
 } from "./openai-responses-shared.js";
@@ -88,12 +90,13 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			timestamp: Date.now(),
 		};
 
-		// SCRAMJET-DIVERGENCE: classify shared Responses failures at the request/stream boundary (#553).
+		// SCRAMJET-DIVERGENCE: classify failures and observe SDK attempts at the request/stream boundary (#553).
 		let failurePhase: "request" | "stream" = "request";
+		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create Azure OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-			const client = createClient(model, apiKey, options);
+			const client = createClient(model, apiKey, options, sdkRequestObserver.fetch);
 			let params = buildParams(model, context, options, deploymentName);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -105,10 +108,11 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
+			sdkRequestObserver.markAccepted();
+			failurePhase = "stream";
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
-			failurePhase = "stream";
 			await processResponsesStream(openaiStream, output, stream, model);
 
 			if (options?.signal?.aborted) {
@@ -119,6 +123,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 				throw new Error("An unknown error occurred");
 			}
 
+			appendResponsesSdkRetryDiagnostic(output, sdkRequestObserver.diagnosticForSuccess());
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -131,7 +136,11 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			if (output.stopReason === "aborted") {
 				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			} else {
-				appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, failurePhase));
+				appendResponsesFailureDiagnostics(
+					output,
+					normalizeResponsesFailure(error, failurePhase),
+					sdkRequestObserver.diagnosticForFailure(options?.maxRetries),
+				);
 			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
@@ -219,7 +228,12 @@ function resolveAzureConfig(
 	};
 }
 
-function createClient(model: Model<"azure-openai-responses">, apiKey: string, options?: AzureOpenAIResponsesOptions) {
+function createClient(
+	model: Model<"azure-openai-responses">,
+	apiKey: string,
+	options: AzureOpenAIResponsesOptions | undefined,
+	fetchImplementation: typeof fetch,
+) {
 	if (!apiKey) {
 		if (!process.env.AZURE_OPENAI_API_KEY) {
 			throw new Error(
@@ -243,6 +257,7 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: headers,
 		baseURL: baseUrl,
+		fetch: fetchImplementation,
 	});
 }
 

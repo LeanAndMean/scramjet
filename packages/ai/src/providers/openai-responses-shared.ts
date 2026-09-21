@@ -227,6 +227,36 @@ export interface SafeResponsesFailure {
 	diagnostic: ResponsesProviderFailureV1;
 }
 
+type ResponsesSdkRetryAttempt =
+	| { ordinal: number; result: "response"; status?: number }
+	| { ordinal: number; result: "transport"; category: "timeout" | "connection" | "other" };
+
+type ResponsesSdkRetryReason =
+	| "accepted_after_retry"
+	| "configured_limit_reached"
+	| "terminal_after_retry"
+	| "configured_zero"
+	| "non_retryable_request"
+	| "stream_already_accepted"
+	| "insufficient_evidence";
+
+export interface ResponsesSdkRetryV1 extends Record<string, unknown> {
+	schemaVersion: 1;
+	layer: "openai_sdk_request";
+	outcome: "recovered" | "exhausted" | "not_attempted";
+	reason: ResponsesSdkRetryReason;
+	observedAttemptCount: number;
+	attempts: ResponsesSdkRetryAttempt[];
+	truncated: boolean;
+}
+
+export interface ResponsesSdkRequestObserver {
+	fetch: typeof fetch;
+	markAccepted(): void;
+	diagnosticForSuccess(): ResponsesSdkRetryV1 | undefined;
+	diagnosticForFailure(maxRetries: number | undefined): ResponsesSdkRetryV1;
+}
+
 class SafeResponsesFailureError extends Error {
 	constructor(readonly failure: SafeResponsesFailure) {
 		super(failure.message);
@@ -377,11 +407,149 @@ export function normalizeResponsesFailure(value: unknown, phase: "request" | "st
 	return makeFailure(value, phase);
 }
 
-export function appendResponsesFailureDiagnostics(output: AssistantMessage, failure: SafeResponsesFailure): void {
+function sdkRetryOrdinal(input: string | URL | Request, init: RequestInit | undefined, fallback: number): number {
+	try {
+		const headers = init?.headers ? new Headers(init.headers) : input instanceof Request ? input.headers : undefined;
+		const value = headers?.get("x-stainless-retry-count");
+		if (value && /^\d+$/.test(value)) {
+			const ordinal = Number(value);
+			if (Number.isSafeInteger(ordinal) && ordinal <= 65_535) return ordinal;
+		}
+	} catch {
+		// Observation must not affect the request.
+	}
+	return Math.min(fallback, 65_535);
+}
+
+function transportCategory(value: unknown): "timeout" | "connection" | "other" {
+	if (!(value instanceof Error)) return "other";
+	const name = value.name.toLowerCase();
+	if (name.includes("timeout") || name.includes("abort")) return "timeout";
+	if (name === "typeerror" || name.includes("connection")) return "connection";
+	return "other";
+}
+
+function isSdkRetryableStatus(status: number | undefined): boolean {
+	return status === 408 || status === 409 || status === 429 || (status !== undefined && status >= 500);
+}
+
+const OPENAI_SDK_DEFAULT_MAX_RETRIES = 2;
+
+// SCRAMJET-DIVERGENCE: Observe bounded SDK request attempts without changing fetch behavior or retry policy (#553).
+export function createResponsesSdkRequestObserver(fetchImplementation: typeof fetch): ResponsesSdkRequestObserver {
+	let observedAttemptCount = 0;
+	let accepted = false;
+	const firstAttempts: ResponsesSdkRetryAttempt[] = [];
+	const latestAttempts: ResponsesSdkRetryAttempt[] = [];
+
+	const record = (attempt: ResponsesSdkRetryAttempt): void => {
+		observedAttemptCount = Math.min(observedAttemptCount + 1, 65_535);
+		if (firstAttempts.length < 4) {
+			firstAttempts.push(attempt);
+			return;
+		}
+		latestAttempts.push(attempt);
+		if (latestAttempts.length > 4) latestAttempts.shift();
+	};
+	const attempts = (): ResponsesSdkRetryAttempt[] =>
+		observedAttemptCount <= 8
+			? [...firstAttempts, ...latestAttempts]
+			: [...firstAttempts, ...latestAttempts.slice(-4)];
+	const diagnostic = (
+		outcome: ResponsesSdkRetryV1["outcome"],
+		reason: ResponsesSdkRetryReason,
+	): ResponsesSdkRetryV1 => ({
+		schemaVersion: 1,
+		layer: "openai_sdk_request",
+		outcome,
+		reason,
+		observedAttemptCount,
+		attempts: attempts(),
+		truncated: observedAttemptCount > 8,
+	});
+
+	return {
+		fetch: async (input, init) => {
+			const fallbackOrdinal = observedAttemptCount;
+			let response: Response;
+			try {
+				response = await fetchImplementation(input, init);
+			} catch (error) {
+				try {
+					record({
+						ordinal: sdkRetryOrdinal(input, init, fallbackOrdinal),
+						result: "transport",
+						category: transportCategory(error),
+					});
+				} catch {
+					// Observation must not replace the transport failure.
+				}
+				throw error;
+			}
+			try {
+				const attempt: ResponsesSdkRetryAttempt = {
+					ordinal: sdkRetryOrdinal(input, init, fallbackOrdinal),
+					result: "response",
+				};
+				if (finiteStatus(response.status) !== undefined) attempt.status = response.status;
+				record(attempt);
+			} catch {
+				// Observation must not replace or alter the response.
+			}
+			return response;
+		},
+		markAccepted: () => {
+			accepted = true;
+		},
+		diagnosticForSuccess: () =>
+			observedAttemptCount > 1 ? diagnostic("recovered", "accepted_after_retry") : undefined,
+		diagnosticForFailure: (maxRetries) => {
+			if (accepted) {
+				return observedAttemptCount > 1
+					? diagnostic("recovered", "accepted_after_retry")
+					: diagnostic("not_attempted", "stream_already_accepted");
+			}
+			if (observedAttemptCount > 1) {
+				const effectiveMaxRetries = maxRetries ?? OPENAI_SDK_DEFAULT_MAX_RETRIES;
+				const reachedConfiguredLimit = observedAttemptCount >= Math.min(effectiveMaxRetries + 1, 65_535);
+				return diagnostic(
+					"exhausted",
+					reachedConfiguredLimit ? "configured_limit_reached" : "terminal_after_retry",
+				);
+			}
+			if (observedAttemptCount === 1) {
+				if (maxRetries === 0) return diagnostic("not_attempted", "configured_zero");
+				const [attempt] = attempts();
+				if (attempt?.result === "response" && !isSdkRetryableStatus(attempt.status)) {
+					return diagnostic("not_attempted", "non_retryable_request");
+				}
+			}
+			return diagnostic("not_attempted", "insufficient_evidence");
+		},
+	};
+}
+
+export function appendResponsesSdkRetryDiagnostic(
+	output: AssistantMessage,
+	diagnostic: ResponsesSdkRetryV1 | undefined,
+): void {
+	if (!diagnostic) return;
+	output.diagnostics = [
+		...(output.diagnostics ?? []),
+		{ type: "sdk_request_retry", timestamp: Date.now(), details: diagnostic },
+	];
+}
+
+export function appendResponsesFailureDiagnostics(
+	output: AssistantMessage,
+	failure: SafeResponsesFailure,
+	sdkRetry?: ResponsesSdkRetryV1,
+): void {
 	output.errorMessage = failure.message;
 	output.diagnostics = [
 		...(output.diagnostics ?? []),
 		{ type: "provider_failure", timestamp: Date.now(), details: failure.diagnostic },
+		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: sdkRetry }] : []),
 		{
 			type: "gateway_observability",
 			timestamp: Date.now(),

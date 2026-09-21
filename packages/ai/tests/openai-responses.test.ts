@@ -7,6 +7,7 @@ import {
 	streamSimpleOpenAIResponses,
 	validateResponsesProviderFailure,
 } from "../src/providers/openai-responses.js";
+import { createResponsesSdkRequestObserver } from "../src/providers/openai-responses-shared.js";
 import type { AssistantMessage, Context, Model, ModelThinkingLevel, ToolResultMessage } from "../src/types.js";
 
 const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -135,18 +136,19 @@ function toolCallResponse(): Response {
 function jsonError(status: number, error?: Record<string, unknown>): Response {
 	return new Response(error ? JSON.stringify({ error }) : undefined, {
 		status,
-		headers: { "content-type": "application/json" },
+		headers: { "content-type": "application/json", "retry-after-ms": "0" },
 	});
 }
 
-function stubFetch(responses: Response[]) {
+function stubFetch(outcomes: Array<Response | { throws: unknown }>) {
 	const requests: Request[] = [];
 	const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
 		const request = input instanceof Request ? input : new Request(input, init);
 		requests.push(request.clone());
-		const response = responses.shift();
-		if (!response) throw new Error("Unexpected request");
-		return response;
+		const outcome = outcomes.shift();
+		if (!outcome) throw new Error("Unexpected request");
+		if ("throws" in outcome) throw outcome.throws;
+		return outcome;
 	});
 	vi.stubGlobal("fetch", fetchMock);
 	return requests;
@@ -255,6 +257,173 @@ describe("OpenAI Responses failure normalization", () => {
 		return message.diagnostics?.find((diagnostic) => diagnostic.type === "provider_failure")?.details;
 	}
 
+	function sdkRetryDetails(message: AssistantMessage) {
+		return message.diagnostics?.find((diagnostic) => diagnostic.type === "sdk_request_retry")?.details;
+	}
+
+	it("records SDK recovery from an HTTP rate limit", async () => {
+		const requests = stubFetch([jsonError(429), completedResponse()]);
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 1 }).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toHaveLength(2);
+		expect(sdkRetryDetails(result)).toEqual({
+			schemaVersion: 1,
+			layer: "openai_sdk_request",
+			outcome: "recovered",
+			reason: "accepted_after_retry",
+			observedAttemptCount: 2,
+			attempts: [
+				{ ordinal: 0, result: "response", status: 429 },
+				{ ordinal: 1, result: "response", status: 200 },
+			],
+			truncated: false,
+		});
+	});
+
+	it("records SDK recovery from a transport failure", async () => {
+		const requests = stubFetch([{ throws: new TypeError("private transport detail") }, completedResponse()]);
+		const result = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 1 }).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(requests).toHaveLength(2);
+		expect(sdkRetryDetails(result)).toEqual({
+			schemaVersion: 1,
+			layer: "openai_sdk_request",
+			outcome: "recovered",
+			reason: "accepted_after_retry",
+			observedAttemptCount: 2,
+			attempts: [
+				{ ordinal: 0, result: "transport", category: "connection" },
+				{ ordinal: 1, result: "response", status: 200 },
+			],
+			truncated: false,
+		});
+		expect(JSON.stringify(result)).not.toContain("private transport detail");
+	});
+
+	it("records exhausted and non-retryable terminal request outcomes", async () => {
+		stubFetch([jsonError(429), jsonError(429)]);
+		const exhausted = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey, maxRetries: 1 }).result();
+		expect(sdkRetryDetails(exhausted)).toEqual({
+			schemaVersion: 1,
+			layer: "openai_sdk_request",
+			outcome: "exhausted",
+			reason: "configured_limit_reached",
+			observedAttemptCount: 2,
+			attempts: [
+				{ ordinal: 0, result: "response", status: 429 },
+				{ ordinal: 1, result: "response", status: 429 },
+			],
+			truncated: false,
+		});
+
+		stubFetch([jsonError(429), jsonError(429), jsonError(429)]);
+		const defaultExhausted = await streamSimpleOpenAIResponses(openaiModel, context, { apiKey }).result();
+		expect(sdkRetryDetails(defaultExhausted)).toEqual(
+			expect.objectContaining({
+				outcome: "exhausted",
+				reason: "configured_limit_reached",
+				observedAttemptCount: 3,
+			}),
+		);
+
+		stubFetch([jsonError(400)]);
+		const nonRetryable = await streamSimpleOpenAIResponses(openaiModel, context, {
+			apiKey,
+			maxRetries: 2,
+		}).result();
+		expect(sdkRetryDetails(nonRetryable)).toEqual(
+			expect.objectContaining({
+				outcome: "not_attempted",
+				reason: "non_retryable_request",
+				observedAttemptCount: 1,
+			}),
+		);
+	});
+
+	it("distinguishes accepted-stream failures from request retries", async () => {
+		const streamFailure = await failureFrom(sse([{ type: "error", code: "server_error" }]));
+		expect(sdkRetryDetails(streamFailure)).toEqual(
+			expect.objectContaining({
+				outcome: "not_attempted",
+				reason: "stream_already_accepted",
+				observedAttemptCount: 1,
+			}),
+		);
+
+		stubFetch([jsonError(429), sse([{ type: "error", code: "server_error" }])]);
+		const recoveredThenFailed = await streamSimpleOpenAIResponses(openaiModel, context, {
+			apiKey,
+			maxRetries: 1,
+		}).result();
+		expect(sdkRetryDetails(recoveredThenFailed)).toEqual(
+			expect.objectContaining({
+				outcome: "recovered",
+				reason: "accepted_after_retry",
+				observedAttemptCount: 2,
+			}),
+		);
+		expect(providerDetails(recoveredThenFailed)).toEqual(expect.objectContaining({ phase: "stream" }));
+	});
+
+	it("keeps observer records bounded and degrades invalid ordinals to call order", async () => {
+		const inputs: Array<string | URL | Request> = [];
+		const inits: Array<RequestInit | undefined> = [];
+		const responses = Array.from({ length: 9 }, (_, index) => new Response(null, { status: 500 + (index % 2) }));
+		const observer = createResponsesSdkRequestObserver(async (input, init) => {
+			inputs.push(input);
+			inits.push(init);
+			return responses.shift()!;
+		});
+
+		for (let index = 0; index < 9; index++) {
+			await observer.fetch("https://example.test", {
+				headers: { "x-stainless-retry-count": index === 0 ? "invalid" : String(index) },
+			});
+		}
+		const diagnostic = observer.diagnosticForFailure(8);
+		expect(diagnostic.observedAttemptCount).toBe(9);
+		expect(diagnostic.attempts.map((attempt) => attempt.ordinal)).toEqual([0, 1, 2, 3, 5, 6, 7, 8]);
+		expect(diagnostic.truncated).toBe(true);
+		expect(inputs).toHaveLength(9);
+		expect(inits).toHaveLength(9);
+	});
+
+	it("returns the exact response, rethrows the exact transport value, and does not consume bodies", async () => {
+		const response = new Response("unconsumed");
+		const responseInput = new Request("https://example.test/response");
+		const responseInit = { headers: { "x-stainless-retry-count": "0" } };
+		const responseFetch = vi.fn(async () => response);
+		const responseObserver = createResponsesSdkRequestObserver(responseFetch);
+		expect(await responseObserver.fetch(responseInput, responseInit)).toBe(response);
+		expect(responseFetch).toHaveBeenCalledWith(responseInput, responseInit);
+		expect(response.bodyUsed).toBe(false);
+
+		const thrown = { sensitive: "not retained" };
+		const throwingFetch = vi.fn(async () => {
+			throw thrown;
+		});
+		const throwingObserver = createResponsesSdkRequestObserver(throwingFetch);
+		await expect(throwingObserver.fetch("https://example.test/error")).rejects.toBe(thrown);
+		expect(JSON.stringify(throwingObserver.diagnosticForFailure(0))).not.toContain("not retained");
+	});
+
+	it("records recovery for custom and Azure shared routes", async () => {
+		const customModel = { ...openaiModel, provider: "custom-responses", baseUrl: "https://custom.example/v1" };
+		stubFetch([jsonError(429), completedResponse()]);
+		const custom = await streamSimpleOpenAIResponses(customModel, context, { apiKey, maxRetries: 1 }).result();
+		expect(sdkRetryDetails(custom)).toEqual(expect.objectContaining({ outcome: "recovered" }));
+
+		stubFetch([jsonError(429), completedResponse()]);
+		const azure = await streamAzureOpenAIResponses(azureModel, context, {
+			apiKey,
+			azureBaseUrl: "https://example.openai.azure.com/openai/v1",
+			maxRetries: 1,
+		}).result();
+		expect(sdkRetryDetails(azure)).toEqual(expect.objectContaining({ outcome: "recovered" }));
+	});
+
 	it("normalizes a bare provider error without undefined placeholders", async () => {
 		const result = await failureFrom(sse([{ type: "error" }]));
 
@@ -273,6 +442,19 @@ describe("OpenAI Responses failure normalization", () => {
 					category: "malformed_event",
 					retryDisposition: "unknown",
 					detailSource: "none",
+				},
+			},
+			{
+				type: "sdk_request_retry",
+				timestamp: expect.any(Number),
+				details: {
+					schemaVersion: 1,
+					layer: "openai_sdk_request",
+					outcome: "not_attempted",
+					reason: "stream_already_accepted",
+					observedAttemptCount: 1,
+					attempts: [{ ordinal: 0, result: "response", status: 200 }],
+					truncated: false,
 				},
 			},
 			{
@@ -405,6 +587,14 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(result.errorMessage).toBe("OpenAI Responses request failed during transport.");
 		expect(providerDetails(result)).toEqual(
 			expect.objectContaining({ phase: "request", kind: "transport", category: "transport" }),
+		);
+		expect(sdkRetryDetails(result)).toEqual(
+			expect.objectContaining({
+				outcome: "not_attempted",
+				reason: "configured_zero",
+				observedAttemptCount: 1,
+				attempts: [{ ordinal: 0, result: "transport", category: "connection" }],
+			}),
 		);
 		expect(JSON.stringify(result)).not.toContain("private host");
 	});

@@ -20,8 +20,10 @@ import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js"
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import {
 	appendResponsesFailureDiagnostics,
+	appendResponsesSdkRetryDiagnostic,
 	convertResponsesMessages,
 	convertResponsesTools,
+	createResponsesSdkRequestObserver,
 	normalizeResponsesFailure,
 	processResponsesStream,
 } from "./openai-responses-shared.js";
@@ -103,14 +105,22 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			timestamp: Date.now(),
 		};
 
-		// SCRAMJET-DIVERGENCE: classify shared Responses failures at the request/stream boundary (#553).
+		// SCRAMJET-DIVERGENCE: classify failures and observe SDK attempts at the request/stream boundary (#553).
 		let failurePhase: "request" | "stream" = "request";
+		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId);
+			const client = createClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				cacheSessionId,
+				sdkRequestObserver.fetch,
+			);
 			let params = buildParams(model, context, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -122,10 +132,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
+			sdkRequestObserver.markAccepted();
+			failurePhase = "stream";
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
-			failurePhase = "stream";
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
 				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
@@ -139,6 +150,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				throw new Error("An unknown error occurred");
 			}
 
+			appendResponsesSdkRetryDiagnostic(output, sdkRequestObserver.diagnosticForSuccess());
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -151,7 +163,11 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			if (output.stopReason === "aborted") {
 				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
 			} else {
-				appendResponsesFailureDiagnostics(output, normalizeResponsesFailure(error, failurePhase));
+				appendResponsesFailureDiagnostics(
+					output,
+					normalizeResponsesFailure(error, failurePhase),
+					sdkRequestObserver.diagnosticForFailure(options?.maxRetries),
+				);
 			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
@@ -187,6 +203,7 @@ function createClient(
 	apiKey?: string,
 	optionsHeaders?: Record<string, string>,
 	sessionId?: string,
+	fetchImplementation?: typeof fetch,
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
@@ -234,6 +251,7 @@ function createClient(
 		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
+		fetch: fetchImplementation,
 	});
 }
 
