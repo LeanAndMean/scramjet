@@ -201,6 +201,12 @@ async function runProduction() {
 		session: new AgentSession({ ...services, sessionManager, initialActiveToolNames: [], agent: new Agent({ streamFn() { throw new Error("Fixture must not invoke models"); } }) }),
 	}), { cwd: directory, agentDir: directory, sessionManager: SessionManager.inMemory(directory) });
 	const terminal = new ProcessTerminal();
+	const terminalStates = [];
+	const ttyState = () => execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim();
+	const startTerminal = terminal.start.bind(terminal);
+	const stopTerminal = terminal.stop.bind(terminal);
+	terminal.start = (...args) => { terminalStates.push({ start: ttyState() }); startTerminal(...args); };
+	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); };
 	const mode = new InteractiveMode(runtime, { terminal });
 	let stopped = false;
 	let finish;
@@ -229,7 +235,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, completed, updates, commandId, stopped, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => stripAnsi(line).slice(0, -1).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => stripAnsi(line).slice(0, -1).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {

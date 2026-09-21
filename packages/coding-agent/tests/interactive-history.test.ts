@@ -29,6 +29,7 @@ vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 }));
 
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
+import modalEditor from "../examples/extensions/modal-editor.js";
 import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
 import { defineTool } from "../src/core/extensions/index.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
@@ -1846,6 +1847,22 @@ it("preserves third-party text rendering, standalone HTML and extension raw-inpu
 			expect(result.expanded).toContain(`ROW-${String(i).padStart(2, "0")} 界é &lt;&amp;&gt;`);
 		expect(result.expanded).not.toMatch(/\x1b|[█│]|Selection held/);
 		expect(html.renderResult("hidden", tool.name, [], { hidden: true }, false)).toEqual({ expanded: "" });
+	} finally {
+		await h.dispose();
+	}
+});
+
+it("keeps the modal editor example usable with explicit Kitty printable keys", async () => {
+	const h = await createProductionInteractiveHarness(60, 24, modalEditor, true);
+	try {
+		h.extensionUI.setEditorText("abc");
+		h.terminal.sendInput("\x1b");
+		h.terminal.sendInput("\x1b[104u");
+		h.terminal.sendInput("\x1b[120u");
+		expect(h.extensionUI.getEditorText()).toBe("ab");
+		h.terminal.sendInput("\x1b[105u");
+		h.terminal.sendInput("\x1b[122u");
+		expect(h.extensionUI.getEditorText()).toBe("abz");
 	} finally {
 		await h.dispose();
 	}

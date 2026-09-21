@@ -175,6 +175,8 @@ try:
         key("paste")
         key("enter")
     else:
+        if not wait_for(lambda: "window id" in run("xprop", "-root", "_NET_SUPPORTING_WM_CHECK"), timeout=15):
+            raise RuntimeError("Desktop window manager did not become ready")
         config_home = output / "config"
         settings = config_home / "xfce4/terminal/terminalrc"
         settings.parent.mkdir(parents=True)

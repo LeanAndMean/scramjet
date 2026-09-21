@@ -10,7 +10,7 @@
  */
 
 import { CustomEditor, type ExtensionAPI } from "@leanandmean/coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth } from "@leanandmean/tui";
+import { decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth } from "@leanandmean/tui";
 
 // Normal mode key mappings: key -> escape sequence (or null for mode switch)
 const NORMAL_KEYS: Record<string, string | null> = {
@@ -45,12 +45,13 @@ class ModalEditor extends CustomEditor {
 			return;
 		}
 
-		// Normal mode: check mapped keys
-		if (data in NORMAL_KEYS) {
-			const seq = NORMAL_KEYS[data];
-			if (data === "i") {
+		// SCRAMJET-DIVERGENCE: viewport terminals can encode ordinary printable keys explicitly.
+		const key = decodeKittyPrintable(data) ?? data;
+		if (key in NORMAL_KEYS) {
+			const seq = NORMAL_KEYS[key];
+			if (key === "i") {
 				this.mode = "insert";
-			} else if (data === "a") {
+			} else if (key === "a") {
 				this.mode = "insert";
 				super.handleInput("\x1b[C"); // move right first
 			} else if (seq) {
@@ -60,7 +61,7 @@ class ModalEditor extends CustomEditor {
 		}
 
 		// Pass control sequences (ctrl+c, etc.) to super, ignore printable chars
-		if (data.length === 1 && data.charCodeAt(0) >= 32) return;
+		if (key.length === 1 && key.charCodeAt(0) >= 32) return;
 		super.handleInput(data);
 	}
 
