@@ -15,18 +15,36 @@ import unittest
 from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[2]
+EXPECTED_SAFETY_CHECKS = {
+    "approvalInstalled", "boundedOverlayImageVisible", "boundedOverlayRequested",
+    "clippedOverlayRequested", "externalEditorReceivesRestoredTermios", "externalEditorRoundTrip",
+    "finalTermiosRestored", "hiddenControlsDoNotAuthorize", "imageConversionSettled",
+    "imageRestoredAfterOverlay", "nativeImageRestoredAfterResume", "nativeImageVisibleAfterConversion",
+    "nativeImageVisibleAfterInvalidation", "nativeOversizedImageVisible", "nativePlacementsCleanedUp",
+    "nativeProtocolDetected", "orderlyExit", "overlayClearsNativeImage", "partialOverlayPlacementWithheld",
+    "partialPlacementRequested", "partialPlacementWithheld", "processActuallySuspended",
+    "productionFixtureStarted", "resumedCandidate", "subsequentActivationAuthorizes", "suspendRequested",
+}
+
+
+def load_safety_functions(names, context):
+    source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
+    declarations = [
+        node for node in source.body
+        if isinstance(node, ast.FunctionDef) and node.name in names
+        or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "REQUIRED_CHECKS" for target in node.targets)
+    ]
+    exec(compile(ast.Module(body=declarations, type_ignores=[]), "terminal-safety.py", "exec"), context)
 
 
 class SafetyCleanupTests(unittest.TestCase):
     def setUp(self):
-        source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
-        functions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in ("cleanup_owned_resources", "report_passed")]
         self.child = Mock()
         self.child.poll.return_value = None
         self.os = Mock()
         self.os.getpgrp.return_value = 10
-        self.context = {"os": self.os, "signal": signal, "child": self.child, "state": Mock(return_value={"pgid": 20}), "key": Mock(), "report": {"checks": {"synthetic": {"passed": True}}}}
-        exec(compile(ast.Module(body=functions, type_ignores=[]), "terminal-safety.py", "exec"), self.context)
+        self.context = {"os": self.os, "signal": signal, "child": self.child, "state": Mock(return_value={"pgid": 20}), "key": Mock(), "report": {"checks": {name: {"passed": True} for name in EXPECTED_SAFETY_CHECKS}}}
+        load_safety_functions({"cleanup_owned_resources", "report_passed"}, self.context)
 
     def cleanup(self):
         self.context["cleanup_owned_resources"]()
@@ -61,6 +79,37 @@ class SafetyCleanupTests(unittest.TestCase):
         self.child.wait.side_effect = subprocess.TimeoutExpired("owned-terminal", 10)
         self.assertFalse(self.cleanup())
         self.assertIn("wait:", self.context["report"]["cleanupError"])
+
+
+class SafetyVerdictTests(unittest.TestCase):
+    def setUp(self):
+        self.context = {
+            "report": {"checks": {name: {"passed": True} for name in EXPECTED_SAFETY_CHECKS}},
+            "wait": Mock(return_value=True),
+            "state": Mock(return_value={}),
+        }
+        load_safety_functions({"check", "report_passed"}, self.context)
+
+    def test_complete_success_is_accepted(self):
+        self.assertTrue(self.context["report_passed"]())
+
+    def test_startup_alone_cannot_pass_the_native_suite(self):
+        self.context["report"]["checks"] = {"productionFixtureStarted": {"passed": True}}
+        self.assertFalse(self.context["report_passed"]())
+
+    def test_each_missing_required_check_fails(self):
+        complete = dict(self.context["report"]["checks"])
+        for name in complete:
+            with self.subTest(missing=name):
+                self.context["report"]["checks"] = {key: value for key, value in complete.items() if key != name}
+                self.assertFalse(self.context["report_passed"]())
+
+    def test_duplicate_check_cannot_overwrite_prior_evidence(self):
+        try:
+            self.context["check"]("productionFixtureStarted", lambda: True)
+        except RuntimeError as error:
+            self.context["report"]["error"] = str(error)
+        self.assertFalse(self.context["report_passed"]())
 
 
 class PasteEvidenceTests(unittest.TestCase):

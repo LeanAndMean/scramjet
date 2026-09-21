@@ -46,16 +46,19 @@ export async function createProductionInteractiveHarness(
 	rows = 24,
 	extension?: ExtensionFactory,
 	viewport = true,
+	settings?: SettingsManager,
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-interactive-test-"));
 	const terminal = new HeadlessTerminal(columns, rows);
 	const authStorage = AuthStorage.inMemory();
-	const settingsManager = SettingsManager.inMemory({
-		theme: "pi-dark",
-		quietStartup: true,
-		compaction: { enabled: false },
-		retry: { enabled: false },
-	});
+	const settingsManager =
+		settings ??
+		SettingsManager.inMemory({
+			theme: "pi-dark",
+			quietStartup: true,
+			compaction: { enabled: false },
+			retry: { enabled: false },
+		});
 	let extensionUI: ExtensionUIContext | undefined;
 	const modelRegistry = ModelRegistry.inMemory(authStorage);
 	vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([]);

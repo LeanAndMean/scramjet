@@ -2,21 +2,27 @@ name: Native terminal feasibility
 
 on:
   push:
-    branches: [feature/issue-551-transient-tui-layout]
-    paths:
-      - .github/workflows/terminal-feasibility.yml
-      - .github/scripts/macos-terminal-*
-      - .github/scripts/terminal-probe.py
-      - .github/scripts/terminal-safety.py
-      - packages/scramjet/tests/fixtures/interactive-viewport.mjs
-      - packages/tui/src/**
-      - packages/coding-agent/src/modes/interactive/**
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  native-terminal-result:
+    name: Native terminal result
+    if: ${{ always() }}
+    needs: [native-safety, native-terminal]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every native job to succeed
+        env:
+          SAFETY_RESULT: ${{ needs.native-safety.result }}
+          INTERACTION_RESULT: ${{ needs.native-terminal.result }}
+        run: test "$SAFETY_RESULT" = success && test "$INTERACTION_RESULT" = success
+
   native-safety:
     name: native-safety (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
