@@ -279,20 +279,32 @@ type HarnessPersistenceAck = {
 };
 
 type AutoRetryEvidence = "provider_failure" | "legacy_text" | "context_overflow" | "none";
+// SCRAMJET-DIVERGENCE: closed, replay-inert retry decisions and outcomes preserve #553 evidence invariants.
 type AutoRetryRecord =
+	| { schemaVersion: 1; outcome: "not_attempted"; reason: "retry_disabled"; evidence: AutoRetryEvidence }
 	| {
 			schemaVersion: 1;
 			outcome: "not_attempted";
-			reason:
-				| "retry_disabled"
-				| "context_overflow_compaction"
-				| "structured_non_transient"
-				| "structured_unknown"
-				| "malformed_provider_diagnostic"
-				| "duplicate_provider_diagnostic"
-				| "legacy_non_retryable"
-				| "missing_error_evidence";
-			evidence: AutoRetryEvidence;
+			reason: "context_overflow_compaction";
+			evidence: "context_overflow";
+	  }
+	| {
+			schemaVersion: 1;
+			outcome: "not_attempted";
+			reason: "structured_non_transient" | "structured_unknown";
+			evidence: "provider_failure";
+	  }
+	| {
+			schemaVersion: 1;
+			outcome: "not_attempted";
+			reason: "malformed_provider_diagnostic" | "duplicate_provider_diagnostic" | "missing_error_evidence";
+			evidence: "none";
+	  }
+	| {
+			schemaVersion: 1;
+			outcome: "not_attempted";
+			reason: "legacy_non_retryable";
+			evidence: "legacy_text";
 	  }
 	| {
 			schemaVersion: 1;
@@ -332,15 +344,15 @@ type RetryClassification =
 	| { kind: "context_overflow" }
 	| {
 			kind: "do_not_retry";
-			reason:
-				| "structured_non_transient"
-				| "structured_unknown"
-				| "malformed_provider_diagnostic"
-				| "duplicate_provider_diagnostic"
-				| "legacy_non_retryable"
-				| "missing_error_evidence";
-			evidence: "provider_failure" | "legacy_text" | "none";
-	  };
+			reason: "structured_non_transient" | "structured_unknown";
+			evidence: "provider_failure";
+	  }
+	| {
+			kind: "do_not_retry";
+			reason: "malformed_provider_diagnostic" | "duplicate_provider_diagnostic" | "missing_error_evidence";
+			evidence: "none";
+	  }
+	| { kind: "do_not_retry"; reason: "legacy_non_retryable"; evidence: "legacy_text" };
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -649,6 +661,7 @@ export class AgentSession {
 		this._outputThroughputGeneration = undefined;
 	}
 
+	// SCRAMJET-DIVERGENCE: every Agent run settles against its final persisted assistant outcome (#553).
 	private _createRetryPromiseForAgentEnd(event: AgentEvent): void {
 		if (event.type !== "agent_end" || this._retryPromise) return;
 
@@ -659,9 +672,8 @@ export class AgentSession {
 		this._retryPromise.catch(() => {});
 	}
 
-	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Harness ownership is captured
-	// synchronously before queueing because an earlier persistence failure may settle the public promise
-	// while later events from the same Agent invocation are still waiting in this queue.
+	// SCRAMJET-DIVERGENCE: harness-tool persisted settlement (#341). Synchronous ownership keeps queued
+	// invocation events attributed after early failures; public settlement awaits execution and the final persistence tail.
 	private async _processAgentEventTracked(event: AgentEvent, harnessAck?: HarnessPersistenceAck): Promise<void> {
 		try {
 			await this._processAgentEvent(event, harnessAck !== undefined);
@@ -813,18 +825,20 @@ export class AgentSession {
 
 			if (msg.stopReason !== "error") {
 				if (this._retryActive) {
+					const attempt = this._runRetryCount;
 					this._appendAutoRetryRecord(
 						{
 							schemaVersion: 1,
 							outcome: "succeeded",
-							attemptsCompleted: this._bounded(this._runRetryCount),
-							cumulativeErrors: this._bounded(this._runRetryCount),
+							attemptsCompleted: this._bounded(attempt),
+							cumulativeErrors: this._bounded(attempt),
 						},
 						true,
 					);
-					this._emit({ type: "auto_retry_end", success: true, attempt: this._runRetryCount });
 					this._retryAttempt = 0;
 					this._retryActive = false;
+					this._retryAbortController = undefined;
+					this._emit({ type: "auto_retry_end", success: true, attempt });
 				}
 				this._resolveRetry();
 				await this._checkCompaction(msg);
@@ -869,15 +883,28 @@ export class AgentSession {
 				const didRetry = await this._handleRetryableError(msg, classification.evidence);
 				if (didRetry) return;
 			} else {
-				this._appendAutoRetryRecord(
-					{
-						schemaVersion: 1,
-						outcome: "not_attempted",
-						reason: classification.reason,
-						evidence: classification.evidence,
-					},
-					true,
-				);
+				const record: AutoRetryRecord =
+					classification.evidence === "provider_failure"
+						? {
+								schemaVersion: 1,
+								outcome: "not_attempted",
+								reason: classification.reason,
+								evidence: "provider_failure",
+							}
+						: classification.evidence === "legacy_text"
+							? {
+									schemaVersion: 1,
+									outcome: "not_attempted",
+									reason: classification.reason,
+									evidence: "legacy_text",
+								}
+							: {
+									schemaVersion: 1,
+									outcome: "not_attempted",
+									reason: classification.reason,
+									evidence: "none",
+								};
+				this._appendAutoRetryRecord(record, true);
 				this._finishRetryWithoutSuccess(msg);
 			}
 
@@ -1054,7 +1081,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
-		// SCRAMJET-DIVERGENCE: idempotent disposal that revokes in-flight harness-tool invocations (#341).
+		// SCRAMJET-DIVERGENCE: idempotent disposal revokes harness invocations and closes retry settlement (#341, #553).
 		// A second call must not re-reject already-settled acknowledgements or re-run teardown.
 		if (this._disposed) return;
 		this._disposed = true;
@@ -3029,6 +3056,7 @@ export class AgentSession {
 	// Auto-Retry
 	// =========================================================================
 
+	// SCRAMJET-DIVERGENCE: persisted post-extension snapshots authoritatively classify and settle retries (#553).
 	private _classifyRetry(message: AssistantMessage): RetryClassification {
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (isContextOverflow(message, Math.min(contextWindow, this.model?.maxInputTokens ?? Infinity))) {
@@ -3098,14 +3126,16 @@ export class AgentSession {
 
 	private _finishRetryWithoutSuccess(message: AssistantMessage): void {
 		if (this._retryAttempt === 0) return;
+		const attempt = this._retryAttempt;
+		this._retryAttempt = 0;
+		this._retryActive = false;
+		this._retryAbortController = undefined;
 		this._emit({
 			type: "auto_retry_end",
 			success: false,
-			attempt: this._retryAttempt,
+			attempt,
 			finalError: message.errorMessage,
 		});
-		this._retryAttempt = 0;
-		this._retryActive = false;
 	}
 
 	private _reportRetryFailure(error: unknown): Error {
@@ -3129,49 +3159,53 @@ export class AgentSession {
 
 		const cumulativeCap = settings.maxRetries * 2;
 		if (this._retryAttempt > settings.maxRetries) {
+			const attempt = this._retryAttempt - 1;
 			this._appendAutoRetryRecord(
 				{
 					schemaVersion: 1,
 					outcome: "exhausted",
 					reason: "attempt_limit",
-					attemptsCompleted: this._bounded(this._retryAttempt - 1),
+					attemptsCompleted: this._bounded(attempt),
 					maxAttempts: this._bounded(settings.maxRetries),
 					cumulativeErrors: this._bounded(this._runRetryCount),
 				},
 				true,
 			);
+			this._retryAttempt = 0;
+			this._retryActive = false;
+			this._retryAbortController = undefined;
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
-				attempt: this._retryAttempt - 1,
+				attempt,
 				finalError: message.errorMessage,
 			});
-			this._retryAttempt = 0;
-			this._retryActive = false;
 			return false;
 		}
 
 		if (this._runRetryCount > cumulativeCap) {
+			const attempt = this._runRetryCount - 1;
 			this._appendAutoRetryRecord(
 				{
 					schemaVersion: 1,
 					outcome: "exhausted",
 					reason: "cumulative_limit",
-					attemptsCompleted: this._bounded(this._runRetryCount - 1),
+					attemptsCompleted: this._bounded(attempt),
 					maxAttempts: this._bounded(settings.maxRetries),
 					cumulativeErrors: this._bounded(this._runRetryCount),
 				},
 				true,
 			);
+			this._retryAttempt = 0;
+			this._retryActive = false;
+			this._retryAbortController = undefined;
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
-				attempt: this._runRetryCount - 1,
+				attempt,
 				finalError:
-					`Repeated retry failures (${this._runRetryCount - 1} total attempts this prompt). ${message.errorMessage ?? ""}`.trim(),
+					`Repeated retry failures (${attempt} total attempts this prompt). ${message.errorMessage ?? ""}`.trim(),
 			});
-			this._retryAttempt = 0;
-			this._retryActive = false;
 			return false;
 		}
 
@@ -3192,6 +3226,8 @@ export class AgentSession {
 		}
 
 		this._retryActive = true;
+		const retryController = new AbortController();
+		this._retryAbortController = retryController;
 		this._emit({
 			type: "auto_retry_start",
 			attempt: this._retryAttempt,
@@ -3200,14 +3236,15 @@ export class AgentSession {
 			errorMessage: message.errorMessage || "Unknown error",
 			cumulativeErrors: this._runRetryCount,
 		});
+		if (retryController.signal.aborted || this._disposed) {
+			return this._finishCancelledRetry(retryController);
+		}
 
 		const messages = this.agent.state.messages;
 		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 			this.agent.state.messages = messages.slice(0, -1);
 		}
 
-		const retryController = new AbortController();
-		this._retryAbortController = retryController;
 		try {
 			await sleep(delayMs, retryController.signal);
 			await sleep(0, retryController.signal);

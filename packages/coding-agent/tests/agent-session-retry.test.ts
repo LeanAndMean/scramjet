@@ -410,38 +410,93 @@ describe("context migration recovery invariants", () => {
 });
 
 describe("AgentSession persisted retry authority", () => {
-	it("retries when message_end replaces an original success with a transient error", async () => {
+	it("waits for asynchronous message_end replacement before retrying an original success", async () => {
 		let replaced = false;
+		let enterReplacement!: () => void;
+		let releaseReplacement!: () => void;
+		const replacementStarted = new Promise<void>((resolve) => {
+			enterReplacement = resolve;
+		});
+		const replacementGate = new Promise<void>((resolve) => {
+			releaseReplacement = resolve;
+		});
 		const { session } = await createFixture((i) => (i === 0 ? assistantText("original") : assistantText("ok")), {
 			extensionFactory: (pi) => {
-				pi.on("message_end", (event) => {
+				pi.on("message_end", async (event) => {
 					if (!replaced && event.message.role === "assistant") {
 						replaced = true;
+						enterReplacement();
+						await replacementGate;
 						return { message: assistantError("rate limit") };
 					}
 				});
 			},
 		});
 
-		await session.prompt("hello");
+		let settled = false;
+		const prompt = session.prompt("hello").finally(() => {
+			settled = true;
+		});
+		await replacementStarted;
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		expect(session.sessionManager.getBranch().filter((entry) => entry.type === "message")).toHaveLength(1);
 
+		releaseReplacement();
+		await prompt;
+
+		const assistants = session.sessionManager
+			.getBranch()
+			.filter((entry) => entry.type === "message" && entry.message.role === "assistant")
+			.map((entry) => entry.message);
+		expect(assistants).toMatchObject([
+			{ stopReason: "error", errorMessage: "rate limit" },
+			{ stopReason: "stop", content: [{ type: "text", text: "ok" }] },
+		]);
 		expect(retryRecords(session)).toEqual([
 			expect.objectContaining({ outcome: "scheduled", evidence: "legacy_text", attempt: 1 }),
 			expect.objectContaining({ outcome: "succeeded", attemptsCompleted: 1 }),
 		]);
 	});
 
-	it("does not retry when message_end replaces an original error with success", async () => {
+	it("waits for asynchronous message_end replacement before accepting an original error", async () => {
+		let enterReplacement!: () => void;
+		let releaseReplacement!: () => void;
+		const replacementStarted = new Promise<void>((resolve) => {
+			enterReplacement = resolve;
+		});
+		const replacementGate = new Promise<void>((resolve) => {
+			releaseReplacement = resolve;
+		});
 		const { session, events } = await createFixture(() => assistantError("rate limit"), {
 			extensionFactory: (pi) => {
-				pi.on("message_end", (event) => {
-					if (event.message.role === "assistant") return { message: assistantText("recovered") };
+				pi.on("message_end", async (event) => {
+					if (event.message.role === "assistant") {
+						enterReplacement();
+						await replacementGate;
+						return { message: assistantText("recovered") };
+					}
 				});
 			},
 		});
 
-		await session.prompt("hello");
+		let settled = false;
+		const prompt = session.prompt("hello").finally(() => {
+			settled = true;
+		});
+		await replacementStarted;
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		expect(session.sessionManager.getBranch().filter((entry) => entry.type === "message")).toHaveLength(1);
 
+		releaseReplacement();
+		await prompt;
+
+		const assistants = session.sessionManager
+			.getBranch()
+			.filter((entry) => entry.type === "message" && entry.message.role === "assistant")
+			.map((entry) => entry.message);
+		expect(assistants).toMatchObject([{ stopReason: "stop", content: [{ type: "text", text: "recovered" }] }]);
 		expect(retryEvents(events)).toEqual([]);
 		expect(retryRecords(session)).toEqual([]);
 	});
@@ -599,6 +654,18 @@ describe("AgentSession persisted retry authority", () => {
 		}
 	});
 
+	it.each([
+		["non-retryable legacy text", assistantError("invalid request"), "legacy_non_retryable", "legacy_text"],
+		["missing error evidence", { ...assistantError(""), errorMessage: undefined }, "missing_error_evidence", "none"],
+	] as const)("records %s as not attempted", async (_label, message, reason, evidence) => {
+		const { session, events } = await createFixture(() => message);
+
+		await session.prompt("hello");
+
+		expect(retryEvents(events)).toEqual([]);
+		expect(retryRecords(session)).toEqual([{ schemaVersion: 1, outcome: "not_attempted", reason, evidence }]);
+	});
+
 	it("records disabled retry policy for every persisted error", async () => {
 		const { session } = await createFixture(() => providerFailure("transient", "rate_limit"), {
 			retryEnabled: false,
@@ -699,6 +766,52 @@ describe("AgentSession persisted retry authority", () => {
 		expect(retryRecords(session)).toEqual([expect.objectContaining({ outcome: "scheduled" })]);
 		expect(session.isRetrying).toBe(false);
 	});
+
+	it("stops immediately when an auto_retry_start listener disposes the session", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 10_000 });
+		const continueAgent = vi.spyOn(session.agent, "continue");
+		session.subscribe((event) => {
+			if (event.type === "auto_retry_start") session.dispose();
+		});
+
+		await expect(session.prompt("hello")).rejects.toThrow("disposed before retry settlement completed");
+
+		expect(continueAgent).not.toHaveBeenCalled();
+		expect((session as any)._retryAbortController).toBeUndefined();
+		expect(session.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled" }),
+			expect.objectContaining({ outcome: "cancelled", reason: "session_disposed" }),
+		]);
+	});
+
+	it.each([
+		[
+			"successful",
+			(callIndex: number) => (callIndex === 0 ? assistantError("rate limit") : assistantText("ok")),
+			true,
+		],
+		[
+			"unsuccessful",
+			(callIndex: number) => (callIndex === 0 ? assistantError("rate limit") : assistantError("invalid request")),
+			false,
+		],
+	] as const)(
+		"does not append cancellation when a %s retry-end listener disposes",
+		async (_label, responses, success) => {
+			const { session } = await createFixture(responses);
+			session.subscribe((event) => {
+				if (event.type === "auto_retry_end" && event.success === success) session.dispose();
+			});
+
+			await expect(session.prompt("hello")).rejects.toThrow("disposed before retry settlement completed");
+
+			expect(
+				retryRecords(session).filter((record) => (record as { outcome?: string }).outcome === "cancelled"),
+			).toEqual([]);
+			expect(retryRecords(session).at(-1)).toMatchObject({ outcome: success ? "succeeded" : "not_attempted" });
+		},
+	);
 
 	it("records cancellation after a scheduled retry and settles", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 10_000 });
