@@ -126,6 +126,16 @@ The interface from top to bottom:
 
 The editor can be temporarily replaced by other UI, like built-in `/settings` or custom UI from extensions (e.g., a Q&A tool that lets the user answer model questions in a structured format). [Extensions](#extensions) can also replace the editor, add widgets above/below it, a status line, custom footer, or overlays.
 
+### Browsing and copying output
+
+Interactive mode retains the current transcript in an application-managed viewport, including running tool cards. Use the mouse wheel/trackpad or drag the **rightmost Scramjet scrollbar** to inspect offscreen output before a turn finishes. New output preserves your reading position; returning to the bottom resumes following. The editor/footer can scroll offscreen rather than staying pinned.
+
+Drag without modifiers to select displayed text, including across scrolling. Right-click the selection or press Ctrl+C to copy it. Selection temporarily holds the presentation and indicates pending updates; copy or Escape releases it. Without transcript selection, Ctrl+C retains its normal editor/quit behavior. Terminal-native Copy menus cannot see this selection; right-click without a selection never pastes or submits in Scramjet.
+
+While scrolled away, PageUp/PageDown browse, Home goes to the beginning, and End/Escape return to the live tail. Other keys return to the tail and reach the focused component; at the tail, normal editor/list bindings apply. Hidden approval controls must first be revealed before a subsequent activation can approve.
+
+Orderly exit restores the shell and leaves one readable plain-text transcript, excluding editor/widgets/temporary controls. Suspend and external-editor handoffs restore the shell without transcript copies. See [terminal setup](docs/terminal-setup.md#transcript-browsing-and-copying) for tested configurations, iTerm2's required right-click setting, clipboard limits and image behavior.
+
 ### Editor
 
 | Feature | How |
@@ -172,9 +182,9 @@ See `/hotkeys` for the full list. Customize via `~/.scramjet/agent/keybindings.j
 
 | Key | Action |
 |-----|--------|
-| Ctrl+C | Clear editor |
+| Ctrl+C | Copy transcript selection; otherwise clear editor |
 | Ctrl+C twice | Quit |
-| Escape | Cancel/abort |
+| Escape | Return from transcript browsing; otherwise cancel/abort |
 | Escape twice | Open `/tree` |
 | Ctrl+L | Open model selector |
 | Ctrl+P / Shift+Ctrl+P | Cycle scoped models forward/backward |

@@ -202,7 +202,7 @@ export interface ExtensionUIContext {
 		options?: {
 			overlay?: boolean;
 			// SCRAMJET-DIVERGENCE: immutable context anchored to its pending tool presentation.
-			/** Commit immutable visual context at a pending tool's transcript position before focusing controls. Not persisted. */
+			/** Retain complete visual context at a pending tool row; reveal and flush before focusing controls. Not persisted. */
 			toolAttachedContext?: {
 				toolCallId: string;
 				render: (tui: TUI, theme: Theme) => Component;

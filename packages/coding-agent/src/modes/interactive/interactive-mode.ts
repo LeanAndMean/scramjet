@@ -371,7 +371,7 @@ export class InteractiveMode {
 			await this.rebindCurrentSession();
 		});
 		this.version = VERSION;
-		// SCRAMJET-DIVERGENCE: mandatory committed/live rendering and injectable terminals (#389).
+		// SCRAMJET-DIVERGENCE: retained interactive rendering and injectable terminals.
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.headerContainer = new Container();
 		this.committedChatContainer = new Container();
@@ -408,8 +408,7 @@ export class InteractiveMode {
 		initTheme(this.settingsManager.getTheme(), true);
 	}
 
-	// SCRAMJET-DIVERGENCE: private candidate entry point until native rollout gates pass.
-	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: Invoked only by candidate fixtures before activation.
+	// SCRAMJET-DIVERGENCE: preserve production ownership while making mutable overflow browseable.
 	private configureRetainedViewport(): void {
 		this.ui.configureViewport({
 			getBlocks: () =>
@@ -726,7 +725,7 @@ export class InteractiveMode {
 
 		this.ui.addChild(this.committedChatContainer);
 		this.ui.addChild(this.chatContainer);
-		if (!this.ui.getViewportState()) this.ui.setLiveRegionStart(this.chatContainer);
+		this.configureRetainedViewport();
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer

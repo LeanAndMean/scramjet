@@ -1,6 +1,6 @@
 # Keybindings
 
-All keyboard shortcuts can be customized via `~/.scramjet/agent/keybindings.json`. Each action can be bound to one or more keys.
+Action keybindings can be customized via `~/.scramjet/agent/keybindings.json`. Each action can be bound to one or more keys.
 
 The config file uses the same namespaced keybinding ids that Scramjet uses internally and that extension authors use in `keyHint()` and injected `keybindings` managers.
 
@@ -19,6 +19,22 @@ After editing `keybindings.json`, run `/reload` in Scramjet to apply the changes
 - **Symbols:** `` ` ``, `-`, `=`, `[`, `]`, `\`, `;`, `'`, `,`, `.`, `/`, `!`, `@`, `#`, `$`, `%`, `^`, `&`, `*`, `(`, `)`, `_`, `+`, `|`, `~`, `{`, `}`, `:`, `<`, `>`, `?`
 
 Modifier combinations: `ctrl+shift+x`, `alt+ctrl+x`, `ctrl+shift+alt+x`, `ctrl+1`, etc.
+
+## Transcript browsing precedence
+
+Interactive mode's retained viewport owns mouse wheel/trackpad scrolling, the rightmost draggable scrollbar and ordinary drag selection. Right-click a nonempty selection or use `tui.input.copy` (Ctrl+C by default) to copy displayed text. Without a transcript selection, the same key keeps its focused-component/application behavior. Escape clears selection and returns to the live tail.
+
+While detached from the tail, the viewport consumes this fixed set **before** editor/list bindings:
+
+| Key | Browsing action |
+|-----|-----------------|
+| PageUp / PageDown | Scroll one viewport page |
+| Home | Beginning of the logical document |
+| End / Escape | Return to the live tail |
+
+Other keys reattach and continue to the focused component; typing reveals the editor cursor. At the tail, paging and Home/End retain their ordinary editor/list meanings. Focused overlays take keyboard precedence. If tool-attached approval controls are hidden by browsing, the first activation reveals and flushes them without approving; a later activation can approve.
+
+These detached-only keys are not additional configurable `tui.viewport.*` actions. See [terminal-setup.md](terminal-setup.md#transcript-browsing-and-copying) for terminal-menu and clipboard requirements.
 
 ## All Actions
 

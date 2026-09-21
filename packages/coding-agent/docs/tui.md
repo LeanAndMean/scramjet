@@ -10,35 +10,37 @@ Extensions and custom tools can render custom TUI components for interactive use
 
 **Scramjet divergence source:** [`packages/tui/src/tui.ts`](../../tui/src/tui.ts)
 
-The interactive mode separates terminal output into append-only committed history and a bounded live canvas. Finalized transcript components are retained for later rebuilds but written to native scrollback only once during routine rendering. Streaming messages, running tools, status, widgets, the editor, footer, autocomplete, and overlays stay live.
+Interactive mode uses an application-managed retained viewport in the alternate screen. The rightmost scrollbar owns browsing of the current transcript, including output that is still changing. Native terminal scrollback is not the active transcript. Streaming and completed tools keep their ordinary grouped presentation; finalization changes cache eligibility without appending a duplicate card.
 
-Mutable output is tail-windowed to at most `terminal.rows - 1` rendered lines before it is written, so live content cannot push mutable rows into native scrollback. Finalization removes the mutable preview and commits the component's finalized presentation once. Pending tools form an ordering barrier, and image-backed tools commit only after their conversions settle.
+The logical document keeps the existing vertical composition: header, finalized and mutable chat, queue, working status, widgets, editor and footer. These are not pinned panes: scrolling away can move the editor and footer offscreen. Passive updates preserve the reading position; explicit editor input reveals its cursor. Overlays remain screen-relative. Session reconstruction resets browsing state, but ordinary updates, expansion, styling and resize preserve component identity and attempt content-relative anchoring.
 
-At the TUI API level, `setLiveRegionStart(component)` selects the first direct child in the live canvas, `commit()` schedules atomic append of newly finalized rows, `commitNow()` renders immediately and waits for terminal output to flush when controls must not receive input first, and `rebuild()` deliberately repaints retained history. Detaching the selected component safely resets committed rendering and returns the TUI to legacy full-repaint rendering. Routine updates, content shrink, temporary-UI dismissal, and height-only resize do not clear scrollback or replay committed history. Width and theme changes, session reconstruction, presentation-setting changes, reload, resume, and external-editor return use deliberate rebuilds because retained output must be reflowed or restyled; those rebuilds intentionally bottom-anchor the display.
+See [terminal-setup.md](terminal-setup.md#transcript-browsing-and-copying) for interaction and terminal-configuration requirements. Session data, tool result contracts, RPC/print output and standalone HTML export are unchanged; viewport state is not serialized.
 
-Overlays remain screen-relative and are composed over the bounded live canvas. Closing an overlay or autocomplete restores the underlying live rows without mutating committed history.
+### Retained viewport API
 
-### Opt-in retained viewport candidate
+`TUI.configureViewport({ getBlocks, keybindings?, copy? })` selects the retained rendering path. InteractiveMode configures it at startup using the mounted production components; standalone TUI callers opt in explicitly. Only promoted committed components are cached; completed tools behind a pending predecessor remain live and browseable. Promotion preserves component identity. Thinking visibility and expansion update existing components; session/tree/reload reconstruction resets browsing and selection. `getBlocks()` returns the ordered projection of existing component instances as `{ component, finalized?, revision? }`. Each component must occur once. Finalization changes cache eligibility, not identity or transcript ownership. Increment `revision` when a finalized block changes; `tui.invalidate()` invalidates projected components and all retained render caches. Width changes and `rebuild()` refresh caches without resetting the reader's anchor. Call `resetViewport()` only for genuine content/session replacement.
 
-`TUI.configureViewport({ getBlocks, keybindings?, copy? })` selects an independent, experimental rendering path; normal interactive startup still uses committed history. InteractiveMode has a private candidate entry point used by the production harness and `interactive-viewport.mjs --production` fixture, not a CLI flag or persisted setting. Its projection uses the mounted header, individual committed/mutable chat components, queue, working status, widgets, editor and footer in their existing order. Only promoted committed components are cached; completed tools behind a pending predecessor remain live and browseable. Promotion preserves component identity. Thinking visibility and expansion update existing components; session/tree/reload reconstruction resets browsing and selection. `getBlocks()` returns the ordered projection of existing component instances as `{ component, finalized?, revision? }`. Each component must occur once. Finalization changes cache eligibility, not identity or transcript ownership. Increment `revision` when a finalized block changes; `tui.invalidate()` invalidates projected components and all retained render caches. Width changes and `rebuild()` refresh caches without resetting the reader's anchor. Call `resetViewport()` only for genuine content/session replacement.
-
-The candidate retains all logical rows, renders components at terminal width minus one, and paints a bounded slice using absolute screen coordinates. The reserved last column displays a scrollbar; at a one-column terminal there is no scrollbar. `scrollViewport(delta)` and `scrollViewportTo(offset, anchorScreenRow = 0)` provide programmatic navigation. Scrolling to the bottom resumes tail-following; output updates and resize clamping do not. `getViewportState()` returns a snapshot of offset, total rows, height, and tail-following state. Overlays remain screen-relative, and cursor/IME positioning uses the visible slice rather than the document tail.
+The viewport retains all logical rows, renders components at terminal width minus one, and paints a bounded slice using absolute screen coordinates. The reserved last column displays a scrollbar; at a one-column terminal there is no scrollbar. `scrollViewport(delta)` and `scrollViewportTo(offset, anchorScreenRow = 0)` provide programmatic navigation. Scrolling to the bottom resumes tail-following; output updates and resize clamping do not. `getViewportState()` returns a snapshot of offset, total rows, height, and tail-following state. Overlays remain screen-relative, and cursor/IME positioning uses the visible slice rather than the document tail.
 
 Anchors use ordered row correspondence, then visible grapheme correspondence across reflow and restyling. Comparison ignores ANSI, whitespace, and wrap boundaries without altering displayed rows or their spacing. The anchored grapheme retains its chosen screen-row offset where geometry permits. Deletion falls back to surviving content in the same block, then the nearest surviving adjacent block (following block wins ties). Blank-only blocks preserve a clamped row ordinal; arbitrary width-dependent or repeated/whitespace-only content cannot promise exact semantic source identity.
 
 `renderNow({ requireFlush: true })` renders immediately and rejects if the terminal cannot flush or flushing fails. It is independent of `commitNow()`, whose committed-history preconditions and flush guarantee remain unchanged. Viewport and committed live-region configuration are mutually exclusive.
 
-The candidate owns wheel scrolling, track clicks and thumb dragging through the full document. Thumb mapping stays fixed during a gesture, then reconciles with current document bounds. Its `addInputListener` consumes PageUp/PageDown/Home/End/Escape only while detached; Escape/End return to the tail, and other keys return to the tail before ordinary dispatch. At-tail keys retain existing editor/list behavior. Keyboard input dispatched to a base component reveals its cursor marker on the next frame even when tall trailing widgets hide the editor; passive updates do not. Later pointer or programmatic navigation cancels that pending reveal. Focused overlays take keyboard precedence; visible overlays cancel underlying selection and pointer gestures. No new default keybinding actions are introduced. Raw-input listeners registered before configuration still run first; do not transform or consume pointer packets if the candidate must own them. Kitty-capable candidate terminals request flags 15 (including explicit escape encoding for all keys), so raw listeners must use the key parser and ignore release events rather than assuming Enter is a bare carriage return. This prevents older Kitty versions' legacy Enter release bytes from looking like a second activation. Pure modifier presses are consumed by the viewport without moving the reader or clearing selection, so forming a copy chord preserves its target. Keyboard stacks are restored in their owning screen buffer; unconfigured terminals retain flags 7.
+The viewport owns wheel scrolling, track clicks and thumb dragging through the full document. Thumb mapping stays fixed during a gesture, then reconciles with current document bounds. Its `addInputListener` consumes PageUp/PageDown/Home/End/Escape only while detached; Escape/End return to the tail, and other keys return to the tail before ordinary dispatch. At-tail keys retain existing editor/list behavior. Keyboard input dispatched to a base component reveals its cursor marker on the next frame even when tall trailing widgets hide the editor; passive updates do not. Later pointer or programmatic navigation cancels that pending reveal. Focused overlays take keyboard precedence; visible overlays cancel underlying selection and pointer gestures. No new default keybinding actions are introduced. Raw-input listeners registered before configuration still run first; do not transform or consume pointer packets if the viewport must own them. Interactive extension listeners are registered after viewport configuration and do not receive consumed pointer/browsing events. Kitty-capable viewport terminals request flags 15 (including explicit escape encoding for all keys), so raw listeners must use the key parser and ignore release events rather than assuming Enter is a bare carriage return. This prevents older Kitty versions' legacy Enter release bytes from looking like a second activation. Pure modifier presses are consumed by the viewport without moving the reader or clearing selection, so forming a copy chord preserves its target. Keyboard stacks are restored in their owning screen buffer; unconfigured terminals retain flags 7.
 
 Ordinary drag selection snaps to displayed grapheme boundaries, supports edge autoscroll and copies selected displayed rows (including component padding) without ANSI controls or scrollbar cells. While selection exists, the presentation is held and one screen row identifies selection/pending updates or copy failure; that notice is not selectable. A successful copy, clearing input, resize, reset or stop releases the hold. Right-click with a nonempty selection and the injected manager's `tui.input.copy` action invoke `copy(text): Promise<void>`; absent selection, Ctrl+C keeps its normal behavior. Copy failures are displayed and retain the selection. Callback resolution means the backend accepted the request, not that the desktop clipboard was independently verified; OSC 52 has no such acknowledgement. Right-click without selection never pastes or submits. Emulator-owned menus cannot see application selection, and native clipboard/interaction checks remain necessary for each supported path.
 
-`ProcessTerminal` implements the additive `Terminal.setViewportMode(enabled)` capability, required and checked before candidate configuration. TUI start/stop coordinates idempotent alternate-screen and SGR button-motion mode entry/restoration; unconfigured callers never enable these modes. Recognized incomplete mouse packets are quarantined after the transport timeout and discarded through a terminator or next escape, rather than leaking their tails into editor text. Headless `sendInput` bypasses transport framing and cannot establish fragmentation safety.
+`ProcessTerminal` implements the additive `Terminal.setViewportMode(enabled)` capability, required and checked before viewport configuration. Injected InteractiveMode terminals must implement this capability; there is no silent fallback to the clipping renderer. TUI start/stop coordinates idempotent alternate-screen and SGR button-motion mode entry/restoration; unconfigured callers never enable these modes. Recognized incomplete mouse packets are quarantined after the transport timeout and discarded through a terminator or next escape, rather than leaking their tails into editor text. Headless `sendInput` bypasses transport framing and cannot establish fragmentation safety.
 
-Default production activation remains pending. Candidate tool-attached context uses `renderNow({ requireFlush: true })` after installing its full retained context and revealing the pending tool. Controls receive focus only after a successful required flush; missing/failed flushing, replaced context, or controls that cannot fit wholly in the viewport fail closed. While browsing away, the first non-browsing input reveals and flushes controls without activating them; only subsequent input can authorize. `isComponentVisible(component)` checks the last painted, fully visible projected block (not a scheduled scroll); `revealComponent(component)` requests its revelation on the next frame. These visibility methods concern projected blocks, not arbitrary nested children. `isComponentFocused(component)` identifies the actual input owner so approval guards do not steal input from a capturing overlay.
+Tool-attached context uses `renderNow({ requireFlush: true })` after installing its full retained context and revealing the pending tool. Controls receive focus only after a successful required flush; missing/failed flushing, replaced context, or controls that cannot fit wholly in the viewport fail closed. While browsing away, the first non-browsing input reveals and flushes controls without activating them; only subsequent input can authorize. `isComponentVisible(component)` checks the last painted, fully visible projected block (not a scheduled scroll); `revealComponent(component)` requests its revelation on the next frame. These visibility methods concern projected blocks, not arbitrary nested children. `isComponentFocused(component)` identifies the actual input owner so approval guards do not steal input from a capturing overlay.
 
 `ui.stop()` is a temporary handoff: it restores the normal buffer and input modes without printing transcript copies. Interactive suspension and both external-editor paths first await the existing bounded input drain, so the opening key's release does not leak to the shell or editor. Late keyboard-query responses cannot re-enable reporting during that drain. Restart restores the retained view independently of the asynchronous keyboard-protocol query. InteractiveMode's final `stop()` additionally passes the current chat components to `ui.stop({ transcript })`, appending one readable plain-text presentation to the restored normal buffer, without clearing prior shell output. Editor, widgets and attached controls are excluded; native images become `[Image]` labels. Repeated stop does not append again. Orderly shutdown awaits terminal flushing; crash cleanup restores modes without promising a transcript, and terminal-loss cleanup deliberately writes nothing.
 
-Built-in Kitty/iTerm2 placements are re-anchored to absolute rows only when their full extent fits; clipped spans show a placeholder and remain reachable by scrolling. `Component.setViewportHeight?(height)` is an optional image-sizing bound, propagated by standard Container/Box rendering, including newly added children. Custom wrappers must forward it to nested images. It must not truncate ordinary text or bound the total stacked document. Built-in Image fits using existing aspect-preserving sizing without changing source data; finalized viewport caches refresh on height changes. iTerm2 placements specify both cell dimensions to avoid rounded width exceeding reserved height. Images are withheld with visible placeholders during overlays and selection; clearing either restores eligible placements. Custom graphics envelopes without recognizable placement geometry cannot be safely clipped and receive a placeholder. Native graphics evidence and final compatibility gates remain separate from text-only tests.
+Built-in Kitty/iTerm2 placements are re-anchored to absolute rows only when their full extent fits; clipped spans show a placeholder and remain reachable by scrolling. `Component.setViewportHeight?(height)` is an optional image-sizing bound, propagated by standard Container/Box rendering, including newly added children. Custom wrappers must forward it to nested images. It must not truncate ordinary text or bound the total stacked document. Built-in Image fits using existing aspect-preserving sizing without changing source data; finalized viewport caches refresh on height changes. iTerm2 placements specify both cell dimensions to avoid rounded width exceeding reserved height. Images are withheld with visible placeholders during overlays and selection; clearing either restores eligible placements. Custom graphics envelopes without recognizable placement geometry cannot be safely clipped and receive a placeholder. Built-in graphics checks do not establish arbitrary custom-envelope compatibility. See [terminal-setup.md](terminal-setup.md#native-compatibility-evidence) for the bounded native evidence.
+
+### Standalone legacy and committed modes
+
+Unconfigured TUI callers retain legacy rendering. `setLiveRegionStart(component)` instead selects an append-only committed prefix and a tail-windowed live canvas, with `commit()` scheduling promotion and `commitNow({ requireFlush: true })` requiring successful flush settlement. Detaching that direct child returns to legacy rendering. These public modes remain separate from InteractiveMode's viewport; their native-history behavior has not been redefined. `rebuild()` deliberately repaints their retained history and can bottom-anchor it.
 
 ## Component Interface
 
@@ -47,6 +49,7 @@ All components implement:
 ```typescript
 interface Component {
   render(width: number): string[];
+  setViewportHeight?(height: number | undefined): void;
   handleInput?(data: string): void;
   wantsKeyRelease?: boolean;
   invalidate(): void;
@@ -56,7 +59,8 @@ interface Component {
 | Method | Description |
 |--------|-------------|
 | `render(width)` | Return array of strings (one per line). Each line **must not exceed `width`**. |
-| `handleInput?(data)` | Receive keyboard input when component has focus. |
+| `setViewportHeight?(height)` | Optional image-sizing bound. Forward through custom image wrappers; never truncate ordinary logical text. |
+| `handleInput?(data)` | Receive keyboard input when component has focus. Use key parsers, not raw-byte equality. |
 | `wantsKeyRelease?` | If true, component receives key release events (Kitty protocol). Default: false. |
 | `invalidate()` | Clear cached render state. Called on theme changes. |
 
@@ -139,9 +143,9 @@ async execute(toolCallId, params, onUpdate, ctx, signal) {
 }
 ```
 
-### Tool-attached committed context
+### Tool-attached retained context
 
-A pending sequential tool can pair compact live controls with immutable long-form context committed at that tool's transcript position:
+A pending sequential tool can pair compact live controls with immutable long-form context retained at that tool's transcript position:
 
 ```typescript
 const result = await ctx.ui.custom(
@@ -155,7 +159,7 @@ const result = await ctx.ui.custom(
 );
 ```
 
-The context is constructed after the controls factory resolves, anchored to the named pending tool row, and committed once. The editor is defocused before terminal flushing begins; controls receive focus only after that flush settles. It is retained internally for deliberate width/theme rebuilds but is not persisted or sent to the model. Native scrollback retention depends on terminal capacity and configuration. The operation fails closed when the row is missing, settled, or cannot be flushed; use it only from the sequential tool identified by `toolCallId`.
+The context is constructed after the controls factory resolves and installed completely at the named pending tool row. It remains browseable even when taller than the screen; it need not all be simultaneously visible or written to native scrollback. The editor is defocused, controls are revealed, and a required visible-frame flush must settle before controls receive focus. Browsing away consumes the first activation to reveal and flush them; only a subsequent activation can authorize. Missing/non-leading/settled rows, replaced context, missing or failed flushes, and controls too tall to fit fail closed. The context is visual-only, not persisted or sent to the model. Use this only from the sequential tool identified by `toolCallId`.
 
 ## Overlays
 
@@ -878,7 +882,7 @@ Replace the main input editor with a custom implementation. Useful for modal edi
 
 ```typescript
 import { CustomEditor, type ExtensionAPI } from "@leanandmean/coding-agent";
-import { matchesKey, truncateToWidth } from "@leanandmean/tui";
+import { decodeKittyPrintable, matchesKey, truncateToWidth } from "@leanandmean/tui";
 
 type Mode = "normal" | "insert";
 
@@ -904,7 +908,8 @@ class VimEditor extends CustomEditor {
     }
 
     // Normal mode: vim-style navigation
-    switch (data) {
+    const key = decodeKittyPrintable(data) ?? data;
+    switch (key) {
       case "i": this.mode = "insert"; return;
       case "h": super.handleInput("\x1b[D"); return; // Left
       case "j": super.handleInput("\x1b[B"); return; // Down
@@ -912,7 +917,7 @@ class VimEditor extends CustomEditor {
       case "l": super.handleInput("\x1b[C"); return; // Right
     }
     // Pass unhandled keys to super (ctrl+c, etc.), but filter printable chars
-    if (data.length === 1 && data.charCodeAt(0) >= 32) return;
+    if (key.length === 1 && key.charCodeAt(0) >= 32) return;
     super.handleInput(data);
   }
 

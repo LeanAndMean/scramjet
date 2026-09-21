@@ -46,7 +46,7 @@ export async function createProductionInteractiveHarness(
 	columns = 60,
 	rows = 24,
 	extension?: ExtensionFactory,
-	viewport = false,
+	viewport = true,
 ) {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-interactive-test-"));
 	const terminal = new HeadlessTerminal(columns, rows);
@@ -103,8 +103,16 @@ export async function createProductionInteractiveHarness(
 		keybindings.mockRestore();
 	}
 	const internals = mode as unknown as InteractiveInternals;
-	if (viewport) internals.configureRetainedViewport();
-	await mode.init();
+	const legacy = viewport
+		? undefined
+		: vi
+				.spyOn(internals, "configureRetainedViewport")
+				.mockImplementation(() => internals.ui.setLiveRegionStart(internals.chatContainer));
+	try {
+		await mode.init();
+	} finally {
+		legacy?.mockRestore();
+	}
 	if (!extensionUI) throw new Error("Production extension UI was not bound");
 	extensionUI.setWorkingIndicator({ frames: ["⠋"] });
 	return {

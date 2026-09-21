@@ -2237,6 +2237,14 @@ Extensions can interact with users via `ctx.ui` methods and customize how messag
 - Autocomplete providers layered on top of built-in slash/path completion (addAutocompleteProvider)
 - Custom footers (setFooter)
 
+### Retained viewport and input ownership
+
+InteractiveMode uses the existing component presentation in an alternate-screen retained viewport. Ordinary `render(width)`, tool `renderCall`/`renderResult`, result/session schemas and HTML export contracts are unchanged. Render the complete logical text rather than clipping it to terminal height. Components receive terminal width minus the reserved scrollbar column; images alone may use the optional `setViewportHeight` bound. Standard Container/Box propagate it; custom image wrappers must forward it. Unrecognized custom graphics envelopes display a placeholder rather than an unsafe clipped placement.
+
+`ctx.ui.onTerminalInput()` listeners run after the viewport listener. They do not receive consumed pointer packets, selection-copy keys or detached PageUp/PageDown/Home/End/Escape. Do not use raw listeners to compete for transcript pointer ownership. Focused overlays keep keyboard precedence. The viewport keeps no session-journal state; session reconstruction discards browsing/selection state.
+
+Kitty-capable viewport terminals explicitly encode printable keys as well as modified keys. Use `matchesKey()`/the injected keybinding manager for actions and `decodeKittyPrintable(data) ?? data` for printable-mode mappings, rather than assuming a printable key is one raw byte. Raw listeners must ignore `isKeyRelease(data)` unless they intentionally handle releases; focused components filter releases by default. The shipped [modal editor](../examples/extensions/modal-editor.ts) demonstrates the printable-key migration. No blanket compatibility claim is made for external raw-byte listeners or graphics wrappers; see [tui.md](tui.md) for exact viewport APIs and [terminal-setup.md](terminal-setup.md#native-compatibility-evidence) for tested configurations.
+
 ### Dialogs
 
 ```typescript
@@ -2494,7 +2502,7 @@ const result = await ctx.ui.custom(
 );
 ```
 
-The context is rendered at that pending tool's transcript position, the editor is defocused, and the context is committed once and flushed before its controls receive focus. The complete context is emitted to native terminal scrollback; retention depends on terminal capacity and configuration. It is visual-only and is not persisted or sent to the model. The call fails closed if the named tool row is absent or no longer pending. Use this only from the sequential tool whose id is supplied; ordinary custom UIs remain live and terminal-height bounded.
+The complete immutable context is installed in the retained transcript at that pending tool's position. It remains browseable through Scramjet's scrollbar even when taller than the screen; it is not an assurance that every row is simultaneously visible or emitted into native scrollback. The editor is defocused, controls are revealed, and a required visible-frame flush must succeed before they receive focus. If browsing hides controls, the first activation reveals and flushes them without approving; only subsequent input can authorize. Missing/non-leading/settled tool rows, replaced context, missing or failed flushing, and controls that cannot fit fail closed. Context is visual-only, not persisted or sent to the model. Use this only from the sequential tool whose id is supplied.
 
 See [tui.md](tui.md) for the full component API.
 
@@ -2540,7 +2548,7 @@ class VimEditor extends CustomEditor {
       this.mode = "normal";
       return;
     }
-    if (this.mode === "normal" && data === "i") {
+    if (this.mode === "normal" && matchesKey(data, "i")) {
       this.mode = "insert";
       return;
     }

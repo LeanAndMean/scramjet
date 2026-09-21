@@ -2,9 +2,57 @@
 
 Scramjet uses the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) for reliable modifier key detection. Most modern terminals support this protocol, but some require configuration.
 
-## Kitty, iTerm2
+## Transcript browsing and copying
 
-Work out of the box.
+During an interactive session, Scramjet owns the alternate screen, mouse reporting, the **rightmost transcript scrollbar**, and drag selection. Wheel/trackpad input and scrollbar dragging browse retained output, including running cards. The terminal's native scrollbar/history is not the live transcript. Returning to the document bottom resumes following; passive updates do not pull you away from what you are reading.
+
+Select by ordinary dragging, including across a screen edge. Right-click a nonempty selection or use `tui.input.copy` (Ctrl+C by default) to copy displayed text without ANSI controls or scrollbar cells. While selected, the presentation is held and pending updates are indicated. Successful copy or Escape releases it; resizing cancels selection. Copy failures are shown and retain the selection. Without selection, Ctrl+C retains its normal application behavior; right-click never causes Scramjet to paste or submit.
+
+Terminal-owned Copy/context menus cannot see application selection. A terminal or multiplexer that intercepts pointer input must be configured to forward it. In tmux, enable `set -g mouse on` for the application's wheel/drag path; tmux's own copy mode is a separate interaction. See [tmux.md](tmux.md) for modified-key setup.
+
+When detached, PageUp/PageDown browse and Home goes to the beginning; End/Escape return to the tail. Other keys return and reach the focused component. At the tail, normal editor/list bindings apply, and focused overlays retain keyboard precedence. See [keybindings.md](keybindings.md#transcript-browsing-precedence).
+
+Clipboard delivery uses the existing platform backend (for example `pbcopy`, `wl-copy`, `xclip`/`xsel`) or OSC 52 where appropriate. Terminals can reject OSC 52 without acknowledgement: a successful request alone is not proof that a desktop clipboard changed. Remote sessions, clipboard security policies and other profiles require their own verification.
+
+Orderly exit restores the shell's normal buffer and appends one readable plain-text transcript, excluding editor/widgets/temporary approval controls; images receive text labels. Suspension and external-editor handoffs restore normal terminal modes without dumping transcript copies. Crash cleanup prioritizes mode restoration; terminal loss cannot guarantee a flush. For a durable rich view, use `/export`—HTML rendering is unchanged.
+
+Built-in Kitty/iTerm2 images fit the viewport without changing retained source data. Partially visible placements and images behind overlays/selection show placeholders rather than painting through other regions; scroll to reveal the full placement or clear selection. Images remain disabled inside tmux. Custom graphics wrappers must forward the optional image-height bound described in [tui.md](tui.md); arbitrary graphics envelopes are not proven compatible.
+
+### Native compatibility evidence
+
+The bounded production journey uses real native desktop input with synthetic retained history, an eight-card/four-active batch, queue/widgets/editor/footer, right-click and Ctrl+C Unicode clipboard equality, selection across scrolling, reading during updates, width/height resize, complete approval context, external-editor return, job control and final restoration. Separate native pixel checks exercise built-in Kitty/iTerm2 images. Detailed successes, failed attempts and exact source commits are recorded in [issue #551](https://github.com/LeanAndMean/scramjet/issues/551).
+
+Recorded native configurations (2026-09-21):
+
+| Path | Tested version and configuration |
+|------|----------------------------------|
+| Windows Terminal / WSL | Terminal 1.24.11911.0, Windows 11 build 22631, WSL2 5.15.153.1, Ubuntu 20.04.6; 120×30; existing profile unchanged |
+| Apple Terminal | 2.14 / 455.1, macOS 15.7.9 / 24G830 ARM64; 80×24 |
+| iTerm2 | 3.6.11 on that macOS; 80×25; `ReportRightClick=true`; inline-image consent for graphics checks |
+| Linux VTE | Xfce Terminal 1.1.3, Ubuntu 24.04.5, X11/Xvfb/Openbox; DejaVu Sans Mono 12, 80×24, native scrollbar hidden |
+| tmux | 3.4 on the preceding VTE path; isolated config with mouse on and status off |
+| xterm | XTerm 390 on Ubuntu 24.04.5/X11; 80×24; `selectToClipboard=true` with its native Shift+Insert paste binding |
+| Kitty | 0.32.2 on Ubuntu 24.04.5/X11; 80×24 interaction and 80×30 graphics profiles |
+
+xterm's native paste binding/source differ from VTE's Ctrl+Shift+V; the recorded paste configuration is not a new Scramjet shortcut. Native xterm evidence does not verify VS Code's integrated terminal, nor does Kitty verify every Kitty-family emulator.
+
+These checks do not establish every emulator/profile, physical trackpad's gesture characteristics, remote desktop, multiplexer, custom extension or graphics renderer. OS-generated wheel events are not physical trackpad testing; headless tests and ordinary CI do not substitute for native desktop/clipboard evidence.
+
+## Kitty
+
+Keyboard reporting works out of the box.
+
+## iTerm2
+
+Keyboard reporting works out of the box. **Right-click copying requires iTerm2's `ReportRightClick` preference** so mouse-reporting applications receive right-clicks instead of iTerm2's native context menu. The default-off profile was tested and does not support Scramjet's right-click-copy path. This is an explicit setup requirement, not a runtime allowlist or automatic fallback.
+
+Enable the right-click-reporting option in iTerm2's Pointer settings, or quit iTerm2 and set its existing preference from another terminal:
+
+```sh
+defaults write com.googlecode.iterm2 ReportRightClick -bool true
+```
+
+Restart iTerm2 afterward. This changes right-click behavior for mouse-reporting applications, not just Scramjet; Scramjet never changes the preference for you. Ctrl+C remains the application-selection copy alternative. Native iTerm2 menus still cannot access application-owned selection.
 
 ## Ghostty
 

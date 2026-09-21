@@ -6,7 +6,7 @@ import { stripVTControlCharacters as stripAnsi } from "node:util";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, ProcessTerminal, TUI, truncateToWidth } from "../../../tui/dist/index.js";
 import { copyToClipboard } from "../../../coding-agent/dist/utils/clipboard.js";
 
-const help = `Retained TUI candidate interaction fixture for #551; NOT production activation.
+const help = `Retained TUI interaction fixture for #551.
 Run from the repository after npm run build:
   node packages/scramjet/tests/fixtures/interactive-viewport.mjs
 No models, personal extensions, personal settings, or existing clipboard reads.
@@ -377,7 +377,6 @@ async function runProduction() {
 		await mode.ui.renderNow({ requireFlush: true });
 		record();
 	}
-	mode.configureRetainedViewport();
 	try {
 		await mode.init();
 		if (journey) {

@@ -1873,6 +1873,7 @@ describe("production interactive composition", () => {
 		const h = await createProductionInteractiveHarness(60, 24);
 		try {
 			const p = h.internals;
+			expect(p.ui.getViewportState()).toMatchObject({ followingTail: true });
 			expect(p.ui.children).toEqual([
 				p.headerContainer,
 				p.committedChatContainer,
@@ -1888,34 +1889,35 @@ describe("production interactive composition", () => {
 			h.extensionUI.setWidget("above", ["ABOVE"]);
 			h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
 			await h.emit({ type: "agent_start" });
-			const appeared = await h.frame();
+			const frame = async () => (await h.frame()).map((row) => row.slice(0, 59));
+			const appeared = await frame();
 			const expected = [
 				"",
 				" ⠋ Working...",
 				"",
 				" ABOVE",
-				"─".repeat(60),
+				"─".repeat(59),
 				"EDITOR",
-				"─".repeat(60),
+				"─".repeat(59),
 				" BELOW",
 				h.session.sessionManager.getCwd(),
-				"?/0 (?)                                    (unknown) unknown",
+				"?/0 (?)                                   (unknown) unknown",
 				...Array<string>(14).fill(""),
 			];
 			expect(appeared.map((row) => row.trimEnd())).toEqual(expected);
 			h.extensionUI.setWidget("above", ["ABOVE", "GROW"]);
-			const grown = await h.frame();
+			const grown = await frame();
 			expect(grown.map((row) => row.trimEnd())).toEqual([
 				...expected.slice(0, 4),
 				" GROW",
 				...expected.slice(4, -1),
 			]);
 			h.extensionUI.setWidget("above", ["ABOVE"]);
-			const shrunk = await h.frame();
+			const shrunk = await frame();
 			expect(shrunk).toEqual(appeared);
 			h.extensionUI.setWidget("above", undefined);
 			h.extensionUI.setWidget("below", undefined);
-			const removed = await h.frame();
+			const removed = await frame();
 			expect(removed.join("\n")).not.toMatch(/ABOVE|BELOW|GROW/);
 		} finally {
 			await h.dispose();

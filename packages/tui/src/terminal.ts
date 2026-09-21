@@ -285,7 +285,7 @@ export class ProcessTerminal implements Terminal {
 		}
 	}
 
-	// SCRAMJET-DIVERGENCE: modes belong to the candidate's bounded surface, not ordinary terminal callers.
+	// SCRAMJET-DIVERGENCE: modes belong to the configured viewport, not ordinary terminal callers.
 	setViewportMode(enabled: boolean): void {
 		if (enabled === this.viewportMode) return;
 		// Kitty keeps separate keyboard stacks for the normal and alternate buffers.
