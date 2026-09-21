@@ -98,6 +98,17 @@ export class HeadlessTerminal implements TerminalContract {
 		this.emulator.scrollLines(amount);
 	}
 
+	cell(row: number, col: number) {
+		const buffer = this.emulator.buffer.active;
+		const cell = buffer.getLine(buffer.viewportY + row)?.getCell(col);
+		if (!cell) throw new Error(`No terminal cell at ${row},${col}`);
+		return {
+			text: cell.getChars(),
+			background: cell.isBgDefault() ? undefined : cell.getBgColor(),
+			inverse: cell.isInverse() !== 0,
+		};
+	}
+
 	cursorPosition(): { row: number; col: number } {
 		const buffer = this.emulator.buffer.active;
 		return { row: buffer.cursorY, col: buffer.cursorX };

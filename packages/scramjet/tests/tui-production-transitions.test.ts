@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProductionInteractiveHarness } from "../../coding-agent/tests/helpers/interactive-harness.js";
+import { sliceByColumn } from "../../tui/src/utils.js";
 import { registerSubagentTool } from "../src/subagent/index.js";
 import { noOpTerminalIndicators } from "./helpers.js";
 
@@ -25,40 +26,41 @@ async function runningBatch(viewport = false) {
 	const tasks = Array.from({ length: 8 }, (_, index) => ({ agent: `child-${index + 1}`, task: "Synthetic task" }));
 	await harness.emit({ type: "agent_start" });
 	await harness.emit({ type: "tool_execution_start", toolCallId: "batch", toolName: "subagent", args: { tasks } });
+	const partialResult = {
+		content: [{ type: "text", text: "Synthetic partial batch" }],
+		details: {
+			mode: "parallel",
+			agentScope: "user",
+			projectAgentsDir: null,
+			results: tasks.map((task, index) => ({
+				...task,
+				agentSource: "user",
+				exitCode: index < 4 ? 0 : -1,
+				messages: [
+					{
+						role: "assistant",
+						content: [
+							{
+								type: "text",
+								text: `CARD-${index + 1} ${"uniquely labelled wrapped synthetic output ".repeat(4)}`,
+							},
+						],
+					},
+				],
+				stderr: "",
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			})),
+		},
+	};
 	await harness.emit({
 		type: "tool_execution_update",
 		toolCallId: "batch",
 		toolName: "subagent",
 		args: { tasks },
-		partialResult: {
-			content: [{ type: "text", text: "Synthetic partial batch" }],
-			details: {
-				mode: "parallel",
-				agentScope: "user",
-				projectAgentsDir: null,
-				results: tasks.map((task, index) => ({
-					...task,
-					agentSource: "user",
-					exitCode: index < 4 ? 0 : -1,
-					messages: [
-						{
-							role: "assistant",
-							content: [
-								{
-									type: "text",
-									text: `CARD-${index + 1} ${"uniquely labelled wrapped synthetic output ".repeat(4)}`,
-								},
-							],
-						},
-					],
-					stderr: "",
-					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-				})),
-			},
-		},
+		partialResult,
 	});
 	await harness.frame();
-	return harness;
+	return { ...harness, partialResult, tasks };
 }
 
 describe("production running subagent presentation", () => {
@@ -218,6 +220,60 @@ it("runs eight children on four workers and browses interleaved live and final c
 		}
 	}
 }, 20000);
+
+it("keeps card separators, reading anchors and held selection coherent during batch updates", async () => {
+	const h = await runningBatch(true);
+	for (const [index, result] of h.partialResult.details.results.entries()) {
+		result.messages[0].content[0].text = `CARD-${index + 1}\ndetail-${index + 1}`;
+	}
+	const update = () =>
+		h.emit({
+			type: "tool_execution_update",
+			toolCallId: "batch",
+			toolName: "subagent",
+			args: { tasks: h.tasks },
+			partialResult: h.partialResult,
+		});
+	const rows = async () => (await h.frame()).map((row) => sliceByColumn(row, 0, 47, true).trimEnd());
+	await update();
+	await h.frame();
+	const cardRow = () => h.internals.ui.render(47).findIndex((row) => row.includes("CARD-3"));
+	expect(cardRow()).toBeGreaterThan(0);
+	h.internals.ui.scrollViewportTo(cardRow());
+	const expected = [
+		" CARD-3",
+		" detail-3",
+		"",
+		" ─── child-4 ✓ [Effort:off]",
+		" CARD-4",
+		" detail-4",
+		"",
+		" ─── child-5 ⏳ [Effort:off]",
+		" CARD-5",
+		" detail-5",
+		"",
+		" ─── child-6 ⏳ [Effort:off]",
+	];
+	expect(await rows()).toEqual(expected);
+	h.partialResult.details.results[0].messages[0].content[0].text = "INSERTED\nCARD-1\ndetail-1";
+	await update();
+	expect(await rows()).toEqual(expected);
+	h.terminal.sendInput("\x1b[<0;2;1M");
+	h.terminal.sendInput("\x1b[<32;8;1M");
+	h.terminal.sendInput("\x1b[<0;8;1m");
+	h.partialResult.details.results[2].messages[0].content[0].text = "CARD-3\nREPLACED";
+	await update();
+	expect(await rows()).toEqual([...expected.slice(0, 11), "updates pending; Esc clears"]);
+	for (let col = 1; col < 7; col++) expect(h.terminal.cell(0, col).inverse).toBe(true);
+	expect(h.terminal.cell(0, 47).inverse).toBe(false);
+	h.terminal.sendInput("\x1b");
+	await h.frame();
+	h.internals.ui.scrollViewportTo(cardRow());
+	expect(await rows()).toEqual([expected[0], " REPLACED", ...expected.slice(2)]);
+	expect(h.terminal.cell(0, 1).inverse).toBe(false);
+	expect(h.extensionUI.getEditorText()).toBe("");
+	expect(h.internals.chatContainer.children).toHaveLength(1);
+});
 
 it("keeps every presented card reachable by wheel before outer completion through production configuration", async () => {
 	const h = await runningBatch(true);

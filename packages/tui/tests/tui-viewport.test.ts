@@ -39,6 +39,74 @@ async function setup(blocks: ViewportBlock[], width = 21, height = 4, options: P
 const mouse = (button: number, x: number, y: number, action = "M") => `\x1b[<${button};${x};${y}${action}`;
 
 describe("viewport interactions", () => {
+	it("drags a ten-thousand-row transcript without discarding history or rerendering finalized blocks", async () => {
+		const history = Array.from(
+			{ length: 1000 },
+			(_, block) => new Rows(Array.from({ length: 10 }, (_, row) => `history-${block * 10 + row}`)),
+		);
+		const status = new Rows(["tick-0"]);
+		const { tui, terminal, frame, text } = await setup(
+			[...history.map((component) => ({ component, finalized: true })), { component: status }],
+			31,
+			21,
+		);
+		const drag = async (from: number, to: number) => {
+			terminal.sendInput(mouse(0, 31, from));
+			terminal.sendInput(mouse(32, 31, to));
+			terminal.sendInput(mouse(0, 31, to, "m"));
+			await frame();
+		};
+		await drag(21, 1);
+		expect(text()).toEqual(Array.from({ length: 21 }, (_, i) => `history-${i}`));
+		await drag(1, 11);
+		expect(text()).toEqual(Array.from({ length: 21 }, (_, i) => `history-${4990 + i}`));
+		for (let i = 1; i <= 20; i++) {
+			status.lines = [`tick-${i}`];
+			await frame();
+			expect(text()[0]).toBe("history-4990");
+		}
+		await drag(11, 21);
+		expect(text()).toEqual([...Array.from({ length: 20 }, (_, i) => `history-${9980 + i}`), "tick-20"]);
+		expect(tui.getViewportState()).toMatchObject({ totalRows: 10001, followingTail: true });
+		await drag(21, 1);
+		expect(text()[0]).toBe("history-0");
+		for (const block of history) expect(block.render).toHaveBeenCalledTimes(1);
+		expect(status.render.mock.calls.length).toBeGreaterThanOrEqual(25);
+		expect(terminal.bufferLines()).toHaveLength(21);
+	});
+
+	it("preserves raw-listener ordering, transforms, release filtering and removal around viewport ownership", async () => {
+		const terminal = new HeadlessTerminal(21, 4);
+		const tui = new TUI(terminal);
+		running.push(tui);
+		const before = vi.fn((data: string) => (data === "a" ? { data: "b" } : undefined));
+		const remove = tui.addInputListener(before);
+		const rows = new Rows(Array.from({ length: 20 }, (_, i) => `row-${i}`));
+		tui.configureViewport({ getBlocks: () => [{ component: rows }] });
+		const after = vi.fn();
+		tui.addInputListener(after);
+		const handleInput = vi.fn();
+		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+		tui.start();
+		await tui.renderNow({ requireFlush: true });
+		terminal.sendInput(mouse(64, 2, 2));
+		expect(before).toHaveBeenLastCalledWith(mouse(64, 2, 2));
+		expect(after).not.toHaveBeenCalled();
+		terminal.sendInput("\x1b[5~");
+		expect(handleInput).not.toHaveBeenCalled();
+		terminal.sendInput("a");
+		expect(after).toHaveBeenLastCalledWith("b");
+		expect(handleInput).toHaveBeenLastCalledWith("b");
+		terminal.sendInput("\x1b[13;1:3u");
+		expect(after).toHaveBeenLastCalledWith("\x1b[13;1:3u");
+		expect(handleInput).toHaveBeenCalledTimes(1);
+		terminal.sendInput("\x1b[13;1u");
+		expect(handleInput).toHaveBeenLastCalledWith("\x1b[13;1u");
+		remove();
+		terminal.sendInput("a");
+		expect(handleInput).toHaveBeenLastCalledWith("a");
+	});
+
 	it("reveals offscreen input cursors without overriding later coalesced pointer navigation", async () => {
 		const editor = { render: () => [`${CURSOR_MARKER}editor`], invalidate() {}, handleInput: vi.fn() };
 		const { tui, terminal, frame, text } = await setup([
@@ -320,13 +388,19 @@ describe("retained viewport", () => {
 	});
 
 	it("reserves a scrollbar column even when content is short and clears stale rows and cells", async () => {
-		const card = new Rows(["a", "long old row", "c", "d", "e"]);
+		const card = new Rows(["a", "\x1b[48;2;40;40;50mlong old row\x1b[0m", "c", "d", "e"]);
 		const { frame, text, terminal } = await setup([{ component: card }], 21, 4);
 		expect(card.render).toHaveBeenLastCalledWith(20);
+		expect(terminal.cell(0, 10).background).toBe(0x282832);
 		card.lines = ["tiny"];
 		await frame();
 		expect(text()).toEqual(["tiny", "", "", ""]);
 		expect(terminal.visibleLines()).toEqual([`tiny${" ".repeat(17)}`, ...Array(3).fill(" ".repeat(21))]);
+		for (let row = 0; row < 4; row++) {
+			for (let col = 0; col < 21; col++) {
+				expect(terminal.cell(row, col)).toMatchObject({ background: undefined, inverse: false });
+			}
+		}
 		card.lines = [];
 		await frame();
 		expect(terminal.visibleLines()).toEqual(Array(4).fill(" ".repeat(21)));
@@ -576,7 +650,7 @@ describe("retained viewport", () => {
 				{ maxWidthCells: 6, maxHeightCells: 3, imageId: 44 },
 				{ widthPx: 54, heightPx: 54 },
 			);
-			const { tui, terminal, frame } = await setup(
+			const { tui, terminal, frame, text } = await setup(
 				[
 					{ component: new Rows(["0", "1", "2"]) },
 					{ component: image, finalized: true },
@@ -592,20 +666,24 @@ describe("retained viewport", () => {
 			expect(terminal.writesSince(mark)).toContain(prefix);
 			expect(terminal.writesSince(mark)).toContain(`\x1b[2;1H${prefix}`);
 			expect(terminal.writesSince(mark)).not.toContain("\x1b[2A");
+			expect(text()).toEqual(["2", "", "", "", "6"]);
 			terminal.sendInput(mouse(0, 1, 1));
 			terminal.sendInput(mouse(32, 2, 1));
 			terminal.sendInput(mouse(0, 2, 1, "m"));
 			mark = terminal.markWrites();
 			await frame();
 			expect(terminal.writesSince(mark)).not.toContain(prefix);
-			expect(terminal.visibleLines().join("\n")).toContain("Image hidden by selection");
+			expect(text()).toEqual(["2", "[Image hidden by selection]", "", "", "Selection held; Esc clears"]);
+			expect(terminal.cell(0, 0).inverse).toBe(true);
+			expect(terminal.cell(1, 0).inverse).toBe(false);
 			terminal.sendInput("\x1b");
 			tui.scrollViewportTo(2);
 			await frame();
-			const overlay = tui.showOverlay(new Text("overlay", 0, 0));
+			const overlay = tui.showOverlay(new Text("overlay", 0, 0), { row: 0, col: 0, width: 7 });
 			mark = terminal.markWrites();
 			await frame();
 			expect(terminal.writesSince(mark)).not.toContain(prefix);
+			expect(text()).toEqual(["overlay", "[Image hidden by overlay]", "", "", "6"]);
 			overlay.hide();
 			mark = terminal.markWrites();
 			await frame();
@@ -614,13 +692,22 @@ describe("retained viewport", () => {
 			mark = terminal.markWrites();
 			await frame();
 			expect(terminal.writesSince(mark)).not.toContain(prefix);
-			expect(terminal.visibleLines()[0]).toContain("Image clipped");
+			expect(text()).toEqual(["[Image clipped; scroll to view]", "", "6", "7", "8"]);
 			if (protocol === "kitty") expect(terminal.writesSince(mark)).toContain("a=d,d=I,i=44");
 			tui.scrollViewportTo(0);
 			mark = terminal.markWrites();
 			await frame();
 			expect(terminal.writesSince(mark)).not.toContain(prefix);
-			expect(terminal.visibleLines()[3]).toContain("Image clipped");
+			expect(text()).toEqual(["0", "1", "2", "[Image clipped; scroll to view]", ""]);
+			tui.stop();
+			await terminal.flush();
+			expect(terminal.visibleLines()[0]).toBe("shell sentinel");
+			tui.start();
+			tui.scrollViewportTo(2);
+			mark = terminal.markWrites();
+			await frame();
+			expect(text()).toEqual(["2", "", "", "", "6"]);
+			expect(terminal.writesSince(mark)).toContain(`\x1b[2;1H${prefix}`);
 		},
 	);
 

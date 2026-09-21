@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@leanandmean/agent";
 import type { AssistantMessage } from "@leanandmean/ai";
 import { type Component, Container, resetCapabilitiesCache, setCapabilities, Text, TUI } from "@leanandmean/tui";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const imageConversion = vi.hoisted(() => ({
@@ -28,9 +29,12 @@ vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 }));
 
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
+import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
+import { defineTool } from "../src/core/extensions/index.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.js";
 import { DaxnutsComponent } from "../src/modes/interactive/components/daxnuts.js";
+import type { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.js";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.js";
 import { initTheme, onThemeChange } from "../src/modes/interactive/theme/theme.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
@@ -1146,6 +1150,22 @@ describe("interactive assistant history", () => {
 
 		expect(terminal.visibleLines().join("\n")).not.toContain("VISIBLE-TOOL-PREVIEW");
 		expect(committedChatContainer.children).toHaveLength(2);
+		expect(committedChatContainer.render(60)).toEqual([]);
+	});
+
+	it("preserves deliberate self-renderer blank rows and single-row attached controls", async () => {
+		const { emit, mode, chatContainer } = createInteractiveHarness();
+		mode.getRegisteredToolDefinition = () => ({
+			renderShell: "self",
+			renderCall: () => ({ render: () => [""], invalidate() {} }),
+		});
+		await emit({ type: "tool_execution_start", toolCallId: "spaced", toolName: "spaced", args: {} });
+		const tool = chatContainer.children[0] as ToolExecutionComponent;
+		expect(tool.render(60)).toEqual(["", ""]);
+		tool.attachCommittedContext(new Text("CONTROL", 0, 0));
+		expect(tool.render(60).map((row) => row.trimEnd())).toEqual(["CONTROL"]);
+		tool.detachCommittedContext();
+		expect(tool.render(60)).toEqual([]);
 	});
 
 	it("waits for Kitty conversion before committing reconstructed tool history", async () => {
@@ -1438,6 +1458,119 @@ describe("production retained viewport", () => {
 		await h.dispose();
 	});
 
+	it("keeps exact assistant, tool, queue and widget rows through individual and coalesced updates", async () => {
+		h.terminal.resize(60, 32);
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setEditorText("E");
+		h.extensionUI.setWidget("above", ["ABOVE"]);
+		h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+		await h.session.steer("STEER");
+		await h.session.followUp("FOLLOW");
+		h.internals.updatePendingMessagesDisplay();
+		await h.emit({ type: "agent_start" });
+		const queue = ["", " Steering: STEER", " Follow-up: FOLLOW", " ↳ Alt+Up to edit all queued messages"];
+		const working = ["", " ⠋ Working..."];
+		const editor = ["─".repeat(59), "E", "─".repeat(59)];
+		const check = async (
+			chat: string[],
+			tail = [...queue, ...working, "", " ABOVE", ...editor, " BELOW", "FOOTER"],
+		) => {
+			const expected = ["HEADER", ...chat, ...tail];
+			expect((await h.frame()).map((row) => row.slice(0, 59).trimEnd())).toEqual([
+				...expected,
+				...Array(32 - expected.length).fill(""),
+			]);
+			expect(h.terminal.cursorPosition()).toEqual({ row: expected.indexOf("E"), col: 1 });
+		};
+		await check([]);
+		await h.emit({ type: "message_start", message: assistant("ANSWER") });
+		await check(["", " ANSWER"]);
+		await h.emit({ type: "message_update", message: assistant("ANSWER\n\nSECOND") });
+		await check(["", " ANSWER", "", " SECOND"]);
+		await h.emit({ type: "message_update", message: assistant("ANSWER") });
+		await h.emit({ type: "message_end", message: assistant("ANSWER") });
+		await h.emit({ type: "tool_execution_start", toolCallId: "layout", toolName: "unknown", args: undefined });
+		const tool = ["", "", " unknown", ""];
+		await check(["", " ANSWER", ...tool]);
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "layout",
+			toolName: "unknown",
+			args: undefined,
+			partialResult: { content: [{ type: "text", text: "RESULT\nGROW" }] },
+		});
+		await check(["", " ANSWER", ...tool.slice(0, -1), " RESULT", " GROW", ""]);
+		const toolBackground = h.terminal.cell(5, 0).background;
+		expect(toolBackground).toBeDefined();
+		for (const row of [3, 9, 10, 11, 12, 13, 14]) expect(h.terminal.cell(row, 0).background).toBeUndefined();
+		expect(h.terminal.cell(5, 59).background).toBeUndefined();
+		const burst = h.terminal.markWrites();
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "layout",
+			toolName: "unknown",
+			args: undefined,
+			partialResult: { content: [{ type: "text", text: "UNPAINTED" }] },
+		});
+		h.extensionUI.setWidget("above", ["REPLACED", "WIDGET"]);
+		h.session.clearQueue();
+		h.internals.updatePendingMessagesDisplay();
+		await h.emit({ type: "tool_execution_end", toolCallId: "layout", result: { content: [] }, isError: false });
+		await h.emit({ type: "agent_end", messages: [] });
+		await check(["", " ANSWER", ...tool], ["", " REPLACED", " WIDGET", ...editor, " BELOW", "FOOTER"]);
+		expect(h.terminal.writesSince(burst)).not.toContain("UNPAINTED");
+		for (let row = 7; row < 32; row++) expect(h.terminal.cell(row, 0).background).toBeUndefined();
+		h.extensionUI.setWidget("above", undefined);
+		h.extensionUI.setWidget("below", undefined);
+		await check(["", " ANSWER", ...tool], ["", ...editor, "FOOTER"]);
+		h.terminal.resize(12, 2);
+		await h.frame();
+		h.internals.ui.scrollViewportTo(1);
+		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " ANSWER"]);
+		h.internals.ui.scrollViewportTo(4);
+		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " unknown"]);
+		h.terminal.sendInput("!");
+		const typed = await h.frame();
+		expect(typed[h.terminal.cursorPosition().row]).toContain("E!");
+		expect(h.terminal.cursorPosition().col).toBe(2);
+	});
+
+	it("shows and dismisses real autocomplete independently of screen-relative overlays", async () => {
+		h.terminal.resize(32, 12);
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+		const editor = ["─".repeat(31), "/hot", "─".repeat(31)];
+		for (const character of "/hot") h.terminal.sendInput(character);
+		const rows = async () => (await h.frame()).map((row) => row.slice(0, 31).trimEnd());
+		const completed = ["HEADER", "", ...editor, "→ hotkeys", " BELOW", "FOOTER", ...Array(4).fill("")];
+		await vi.waitFor(async () => expect(await rows()).toEqual(completed));
+		expect(h.terminal.cell(3, 4).inverse).toBe(true);
+		const autocompleteFrame = h.terminal.markWrites();
+		await rows();
+		expect(h.terminal.writesSince(autocompleteFrame)).toContain("\x1b[?25l");
+		const input = vi.fn();
+		const overlay = h.internals.ui.showOverlay(
+			{
+				render: () => ["MODAL"],
+				invalidate() {},
+				handleInput: input,
+			},
+			{ row: 0, col: 0, width: 31 },
+		);
+		expect(await rows()).toEqual(["MODAL", ...completed.slice(1)]);
+		h.terminal.sendInput("\x1b");
+		expect(input).toHaveBeenCalledExactlyOnceWith("\x1b");
+		expect(await rows()).toEqual(["MODAL", ...completed.slice(1)]);
+		overlay.hide();
+		expect(await rows()).toEqual(completed);
+		h.terminal.sendInput("\x1b");
+		expect(await rows()).toEqual(["HEADER", "", ...editor, " BELOW", "FOOTER", ...Array(5).fill("")]);
+		expect(h.terminal.cursorPosition()).toEqual({ row: 3, col: 4 });
+		expect(h.extensionUI.getEditorText()).toBe("/hot");
+	});
+
 	it("keeps exact intermediate widget and working rows in the production projection", async () => {
 		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
 		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
@@ -1631,6 +1764,91 @@ describe("production retained viewport", () => {
 			expect((await h.frame()).join("\n")).not.toContain("Selection held");
 		},
 	);
+});
+
+it("preserves third-party text rendering, standalone HTML and extension raw-input ownership", async () => {
+	const tool = defineTool({
+		name: "custom_text",
+		label: "Custom text",
+		description: "Synthetic renderer",
+		parameters: Type.Object({}),
+		execute: async () => ({ content: [], details: { hidden: false } }),
+		renderShell: "self",
+		renderCall: (_args, _theme, context) => new Text(context.isPartial ? "CUSTOM <call>" : "", 0, 0),
+		renderResult: (result, { expanded, isPartial }) => {
+			const text = result.content
+				.filter((item) => item.type === "text")
+				.map((item) => item.text)
+				.join("\n");
+			return new Text(
+				result.details.hidden ? "" : expanded || isPartial ? text : text.split("\n").slice(0, 2).join("\n"),
+				0,
+				0,
+			);
+		},
+	});
+	const h = await createProductionInteractiveHarness(32, 12, (pi) => pi.registerTool(tool), true);
+	try {
+		h.extensionUI.setHeader(() => new Text("HEADER", 0, 0));
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setWidget("above", undefined);
+		const rows = async () => (await h.frame()).map((row) => row.slice(0, 31).trimEnd());
+		const initial = ["HEADER", "", "─".repeat(31), "", "─".repeat(31), "FOOTER", ...Array(6).fill("")];
+		expect(await rows()).toEqual(initial);
+		await h.emit({ type: "tool_execution_start", toolCallId: "custom", toolName: tool.name, args: {} });
+		expect(await rows()).toEqual(["HEADER", "", "CUSTOM <call>", ...initial.slice(1, -2)]);
+		const text = Array.from({ length: 80 }, (_, i) => `ROW-${String(i).padStart(2, "0")} 界e\u0301 <&>`).join("\n");
+		const content = [{ type: "text" as const, text }];
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "custom",
+			toolName: tool.name,
+			args: {},
+			partialResult: { content, details: { hidden: false } },
+		});
+		await h.frame();
+		h.internals.ui.scrollViewportTo(3);
+		expect((await rows()).slice(0, 3)).toEqual(["ROW-00 界é <&>", "ROW-01 界é <&>", "ROW-02 界é <&>"]);
+		const listener = vi.fn((data: string) => (data === "x" ? { data: "y" } : undefined));
+		const remove = h.extensionUI.onTerminalInput(listener);
+		h.terminal.sendInput("\x1b[<64;2;2M");
+		h.terminal.sendInput("\x1b[5~");
+		expect(listener).not.toHaveBeenCalled();
+		h.terminal.sendInput("x");
+		await h.frame();
+		expect(listener).toHaveBeenLastCalledWith("x");
+		expect(h.extensionUI.getEditorText()).toBe("y");
+		remove();
+		h.terminal.sendInput("x");
+		expect(h.extensionUI.getEditorText()).toBe("yx");
+		h.extensionUI.setEditorText("");
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "custom",
+			result: { content: [], details: { hidden: true } },
+			isError: false,
+		});
+		h.internals.ui.scrollViewportTo(Number.MAX_SAFE_INTEGER);
+		expect(await rows()).toEqual(initial);
+		const html = createToolHtmlRenderer({
+			getToolDefinition: () => tool,
+			theme: h.extensionUI.theme,
+			cwd: "/synthetic",
+			width: 32,
+		});
+		expect(html.renderCall("export", tool.name, {})).toBe(
+			`<div class="ansi-line">CUSTOM &lt;call&gt;${" ".repeat(19)}</div>`,
+		);
+		const result = html.renderResult("export", tool.name, content, { hidden: false }, false)!;
+		expect(result.collapsed?.match(/class="ansi-line"/g)).toHaveLength(2);
+		expect(result.expanded?.match(/class="ansi-line"/g)).toHaveLength(80);
+		for (let i = 0; i < 80; i++)
+			expect(result.expanded).toContain(`ROW-${String(i).padStart(2, "0")} 界é &lt;&amp;&gt;`);
+		expect(result.expanded).not.toMatch(/\x1b|[█│]|Selection held/);
+		expect(html.renderResult("hidden", tool.name, [], { hidden: true }, false)).toEqual({ expanded: "" });
+	} finally {
+		await h.dispose();
+	}
 });
 
 describe("production interactive composition", () => {
