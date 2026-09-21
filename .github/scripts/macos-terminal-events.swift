@@ -78,11 +78,27 @@ case "press":
 case "key":
     let code = CGKeyCode(args[2])!
     let flags = CGEventFlags(rawValue: UInt64(args[3])!)
+    let modifiers: [(CGEventFlags, CGKeyCode)] = [(.maskControl, 59), (.maskShift, 56), (.maskAlternate, 58), (.maskCommand, 55)]
+    var active = CGEventFlags()
+    for (flag, modifier) in modifiers where flags.contains(flag) {
+        active.insert(flag)
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: modifier, keyDown: true)!
+        event.flags = active
+        event.post(tap: .cghidEventTap)
+        usleep(20_000)
+    }
     for down in [true, false] {
         let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
         event.flags = flags
         event.post(tap: .cghidEventTap)
-        usleep(50_000)
+        usleep(20_000)
+    }
+    for (flag, modifier) in modifiers.reversed() where flags.contains(flag) {
+        active.remove(flag)
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: modifier, keyDown: false)!
+        event.flags = active
+        event.post(tap: .cghidEventTap)
+        usleep(20_000)
     }
 case "mouse":
     let point = CGPoint(x: Double(args[3])!, y: Double(args[4])!)

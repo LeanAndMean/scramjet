@@ -68,6 +68,25 @@ describe("mouse transport framing", () => {
 });
 
 describe("candidate terminal modes", () => {
+	it("does not re-enable keyboard reporting from a query response received during a handoff drain", async () => {
+		vi.useFakeTimers();
+		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
+		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
+		vi.spyOn(process, "kill").mockReturnValue(true);
+		const terminal = new ProcessTerminal();
+		terminal.start(
+			() => {},
+			() => {},
+		);
+		terminal.setViewportMode(true);
+		const draining = terminal.drainInput();
+		process.stdin.emit("data", "\x1b[?0u");
+		await vi.advanceTimersByTimeAsync(60);
+		await draining;
+		terminal.stop();
+		expect(output.mock.calls.map(([value]) => value).join("")).not.toContain("\x1b[>15u");
+	});
 	it("requests explicit viewport key events and restores keyboard stacks in their owning buffers", () => {
 		vi.useFakeTimers();
 		const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);

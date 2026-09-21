@@ -50,7 +50,7 @@ if (process.argv.includes("--inspect-screenshot")) {
 	let count = 0;
 	let left = width, right = 0, top = image.get_height(), bottom = 0;
 	for (let i = 0; i < pixels.length; i += 4) {
-		if (pixels[i] > 220 && pixels[i + 1] < 40 && pixels[i + 2] > 220) {
+		if (pixels[i] > 220 && pixels[i + 1] < 100 && pixels[i + 2] > 220) {
 			count++;
 			const x = (i / 4) % width, y = Math.floor(i / 4 / width);
 			left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
@@ -242,7 +242,7 @@ async function runProduction() {
 			if (safetyState.inputs.length > 30) safetyState.inputs.shift();
 		}
 		if (isKeyRelease(data)) return { consume: true };
-		if (matchesKey(data, "ctrl+q")) { stop(); return { consume: true }; }
+		if (matchesKey(data, "ctrl+q")) { void terminal.drainInput().then(stop); return { consume: true }; }
 		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find((key) => matchesKey(data, key));
 		if (action) {
 			sequence = sequence.then(() => safetyAction(action)).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
@@ -283,7 +283,7 @@ async function runProduction() {
 			const receipt = join(directory, "handoff.txt");
 			writeFileSync(editor, `#!/bin/sh\nstty -g > '${receipt}'\nprintf 'SYNTHETIC EXTERNAL EDITOR\\n'\nprintf 'edited by synthetic external editor' > "$1"\n`, { mode: 0o700 });
 			process.env.VISUAL = editor;
-			mode.openExternalEditor();
+			await mode.openExternalEditor();
 			safetyState.handoffTermios = readFileSync(receipt, "utf8").trim();
 			safetyState.editorHandoffs++;
 			safetyState.phase = "editor-return";
@@ -307,7 +307,7 @@ async function runProduction() {
 			safetyState.phase = "suspending";
 			record();
 			process.once("SIGCONT", () => { safetyState.phase = "resumed"; setTimeout(record, 50); });
-			mode.handleCtrlZ();
+			await mode.handleCtrlZ();
 			return;
 		}
 		await mode.ui.renderNow({ requireFlush: true });

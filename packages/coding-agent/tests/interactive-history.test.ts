@@ -185,6 +185,31 @@ function createInteractiveHarness(): {
 }
 
 describe("retained approval and exit safety", () => {
+	it("drains key releases before suspending the terminal", async () => {
+		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+		let release!: () => void;
+		vi.spyOn(h.terminal, "drainInput").mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+		);
+		const stop = vi.spyOn(h.internals.ui, "stop");
+		const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+		try {
+			const suspending = h.internals.handleCtrlZ();
+			expect(stop).not.toHaveBeenCalled();
+			expect(kill).not.toHaveBeenCalled();
+			release();
+			await suspending;
+			expect(stop).toHaveBeenCalledOnce();
+			expect(kill).toHaveBeenCalledWith(0, "SIGTSTP");
+		} finally {
+			process.emit("SIGCONT");
+			kill.mockRestore();
+			await h.dispose();
+		}
+	});
 	it("flushes complete retained context and consumes activation while controls are hidden", async () => {
 		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
 		try {
@@ -246,58 +271,62 @@ describe("retained approval and exit safety", () => {
 		}
 	});
 
-	it.each(["missing", "rejected", "cancelled", "replaced"])("fails closed across %s candidate flush", async (kind) => {
-		const h = await createProductionInteractiveHarness(60, 12, undefined, true);
-		const flush = h.terminal.flush.bind(h.terminal);
-		try {
-			await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
-			let release!: () => void;
-			const gate = new Promise<void>((resolve) => {
-				release = resolve;
-			});
-			Object.defineProperty(h.terminal, "flush", {
-				configurable: true,
-				value:
-					kind === "missing"
-						? undefined
-						: kind === "rejected"
-							? () => Promise.reject(new Error("flush failed"))
-							: () => gate,
-			});
-			let finish!: (result: string) => void;
-			const activate = vi.fn();
-			const dispose = vi.fn();
-			const pending = h.extensionUI.custom<string>(
-				(_tui, _theme, _kb, done) => {
-					finish = done;
-					return { render: () => ["LIVE"], invalidate() {}, handleInput: activate, dispose };
-				},
-				{ toolAttachedContext: { toolCallId: "approval", render: () => new Text("IMMUTABLE-CONTEXT", 0, 0) } },
-			);
-			const outcome = pending.catch((error: Error) => error.message);
-			await Promise.resolve();
-			await Promise.resolve();
-			h.terminal.sendInput("\r");
-			expect(activate).not.toHaveBeenCalled();
-			if (kind === "cancelled") finish("cancelled");
-			if (kind === "replaced") {
-				h.internals.clearTranscript();
-				h.extensionUI.setEditorText("NEW SESSION INPUT");
+	it.each(["missing", "rejected", "cancelled", "replaced", "replaced-and-cancelled"])(
+		"fails closed across %s candidate flush",
+		async (kind) => {
+			const h = await createProductionInteractiveHarness(60, 12, undefined, true);
+			const flush = h.terminal.flush.bind(h.terminal);
+			try {
+				await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+				let release!: () => void;
+				const gate = new Promise<void>((resolve) => {
+					release = resolve;
+				});
+				Object.defineProperty(h.terminal, "flush", {
+					configurable: true,
+					value:
+						kind === "missing"
+							? undefined
+							: kind === "rejected"
+								? () => Promise.reject(new Error("flush failed"))
+								: () => gate,
+				});
+				let finish!: (result: string) => void;
+				const activate = vi.fn();
+				const dispose = vi.fn();
+				const pending = h.extensionUI.custom<string>(
+					(_tui, _theme, _kb, done) => {
+						finish = done;
+						return { render: () => ["LIVE"], invalidate() {}, handleInput: activate, dispose };
+					},
+					{ toolAttachedContext: { toolCallId: "approval", render: () => new Text("IMMUTABLE-CONTEXT", 0, 0) } },
+				);
+				const outcome = pending.catch((error: Error) => error.message);
+				await Promise.resolve();
+				await Promise.resolve();
+				h.terminal.sendInput("\r");
+				expect(activate).not.toHaveBeenCalled();
+				if (kind === "cancelled") finish("cancelled");
+				if (kind.startsWith("replaced")) {
+					h.internals.clearTranscript();
+					h.extensionUI.setEditorText("NEW SESSION INPUT");
+					if (kind === "replaced-and-cancelled") finish("cancelled");
+				}
+				release();
+				const result = await outcome;
+				expect(result).toMatch(kind.endsWith("cancelled") ? /cancelled/ : /flush|replaced/);
+				h.terminal.sendInput("\r");
+				expect(activate).not.toHaveBeenCalled();
+				expect(dispose).toHaveBeenCalledOnce();
+				if (kind.startsWith("replaced")) expect(h.extensionUI.getEditorText()).toBe("NEW SESSION INPUT");
+				if (kind !== "cancelled")
+					expect(h.internals.committedChatContainer.render(60).join("\n")).not.toContain("IMMUTABLE-CONTEXT");
+			} finally {
+				Object.defineProperty(h.terminal, "flush", { configurable: true, value: flush });
+				await h.dispose();
 			}
-			release();
-			const result = await outcome;
-			expect(result).toMatch(kind === "cancelled" ? /cancelled/ : /flush|replaced/);
-			h.terminal.sendInput("\r");
-			expect(activate).not.toHaveBeenCalled();
-			expect(dispose).toHaveBeenCalledOnce();
-			if (kind === "replaced") expect(h.extensionUI.getEditorText()).toBe("NEW SESSION INPUT");
-			if (kind !== "cancelled")
-				expect(h.internals.committedChatContainer.render(60).join("\n")).not.toContain("IMMUTABLE-CONTEXT");
-		} finally {
-			Object.defineProperty(h.terminal, "flush", { configurable: true, value: flush });
-			await h.dispose();
-		}
-	});
+		},
+	);
 
 	it.each(["success", "failure", "replaced"])("settles late candidate image conversion across %s", async (kind) => {
 		const h = await createProductionInteractiveHarness(60, 12, undefined, true);

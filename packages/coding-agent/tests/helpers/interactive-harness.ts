@@ -32,6 +32,7 @@ interface InteractiveInternals {
 	footer: Container;
 	handleEvent(event: AgentSessionEvent): Promise<void>;
 	configureRetainedViewport(): void;
+	handleCtrlZ(): Promise<void>;
 	clearTranscript(): void;
 	handleReloadCommand(): Promise<void>;
 	handleExtensionNewSession(): Promise<{ cancelled: boolean }>;

@@ -156,6 +156,7 @@ export class ProcessTerminal implements Terminal {
 			if (!this._kittyProtocolActive) {
 				const match = sequence.match(kittyResponsePattern);
 				if (match) {
+					if (!this.inputHandler) return;
 					this._kittyProtocolActive = true;
 					setKittyProtocolActive(true);
 

@@ -2478,7 +2478,7 @@ export class InteractiveMode {
 				removeInputGuard?.();
 				attachedTool?.detachCommittedContext();
 				if (isOverlay) this.ui.hideOverlay();
-				else restoreEditor();
+				else if (!attachedTool || this.chatContainer.children.includes(attachedTool)) restoreEditor();
 				// Note: both branches above already call requestRender
 				resolve(result);
 				try {
@@ -3702,7 +3702,7 @@ export class InteractiveMode {
 		this.signalCleanupHandlers = [];
 	}
 
-	private handleCtrlZ(): void {
+	private async handleCtrlZ(): Promise<void> {
 		if (process.platform === "win32") {
 			this.showStatus("Suspend to background is not supported on Windows");
 			return;
@@ -3727,7 +3727,8 @@ export class InteractiveMode {
 		});
 
 		try {
-			// Stop the TUI (restore terminal to normal mode)
+			// SCRAMJET-DIVERGENCE: drain releases before handing keyboard ownership back to the shell.
+			await this.ui.terminal.drainInput();
 			this.ui.stop();
 
 			// Send SIGTSTP to process group (pid=0 means all processes in group)
@@ -3853,7 +3854,7 @@ export class InteractiveMode {
 		this.ui.rebuild();
 	}
 
-	private openExternalEditor(): void {
+	private async openExternalEditor(): Promise<void> {
 		// Determine editor (respect $VISUAL, then $EDITOR)
 		const editorCmd = process.env.VISUAL || process.env.EDITOR;
 		if (!editorCmd) {
@@ -3868,7 +3869,8 @@ export class InteractiveMode {
 			// Write current content to temp file
 			fs.writeFileSync(tmpFile, currentText, "utf-8");
 
-			// Stop TUI to release terminal
+			// SCRAMJET-DIVERGENCE: the editor must not inherit the key release that opened it.
+			await this.ui.terminal.drainInput();
 			this.ui.stop();
 
 			// Split by space to support editor arguments (e.g., "code --wait")
