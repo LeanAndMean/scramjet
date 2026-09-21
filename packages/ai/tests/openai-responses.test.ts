@@ -561,23 +561,50 @@ describe("OpenAI Responses failure normalization", () => {
 		},
 	);
 
-	it("does not let request transport inference override context overflow", async () => {
-		const result = await streamOpenAIResponses(openaiModel, context, {
-			apiKey,
-			onPayload: async () => {
-				throw new TypeError("maximum context length exceeded");
-			},
-		}).result();
+	it.each([
+		["OpenAI", streamOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)(
+		"keeps %s payload callback failures out of provider diagnostics",
+		async (_name, streamFn, model, extra) => {
+			const result = await streamFn(model as never, context, {
+				apiKey,
+				...extra,
+				onPayload: async () => {
+					throw new TypeError("private callback rate limit sentinel");
+				},
+			} as never).result();
 
-		expect(providerDetails(result)).toEqual(
-			expect.objectContaining({
-				phase: "request",
-				kind: "provider_event",
-				category: "context_overflow",
-				retryDisposition: "non_transient",
-			}),
-		);
-	});
+			expect(result.stopReason).toBe("error");
+			expect(result.errorMessage).toBe("OpenAI Responses payload callback failed.");
+			expect(result.diagnostics).toBeUndefined();
+			expect(JSON.stringify(result)).not.toContain("private callback rate limit sentinel");
+		},
+	);
+
+	it.each([
+		["OpenAI", streamOpenAIResponses, openaiModel, {}],
+		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
+	] as const)(
+		"keeps %s payload callback failures private when the request is also aborted",
+		async (_name, streamFn, model, extra) => {
+			const controller = new AbortController();
+			controller.abort();
+			const result = await streamFn(model as never, context, {
+				apiKey,
+				...extra,
+				signal: controller.signal,
+				onPayload: async () => {
+					throw new TypeError("private aborted callback sentinel");
+				},
+			} as never).result();
+
+			expect(result.stopReason).toBe("aborted");
+			expect(result.errorMessage).toBe("OpenAI Responses payload callback failed.");
+			expect(result.diagnostics).toBeUndefined();
+			expect(JSON.stringify(result)).not.toContain("private aborted callback sentinel");
+		},
+	);
 
 	it("normalizes request transport failures without retaining the thrown message", async () => {
 		vi.stubGlobal(
@@ -752,6 +779,13 @@ describe("OpenAI Responses failure normalization", () => {
 			retryDisposition: "transient",
 		});
 		expect(validateResponsesProviderFailure(undefined)).toEqual({ status: "absent" });
+		expect(validateResponsesProviderFailure({ type: "provider_failure" })).toEqual({ status: "malformed" });
+		for (const diagnostic of [null, "provider_failure", 1, true]) {
+			expect(validateResponsesProviderFailure([diagnostic])).toEqual({ status: "malformed" });
+		}
+		expect(validateResponsesProviderFailure([{ type: "usage", timestamp: 0, details: { tokens: 1 } }])).toEqual({
+			status: "absent",
+		});
 		expect(
 			validateResponsesProviderFailure([
 				{ type: "provider_failure", timestamp: 0, details: { ...providerDetails(result), extra: true } },

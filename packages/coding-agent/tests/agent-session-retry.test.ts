@@ -129,6 +129,12 @@ async function createFixture(
 		reserveTokens?: number;
 		retryEnabled?: boolean;
 		extensionFactory?: (pi: ExtensionAPI) => void;
+		persist?: boolean;
+		sessionManager?: SessionManager;
+		streamFn?: (
+			callIndex: number,
+			signal: AbortSignal | undefined,
+		) => ReturnType<typeof createAssistantMessageEventStream>;
 	},
 ): Promise<Fixture> {
 	const dir = mkdtempSync(join(tmpdir(), "retry-test-"));
@@ -143,7 +149,8 @@ async function createFixture(
 		},
 		compaction: { reserveTokens: options?.reserveTokens ?? 16_384 },
 	});
-	const sessionManager = SessionManager.inMemory(cwd);
+	const sessionManager =
+		options?.sessionManager ?? (options?.persist ? SessionManager.create(cwd, dir) : SessionManager.inMemory(cwd));
 	const authStorage = AuthStorage.inMemory();
 	authStorage.setRuntimeApiKey("openai", "fake");
 	const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
@@ -157,9 +164,16 @@ async function createFixture(
 
 	let callIndex = 0;
 	const agent = new Agent({
-		initialState: { systemPrompt: "", model: options?.model ?? testModel, tools: [] },
-		streamFn: () => {
-			const message = responses(callIndex++);
+		initialState: {
+			systemPrompt: "",
+			model: options?.model ?? testModel,
+			tools: [],
+			messages: sessionManager.buildSessionContext().messages,
+		},
+		streamFn: (_model, _context, streamOptions) => {
+			const currentCall = callIndex++;
+			if (options?.streamFn) return options.streamFn(currentCall, streamOptions?.signal);
+			const message = responses(currentCall);
 			const stream = createAssistantMessageEventStream();
 			stream.push({ type: "start", partial: message });
 			stream.push({ type: "done", reason: message.stopReason as "stop" | "toolUse" | "error", message });
@@ -818,6 +832,90 @@ describe("AgentSession persisted retry authority", () => {
 		]);
 	});
 
+	it("aborts an active retry continuation when disposed", async () => {
+		let continuationStarted: (() => void) | undefined;
+		const started = new Promise<void>((resolve) => {
+			continuationStarted = resolve;
+		});
+		let continuationAborted = false;
+		const { session } = await createFixture(() => assistantError("rate limit"), {
+			streamFn: (callIndex, signal) => {
+				const stream = createAssistantMessageEventStream();
+				if (callIndex === 0) {
+					const message = assistantError("rate limit");
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+					return stream;
+				}
+
+				continuationStarted?.();
+				const finishAborted = () => {
+					continuationAborted = true;
+					const message = { ...assistantError("aborted"), stopReason: "aborted" as const };
+					stream.push({ type: "error", reason: "aborted", error: message });
+				};
+				if (signal?.aborted) finishAborted();
+				else signal?.addEventListener("abort", finishAborted, { once: true });
+				return stream;
+			},
+		});
+		const promptResult = session.prompt("hello").catch((error: unknown) => error);
+		await started;
+
+		session.dispose();
+		try {
+			await vi.waitFor(() => expect(continuationAborted).toBe(true));
+		} finally {
+			session.agent.abort();
+			await session.agent.waitForIdle();
+		}
+
+		expect(await promptResult).toEqual(
+			expect.objectContaining({ message: "AgentSession disposed before retry settlement completed." }),
+		);
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled" }),
+			expect.objectContaining({ outcome: "cancelled", reason: "session_disposed" }),
+		]);
+	});
+
+	it("records disposal after assistant persistence but before retry classification", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"));
+		let disposed = false;
+		session.agent.subscribe((event) => {
+			if (event.type === "agent_end" && !disposed) {
+				disposed = true;
+				session.dispose();
+			}
+		});
+
+		await expect(session.prompt("hello")).rejects.toThrow("disposed before retry settlement completed");
+
+		const relevant = session.sessionManager
+			.getBranch()
+			.filter((entry) => entry.type === "custom" || (entry.type === "message" && entry.message.role === "assistant"))
+			.map((entry) =>
+				entry.type === "custom" ? (entry.data as { outcome: string }).outcome : entry.message.stopReason,
+			);
+		expect(relevant).toEqual(["error", "cancelled"]);
+	});
+
+	it("does not persist an assistant error after disposal during message_end", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"));
+		session.subscribe((event) => {
+			if (event.type === "message_end" && event.message.role === "assistant") session.dispose();
+		});
+
+		await session.prompt("hello");
+
+		expect(
+			session.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type === "message" && entry.message.role === "assistant"),
+		).toEqual([]);
+		expect(retryRecords(session)).toEqual([]);
+	});
+
 	it("rejects disposal during the post-backoff handoff without continuing", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 1 });
 		const continueAgent = vi.spyOn(session.agent, "continue");
@@ -873,6 +971,40 @@ describe("AgentSession persisted retry authority", () => {
 		expect(session.sessionManager.buildSessionContext().messages.every((message) => message.role !== "custom")).toBe(
 			true,
 		);
+	});
+
+	it("keeps retry records durable and inert after reopening a disk-backed session", async () => {
+		const { session } = await createFixture((i) => (i === 0 ? assistantError("rate limit") : assistantText("ok")), {
+			persist: true,
+		});
+		await session.prompt("hello");
+		const expectedRecords = retryRecords(session);
+		const sessionFile = session.sessionManager.getSessionFile();
+		expect(sessionFile).toBeDefined();
+		session.dispose();
+
+		const reopened = SessionManager.open(sessionFile!);
+		const context = reopened.buildSessionContext();
+		const reopenedRecords = reopened
+			.getBranch()
+			.filter((entry) => entry.type === "custom" && entry.customType === "coding-agent:auto-retry")
+			.map((entry) => entry.data);
+		expect(reopenedRecords).toEqual(expectedRecords);
+		expect(context.messages.map((message) => message.role)).toEqual(["user", "assistant", "assistant"]);
+		expect(JSON.stringify(context)).not.toContain("coding-agent:auto-retry");
+
+		const fresh = await createFixture(() => assistantText("unexpected continuation"), { sessionManager: reopened });
+		const continueAgent = vi.spyOn(fresh.session.agent, "continue");
+		const internal = fresh.session as any;
+		expect(fresh.session.state.messages).toEqual(context.messages);
+		expect(fresh.session.isRetrying).toBe(false);
+		expect(internal._retryAbortController).toBeUndefined();
+		expect(internal._retryAttempt).toBe(0);
+		expect(internal._runRetryCount).toBe(0);
+		expect(internal._retryPromise).toBeUndefined();
+		await Promise.resolve();
+		expect(continueAgent).not.toHaveBeenCalled();
+		fresh.session.dispose();
 	});
 });
 

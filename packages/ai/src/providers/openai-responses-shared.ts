@@ -27,7 +27,6 @@ import type {
 	ToolCall,
 	Usage,
 } from "../types.js";
-import type { AssistantMessageDiagnostic } from "../utils/diagnostics.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
@@ -625,10 +624,15 @@ function isProviderFailureDetails(value: unknown): value is ResponsesProviderFai
 	return kind === "provider_event" && (category === "provider_error" || category === "unknown");
 }
 
-export function validateResponsesProviderFailure(
-	diagnostics: AssistantMessageDiagnostic[] | undefined,
-): ResponsesProviderFailureValidation {
-	const matches = diagnostics?.filter((diagnostic) => diagnostic.type === "provider_failure") ?? [];
+export function validateResponsesProviderFailure(diagnostics: unknown): ResponsesProviderFailureValidation {
+	if (diagnostics === undefined) return { status: "absent" };
+	if (!Array.isArray(diagnostics)) return { status: "malformed" };
+	const matches: Record<string, unknown>[] = [];
+	for (const diagnostic of diagnostics) {
+		const candidate = recordOf(diagnostic);
+		if (!candidate || typeof candidate.type !== "string") return { status: "malformed" };
+		if (candidate.type === "provider_failure") matches.push(candidate);
+	}
 	if (matches.length === 0) return { status: "absent" };
 	if (matches.length > 1) return { status: "duplicate" };
 	const details = matches[0].details;

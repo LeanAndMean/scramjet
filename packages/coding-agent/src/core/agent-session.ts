@@ -734,6 +734,7 @@ export class AgentSession {
 
 		// Notify all listeners
 		this._emit(event);
+		if (this._disposed) return;
 
 		// Handle session persistence
 		if (event.type === "message_end") {
@@ -1059,7 +1060,10 @@ export class AgentSession {
 		this._disposed = true;
 		this._resetOutputThroughput();
 		const retryDisposeError = new Error("AgentSession disposed before retry settlement completed.");
-		if (this._retryActive) {
+		const retryWasActive = this._retryActive;
+		const unclassifiedErrorWasPersisted = this._persistedAssistantSnapshot?.stopReason === "error";
+		if (retryWasActive) this.agent.abort();
+		if (retryWasActive || unclassifiedErrorWasPersisted) {
 			try {
 				this._appendAutoRetryRecord({
 					schemaVersion: 1,
@@ -1076,6 +1080,7 @@ export class AgentSession {
 		this._retryAbortController = undefined;
 		this._retryAttempt = 0;
 		this._retryActive = false;
+		this._persistedAssistantSnapshot = undefined;
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
