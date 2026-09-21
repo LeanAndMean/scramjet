@@ -50,7 +50,7 @@ func geometry(_ element: AXUIElement, depth: Int = 0) -> [[String: Any]] {
 
 func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool {
     if depth > 12 { return false }
-    if attribute(element, kAXRoleAttribute) as? String == "AXButton",
+    if ["AXButton", "AXCheckBox"].contains(attribute(element, kAXRoleAttribute) as? String ?? ""),
        [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].contains(where: { attribute(element, $0) as? String == title }) {
         return AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
     }

@@ -106,21 +106,29 @@ try:
         run("pbcopy", input=command)
         run(str(driver), "key", "9", "1048576")
         run(str(driver), "key", "36", "0")
+        for _ in range(10):
+            time.sleep(1)
+            remember = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Remember my choice"))
+            allow = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Yes"))
+            if allow["pressed"] or state().get("phase") == "image":
+                report["inlineImagePermission"] = {"remember": remember, "allow": allow}
+                break
     else:
         report["version"] = run("kitty", "--version")
         config = output / "kitty.conf"
         config.write_text("font_size 12\ninitial_window_width 80c\ninitial_window_height 30c\nremember_window_size no\nconfirm_os_window_close 0\n")
         report["configuration"] = config.read_text()
         child = subprocess.Popen(["kitty", "--config", str(config), "--title", "ScramjetSafety", "/bin/bash", "--noprofile", "--norc"], stderr=(output / "kitty.log").open("w"))
-        time.sleep(2)
-        window = run("xdotool", "search", "--onlyvisible", "--name", "ScramjetSafety").splitlines()[-1]
+        if not wait(lambda: subprocess.run(["xdotool", "search", "--onlyvisible", "--class", "kitty"], capture_output=True, timeout=5).returncode == 0, seconds=30):
+            raise RuntimeError("Kitty window did not become visible")
+        window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window)
         run("xdotool", "type", "--clearmodifiers", "--delay", "1", f"/bin/bash {shlex.quote(str(launcher))}")
         run("xdotool", "key", "Return")
     check("productionFixtureStarted", lambda: state().get("phase") == "image")
     check("nativeProtocolDetected", lambda: state().get("protocol") == ("iterm2" if mac else "kitty"))
     if not mac:
-        window = run("xdotool", "search", "--onlyvisible", "--name", "ScramjetSafety").splitlines()[-1]
+        window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window)
     key("1")
     count = pixels("fitted-image")
