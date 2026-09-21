@@ -32,6 +32,9 @@ Counters prove receipt only, not desktop interaction or clipboard acceptance.
 Use --production for the actual InteractiveMode composition with eight synthetic
 subagent cards, queues, widgets, editor and footer. Ctrl+N advances one child,
 Ctrl+O expands/collapses, Ctrl+Q exits. No child processes or models are invoked.
+Use --production --journey for the native activation matrix: synthetic history,
+real grouped cards, clipboard observation, and controlled updates/approval/handoffs.
+Only that mode polls <SCRAMJET_TUI_PROBE_EVIDENCE>.command for fixture actions.
 The default mode retains the Stage 3 desktop driver's fixed-row protocol.
 Use --safety for synthetic native image/approval/handoff checks. Keys 1/2 show or
 clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
@@ -258,7 +261,7 @@ async function runProduction() {
 			else if (command.action === "editor") extensionUI.setEditorText("");
 			else if (command.action === "approval") await safetyAction("4");
 			else if (command.action === "external") await safetyAction("6");
-			else if (command.action === "suspend") await safetyAction("7");
+			else if (command.action === "suspend") { await safetyAction("7"); return; }
 			else throw new Error(`Unknown fixture action: ${command.action}`);
 			await mode.ui.renderNow({ requireFlush: true });
 			safetyState.commandDone = command.id;

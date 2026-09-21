@@ -96,7 +96,7 @@ def fixture_command(action):
     global command_id
     command_id += 1
     path = Path(str(state_path) + ".command")
-    temporary = path.with_suffix(".tmp")
+    temporary = Path(str(path) + ".tmp")
     temporary.write_text(json.dumps({"id": command_id, "action": action}))
     temporary.replace(path)
     if not wait_for(lambda: state().get("commandDone") == command_id or (action == "suspend" and state().get("phase") == "suspending") or state().get("error"), timeout=10):
@@ -196,10 +196,10 @@ try:
         window_id = run("xdotool", "search", "--onlyvisible", "--name", "ScramjetProbe").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window_id)
         if tmux_command:
-            run("xdotool", "type", "--clearmodifiers", "--delay", "1", tmux_command)
+            run("xdotool", "type", "--clearmodifiers", "--delay", "20", tmux_command)
             key("enter")
             time.sleep(1)
-        run("xdotool", "type", "--clearmodifiers", "--delay", "1", launch_command)
+        run("xdotool", "type", "--clearmodifiers", "--delay", "20", launch_command)
         key("enter")
     if not wait_for(lambda: bool(state()), timeout=30):
         raise RuntimeError("Terminal did not start the fixture in a TTY")

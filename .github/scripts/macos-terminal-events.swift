@@ -85,8 +85,10 @@ case "press":
     emit(["applications": apps.map { $0.localizedName ?? "unknown" }, "pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
 case "key":
     let code = CGKeyCode(args[2])!
-    let flags = CGEventFlags(rawValue: UInt64(args[3])!)
-    let modifiers: [(CGEventFlags, CGKeyCode)] = [(.maskControl, 59), (.maskShift, 56), (.maskAlternate, 58), (.maskCommand, 55)]
+    var flags = CGEventFlags(rawValue: UInt64(args[3])!)
+    // iTerm2's Kitty encoder requires the left/right device bits present on physical modifier events.
+    let modifiers: [(CGEventFlags, CGKeyCode)] = [(.maskControl.union(CGEventFlags(rawValue: 0x1)), 59), (.maskShift.union(CGEventFlags(rawValue: 0x2)), 56), (.maskAlternate.union(CGEventFlags(rawValue: 0x20)), 58), (.maskCommand.union(CGEventFlags(rawValue: 0x8)), 55)]
+    for (flag, _) in modifiers where !flags.intersection(flag).isEmpty { flags.formUnion(flag) }
     var active = CGEventFlags()
     for (flag, modifier) in modifiers where flags.contains(flag) {
         active.insert(flag)
