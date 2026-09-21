@@ -266,16 +266,16 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 // AgentSession Class
 // ============================================================================
 
-// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement acknowledgement (#341). One deferred
-// promise per in-flight harness-tool invocation, resolved after the matching tool-result message_end
-// is persisted and rejected if that processing fails or the session is disposed first. resolve/reject
-// are called directly at several sites with no explicit settled-once guard (unlike the Agent-side
-// settleHarnessInvocation choke point): that is safe because native Promise settlement is
-// first-settlement-wins, so a later resolve/reject on an already-settled ack is a no-op.
+// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement acknowledgement (#341). Each invocation
+// retains synchronous event attribution and its queue tail until Agent execution and persistence both
+// settle, so an early write failure cannot leak later invocation failures into ordinary run state.
 type HarnessPersistenceAck = {
 	promise: Promise<void>;
 	resolve: () => void;
 	reject: (reason: Error) => void;
+	persistenceTail: Promise<void>;
+	firstPersistenceError?: Error;
+	settled: boolean;
 };
 
 type AutoRetryEvidence = "provider_failure" | "legacy_text" | "context_overflow" | "none";
@@ -306,8 +306,15 @@ type AutoRetryRecord =
 	| { schemaVersion: 1; outcome: "succeeded"; attemptsCompleted: number; cumulativeErrors: number }
 	| {
 			schemaVersion: 1;
+			outcome: "failed";
+			reason: "continuation_rejected";
+			attempt: number;
+			cumulativeErrors: number;
+	  }
+	| {
+			schemaVersion: 1;
 			outcome: "cancelled";
-			reason: "cancelled_during_backoff";
+			reason: "cancelled_during_backoff" | "session_disposed";
 			attempt: number;
 			cumulativeErrors: number;
 	  }
@@ -598,13 +605,16 @@ export class AgentSession {
 		// and waitForRetry() can miss the in-flight retry.
 		this._createRetryPromiseForAgentEnd(event);
 
-		this._agentEventQueue = this._agentEventQueue.then(
-			() => this._processAgentEventTracked(event),
-			() => this._processAgentEventTracked(event),
+		const harnessAck = this._harnessPersistenceAckForEvent(event);
+		const processing = this._agentEventQueue.then(
+			() => this._processAgentEventTracked(event, harnessAck),
+			() => this._processAgentEventTracked(event, harnessAck),
 		);
+		this._agentEventQueue = processing;
+		if (harnessAck) harnessAck.persistenceTail = processing;
 
 		// Keep queue alive if an event handler fails
-		this._agentEventQueue.catch(() => {});
+		processing.catch(() => {});
 
 		// SCRAMJET-DIVERGENCE: turn_end tool/prompt changes must settle before Agent snapshots
 		// live state for the next provider request (#524).
@@ -649,29 +659,16 @@ export class AgentSession {
 		this._retryPromise.catch(() => {});
 	}
 
-	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Wraps queue-side event processing
-	// so a harness-tool invocation's persistence acknowledgement resolves only after the matching
-	// tool-result message_end has been fully processed and persisted, and rejects if processing any of
-	// that invocation's events throws. Rethrows to preserve the queue's existing keep-processing
-	// behavior (the caller attaches `.catch(() => {})`).
-	private async _processAgentEventTracked(event: AgentEvent): Promise<void> {
-		const ackId = this._harnessAckIdForEvent(event);
-		const ack = ackId !== undefined ? this._harnessPersistenceAcks.get(ackId) : undefined;
-		// Decide from the ORIGINAL event, before _processAgentEvent runs, whether this is the
-		// ack-resolving tool-result: a message_end hook can replace event.message in place
-		// (_replaceMessageInPlace), so re-reading role/toolCallId after the await could miss the match
-		// and strand the acknowledgement.
-		const resolvesAck =
-			ack !== undefined &&
-			event.type === "message_end" &&
-			event.message.role === "toolResult" &&
-			event.message.toolCallId === ackId;
+	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Harness ownership is captured
+	// synchronously before queueing because an earlier persistence failure may settle the public promise
+	// while later events from the same Agent invocation are still waiting in this queue.
+	private async _processAgentEventTracked(event: AgentEvent, harnessAck?: HarnessPersistenceAck): Promise<void> {
 		try {
-			await this._processAgentEvent(event);
+			await this._processAgentEvent(event, harnessAck !== undefined);
 		} catch (err) {
 			const error = err instanceof Error ? err : new Error(String(err));
-			if (ack) {
-				ack.reject(error);
+			if (harnessAck) {
+				harnessAck.firstPersistenceError ??= error;
 			} else {
 				if (event.type === "message_end" && event.message.role === "assistant") {
 					this._assistantPersistenceError = error;
@@ -680,46 +677,36 @@ export class AgentSession {
 			}
 			throw err;
 		}
-		// Resolving here counts as "persisted" only because SessionManager persistence is synchronous
-		// (appendFileSync): _processAgentEvent has already written the tool-result row by the time it
-		// returns. If _persist ever becomes async, this would resolve before persistence completes.
-		if (resolvesAck) {
-			ack?.resolve();
-		}
 	}
 
-	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). The tool-call id an event belongs
-	// to for acknowledgement tracking — the synthetic assistant tool-call, the `tool_execution_*`
-	// events, or the tool-result message. Returns undefined for events unrelated to a pending harness
-	// invocation; a returned id that has no pending acknowledgement (an ordinary model tool call)
-	// resolves to no-op at the call site.
-	private _harnessAckIdForEvent(event: AgentEvent): string | undefined {
+	private _harnessPersistenceAckForEvent(event: AgentEvent): HarnessPersistenceAck | undefined {
+		let toolCallId: string | undefined;
 		switch (event.type) {
 			case "tool_execution_start":
 			case "tool_execution_update":
 			case "tool_execution_end":
-				return event.toolCallId;
+				toolCallId = event.toolCallId;
+				break;
 			case "message_start":
 			case "message_end": {
 				const message = event.message;
 				if (message.role === "toolResult") {
-					return message.toolCallId;
-				}
-				if (message.role === "assistant") {
+					toolCallId = message.toolCallId;
+				} else if (message.role === "assistant") {
 					for (const block of message.content) {
 						if (block.type === "toolCall" && this._harnessPersistenceAcks.has(block.id)) {
-							return block.id;
+							toolCallId = block.id;
+							break;
 						}
 					}
 				}
-				return undefined;
+				break;
 			}
-			default:
-				return undefined;
 		}
+		return toolCallId === undefined ? undefined : this._harnessPersistenceAcks.get(toolCallId);
 	}
 
-	private async _processAgentEvent(event: AgentEvent): Promise<void> {
+	private async _processAgentEvent(event: AgentEvent, fromHarnessInvocation = false): Promise<void> {
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -771,7 +758,7 @@ export class AgentSession {
 						? (JSON.parse(JSON.stringify(event.message)) as AssistantMessage)
 						: event.message;
 				const messageEntryId = this.sessionManager.appendMessage(persistedMessage);
-				if (persistedMessage.role === "assistant") {
+				if (persistedMessage.role === "assistant" && !fromHarnessInvocation) {
 					this._persistedAssistantSnapshot = persistedMessage;
 				}
 				if (event.message.role === "user") {
@@ -800,13 +787,14 @@ export class AgentSession {
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			if (event.message.role === "assistant" && event.message.stopReason !== "error") {
+			if (event.message.role === "assistant" && event.message.stopReason !== "error" && !fromHarnessInvocation) {
 				this._overflowRecoveryAttempted = false;
 				if (this._retryActive) this._retryAttempt = 0;
 			}
 		}
 
 		if (event.type === "agent_end") {
+			if (this._disposed) return;
 			if (this._assistantPersistenceError) {
 				const error = this._assistantPersistenceError;
 				this._assistantPersistenceError = undefined;
@@ -1070,6 +1058,24 @@ export class AgentSession {
 		if (this._disposed) return;
 		this._disposed = true;
 		this._resetOutputThroughput();
+		const retryDisposeError = new Error("AgentSession disposed before retry settlement completed.");
+		if (this._retryActive) {
+			try {
+				this._appendAutoRetryRecord({
+					schemaVersion: 1,
+					outcome: "cancelled",
+					reason: "session_disposed",
+					attempt: this._bounded(this._retryAttempt),
+					cumulativeErrors: this._bounded(this._runRetryCount),
+				});
+			} catch (error) {
+				this._reportRetryFailure(error);
+			}
+		}
+		this._retryAbortController?.abort();
+		this._retryAbortController = undefined;
+		this._retryAttempt = 0;
+		this._retryActive = false;
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
@@ -1079,12 +1085,11 @@ export class AgentSession {
 		// roll back arbitrary side effects.
 		const disposeError = new Error("AgentSession disposed before the harness tool invocation settled.");
 		for (const ack of this._harnessPersistenceAcks.values()) {
-			ack.reject(disposeError);
+			this._settleHarnessPersistenceAck(ack, disposeError);
 		}
 		this._harnessPersistenceAcks.clear();
 		this.agent.rejectUnsettledHarnessTools(disposeError);
-		this._retryAbortController?.abort();
-		this._rejectRetry(new Error("AgentSession disposed before retry settlement completed."));
+		this._rejectRetry(retryDisposeError);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
@@ -1268,13 +1273,12 @@ export class AgentSession {
 			throw new Error(`Cannot invoke harness tool "${name}": no tool with that name is registered.`);
 		}
 		const toolCallId = this._allocateHarnessToolCallId(options?.toolCallId);
-		// Register the acknowledgement before Agent execution can emit events, so the queue-side handler
-		// always finds it. Await Agent execution and persistence concurrently: Agent-core failure or a
-		// persistence failure rejects, and the tool-call-id-keyed handler resolves after the matching
-		// tool-result is persisted.
+		// Register before Agent execution can emit events. The coordinator retains attribution until Agent
+		// execution and the invocation's final queued persistence task both settle.
 		const ack = this._registerHarnessPersistenceAck(toolCallId);
+		void this._completeHarnessToolInvocation(this.agent.runHarnessTool(tool, args, { toolCallId }), ack);
 		try {
-			await Promise.all([this.agent.runHarnessTool(tool, args, { toolCallId }), ack.promise]);
+			await ack.promise;
 		} finally {
 			// Identity-checked cleanup: only drop the entry if it is still this invocation's ack (disposal
 			// may have cleared the map, and a later same-id invocation must not have its entry removed).
@@ -1312,9 +1316,28 @@ export class AgentSession {
 		return id;
 	}
 
+	private async _completeHarnessToolInvocation(execution: Promise<void>, ack: HarnessPersistenceAck): Promise<void> {
+		let executionError: Error | undefined;
+		try {
+			await execution;
+		} catch (error) {
+			executionError = error instanceof Error ? error : new Error(String(error));
+		}
+		try {
+			await ack.persistenceTail;
+		} catch {}
+		this._settleHarnessPersistenceAck(ack, ack.firstPersistenceError ?? executionError);
+	}
+
+	private _settleHarnessPersistenceAck(ack: HarnessPersistenceAck, error?: Error): void {
+		if (ack.settled) return;
+		ack.settled = true;
+		if (error) ack.reject(error);
+		else ack.resolve();
+	}
+
 	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Register a deferred acknowledgement
-	// keyed by tool-call id. The caller awaits `ack.promise` inside the same synchronous frame that
-	// registers it, so a synchronous disposal rejection can never strand it as an unhandled rejection.
+	// keyed by tool-call id before any invocation event can be emitted.
 	private _registerHarnessPersistenceAck(toolCallId: string): HarnessPersistenceAck {
 		let resolve!: () => void;
 		let reject!: (reason: Error) => void;
@@ -1322,7 +1345,13 @@ export class AgentSession {
 			resolve = res;
 			reject = rej;
 		});
-		const ack: HarnessPersistenceAck = { promise, resolve, reject };
+		const ack: HarnessPersistenceAck = {
+			promise,
+			resolve,
+			reject,
+			persistenceTail: Promise.resolve(),
+			settled: false,
+		};
 		this._harnessPersistenceAcks.set(toolCallId, ack);
 		return ack;
 	}
@@ -3186,16 +3215,35 @@ export class AgentSession {
 		if (this._retryAbortController === retryController) this._retryAbortController = undefined;
 
 		this.agent.continue().catch((error) => {
+			if (this._disposed || !this._retryActive) return;
 			const attempt = this._retryAttempt;
+			const continuationError = this._reportRetryFailure(error);
+			let settlementError = continuationError;
+			try {
+				this._appendAutoRetryRecord({
+					schemaVersion: 1,
+					outcome: "failed",
+					reason: "continuation_rejected",
+					attempt: this._bounded(attempt),
+					cumulativeErrors: this._bounded(this._runRetryCount),
+				});
+			} catch (persistenceError) {
+				const reportedPersistenceError = this._reportRetryFailure(persistenceError);
+				settlementError = new AggregateError(
+					[continuationError, reportedPersistenceError],
+					"Retry continuation and outcome persistence both failed.",
+					{ cause: continuationError },
+				);
+			}
 			this._retryAttempt = 0;
 			this._retryActive = false;
 			this._emit({
 				type: "auto_retry_end",
 				success: false,
 				attempt,
-				finalError: error instanceof Error ? error.message : String(error),
+				finalError: continuationError.message,
 			});
-			this._rejectRetry(this._reportRetryFailure(error));
+			this._rejectRetry(settlementError);
 		});
 
 		return true;

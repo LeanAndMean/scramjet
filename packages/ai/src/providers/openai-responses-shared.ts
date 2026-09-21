@@ -341,6 +341,7 @@ function makeFailure(
 		(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
 	);
 	const status = top.status ?? nested.status;
+	const statusCategory = categoryFromStatus(status);
 	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
 	let category: ResponsesFailureCategory;
 	let detailSource: ResponsesFailureDetailSource;
@@ -350,8 +351,8 @@ function makeFailure(
 	} else if (providerCode) {
 		category = PROVIDER_CODE_CATEGORIES[providerCode];
 		detailSource = matchedCode?.[1] ?? "provider_code";
-	} else if (categoryFromStatus(status)) {
-		category = categoryFromStatus(status) as ResponsesFailureCategory;
+	} else if (statusCategory) {
+		category = statusCategory;
 		detailSource = "http_status";
 	} else {
 		category = messageCategory ?? (kindHint === "malformed_event" ? "malformed_event" : "unknown");
@@ -453,10 +454,7 @@ export function createResponsesSdkRequestObserver(fetchImplementation: typeof fe
 		latestAttempts.push(attempt);
 		if (latestAttempts.length > 4) latestAttempts.shift();
 	};
-	const attempts = (): ResponsesSdkRetryAttempt[] =>
-		observedAttemptCount <= 8
-			? [...firstAttempts, ...latestAttempts]
-			: [...firstAttempts, ...latestAttempts.slice(-4)];
+	const attempts = (): ResponsesSdkRetryAttempt[] => [...firstAttempts, ...latestAttempts];
 	const diagnostic = (
 		outcome: ResponsesSdkRetryV1["outcome"],
 		reason: ResponsesSdkRetryReason,

@@ -103,6 +103,17 @@ function makeDummyTool(): ToolDefinition {
 	});
 }
 
+function makeHarnessNoticeTool(): ToolDefinition {
+	return defineTool({
+		name: "harness_notice",
+		label: "Harness Notice",
+		description: "A harness-only notice for testing.",
+		activation: "harness-only",
+		parameters: Type.Object({}),
+		execute: async () => ({ content: [{ type: "text", text: "noted" }], details: undefined }),
+	});
+}
+
 interface Fixture {
 	session: AgentSession;
 	events: AgentSessionEvent[];
@@ -627,11 +638,51 @@ describe("AgentSession persisted retry authority", () => {
 		});
 	});
 
-	it("rejects settlement when continuation fails without a later agent_end", async () => {
+	it("records continuation rejection after scheduled before rejecting settlement", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"));
-		vi.spyOn(session.agent, "continue").mockRejectedValue(new Error("continue failed"));
+		vi.spyOn(session.agent, "continue").mockRejectedValue(new Error("continue failed private sentinel"));
 
-		await expect(session.prompt("hello")).rejects.toThrow("continue failed");
+		await expect(session.prompt("hello")).rejects.toThrow("continue failed private sentinel");
+		expect(retryRecords(session)).toEqual([
+			{
+				schemaVersion: 1,
+				outcome: "scheduled",
+				evidence: "legacy_text",
+				attempt: 1,
+				maxAttempts: 3,
+				cumulativeErrors: 1,
+				delayMs: 1,
+			},
+			{
+				schemaVersion: 1,
+				outcome: "failed",
+				reason: "continuation_rejected",
+				attempt: 1,
+				cumulativeErrors: 1,
+			},
+		]);
+		expect(JSON.stringify(retryRecords(session))).not.toContain("private sentinel");
+		expect(session.isRetrying).toBe(false);
+	});
+
+	it("preserves continuation and terminal-record failures", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"));
+		const continueError = new Error("continue failed");
+		const persistenceError = new Error("failed outcome append failed");
+		vi.spyOn(session.agent, "continue").mockRejectedValue(continueError);
+		const appendCustomEntry = session.sessionManager.appendCustomEntry.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendCustomEntry").mockImplementation((customType, data, parentId) => {
+			if (customType === "coding-agent:auto-retry" && (data as { outcome?: string }).outcome === "failed") {
+				throw persistenceError;
+			}
+			return appendCustomEntry(customType, data, parentId);
+		});
+
+		const rejection = await session.prompt("hello").catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(AggregateError);
+		expect(rejection).toMatchObject({ cause: continueError, errors: [continueError, persistenceError] });
+		expect(retryRecords(session)).toEqual([expect.objectContaining({ outcome: "scheduled" })]);
 		expect(session.isRetrying).toBe(false);
 	});
 
@@ -694,7 +745,7 @@ describe("AgentSession persisted retry authority", () => {
 		}
 	});
 
-	it("rejects disposal during backoff without continuing", async () => {
+	it("records disposal during backoff without continuing", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 10_000 });
 		const continueAgent = vi.spyOn(session.agent, "continue");
 		const prompt = session.prompt("hello");
@@ -704,6 +755,67 @@ describe("AgentSession persisted retry authority", () => {
 		await expect(prompt).rejects.toThrow("disposed before retry settlement completed");
 		await vi.waitFor(() => expect(session.isRetrying).toBe(false));
 		expect(continueAgent).not.toHaveBeenCalled();
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled" }),
+			{
+				schemaVersion: 1,
+				outcome: "cancelled",
+				reason: "session_disposed",
+				attempt: 1,
+				cumulativeErrors: 1,
+			},
+		]);
+	});
+
+	it("continues teardown when the disposal outcome cannot be persisted", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 10_000 });
+		const continueAgent = vi.spyOn(session.agent, "continue");
+		const appendCustomEntry = session.sessionManager.appendCustomEntry.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendCustomEntry").mockImplementation((customType, data, parentId) => {
+			if (
+				customType === "coding-agent:auto-retry" &&
+				(data as { outcome?: string; reason?: string }).reason === "session_disposed"
+			) {
+				throw new Error("disposal record failed private sentinel");
+			}
+			return appendCustomEntry(customType, data, parentId);
+		});
+		const prompt = session.prompt("hello");
+		await vi.waitFor(() => expect(session.isRetrying).toBe(true));
+
+		expect(() => session.dispose()).not.toThrow();
+		await expect(prompt).rejects.toThrow("disposed before retry settlement completed");
+		expect(session.isRetrying).toBe(false);
+		expect(continueAgent).not.toHaveBeenCalled();
+		expect(retryRecords(session)).toEqual([expect.objectContaining({ outcome: "scheduled" })]);
+		await expect(session.invokeHarnessTool("dummy", {})).rejects.toThrow(/disposed/i);
+	});
+
+	it("keeps disposal as the sole terminal outcome when continuation later rejects", async () => {
+		const { session } = await createFixture(() => assistantError("rate limit"));
+		let rejectContinue: (error: Error) => void = () => {};
+		const continueResult = new Promise<void>((_resolve, reject) => {
+			rejectContinue = reject;
+		});
+		const continueAgent = vi.spyOn(session.agent, "continue").mockReturnValue(continueResult);
+		const prompt = session.prompt("hello");
+		await vi.waitFor(() => expect(continueAgent).toHaveBeenCalledOnce());
+
+		session.dispose();
+		await expect(prompt).rejects.toThrow("disposed before retry settlement completed");
+		rejectContinue(new Error("late continuation failure"));
+		await Promise.resolve();
+
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled" }),
+			{
+				schemaVersion: 1,
+				outcome: "cancelled",
+				reason: "session_disposed",
+				attempt: 1,
+				cumulativeErrors: 1,
+			},
+		]);
 	});
 
 	it("rejects disposal during the post-backoff handoff without continuing", async () => {
@@ -731,6 +843,16 @@ describe("AgentSession persisted retry authority", () => {
 
 			expect(session.isRetrying).toBe(false);
 			expect(continueAgent).not.toHaveBeenCalled();
+			expect(retryRecords(session)).toEqual([
+				expect.objectContaining({ outcome: "scheduled" }),
+				{
+					schemaVersion: 1,
+					outcome: "cancelled",
+					reason: "session_disposed",
+					attempt: 1,
+					cumulativeErrors: 1,
+				},
+			]);
 		} finally {
 			setTimeoutSpy.mockRestore();
 		}
@@ -802,6 +924,44 @@ describe("AgentSession retry bounding", () => {
 			attemptsCompleted: 3,
 			maxAttempts: 3,
 		});
+	});
+
+	it("does not let final-turn harness assistants reset consecutive retry attempts", async () => {
+		const notice = makeHarnessNoticeTool();
+		const { session, events } = await createFixture(
+			() => assistantError("Anthropic stream ended before message_stop"),
+			{ maxRetries: 2, customTools: [notice] },
+		);
+		const invocations: Promise<void>[] = [];
+		session.agent.subscribe((event) => {
+			if (
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				event.message.origin === "provider" &&
+				event.message.stopReason === "error"
+			) {
+				const invocation = session.invokeHarnessTool("harness_notice", {});
+				invocation.catch(() => {});
+				invocations.push(invocation);
+			}
+		});
+
+		await session.prompt("hello");
+		await Promise.all(invocations);
+
+		expect(retryEvents(events).filter((event) => event.type === "auto_retry_start")).toHaveLength(2);
+		expect(retryRecords(session).at(-1)).toMatchObject({
+			outcome: "exhausted",
+			reason: "attempt_limit",
+			attemptsCompleted: 2,
+			maxAttempts: 2,
+		});
+		expect(
+			session.sessionManager
+				.getBranch()
+				.filter((entry) => entry.type === "message")
+				.some((entry) => entry.message.role === "assistant" && entry.message.origin === "harness"),
+		).toBe(true);
 	});
 
 	it("interleaved errors and successes hit cumulative cap", async () => {
