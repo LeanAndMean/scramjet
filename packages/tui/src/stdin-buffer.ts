@@ -299,6 +299,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	private _holdOsc: boolean = false;
 	private discardMouse = false;
 	private timedOutPrefix = "";
+	private timedOutPrefixExpiresAt = 0;
 
 	constructor(options: StdinBufferOptions = {}) {
 		super();
@@ -333,7 +334,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 		if (this.timedOutPrefix) {
 			const recovered = this.timedOutPrefix + str;
-			if (recovered.startsWith(`${ESC}[<`) || recovered === `${ESC}[`) str = recovered;
+			if (Date.now() < this.timedOutPrefixExpiresAt && (recovered.startsWith(`${ESC}[<`) || recovered === `${ESC}[`))
+				str = recovered;
 			this.timedOutPrefix = "";
 		}
 		if (this.discardMouse) {
@@ -444,6 +446,8 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		}
 
 		this.timedOutPrefix = this.buffer === ESC || this.buffer === `${ESC}[` ? this.buffer : "";
+		// SCRAMJET-DIVERGENCE: ambiguous prefixes get only one further framing interval for late mouse fragments.
+		this.timedOutPrefixExpiresAt = Date.now() + this.timeoutMs;
 		this.discardMouse = this.buffer.startsWith(`${ESC}[<`);
 		const sequences = this.discardMouse ? [] : [this.buffer];
 		this.buffer = "";

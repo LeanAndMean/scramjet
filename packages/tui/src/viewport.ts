@@ -177,6 +177,8 @@ export class RetainedViewport {
 	private generation = 0;
 	private offset = 0;
 	private height = 0;
+	private paintedOffset = 0;
+	private paintedHeight = 0;
 	private totalRows = 0;
 	private followingTail = true;
 	private width = 0;
@@ -217,12 +219,13 @@ export class RetainedViewport {
 
 	private endGesture(): void {
 		this.gesture = undefined;
+		this.edgeDirection = 0;
 		if (this.edgeTimer) clearInterval(this.edgeTimer);
 		this.edgeTimer = undefined;
 	}
 
-	private point(x: number, y: number): SelectionPoint {
-		const row = Math.max(0, Math.min(this.totalRows - 1, this.offset + Math.min(y, this.height - 1)));
+	private point(x: number, y: number, offset = this.paintedOffset, height = this.paintedHeight): SelectionPoint {
+		const row = Math.max(0, Math.min(this.totalRows - 1, offset + Math.min(y, height - 1)));
 		const text = plainText(this.logical[row] ?? "");
 		let column = 0;
 		for (const { segment } of getSegmenter().segment(text)) {
@@ -305,9 +308,10 @@ export class RetainedViewport {
 					const grab = y - 1 >= top && y - 1 < top + size ? y - 1 - top : Math.floor(size / 2);
 					this.gesture = { kind: "thumb", grab, travel: this.height - size, maximum: this.maxOffset };
 					this.dragThumb(y - 1);
-				} else if (y <= this.height && this.totalRows > 0 && this.screenHeight > 1) {
+				} else if (y <= this.paintedHeight && this.totalRows > 0 && this.screenHeight > 1) {
 					this.cancelInteraction();
 					const point = this.point(x - 1, y - 1);
+					this.offset = this.paintedOffset;
 					this.selection = { start: point, end: point };
 					this.followingTail = false;
 					this.anchor = this.anchorAt(this.offset, 0);
@@ -325,7 +329,12 @@ export class RetainedViewport {
 						this.edgeTimer = setInterval(() => {
 							if (!this.selection || !this.edgeDirection) return;
 							this.scrollTo(this.offset + this.edgeDirection);
-							this.selection.end = this.point(this.pointerColumn, this.edgeDirection > 0 ? this.height - 1 : 0);
+							this.selection.end = this.point(
+								this.pointerColumn,
+								this.edgeDirection > 0 ? this.height - 1 : 0,
+								this.offset,
+								this.height,
+							);
 							this.requestRender();
 						}, 80);
 				}
@@ -401,6 +410,8 @@ export class RetainedViewport {
 		this.visibleComponents.clear();
 		this.anchor = undefined;
 		this.offset = 0;
+		this.paintedOffset = 0;
+		this.paintedHeight = 0;
 		this.totalRows = 0;
 		this.followingTail = true;
 	}
@@ -569,6 +580,11 @@ export class RetainedViewport {
 			}
 		}
 		return { lines, images };
+	}
+
+	markPainted(): void {
+		this.paintedOffset = this.offset;
+		this.paintedHeight = this.height;
 	}
 
 	scrollbar(row: number): string {

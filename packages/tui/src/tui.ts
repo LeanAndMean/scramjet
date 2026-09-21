@@ -1394,9 +1394,10 @@ export class TUI extends Container {
 				: line;
 		});
 		const resized = width !== this.previousWidth || height !== this.previousHeight;
+		const hasImages = frame.images.length > 0 || lines.some(isImageLine);
 		let buffer = `\x1b[?2026h${this.deleteKittyImages(this.previousKittyImageIds)}`;
 		for (let row = 0; row < height; row++) {
-			if (resized || this.viewportHadImages || frame.images.length > 0 || lines[row] !== this.previousLines[row]) {
+			if (resized || this.viewportHadImages || hasImages || lines[row] !== this.previousLines[row]) {
 				buffer += `\x1b[${row + 1};1H\x1b[2K${lines[row]}`;
 			}
 		}
@@ -1405,9 +1406,13 @@ export class TUI extends Container {
 		buffer += cursor && this.showHardwareCursor ? "\x1b[?25h" : "\x1b[?25l";
 		buffer += "\x1b[?2026l";
 		this.terminal.write(buffer);
+		viewport.markPainted();
 		this.previousLines = lines;
-		this.previousKittyImageIds = this.collectKittyImageIds(frame.images.map((image) => image.sequence));
-		this.viewportHadImages = frame.images.length > 0;
+		this.previousKittyImageIds = this.collectKittyImageIds([
+			...lines,
+			...frame.images.map((image) => image.sequence),
+		]);
+		this.viewportHadImages = hasImages;
 		this.previousWidth = width;
 		this.previousHeight = height;
 	}

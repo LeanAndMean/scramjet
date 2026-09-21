@@ -2524,8 +2524,8 @@ export class InteractiveMode {
 									fail(new Error("Tool-attached context is no longer current"));
 									return { consume: true };
 								}
-								if (revealingControls) return { consume: true };
 								if (!this.ui.isComponentFocused(tool)) return undefined;
+								if (revealingControls) return { consume: true };
 								if (this.ui.isComponentVisible(tool)) return undefined;
 								revealingControls = true;
 								this.ui.setFocus(null);
