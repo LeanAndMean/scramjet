@@ -156,33 +156,39 @@ describe("viewport interactions", () => {
 		expect(tui.getViewportState()).toMatchObject({ offset: 190, followingTail: true });
 	});
 
-	it("copies exact ANSI-free wide/combining selection, reconciles updates, and leaves empty Ctrl+C alone", async () => {
-		const copy = vi.fn().mockResolvedValue(undefined);
-		const card = new Rows(["\x1b[31mcafé 界 e\u0301 text\x1b[0m", ...Array(8).fill("more")]);
-		const { tui, terminal, frame } = await setup([{ component: card }], 31, 5, { copy });
-		const handleInput = vi.fn();
-		tui.setFocus({ render: () => [], invalidate() {}, handleInput });
-		tui.scrollViewportTo(0);
-		await frame();
-		terminal.sendInput(mouse(0, 1, 1));
-		terminal.sendInput(mouse(32, 30, 1));
-		terminal.sendInput(mouse(0, 30, 1, "m"));
-		card.lines[0] = "changed";
-		await frame();
-		expect(terminal.visibleLines()[0]).toContain("café 界 e\u0301 text");
-		expect(terminal.visibleLines()[4]).toContain("updates pending");
-		expect(terminal.writes.join("")).toContain("\x1b[7m");
-		terminal.sendInput(mouse(2, 3, 1));
-		await frame();
-		expect(copy).toHaveBeenCalledExactlyOnceWith("café 界 e\u0301 text");
-		await frame();
-		expect(terminal.visibleLines()[0]).toContain("changed");
-		terminal.sendInput("\x03");
-		expect(handleInput).toHaveBeenCalledExactlyOnceWith("\x03");
-		terminal.sendInput(mouse(2, 3, 1));
-		expect(copy).toHaveBeenCalledTimes(1);
-		expect(handleInput).toHaveBeenCalledTimes(1);
-	});
+	it.each(["pointer", "keyboard"])(
+		"copies exact ANSI-free wide/combining selection via %s and leaves empty Ctrl+C alone",
+		async (input) => {
+			const copy = vi.fn().mockResolvedValue(undefined);
+			const card = new Rows(["\x1b[31mcafé 界 e\u0301 text\x1b[0m", ...Array(8).fill("more")]);
+			const { tui, terminal, frame } = await setup([{ component: card }], 31, 5, { copy });
+			const handleInput = vi.fn();
+			tui.setFocus({ render: () => [], invalidate() {}, handleInput });
+			tui.scrollViewportTo(0);
+			await frame();
+			terminal.sendInput(mouse(0, 1, 1));
+			terminal.sendInput(mouse(32, 30, 1));
+			terminal.sendInput(mouse(0, 30, 1, "m"));
+			card.lines[0] = "changed";
+			await frame();
+			expect(terminal.visibleLines()[0]).toContain("café 界 e\u0301 text");
+			expect(terminal.visibleLines()[4]).toContain("updates pending");
+			expect(terminal.writes.join("")).toContain("\x1b[7m");
+			if (input === "keyboard") {
+				terminal.sendInput("\x1b[57442;5u");
+				terminal.sendInput("\x1b[99;5u");
+			} else terminal.sendInput(mouse(2, 3, 1));
+			await frame();
+			expect(copy).toHaveBeenCalledExactlyOnceWith("café 界 e\u0301 text");
+			await frame();
+			expect(terminal.visibleLines()[0]).toContain("changed");
+			terminal.sendInput("\x03");
+			expect(handleInput).toHaveBeenCalledExactlyOnceWith("\x03");
+			terminal.sendInput(mouse(2, 3, 1));
+			expect(copy).toHaveBeenCalledTimes(1);
+			expect(handleInput).toHaveBeenCalledTimes(1);
+		},
+	);
 
 	it("retains selection on copy failure, honors injected copy bindings, and rejects stale completion", async () => {
 		let resolve!: () => void;

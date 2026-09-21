@@ -1,7 +1,7 @@
 // SCRAMJET-DIVERGENCE: retained component rows and content-relative reading anchors.
 import { diffArrays } from "diff";
 import { getKeybindings, type KeybindingsManager } from "./keybindings.js";
-import { isKeyRelease, matchesKey } from "./keys.js";
+import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
 import { isImageLine } from "./terminal-image.js";
 import type { Component } from "./tui.js";
 import { extractAnsiCode, getSegmenter, sliceByColumn, truncateToWidth, visibleWidth } from "./utils.js";
@@ -274,6 +274,7 @@ export class RetainedViewport {
 	}
 
 	handleInput(data: string, overlayFocused: boolean, overlayVisible: boolean): boolean {
+		if (isKeyModifier(data)) return true;
 		if (data.startsWith("\x1b[<") || data.startsWith("\x1b[M")) {
 			if (overlayVisible) {
 				this.endGesture();

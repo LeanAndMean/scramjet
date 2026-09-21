@@ -36,6 +36,7 @@ Use --safety for synthetic native image/approval/handoff checks. Keys 1/2 show o
 clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
 6 opens a synthetic external editor, 7 suspends (resume with fg/SIGCONT),
 8 delivers a JPEG tool result through conversion/finalization, 9 invalidates it.
+0 exits the safety fixture through the same drain/stop path as Ctrl+Q.
 --inspect-screenshot <png> counts synthetic magenta pixels using installed Photon.`;
 if (process.argv.includes("--help")) {
 	console.log(help);
@@ -244,7 +245,7 @@ async function runProduction() {
 			if (safetyState.inputs.length > 30) safetyState.inputs.shift();
 		}
 		if (isKeyRelease(data)) return { consume: true };
-		if (matchesKey(data, "ctrl+q")) { void terminal.drainInput().then(stop); return { consume: true }; }
+		if (matchesKey(data, "ctrl+q") || (safety && matchesKey(data, "0"))) { void terminal.drainInput().then(stop); return { consume: true }; }
 		const action = safety && ["1", "2", "3", "4", "5", "6", "7", "8", "9"].find((key) => matchesKey(data, key));
 		if (action) {
 			sequence = sequence.then(() => safetyAction(action)).catch((error) => { stop(); console.error(error); process.exitCode = 1; });
