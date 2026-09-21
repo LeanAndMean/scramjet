@@ -623,11 +623,11 @@ If the command hit a blocker, report `status: "blocked"` instead of `completed`.
 
 ## 7. User Input Tool
 
-Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. While either dialog is open, `app.thinking.cycle` changes the session effort immediately; the widget shows the effective effort and any usable configured shortcut. Selector-owned navigation, confirmation, and cancellation controls take precedence when bindings conflict, and an effort change survives Escape. Freetext renders its `message` in the tool call row, then parks the command immediately so the user can reply through the standard editor; it does not use the effort-enabled selector.
+Commands can request structured user input mid-turn via `get_scramjet_user_input` instead of ending the turn with a prose question. Confirm and select block until the user responds and return successful answers as the tool result; pressing Escape cancels those prompts and ends the turn. Their prompt messages remain visible in the tool-result row after completion or cancellation, and select result history includes the presented option labels and descriptions. While either dialog is open, `app.thinking.cycle` changes the session effort immediately; the widget shows the effective effort and any usable configured shortcut. Selector-owned navigation, confirmation, and cancellation controls take precedence when bindings conflict, and an effort change survives Escape. Freetext terminates the turn so the user can reply through the standard editor; with an active command it also parks that command. Its completed row retains the prompt and shows whether the command is parked or the idle interaction awaits an editor reply. Freetext does not use the effort-enabled selector.
 
 ### When to use it
 
-Use `get_scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input). Confirm/select let the agent continue executing in the same turn after a successful response; freetext intentionally ends the turn and resumes after the user's next standard-editor reply. Prefer it over prose questions when:
+Use `get_scramjet_user_input` when a command needs an explicit user decision (approval, choice, free-form input). Confirm/select let the agent continue executing in the same turn after a successful response; freetext intentionally ends the turn, and the next standard-editor reply resumes an active parked command or begins a normal turn when idle. Prefer it over prose questions when:
 
 - The response has a constrained shape (yes/no, pick-one, short text).
 - The agent needs a clear prompt rendered in the transcript.
@@ -670,7 +670,7 @@ When command policy genuinely prefers one choice regardless of runtime context, 
 { "type": "freetext", "message": "What should the release title be?", "placeholder": "v1.2.3" }
 ```
 
-The `message` is displayed in the tool call row before/alongside the parked result. Freetext always returns `terminate: true` and parks the command; the user replies in the standard message editor, and that reply arrives as the next normal user message rather than as a tool result. The `placeholder` field is accepted for compatibility but unused. If the user needs context, trade-offs, or consequences to answer well, state that context in assistant prose before calling the tool; keep `message` as the concise question.
+Freetext always returns `terminate: true`, and the user replies in the standard message editor; that reply arrives as the next normal user message rather than as a tool result. With an active command, freetext parks the command and returns `parked: true`; while idle, it returns `parked: false` without lifecycle mutation. The completed row retains the prompt exactly once and shows `Parked for reply` for the active-command outcome or `Reply in the standard editor` for the idle outcome. The `placeholder` field is accepted for compatibility but unused. If the user needs context, trade-offs, or consequences to answer well, state that context in assistant prose before calling the tool; keep `message` as the concise question.
 
 ### Cancellation
 

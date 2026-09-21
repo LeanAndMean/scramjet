@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.98.0 — Refresh GitHub Copilot model offerings
+
+Adds verified GitHub Copilot model metadata and keeps catalog generation, request serialization, and authenticated model discovery aligned. Fixes [#477](https://github.com/LeanAndMean/scramjet/issues/477).
+
+### Changed
+
+- Add nine verified Copilot offerings across Anthropic, Google, xAI, Moonshot AI, Microsoft, and Fable model families.
+- Apply model-specific APIs, context and request limits, reasoning support, capabilities, headers, and subscription-route price estimates.
+- Document Copilot entitlement and scalar-pricing limitations while preserving existing generated catalog records.
+
+### Tests
+
+- Add generator, catalog, request serialization, registry visibility, CLI listing, and selector-membership coverage.
+
+## 0.97.1 — Keep idle freetext prompts visible
+
+Keeps idle freetext questions visible after tool execution so users know where to reply. Fixes [#543](https://github.com/LeanAndMean/scramjet/issues/543).
+
+### Fixed
+
+- Retain idle freetext prompts in completed tool rows with a clear standard-editor reply cue.
+- Preserve parked-command rendering while leaving malformed freetext result details empty.
+
+### Tests
+
+- Add compositor and result-detail coverage for idle and parked freetext outcomes.
+
 ## 0.97.0 — Show waiting state during interactive choices
 
 Keeps the terminal title aligned with user attention while Scramjet waits for an interactive choice. Fixes [#546](https://github.com/LeanAndMean/scramjet/issues/546).
