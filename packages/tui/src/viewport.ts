@@ -18,6 +18,7 @@ export interface ViewportBlock {
 	component: Component;
 	finalized?: boolean;
 	dock?: boolean;
+	fitHeight?(rows: number): void;
 	/** Increment when a finalized component's presentation changes. */
 	revision?: number;
 }
@@ -29,6 +30,7 @@ export interface ViewportOptions {
 	getScrollWheelStep?(): number;
 	handlePresentationInput?(data: string): boolean;
 	keepReadingOnInput?(): boolean;
+	allowViewportKeys?(data: string): boolean;
 }
 
 export interface ViewportState {
@@ -358,7 +360,10 @@ export class RetainedViewport {
 			return true;
 		}
 		const keybindings = this.options.keybindings ?? getKeybindings();
-		if (keybindings.matches(data, "tui.viewport.pageUp") || keybindings.matches(data, "tui.viewport.pageDown")) {
+		if (
+			this.options.allowViewportKeys?.(data) !== false &&
+			(keybindings.matches(data, "tui.viewport.pageUp") || keybindings.matches(data, "tui.viewport.pageDown"))
+		) {
 			const direction = keybindings.matches(data, "tui.viewport.pageUp") ? -1 : 1;
 			this.scrollTo(this.offset + direction * this.height);
 			this.requestRender();
@@ -497,6 +502,7 @@ export class RetainedViewport {
 		if (new Set(projected.map((block) => block.component)).size !== projected.length)
 			throw new Error("Viewport blocks must have unique component identities");
 		const render = (block: ViewportBlock, availableHeight: number): RenderedBlock => {
+			block.fitHeight?.(availableHeight);
 			const old = previous.get(block.component);
 			const reusable =
 				block.finalized &&
@@ -524,8 +530,16 @@ export class RetainedViewport {
 		const firstDock = projected.findIndex((block) => block.dock);
 		if (firstDock !== -1 && projected.slice(firstDock).some((block) => !block.dock))
 			throw new Error("Dock blocks must form the document suffix");
-		const dock = projected.filter((block) => block.dock).map((block) => render(block, Math.max(1, height - 1)));
-		const proposedDockHeight = dock.reduce((sum, block) => sum + block.lines.length, 0);
+		const dock = new Map<Component, RenderedBlock>();
+		for (const block of projected.filter((block) => block.dock && !block.fitHeight))
+			dock.set(block.component, render(block, Math.max(1, height - 1)));
+		const fixedDockHeight = [...dock.values()].reduce((sum, block) => sum + block.lines.length, 0);
+		for (const block of projected.filter((block) => block.dock && block.fitHeight))
+			dock.set(
+				block.component,
+				render(block, Math.max(1, fixedDockHeight >= height - 2 ? height - 1 : height - fixedDockHeight - 2)),
+			);
+		const proposedDockHeight = [...dock.values()].reduce((sum, block) => sum + block.lines.length, 0);
 		const suspended = proposedDockHeight > 0 && proposedDockHeight + 2 > height;
 		const dockHeight = suspended ? 0 : proposedDockHeight;
 		const renderHeight = Math.max(1, height - dockHeight - (suspended ? 1 : 0));
@@ -533,7 +547,9 @@ export class RetainedViewport {
 		let start = 0;
 		for (const block of projected) {
 			const rendered = block.dock
-				? dock.find((candidate) => candidate.component === block.component)!
+				? suspended && block.fitHeight && dock.get(block.component)!.height !== renderHeight
+					? render(block, renderHeight)
+					: dock.get(block.component)!
 				: render(block, renderHeight);
 			rendered.start = start;
 			next.set(block.component, rendered);

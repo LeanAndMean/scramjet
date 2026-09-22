@@ -90,6 +90,7 @@ export const TUI_KEYBINDINGS = {
 	},
 	"tui.editor.pageUp": { defaultKeys: "pageUp", description: "Page up" },
 	"tui.editor.pageDown": { defaultKeys: "pageDown", description: "Page down" },
+	// SCRAMJET-DIVERGENCE: transcript entry must not require a pointer or steal ordinary editor paging.
 	"tui.viewport.pageUp": { defaultKeys: "alt+pageUp", description: "Browse transcript up" },
 	"tui.viewport.pageDown": { defaultKeys: "alt+pageDown", description: "Browse transcript down" },
 	"tui.editor.deleteCharBackward": {

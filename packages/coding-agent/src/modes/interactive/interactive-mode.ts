@@ -7,6 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@leanandmean/agent";
 import {
 	type AssistantMessage,
@@ -239,6 +240,7 @@ export class InteractiveMode {
 	private statusContainer: Container;
 	private defaultEditor: CustomEditor;
 	private editor: EditorComponent;
+	private editorAvailableRows: number | undefined;
 	private editorComponentFactory: EditorFactory | undefined;
 	private autocompleteProvider: AutocompleteProvider | undefined;
 	private autocompleteProviderWrappers: AutocompleteProviderFactory[] = [];
@@ -413,12 +415,7 @@ export class InteractiveMode {
 
 	private configureEditorHeight(editor: EditorComponent): void {
 		editor.setHeightLimit?.(() => ({
-			rows: Math.max(
-				1,
-				this.ui.terminal.rows -
-					(this.customFooter ?? this.footer).render(Math.max(1, this.ui.terminal.columns - 1)).length -
-					1,
-			),
+			rows: Math.max(1, this.editorAvailableRows ?? this.ui.terminal.rows - 3),
 			text: Math.max(
 				1,
 				Math.floor((this.ui.terminal.rows * this.settingsManager.getEditorMaxHeightPercent()) / 100),
@@ -449,11 +446,38 @@ export class InteractiveMode {
 							this.widgetContainerBelow,
 							this.customFooter ?? this.footer,
 						].includes(component as Container);
-					return [{ component, finalized: false, dock }];
+					return [
+						{
+							component,
+							finalized: false,
+							dock,
+							fitHeight:
+								component === this.editorContainer
+									? (rows: number) => {
+											this.editorAvailableRows = rows;
+										}
+									: undefined,
+						},
+					];
 				}),
 			keybindings: this.keybindings,
 			copy: copyToClipboard,
 			getScrollWheelStep: () => this.settingsManager.getScrollWheelStep(),
+			allowViewportKeys: (data) =>
+				this.ui.isComponentFocused(this.editor) ||
+				(!matchesKey(data, "space") &&
+					!(
+						[
+							"tui.select.up",
+							"tui.select.down",
+							"tui.select.pageUp",
+							"tui.select.pageDown",
+							"tui.select.confirm",
+							"tui.select.cancel",
+							"tui.input.submit",
+							"tui.input.tab",
+						] as const
+					).some((action) => this.keybindings.matches(data, action))),
 			keepReadingOnInput: () => {
 				const ownsFocus = (component: Component): boolean =>
 					this.ui.isComponentFocused(component) ||
@@ -4226,6 +4250,24 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private async settleLayoutSettings(selector: SettingsSelectorComponent): Promise<void> {
+		const settings = this.settingsManager;
+		await settings.flush();
+		const errors = settings.drainErrors();
+		selector.setSaveError(errors.length ? "Changes not saved; see warning" : undefined);
+		if (errors.length) {
+			const details = stripVTControlCharacters(
+				errors.map(({ scope, error }) => `${scope}: ${error.message}`).join("; "),
+			)
+				.replace(/[\r\n\t]/g, " ")
+				.slice(0, 200);
+			this.showWarning(
+				`Layout settings not saved (${details}). Changes may be lost on restart; project overrides still apply.`,
+			);
+		}
+		this.ui.requestRender();
+	}
+
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
 			const selector = new SettingsSelectorComponent(
@@ -4359,16 +4401,19 @@ export class InteractiveMode {
 					},
 					onDockEditorChange: (enabled) => {
 						this.settingsManager.setDockEditor(enabled);
+						void this.settleLayoutSettings(selector);
 						this.ui.refreshViewportLayout();
 						return this.settingsManager.getDockEditor();
 					},
 					onEditorMaxHeightPercentChange: (percent) => {
 						this.settingsManager.setEditorMaxHeightPercent(percent);
+						void this.settleLayoutSettings(selector);
 						this.ui.refreshViewportLayout();
 						return this.settingsManager.getEditorMaxHeightPercent();
 					},
 					onScrollWheelStepChange: (step) => {
 						this.settingsManager.setScrollWheelStep(step);
+						void this.settleLayoutSettings(selector);
 						this.ui.requestRender();
 						return this.settingsManager.getScrollWheelStep();
 					},
@@ -4377,7 +4422,7 @@ export class InteractiveMode {
 						this.ui.requestRender();
 					},
 				},
-				() => Math.max(1, this.ui.terminal.rows - 4),
+				() => Math.max(1, Math.min(this.editorAvailableRows ?? Infinity, this.ui.terminal.rows - 4)),
 			);
 			return { component: selector, focus: selector.getSettingsList() };
 		});

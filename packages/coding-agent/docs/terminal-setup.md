@@ -4,13 +4,13 @@ Scramjet uses the [Kitty keyboard protocol](https://sw.kovidgoyal.net/kitty/keyb
 
 ## Transcript browsing and copying
 
-During an interactive session, Scramjet owns the alternate screen, mouse reporting, the **rightmost transcript scrollbar**, and drag selection. Wheel/trackpad input and scrollbar dragging browse retained output, including running cards. The terminal's native scrollbar/history is not the live transcript. Returning to the document bottom resumes following; passive updates do not pull you away from what you are reading.
+During an interactive session, Scramjet owns the alternate screen, mouse reporting, the **rightmost transcript scrollbar**, and drag selection. Wheel/trackpad input and scrollbar dragging browse retained output, including running cards. The terminal's native scrollbar/history is not the live transcript. Returning to the document bottom resumes following; passive updates do not pull you away from what you are reading. The input area is docked by default; typing there preserves the transcript anchor. `/settings` can change docking, the input-text height ceiling (30%, range 10–50%), and wheel step (3, range 1–20). Input shrinks around adjacent widgets before an oversized band falls back to explained, undocked retained browsing. Selection remains within the transcript or dock where it began; holding a selection freezes both presentations.
 
 Select by ordinary dragging, including across a screen edge. Right-click a nonempty selection or use `tui.input.copy` (Ctrl+C by default) to copy displayed text without ANSI controls or scrollbar cells. While selected, the presentation is held and pending updates are indicated. Successful copy or Escape releases it; resizing cancels selection. Copy failures are shown and retain the selection. Without selection, Ctrl+C retains its normal application behavior; right-click never causes Scramjet to paste or submit.
 
 Terminal-owned Copy/context menus cannot see application selection. A terminal or multiplexer that intercepts pointer input must be configured to forward it. In tmux, enable `set -g mouse on` for the application's wheel/drag path; tmux's own copy mode is a separate interaction. See [tmux.md](tmux.md) for modified-key setup.
 
-When detached, PageUp/PageDown browse and Home goes to the beginning; End/Escape return to the tail. Other keys return and reach the focused component. At the tail, normal editor/list bindings apply, and focused overlays retain keyboard precedence. See [keybindings.md](keybindings.md#transcript-browsing-precedence).
+Alt+PageUp/Alt+PageDown provide keyboard-only entry into transcript browsing. When detached, PageUp/PageDown browse and Home goes to the beginning; End/Escape return to the tail. Docked editing and presentation toggles keep the reading anchor, while ordinary undocked editing reveals its cursor. At the tail, normal editor/list bindings apply, and focused overlays retain keyboard precedence. See [keybindings.md](keybindings.md#transcript-browsing-precedence).
 
 Clipboard delivery uses the existing platform backend (for example `pbcopy`, `wl-copy`, `xclip`/`xsel`) or OSC 52 where appropriate. Wayland copying awaits stdin completion and a successful `wl-copy` parent exit, with a five-second subprocess timeout; observable failure tries the existing X11/OSC 52 fallbacks before releasing selection. Terminals can reject OSC 52 without acknowledgement: a successful request alone is not proof that a desktop clipboard changed. Remote sessions, clipboard security policies and other profiles require their own verification.
 
@@ -23,6 +23,8 @@ After an expired raw Escape/CSI prefix, active mouse reporting recognizes one im
 ### Native compatibility evidence
 
 The bounded production journey uses real native desktop input with synthetic retained history, an eight-card/four-active batch, queue/widgets/editor/footer, right-click and Ctrl+C Unicode clipboard equality, selection across scrolling, reading during updates, width/height resize, complete approval context, external-editor return, job control and final restoration. Separate native pixel checks exercise built-in Kitty/iTerm2 images. Detailed successes, failed attempts and exact source commits are recorded in [issue #551](https://github.com/LeanAndMean/scramjet/issues/551).
+
+The recorded configurations below establish the earlier retained-renderer journeys; they are not, by themselves, evidence for every subsequent docking/settings change. Match each claim to the source revision and check names in its report.
 
 Recorded native configurations (2026-09-21):
 

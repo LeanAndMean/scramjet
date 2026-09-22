@@ -32,11 +32,18 @@ While detached from the tail, the viewport consumes this fixed set **before** ed
 | Home | Beginning of the logical document |
 | End / Escape | Return to the live tail |
 
-Other keys reattach and continue to the focused component; typing reveals the editor cursor. At the tail, paging and Home/End retain their ordinary editor/list meanings. Focused overlays take keyboard precedence. If tool-attached approval controls are hidden by browsing, the first activation reveals and flushes them without approving; a later activation can approve.
+Docked input and configured tool/thinking presentation toggles preserve the transcript anchor; undocked ordinary editing reveals the editor cursor. At the tail, unmodified paging and Home/End retain their editor/list meanings. Focused overlays take precedence, and conflicting focused selector bindings take precedence over the configurable viewport actions. If tool-attached approval controls are hidden by browsing, the first activation reveals and flushes them without approving; a later activation can approve.
 
-These detached-only keys are not additional configurable `tui.viewport.*` actions. See [terminal-setup.md](terminal-setup.md#transcript-browsing-and-copying) for terminal-menu and clipboard requirements.
+The fixed detached-only keys above remain separate from `tui.viewport.pageUp` and `tui.viewport.pageDown`, which default to Alt+PageUp and Alt+PageDown and work from the tail as well as while browsing. Terminal/desktop interception can require remapping these configurable actions. See [terminal-setup.md](terminal-setup.md#transcript-browsing-and-copying) for terminal-menu and clipboard requirements.
 
 ## All Actions
+
+### Transcript Navigation
+
+| Keybinding id | Default | Description |
+|--------|---------|-------------|
+| `tui.viewport.pageUp` | `alt+pageUp` | Browse one transcript page upward, including from the tail |
+| `tui.viewport.pageDown` | `alt+pageDown` | Browse one transcript page downward |
 
 ### TUI Editor Cursor Movement
 

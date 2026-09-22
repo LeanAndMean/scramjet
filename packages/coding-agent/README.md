@@ -128,11 +128,11 @@ The editor can be temporarily replaced by other UI, like built-in `/settings` or
 
 ### Browsing and copying output
 
-Interactive mode retains the current transcript in an application-managed viewport, including running tool cards. Use the mouse wheel/trackpad or drag the **rightmost Scramjet scrollbar** to inspect offscreen output before a turn finishes. New output preserves your reading position; returning to the bottom resumes following. The editor/footer can scroll offscreen rather than staying pinned.
+Interactive mode retains the current transcript in an application-managed viewport, including running tool cards. Use the mouse wheel/trackpad or drag the **rightmost Scramjet scrollbar** to inspect offscreen output before a turn finishes. New output preserves your reading position; returning to the bottom resumes following. The editor, adjacent widgets and footer stay docked by default, so you can type while reading older output. `/settings` offers live docking, maximum input-height percentage and wheel-step controls; undocking restores the single scrolling layout without changing renderer.
 
 Drag without modifiers to select displayed text, including across scrolling. Right-click the selection or press Ctrl+C to copy it. Selection temporarily holds the presentation and indicates pending updates; copy or Escape releases it. Without transcript selection, Ctrl+C retains its normal editor/quit behavior. Terminal-native Copy menus cannot see this selection; right-click without a selection never pastes or submits in Scramjet.
 
-While scrolled away, PageUp/PageDown browse, Home goes to the beginning, and End/Escape return to the live tail. Other keys return to the tail and reach the focused component; at the tail, normal editor/list bindings apply. Hidden approval controls must first be revealed before a subsequent activation can approve.
+While scrolled away, PageUp/PageDown browse, Home goes to the beginning, and End/Escape return to the live tail. Alt+PageUp/Alt+PageDown enter transcript browsing from the tail. Docked editing and presentation toggles preserve the reading position; undocked editing reveals its cursor. At the tail, ordinary editor/list bindings apply. Hidden approval controls must first be revealed before a subsequent activation can approve.
 
 Orderly exit restores the shell and leaves one readable plain-text transcript, excluding editor/widgets/temporary controls. Suspend and external-editor handoffs restore the shell without transcript copies. See [terminal setup](docs/terminal-setup.md#transcript-browsing-and-copying) for tested configurations, iTerm2's required right-click setting, clipboard limits and image behavior.
 

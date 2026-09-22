@@ -68,6 +68,7 @@ export class SelectList implements Component {
 		this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
 	}
 
+	// SCRAMJET-DIVERGENCE: allocated input regions must retain the selected option within their row budget.
 	setMaxHeight(rows: number | undefined): void {
 		this.maximumRows = rows === undefined ? undefined : Math.max(1, Math.floor(rows));
 	}

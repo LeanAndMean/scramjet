@@ -90,6 +90,7 @@ export class SettingsList implements Component, Focusable {
 		}
 	}
 
+	// SCRAMJET-DIVERGENCE: bounded settings preserve actionable rows before optional descriptions.
 	setMaxHeight(rows: number | undefined): void {
 		const next = rows === undefined ? undefined : Math.max(1, Math.floor(rows));
 		if (next !== this.maximumRows && next !== undefined) this.controlsVisible = false;

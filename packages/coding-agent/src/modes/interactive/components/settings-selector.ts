@@ -10,6 +10,7 @@ import {
 	SettingsList,
 	Spacer,
 	Text,
+	truncateToWidth,
 } from "@leanandmean/tui";
 import type { WarningSettings } from "../../../core/settings-manager.js";
 import { getSelectListTheme, getSettingsListTheme, theme } from "../theme/theme.js";
@@ -225,6 +226,7 @@ class SelectSubmenu extends Container {
  */
 export class SettingsSelectorComponent extends Container {
 	private settingsList: SettingsList;
+	private saveError: string | undefined;
 
 	constructor(
 		config: SettingsConfig,
@@ -590,10 +592,15 @@ export class SettingsSelectorComponent extends Container {
 		this.addChild(new DynamicBorder());
 	}
 
+	setSaveError(message: string | undefined): void {
+		this.saveError = message;
+	}
+
 	override render(width: number): string[] {
 		const rows = this.maximumRows?.();
-		this.settingsList.setMaxHeight(rows === undefined ? undefined : Math.max(1, rows - 2));
-		return rows !== undefined && rows < 3 ? this.settingsList.render(width) : super.render(width);
+		const warning = this.saveError ? [truncateToWidth(theme.fg("warning", this.saveError), width)] : [];
+		this.settingsList.setMaxHeight(rows === undefined ? undefined : Math.max(1, rows - 2 - warning.length));
+		return [...warning, ...(rows !== undefined && rows < 3 ? this.settingsList.render(width) : super.render(width))];
 	}
 
 	getSettingsList(): SettingsList {
