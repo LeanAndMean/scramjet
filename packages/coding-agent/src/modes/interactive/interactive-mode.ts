@@ -231,6 +231,7 @@ export interface InteractiveModeOptions {
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private ui: TUI;
+	private readonly tuiMode: "retained" | "committed";
 	private committedChatContainer: Container;
 	private chatContainer: Container;
 	private mutableChatComponents = new Set<Component>();
@@ -371,6 +372,7 @@ export class InteractiveMode {
 			await this.rebindCurrentSession();
 		});
 		this.version = VERSION;
+		this.tuiMode = this.settingsManager.getTuiMode();
 		// SCRAMJET-DIVERGENCE: retained interactive rendering and injectable terminals.
 		this.ui = new TUI(options.terminal ?? new ProcessTerminal(), this.settingsManager.getShowHardwareCursor());
 		this.headerContainer = new Container();
@@ -389,6 +391,7 @@ export class InteractiveMode {
 			autocompleteMaxVisible,
 		});
 		this.editor = this.defaultEditor;
+		this.configureEditorHeight(this.editor);
 		this.defaultEditor.setSpellcheckProvider(new NspellProvider());
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
@@ -408,6 +411,21 @@ export class InteractiveMode {
 		initTheme(this.settingsManager.getTheme(), true);
 	}
 
+	private configureEditorHeight(editor: EditorComponent): void {
+		editor.setHeightLimit?.(() => ({
+			rows: Math.max(
+				1,
+				this.ui.terminal.rows -
+					(this.customFooter ?? this.footer).render(Math.max(1, this.ui.terminal.columns - 1)).length -
+					1,
+			),
+			text: Math.max(
+				1,
+				Math.floor((this.ui.terminal.rows * this.settingsManager.getEditorMaxHeightPercent()) / 100),
+			),
+		}));
+	}
+
 	// SCRAMJET-DIVERGENCE: preserve production ownership while making mutable overflow browseable.
 	private configureRetainedViewport(): void {
 		this.ui.configureViewport({
@@ -422,10 +440,36 @@ export class InteractiveMode {
 							finalized: component === this.committedChatContainer,
 						}));
 					}
-					return [{ component, finalized: false }];
+					const dock =
+						this.settingsManager.getDockEditor() &&
+						this.editorContainer.children.length > 0 &&
+						[
+							this.widgetContainerAbove,
+							this.editorContainer,
+							this.widgetContainerBelow,
+							this.customFooter ?? this.footer,
+						].includes(component as Container);
+					return [{ component, finalized: false, dock }];
 				}),
 			keybindings: this.keybindings,
 			copy: copyToClipboard,
+			getScrollWheelStep: () => this.settingsManager.getScrollWheelStep(),
+			keepReadingOnInput: () => {
+				const ownsFocus = (component: Component): boolean =>
+					this.ui.isComponentFocused(component) ||
+					(component instanceof Container && component.children.some(ownsFocus));
+				return this.editorContainer.children.some(ownsFocus);
+			},
+			handlePresentationInput: (data) => {
+				if (!this.ui.isComponentFocused(this.editor)) return false;
+				if (
+					!this.keybindings.matches(data, "app.tools.expand") &&
+					!this.keybindings.matches(data, "app.thinking.toggle")
+				)
+					return false;
+				this.editor.handleInput(data);
+				return true;
+			},
 		});
 	}
 
@@ -725,7 +769,8 @@ export class InteractiveMode {
 
 		this.ui.addChild(this.committedChatContainer);
 		this.ui.addChild(this.chatContainer);
-		this.configureRetainedViewport();
+		if (this.tuiMode === "retained") this.configureRetainedViewport();
+		else this.ui.setLiveRegionStart(this.chatContainer);
 		this.ui.addChild(this.pendingMessagesContainer);
 		this.ui.addChild(this.statusContainer);
 		this.renderWidgets(); // Initialize with default spacer
@@ -2388,6 +2433,7 @@ export class InteractiveMode {
 			}
 
 			this.editor = newEditor;
+			this.configureEditorHeight(this.editor);
 		} else {
 			// Restore default editor with text from custom editor
 			this.defaultEditor.setText(currentText);
@@ -4209,6 +4255,11 @@ export class InteractiveMode {
 					quietStartup: this.settingsManager.getQuietStartup(),
 					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
 					warnings: this.settingsManager.getWarnings(),
+					tuiMode: this.tuiMode,
+					dockEditor: this.settingsManager.getDockEditor(),
+					editorMaxHeightPercent: this.settingsManager.getEditorMaxHeightPercent(),
+					scrollWheelStep: this.settingsManager.getScrollWheelStep(),
+					viewportProjectOverrides: Object.keys(this.settingsManager.getProjectSettings()),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -4306,11 +4357,27 @@ export class InteractiveMode {
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
 					},
+					onDockEditorChange: (enabled) => {
+						this.settingsManager.setDockEditor(enabled);
+						this.ui.refreshViewportLayout();
+						return this.settingsManager.getDockEditor();
+					},
+					onEditorMaxHeightPercentChange: (percent) => {
+						this.settingsManager.setEditorMaxHeightPercent(percent);
+						this.ui.refreshViewportLayout();
+						return this.settingsManager.getEditorMaxHeightPercent();
+					},
+					onScrollWheelStepChange: (step) => {
+						this.settingsManager.setScrollWheelStep(step);
+						this.ui.requestRender();
+						return this.settingsManager.getScrollWheelStep();
+					},
 					onCancel: () => {
 						done();
 						this.ui.requestRender();
 					},
 				},
+				() => Math.max(1, this.ui.terminal.rows - 4),
 			);
 			return { component: selector, focus: selector.getSettingsList() };
 		});

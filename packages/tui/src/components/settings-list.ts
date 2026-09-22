@@ -40,6 +40,8 @@ export class SettingsList implements Component, Focusable {
 	private theme: SettingsListTheme;
 	private selectedIndex = 0;
 	private maxVisible: number;
+	private maximumRows: number | undefined;
+	private controlsVisible = true;
 	private onChange: (id: string, newValue: string) => void;
 	private onCancel: () => void;
 	private searchInput?: Input;
@@ -88,6 +90,12 @@ export class SettingsList implements Component, Focusable {
 		}
 	}
 
+	setMaxHeight(rows: number | undefined): void {
+		const next = rows === undefined ? undefined : Math.max(1, Math.floor(rows));
+		if (next !== this.maximumRows && next !== undefined) this.controlsVisible = false;
+		this.maximumRows = next;
+	}
+
 	invalidate(): void {
 		this.searchInput?.invalidate();
 		this.submenuComponent?.invalidate?.();
@@ -96,14 +104,18 @@ export class SettingsList implements Component, Focusable {
 	render(width: number): string[] {
 		// If submenu is active, render it instead
 		if (this.submenuComponent) {
+			(this.submenuComponent as Component & { setMaxHeight?(rows: number | undefined): void }).setMaxHeight?.(
+				this.maximumRows,
+			);
 			return this.submenuComponent.render(width);
 		}
 
 		return this.renderMainList(width);
 	}
 
-	private renderMainList(width: number): string[] {
+	private renderMainList(width: number, maxVisible = this.maxVisible): string[] {
 		const lines: string[] = [];
+		this.controlsVisible = true;
 
 		if (this.searchEnabled && this.searchInput) {
 			lines.push(...this.searchInput.render(width));
@@ -128,9 +140,9 @@ export class SettingsList implements Component, Focusable {
 		// Calculate visible range with scrolling
 		const startIndex = Math.max(
 			0,
-			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), displayItems.length - this.maxVisible),
+			Math.min(this.selectedIndex - Math.floor(maxVisible / 2), displayItems.length - maxVisible),
 		);
-		const endIndex = Math.min(startIndex + this.maxVisible, displayItems.length);
+		const endIndex = Math.min(startIndex + maxVisible, displayItems.length);
 
 		// Calculate max label width for alignment
 		const maxLabelWidth = Math.min(30, Math.max(...this.items.map((item) => visibleWidth(item.label))));
@@ -163,6 +175,7 @@ export class SettingsList implements Component, Focusable {
 			}
 		}
 
+		const essentialRows = lines.length;
 		// Add scroll indicator if needed
 		if (startIndex > 0 || endIndex < displayItems.length) {
 			const scrollText = `  (${this.selectedIndex + 1}/${displayItems.length})`;
@@ -181,7 +194,14 @@ export class SettingsList implements Component, Focusable {
 
 		// Add hint
 		this.addHintLine(lines, width);
-
+		if (this.maximumRows !== undefined && lines.length > this.maximumRows) {
+			if (maxVisible > 1) return this.renderMainList(width, maxVisible - 1);
+			if (essentialRows > this.maximumRows) {
+				this.controlsVisible = false;
+				return [truncateToWidth("Resize to show settings", width)];
+			}
+			return lines.slice(0, this.maximumRows);
+		}
 		return lines;
 	}
 
@@ -199,10 +219,13 @@ export class SettingsList implements Component, Focusable {
 		if (kb.matches(data, "tui.select.up")) {
 			if (displayItems.length === 0) return;
 			this.selectedIndex = this.selectedIndex === 0 ? displayItems.length - 1 : this.selectedIndex - 1;
+			if (this.maximumRows !== undefined) this.controlsVisible = false;
 		} else if (kb.matches(data, "tui.select.down")) {
 			if (displayItems.length === 0) return;
 			this.selectedIndex = this.selectedIndex === displayItems.length - 1 ? 0 : this.selectedIndex + 1;
+			if (this.maximumRows !== undefined) this.controlsVisible = false;
 		} else if (kb.matches(data, "tui.select.confirm") || matchesKey(data, "space")) {
+			if (!this.controlsVisible) return;
 			// SCRAMJET-DIVERGENCE: viewport keyboard negotiation encodes ordinary Space too.
 			this.activateItem();
 		} else if (kb.matches(data, "tui.select.cancel")) {
@@ -214,6 +237,7 @@ export class SettingsList implements Component, Focusable {
 			}
 			this.searchInput.handleInput(sanitized);
 			this.applyFilter(this.searchInput.getValue());
+			if (this.maximumRows !== undefined) this.controlsVisible = false;
 		}
 	}
 

@@ -54,6 +54,8 @@ export async function createProductionInteractiveHarness(
 	const settingsManager =
 		settings ??
 		SettingsManager.inMemory({
+			tuiMode: viewport ? "retained" : "committed",
+			dockEditor: false,
 			theme: "pi-dark",
 			quietStartup: true,
 			compaction: { enabled: false },
@@ -107,24 +109,15 @@ export async function createProductionInteractiveHarness(
 		keybindings.mockRestore();
 	}
 	const internals = mode as unknown as InteractiveInternals;
-	const legacy = viewport
-		? undefined
-		: vi
-				.spyOn(internals, "configureRetainedViewport")
-				.mockImplementation(() => internals.ui.setLiveRegionStart(internals.chatContainer));
 	expect(vi.isMockFunction(ensureTool)).toBe(true);
 	const provisioningCalls = vi.mocked(ensureTool).mock.calls.length;
-	try {
-		await mode.init();
-		expect(
-			vi
-				.mocked(ensureTool)
-				.mock.calls.slice(provisioningCalls)
-				.map(([name]) => name),
-		).toEqual(["fd", "rg"]);
-	} finally {
-		legacy?.mockRestore();
-	}
+	await mode.init();
+	expect(
+		vi
+			.mocked(ensureTool)
+			.mock.calls.slice(provisioningCalls)
+			.map(([name]) => name),
+	).toEqual(["fd", "rg"]);
 	if (!extensionUI) throw new Error("Production extension UI was not bound");
 	extensionUI.setWorkingIndicator({ frames: ["⠋"] });
 	return {

@@ -277,6 +277,8 @@ export class Editor implements Component, Focusable {
 
 	// Vertical scrolling support
 	private scrollOffset: number = 0;
+	private heightLimit: (() => { rows: number; text: number }) | undefined;
+	private renderedTextRows: number | undefined;
 
 	// Border color (can be changed dynamically)
 	public borderColor: (str: string) => string;
@@ -351,6 +353,11 @@ export class Editor implements Component, Focusable {
 	/** Segment text with paste-marker awareness, only merging markers with valid IDs. */
 	private segment(text: string): Iterable<Intl.SegmentData> {
 		return segmentWithMarkers(text, this.validPasteIds());
+	}
+
+	// SCRAMJET-DIVERGENCE: input layout budgets are distinct from image viewport bounds.
+	setHeightLimit(limits: () => { rows: number; text: number }): void {
+		this.heightLimit = limits;
 	}
 
 	getPaddingX(): number {
@@ -481,9 +488,17 @@ export class Editor implements Component, Focusable {
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
 
-		// Calculate max visible lines: 30% of terminal height, minimum 5 lines
 		const terminalRows = this.tui.terminal.rows;
-		const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
+		const limits = this.heightLimit?.();
+		const maximumRows = limits ? Math.max(1, Math.floor(limits.rows)) : Infinity;
+		if (maximumRows <= 3) this.cancelAutocomplete();
+		this.autocompleteList?.setMaxHeight(Number.isFinite(maximumRows) ? maximumRows - 3 : undefined);
+		const completionRows =
+			this.autocompleteState && this.autocompleteList ? this.autocompleteList.render(contentWidth).length : 0;
+		const maxVisibleLines = limits
+			? Math.max(1, Math.min(Math.floor(limits.text), maximumRows - 2 - completionRows))
+			: Math.max(5, Math.floor(terminalRows * 0.3));
+		this.renderedTextRows = maxVisibleLines;
 
 		// Find the cursor line index in layoutLines
 		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);
@@ -508,7 +523,9 @@ export class Editor implements Component, Focusable {
 		const rightPadding = leftPadding;
 
 		// Render top border (with scroll indicator if scrolled down)
-		if (this.scrollOffset > 0) {
+		if (maximumRows < 3) {
+			// Only the cursor row can fit; borders must not displace editable content.
+		} else if (this.scrollOffset > 0) {
 			const indicator = `─── ↑ ${this.scrollOffset} more `;
 			const remaining = width - visibleWidth(indicator);
 			if (remaining >= 0) {
@@ -613,6 +630,9 @@ export class Editor implements Component, Focusable {
 
 		// Render bottom border (with scroll indicator if more content below)
 		const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
+		if (maximumRows < 3) {
+			return result;
+		}
 		if (linesBelow > 0) {
 			const indicator = `─── ↓ ${linesBelow} more `;
 			const remaining = width - visibleWidth(indicator);
@@ -1862,8 +1882,7 @@ export class Editor implements Component, Focusable {
 	 */
 	private pageScroll(direction: -1 | 1): void {
 		this.lastAction = null;
-		const terminalRows = this.tui.terminal.rows;
-		const pageSize = Math.max(5, Math.floor(terminalRows * 0.3));
+		const pageSize = this.renderedTextRows ?? Math.max(5, Math.floor(this.tui.terminal.rows * 0.3));
 
 		const visualLines = this.buildVisualLineMap(this.lastWidth);
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);

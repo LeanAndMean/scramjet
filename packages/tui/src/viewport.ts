@@ -17,6 +17,7 @@ import {
 export interface ViewportBlock {
 	component: Component;
 	finalized?: boolean;
+	dock?: boolean;
 	/** Increment when a finalized component's presentation changes. */
 	revision?: number;
 }
@@ -25,6 +26,9 @@ export interface ViewportOptions {
 	getBlocks(): readonly ViewportBlock[];
 	keybindings?: KeybindingsManager;
 	copy?(text: string): Promise<void>;
+	getScrollWheelStep?(): number;
+	handlePresentationInput?(data: string): boolean;
+	keepReadingOnInput?(): boolean;
 }
 
 export interface ViewportState {
@@ -162,6 +166,11 @@ export class RetainedViewport {
 	private width = 0;
 	private screenHeight = 0;
 	private logical: string[] = [];
+	private dockHeight = 0;
+	private paintedDockTop = 0;
+	private paintedDockStart = 0;
+	private dockSuspended = false;
+	private selectionInDock = false;
 	private visibleComponents = new Set<Component>();
 	private selection: { start: SelectionPoint; end: SelectionPoint } | undefined;
 	private pendingUpdates = false;
@@ -181,7 +190,7 @@ export class RetainedViewport {
 	) {}
 
 	get notice(): string | undefined {
-		if (!this.selection) return undefined;
+		if (!this.selection) return this.dockSuspended ? "Dock suspended: insufficient space" : undefined;
 		if (this.copyError) return `Copy failed: ${this.copyError}; selection retained`;
 		if (this.copying) return "Copying selection…";
 		return this.pendingUpdates ? "updates pending; Esc clears" : "Selection held; Esc clears";
@@ -203,7 +212,12 @@ export class RetainedViewport {
 	}
 
 	private point(x: number, y: number, offset = this.paintedOffset, height = this.paintedHeight): SelectionPoint {
-		const row = Math.max(0, Math.min(this.totalRows - 1, offset + Math.min(y, height - 1)));
+		const row = this.selectionInDock
+			? Math.max(
+					this.paintedDockStart,
+					Math.min(this.logical.length - 1, this.paintedDockStart + y - this.paintedDockTop),
+				)
+			: Math.max(0, Math.min(this.totalRows - 1, offset + Math.min(y, height - 1)));
 		const text = plainText(this.logical[row] ?? "");
 		let column = 0;
 		for (const { segment } of getSegmenter().segment(text)) {
@@ -280,27 +294,32 @@ export class RetainedViewport {
 			}
 			if (x < 1 || x > this.width + 1 || y < 1 || y > this.screenHeight) return true;
 			if (button === 64 || button === 65) {
-				this.scrollTo(this.offset + (button === 64 ? -3 : 3));
+				this.scrollTo(this.offset + (button === 64 ? -1 : 1) * (this.options.getScrollWheelStep?.() ?? 3));
 			} else if (button === 2) {
 				void this.copySelection();
 			} else if (button === 0) {
 				this.endGesture();
-				if (x === this.width + 1) {
+				if (x === this.width + 1 && y <= this.paintedHeight) {
 					this.cancelInteraction();
-					this.height = this.screenHeight;
+					this.height = this.screenHeight - this.dockHeight - (this.dockSuspended ? 1 : 0);
 					const { size, top } = this.thumb();
 					const grab = y - 1 >= top && y - 1 < top + size ? y - 1 - top : Math.floor(size / 2);
 					this.gesture = { kind: "thumb", grab, travel: this.height - size, maximum: this.maxOffset };
 					this.dragThumb(y - 1);
-				} else if (y <= this.paintedHeight && this.totalRows > 0 && this.screenHeight > 1) {
+				} else if (
+					(y <= this.paintedHeight || (this.dockHeight > 0 && y > this.paintedDockTop)) &&
+					this.logical.length > 0 &&
+					this.screenHeight > 1
+				) {
 					this.cancelInteraction();
+					this.selectionInDock = this.dockHeight > 0 && y > this.paintedDockTop;
 					const point = this.point(x - 1, y - 1);
 					this.offset = this.paintedOffset;
 					this.selection = { start: point, end: point };
 					this.followingTail = false;
 					this.anchor = this.anchorAt(this.offset, 0);
-					this.height = Math.max(1, this.screenHeight - 1);
-					if (point.row >= this.offset + this.height) this.scrollTo(this.offset + 1);
+					this.height = Math.max(1, this.screenHeight - this.dockHeight - 1);
+					if (!this.selectionInDock && point.row >= this.offset + this.height) this.scrollTo(this.offset + 1);
 					this.gesture = { kind: "selection" };
 				}
 			} else if (button === 32) {
@@ -308,7 +327,7 @@ export class RetainedViewport {
 				else if (this.gesture?.kind === "selection" && this.selection) {
 					this.pointerColumn = Math.min(x - 1, this.width);
 					this.selection.end = this.point(this.pointerColumn, y - 1);
-					this.edgeDirection = y >= this.height ? 1 : y === 1 ? -1 : 0;
+					this.edgeDirection = this.selectionInDock ? 0 : y >= this.height ? 1 : y === 1 ? -1 : 0;
 					if (!this.edgeTimer)
 						this.edgeTimer = setInterval(() => {
 							if (!this.selection || !this.edgeDirection) return;
@@ -338,6 +357,13 @@ export class RetainedViewport {
 			this.requestRender();
 			return true;
 		}
+		const keybindings = this.options.keybindings ?? getKeybindings();
+		if (keybindings.matches(data, "tui.viewport.pageUp") || keybindings.matches(data, "tui.viewport.pageDown")) {
+			const direction = keybindings.matches(data, "tui.viewport.pageUp") ? -1 : 1;
+			this.scrollTo(this.offset + direction * this.height);
+			this.requestRender();
+			return true;
+		}
 		const detached = !this.followingTail;
 		if (matchesKey(data, "escape") && this.selection) {
 			this.cancelInteraction();
@@ -346,14 +372,20 @@ export class RetainedViewport {
 			return true;
 		}
 		if (detached) {
+			if (this.options.handlePresentationInput?.(data)) {
+				this.cancelInteraction();
+				this.requestRender();
+				return true;
+			}
 			if (matchesKey(data, "pageUp")) this.scrollTo(this.offset - this.height);
 			else if (matchesKey(data, "pageDown")) this.scrollTo(this.offset + this.height);
 			else if (matchesKey(data, "home")) this.scrollTo(0);
 			else {
 				this.cancelInteraction();
-				this.scrollTo(this.maxOffset);
+				const returnToTail = matchesKey(data, "end") || matchesKey(data, "escape");
+				if (returnToTail || !this.dockHeight || !this.options.keepReadingOnInput?.()) this.scrollTo(this.maxOffset);
 				this.requestRender();
-				return matchesKey(data, "end") || matchesKey(data, "escape");
+				return returnToTail;
 			}
 			this.requestRender();
 			return true;
@@ -398,6 +430,8 @@ export class RetainedViewport {
 		this.logical = [];
 		this.blocks = [];
 		this.visibleComponents.clear();
+		this.dockHeight = 0;
+		this.dockSuspended = false;
 		this.anchor = undefined;
 		this.offset = 0;
 		this.paintedOffset = 0;
@@ -439,28 +473,39 @@ export class RetainedViewport {
 
 	revealComponent(component: Component): void {
 		const block = this.blocks.find((block) => block.component === component);
-		if (block) this.scrollTo(block.start + Math.max(0, block.lines.length - this.height));
+		if (block && block.start < this.totalRows)
+			this.scrollTo(block.start + Math.max(0, block.lines.length - this.height));
+	}
+
+	revealRow(row: number): void {
+		if (row >= this.totalRows && this.dockHeight) return;
+		if (row < this.offset) this.scrollTo(row);
+		else if (row >= this.offset + this.height) this.scrollTo(row - this.height + 1);
+	}
+
+	get noticeRow(): number {
+		return this.height;
 	}
 
 	update(width: number, height: number): string[] {
 		if (width !== this.width || height !== this.screenHeight) this.cancelInteraction();
 		this.width = width;
 		this.screenHeight = height;
-		this.height = this.selection ? Math.max(1, height - 1) : Math.max(0, height);
 		const previous = new Map(this.blocks.map((block) => [block.component, block]));
 		const next = new Map<Component, RenderedBlock>();
-		let start = 0;
-		for (const block of this.options.getBlocks()) {
-			if (next.has(block.component)) throw new Error("Viewport blocks must have unique component identities");
+		const projected = this.options.getBlocks();
+		if (new Set(projected.map((block) => block.component)).size !== projected.length)
+			throw new Error("Viewport blocks must have unique component identities");
+		const render = (block: ViewportBlock, availableHeight: number): RenderedBlock => {
 			const old = previous.get(block.component);
 			const reusable =
 				block.finalized &&
 				old?.finalized &&
 				old.width === width &&
-				old.height === height &&
+				old.height === availableHeight &&
 				old.generation === this.generation &&
 				old.revision === block.revision;
-			block.component.setViewportHeight?.(height);
+			block.component.setViewportHeight?.(availableHeight);
 			let complete = reusable ? old.complete : true;
 			let lines = reusable
 				? old.lines
@@ -474,8 +519,25 @@ export class RetainedViewport {
 			if (!reusable && !complete) lines.push(truncateToWidth("Clipped output: component exceeded width", width, ""));
 			if (old && lines.length === old.lines.length && lines.every((line, i) => line === old.lines[i]))
 				lines = old.lines;
-			next.set(block.component, { ...block, lines, complete, start, width, height, generation: this.generation });
-			start += lines.length;
+			return { ...block, lines, complete, start: 0, width, height: availableHeight, generation: this.generation };
+		};
+		const firstDock = projected.findIndex((block) => block.dock);
+		if (firstDock !== -1 && projected.slice(firstDock).some((block) => !block.dock))
+			throw new Error("Dock blocks must form the document suffix");
+		const dock = projected.filter((block) => block.dock).map((block) => render(block, Math.max(1, height - 1)));
+		const proposedDockHeight = dock.reduce((sum, block) => sum + block.lines.length, 0);
+		const suspended = proposedDockHeight > 0 && proposedDockHeight + 2 > height;
+		const dockHeight = suspended ? 0 : proposedDockHeight;
+		const renderHeight = Math.max(1, height - dockHeight - (suspended ? 1 : 0));
+		const transcriptHeight = Math.max(1, renderHeight - (this.selection ? 1 : 0));
+		let start = 0;
+		for (const block of projected) {
+			const rendered = block.dock
+				? dock.find((candidate) => candidate.component === block.component)!
+				: render(block, renderHeight);
+			rendered.start = start;
+			next.set(block.component, rendered);
+			start += rendered.lines.length;
 		}
 		if (this.selection) {
 			const latest = [...next.values()].flatMap((block) => block.lines);
@@ -483,7 +545,10 @@ export class RetainedViewport {
 				latest.length !== this.logical.length || latest.some((line, i) => line !== this.logical[i]);
 			return this.logical;
 		}
-		this.totalRows = start;
+		this.dockHeight = dockHeight;
+		this.dockSuspended = suspended;
+		this.height = transcriptHeight;
+		this.totalRows = start - dockHeight;
 		if (this.gesture?.kind !== "thumb" && !this.followingTail && this.anchor) {
 			const anchor = this.anchor;
 			const old = previous.get(anchor.component);
@@ -532,23 +597,37 @@ export class RetainedViewport {
 					(block) =>
 						!this.selection &&
 						block.lines.length > 0 &&
-						block.start >= this.offset &&
-						block.start + block.lines.length <= this.offset + this.height,
+						((this.dockHeight > 0 && block.start >= this.totalRows) ||
+							(block.start >= this.offset && block.start + block.lines.length <= this.offset + this.height)),
 				)
 				.map((block) => block.component),
 		);
+		const hiddenLabel = hideImages
+			? "[Image hidden by overlay]"
+			: this.selection
+				? "[Image hidden by selection]"
+				: undefined;
 		const { lines, images } = sliceImagePlacements(
-			logical,
+			logical.slice(0, this.totalRows),
 			this.offset,
 			this.height,
 			width,
-			hideImages ? "[Image hidden by overlay]" : this.selection ? "[Image hidden by selection]" : undefined,
+			hiddenLabel,
 		);
+		const dockTop = this.screenHeight - this.dockHeight;
+		if (this.dockHeight > 0) {
+			while (lines.length < dockTop) lines.push("");
+			const dock = sliceImagePlacements(logical.slice(this.totalRows), 0, this.dockHeight, width, hiddenLabel);
+			lines.push(...dock.lines);
+			images.push(...dock.images.map((image) => ({ ...image, row: image.row + dockTop })));
+		}
 		const range = this.selectionRange();
 		if (range) {
 			const [start, end] = range;
 			for (let i = 0; i < lines.length; i++) {
-				const row = this.offset + i;
+				const inDock = this.dockHeight > 0 && i >= dockTop;
+				if (inDock !== this.selectionInDock || (!inDock && i >= this.height)) continue;
+				const row = inDock ? this.totalRows + i - dockTop : this.offset + i;
 				if (row < start.row || row > end.row) continue;
 				const left = row === start.row ? start.column : 0;
 				const right = row === end.row ? end.column : visibleWidth(lines[i]);
@@ -563,6 +642,8 @@ export class RetainedViewport {
 	markPainted(): void {
 		this.paintedOffset = this.offset;
 		this.paintedHeight = this.height;
+		this.paintedDockTop = this.screenHeight - this.dockHeight;
+		this.paintedDockStart = this.totalRows;
 	}
 
 	scrollbar(row: number): string {

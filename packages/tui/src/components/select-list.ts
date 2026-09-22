@@ -42,6 +42,7 @@ export class SelectList implements Component {
 	private filteredItems: SelectItem[] = [];
 	private selectedIndex: number = 0;
 	private maxVisible: number = 5;
+	private maximumRows: number | undefined;
 	private theme: SelectListTheme;
 	private layout: SelectListLayoutOptions;
 
@@ -67,6 +68,10 @@ export class SelectList implements Component {
 		this.selectedIndex = Math.max(0, Math.min(index, this.filteredItems.length - 1));
 	}
 
+	setMaxHeight(rows: number | undefined): void {
+		this.maximumRows = rows === undefined ? undefined : Math.max(1, Math.floor(rows));
+	}
+
 	invalidate(): void {
 		// No cached state to invalidate currently
 	}
@@ -82,12 +87,12 @@ export class SelectList implements Component {
 
 		const primaryColumnWidth = this.getPrimaryColumnWidth();
 
-		// Calculate visible range with scrolling
+		const maxVisible = Math.min(this.maxVisible, Math.max(1, (this.maximumRows ?? Infinity) - 1));
 		const startIndex = Math.max(
 			0,
-			Math.min(this.selectedIndex - Math.floor(this.maxVisible / 2), this.filteredItems.length - this.maxVisible),
+			Math.min(this.selectedIndex - Math.floor(maxVisible / 2), this.filteredItems.length - maxVisible),
 		);
-		const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
+		const endIndex = Math.min(startIndex + maxVisible, this.filteredItems.length);
 
 		// Render visible items
 		for (let i = startIndex; i < endIndex; i++) {
@@ -100,7 +105,7 @@ export class SelectList implements Component {
 		}
 
 		// Add scroll indicators if needed
-		if (startIndex > 0 || endIndex < this.filteredItems.length) {
+		if ((startIndex > 0 || endIndex < this.filteredItems.length) && lines.length < (this.maximumRows ?? Infinity)) {
 			const scrollText = `  (${this.selectedIndex + 1}/${this.filteredItems.length})`;
 			// Truncate if too long for terminal
 			lines.push(this.theme.scrollInfo(truncateToWidth(scrollText, width - 2, "")));

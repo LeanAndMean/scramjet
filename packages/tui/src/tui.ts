@@ -402,6 +402,12 @@ export class TUI extends Container {
 		this.requestRender();
 	}
 
+	refreshViewportLayout(): void {
+		this.viewportPaint = undefined;
+		this.viewport?.cancelInteraction();
+		this.rebuild();
+	}
+
 	resetViewport(): void {
 		this.viewportPaint = undefined;
 		this.viewportRevealFocus = false;
@@ -1439,14 +1445,13 @@ export class TUI extends Container {
 		if (this.viewportRevealFocus) {
 			this.viewportRevealFocus = false;
 			const cursorRow = logical.findIndex((line) => line.includes(CURSOR_MARKER));
-			const { offset } = viewport.state;
-			if (cursorRow >= 0 && cursorRow < offset) viewport.scrollTo(cursorRow);
-			else if (cursorRow >= offset + height) viewport.scrollTo(cursorRow - height + 1);
+			if (cursorRow >= 0) viewport.revealRow(cursorRow);
 		}
 		const frame = viewport.slice(logical, contentWidth, this.hasOverlay());
 		let lines = frame.lines;
 		while (lines.length < height) lines.push("");
-		if (viewport.notice) lines[height - 1] = truncateToWidth(viewport.notice, contentWidth);
+		if (viewport.notice)
+			lines[Math.min(height - 1, viewport.noticeRow)] = truncateToWidth(viewport.notice, contentWidth);
 		if (
 			this.overlayStack.some((entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry))
 		) {
