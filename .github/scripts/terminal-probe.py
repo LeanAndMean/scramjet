@@ -194,8 +194,11 @@ def open_settings(query):
     if not wait_for(lambda: any("Auto-compact" in row for row in state().get("painted", []))):
         raise RuntimeError("Real settings selector did not open")
     type_text(query)
-    if not wait_for(lambda: any(query.lower() in row.lower() for row in state().get("painted", []))):
-        raise RuntimeError("Settings search did not render")
+    def search_painted():
+        current = state()
+        return current.get("frameFlushed") is True and any(row.strip() == f"> {query}" for row in current.get("painted", []))
+    if not wait_for(search_painted):
+        raise RuntimeError("Complete settings search did not flush")
 
 
 def close_settings():
@@ -290,11 +293,15 @@ try:
     report["viewportKeys"] = {"profile": "F8/F9" if key_profile else "Alt+PageUp/Alt+PageDown", "qualification": "Apple Terminal emitted unmodified PageUp for Option+PageUp; this is an explicit temporary app-keybinding profile, not a runtime terminal fallback." if key_profile else "default bindings"}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
+        f"rm -f {shlex.quote(str(output / 'exit-code'))} {shlex.quote(str(output / 'stty-after.txt'))}",
         f"stty -g > {shlex.quote(str(output / 'stty-before.txt'))}",
         "printf 'SCRAMJET NORMAL BUFFER SENTINEL\\n'",
         f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --journey{key_profile}",
+        "fixture_status=$?",
+        f'printf "%s\\n" "$fixture_status" > {shlex.quote(str(output / "exit-code"))}',
         f"stty -g > {shlex.quote(str(output / 'stty-after.txt'))}",
         "printf 'SCRAMJET RESTORED SHELL\\n'",
+        'exit "$fixture_status"',
     ]) + "\n")
     launch_command = f"/bin/bash {shlex.quote(str(launcher))}"
     tmux_command = None
@@ -599,7 +606,7 @@ try:
     key("enter")
     check("jobControlResumed", lambda: state()["phase"] == "resumed")
     key("exit")
-    check("orderlyExit", lambda: state().get("stopped") is True and (output / "stty-after.txt").exists())
+    check("orderlyExit", lambda: state().get("stopped") is True and (output / "stty-after.txt").exists() and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
     check("termiosRestored", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))
     screenshot("restored")
 except Exception as error:

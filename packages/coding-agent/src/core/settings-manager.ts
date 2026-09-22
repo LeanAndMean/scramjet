@@ -543,6 +543,8 @@ export class SettingsManager {
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
 
 		if (this.globalSettingsLoadError) {
+			// SCRAMJET-DIVERGENCE: startup drains load errors, so every blocked save needs its own diagnostic.
+			this.recordError("global", this.globalSettingsLoadError);
 			return;
 		}
 
