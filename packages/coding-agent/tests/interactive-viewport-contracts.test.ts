@@ -446,6 +446,55 @@ describe("retained interactive contracts", () => {
 		expect((await h.frame()).filter((line) => line.includes("INPUT-")).length).toBe(8);
 	});
 
+	it("keeps the selected setting visible when undocking while reading", async () => {
+		const h = await setup();
+		await history(h);
+		h.extensionUI.setWidget("above", ["ABOVE"]);
+		h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+		h.internals.ui.scrollViewportTo(0);
+		await h.frame();
+		await openSettings(h, "dock");
+		h.terminal.sendInput("\r");
+		const frame = await h.frame();
+		expect(frame.join("\n")).toContain("Dock input area");
+		expect(frame.join("\n")).toContain("false");
+	});
+
+	it.each(["\x1b", "\x1b[27u"])(
+		"cancels focused settings with the first Escape %j after undocking",
+		async (cancelKey) => {
+			const h = await setup();
+			await history(h);
+			h.extensionUI.setWidget("above", ["ABOVE"]);
+			h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+			h.internals.ui.scrollViewportTo(0);
+			await h.frame();
+			await openSettings(h, "dock");
+			h.terminal.sendInput("\r");
+			await h.frame();
+			h.terminal.sendInput(cancelKey);
+			await h.frame();
+			h.terminal.sendInput("x");
+			expect(h.extensionUI.getEditorText()).toBe("x");
+		},
+	);
+
+	it.each(["\x1b", "\x1b[27u"])(
+		"cancels a focused selector while independently detached using %j",
+		async (cancelKey) => {
+			const h = await setup(24, settings({ dockEditor: false }));
+			await history(h);
+			await openSettings(h, "dock");
+			h.internals.ui.scrollViewportTo(0);
+			await h.frame();
+			expect(h.internals.ui.getViewportState()!.followingTail).toBe(false);
+			h.terminal.sendInput(cancelKey);
+			await h.frame();
+			h.terminal.sendInput("x");
+			expect(h.extensionUI.getEditorText()).toBe("x");
+		},
+	);
+
 	it("keeps settings usable in a narrow terminal while toggling the dock", async () => {
 		const h = await setup(12, settings(), 24);
 		await openSettings(h, "dock");
