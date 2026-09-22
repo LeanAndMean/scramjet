@@ -661,6 +661,134 @@ describe("retained interactive contracts", () => {
 		}
 	});
 
+	it.each([
+		{ initial: "retained", next: "committed" },
+		{ initial: "committed", next: "retained" },
+	])(
+		"keeps $initial rendering across reload and session replacement until fresh startup",
+		async ({ initial, next }) => {
+			const directory = mkdtempSync(join(tmpdir(), "scramjet-renderer-lifetime-"));
+			directories.push(directory);
+			const agentDir = join(directory, "agent");
+			mkdirSync(agentDir);
+			const file = join(agentDir, "settings.json");
+			writeFileSync(file, JSON.stringify({ theme: "pi-dark", quietStartup: true, tuiMode: initial }));
+			const manager = SettingsManager.create(directory, agentDir);
+			const h = await setup(24, manager);
+			await manager.flush();
+			const ui = h.internals.ui;
+			expect(Boolean(ui.getViewportState())).toBe(initial === "retained");
+			writeFileSync(file, JSON.stringify({ theme: "pi-dark", quietStartup: true, tuiMode: next }));
+			await h.internals.handleReloadCommand();
+			await h.frame();
+			expect(manager.getTuiMode()).toBe(next);
+			expect(h.internals.ui).toBe(ui);
+			expect(Boolean(ui.getViewportState())).toBe(initial === "retained");
+			expect(await h.internals.handleExtensionNewSession()).toEqual({ cancelled: false });
+			await h.frame();
+			expect(h.internals.ui).toBe(ui);
+			expect(Boolean(ui.getViewportState())).toBe(initial === "retained");
+			const restarted = await setup(24, SettingsManager.create(directory, agentDir));
+			await restarted.frame();
+			expect(Boolean(restarted.internals.ui.getViewportState())).toBe(next === "retained");
+			expect(restarted.terminal.writes.join("").includes("\x1b[?1049h")).toBe(next === "retained");
+		},
+	);
+
+	describe("layout settings boundaries", () => {
+		function scoped(global: Record<string, unknown>, project: Record<string, unknown> = {}) {
+			return SettingsManager.fromStorage({
+				withLock(scope, update) {
+					update(JSON.stringify(scope === "global" ? global : project));
+				},
+			});
+		}
+
+		it.each([
+			{ global: undefined, project: undefined, expected: "retained" },
+			{ global: "retained", project: undefined, expected: "retained" },
+			{ global: "committed", project: undefined, expected: "committed" },
+			{ global: "retained", project: "committed", expected: "committed" },
+			{ global: "committed", project: "retained", expected: "retained" },
+		])("resolves renderer global=$global project=$project", ({ global, project, expected }) => {
+			const manager = scoped({ tuiMode: global }, { tuiMode: project });
+			expect(manager.getTuiMode()).toBe(expected);
+			expect(manager.drainErrors()).toEqual([]);
+		});
+
+		it.each(["automatic", "", null, false, 1, [], {}].map((value) => ({ value })))(
+			"rejects explicit invalid renderer $value in either scope",
+			({ value }) => {
+				for (const manager of [scoped({ tuiMode: value }), scoped({}, { tuiMode: value })]) {
+					expect(() => manager.getTuiMode()).toThrow(
+						'tuiMode must be "retained" or "committed"; correct settings.json and restart.',
+					);
+				}
+			},
+		);
+
+		it.each([
+			{
+				key: "editorMaxHeightPercent",
+				get: "getEditorMaxHeightPercent",
+				set: "setEditorMaxHeightPercent",
+				fallback: 30,
+				minimum: 10,
+				maximum: 50,
+			},
+			{
+				key: "scrollWheelStep",
+				get: "getScrollWheelStep",
+				set: "setScrollWheelStep",
+				fallback: 3,
+				minimum: 1,
+				maximum: 20,
+			},
+		] as const)(
+			"validates and normalizes $key at load and setter boundaries",
+			async ({ key, get, set, fallback, minimum, maximum }) => {
+				expect(scoped({})[get]()).toBe(fallback);
+				for (const scope of ["global", "project"] as const) {
+					for (const value of [null, true, "12", [], {}]) {
+						const manager = scope === "global" ? scoped({ [key]: value }) : scoped({}, { [key]: value });
+						expect(manager[get]()).toBe(fallback);
+						expect(manager.drainErrors()).toEqual([
+							{ scope, error: new Error(`${key} must be a finite number; using ${fallback}.`) },
+						]);
+					}
+					for (const [value, expected] of [
+						[-5, minimum],
+						[minimum + 0.9, minimum],
+						[maximum + 100, maximum],
+					]) {
+						const manager = scope === "global" ? scoped({ [key]: value }) : scoped({}, { [key]: value });
+						expect(manager[get]()).toBe(expected);
+						expect(manager.drainErrors()).toEqual([]);
+					}
+				}
+				const manager = SettingsManager.inMemory();
+				for (const value of [NaN, Infinity, -Infinity, null, true, "12", [], {}]) {
+					manager[set](value as number);
+					await manager.flush();
+					expect(manager[get]()).toBe(fallback);
+					expect(manager.drainErrors()).toEqual([
+						{ scope: "global", error: new Error(`${key} must be a finite number; using ${fallback}.`) },
+					]);
+				}
+				for (const [value, expected] of [
+					[-5, minimum],
+					[minimum + 0.9, minimum],
+					[maximum + 100, maximum],
+				]) {
+					manager[set](value);
+					await manager.flush();
+					expect(manager[get]()).toBe(expected);
+					expect(manager.drainErrors()).toEqual([]);
+				}
+			},
+		);
+	});
+
 	it("preserves invalid settings files while exposing their load error", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "scramjet-invalid-layout-"));
 		directories.push(directory);

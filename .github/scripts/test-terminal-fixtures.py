@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import pty
 import select
+import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -186,6 +188,95 @@ class InteractionVerdictTests(unittest.TestCase):
         except RuntimeError as error:
             self.context["report"]["error"] = str(error)
         self.assertFalse(self.passed())
+
+
+def interaction_source():
+    return ast.parse((ROOT / ".github/scripts/terminal-probe.py").read_text())
+
+
+def interaction_check(name, context):
+    source = interaction_source()
+    predicate = next(node.args[1] for node in ast.walk(source) if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Name) and node.func.id in ("check", "stable_check")
+                     and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == name)
+    return eval(compile(ast.Expression(body=predicate), "terminal-probe.py", "eval"), context)
+
+
+class InteractionExitTests(unittest.TestCase):
+    def launch(self, code):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        output = Path(directory.name)
+        fixture = output / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text("import {writeFileSync} from 'node:fs';\n"
+                           "writeFileSync(process.env.SCRAMJET_TUI_PROBE_EVIDENCE, JSON.stringify({stopped:true}));\n"
+                           f"process.exit({code});\n")
+        state_path = output / "fixture.json"
+        launcher = output / "launch.sh"
+        context = {"output": output, "root": output, "state_path": state_path, "launcher": launcher,
+                   "shlex": shlex, "shutil": shutil, "key_profile": ""}
+        source = interaction_source()
+        writer = next(node for node in ast.walk(source) if isinstance(node, ast.Expr)
+                      and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+                      and isinstance(node.value.func.value, ast.Name) and node.value.func.value.id == "launcher"
+                      and node.value.func.attr == "write_text")
+        exec(compile(ast.Module(body=[writer], type_ignores=[]), "terminal-probe.py", "exec"), context)
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        before = termios.tcgetattr(slave)
+        result = subprocess.run(["/bin/bash", str(launcher)], stdin=slave, stdout=slave, stderr=subprocess.PIPE, timeout=10)
+        self.assertEqual(termios.tcgetattr(slave), before)
+        self.assertTrue((output / "stty-after.txt").exists())
+        current = json.loads(state_path.read_text())
+        predicate = interaction_check("orderlyExit", {"state": lambda: current, "output": output})
+        return result, output, predicate
+
+    def test_zero_exit_is_required_and_recorded(self):
+        result, output, predicate = self.launch(0)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(predicate())
+        self.assertTrue((output / "exit-code").exists(), "zero exit needs a current-run receipt")
+        self.assertEqual((output / "exit-code").read_text().strip(), "0")
+
+    def test_nonzero_exit_survives_successful_restoration(self):
+        result, output, predicate = self.launch(7)
+        self.assertEqual((predicate(), result.returncode), (False, 7))
+        self.assertEqual((output / "exit-code").read_text().strip(), "7")
+
+    def test_missing_exit_receipt_cannot_pass(self):
+        _result, output, predicate = self.launch(0)
+        (output / "exit-code").unlink(missing_ok=True)
+        self.assertFalse(predicate())
+
+
+class SettingsSearchReadinessTests(unittest.TestCase):
+    def test_waits_for_complete_painted_search_before_returning(self):
+        source = interaction_source()
+        function = next(node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "open_settings")
+        ready = {"painted": ["> dock", "→ Dock input area false"], "frameFlushed": True}
+        observations = []
+        def wait_for(predicate):
+            if len(observations) == 0:
+                current.update(painted=["→ Auto-compact true"], frameFlushed=True)
+                observations.append(predicate())
+            else:
+                for frame in (
+                    {"painted": ["> doc", "→ Dock input area false"], "frameFlushed": True},
+                    {"painted": ["> dock", "→ Dock input area false"], "frameFlushed": False},
+                    ready,
+                ):
+                    current.update(frame)
+                    observations.append(predicate())
+            return observations[-1]
+        current = {}
+        context = {"fixture_command": Mock(), "type_text": Mock(), "key": Mock(),
+                   "state": lambda: current, "wait_for": wait_for}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), context)
+        context["open_settings"]("dock")
+        self.assertEqual(observations, [True, False, False, True])
+        context["key"].assert_called_once_with("enter")
 
 
 class InteractionCleanupTests(unittest.TestCase):
