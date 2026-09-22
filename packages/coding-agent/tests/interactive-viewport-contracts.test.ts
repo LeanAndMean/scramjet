@@ -106,6 +106,133 @@ describe("retained interactive contracts", () => {
 		expect(text).not.toContain("FIXTURE-FOOTER");
 	});
 
+	it.each(["right click", "configured key"])(
+		"copies dock-origin selection across the seam using %s",
+		async (route) => {
+			const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+			const h = await setup();
+			await history(h);
+			h.extensionUI.setWidget("above", () => new Text("DOCK-A", 0, 0));
+			h.extensionUI.setWidget("below", () => new Text("BELOW", 0, 0), { placement: "belowEditor" });
+			h.extensionUI.setFooter(() => new Text("FOOTER-A", 0, 0));
+			getKeybindings().setUserBindings({ "tui.input.copy": "ctrl+y" });
+			h.internals.ui.scrollViewportTo(0);
+			const initial = await h.frame();
+			expect(initial[0].slice(0, 59).trimEnd()).toBe("HISTORY-000");
+			expect(initial.slice(17).map((line) => line.trimEnd())).toEqual([
+				"",
+				"DOCK-A",
+				"─".repeat(59),
+				"DRAFT",
+				"─".repeat(59),
+				"BELOW",
+				"FOOTER-A",
+			]);
+			vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+			try {
+				h.terminal.sendInput(mouse(0, 7, 19));
+				h.terminal.sendInput(mouse(32, 1, 1));
+				await h.frame();
+				const mark = h.terminal.markWrites();
+				vi.advanceTimersByTime(320);
+				expect(h.internals.ui.getViewportState()!.offset).toBe(0);
+				expect(h.terminal.writesSince(mark)).toBe("");
+				expect(Array.from({ length: 6 }, (_, column) => h.terminal.cell(18, column).inverse)).toEqual(
+					Array(6).fill(true),
+				);
+				expect(h.terminal.cell(0, 0).inverse).toBe(false);
+				h.terminal.sendInput("\x1b[<0;1;1m");
+				await h.frame();
+				expect(copy).not.toHaveBeenCalled();
+				h.terminal.sendInput(route === "right click" ? mouse(2, 2, 19) : "\x19");
+				await h.frame();
+				expect(copy).toHaveBeenCalledExactlyOnceWith("\nDOCK-A");
+				expect(h.extensionUI.getEditorText()).toBe("DRAFT");
+				expect(h.internals.ui.getViewportState()!.offset).toBe(0);
+				expect((await h.frame()).join("\n")).not.toContain("Selection held");
+			} finally {
+				h.terminal.sendInput("\x1b[<0;1;1m");
+				vi.useRealTimers();
+				getKeybindings().setUserBindings({});
+			}
+		},
+	);
+
+	it.each(["transcript", "dock"])(
+		"holds both regions through passive geometry changes during %s selection",
+		async (origin) => {
+			const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+			const h = await setup();
+			await history(h);
+			h.extensionUI.setWidget("above", () => new Text("DOCK-A", 0, 0));
+			h.extensionUI.setWidget("below", () => new Text("BELOW", 0, 0), { placement: "belowEditor" });
+			h.extensionUI.setFooter(() => new Text("FOOTER-A", 0, 0));
+			h.internals.ui.scrollViewportTo(0);
+			const initial = await h.frame();
+			expect(initial[0].slice(0, 59).trimEnd()).toBe("HISTORY-000");
+			expect(initial[18].trimEnd()).toBe("DOCK-A");
+			expect(initial[20].trimEnd()).toBe("DRAFT");
+			expect(initial[23].trimEnd()).toBe("FOOTER-A");
+			const selectedRow = origin === "dock" ? 18 : 0;
+			const expected = origin === "dock" ? "DOCK-A" : "HISTORY-000";
+			h.terminal.sendInput(mouse(0, 1, selectedRow + 1));
+			h.terminal.sendInput(mouse(32, expected.length + 1, selectedRow + 1));
+			h.terminal.sendInput(`\x1b[<0;${expected.length + 1};${selectedRow + 1}m`);
+			const selected = await h.frame();
+			expect(h.internals.ui.getViewportState()!.height).toBe(16);
+			expect(selected[16]).toContain("Selection held");
+			const inverse = () =>
+				Array.from({ length: 24 }, (_, row) =>
+					Array.from({ length: 59 }, (_, column) => h.terminal.cell(row, column).inverse),
+				);
+			const heldInverse = inverse();
+			expect(heldInverse[selectedRow].slice(0, expected.length)).toEqual(Array(expected.length).fill(true));
+			const withoutNotice = <T>(rows: T[]) => rows.filter((_, row) => row !== 16);
+			const assertHeld = async () => {
+				const frame = await h.frame();
+				expect(withoutNotice(frame)).toEqual(withoutNotice(selected));
+				expect(withoutNotice(inverse())).toEqual(withoutNotice(heldInverse));
+				expect(h.internals.ui.getViewportState()).toMatchObject({ offset: 0, height: 16, followingTail: false });
+				return frame;
+			};
+			h.extensionUI.setWidget("above", () => new Text("GROW-1\nGROW-2\nGROW-3", 0, 0));
+			expect((await assertHeld())[16]).toContain("updates pending");
+			h.extensionUI.setFooter(() => new Text("FOOTER-B\nFOOTER-C", 0, 0));
+			await assertHeld();
+			h.extensionUI.setWidget("above", () => new Text(Array(40).fill("OVERSIZED").join("\n"), 0, 0));
+			await assertHeld();
+			h.extensionUI.setWidget("above", () => new Text("LATEST", 0, 0));
+			await assertHeld();
+			expect(copy).not.toHaveBeenCalled();
+			if (origin === "dock") {
+				copy.mockRejectedValueOnce(new Error("synthetic clipboard failure"));
+				h.terminal.sendInput("\x03");
+				await vi.waitFor(async () => expect((await h.frame())[16]).toContain("Copy failed"));
+				await assertHeld();
+				expect(copy).toHaveBeenCalledExactlyOnceWith(expected);
+			}
+			h.terminal.sendInput("\x03");
+			await vi.waitFor(() => expect(copy).toHaveBeenCalledTimes(origin === "dock" ? 2 : 1));
+			expect(copy.mock.calls.every(([text]) => text === expected)).toBe(true);
+			const latest = await h.frame();
+			expect(latest[0].slice(0, 59).trimEnd()).toBe("HISTORY-000");
+			expect(latest.slice(16).map((line) => line.trimEnd())).toEqual([
+				"",
+				"LATEST",
+				"─".repeat(59),
+				"DRAFT",
+				"─".repeat(59),
+				"BELOW",
+				"FOOTER-B",
+				"FOOTER-C",
+			]);
+			expect(latest.join("\n")).not.toMatch(/GROW-|OVERSIZED|DOCK-A|updates pending|Copy failed/);
+			expect(h.internals.ui.getViewportState()).toMatchObject({ offset: 0, height: 16, followingTail: false });
+			expect(h.extensionUI.getEditorText()).toBe("DRAFT");
+			expect(h.terminal.cell(origin === "dock" ? 17 : 0, 0).inverse).toBe(false);
+		},
+	);
+
 	it("reclaims a safe scrolling layout for an oversized dock without losing draft text", async () => {
 		const h = await setup();
 		await history(h);
