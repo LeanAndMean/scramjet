@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@leanandmean/ai";
-import { Text } from "@leanandmean/tui";
+import { getKeybindings, Text } from "@leanandmean/tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SettingsManager } from "../src/core/settings-manager.js";
+import { type Settings, SettingsManager } from "../src/core/settings-manager.js";
 import * as clipboard from "../src/utils/clipboard.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
@@ -306,5 +306,168 @@ describe("retained interactive contracts", () => {
 			finish?.("cancelled");
 			await outcome;
 		}
+	});
+
+	it("shrinks the editor before suspending a dock that can still fit", async () => {
+		const h = await setup(24, settings({ editorMaxHeightPercent: 50 }));
+		await history(h);
+		const draft = Array.from({ length: 30 }, (_, index) => `INPUT-${index}`).join("\n");
+		h.extensionUI.setEditorText(draft);
+		h.extensionUI.setWidget(
+			"adjacent",
+			() => new Text(Array.from({ length: 10 }, (_, index) => `BAND-${index}`).join("\n"), 0, 0),
+			{ placement: "belowEditor" },
+		);
+		const frame = await h.frame();
+		expect(frame.join("\n")).not.toMatch(/dock.*suspended/i);
+		expect(frame.filter((line) => line.includes("INPUT-")).length).toBe(8);
+		for (let index = 0; index < 10; index++) expect(frame.join("\n")).toContain(`BAND-${index}`);
+		expect(frame.at(-1)).toContain("FIXTURE-FOOTER");
+		expect(h.internals.ui.getViewportState()!.height).toBe(2);
+		expect(h.extensionUI.getEditorText()).toBe(draft);
+		h.extensionUI.setWidget("adjacent", undefined);
+		expect((await h.frame()).filter((line) => line.includes("INPUT-")).length).toBe(12);
+	});
+
+	it("gives focused settings navigation precedence over a viewport paging remap", async () => {
+		const h = await setup();
+		await history(h);
+		getKeybindings().setUserBindings({ "tui.viewport.pageUp": "up" });
+		await openSettings(h, "");
+		const before = h.internals.ui.getViewportState()!.offset;
+		h.terminal.sendInput("\x1b[A");
+		const frame = await h.frame();
+		expect(h.internals.ui.getViewportState()!.offset).toBe(before);
+		expect(frame.find((line) => line.includes("Wheel scroll lines"))).toContain("→ Wheel scroll lines");
+	});
+
+	it.each([
+		{ query: "wheel", key: "scrollWheelStep", initial: 3 },
+		{ query: "height", key: "editorMaxHeightPercent", initial: 30 },
+		{ query: "dock", key: "dockEditor", initial: true },
+	])("shows an unsaved warning when a live $key write fails", async ({ query, key, initial }) => {
+		let durable = JSON.stringify({ theme: "pi-dark", quietStartup: true, [key]: initial });
+		let failWrites = false;
+		const manager = SettingsManager.fromStorage({
+			withLock(scope, update) {
+				const next = update(scope === "global" ? durable : undefined);
+				if (next !== undefined && scope === "global") {
+					if (failWrites)
+						throw Object.assign(new Error("permission denied (synthetic EACCES)"), { code: "EACCES" });
+					durable = next;
+				}
+			},
+		});
+		const h = await setup(24, manager);
+		await manager.flush();
+		failWrites = true;
+		await openSettings(h, query);
+		h.terminal.sendInput("\r");
+		await manager.flush();
+		await vi.waitFor(async () => expect((await h.frame()).join("\n")).toMatch(/not saved|unsaved/i));
+		expect(JSON.parse(durable)[key]).toBe(initial);
+		expect(manager.getGlobalSettings()[key as keyof Settings]).not.toBe(initial);
+	});
+
+	it("changes wheel scrolling through settings and restores the saved value on restart", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "scramjet-wheel-settings-"));
+		directories.push(directory);
+		const agentDir = join(directory, "agent");
+		mkdirSync(agentDir);
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "pi-dark", quietStartup: true }));
+		const manager = SettingsManager.create(directory, agentDir);
+		const h = await setup(24, manager);
+		await history(h);
+		await openSettings(h, "wheel");
+		expect(h.terminal.visibleLines().join("\n")).toContain("Wheel scroll lines");
+		for (let step = 0; step < 4; step++) {
+			h.terminal.sendInput("\r");
+			await h.frame();
+		}
+		await manager.flush();
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")).scrollWheelStep).toBe(7);
+		expect((await h.frame()).join("\n")).not.toMatch(/not saved|unsaved/i);
+		h.terminal.sendInput("\x1b");
+		await h.frame();
+		h.internals.ui.scrollViewportTo(30);
+		await h.frame();
+		h.terminal.sendInput(mouse(64));
+		await h.frame();
+		expect(h.internals.ui.getViewportState()!.offset).toBe(23);
+		const restarted = await setup(24, SettingsManager.create(directory, agentDir));
+		await history(restarted);
+		restarted.internals.ui.scrollViewportTo(30);
+		await restarted.frame();
+		restarted.terminal.sendInput(mouse(64));
+		await restarted.frame();
+		expect(restarted.internals.ui.getViewportState()!.offset).toBe(23);
+	});
+
+	it("keeps project precedence explicit when a live editor-height edit saves globally", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "scramjet-project-layout-"));
+		directories.push(directory);
+		const agentDir = join(directory, "agent");
+		mkdirSync(agentDir);
+		mkdirSync(join(directory, ".scramjet"));
+		const projectFile = join(directory, ".scramjet", "settings.json");
+		const project = JSON.stringify({ editorMaxHeightPercent: 20 });
+		writeFileSync(projectFile, project);
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "pi-dark", quietStartup: true }));
+		const manager = SettingsManager.create(directory, agentDir);
+		const h = await setup(40, manager);
+		await openSettings(h, "height");
+		expect(h.terminal.visibleLines().join("\n")).toContain("Project settings override");
+		h.terminal.sendInput("\r");
+		const frame = await h.frame();
+		await manager.flush();
+		expect(frame.join("\n")).toContain("20%");
+		expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8")).editorMaxHeightPercent).toBe(25);
+		expect(readFileSync(projectFile, "utf8")).toBe(project);
+		h.terminal.sendInput("\x1b");
+		h.extensionUI.setEditorText(Array.from({ length: 30 }, (_, i) => `INPUT-${i}`).join("\n"));
+		expect((await h.frame()).filter((line) => line.includes("INPUT-")).length).toBe(8);
+	});
+
+	it("keeps settings usable in a narrow terminal while toggling the dock", async () => {
+		const h = await setup(12, settings(), 24);
+		await openSettings(h, "dock");
+		let frame = await h.frame();
+		expect(frame.join("\n")).toContain("Dock input area");
+		h.terminal.sendInput("\r");
+		frame = await h.frame();
+		expect(frame.join("\n")).toContain("Dock input area");
+		expect(frame.join("\n")).toContain("false");
+		h.terminal.sendInput("\x1b");
+		await h.frame();
+		h.terminal.sendInput("x");
+		expect(h.extensionUI.getEditorText()).toBe("x");
+	});
+
+	it("keeps the docked editor cursor on its painted row while reading history", async () => {
+		const h = await setup();
+		await history(h);
+		h.internals.ui.scrollViewportTo(0);
+		await h.frame();
+		h.terminal.sendInput("x");
+		const frame = await h.frame();
+		expect(h.terminal.cursorPosition().row).toBe(frame.findIndex((line) => line.includes("DRAFTx")));
+		expect(frame[0]).toContain("HISTORY-000");
+	});
+
+	it("preserves invalid settings files while exposing their load error", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "scramjet-invalid-layout-"));
+		directories.push(directory);
+		const agentDir = join(directory, "agent");
+		mkdirSync(agentDir);
+		const file = join(agentDir, "settings.json");
+		writeFileSync(file, "{broken-json");
+		const manager = SettingsManager.create(directory, agentDir);
+		expect(manager.drainErrors()).toEqual([expect.objectContaining({ scope: "global", error: expect.any(Error) })]);
+		const h = await setup(24, manager);
+		await openSettings(h, "wheel");
+		h.terminal.sendInput("\r");
+		await h.frame();
+		await manager.flush();
+		expect(readFileSync(file, "utf8")).toBe("{broken-json");
 	});
 });
