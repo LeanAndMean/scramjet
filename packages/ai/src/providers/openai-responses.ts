@@ -19,6 +19,7 @@ import { headersToRecord } from "../utils/headers.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import {
+	abortedResponsesFailureMessage,
 	appendResponsesFailureDiagnostics,
 	appendResponsesSdkRetryDiagnostic,
 	convertResponsesMessages,
@@ -177,7 +178,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			} else if (responseCallbackFailed) {
 				output.errorMessage = "OpenAI Responses response callback failed.";
 			} else if (output.stopReason === "aborted") {
-				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+				output.errorMessage = abortedResponsesFailureMessage(error);
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,

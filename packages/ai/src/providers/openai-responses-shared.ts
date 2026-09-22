@@ -189,7 +189,7 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 	server: "OpenAI Responses service returned a server error.",
 	timeout: "OpenAI Responses request timed out.",
 	transport: "OpenAI Responses request failed during transport.",
-	context_overflow: "OpenAI Responses context length was exceeded.",
+	context_overflow: "OpenAI Responses input exceeds the context window.",
 	authentication: "OpenAI Responses authentication failed.",
 	permission: "OpenAI Responses request was not permitted.",
 	invalid_request: "OpenAI Responses request was invalid.",
@@ -200,6 +200,19 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 	malformed_event: "OpenAI Responses returned a malformed error event.",
 	unknown: "OpenAI Responses request failed without recognized details.",
 };
+
+const PROVIDER_DETAIL_MAX_LENGTH = 200;
+const PROVIDER_DETAIL_REDACTIONS: RegExp[] = [
+	/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]+/gi,
+	/[^\s@'"`<>]+@[^\s@'"`<>]+\.[a-z]{2,}/gi,
+	/\bbearer\s+[^\s'"`]+/gi,
+	/\bsk-[a-z0-9_-]{8,}/gi,
+	/\b(?:resp|req|chatcmpl|msg|rs|fc|call|sess|proj|org)[_-](?=[a-z0-9_-]*\d)[a-z0-9_-]{6,}\b/gi,
+	/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g,
+	/\b(?:[a-z0-9-]+\.){2,}[a-z0-9-]+(?::\d{1,5})?\b/gi,
+	/(?<=^|[\s'"`(])(?:~|\/)[^\s'"`)]+/g,
+	/\b[A-Za-z0-9_-]{32,}\b/g,
+];
 
 const PROVIDER_CODES = new Set<string>(Object.keys(PROVIDER_CODE_CATEGORIES));
 const FAILURE_DETAIL_KEYS = new Set([
@@ -286,6 +299,33 @@ function readFailureScalars(value: unknown): { top: FailureScalars; nested: Fail
 	return { top: read(topRecord), nested: read(nestedRecord) };
 }
 
+function sanitizeProviderDetail(message: string | undefined): string | undefined {
+	if (!message) return undefined;
+	let detail = message;
+	for (const pattern of PROVIDER_DETAIL_REDACTIONS) detail = detail.replace(pattern, "[redacted]");
+	detail = detail
+		.replace(/[\u0000-\u001f\u007f]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (detail.length === 0 || /^(?:undefined|null)$/i.test(detail)) return undefined;
+	if (detail.length > PROVIDER_DETAIL_MAX_LENGTH) detail = `${detail.slice(0, PROVIDER_DETAIL_MAX_LENGTH - 1)}…`;
+	return detail;
+}
+
+function composeFailureMessage(category: ResponsesFailureCategory, detail: string | undefined): string {
+	const base = CATEGORY_MESSAGES[category];
+	if (!detail) return base;
+	return `${base.slice(0, -1)}: ${detail}${/[.!?…]$/.test(detail) ? "" : "."}`;
+}
+
+// SCRAMJET-DIVERGENCE: a user abort keeps the abort reason, stripped and capped like provider detail (#553).
+export function abortedResponsesFailureMessage(error: unknown): string {
+	return (
+		sanitizeProviderDetail(error instanceof Error ? error.message : undefined) ??
+		"OpenAI Responses request was aborted."
+	);
+}
+
 function categoryFromMessage(message: string | undefined): ResponsesFailureCategory | undefined {
 	if (!message) return undefined;
 	const normalized = message.toLowerCase();
@@ -302,6 +342,8 @@ function categoryFromMessage(message: string | undefined): ResponsesFailureCateg
 	if (/content.filter|content.policy|safety policy/.test(normalized)) return "content_rejection";
 	if (/invalid request|bad request/.test(normalized)) return "invalid_request";
 	if (/server error|internal error|internal server/.test(normalized)) return "server";
+	if (/\b50[0234]\b|service unavailable|bad gateway|gateway time-?out|upstream/.test(normalized)) return "server";
+	if (/fetch failed|socket hang up|econnreset|stream ended/.test(normalized)) return "transport";
 	return undefined;
 }
 
@@ -402,7 +444,12 @@ function makeFailure(
 	};
 	if (status !== undefined) diagnostic.httpStatus = status;
 	if (providerCode !== undefined) diagnostic.providerCode = providerCode;
-	return { message: CATEGORY_MESSAGES[category], diagnostic };
+	// Overflow text stays exact so `isContextOverflow` keys on it deterministically.
+	const detail =
+		kind === "malformed_event" || category === "context_overflow"
+			? undefined
+			: sanitizeProviderDetail(top.message ?? nested.message);
+	return { message: composeFailureMessage(category, detail), diagnostic };
 }
 
 export function normalizeResponsesFailure(value: unknown, phase: "request" | "stream"): SafeResponsesFailure {

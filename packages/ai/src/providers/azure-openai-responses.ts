@@ -14,6 +14,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import {
+	abortedResponsesFailureMessage,
 	appendResponsesFailureDiagnostics,
 	appendResponsesSdkRetryDiagnostic,
 	convertResponsesMessages,
@@ -150,7 +151,7 @@ export const streamAzureOpenAIResponses: StreamFunction<"azure-openai-responses"
 			} else if (responseCallbackFailed) {
 				output.errorMessage = "OpenAI Responses response callback failed.";
 			} else if (output.stopReason === "aborted") {
-				output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+				output.errorMessage = abortedResponsesFailureMessage(error);
 			} else {
 				appendResponsesFailureDiagnostics(
 					output,

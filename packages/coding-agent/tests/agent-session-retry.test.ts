@@ -14,6 +14,37 @@ import { ModelRegistry } from "../src/core/model-registry.js";
 import { DefaultResourceLoader } from "../src/core/resource-loader.js";
 import { SessionManager } from "../src/core/session-manager.js";
 import { SettingsManager } from "../src/core/settings-manager.js";
+import * as sleepModule from "../src/utils/sleep.js";
+
+const { actualSleep } = vi.hoisted(() => ({
+	actualSleep: { current: undefined as typeof sleepModule.sleep | undefined },
+}));
+vi.mock("../src/utils/sleep.js", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../src/utils/sleep.js")>();
+	actualSleep.current = actual.sleep;
+	return { ...actual, sleep: vi.fn(actual.sleep) };
+});
+
+/** Capture the zero-delay post-backoff handoff so a test can act before `continue()` runs. */
+function captureRetryHandoff(): { handoff: () => (() => void) | undefined; restore: () => void } {
+	const actual = actualSleep.current!;
+	let runHandoff: (() => void) | undefined;
+	vi.mocked(sleepModule.sleep).mockImplementation((ms, signal) => {
+		if (ms !== 0 || runHandoff) return actual(ms, signal);
+		return new Promise<void>((resolve) => {
+			runHandoff = resolve;
+		});
+	});
+	return {
+		handoff: () => runHandoff,
+		restore: () => vi.mocked(sleepModule.sleep).mockImplementation(actual),
+	};
+}
+
+async function settle(): Promise<void> {
+	await new Promise<void>((resolve) => setTimeout(resolve, 0));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 const testModel: Model<"openai-chat"> = {
 	id: "test-model",
@@ -363,6 +394,70 @@ describe("AgentSession context window", () => {
 		]);
 	});
 
+	it("compacts the canonical shared-Responses overflow message instead of auto-retrying it", async () => {
+		// Exact canonical text and diagnostic produced by the shared Responses normalizer (asserted in `ai` tests).
+		const failure: AssistantMessage = {
+			...assistantError("OpenAI Responses input exceeds the context window."),
+			diagnostics: [
+				{
+					type: "provider_failure",
+					timestamp: Date.now(),
+					details: {
+						schemaVersion: 1,
+						layer: "openai_responses",
+						phase: "request",
+						kind: "http",
+						category: "context_overflow",
+						retryDisposition: "non_transient",
+						detailSource: "provider_code",
+						httpStatus: 400,
+						providerCode: "context_length_exceeded",
+					},
+				},
+			],
+		};
+		const { session, events } = await createFixture((i) => (i === 0 ? failure : assistantText("ok")));
+
+		await session.prompt("hello");
+
+		await vi.waitFor(() => {
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+		});
+		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "not_attempted", reason: "context_overflow_compaction" }),
+		]);
+	});
+
+	it("retries gateway prose that carries a transient status word without an allowlisted code", async () => {
+		const failure: AssistantMessage = {
+			...assistantError("OpenAI Responses service returned a server error: upstream 503 Service Unavailable."),
+			diagnostics: [
+				{
+					type: "provider_failure",
+					timestamp: Date.now(),
+					details: {
+						schemaVersion: 1,
+						layer: "openai_responses",
+						phase: "stream",
+						kind: "provider_event",
+						category: "server",
+						retryDisposition: "transient",
+						detailSource: "message_category",
+					},
+				},
+			],
+		};
+		const { session } = await createFixture((i) => (i === 0 ? failure : assistantText("ok")));
+
+		await session.prompt("hello");
+
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled", evidence: "provider_failure" }),
+			expect.objectContaining({ outcome: "succeeded" }),
+		]);
+	});
+
 	it("gives context overflow precedence over structured transient evidence", async () => {
 		const model = { ...testModel, maxInputTokens: 272_000 };
 		const overflow = {
@@ -573,7 +668,7 @@ describe("AgentSession persisted retry authority", () => {
 		await harnessStarted;
 
 		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
-		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+		const appendSpy = vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
 			if (
 				message.role === "assistant" &&
 				message.content.some((block) => block.type === "text" && block.text === "provider result")
@@ -589,8 +684,9 @@ describe("AgentSession persisted retry authority", () => {
 
 		await harnessInvocation;
 		await expect(prompt).rejects.toThrow("delayed assistant append failed");
-		expect((session as any)._unsettledAgentRuns.size).toBe(0);
-		expect((session as any)._unsettledRetryChains.size).toBe(0);
+		expect(session.isRetrying).toBe(false);
+		appendSpy.mockRestore();
+		await expect(session.prompt("next")).resolves.toBeUndefined();
 	});
 
 	it("clears a prompt start reservation when the Agent rejects before agent_start", async () => {
@@ -599,7 +695,6 @@ describe("AgentSession persisted retry authority", () => {
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockRejectedValueOnce(new Error("pre-start failure"));
 
 		await expect(session.prompt("first")).rejects.toThrow("pre-start failure");
-		expect((session as any)._pendingAgentRunStart).toBeUndefined();
 		promptSpy.mockImplementation(agentPrompt);
 
 		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
@@ -617,7 +712,7 @@ describe("AgentSession persisted retry authority", () => {
 		session.sessionManager.appendMessage(continuationInput);
 
 		await session.agent.continue();
-		await (session as any)._agentEventQueue;
+		await settle();
 
 		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
 		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
@@ -659,7 +754,7 @@ describe("AgentSession persisted retry authority", () => {
 			{ customType: "test", content: "hidden prompt", display: false },
 			{ triggerTurn: true },
 		);
-		await (session as any)._agentEventQueue;
+		await settle();
 
 		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
 		vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
@@ -927,7 +1022,7 @@ describe("AgentSession persisted retry authority", () => {
 		await expect(session.prompt("hello")).rejects.toThrow("disposed before retry settlement completed");
 
 		expect(continueAgent).not.toHaveBeenCalled();
-		expect((session as any)._retryAbortController).toBeUndefined();
+		expect(session.isRetrying).toBe(false);
 		expect(session.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
 		expect(retryRecords(session)).toEqual([
 			expect.objectContaining({ outcome: "scheduled" }),
@@ -979,7 +1074,7 @@ describe("AgentSession persisted retry authority", () => {
 		const secondResult = await session
 			.prompt("second", { preflightResult: (accepted) => preflightResults.push(accepted) })
 			.catch((error: unknown) => error);
-		const retryCount = (session as any)._runRetryCount;
+		const retryCount = session.retryAttempt;
 		const recordsBeforeCleanup = retryRecords(session);
 		const retryStillActive = session.isRetrying;
 		if (retryStillActive) session.abortRetry();
@@ -1011,7 +1106,7 @@ describe("AgentSession persisted retry authority", () => {
 		const triggeredResult = await session
 			.sendCustomMessage({ customType: "test", content: "hidden prompt", display: false }, { triggerTurn: true })
 			.catch((error: unknown) => error);
-		const retryCount = (session as any)._runRetryCount;
+		const retryCount = session.retryAttempt;
 		const recordsBeforeCleanup = retryRecords(session);
 		const retryStillActive = session.isRetrying;
 		if (retryStillActive) session.abortRetry();
@@ -1045,21 +1140,13 @@ describe("AgentSession persisted retry authority", () => {
 	it("cancels during the post-backoff handoff without continuing", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 1 });
 		const continueAgent = vi.spyOn(session.agent, "continue");
-		const nativeSetTimeout = globalThis.setTimeout;
-		let runHandoff: (() => void) | undefined;
-		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-			if (delay === 0 && !runHandoff) {
-				runHandoff = () => (callback as (...callbackArgs: unknown[]) => void)(...args);
-				return {} as ReturnType<typeof setTimeout>;
-			}
-			return nativeSetTimeout(callback, delay, ...args);
-		});
+		const { handoff, restore } = captureRetryHandoff();
 		try {
 			const prompt = session.prompt("hello");
-			await vi.waitFor(() => expect(runHandoff).toBeDefined());
+			await vi.waitFor(() => expect(handoff()).toBeDefined());
 
 			session.abortRetry();
-			runHandoff?.();
+			handoff()?.();
 			await prompt;
 
 			expect(continueAgent).not.toHaveBeenCalled();
@@ -1082,7 +1169,7 @@ describe("AgentSession persisted retry authority", () => {
 				},
 			]);
 		} finally {
-			setTimeoutSpy.mockRestore();
+			restore();
 		}
 	});
 
@@ -1188,7 +1275,7 @@ describe("AgentSession persisted retry authority", () => {
 		session.dispose();
 		await expect(prompt).rejects.toThrow("disposed before retry settlement completed");
 		rejectContinue(new Error("late continuation failure"));
-		await Promise.resolve();
+		await settle();
 
 		expect(retryRecords(session)).toEqual([
 			expect.objectContaining({ outcome: "scheduled" }),
@@ -1297,22 +1384,14 @@ describe("AgentSession persisted retry authority", () => {
 	it("rejects disposal during the post-backoff handoff without continuing", async () => {
 		const { session } = await createFixture(() => assistantError("rate limit"), { baseDelayMs: 1 });
 		const continueAgent = vi.spyOn(session.agent, "continue");
-		const nativeSetTimeout = globalThis.setTimeout;
-		let runHandoff: (() => void) | undefined;
-		const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-			if (delay === 0 && !runHandoff) {
-				runHandoff = () => (callback as (...callbackArgs: unknown[]) => void)(...args);
-				return {} as ReturnType<typeof setTimeout>;
-			}
-			return nativeSetTimeout(callback, delay, ...args);
-		});
+		const { handoff, restore } = captureRetryHandoff();
 		try {
 			const prompt = session.prompt("hello");
 			const rejection = prompt.catch((error: unknown) => error);
-			await vi.waitFor(() => expect(runHandoff).toBeDefined());
+			await vi.waitFor(() => expect(handoff()).toBeDefined());
 
 			session.dispose();
-			runHandoff?.();
+			handoff()?.();
 			expect(await rejection).toEqual(
 				expect.objectContaining({ message: "AgentSession disposed before retry settlement completed." }),
 			);
@@ -1330,7 +1409,7 @@ describe("AgentSession persisted retry authority", () => {
 				},
 			]);
 		} finally {
-			setTimeoutSpy.mockRestore();
+			restore();
 		}
 	});
 
@@ -1384,18 +1463,221 @@ describe("AgentSession persisted retry authority", () => {
 
 		const fresh = await createFixture(() => assistantText("unexpected continuation"), { sessionManager: reopened });
 		const continueAgent = vi.spyOn(fresh.session.agent, "continue");
-		const internal = fresh.session as any;
 		expect(fresh.session.state.messages).toEqual(context.messages);
 		expect(fresh.session.isRetrying).toBe(false);
-		expect(internal._retryAbortController).toBeUndefined();
-		expect(internal._retryAttempt).toBe(0);
-		expect(internal._runRetryCount).toBe(0);
-		expect(internal._unsettledAgentRuns.size).toBe(0);
-		expect(internal._unsettledRetryChains.size).toBe(0);
-		expect(internal._pendingRetryContinuation).toBeUndefined();
-		await Promise.resolve();
+		expect(fresh.session.retryAttempt).toBe(0);
+		await settle();
 		expect(continueAgent).not.toHaveBeenCalled();
+		expect(retryEvents(fresh.events)).toEqual([]);
+		await expect(fresh.session.prompt("fresh prompt")).resolves.toBeUndefined();
+		expect(retryRecords(fresh.session)).toEqual(expectedRecords);
 		fresh.session.dispose();
+	});
+
+	it("releases the retry when the continuation's assistant message cannot be persisted", async () => {
+		const { session, events } = await createFixture((i) =>
+			i === 0 ? assistantError("rate limit") : assistantText("retry result"),
+		);
+		const appendMessage = session.sessionManager.appendMessage.bind(session.sessionManager);
+		const appendSpy = vi.spyOn(session.sessionManager, "appendMessage").mockImplementation((message) => {
+			if (
+				message.role === "assistant" &&
+				message.content.some((block) => block.type === "text" && block.text === "retry result")
+			) {
+				throw new Error("continuation append failed");
+			}
+			return appendMessage(message);
+		});
+
+		await expect(session.prompt("hello")).rejects.toThrow("continuation append failed");
+
+		expect(session.isRetrying).toBe(false);
+		expect(retryEvents(events).at(-1)).toMatchObject({
+			type: "auto_retry_end",
+			success: false,
+			attempt: 1,
+			finalError: "continuation append failed",
+		});
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled" }),
+			expect.objectContaining({ outcome: "failed", reason: "continuation_rejected", attempt: 1 }),
+		]);
+		appendSpy.mockRestore();
+		await session.agent.waitForIdle();
+		await expect(session.prompt("next")).resolves.toBeUndefined();
+	});
+
+	it("closes a recovered retry when the same continuation later fails non-retryably", async () => {
+		const { session, events } = await createFixture(
+			(i) => {
+				if (i === 0) return assistantError("rate limit");
+				if (i === 1) return assistantToolCall("dummy", "call-1");
+				return providerFailure("non_transient", "invalid_request");
+			},
+			{ customTools: [makeDummyTool()] },
+		);
+
+		await session.prompt("hello");
+
+		expect(session.isRetrying).toBe(false);
+		expect(retryEvents(events)).toEqual([
+			expect.objectContaining({ type: "auto_retry_start", attempt: 1 }),
+			expect.objectContaining({ type: "auto_retry_end", success: true, attempt: 1 }),
+		]);
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled", attempt: 1 }),
+			expect.objectContaining({ outcome: "succeeded", attemptsCompleted: 1 }),
+			expect.objectContaining({
+				outcome: "not_attempted",
+				reason: "structured_non_transient",
+				evidence: "provider_failure",
+			}),
+		]);
+		await expect(session.prompt("next")).resolves.toBeUndefined();
+	});
+
+	it("closes a recovered retry when the same continuation later overflows", async () => {
+		const model = { ...testModel, maxInputTokens: 272_000 };
+		const { session, events } = await createFixture(
+			(i) => {
+				if (i === 0) return assistantError("rate limit");
+				if (i === 1) return assistantToolCall("dummy", "call-1");
+				if (i === 2) return assistantError("Provider returned error: maximum context length is 272000 tokens");
+				return assistantText("compacted continuation");
+			},
+			{ customTools: [makeDummyTool()], model },
+		);
+
+		await session.prompt("hello");
+		await vi.waitFor(() => {
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+		});
+
+		expect(session.isRetrying).toBe(false);
+		expect(retryEvents(events).filter((event) => event.type === "auto_retry_end")).toEqual([
+			expect.objectContaining({ type: "auto_retry_end", success: true, attempt: 1 }),
+		]);
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled", attempt: 1 }),
+			expect.objectContaining({ outcome: "succeeded", attemptsCompleted: 1 }),
+			expect.objectContaining({ outcome: "not_attempted", reason: "context_overflow_compaction" }),
+		]);
+		await vi.waitFor(() => expect(session.isStreaming).toBe(false));
+		await expect(session.prompt("next")).resolves.toBeUndefined();
+	});
+
+	it("compacts an overflow that arrives on a second retry attempt", async () => {
+		const model = { ...testModel, maxInputTokens: 272_000 };
+		const { session, events } = await createFixture(
+			(i) => {
+				if (i === 0) return assistantError("rate limit");
+				if (i === 1) return assistantError("Provider returned error: maximum context length is 272000 tokens");
+				return assistantText("ok");
+			},
+			{ model },
+		);
+
+		await session.prompt("hello");
+		await vi.waitFor(() => {
+			expect(events).toContainEqual(expect.objectContaining({ type: "compaction_start", reason: "overflow" }));
+		});
+
+		expect(retryEvents(events)).toEqual([
+			expect.objectContaining({ type: "auto_retry_start", attempt: 1 }),
+			expect.objectContaining({ type: "auto_retry_end", success: false, attempt: 1 }),
+		]);
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled", attempt: 1 }),
+			expect.objectContaining({
+				outcome: "not_attempted",
+				reason: "context_overflow_compaction",
+				evidence: "context_overflow",
+			}),
+		]);
+		expect(session.isRetrying).toBe(false);
+	});
+
+	it("binds a retry continuation whose Agent start is deferred to the original prompt", async () => {
+		const { session, events } = await createFixture(
+			(i) => (i === 0 ? assistantError("rate limit") : assistantText("retry succeeded")),
+			{ baseDelayMs: 1 },
+		);
+		let releaseStart!: () => void;
+		const startGate = new Promise<void>((resolve) => {
+			releaseStart = resolve;
+		});
+		const agentContinue = session.agent.continue.bind(session.agent);
+		vi.spyOn(session.agent, "continue").mockImplementation(async () => {
+			await startGate;
+			return agentContinue();
+		});
+
+		const prompt = session.prompt("hello");
+		await vi.waitFor(() => expect(session.agent.continue).toHaveBeenCalledOnce());
+		await settle();
+		expect(session.isRetrying).toBe(true);
+		expect(session.isStreaming).toBe(false);
+
+		releaseStart();
+		await prompt;
+
+		expect(session.isRetrying).toBe(false);
+		expect(retryEvents(events).at(-1)).toMatchObject({ type: "auto_retry_end", success: true, attempt: 1 });
+		expect(retryRecords(session)).toEqual([
+			expect.objectContaining({ outcome: "scheduled" }),
+			expect.objectContaining({ outcome: "succeeded", attemptsCompleted: 1 }),
+		]);
+	});
+
+	it("steers into an active retry continuation instead of rejecting", async () => {
+		let releaseContinuation!: () => void;
+		const continuationGate = new Promise<void>((resolve) => {
+			releaseContinuation = resolve;
+		});
+		let markContinuationStarted!: () => void;
+		const continuationStarted = new Promise<void>((resolve) => {
+			markContinuationStarted = resolve;
+		});
+		const { session, events } = await createFixture(() => assistantError("rate limit"), {
+			streamFn: (callIndex) => {
+				const stream = createAssistantMessageEventStream();
+				if (callIndex === 0) {
+					const message = assistantError("rate limit");
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "error", reason: "error", error: message });
+					return stream;
+				}
+				const message = assistantText(callIndex === 1 ? "retry succeeded" : "steered reply");
+				void (async () => {
+					if (callIndex === 1) {
+						markContinuationStarted();
+						await continuationGate;
+					}
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: "stop", message });
+				})();
+				return stream;
+			},
+		});
+
+		const prompt = session.prompt("hello");
+		await continuationStarted;
+		expect(session.isRetrying).toBe(true);
+		expect(session.isStreaming).toBe(true);
+
+		await expect(session.prompt("steer me", { streamingBehavior: "steer" })).resolves.toBeUndefined();
+		releaseContinuation();
+		await prompt;
+
+		expect(session.isRetrying).toBe(false);
+		expect(retryEvents(events).at(-1)).toMatchObject({ type: "auto_retry_end", success: true, attempt: 1 });
+		expect(
+			session.state.messages.some(
+				(message) =>
+					message.role === "assistant" &&
+					message.content.some((block) => block.type === "text" && block.text === "steered reply"),
+			),
+		).toBe(true);
 	});
 });
 
