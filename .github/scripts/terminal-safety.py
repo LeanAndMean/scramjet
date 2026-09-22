@@ -120,6 +120,14 @@ def cleanup_owned_resources(close_windows=None):
         report["cleanupError"] = "; ".join(errors)
 
 
+def shell_exited(pid):
+    try:
+        os.kill(pid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+
+
 def close_mac_windows():
     report["windowCloseRequest"] = json.loads(run(str(driver), "close-windows-pid", str(child.pid)))
     if not wait(lambda: json.loads(run(str(driver), "windows-pid", str(child.pid), "--on-screen")) == [], seconds=5):
@@ -130,6 +138,12 @@ def close_mac_windows():
         except Exception as error:
             report["cleanupCaptureError"] = str(error)
         raise RuntimeError("Owned terminal windows did not close")
+    receipt = output / "shell-pid"
+    if receipt.exists():
+        shell_pid = int(receipt.read_text())
+        # iTerm2's default undo-close grace period keeps the shell alive for five seconds.
+        if not wait(lambda: shell_exited(shell_pid), seconds=10):
+            raise RuntimeError("Owned terminal shell did not exit after window closure")
 
 
 def verify_mac_cleanup():
@@ -145,13 +159,7 @@ def verify_mac_cleanup():
         if "productionFixtureStarted" in report["checks"] and not receipt.exists():
             raise RuntimeError("Owned shell receipt is missing")
         shell_pid = int(receipt.read_text()) if receipt.exists() else None
-        def shell_closed():
-            try:
-                os.kill(shell_pid, 0)
-                return False
-            except ProcessLookupError:
-                return True
-        if shell_pid and not wait(shell_closed, seconds=5):
+        if shell_pid and not wait(lambda: shell_exited(shell_pid), seconds=5):
             report["remainingOwnedShell"] = run("ps", "-o", "pid=,ppid=,pgid=,stat=,comm=", "-p", str(shell_pid))
             raise RuntimeError("Owned terminal shell did not exit")
         report["ownedTerminalClosed"] = {"pid": child.pid, "shellPid": shell_pid}

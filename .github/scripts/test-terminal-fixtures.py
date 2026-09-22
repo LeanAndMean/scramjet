@@ -668,6 +668,30 @@ class NoSelectionPasteTests(unittest.TestCase):
 
 
 class OwnedWindowClosureTests(unittest.TestCase):
+    def test_shell_shutdown_settles_before_application_termination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "shell-pid").write_text("12345")
+            order = []
+            child = Mock(pid=42)
+            child.poll.return_value = None
+            child.terminate.side_effect = lambda: order.append("terminate")
+            system = Mock()
+            def shell(pid, sig):
+                self.assertEqual((pid, sig), (12345, 0))
+                order.append("shell-exited")
+                raise ProcessLookupError()
+            system.kill.side_effect = shell
+            context = {"child": child, "state": lambda: {"stopped": True}, "report": {"checks": {}},
+                       "run": lambda *_args: "[]", "wait": lambda predicate, **_kwargs: predicate(),
+                       "json": json, "os": system, "driver": "events", "output": output}
+            source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
+            helpers = {node.name for node in source.body if isinstance(node, ast.FunctionDef)} - {"run", "state", "wait", "key", "pixels", "check"}
+            load_safety_functions(helpers, context)
+            context["cleanup_owned_resources"](context["close_mac_windows"])
+            self.assertEqual(order, ["shell-exited", "terminate"])
+            self.assertNotIn("cleanupError", context["report"])
+
     def test_window_close_failure_still_attempts_process_cleanup(self):
         child = Mock()
         child.poll.return_value = None
@@ -704,7 +728,7 @@ class MacHiddenWindowBookkeepingTests(unittest.TestCase):
                 context = {"child": child, "state": lambda: {"stopped": True}, "report": {"checks": {}},
                            "run": run, "wait": lambda predicate, **_kwargs: predicate(), "json": json,
                            "os": system, "driver": "events", "output": output}
-                load_safety_functions({"cleanup_owned_resources", "close_mac_windows", "verify_mac_cleanup"}, context)
+                load_safety_functions({"cleanup_owned_resources", "close_mac_windows", "verify_mac_cleanup", "shell_exited"}, context)
                 context["cleanup_owned_resources"](context["close_mac_windows"])
                 context["verify_mac_cleanup"]()
                 self.assertEqual("cleanupError" in context["report"], leftover)
