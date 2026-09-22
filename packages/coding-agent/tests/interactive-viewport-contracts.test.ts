@@ -640,6 +640,27 @@ describe("retained interactive contracts", () => {
 		expect(frame[0]).toContain("HISTORY-000");
 	});
 
+	it("keeps blocked-save warnings across repeated edits after startup diagnostics are drained", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "scramjet-blocked-layout-save-"));
+		directories.push(directory);
+		const agentDir = join(directory, "agent");
+		mkdirSync(agentDir);
+		const file = join(agentDir, "settings.json");
+		writeFileSync(file, "{broken-json");
+		const manager = SettingsManager.create(directory, agentDir);
+		manager.drainErrors();
+		const h = await setup(24, manager);
+		manager.drainErrors();
+		await openSettings(h, "wheel");
+		for (const expected of [4, 5]) {
+			h.terminal.sendInput("\r");
+			await manager.flush();
+			await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("Changes not saved"));
+			expect(manager.getScrollWheelStep()).toBe(expected);
+			expect(readFileSync(file, "utf8")).toBe("{broken-json");
+		}
+	});
+
 	it("preserves invalid settings files while exposing their load error", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "scramjet-invalid-layout-"));
 		directories.push(directory);
