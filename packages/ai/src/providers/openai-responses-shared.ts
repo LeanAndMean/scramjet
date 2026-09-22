@@ -201,6 +201,7 @@ const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
 	unknown: "OpenAI Responses request failed without recognized details.",
 };
 
+const PROVIDER_MESSAGE_MAX_LENGTH = 4096;
 const PROVIDER_DETAIL_MAX_LENGTH = 200;
 const PROVIDER_DETAIL_REDACTIONS: RegExp[] = [
 	/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]+/gi,
@@ -209,10 +210,18 @@ const PROVIDER_DETAIL_REDACTIONS: RegExp[] = [
 	/\bsk-[a-z0-9_-]{8,}/gi,
 	/\b(?:resp|req|chatcmpl|msg|rs|fc|call|sess|proj|org)[_-](?=[a-z0-9_-]*\d)[a-z0-9_-]{6,}\b/gi,
 	/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g,
-	/\b(?:[a-z0-9-]+\.){2,}[a-z0-9-]+(?::\d{1,5})?\b/gi,
+	// All-digit labels are dotted paths (`input.0.content`) or versions, not hostnames; IPv4 has its own rule.
+	/\b(?:(?!\d+\.)[a-z0-9-]+\.){2,}(?!\d+\b)[a-z0-9-]+(?::\d{1,5})?\b/gi,
 	/(?<=^|[\s'"`(])(?:~|\/)[^\s'"`)]+/g,
 	/\b[A-Za-z0-9_-]{32,}\b/g,
 ];
+
+const GATEWAY_OBSERVABILITY: GatewayObservabilityV1 = {
+	schemaVersion: 1,
+	layer: "gateway_service_internal",
+	outcome: "unobservable",
+	reason: "no_structured_evidence",
+};
 
 const PROVIDER_CODES = new Set<string>(Object.keys(PROVIDER_CODE_CATEGORIES));
 const FAILURE_DETAIL_KEYS = new Set([
@@ -252,6 +261,13 @@ type ResponsesSdkRetryReason =
 	| "stream_already_accepted"
 	| "insufficient_evidence";
 
+export interface GatewayObservabilityV1 {
+	schemaVersion: 1;
+	layer: "gateway_service_internal";
+	outcome: "unobservable";
+	reason: "no_structured_evidence";
+}
+
 export interface ResponsesSdkRetryV1 {
 	schemaVersion: 1;
 	layer: "openai_sdk_request";
@@ -283,6 +299,10 @@ function finiteString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : undefined;
 }
 
+function boundedMessage(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value.slice(0, PROVIDER_MESSAGE_MAX_LENGTH) : undefined;
+}
+
 function finiteStatus(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
 }
@@ -293,7 +313,7 @@ function readFailureScalars(value: unknown): { top: FailureScalars; nested: Fail
 	const read = (record: Record<string, unknown> | undefined): FailureScalars => ({
 		code: finiteString(record?.code),
 		type: finiteString(record?.type),
-		message: finiteString(record?.message),
+		message: boundedMessage(record?.message),
 		status: finiteStatus(record?.status),
 	});
 	return { top: read(topRecord), nested: read(nestedRecord) };
@@ -342,7 +362,13 @@ function categoryFromMessage(message: string | undefined): ResponsesFailureCateg
 	if (/content.filter|content.policy|safety policy/.test(normalized)) return "content_rejection";
 	if (/invalid request|bad request/.test(normalized)) return "invalid_request";
 	if (/server error|internal error|internal server/.test(normalized)) return "server";
-	if (/\b50[0234]\b|service unavailable|bad gateway|gateway time-?out|upstream/.test(normalized)) return "server";
+	if (
+		/\bupstream (?:error|unavailable|connect(?:ion)?|request failed)\b|(?:status|http|error|code|returned|received|upstream)\s*:?\s*50[0234]\b|service unavailable|bad gateway|gateway time-?out/.test(
+			normalized,
+		)
+	) {
+		return "server";
+	}
 	if (/fetch failed|socket hang up|econnreset|stream ended/.test(normalized)) return "transport";
 	return undefined;
 }
@@ -596,16 +622,7 @@ export function appendResponsesFailureDiagnostics(
 		...(output.diagnostics ?? []),
 		{ type: "provider_failure", timestamp: Date.now(), details: { ...failure.diagnostic } },
 		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...sdkRetry } }] : []),
-		{
-			type: "gateway_observability",
-			timestamp: Date.now(),
-			details: {
-				schemaVersion: 1,
-				layer: "gateway_service_internal",
-				outcome: "unobservable",
-				reason: "no_structured_evidence",
-			},
-		},
+		{ type: "gateway_observability", timestamp: Date.now(), details: { ...GATEWAY_OBSERVABILITY } },
 	];
 }
 

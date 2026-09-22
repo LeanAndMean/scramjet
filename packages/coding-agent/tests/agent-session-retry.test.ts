@@ -429,7 +429,7 @@ describe("AgentSession context window", () => {
 		]);
 	});
 
-	it("retries gateway prose that carries a transient status word without an allowlisted code", async () => {
+	it("retries when the session honors a structured transient disposition from message-derived evidence", async () => {
 		const failure: AssistantMessage = {
 			...assistantError("OpenAI Responses service returned a server error: upstream 503 Service Unavailable."),
 			diagnostics: [
@@ -929,6 +929,10 @@ describe("AgentSession persisted retry authority", () => {
 
 	it("persists scheduled before removing the failed message or emitting retry start", async () => {
 		const { session, events } = await createFixture(() => assistantError("rate limit"));
+		const settlementErrors: string[] = [];
+		session.extensionRunner.onError((error) => {
+			if (error.event === "retry_settlement") settlementErrors.push(error.error);
+		});
 		const appendCustomEntry = session.sessionManager.appendCustomEntry.bind(session.sessionManager);
 		vi.spyOn(session.sessionManager, "appendCustomEntry").mockImplementation((customType, data, parentId) => {
 			if (customType === "coding-agent:auto-retry") throw new Error("scheduled append failed");
@@ -937,8 +941,38 @@ describe("AgentSession persisted retry authority", () => {
 
 		await expect(session.prompt("hello")).rejects.toThrow("scheduled append failed");
 
+		expect(settlementErrors).toEqual(["scheduled append failed"]);
 		expect(events).not.toContainEqual(expect.objectContaining({ type: "auto_retry_start" }));
 		expect(session.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "error" });
+	});
+
+	it("closes the prior attempt when a later scheduled record cannot be persisted", async () => {
+		const { session, events } = await createFixture((i) =>
+			i < 2 ? assistantError("rate limit") : assistantText("ok"),
+		);
+		const appendCustomEntry = session.sessionManager.appendCustomEntry.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendCustomEntry").mockImplementation((customType, data, parentId) => {
+			if (customType === "coding-agent:auto-retry" && (data as { attempt?: number }).attempt === 2) {
+				throw new Error("second scheduled append failed");
+			}
+			return appendCustomEntry(customType, data, parentId);
+		});
+
+		await expect(session.prompt("hello")).rejects.toThrow("second scheduled append failed");
+
+		expect(session.isRetrying).toBe(false);
+		expect(retryEvents(events)).toEqual([
+			expect.objectContaining({ type: "auto_retry_start", attempt: 1 }),
+			expect.objectContaining({
+				type: "auto_retry_end",
+				success: false,
+				attempt: 1,
+				finalError: "Retry outcome persistence failed",
+			}),
+		]);
+		expect(retryRecords(session)).toEqual([expect.objectContaining({ outcome: "scheduled", attempt: 1 })]);
+		await session.agent.waitForIdle();
+		await expect(session.prompt("next")).resolves.toBeUndefined();
 	});
 
 	it("rejects and cleans up when the terminal success record cannot be persisted", async () => {
@@ -1500,9 +1534,43 @@ describe("AgentSession persisted retry authority", () => {
 		});
 		expect(retryRecords(session)).toEqual([
 			expect.objectContaining({ outcome: "scheduled" }),
-			expect.objectContaining({ outcome: "failed", reason: "continuation_rejected", attempt: 1 }),
+			expect.objectContaining({ outcome: "failed", reason: "run_failed", attempt: 1 }),
 		]);
 		appendSpy.mockRestore();
+		await session.agent.waitForIdle();
+		await expect(session.prompt("next")).resolves.toBeUndefined();
+	});
+
+	it("rejects and releases a recovered retry when its success record cannot be persisted", async () => {
+		const { session, events } = await createFixture(
+			(i) => {
+				if (i === 0) return assistantError("rate limit");
+				if (i === 1) return assistantToolCall("dummy", "call-1");
+				return providerFailure("non_transient", "invalid_request");
+			},
+			{ customTools: [makeDummyTool()] },
+		);
+		const appendCustomEntry = session.sessionManager.appendCustomEntry.bind(session.sessionManager);
+		vi.spyOn(session.sessionManager, "appendCustomEntry").mockImplementation((customType, data, parentId) => {
+			if (customType === "coding-agent:auto-retry" && (data as { outcome?: string }).outcome === "succeeded") {
+				throw new Error("recovered append failed");
+			}
+			return appendCustomEntry(customType, data, parentId);
+		});
+
+		await expect(session.prompt("hello")).rejects.toThrow("recovered append failed");
+
+		expect(session.isRetrying).toBe(false);
+		expect(retryEvents(events)).toEqual([
+			expect.objectContaining({ type: "auto_retry_start", attempt: 1 }),
+			expect.objectContaining({
+				type: "auto_retry_end",
+				success: false,
+				attempt: 1,
+				finalError: "Retry outcome persistence failed",
+			}),
+		]);
+		expect(retryRecords(session)).toEqual([expect.objectContaining({ outcome: "scheduled", attempt: 1 })]);
 		await session.agent.waitForIdle();
 		await expect(session.prompt("next")).resolves.toBeUndefined();
 	});

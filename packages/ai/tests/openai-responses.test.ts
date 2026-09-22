@@ -624,6 +624,52 @@ describe("OpenAI Responses failure normalization", () => {
 	});
 
 	it.each([
+		"The upstream model does not support tools",
+		"The 'upstream' parameter is invalid",
+		"Invalid schema for function 'x': 504 is not a valid enum value",
+	])("does not treat %s as a transient server error", (message) => {
+		const result = normalizeResponsesFailure({ type: "error", message }, "stream");
+		expect(result.diagnostic).toEqual(expect.objectContaining({ category: "unknown", retryDisposition: "unknown" }));
+	});
+
+	it("classifies and caps provider messages longer than the detail bound instead of dropping them", () => {
+		const long = `Rate limit reached for gpt-6-astra on tokens per min. ${"please retry ".repeat(30)}`;
+		const result = normalizeResponsesFailure({ type: "error", message: long }, "stream");
+		expect(result.diagnostic).toEqual(
+			expect.objectContaining({
+				kind: "provider_event",
+				category: "rate_limit",
+				retryDisposition: "transient",
+				detailSource: "message_category",
+			}),
+		);
+		expect(result.message.startsWith("OpenAI Responses request was rate limited: Rate limit reached")).toBe(true);
+		expect(result.message.endsWith("\u2026")).toBe(true);
+		expect(result.message.length).toBeLessThan(long.length);
+
+		const overflow = normalizeResponsesFailure(
+			{ type: "error", message: `maximum context length exceeded ${"y".repeat(300)}` },
+			"stream",
+		);
+		expect(overflow.message).toBe("OpenAI Responses input exceeds the context window.");
+		expect(overflow.diagnostic.category).toBe("context_overflow");
+	});
+
+	it("keeps dotted parameter paths readable while redacting multi-label hostnames", () => {
+		const path = normalizeResponsesFailure({ message: "Invalid value at input.0.content: expected array" }, "stream");
+		expect(path.message).toBe(
+			"OpenAI Responses request failed without recognized details: Invalid value at input.0.content: expected array.",
+		);
+		const host = normalizeResponsesFailure(
+			{ message: "connect to gateway.internal.example.com:8443 refused" },
+			"stream",
+		);
+		expect(host.message).toBe(
+			"OpenAI Responses request failed without recognized details: connect to [redacted] refused.",
+		);
+	});
+
+	it.each([
 		["OpenAI", streamOpenAIResponses, openaiModel, {}],
 		["Azure", streamAzureOpenAIResponses, azureModel, { azureBaseUrl: "https://example.openai.azure.com/openai/v1" }],
 	] as const)("keeps the %s abort path free of private detail", async (_name, streamFn, model, extra) => {

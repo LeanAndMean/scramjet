@@ -284,12 +284,22 @@ function createDeferred<T = void>(): Deferred<T> {
 	return { promise, resolve, reject, settled: false };
 }
 
-function settleDeferred<T>(deferred: Deferred<T>, error: Error | undefined, value: T): boolean {
+function resolveDeferred<T>(deferred: Deferred<T>, value: T): boolean {
 	if (deferred.settled) return false;
 	deferred.settled = true;
-	if (error) deferred.reject(error);
-	else deferred.resolve(value);
+	deferred.resolve(value);
 	return true;
+}
+
+function rejectDeferred(deferred: Pick<Deferred<unknown>, "reject" | "settled">, error: Error): boolean {
+	if (deferred.settled) return false;
+	deferred.settled = true;
+	deferred.reject(error);
+	return true;
+}
+
+function settleDeferred(deferred: Deferred, error: Error | undefined): boolean {
+	return error ? rejectDeferred(deferred, error) : resolveDeferred(deferred, undefined);
 }
 
 // SCRAMJET-DIVERGENCE: harness-tool persisted-settlement acknowledgement (#341). Each invocation
@@ -352,7 +362,7 @@ type AutoRetryRecord =
 	| {
 			schemaVersion: 1;
 			outcome: "failed";
-			reason: "continuation_rejected";
+			reason: "continuation_rejected" | "run_failed";
 			attempt: number;
 			cumulativeErrors: number;
 	  }
@@ -689,7 +699,7 @@ export class AgentSession {
 			if (reservation) {
 				this._pendingAgentRunStart = undefined;
 				reservation.run = run;
-				settleDeferred(reservation, undefined, run);
+				resolveDeferred(reservation, run);
 			}
 			return run;
 		}
@@ -702,11 +712,11 @@ export class AgentSession {
 	}
 
 	private _settleAgentRun(run: AgentRunSettlement, error?: Error): void {
-		if (settleDeferred(run, error, undefined)) this._unsettledAgentRuns.delete(run);
+		if (settleDeferred(run, error)) this._unsettledAgentRuns.delete(run);
 	}
 
 	private _settleRetryChain(chain: RetryChainSettlement, error?: Error): void {
-		if (settleDeferred(chain, error, undefined)) this._unsettledRetryChains.delete(chain);
+		if (settleDeferred(chain, error)) this._unsettledRetryChains.delete(chain);
 	}
 
 	private _completeAgentRun(run: AgentRunSettlement, error?: Error): void {
@@ -723,7 +733,7 @@ export class AgentSession {
 
 	private _rejectAgentRunStart(reservation: AgentRunStartReservation, error: Error): void {
 		if (this._pendingAgentRunStart === reservation) this._pendingAgentRunStart = undefined;
-		settleDeferred(reservation, error, undefined as never);
+		rejectDeferred(reservation, error);
 	}
 
 	// SCRAMJET-DIVERGENCE: harness-tool persisted settlement (#341). Synchronous ownership keeps queued
@@ -1411,7 +1421,7 @@ export class AgentSession {
 	}
 
 	private _settleHarnessPersistenceAck(ack: HarnessPersistenceAck, error?: Error): void {
-		settleDeferred(ack, error, undefined);
+		settleDeferred(ack, error);
 	}
 
 	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Register a deferred acknowledgement
@@ -3193,7 +3203,7 @@ export class AgentSession {
 				{
 					schemaVersion: 1,
 					outcome: "failed",
-					reason: "continuation_rejected",
+					reason: "run_failed",
 					attempt: this._bounded(retry.attempt),
 					cumulativeErrors: this._bounded(this._runRetryCount),
 				},
@@ -3285,7 +3295,7 @@ export class AgentSession {
 					finalError: "Retry outcome persistence failed",
 				});
 			}
-			throw error;
+			throw this._reportRetryFailure(error);
 		}
 
 		const controller = new AbortController();
