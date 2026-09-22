@@ -60,13 +60,6 @@ func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool 
     return false
 }
 
-func windowIsOnScreen(_ record: [String: Any]) -> Bool {
-    guard let value = record[kCGWindowIsOnscreen as String] else { return true }
-    let object = value as CFTypeRef
-    guard CFGetTypeID(object) == CFBooleanGetTypeID() else { return true }
-    return CFBooleanGetValue(object as! CFBoolean)
-}
-
 func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
     var flags = CGEventFlags(rawValue: rawFlags)
     // iTerm2's Kitty encoder requires device bits on physical modifier events.
@@ -99,11 +92,6 @@ func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
 
 let args = CommandLine.arguments
 switch args[1] {
-case "self-test-window-visibility":
-    let key = kCGWindowIsOnscreen as String
-    let records: [[String: Any]] = [[:], [key: true], [key: false], [key: "false"], [key: NSNumber(value: 0)]]
-    precondition(records.map(windowIsOnScreen) == [true, true, false, true, true], "Unknown window visibility must remain potentially visible")
-    emit(["passed": true, "cases": records.count])
 case "capabilities":
     emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
           "screenCapture": CGPreflightScreenCaptureAccess()])
@@ -141,11 +129,13 @@ case "close-windows-pid":
     }
 case "windows-pid":
     let pid = Int(args[2])!
-    guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { fatalError("Window enumeration failed") }
+    let onScreenOnly = args.count == 4 && args[3] == "--on-screen"
+    guard args.count == 3 || onScreenOnly else { fatalError("Unknown window query option") }
+    let options: CGWindowListOption = onScreenOnly ? [.optionOnScreenOnly, .excludeDesktopElements] : [.optionAll, .excludeDesktopElements]
+    guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { fatalError("Window enumeration failed") }
     emit(windows.filter { $0[kCGWindowOwnerPID as String] as? Int == pid }.map { item -> [String: Any] in
         ["pid": pid, "window": item[kCGWindowNumber as String] as? Int ?? 0,
          "layer": item[kCGWindowLayer as String] as? Int ?? 0,
-         "onScreen": windowIsOnScreen(item),
          "bounds": item[kCGWindowBounds as String] as? [String: Any] ?? [:]]
     })
 case "press-pid":

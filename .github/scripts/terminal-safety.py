@@ -122,7 +122,7 @@ def cleanup_owned_resources(close_windows=None):
 
 def close_mac_windows():
     report["windowCloseRequest"] = json.loads(run(str(driver), "close-windows-pid", str(child.pid)))
-    if not wait(lambda: not any(window.get("onScreen", True) for window in json.loads(run(str(driver), "windows-pid", str(child.pid)))), seconds=5):
+    if not wait(lambda: json.loads(run(str(driver), "windows-pid", str(child.pid), "--on-screen")) == [], seconds=5):
         try:
             report["windowsAfterClose"] = json.loads(run(str(driver), "windows-pid", str(child.pid)))
             report["geometryAfterClose"] = json.loads(run(str(driver), "geometry-pid", str(child.pid)))
@@ -214,7 +214,6 @@ try:
     if mac:
         report["version"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", "/Applications/iTerm.app/Contents/Info.plist")
         run("swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver))
-        report["windowVisibilitySelfTest"] = json.loads(run(str(driver), "self-test-window-visibility"))
         report["capabilities"] = json.loads(run(str(driver), "capabilities"))
         if json.loads(run(str(driver), "running", "com.googlecode.iterm2")):
             raise RuntimeError("Refusing to adopt an existing iTerm process")

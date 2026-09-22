@@ -696,7 +696,8 @@ class MacHiddenWindowBookkeepingTests(unittest.TestCase):
                     if args[1] == "close-windows-pid":
                         return json.dumps({"closed": 1, "pid": 42})
                     if args[1] == "windows-pid":
-                        return json.dumps([{"pid": 42, "onScreen": False}] if child.poll() is None or leftover else [])
+                        records = [{"pid": 42, "onScreen": False}] if child.poll() is None or leftover else []
+                        return json.dumps([record for record in records if record["onScreen"]] if args[3:] == ("--on-screen",) else records)
                     return "[]"
                 system = Mock()
                 system.kill.side_effect = ProcessLookupError()
