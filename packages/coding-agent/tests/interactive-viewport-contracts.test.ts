@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@leanandmean/ai";
-import { getKeybindings, Text } from "@leanandmean/tui";
+import { type EditorComponent, getKeybindings, Text } from "@leanandmean/tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.js";
 import * as clipboard from "../src/utils/clipboard.js";
@@ -508,6 +508,43 @@ describe("retained interactive contracts", () => {
 		await h.frame();
 		h.terminal.sendInput("x");
 		expect(h.extensionUI.getEditorText()).toBe("x");
+	});
+
+	it.each([1, 2])("does not activate hidden settings at %i terminal rows and recovers", async (rows) => {
+		const h = await setup();
+		await openSettings(h, "wheel");
+		h.terminal.resize(24, rows);
+		expect((await h.frame()).join("\n")).toMatch(/resize/i);
+		h.terminal.sendInput("\r");
+		await h.frame();
+		expect(h.session.settingsManager.getScrollWheelStep()).toBe(3);
+		h.terminal.resize(60, 24);
+		expect((await h.frame()).join("\n")).toContain("Wheel scroll lines");
+		h.terminal.sendInput("\r");
+		await h.frame();
+		expect(h.session.settingsManager.getScrollWheelStep()).toBe(4);
+	});
+
+	it.each([1, 2])("does not complete or submit hidden input at %i terminal rows", async (rows) => {
+		const h = await setup();
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.fn();
+		editor.onSubmit = submit;
+		for (const character of "/hot") h.terminal.sendInput(character);
+		await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("→ hotkeys"));
+		h.terminal.resize(24, rows);
+		expect((await h.frame()).join("\n")).toMatch(/resize/i);
+		h.terminal.sendInput("\t");
+		h.terminal.sendInput("\r");
+		await h.frame();
+		expect(submit).not.toHaveBeenCalled();
+		expect(h.extensionUI.getEditorText()).toBe("/hot");
+		h.terminal.resize(60, 24);
+		await h.frame();
+		h.terminal.sendInput("\t");
+		await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toMatch(/^\/hotkeys/));
+		h.terminal.sendInput("\r");
+		expect(submit).toHaveBeenCalledOnce();
 	});
 
 	it("keeps the docked editor cursor on its painted row while reading history", async () => {

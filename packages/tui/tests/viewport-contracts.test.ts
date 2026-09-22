@@ -230,6 +230,19 @@ describe("focus transport contracts", () => {
 	});
 });
 
+it("observes only visible terminal columns after shrinking while preserving printed spaces", async () => {
+	const terminal = new HeadlessTerminal(12, 2);
+	terminal.write("\x1b[?1049hABCDEFGHIJKL");
+	await terminal.flush();
+	terminal.resize(6, 2);
+	terminal.write("\x1b[H\x1b[2Ksmall");
+	await terminal.flush();
+	expect(terminal.visibleLines()[0]).toBe("small");
+	terminal.write("\rsmall ");
+	await terminal.flush();
+	expect(terminal.visibleLines()[0]).toBe("small ");
+});
+
 describe("overwidth containment contracts", () => {
 	const wide = "\x1b[31mAB界e\u0301XYZ1234-INVISIBLE-SUFFIX\x1b[0m";
 	it("contains visible overwidth without throwing and recovers", async () => {
