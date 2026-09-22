@@ -61,7 +61,7 @@ With images:
 - `"steer"`: Queue the message while the agent is running. It is delivered after the current assistant turn finishes executing its tool calls, before the next LLM call.
 - `"followUp"`: Wait until the agent finishes. Message is delivered only when agent stops.
 
-If the agent is streaming and no `streamingBehavior` is specified, the command returns an error.
+If the agent is streaming and no `streamingBehavior` is specified, the command returns an error. During automatic-retry backoff, when the agent is not streaming but the retry chain is still active, a new prompt is rejected; send `abort_retry` before starting unrelated work.
 
 **Extension commands**: If the message is an extension command (e.g., `/mycommand`), it executes immediately even during streaming. Extension commands manage their own LLM interaction via `pi.sendMessage()`.
 
@@ -408,7 +408,7 @@ Response:
 
 #### abort_retry
 
-Abort an in-progress retry (cancel the delay and stop retrying).
+Abort an in-progress retry, whether it is waiting in backoff or running the retry continuation.
 
 ```json
 {"type": "abort_retry"}
