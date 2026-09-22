@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.99.0 — Preserve Responses errors and retry diagnostics
+
+Preserves privacy-safe provider failure evidence and makes persisted assistant outcomes authoritative for automatic retry decisions. Fixes [#553](https://github.com/LeanAndMean/scramjet/issues/553).
+
+### Changed
+
+- Normalize shared OpenAI Responses failures across OpenAI, Azure, and custom routes into canonical messages with bounded diagnostics.
+- Record invocation-local OpenAI SDK request-attempt evidence without changing retry behavior or exposing unrestricted provider data.
+- Base AgentSession retry decisions on persisted finalized assistant snapshots and persist replay-inert retry outcomes with race-safe settlement.
+- Reject unrelated prompts during retry backoff and allow retry cancellation during an active continuation.
+
+### Tests
+
+- Add regression coverage for malformed provider events, SDK retry outcomes, structured retry policy, extension replacement, persistence failures, cancellation, and lifecycle ordering.
+
 ## 0.98.0 — Refresh GitHub Copilot model offerings
 
 Adds verified GitHub Copilot model metadata and keeps catalog generation, request serialization, and authenticated model discovery aligned. Fixes [#477](https://github.com/LeanAndMean/scramjet/issues/477).
