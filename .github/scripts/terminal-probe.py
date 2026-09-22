@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -36,7 +37,7 @@ REQUIRED_CHECKS = {
     "rightClickClipboardExactUnicode", "rightClickRequestsCopy", "rightWithoutSelectionDoesNotCopyOrPaste",
     "scrolledSelectionClipboardExact", "selectionAutoscrolls", "selectionHoldsDuringUpdates",
     "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
-    "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail",
+    "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail", "keyboardBrowsingReturnsToTail",
     "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
     "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies",
     "nativeInputHeightCeiling",
@@ -50,6 +51,42 @@ def required_checks():
     if terminal_kind == "vte" and not with_tmux:
         expected |= {"narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored"}
     return expected
+
+
+def cleanup_owned_resources():
+    if not terminal_started:
+        return
+    errors = []
+    try:
+        fixture_state = state()
+        pgid = fixture_state.get("pgid")
+        if pgid and pgid != os.getpgrp() and not fixture_state.get("stopped"):
+            os.killpg(pgid, signal.SIGCONT)
+    except ProcessLookupError:
+        pass
+    except Exception as error:
+        errors.append(f"resume: {error}")
+    operations = [("exit", lambda: key("exit"))]
+    if with_tmux:
+        operations.append(("tmux", lambda: subprocess.run(["tmux", "-L", "scramjet-probe", "kill-server"], capture_output=True, timeout=10, check=True)))
+    operations.append(("close", lambda: key("close")))
+    for label, operation in operations:
+        try:
+            operation()
+        except ProcessLookupError:
+            pass
+        except Exception as error:
+            errors.append(f"{label}: {error}")
+    if terminal_process and terminal_process.poll() is None:
+        for label, operation in [("terminate", terminal_process.terminate), ("wait", lambda: terminal_process.wait(timeout=10))]:
+            try:
+                operation()
+            except ProcessLookupError:
+                pass
+            except Exception as error:
+                errors.append(f"{label}: {error}")
+    if errors:
+        report["cleanupError"] = "; ".join(errors)
 
 
 def report_passed():
@@ -97,9 +134,9 @@ def type_text(text):
 
 
 def key(name):
-    mac = {"viewportUp": (116, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
+    mac = {"viewportUp": (100, 0) if terminal_kind == "apple" else (116, 524288), "viewportDown": (101, 0) if terminal_kind == "apple" else (121, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
            "a": (0, 0), "b": (11, 0), "c": (8, 0), "left": (123, 0), "backspace": (51, 0), "exit": (12, 262144), "close": (13, 1048576), "f": (3, 0), "g": (5, 0)}
-    linux = {"viewportUp": "alt+Prior", "toggleTools": "ctrl+o", "paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
+    linux = {"viewportUp": "alt+Prior", "viewportDown": "alt+Next", "toggleTools": "ctrl+o", "paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
              "left": "Left", "backspace": "BackSpace", "exit": "ctrl+q", "close": "alt+F4"}
     if is_mac:
         events("key", *mac[name])
@@ -159,6 +196,12 @@ def open_settings(query):
     type_text(query)
     if not wait_for(lambda: any(query.lower() in row.lower() for row in state().get("painted", []))):
         raise RuntimeError("Settings search did not render")
+
+
+def close_settings():
+    key("escape")
+    if not wait_for(lambda: state().get("editorActive") is True and state().get("frameFlushed") is True):
+        raise RuntimeError("Settings selector did not release focus after Escape")
 
 
 def stable_check(name, predicate, seconds=0.35):
@@ -243,11 +286,13 @@ try:
         report["terminalVersion"] = run(executable, "-version" if terminal_kind == "xterm" else "--version")
         report["packages"] = run("dpkg-query", "-W", executable, "tmux", "xdotool", "xvfb")
     seed_clipboard("SCRAMJET-PROBE-SENTINEL")
+    key_profile = " --function-key-browsing" if terminal_kind == "apple" else ""
+    report["viewportKeys"] = {"profile": "F8/F9" if key_profile else "Alt+PageUp/Alt+PageDown", "qualification": "Apple Terminal emitted unmodified PageUp for Option+PageUp; this is an explicit temporary app-keybinding profile, not a runtime terminal fallback." if key_profile else "default bindings"}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
         f"stty -g > {shlex.quote(str(output / 'stty-before.txt'))}",
         "printf 'SCRAMJET NORMAL BUFFER SENTINEL\\n'",
-        f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --journey",
+        f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --journey{key_profile}",
         f"stty -g > {shlex.quote(str(output / 'stty-after.txt'))}",
         "printf 'SCRAMJET RESTORED SHELL\\n'",
     ]) + "\n")
@@ -402,6 +447,8 @@ try:
     tail = state()
     key("viewportUp")
     check("keyboardOnlyBrowsingFromTail", lambda: not state()["followingTail"] and state()["offset"] == tail["offset"] - tail["height"])
+    key("viewportDown")
+    check("keyboardBrowsingReturnsToTail", lambda: state()["followingTail"] and state()["offset"] == tail["offset"])
     mouse("down", *cell(columns, 1))
     mouse("up", *cell(columns, 1))
     anchor = state()["painted"][0]
@@ -412,15 +459,15 @@ try:
     open_settings("dock")
     key("enter")
     check("settingsUndocksLive", lambda: state()["dockEditor"] is False and state()["height"] == state()["rows"])
-    key("escape")
+    close_settings()
     open_settings("dock")
     key("enter")
     check("settingsRedocksLive", lambda: state()["dockEditor"] is True and state()["height"] < state()["rows"])
-    key("escape")
+    close_settings()
     open_settings("wheel")
     key("enter")
     check("settingsWheelChangeApplies", lambda: state()["wheelStep"] == 4)
-    key("escape")
+    close_settings()
     mouse("down", *cell(columns, state()["height"] // 2))
     mouse("up", *cell(columns, state()["height"] // 2))
     before_wheel = state()
@@ -430,7 +477,7 @@ try:
     open_settings("height")
     key("enter")
     check("settingsEditorHeightChangeApplies", lambda: state()["editorHeightPercent"] == 35)
-    key("escape")
+    close_settings()
     fixture_command("long-editor")
     check("nativeInputHeightCeiling", lambda: sum(row.strip().startswith("INPUT-") for row in state()["painted"]) == state()["rows"] * 35 // 100)
     screenshot("docked-settings")
@@ -446,7 +493,7 @@ try:
         key("enter")
         check("narrowSettingsRemainsUsable", lambda: state()["wheelStep"] == 5 and any("Wheel scroll lines" in row for row in state()["painted"]))
         screenshot("narrow-settings")
-        key("escape")
+        close_settings()
         run("xdotool", "windowsize", window_id, str(width), str(height))
         check("narrowEditorSizeRestored", lambda: (state()["columns"], state()["rows"]) == (columns, rows))
     fixture_command("expand")
@@ -561,18 +608,7 @@ except Exception as error:
         report["stderr"] = error.stderr
     screenshot("failure")
 finally:
-    if terminal_started:
-        try:
-            key("exit")
-            key("close")
-            if with_tmux:
-                subprocess.run(["tmux", "-L", "scramjet-probe", "kill-server"], capture_output=True, timeout=10)
-            if terminal_process:
-                if terminal_process.poll() is None:
-                    terminal_process.terminate()
-                terminal_process.wait(timeout=10)
-        except Exception as error:
-            report["cleanupError"] = str(error)
+    cleanup_owned_resources()
     report["passed"] = report_passed()
     (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))

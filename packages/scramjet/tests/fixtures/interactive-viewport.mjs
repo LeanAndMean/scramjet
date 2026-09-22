@@ -180,6 +180,8 @@ async function runProduction() {
 	const directory = mkdtempSync(join(tmpdir(), "scramjet-production-viewport-"));
 	process.env.SCRAMJET_CODING_AGENT_DIR = directory;
 	process.env.SCRAMJET_OFFLINE = "1";
+	const functionKeyBrowsing = process.argv.includes("--function-key-browsing");
+	if (functionKeyBrowsing) writeFileSync(join(directory, "keybindings.json"), JSON.stringify({ "tui.viewport.pageUp": "f8", "tui.viewport.pageDown": "f9" }));
 	const { Agent } = await import("../../../agent/dist/index.js");
 	const { AgentSession, AuthStorage, ModelRegistry, SessionManager, SettingsManager, InteractiveMode } = await import("../../../coding-agent/dist/index.js");
 	const { createAgentSessionServices } = await import("../../../coding-agent/dist/core/agent-session-services.js");
@@ -242,7 +244,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => stripAnsi(line).slice(0, -1).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => stripAnsi(line).slice(0, -1).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {

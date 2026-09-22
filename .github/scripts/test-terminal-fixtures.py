@@ -125,7 +125,7 @@ EXPECTED_INTERACTION_CHECKS = {
     "readingInsideRunningBatch", "rightClickClipboardExactUnicode", "rightClickRequestsCopy",
     "rightWithoutSelectionDoesNotCopyOrPaste", "scrolledSelectionClipboardExact", "selectionAutoscrolls",
     "selectionHoldsDuringUpdates", "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
-    "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail",
+    "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail", "keyboardBrowsingReturnsToTail",
     "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
     "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies", "nativeInputHeightCeiling",
     "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
