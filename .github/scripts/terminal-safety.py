@@ -121,8 +121,14 @@ def cleanup_owned_resources(close_windows=None):
 
 
 def close_mac_windows():
-    run(str(driver), "close-windows-pid", str(child.pid))
+    report["windowCloseRequest"] = json.loads(run(str(driver), "close-windows-pid", str(child.pid)))
     if not wait(lambda: json.loads(run(str(driver), "windows-pid", str(child.pid))) == [], seconds=5):
+        try:
+            report["windowsAfterClose"] = json.loads(run(str(driver), "windows-pid", str(child.pid)))
+            report["geometryAfterClose"] = json.loads(run(str(driver), "geometry-pid", str(child.pid)))
+            run("screencapture", "-x", str(output / "cleanup-window.png"))
+        except Exception as error:
+            report["cleanupCaptureError"] = str(error)
         raise RuntimeError("Owned terminal windows did not close")
 
 

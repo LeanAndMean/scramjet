@@ -130,7 +130,12 @@ case "close-windows-pid":
 case "windows-pid":
     let pid = Int(args[2])!
     guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { fatalError("Window enumeration failed") }
-    emit(windows.filter { $0[kCGWindowOwnerPID as String] as? Int == pid }.map { ["pid": pid, "window": $0[kCGWindowNumber as String] as? Int ?? 0] })
+    emit(windows.filter { $0[kCGWindowOwnerPID as String] as? Int == pid }.map { item -> [String: Any] in
+        ["pid": pid, "window": item[kCGWindowNumber as String] as? Int ?? 0,
+         "layer": item[kCGWindowLayer as String] as? Int ?? 0,
+         "onScreen": item[kCGWindowIsOnscreen as String] as? Bool ?? false,
+         "bounds": item[kCGWindowBounds as String] as? [String: Any] ?? [:]]
+    })
 case "press-pid":
     emit(["pressed": pressButton(AXUIElementCreateApplication(pid_t(args[2])!), title: args[3])])
 case "press":

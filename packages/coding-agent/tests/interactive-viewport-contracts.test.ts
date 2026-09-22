@@ -2,10 +2,20 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@leanandmean/ai";
-import { CURSOR_MARKER, type EditorComponent, getKeybindings, Text } from "@leanandmean/tui";
+import {
+	CURSOR_MARKER,
+	type EditorComponent,
+	getCapabilities,
+	getCellDimensions,
+	getKeybindings,
+	setCapabilities,
+	setCellDimensions,
+	Text,
+} from "@leanandmean/tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.js";
 import * as clipboard from "../src/utils/clipboard.js";
+import { loadPhoton } from "../src/utils/photon.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
 
 vi.mock("../src/utils/tools-manager.js", () => ({ ensureTool: vi.fn(async () => undefined) }));
@@ -787,6 +797,79 @@ describe("retained interactive contracts", () => {
 				}
 			},
 		);
+	});
+
+	it.each([
+		{ phase: "no reply", response: undefined, columns: 5 },
+		{ phase: "before reveal", response: "\x1b[6;19;10t", columns: 5 },
+		{ phase: "after reveal", response: "\x1b[6;19;10t", columns: 5 },
+		{ phase: "changed width", response: "\x1b[6;19;20t", columns: 3 },
+		{ phase: "changed height", response: "\x1b[6;9;10t", columns: 2 },
+	])("preserves production image reading across cell measurements: $phase", async ({ phase, response, columns }) => {
+		const previousCapabilities = getCapabilities();
+		const previousDimensions = getCellDimensions();
+		const photon = await loadPhoton();
+		const pixels = new Uint8Array(300 * 3000 * 4).fill(255);
+		for (let index = 1; index < pixels.length; index += 4) pixels[index] = 0;
+		const image = new photon.PhotonImage(pixels, 300, 3000);
+		try {
+			setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+			setCellDimensions({ widthPx: 10, heightPx: 19 });
+			const h = await setup(30, settings(), 80);
+			h.extensionUI.setWidget("above", ["ABOVE"]);
+			h.extensionUI.setWidget("below", ["BELOW"], { placement: "belowEditor" });
+			h.extensionUI.setFooter(() => new Text("FOOTER\nFOOTER", 0, 0));
+			await history(h);
+			await h.emit({ type: "agent_start" });
+			await h.emit({ type: "tool_execution_start", toolCallId: "measured-image", toolName: "unknown", args: {} });
+			const tool = h.internals.chatContainer.children[0];
+			await h.emit({
+				type: "tool_execution_end",
+				toolCallId: "measured-image",
+				isError: false,
+				result: {
+					content: [
+						{ type: "text", text: "IMAGE-CAPTION" },
+						{ type: "image", mimeType: "image/png", data: Buffer.from(image.get_bytes()).toString("base64") },
+					],
+				},
+			});
+			await h.frame();
+			if (phase === "before reveal") {
+				h.terminal.sendInput(response!);
+				await h.frame();
+			}
+			h.internals.ui.revealComponent(tool);
+			let mark = h.terminal.markWrites();
+			expect((await h.frame()).join("\n")).not.toContain("Image clipped");
+			expect(h.terminal.writesSince(mark)).toMatch(/\x1b_Ga=T,[^;]*c=5,r=22/);
+			const before = h.internals.ui.getViewportState()!;
+			expect(before.height).toBe(22);
+			expect(before.followingTail).toBe(false);
+			const invalidate = vi.spyOn(tool, "invalidate");
+			mark = h.terminal.markWrites();
+			if (response && phase !== "before reveal") h.terminal.sendInput(response);
+			await h.frame();
+			if (phase.startsWith("changed")) {
+				expect(invalidate).toHaveBeenCalledOnce();
+				expect(getCellDimensions()).toEqual(
+					phase === "changed width" ? { widthPx: 20, heightPx: 19 } : { widthPx: 10, heightPx: 9 },
+				);
+				h.internals.ui.revealComponent(tool);
+				mark = h.terminal.markWrites();
+				await h.frame();
+			} else {
+				expect(h.internals.ui.getViewportState()!.offset).toBe(before.offset);
+				expect(invalidate).not.toHaveBeenCalled();
+			}
+			expect(h.terminal.writesSince(mark)).toMatch(new RegExp(`\\x1b_Ga=T,[^;]*c=${columns},r=22`));
+			expect(h.terminal.visibleLines().join("\n")).not.toContain("Image clipped");
+			expect(h.extensionUI.getEditorText()).toBe("DRAFT");
+		} finally {
+			image.free();
+			setCellDimensions(previousDimensions);
+			setCapabilities(previousCapabilities);
+		}
 	});
 
 	it("preserves invalid settings files while exposing their load error", async () => {
