@@ -26,6 +26,8 @@ The bounded production journey uses real native desktop input with synthetic ret
 
 The recorded configurations below establish the earlier retained-renderer journeys; they are not, by themselves, evidence for every subsequent docking/settings change. Match each claim to the source revision and check names in its report.
 
+The hosted drivers require a zero fixture-exit receipt and terminal restoration; the macOS graphics driver separately owns and verifies closure of its terminal process, windows and shell. Graphics confinement compares fresh image pixels with independent single-row color bands in the safety fixture's above-editor widget and last footer row, preserving their heights and accounting for the leading dock spacer. Calibration uses screenshot pixels rather than default cell dimensions, so display scaling is measured rather than assumed. The representative VTE journey includes narrow wrapped editing, autocomplete acceptance and a separate native committed-mode smoke. No-selection right-click checks wait for acknowledged input and then require stable copy, paste, error and editor observations; intercepted paste remains payload-free. Windows desktop/clipboard execution requires separate explicit permission.
+
 Recorded native configurations (2026-09-21):
 
 | Path | Tested version and configuration |

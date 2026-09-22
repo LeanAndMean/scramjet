@@ -89,7 +89,7 @@ def pixels(name):
     return result["count"]
 
 
-def cleanup_owned_resources():
+def cleanup_owned_resources(close_windows=None):
     errors = []
     try:
         fixture_state = state()
@@ -103,6 +103,11 @@ def cleanup_owned_resources():
                 key("exit")
     except Exception as error:
         errors.append(f"fixture: {error}")
+    if close_windows:
+        try:
+            close_windows()
+        except Exception as error:
+            errors.append(f"close windows: {error}")
     if child and child.poll() is None:
         for label, operation in [("terminate", child.terminate), ("wait", lambda: child.wait(timeout=10))]:
             try:
@@ -113,6 +118,12 @@ def cleanup_owned_resources():
                 errors.append(f"{label}: {error}")
     if errors:
         report["cleanupError"] = "; ".join(errors)
+
+
+def close_mac_windows():
+    run(str(driver), "close-windows-pid", str(child.pid))
+    if not wait(lambda: json.loads(run(str(driver), "windows-pid", str(child.pid))) == [], seconds=5):
+        raise RuntimeError("Owned terminal windows did not close")
 
 
 def verify_mac_cleanup():
@@ -135,6 +146,7 @@ def verify_mac_cleanup():
             except ProcessLookupError:
                 return True
         if shell_pid and not wait(shell_closed, seconds=5):
+            report["remainingOwnedShell"] = run("ps", "-o", "pid=,ppid=,pgid=,stat=,comm=", "-p", str(shell_pid))
             raise RuntimeError("Owned terminal shell did not exit")
         report["ownedTerminalClosed"] = {"pid": child.pid, "shellPid": shell_pid}
     except Exception as error:
@@ -150,8 +162,10 @@ def image_confined(name):
     cell_height = dock["bottom"] - dock["top"] + 1
     width = dock["right"] - dock["left"] + 1
     current = state()
-    if (cell_height <= 0 or width <= 0 or current["columns"] <= 1
-            or width % (current["columns"] - 1) != 0
+    inset = markers.get("insetColumns", 0)
+    marker_columns = current["columns"] - 1 - 2 * inset
+    if (inset not in (0, 1) or cell_height <= 0 or width <= 0 or marker_columns <= 0
+            or width % marker_columns != 0
             or bottom["left"] != dock["left"] or bottom["right"] != dock["right"]
             or bottom["bottom"] - bottom["top"] + 1 != cell_height
             or dock["count"] != width * cell_height or bottom["count"] != width * cell_height):
@@ -159,11 +173,12 @@ def image_confined(name):
     top = bottom["bottom"] + 1 - current["rows"] * cell_height
     # The above-editor widget follows one production spacer row.
     dock_top = dock["top"] - cell_height
-    bounds = {"left": dock["left"], "right": dock["right"] + 1, "top": top, "bottom": dock_top,
-              "cellHeight": cell_height, "cellWidth": width // (current["columns"] - 1)}
+    cell_width = width // marker_columns
+    bounds = {"left": dock["left"] - inset * cell_width, "right": dock["right"] + 1 + inset * cell_width,
+              "top": top, "bottom": dock_top, "cellHeight": cell_height, "cellWidth": cell_width}
     report.setdefault("transcriptBounds", {})[name] = bounds
     return (0 <= top < dock_top < bottom["top"] and (dock_top - top) % cell_height == 0
-            and 0 <= dock["left"] < dock["right"] < sample["width"]
+            and 0 <= bounds["left"] < bounds["right"] <= sample["width"]
             and bottom["bottom"] < sample["height"]
             and bounds["left"] <= sample["left"] <= sample["right"] < bounds["right"]
             and top <= sample["top"] <= sample["bottom"] < dock_top)
@@ -184,12 +199,11 @@ try:
     report["image"] = {k: os.environ.get(k) for k in ("ImageVersion", "RUNNER_ARCH")}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
-        f'printf "%s\\n" "$$" > {shlex.quote(str(output / "shell-pid"))}',
+        f'printf "%s\\n" "$PPID" > {shlex.quote(str(output / "shell-pid"))}',
         "printf 'NORMAL-BUFFER-SENTINEL\\n'",
         f"PI_TUI_WRITE_LOG={shlex.quote(str(output / 'ansi.log'))} SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(fixture))} --safety 2> {shlex.quote(str(output / 'stderr.log'))}",
         f"echo $? > {shlex.quote(str(output / 'exit-code'))}",
         "printf 'RESTORED-SHELL-SENTINEL\\n'",
-        "exec bash --noprofile --norc",
     ]) + "\n")
     if mac:
         report["version"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", "/Applications/iTerm.app/Contents/Info.plist")
@@ -324,7 +338,7 @@ except Exception as error:
     except Exception as capture_error:
         report["captureError"] = str(capture_error)
 finally:
-    cleanup_owned_resources()
+    cleanup_owned_resources(close_mac_windows if mac and child else None)
     if mac:
         verify_mac_cleanup()
     report["passed"] = report_passed()

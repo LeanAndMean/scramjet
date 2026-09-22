@@ -58,12 +58,10 @@ if (process.argv.includes("--inspect-screenshot")) {
 	const pixels = image.get_raw_pixels();
 	const width = image.get_width(), height = image.get_height();
 	const bounds = () => ({ count: 0, left: width, right: 0, top: height, bottom: 0 });
-	const magenta = bounds(), calibration = { dock: bounds(), bottom: bounds() };
+	const magenta = bounds();
 	for (let i = 0; i < pixels.length; i += 4) {
 		const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-		const target = r > 220 && g < 100 && b > 220 ? magenta
-			: r < 100 && g > 220 && b > 220 ? calibration.dock
-			: r > 220 && g > 220 && b < 100 ? calibration.bottom : undefined;
+		const target = r > 220 && g < 100 && b > 220 ? magenta : undefined;
 		if (target) {
 			target.count++;
 			const x = (i / 4) % width, y = Math.floor(i / 4 / width);
@@ -71,6 +69,26 @@ if (process.argv.includes("--inspect-screenshot")) {
 			target.top = Math.min(target.top, y); target.bottom = Math.max(target.bottom, y);
 		}
 	}
+	function band(isColor) {
+		let longest = 0, runs = [];
+		for (let y = 0; y < height; y++) {
+			let start = -1;
+			for (let x = 0; x <= width; x++) {
+				const i = (y * width + x) * 4;
+				if (x < width && isColor(pixels[i], pixels[i + 1], pixels[i + 2])) {
+					if (start < 0) start = x;
+				} else if (start >= 0) {
+					const length = x - start;
+					if (length > longest) { longest = length; runs = []; }
+					if (length === longest) runs.push({ left: start, right: x - 1, y });
+					start = -1;
+				}
+			}
+		}
+		if (!runs.length || runs.some((row, index) => row.left !== runs[0].left || row.right !== runs[0].right || row.y !== runs[0].y + index)) return bounds();
+		return { count: longest * runs.length, left: runs[0].left, right: runs[0].right, top: runs[0].y, bottom: runs.at(-1).y };
+	}
+	const calibration = { insetColumns: 1, dock: band((r, g, b) => r < 100 && g > 220 && b > 220), bottom: band((r, g, b) => r > 220 && g > 220 && b < 100) };
 	image.free();
 	console.log(JSON.stringify({ ...magenta, width, height, calibration }));
 	process.exit(0);
@@ -437,12 +455,12 @@ async function runProduction() {
 		mode.updatePendingMessagesDisplay();
 		await mode.handleEvent({ type: "agent_start" });
 		if (safety) {
-			extensionUI.setWidget("above", () => ({ invalidate() {}, render: (width) => [`\x1b[48;2;0;255;255m${" ".repeat(width)}\x1b[0m`] }));
+			extensionUI.setWidget("above", () => ({ invalidate() {}, render: (width) => [` \x1b[48;2;0;255;255m${" ".repeat(Math.max(0, width - 2))}\x1b[0m `] }));
 			extensionUI.setFooter(() => ({
 				invalidate() { mode.footer.invalidate(); },
 				render(width) {
 					const rows = mode.footer.render(width);
-					return [...rows.slice(0, -1), `\x1b[48;2;255;255;0m${" ".repeat(width)}\x1b[0m`];
+					return [...rows.slice(0, -1), ` \x1b[48;2;255;255;0m${" ".repeat(Math.max(0, width - 2))}\x1b[0m `];
 				},
 			}));
 			const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");

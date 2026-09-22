@@ -667,10 +667,25 @@ class NoSelectionPasteTests(unittest.TestCase):
                 self.assertGreaterEqual(recorded["stableSeconds"], 0.35)
 
 
+class OwnedWindowClosureTests(unittest.TestCase):
+    def test_window_close_failure_still_attempts_process_cleanup(self):
+        child = Mock()
+        child.poll.return_value = None
+        close = Mock(side_effect=PermissionError("owned AX close denied"))
+        context = {"child": child, "state": Mock(side_effect=ValueError("unreadable fixture")), "report": {}}
+        load_safety_functions({"cleanup_owned_resources"}, context)
+        context["cleanup_owned_resources"](close)
+        close.assert_called_once()
+        child.terminate.assert_called_once()
+        child.wait.assert_called_once_with(timeout=10)
+        self.assertIn("unreadable fixture", context["report"]["cleanupError"])
+        self.assertIn("owned AX close denied", context["report"]["cleanupError"])
+
+
 class NativePixelCalibrationTests(unittest.TestCase):
     def test_actual_inspector_and_predicate_use_scaled_independent_markers(self):
         for scale in (1, 2):
-            for scenario in ("contained", "crossing", "missing", "damaged"):
+            for scenario in ("contained", "crossing", "missing", "damaged", "ambiguous"):
                 with self.subTest(scale=scale, scenario=scenario), tempfile.TemporaryDirectory() as directory:
                     width, height = 100 * scale, 120 * scale
                     rgba = bytearray([255] * (width * height * 4))
@@ -681,8 +696,12 @@ class NativePixelCalibrationTests(unittest.TestCase):
                                 rgba[index:index + 4] = bytes([*color, 255])
                     rectangle(15, 12, 35, 59 if scenario == "crossing" else 58, (255, 0, 255))
                     if scenario != "missing":
-                        rectangle(5, 61, 45, 64, (0, 255, 255))
-                    rectangle(5, 94, 45, 97, (255, 255, 0))
+                        rectangle(7, 61, 43, 64, (0, 255, 255))
+                    rectangle(7, 94, 43, 97, (255, 255, 0))
+                    rectangle(70, 100, 75, 105, (0, 255, 255))
+                    rectangle(80, 100, 85, 105, (255, 255, 0))
+                    if scenario == "ambiguous":
+                        rectangle(7, 80, 43, 83, (0, 255, 255))
                     if scenario == "damaged":
                         rectangle(10, 62, 11, 63, (255, 255, 255))
                     def chunk(kind, content):

@@ -114,6 +114,19 @@ case "geometry-pid":
     emit(geometry(AXUIElementCreateApplication(pid_t(args[2])!)))
 case "activate-pid":
     emit(["activated": NSRunningApplication(processIdentifier: pid_t(args[2])!)?.activate(options: [.activateIgnoringOtherApps]) ?? false])
+case "close-windows-pid":
+    let pid = pid_t(args[2])!
+    if let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated {
+        let application = AXUIElementCreateApplication(pid)
+        guard let windows = attribute(application, kAXWindowsAttribute) as? [AXUIElement] else { fatalError("Owned window enumeration failed") }
+        for window in windows {
+            guard let button = attribute(window, kAXCloseButtonAttribute), CFGetTypeID(button) == AXUIElementGetTypeID() else { fatalError("Owned window has no close button") }
+            guard AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString) == .success else { fatalError("Owned window close failed") }
+        }
+        emit(["pid": pid, "closed": windows.count])
+    } else {
+        emit(["pid": pid, "closed": 0])
+    }
 case "windows-pid":
     let pid = Int(args[2])!
     guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { fatalError("Window enumeration failed") }
