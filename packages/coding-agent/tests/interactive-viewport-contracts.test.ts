@@ -308,6 +308,24 @@ describe("retained interactive contracts", () => {
 		}
 	});
 
+	it("keeps autocomplete usable across repeated oversized-dock fallback renders", async () => {
+		const h = await setup();
+		for (const character of "/hot") h.terminal.sendInput(character);
+		await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("→ hotkeys"));
+		h.extensionUI.setWidget(
+			"oversized",
+			() => new Text(Array.from({ length: 40 }, (_, i) => `LARGE-${i}`).join("\n"), 0, 0),
+		);
+		for (let pass = 0; pass < 3; pass++) {
+			const frame = await h.frame();
+			expect(frame.join("\n")).toContain("→ hotkeys");
+			expect(frame.join("\n")).toMatch(/dock.*suspended/i);
+		}
+		h.terminal.sendInput("\t");
+		await h.frame();
+		expect(h.extensionUI.getEditorText()).toMatch(/^\/hotkeys/);
+	});
+
 	it("shrinks the editor before suspending a dock that can still fit", async () => {
 		const h = await setup(24, settings({ editorMaxHeightPercent: 50 }));
 		await history(h);

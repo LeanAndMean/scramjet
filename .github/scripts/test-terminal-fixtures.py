@@ -112,6 +112,99 @@ class SafetyVerdictTests(unittest.TestCase):
         self.assertFalse(self.context["report_passed"]())
 
 
+EXPECTED_INTERACTION_CHECKS = {
+    "allEightCardsReachableBeforeCompletion", "completeApprovalContextReachable", "controlCCopiesSelection",
+    "desktopCellTargetVerified", "desktopPasteRoundTrip", "desktopThumbDragReachesEnd",
+    "desktopTrackClickReachesStart", "desktopWheelScrollsDocument", "externalProgramRoundTrip",
+    "firstFourRunningCardsReachable", "hiddenApprovalActivationOnlyReveals", "jobControlResumed",
+    "jobControlSuspended", "keyboardEditingCoexists", "longSessionMiddleReachable", "nativeSizeRestored",
+    "nativeWidthAndHeightChanged", "orderlyExit", "ordinaryDesktopDragSelects", "productionCompositionConfigured",
+    "readingAnchorSurvivesOtherChildUpdate", "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack",
+    "readingInsideRunningBatch", "rightClickClipboardExactUnicode", "rightClickRequestsCopy",
+    "rightWithoutSelectionDoesNotCopyOrPaste", "scrolledSelectionClipboardExact", "selectionAutoscrolls",
+    "selectionHoldsDuringUpdates", "subsequentApprovalActivation", "termiosRestored",
+}
+
+
+class InteractionVerdictTests(unittest.TestCase):
+    def setUp(self):
+        source = ast.parse((ROOT / ".github/scripts/terminal-probe.py").read_text())
+        declarations = [node for node in source.body if
+            isinstance(node, ast.FunctionDef) and node.name in ("check", "required_checks", "report_passed")
+            or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "REQUIRED_CHECKS" for target in node.targets)]
+        verdict = next(node.value for node in ast.walk(source) if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and target.value.id == "report"
+            and isinstance(target.slice, ast.Constant) and target.slice.value == "passed" for target in node.targets))
+        self.expression = compile(ast.Expression(body=verdict), "terminal-probe.py", "eval")
+        self.context = {"report": {"checks": {name: {"passed": True} for name in EXPECTED_INTERACTION_CHECKS},
+                                  "screenshots": {"complete": {"exit": 0}}},
+                        "is_mac": False, "terminal_kind": "vte", "with_tmux": False,
+                        "wait_for": Mock(return_value=True), "state": Mock(return_value={})}
+        exec(compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
+
+    def passed(self):
+        return eval(self.expression, self.context)
+
+    def test_complete_success_is_accepted(self):
+        self.assertTrue(self.passed())
+        self.context["is_mac"] = True
+        self.context["terminal_kind"] = "apple"
+        del self.context["report"]["checks"]["desktopCellTargetVerified"]
+        self.assertTrue(self.passed())
+
+    def test_startup_and_a_screenshot_are_not_a_complete_journey(self):
+        self.context["report"]["checks"] = {"productionCompositionConfigured": {"passed": True}}
+        self.assertFalse(self.passed())
+
+    def test_each_missing_required_check_fails(self):
+        complete = dict(self.context["report"]["checks"])
+        for name in complete:
+            with self.subTest(missing=name):
+                self.context["report"]["checks"] = {key: value for key, value in complete.items() if key != name}
+                self.assertFalse(self.passed())
+
+    def test_duplicate_check_is_rejected(self):
+        try:
+            self.context["check"]("productionCompositionConfigured", lambda: True)
+        except RuntimeError as error:
+            self.context["report"]["error"] = str(error)
+        self.assertFalse(self.passed())
+
+
+class TerminalReadinessTests(unittest.TestCase):
+    def setUp(self):
+        source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
+        opened = next(node for node in ast.walk(source) if isinstance(node, ast.FunctionDef) and node.name == "opened")
+        self.geometry = Mock(return_value="[]")
+        process = Mock()
+        process.run.return_value.stdout = ""
+        process.CalledProcessError = subprocess.CalledProcessError
+        opener = Mock()
+        opener.poll.return_value = 0
+        self.context = {"subprocess": process, "opener": opener, "run": self.geometry, "driver": "events", "report": {}, "json": json}
+        exec(compile(ast.Module(body=[opened], type_ignores=[]), "terminal-safety.py", "exec"), self.context)
+
+    def test_open_exit_does_not_prove_a_terminal_window_exists(self):
+        self.assertFalse(self.context["opened"]())
+
+    def test_window_without_terminal_text_is_not_ready(self):
+        self.geometry.return_value = json.dumps([{"role": "AXWindow"}])
+        self.assertFalse(self.context["opened"]())
+
+    def test_window_and_text_surface_are_ready(self):
+        self.geometry.return_value = json.dumps([{"role": "AXWindow"}, {"role": "AXTextArea"}])
+        self.assertTrue(self.context["opened"]())
+
+    def test_gatekeeper_click_is_not_window_readiness(self):
+        self.context["subprocess"].run.return_value.stdout = "42"
+        self.geometry.side_effect = lambda *args: json.dumps({"pressed": True}) if args[1] == "press-pid" else "[]"
+        self.assertFalse(self.context["opened"]())
+
+    def test_temporarily_unavailable_geometry_is_not_readiness(self):
+        self.geometry.side_effect = subprocess.CalledProcessError(1, "geometry")
+        self.assertFalse(self.context["opened"]())
+
+
 class PasteEvidenceTests(unittest.TestCase):
     def test_production_paste_is_payload_free(self):
         for args in (["--production", "--journey"], ["--safety"]):
