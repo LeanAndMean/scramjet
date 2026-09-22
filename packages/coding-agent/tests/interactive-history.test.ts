@@ -1734,12 +1734,12 @@ describe("production retained viewport", () => {
 		h.extensionUI.setWidget("above", undefined);
 		h.extensionUI.setWidget("below", undefined);
 		await check(["", " ANSWER", ...tool], ["", ...editor, "FOOTER"]);
-		h.terminal.resize(12, 2);
+		h.terminal.resize(12, 3);
 		await h.frame();
 		h.internals.ui.scrollViewportTo(1);
-		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " ANSWER"]);
+		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " ANSWER", ""]);
 		h.internals.ui.scrollViewportTo(4);
-		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " unknown"]);
+		expect((await h.frame()).map((row) => row.slice(0, 11).trimEnd())).toEqual(["", " unknown", ""]);
 		h.terminal.sendInput("!");
 		const typed = await h.frame();
 		expect(typed[h.terminal.cursorPosition().row]).toContain("E!");

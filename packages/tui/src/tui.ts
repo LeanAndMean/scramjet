@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { stripVTControlCharacters } from "node:util";
 import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js";
-import { isKeyRelease, matchesKey } from "./keys.js";
+import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
@@ -283,6 +283,7 @@ export class TUI extends Container {
 	private viewportHadOverlay = false;
 	private viewportRevealFocus = false;
 	private viewportPaint: { flushed: boolean } | undefined;
+	private viewportMinimumPainted = false;
 	private reportedViewportFlushFailure = false;
 	private viewportRevealComponent?: Component;
 	private started = false;
@@ -328,12 +329,32 @@ export class TUI extends Container {
 	configureViewport(options: ViewportOptions): void {
 		if (this.liveRegionStart) throw new Error("Cannot configure a viewport with a committed live region");
 		if (!this.terminal.setViewportMode) throw new Error("Terminal must support viewport mode");
+		if (options.minimumSize && !this.terminal.flush)
+			throw new Error("Minimum-size input protection requires terminal flushing");
 		this.viewport?.cancelInteraction();
 		this.viewportPaint = undefined;
+		if (!options.minimumSize) this.viewportMinimumPainted = false;
 		this.removeViewportInput?.();
 		this.viewportRevealFocus = false;
 		this.viewport = new RetainedViewport(options, () => this.requestRender());
 		this.removeViewportInput = this.addInputListener((data) => {
+			const protocol = data === "\x1b[I" || data === "\x1b[O" || /^\x1b\[\d+;\d+;\d+t$/.test(data);
+			if (
+				!protocol &&
+				(this.viewport?.isTooSmall(this.terminal.columns, this.terminal.rows) || this.viewportMinimumPainted)
+			) {
+				this.viewport?.cancelInteraction();
+				if (
+					!isKeyRelease(data) &&
+					!isKeyModifier(data) &&
+					!data.startsWith("\x1b[200~") &&
+					!data.startsWith("\x1b[<") &&
+					!data.startsWith("\x1b[M")
+				)
+					options.handleBlockedInput?.(data);
+				this.requestRender();
+				return { consume: true };
+			}
 			const overlayFocused = this.overlayStack.some(
 				(entry) => entry.component === this.focusedComponent && this.isOverlayVisible(entry),
 			);
@@ -1437,12 +1458,14 @@ export class TUI extends Container {
 		const width = this.terminal.columns;
 		const height = this.terminal.rows;
 		const contentWidth = Math.max(1, width - 1);
-		const logical = viewport.update(contentWidth, height);
-		if (this.viewportRevealComponent) {
+		const logical = viewport.update(contentWidth, height, width);
+		const tooSmall = viewport.isTooSmall();
+		if (tooSmall) this.viewportMinimumPainted = true;
+		if (!tooSmall && this.viewportRevealComponent) {
 			viewport.revealComponent(this.viewportRevealComponent);
 			this.viewportRevealComponent = undefined;
 		}
-		if (this.viewportRevealFocus) {
+		if (!tooSmall && this.viewportRevealFocus) {
 			this.viewportRevealFocus = false;
 			const cursorRow = logical.findIndex((line) => line.includes(CURSOR_MARKER));
 			if (cursorRow >= 0) viewport.revealRow(cursorRow);
@@ -1457,7 +1480,7 @@ export class TUI extends Container {
 		) {
 			lines = lines.map((line) => line.replaceAll(CURSOR_MARKER, ""));
 		}
-		lines = this.compositeOverlays(lines, contentWidth, height, true, frame.images);
+		if (!tooSmall) lines = this.compositeOverlays(lines, contentWidth, height, true, frame.images);
 		const cursor = this.extractCursorPosition(lines, height);
 		lines = this.applyLineResets(lines.map((line) => line.replaceAll(CURSOR_MARKER, "")));
 		const reset = TUI.SEGMENT_RESET;
@@ -1504,6 +1527,7 @@ export class TUI extends Container {
 			() => {
 				if (this.viewportPaint !== paint || this.stopped) return;
 				paint.flushed = true;
+				if (!tooSmall) this.viewportMinimumPainted = false;
 				this.reportedViewportFlushFailure = false;
 			},
 			(error: unknown) => {

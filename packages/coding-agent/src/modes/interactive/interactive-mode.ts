@@ -46,6 +46,7 @@ import {
 	Text,
 	TruncatedText,
 	TUI,
+	TUI_KEYBINDINGS,
 	visibleWidth,
 } from "@leanandmean/tui";
 import { spawn, spawnSync } from "child_process";
@@ -462,22 +463,32 @@ export class InteractiveMode {
 				}),
 			keybindings: this.keybindings,
 			copy: copyToClipboard,
+			minimumSize: { columns: 12, rows: 3 },
+			handleBlockedInput: (data) => {
+				const selector = this.editorContainer.children[0];
+				if (
+					selector instanceof SettingsSelectorComponent &&
+					this.ui.isComponentFocused(selector.getSettingsList()) &&
+					this.keybindings.matches(data, "tui.select.cancel")
+				) {
+					selector.cancel();
+				} else if (this.keybindings.matches(data, "app.interrupt")) {
+					this.restoreQueuedMessagesToEditor();
+					this.session.abortBash();
+					this.session.abortCompaction();
+					this.session.abortBranchSummary();
+					void this.session.abort();
+				} else if (this.keybindings.matches(data, "app.exit") && this.editor.getText().length === 0) {
+					this.handleCtrlD();
+				}
+			},
 			getScrollWheelStep: () => this.settingsManager.getScrollWheelStep(),
 			allowViewportKeys: (data) =>
 				this.ui.isComponentFocused(this.editor) ||
 				(!matchesKey(data, "space") &&
-					!(
-						[
-							"tui.select.up",
-							"tui.select.down",
-							"tui.select.pageUp",
-							"tui.select.pageDown",
-							"tui.select.confirm",
-							"tui.select.cancel",
-							"tui.input.submit",
-							"tui.input.tab",
-						] as const
-					).some((action) => this.keybindings.matches(data, action))),
+					!(Object.keys(TUI_KEYBINDINGS) as (keyof typeof TUI_KEYBINDINGS)[]).some(
+						(action) => !action.startsWith("tui.viewport.") && this.keybindings.matches(data, action),
+					)),
 			keepReadingOnInput: () => {
 				const ownsFocus = (component: Component): boolean =>
 					this.ui.isComponentFocused(component) ||
@@ -4403,6 +4414,7 @@ export class InteractiveMode {
 						this.settingsManager.setDockEditor(enabled);
 						void this.settleLayoutSettings(selector);
 						this.ui.refreshViewportLayout();
+						if (!this.settingsManager.getDockEditor()) this.ui.revealComponent(this.editorContainer);
 						return this.settingsManager.getDockEditor();
 					},
 					onEditorMaxHeightPercentChange: (percent) => {

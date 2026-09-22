@@ -79,10 +79,12 @@ export class HeadlessTerminal implements TerminalContract {
 
 	visibleLines(): string[] {
 		const buffer = this.emulator.buffer.active;
-		return Array.from(
-			{ length: this._rows },
-			(_, row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "",
-		);
+		return Array.from({ length: this._rows }, (_, row) => {
+			const line = buffer.getLine(buffer.viewportY + row);
+			let end = this._columns;
+			while (end > 0 && !line?.getCell(end - 1)?.getChars()) end--;
+			return line?.translateToString(false, 0, end) ?? "";
+		});
 	}
 
 	bufferLines(): string[] {

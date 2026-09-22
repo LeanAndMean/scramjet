@@ -31,6 +31,8 @@ export interface ViewportOptions {
 	handlePresentationInput?(data: string): boolean;
 	keepReadingOnInput?(): boolean;
 	allowViewportKeys?(data: string): boolean;
+	minimumSize?: { columns: number; rows: number };
+	handleBlockedInput?(data: string): void;
 }
 
 export interface ViewportState {
@@ -166,6 +168,7 @@ export class RetainedViewport {
 	private totalRows = 0;
 	private followingTail = true;
 	private width = 0;
+	private terminalColumns = 0;
 	private screenHeight = 0;
 	private logical: string[] = [];
 	private dockHeight = 0;
@@ -191,7 +194,15 @@ export class RetainedViewport {
 		private readonly requestRender: () => void = () => {},
 	) {}
 
+	isTooSmall(columns = this.terminalColumns, rows = this.screenHeight): boolean {
+		return (
+			!!this.options.minimumSize &&
+			(columns < this.options.minimumSize.columns || rows < this.options.minimumSize.rows)
+		);
+	}
+
 	get notice(): string | undefined {
+		if (this.isTooSmall()) return "Resize";
 		if (!this.selection) return this.dockSuspended ? "Dock suspended: insufficient space" : undefined;
 		if (this.copyError) return `Copy failed: ${this.copyError}; selection retained`;
 		if (this.copying) return "Copying selection…";
@@ -360,8 +371,9 @@ export class RetainedViewport {
 			return true;
 		}
 		const keybindings = this.options.keybindings ?? getKeybindings();
+		const allowNavigation = this.options.allowViewportKeys?.(data) !== false;
 		if (
-			this.options.allowViewportKeys?.(data) !== false &&
+			allowNavigation &&
 			(keybindings.matches(data, "tui.viewport.pageUp") || keybindings.matches(data, "tui.viewport.pageDown"))
 		) {
 			const direction = keybindings.matches(data, "tui.viewport.pageUp") ? -1 : 1;
@@ -375,6 +387,10 @@ export class RetainedViewport {
 			this.scrollTo(this.maxOffset);
 			this.requestRender();
 			return true;
+		}
+		if (!allowNavigation) {
+			if (this.selection) this.cancelInteraction();
+			return false;
 		}
 		if (detached) {
 			if (this.options.handlePresentationInput?.(data)) {
@@ -473,7 +489,7 @@ export class RetainedViewport {
 
 	isComponentRenderComplete(component: Component): boolean {
 		const block = this.blocks.find((block) => block.component === component);
-		return !this.selection && block?.generation === this.generation && block.complete;
+		return !this.isTooSmall() && !this.selection && block?.generation === this.generation && block.complete;
 	}
 
 	revealComponent(component: Component): void {
@@ -489,13 +505,19 @@ export class RetainedViewport {
 	}
 
 	get noticeRow(): number {
-		return this.height;
+		return this.isTooSmall() ? 0 : this.height;
 	}
 
-	update(width: number, height: number): string[] {
+	update(width: number, height: number, terminalColumns = width + 1): string[] {
 		if (width !== this.width || height !== this.screenHeight) this.cancelInteraction();
 		this.width = width;
+		this.terminalColumns = terminalColumns;
 		this.screenHeight = height;
+		if (this.isTooSmall()) {
+			this.height = 0;
+			this.visibleComponents.clear();
+			return this.logical;
+		}
 		const previous = new Map(this.blocks.map((block) => [block.component, block]));
 		const next = new Map<Component, RenderedBlock>();
 		const projected = this.options.getBlocks();
@@ -607,6 +629,10 @@ export class RetainedViewport {
 	}
 
 	slice(logical: string[], width: number, hideImages: boolean): { lines: string[]; images: ImagePlacement[] } {
+		if (this.isTooSmall()) {
+			this.visibleComponents.clear();
+			return { lines: [], images: [] };
+		}
 		this.visibleComponents = new Set(
 			this.blocks
 				.filter(
@@ -663,7 +689,7 @@ export class RetainedViewport {
 	}
 
 	scrollbar(row: number): string {
-		if (this.totalRows <= this.height || row >= this.height) return " ";
+		if (this.isTooSmall() || this.totalRows <= this.height || row >= this.height) return " ";
 		const { size, top } = this.thumb();
 		return row >= top && row < top + size ? "█" : "│";
 	}

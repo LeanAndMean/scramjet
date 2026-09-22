@@ -14,7 +14,7 @@ Alt+PageUp/Alt+PageDown provide keyboard-only entry into transcript browsing. Wh
 
 Clipboard delivery uses the existing platform backend (for example `pbcopy`, `wl-copy`, `xclip`/`xsel`) or OSC 52 where appropriate. Wayland copying awaits stdin completion and a successful `wl-copy` parent exit, with a five-second subprocess timeout; observable failure tries the existing X11/OSC 52 fallbacks before releasing selection. Terminals can reject OSC 52 without acknowledgement: a successful request alone is not proof that a desktop clipboard changed. Remote sessions, clipboard security policies and other profiles require their own verification.
 
-Orderly exit restores the shell's normal buffer and appends one readable plain-text transcript, excluding editor/widgets/temporary approval controls; images receive text labels. Suspension and external-editor handoffs restore normal terminal modes without dumping transcript copies. Crash cleanup prioritizes mode restoration; terminal loss cannot guarantee a flush. For a durable rich view, use `/export`—HTML rendering is unchanged.
+Orderly exit restores the shell's normal buffer and appends one readable plain-text transcript, excluding editor/widgets/temporary approval controls; images receive text labels. Suspension and external-editor handoffs restore normal terminal modes without dumping transcript copies. Crash cleanup prioritizes mode restoration; terminal loss cannot guarantee a flush. For a durable rich view, use `/export`—HTML rendering is unchanged. A retained terminal smaller than 12 columns or three rows shows a resize notice and blocks ordinary input until a usable frame is restored; configured interrupt and empty-draft exit remain available.
 
 Built-in Kitty/iTerm2 images fit the viewport without changing retained source data. Partially visible placements and images behind overlays/selection show placeholders rather than painting through other regions; scroll to reveal the full placement or clear selection. Images remain disabled inside tmux. Custom graphics wrappers must forward the optional image-height bound described in [tui.md](tui.md); arbitrary graphics envelopes are not proven compatible.
 
@@ -41,6 +41,19 @@ Recorded native configurations (2026-09-21):
 xterm's native paste binding/source differ from VTE's Ctrl+Shift+V; the recorded paste configuration is not a new Scramjet shortcut. Native xterm evidence does not verify VS Code's integrated terminal, nor does Kitty verify every Kitty-family emulator.
 
 These checks do not establish every emulator/profile, physical trackpad's gesture characteristics, remote desktop, multiplexer, custom extension or graphics renderer. OS-generated wheel events are not physical trackpad testing; headless tests and ordinary CI do not substitute for native desktop/clipboard evidence.
+
+## Apple Terminal
+
+In the tested Apple Terminal 2.14 profile, Option+PageUp arrived as unmodified PageUp. Scramjet cannot distinguish those identical bytes without stealing ordinary editor paging. Use an explicit application keybinding profile instead:
+
+```json
+{
+  "tui.viewport.pageUp": "f8",
+  "tui.viewport.pageDown": "f9"
+}
+```
+
+Set this in `~/.scramjet/agent/keybindings.json`; keyboards with media-key defaults may require Fn+F8/Fn+F9. The Apple native journey declares and exercises this temporary profile. Other tested terminal paths exercise the default Alt+PageUp/Alt+PageDown bindings. This is not an automatic runtime terminal allowlist or a claim about every keyboard layout.
 
 ## Kitty
 

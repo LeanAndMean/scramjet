@@ -230,7 +230,7 @@ export class SettingsSelectorComponent extends Container {
 
 	constructor(
 		config: SettingsConfig,
-		callbacks: SettingsCallbacks,
+		private readonly callbacks: SettingsCallbacks,
 		private readonly maximumRows?: () => number,
 	) {
 		super();
@@ -590,6 +590,10 @@ export class SettingsSelectorComponent extends Container {
 
 		this.addChild(this.settingsList);
 		this.addChild(new DynamicBorder());
+	}
+
+	cancel(): void {
+		this.callbacks.onCancel();
 	}
 
 	setSaveError(message: string | undefined): void {

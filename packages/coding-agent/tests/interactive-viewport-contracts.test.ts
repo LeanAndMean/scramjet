@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@leanandmean/ai";
-import { type EditorComponent, getKeybindings, Text } from "@leanandmean/tui";
+import { CURSOR_MARKER, type EditorComponent, getKeybindings, Text } from "@leanandmean/tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.js";
 import * as clipboard from "../src/utils/clipboard.js";
@@ -545,6 +545,88 @@ describe("retained interactive contracts", () => {
 		await vi.waitFor(() => expect(h.extensionUI.getEditorText()).toMatch(/^\/hotkeys/));
 		h.terminal.sendInput("\r");
 		expect(submit).toHaveBeenCalledOnce();
+	});
+
+	it("blocks submission across both pre-paint resize boundaries", async () => {
+		const h = await setup();
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.fn();
+		editor.onSubmit = submit;
+		h.extensionUI.setEditorText("KEEP");
+		await h.frame();
+		h.terminal.resize(60, 1);
+		h.terminal.sendInput("\r");
+		expect(submit).not.toHaveBeenCalled();
+		expect(h.extensionUI.getEditorText()).toBe("KEEP");
+		await h.frame();
+		h.terminal.resize(60, 24);
+		h.terminal.sendInput("\r");
+		expect(submit).not.toHaveBeenCalled();
+		await h.frame();
+		h.terminal.sendInput("\r");
+		expect(submit).toHaveBeenCalledExactlyOnceWith("KEEP");
+	});
+
+	it("masks overlays and blocks releases and paste while too small without losing focus", async () => {
+		const h = await setup();
+		const input = vi.fn();
+		const overlay = h.internals.ui.showOverlay({
+			render: () => [`${CURSOR_MARKER}HIDDEN CONTROL`],
+			invalidate() {},
+			handleInput: input,
+			wantsKeyRelease: true,
+		});
+		h.internals.ui.setShowHardwareCursor(true);
+		await h.frame();
+		const writes = h.terminal.markWrites();
+		h.terminal.resize(24, 2);
+		const frame = await h.frame();
+		expect(frame[0]).toContain("Resize");
+		expect(frame.join("\n")).not.toContain("HIDDEN CONTROL");
+		expect(h.terminal.writesSince(writes)).not.toContain("\x1b[?25h");
+		for (const data of ["x", "\r", "\t", "\x1b[13;1:3u", "\x1b[200~\x1b\x04\x1b[201~", mouse(2), "\x1b[I", "\x1b[O"])
+			h.terminal.sendInput(data);
+		expect(input).not.toHaveBeenCalled();
+		h.terminal.resize(60, 24);
+		await h.frame();
+		h.terminal.sendInput("x");
+		expect(input).toHaveBeenCalledExactlyOnceWith("x");
+		overlay.hide();
+	});
+
+	it("honors configured emergency actions without treating whitespace or paste as empty input", async () => {
+		const h = await setup();
+		const abort = vi.spyOn(h.session, "abort").mockResolvedValue();
+		const shutdown = vi.spyOn(h.mode as unknown as { shutdown(): Promise<void> }, "shutdown").mockResolvedValue();
+		getKeybindings().setUserBindings({ "app.interrupt": "ctrl+x", "app.exit": "ctrl+q" });
+		h.terminal.resize(60, 1);
+		await h.frame();
+		h.terminal.sendInput("\x1b[200~\x18\x11\x1b[201~");
+		h.terminal.sendInput("\x1b[120;5:3u");
+		expect(abort).not.toHaveBeenCalled();
+		expect(shutdown).not.toHaveBeenCalled();
+		h.terminal.sendInput("\x18");
+		expect(abort).toHaveBeenCalledOnce();
+		h.extensionUI.setEditorText(" ");
+		h.terminal.sendInput("\x11");
+		expect(shutdown).not.toHaveBeenCalled();
+		h.extensionUI.setEditorText("");
+		h.terminal.sendInput("\x11");
+		expect(shutdown).toHaveBeenCalledOnce();
+	});
+
+	it("uses physical terminal columns and accepts the exact minimum geometry", async () => {
+		const h = await setup(24, settings({ dockEditor: false }));
+		h.extensionUI.setFooter(() => new Text("", 0, 0));
+		h.extensionUI.setEditorText("E");
+		h.terminal.resize(11, 24);
+		expect((await h.frame())[0]).toContain("Resize");
+		h.terminal.sendInput("x");
+		expect(h.extensionUI.getEditorText()).toBe("E");
+		h.terminal.resize(12, 3);
+		await h.frame();
+		h.terminal.sendInput("x");
+		expect(h.extensionUI.getEditorText()).toBe("Ex");
 	});
 
 	it("keeps the docked editor cursor on its painted row while reading history", async () => {
