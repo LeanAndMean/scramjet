@@ -115,6 +115,60 @@ def cleanup_owned_resources():
         report["cleanupError"] = "; ".join(errors)
 
 
+def verify_mac_cleanup():
+    if not child:
+        return
+    try:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+        if not wait(lambda: json.loads(run(str(driver), "windows-pid", str(child.pid))) == [], seconds=5):
+            raise RuntimeError("Owned terminal windows did not close")
+        receipt = output / "shell-pid"
+        if "productionFixtureStarted" in report["checks"] and not receipt.exists():
+            raise RuntimeError("Owned shell receipt is missing")
+        shell_pid = int(receipt.read_text()) if receipt.exists() else None
+        def shell_closed():
+            try:
+                os.kill(shell_pid, 0)
+                return False
+            except ProcessLookupError:
+                return True
+        if shell_pid and not wait(shell_closed, seconds=5):
+            raise RuntimeError("Owned terminal shell did not exit")
+        report["ownedTerminalClosed"] = {"pid": child.pid, "shellPid": shell_pid}
+    except Exception as error:
+        report["cleanupError"] = "; ".join(filter(None, [report.get("cleanupError"), f"owned terminal: {error}"]))
+
+
+def image_confined(name):
+    sample = report["pixels"][name]
+    markers = sample.get("calibration", {})
+    dock, bottom = markers.get("dock", {}), markers.get("bottom", {})
+    if not dock.get("count") or not bottom.get("count"):
+        return False
+    cell_height = dock["bottom"] - dock["top"] + 1
+    width = dock["right"] - dock["left"] + 1
+    current = state()
+    if (cell_height <= 0 or width <= 0 or current["columns"] <= 1
+            or width % (current["columns"] - 1) != 0
+            or bottom["left"] != dock["left"] or bottom["right"] != dock["right"]
+            or bottom["bottom"] - bottom["top"] + 1 != cell_height
+            or dock["count"] != width * cell_height or bottom["count"] != width * cell_height):
+        return False
+    top = bottom["bottom"] + 1 - current["rows"] * cell_height
+    # The above-editor widget follows one production spacer row.
+    dock_top = dock["top"] - cell_height
+    bounds = {"left": dock["left"], "right": dock["right"] + 1, "top": top, "bottom": dock_top,
+              "cellHeight": cell_height, "cellWidth": width // (current["columns"] - 1)}
+    report.setdefault("transcriptBounds", {})[name] = bounds
+    return (0 <= top < dock_top < bottom["top"] and (dock_top - top) % cell_height == 0
+            and 0 <= dock["left"] < dock["right"] < sample["width"]
+            and bottom["bottom"] < sample["height"]
+            and bounds["left"] <= sample["left"] <= sample["right"] < bounds["right"]
+            and top <= sample["top"] <= sample["bottom"] < dock_top)
+
+
 def report_passed():
     return set(report["checks"]) == REQUIRED_CHECKS and all(c["passed"] for c in report["checks"].values()) and not any(k in report for k in ("error", "cleanupError"))
 
@@ -130,6 +184,7 @@ try:
     report["image"] = {k: os.environ.get(k) for k in ("ImageVersion", "RUNNER_ARCH")}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
+        f'printf "%s\\n" "$$" > {shlex.quote(str(output / "shell-pid"))}',
         "printf 'NORMAL-BUFFER-SENTINEL\\n'",
         f"PI_TUI_WRITE_LOG={shlex.quote(str(output / 'ansi.log'))} SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(fixture))} --safety 2> {shlex.quote(str(output / 'stderr.log'))}",
         f"echo $? > {shlex.quote(str(output / 'exit-code'))}",
@@ -140,7 +195,11 @@ try:
         report["version"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", "/Applications/iTerm.app/Contents/Info.plist")
         run("swiftc", str(root / ".github/scripts/macos-terminal-events.swift"), "-o", str(driver))
         report["capabilities"] = json.loads(run(str(driver), "capabilities"))
-        opener = subprocess.Popen(["open", "-a", "iTerm"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if json.loads(run(str(driver), "running", "com.googlecode.iterm2")):
+            raise RuntimeError("Refusing to adopt an existing iTerm process")
+        executable = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleExecutable", "/Applications/iTerm.app/Contents/Info.plist")
+        child = subprocess.Popen([f"/Applications/iTerm.app/Contents/MacOS/{executable}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        report["ownedTerminalPid"] = child.pid
         def opened():
             agents = subprocess.run(["pgrep", "-x", "CoreServicesUIAgent"], capture_output=True, text=True, timeout=5).stdout.split()
             report["gatekeeperAgents"] = agents
@@ -153,9 +212,13 @@ try:
                 return False
         if not wait(opened, seconds=20):
             raise RuntimeError("iTerm opening prompt could not be confirmed")
-        opener.wait(timeout=30)
-        run(str(driver), "activate", "com.googlecode.iterm2")
-        if not wait(lambda: json.loads(run(str(driver), "frontmost")).get("bundle", "").lower() == "com.googlecode.iterm2"):
+        if child.poll() is not None:
+            raise RuntimeError("Owned iTerm process exited during startup")
+        owned_roles = {item["role"] for item in json.loads(run(str(driver), "geometry-pid", str(child.pid)))}
+        if not {"AXWindow", "AXTextArea"} <= owned_roles:
+            raise RuntimeError("Owned iTerm process has no usable window")
+        run(str(driver), "activate-pid", str(child.pid))
+        if not wait(lambda: json.loads(run(str(driver), "frontmost")).get("pid") == child.pid):
             raise RuntimeError("Owned iTerm window did not acquire focus")
         time.sleep(1)
         report["updatePrompt"] = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Don't Check"))
@@ -189,14 +252,14 @@ try:
         window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window)
     key("1")
-    check("nativeOversizedImageVisible", lambda: pixels("fitted-image") > 400)
+    check("nativeOversizedImageVisible", lambda: pixels("fitted-image") > 400 and image_confined("fitted-image"))
     original_height = state()["height"]
     original_bottom = report["pixels"]["fitted-image"]["bottom"]
     key("i")
     check("dockGrowthReducesTranscript", lambda: state().get("phase") == "dock-grown" and state()["height"] < original_height)
-    check("nativeImageFitsReducedTranscript", lambda: pixels("dock-grown") > 400 and report["pixels"]["dock-grown"]["bottom"] < original_bottom)
+    check("nativeImageFitsReducedTranscript", lambda: pixels("dock-grown") > 400 and image_confined("dock-grown") and report["pixels"]["dock-grown"]["bottom"] < original_bottom)
     key("j")
-    check("dockShrinkRestoresImage", lambda: state()["height"] == original_height and pixels("dock-restored") > 400 and report["pixels"]["dock-restored"]["bottom"] == original_bottom)
+    check("dockShrinkRestoresImage", lambda: state()["height"] == original_height and pixels("dock-restored") > 400 and image_confined("dock-restored") and report["pixels"]["dock-restored"]["bottom"] == original_bottom)
     key("2")
     check("partialPlacementRequested", lambda: state().get("phase") == "clipped")
     check("partialPlacementWithheld", lambda: pixels("clipped-image") == 0)
@@ -262,6 +325,8 @@ except Exception as error:
         report["captureError"] = str(capture_error)
 finally:
     cleanup_owned_resources()
+    if mac:
+        verify_mac_cleanup()
     report["passed"] = report_passed()
     (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))

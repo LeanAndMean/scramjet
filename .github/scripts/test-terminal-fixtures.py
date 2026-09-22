@@ -14,6 +14,7 @@ import tempfile
 import termios
 import time
 import unittest
+import zlib
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -131,6 +132,8 @@ EXPECTED_INTERACTION_CHECKS = {
     "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
     "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies", "nativeInputHeightCeiling",
     "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
+    "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
+    "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration",
 }
 
 
@@ -157,13 +160,17 @@ class InteractionVerdictTests(unittest.TestCase):
         self.assertTrue(self.passed())
         self.context["is_mac"] = True
         self.context["terminal_kind"] = "apple"
-        for name in ("desktopCellTargetVerified", "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored"):
+        for name in ("desktopCellTargetVerified", "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
+                     "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
+                     "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"):
             del self.context["report"]["checks"][name]
         self.assertTrue(self.passed())
 
     def test_focus_profile_requires_focus_checks(self):
         self.context["terminal_kind"] = "kitty"
-        for name in ("narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored"):
+        for name in ("narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
+                     "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
+                     "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"):
             del self.context["report"]["checks"][name]
         for name in ("nativeFocusDragActive", "nativeFocusOutReceived", "focusLossStopsSelectionScroll", "nativeFocusReturned"):
             self.context["report"]["checks"][name] = {"passed": True}
@@ -658,6 +665,42 @@ class NoSelectionPasteTests(unittest.TestCase):
                 recorded = context["report"]["checks"]["rightWithoutSelectionDoesNotCopyOrPaste"]
                 self.assertEqual(recorded["passed"], counter is None)
                 self.assertGreaterEqual(recorded["stableSeconds"], 0.35)
+
+
+class NativePixelCalibrationTests(unittest.TestCase):
+    def test_actual_inspector_and_predicate_use_scaled_independent_markers(self):
+        for scale in (1, 2):
+            for scenario in ("contained", "crossing", "missing", "damaged"):
+                with self.subTest(scale=scale, scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                    width, height = 100 * scale, 120 * scale
+                    rgba = bytearray([255] * (width * height * 4))
+                    def rectangle(left, top, right, bottom, color):
+                        for y in range(top * scale, bottom * scale):
+                            for x in range(left * scale, right * scale):
+                                index = (y * width + x) * 4
+                                rgba[index:index + 4] = bytes([*color, 255])
+                    rectangle(15, 12, 35, 59 if scenario == "crossing" else 58, (255, 0, 255))
+                    if scenario != "missing":
+                        rectangle(5, 61, 45, 64, (0, 255, 255))
+                    rectangle(5, 94, 45, 97, (255, 255, 0))
+                    if scenario == "damaged":
+                        rectangle(10, 62, 11, 63, (255, 255, 255))
+                    def chunk(kind, content):
+                        return struct.pack(">I", len(content)) + kind + content + struct.pack(">I", zlib.crc32(kind + content))
+                    scanlines = b"".join(b"\0" + rgba[y * width * 4:(y + 1) * width * 4] for y in range(height))
+                    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(scanlines)) + chunk(b"IEND", b"")
+                    path = Path(directory) / "calibration.png"
+                    path.write_bytes(png)
+                    sample = json.loads(subprocess.run(["node", str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"), "--inspect-screenshot", str(path)], capture_output=True, text=True, check=True, timeout=10).stdout)
+                    self.assertGreater(sample["count"], 400)
+                    self.assertEqual((sample["width"], sample["height"]), (width, height))
+                    context = {"report": {"pixels": {"sample": sample}}, "state": lambda: {"columns": 21, "rows": 30}}
+                    load_safety_functions({"image_confined"}, context)
+                    self.assertEqual(context["image_confined"]("sample"), scenario == "contained")
+                    if scenario == "contained":
+                        self.assertEqual(context["report"]["transcriptBounds"]["sample"],
+                                         {"left": 5 * scale, "right": 45 * scale, "top": 7 * scale, "bottom": 58 * scale,
+                                          "cellHeight": 3 * scale, "cellWidth": 2 * scale})
 
 
 if __name__ == "__main__":

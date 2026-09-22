@@ -80,6 +80,14 @@ function Check([string]$Name, [scriptblock]$Predicate, [int]$StableMilliseconds 
     if (-not $passed) { throw "Failed native check: $Name" }
     return $passed
 }
+function Right-ClickUnchanged($Before) {
+    $current = State
+    if ($current.rightWithoutSelection -ne ($Before.rightWithoutSelection + 1)) { return $false }
+    foreach ($name in @('rightCopy', 'keyCopy', 'copyErrors', 'pasteMatches', 'pasteMismatches', 'editor')) {
+        if ($current.$name -cne $Before.$name) { return $false }
+    }
+    return $true
+}
 function Fixture-Command([string]$Action) {
     $script:commandId++
     [System.IO.File]::WriteAllText("$statePath.command.tmp", (@{ id = $commandId; action = $Action } | ConvertTo-Json -Compress))
@@ -131,7 +139,7 @@ function Open-Settings([string]$Query) {
     if (-not (Wait-For { @((State).painted | Where-Object { $_.Contains('Auto-compact') }).Count -gt 0 })) { throw 'Real settings selector did not open' }
     Assert-Focus
     [System.Windows.Forms.SendKeys]::SendWait($Query)
-    if (-not (Wait-For { @((State).painted | Where-Object { $_.ToLower().Contains($Query) }).Count -gt 0 })) { throw 'Settings search did not render' }
+    if (-not (Wait-For { $current = State; $current.frameFlushed -eq $true -and @($current.painted | Where-Object { $_.Trim() -ceq "> $Query" }).Count -gt 0 })) { throw 'Complete settings search did not flush' }
 }
 function Close-Settings {
     Key 27
@@ -209,9 +217,11 @@ try {
     [void](Check 'rightClickRequestsCopy' { (State).rightCopy -gt 0 })
     [void](Check 'rightClickClipboardExactUnicode' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
     Screenshot 'right-click'
+    $beforeRight = State
     Mouse 8 $point[0] $point[1]
     Mouse 16 $point[0] $point[1]
-    [void](Check 'rightWithoutSelectionDoesNotCopyOrPaste' { (State).rightWithoutSelection -gt 0 -and (State).rightCopy -eq 1 -and (State).editor -ceq 'Synthetic editor' })
+    if (-not (Wait-For { $current = State; $current.rightWithoutSelection -eq ($beforeRight.rightWithoutSelection + 1) -and $current.frameFlushed -eq $true })) { throw 'No-selection right click did not reach a flushed frame' }
+    [void](Check 'rightWithoutSelectionDoesNotCopyOrPaste' { Right-ClickUnchanged $beforeRight } 350)
     Drag (Cell 1 1) (Cell 60 1)
     [System.Windows.Forms.Clipboard]::SetText('SCRAMJET-PROBE-SENTINEL')
     Key 67 @(17)

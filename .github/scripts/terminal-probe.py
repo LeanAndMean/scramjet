@@ -49,7 +49,9 @@ def required_checks():
     if terminal_kind in ("kitty", "iterm2"):
         expected |= {"nativeFocusDragActive", "nativeFocusOutReceived", "focusLossStopsSelectionScroll", "nativeFocusReturned"}
     if terminal_kind == "vte" and not with_tmux:
-        expected |= {"narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored"}
+        expected |= {"narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
+                     "narrowWrappedInputVisible", "narrowMultilineEditing", "narrowAutocompleteVisible", "narrowAutocompleteAccepted",
+                     "nativeCommittedMode", "nativeCommittedBatchCompletes", "nativeCommittedRestoration"}
     return expected
 
 
@@ -137,7 +139,7 @@ def key(name):
     mac = {"viewportUp": (100, 0) if terminal_kind == "apple" else (116, 524288), "viewportDown": (101, 0) if terminal_kind == "apple" else (121, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
            "a": (0, 0), "b": (11, 0), "c": (8, 0), "left": (123, 0), "backspace": (51, 0), "exit": (12, 262144), "close": (13, 1048576), "f": (3, 0), "g": (5, 0)}
     linux = {"viewportUp": "alt+Prior", "viewportDown": "alt+Next", "toggleTools": "ctrl+o", "paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
-             "left": "Left", "backspace": "BackSpace", "exit": "ctrl+q", "close": "alt+F4"}
+             "left": "Left", "backspace": "BackSpace", "tab": "Tab", "exit": "ctrl+q", "close": "alt+F4"}
     if is_mac:
         events("key", *mac[name])
     else:
@@ -205,6 +207,13 @@ def close_settings():
     key("escape")
     if not wait_for(lambda: state().get("editorActive") is True and state().get("frameFlushed") is True):
         raise RuntimeError("Settings selector did not release focus after Escape")
+
+
+def right_click_unchanged(before):
+    current = state()
+    return (current["rightWithoutSelection"] == before["rightWithoutSelection"] + 1
+            and all(current[key] == before[key] for key in
+                    ("rightCopy", "keyCopy", "copyErrors", "pasteMatches", "pasteMismatches", "editor")))
 
 
 def stable_check(name, predicate, seconds=0.35):
@@ -430,9 +439,12 @@ try:
     if not right_copied:
         key("escape")
         time.sleep(0.6)
+    before_right = state()
     mouse("rightDown", *cell(10, 1))
     mouse("rightUp", *cell(10, 1))
-    check("rightWithoutSelectionDoesNotCopyOrPaste", lambda: state().get("rightWithoutSelection", 0) > 0 and state().get("rightCopy") == 1 and state().get("editor") == "Synthetic editor")
+    if not wait_for(lambda: (current := state())["rightWithoutSelection"] == before_right["rightWithoutSelection"] + 1 and current.get("frameFlushed") is True):
+        raise RuntimeError("No-selection right click did not reach a flushed frame")
+    stable_check("rightWithoutSelectionDoesNotCopyOrPaste", lambda: right_click_unchanged(before_right))
     drag(cell(1, 1), cell(60, 1))
     seed_clipboard("SCRAMJET-PROBE-SENTINEL")
     key("copy")
@@ -492,15 +504,35 @@ try:
     if terminal_kind in ("kitty", "iterm2"):
         check_focus_loss(cell, columns)
     if terminal_kind == "vte" and not with_tmux:
-        run("xdotool", "windowsize", window_id, str(first["width"] * 26), str(first["height"] * 14))
-        if not wait_for(lambda: state()["columns"] < columns and state()["rows"] < rows):
-            raise RuntimeError("Narrow settings resize did not reach the terminal")
+        run("xdotool", "windowsize", window_id, str(first["width"] * 26 + width % columns), str(first["height"] * 14 + height % rows))
+        if not wait_for(lambda: (state()["columns"], state()["rows"]) == (26, 14)):
+            raise RuntimeError("Narrow 26x14 resize did not reach the terminal")
         open_settings("wheel")
         check("narrowSettingsVisible", lambda: any("Wheel scroll lines" in row for row in state()["painted"]))
         key("enter")
         check("narrowSettingsRemainsUsable", lambda: state()["wheelStep"] == 5 and any("Wheel scroll lines" in row for row in state()["painted"]))
         screenshot("narrow-settings")
         close_settings()
+        wrapped_line = "012345678901234567890123"
+        narrow_draft = wrapped_line * 4 + "\nTAIL"
+        fixture_command("narrow-editor")
+        check("narrowWrappedInputVisible", lambda: state()["editor"] == narrow_draft and state()["frameFlushed"]
+              and sum(row.strip() == wrapped_line for row in state()["painted"]) == 3
+              and any(row.strip() == "TAIL" for row in state()["painted"]))
+        key("left")
+        key("backspace")
+        type_text("x")
+        check("narrowMultilineEditing", lambda: state()["editor"] == wrapped_line * 4 + "\nTAxL"
+              and state()["frameFlushed"] and any(row.strip() == "TAxL" for row in state()["painted"]))
+        screenshot("narrow-multiline")
+        fixture_command("editor")
+        type_text("/hot")
+        check("narrowAutocompleteVisible", lambda: state()["editor"] == "/hot" and state()["frameFlushed"]
+              and any("→ hotkeys" in row for row in state()["painted"]))
+        key("tab")
+        check("narrowAutocompleteAccepted", lambda: state()["editor"] == "/hotkeys " and state()["frameFlushed"])
+        screenshot("narrow-autocomplete")
+        fixture_command("editor")
         run("xdotool", "windowsize", window_id, str(width), str(height))
         check("narrowEditorSizeRestored", lambda: (state()["columns"], state()["rows"]) == (columns, rows))
     fixture_command("expand")
@@ -609,6 +641,24 @@ try:
     check("orderlyExit", lambda: state().get("stopped") is True and (output / "stty-after.txt").exists() and (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
     check("termiosRestored", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))
     screenshot("restored")
+    if terminal_kind == "vte" and not with_tmux:
+        state_path = output / "committed.json"
+        committed_launcher = output / "committed.sh"
+        committed_launcher.write_text("#!/bin/bash\n" + "\n".join([
+            f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --committed",
+            "fixture_status=$?",
+            f'printf "%s\\n" "$fixture_status" > {shlex.quote(str(output / "committed-exit-code"))}',
+            "printf 'COMMITTED RESTORED SHELL\\n'",
+            'exit "$fixture_status"',
+        ]) + "\n")
+        type_text(f"/bin/bash {shlex.quote(str(committed_launcher))}")
+        key("enter")
+        check("nativeCommittedMode", lambda: state().get("production") is True and state().get("mode") == "committed"
+              and state().get("viewport") is None and state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
+        check("nativeCommittedBatchCompletes", lambda: state().get("completed") == 8 and state().get("stopped") is True
+              and (output / "committed-exit-code").exists() and (output / "committed-exit-code").read_text().strip() == "0")
+        check("nativeCommittedRestoration", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))
+        screenshot("committed-restored")
 except Exception as error:
     report["error"] = str(error)
     if isinstance(error, subprocess.CalledProcessError):

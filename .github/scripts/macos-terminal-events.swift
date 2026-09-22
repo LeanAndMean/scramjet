@@ -108,6 +108,16 @@ case "geometry", "resize":
     } else {
         emit(geometry(application))
     }
+case "running":
+    emit(NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }.map { $0.processIdentifier })
+case "geometry-pid":
+    emit(geometry(AXUIElementCreateApplication(pid_t(args[2])!)))
+case "activate-pid":
+    emit(["activated": NSRunningApplication(processIdentifier: pid_t(args[2])!)?.activate(options: [.activateIgnoringOtherApps]) ?? false])
+case "windows-pid":
+    let pid = Int(args[2])!
+    guard let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { fatalError("Window enumeration failed") }
+    emit(windows.filter { $0[kCGWindowOwnerPID as String] as? Int == pid }.map { ["pid": pid, "window": $0[kCGWindowNumber as String] as? Int ?? 0] })
 case "press-pid":
     emit(["pressed": pressButton(AXUIElementCreateApplication(pid_t(args[2])!), title: args[3])])
 case "press":
@@ -126,7 +136,7 @@ case "activate":
     let app = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
     emit(["activated": app?.activate(options: [.activateIgnoringOtherApps]) ?? false])
 case "frontmost":
-    emit(["bundle": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""])
+    emit(["bundle": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "", "pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0])
 case "mouse":
     let point = CGPoint(x: Double(args[3])!, y: Double(args[4])!)
     let actions: [String: (CGEventType, CGMouseButton)] = [

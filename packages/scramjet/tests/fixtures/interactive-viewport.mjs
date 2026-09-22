@@ -42,6 +42,8 @@ clip the image, 3 toggles an overlay, 4 opens approval, 5 browses its context,
 8 delivers a JPEG tool result through conversion/finalization, 9 invalidates it.
 G shows a bounded image overlay; H shows a padded, clipped image overlay.
 I grows the input dock and J restores it for native image-boundary checks.
+Safety mode colors the existing above-editor row and last footer row to calibrate
+cell and dock bounds in screenshot pixels without changing their heights.
 0 exits the safety fixture through the same drain/stop path as Ctrl+Q.
 --production --committed runs a short startup/finalization/exit smoke in committed mode.
 --inspect-screenshot <png> counts synthetic magenta pixels using installed Photon.`;
@@ -54,18 +56,23 @@ if (process.argv.includes("--inspect-screenshot")) {
 	const photon = await loadPhoton();
 	const image = photon.PhotonImage.new_from_byteslice(readFileSync(process.argv[process.argv.indexOf("--inspect-screenshot") + 1]));
 	const pixels = image.get_raw_pixels();
-	const width = image.get_width();
-	let count = 0;
-	let left = width, right = 0, top = image.get_height(), bottom = 0;
+	const width = image.get_width(), height = image.get_height();
+	const bounds = () => ({ count: 0, left: width, right: 0, top: height, bottom: 0 });
+	const magenta = bounds(), calibration = { dock: bounds(), bottom: bounds() };
 	for (let i = 0; i < pixels.length; i += 4) {
-		if (pixels[i] > 220 && pixels[i + 1] < 100 && pixels[i + 2] > 220) {
-			count++;
+		const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+		const target = r > 220 && g < 100 && b > 220 ? magenta
+			: r < 100 && g > 220 && b > 220 ? calibration.dock
+			: r > 220 && g > 220 && b < 100 ? calibration.bottom : undefined;
+		if (target) {
+			target.count++;
 			const x = (i / 4) % width, y = Math.floor(i / 4 / width);
-			left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+			target.left = Math.min(target.left, x); target.right = Math.max(target.right, x);
+			target.top = Math.min(target.top, y); target.bottom = Math.max(target.bottom, y);
 		}
 	}
 	image.free();
-	console.log(JSON.stringify({ count, left, right, top, bottom }));
+	console.log(JSON.stringify({ ...magenta, width, height, calibration }));
 	process.exit(0);
 }
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an interactive terminal; use --help");
@@ -275,6 +282,7 @@ async function runProduction() {
 			else if (command.action === "expand") mode.setToolsExpanded(true);
 			else if (command.action === "editor") extensionUI.setEditorText("");
 			else if (command.action === "long-editor") extensionUI.setEditorText(Array.from({ length: 50 }, (_, i) => `INPUT-${i}`).join("\n"));
+			else if (command.action === "narrow-editor") extensionUI.setEditorText("012345678901234567890123".repeat(4) + "\nTAIL");
 			else if (command.action === "tail") mode.ui.scrollViewport(Number.MAX_SAFE_INTEGER);
 			else if (command.action === "approval") await safetyAction("4");
 			else if (command.action === "external") await safetyAction("6");
@@ -429,6 +437,14 @@ async function runProduction() {
 		mode.updatePendingMessagesDisplay();
 		await mode.handleEvent({ type: "agent_start" });
 		if (safety) {
+			extensionUI.setWidget("above", () => ({ invalidate() {}, render: (width) => [`\x1b[48;2;0;255;255m${" ".repeat(width)}\x1b[0m`] }));
+			extensionUI.setFooter(() => ({
+				invalidate() { mode.footer.invalidate(); },
+				render(width) {
+					const rows = mode.footer.render(width);
+					return [...rows.slice(0, -1), `\x1b[48;2;255;255;0m${" ".repeat(width)}\x1b[0m`];
+				},
+			}));
 			const { loadPhoton } = await import("../../../coding-agent/dist/utils/photon.js");
 			const { getCapabilities } = await import("../../../tui/dist/index.js");
 			const photon = await loadPhoton();
