@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Distro,
     [Parameter(Mandatory=$true)][string]$LaunchScript,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
+    [Parameter(Mandatory=$true)][string]$SourceRevision,
     [switch]$AllowDesktopInteraction
 )
 $ErrorActionPreference = 'Stop'
@@ -34,6 +35,24 @@ $heldButtons = 0
 $report = [ordered]@{ scope = 'Windows Terminal / WSL production InteractiveMode activation journey'; checks = [ordered]@{} }
 $statePath = Join-Path $OutputDirectory 'fixture.json'
 $commandId = 0
+$requiredChecks = @(
+    'productionCompositionConfigured', 'desktopCellTargetVerified', 'desktopWheelScrollsDocument',
+    'desktopThumbDragReachesEnd', 'desktopTrackClickReachesStart', 'ordinaryDesktopDragSelects',
+    'rightClickRequestsCopy', 'rightClickClipboardExactUnicode', 'rightWithoutSelectionDoesNotCopyOrPaste',
+    'controlCCopiesSelection', 'desktopPasteRoundTrip', 'keyboardEditingCoexists', 'longSessionMiddleReachable',
+    'selectionAutoscrolls', 'selectionHoldsDuringUpdates', 'scrolledSelectionClipboardExact',
+    'firstFourRunningCardsReachable', 'allEightCardsReachableBeforeCompletion', 'readingInsideRunningBatch',
+    'readingAnchorSurvivesOtherChildUpdate', 'nativeWidthAndHeightChanged', 'readingAnchorSurvivesResize',
+    'nativeSizeRestored', 'readingAnchorSurvivesResizeBack', 'completeApprovalContextReachable',
+    'hiddenApprovalActivationOnlyReveals', 'subsequentApprovalActivation', 'externalProgramRoundTrip',
+    'jobControlSuspended', 'jobControlResumed', 'orderlyExit', 'termiosRestored', 'checkoutProvenanceMatches',
+    'defaultDockKeepsInputVisible', 'dockedTypingPreservesReading', 'keyboardOnlyBrowsingFromTail',
+    'keyboardBrowsingReturnsToTail', 'nativePresentationTogglePreservesReading', 'settingsUndocksLive',
+    'settingsRedocksLive', 'settingsWheelChangeApplies', 'configuredWheelDistance',
+    'settingsEditorHeightChangeApplies', 'nativeInputHeightCeiling'
+)
+$report.sourceRevision = $SourceRevision
+$report.viewportKeys = 'Alt+PageUp/Alt+PageDown'
 New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 
 function State {
@@ -48,8 +67,14 @@ function Wait-For([scriptblock]$Predicate, [int]$Seconds = 5) {
     } while ([DateTime]::UtcNow -lt $deadline)
     return $false
 }
-function Check([string]$Name, [scriptblock]$Predicate) {
+function Check([string]$Name, [scriptblock]$Predicate, [int]$StableMilliseconds = 0) {
+    if (-not ($requiredChecks -ccontains $Name) -or $report.checks.Contains($Name)) { throw "Unexpected or duplicate native check: $Name" }
     $passed = Wait-For $Predicate
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($StableMilliseconds)
+    while ($passed -and [DateTime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 50
+        $passed = [bool](& $Predicate)
+    }
     $report.checks[$Name] = @{ passed = $passed; fixture = (State) }
     Write-Host "$Name`: $passed"
     if (-not $passed) { throw "Failed native check: $Name" }
@@ -65,12 +90,13 @@ function Fixture-Command([string]$Action) {
 function Assert-Focus {
     if ([ProbeDesktop]::GetForegroundWindow() -ne $handle) { throw 'Probe lost foreground focus; refusing to send input to another window.' }
 }
-function Key([byte]$Code, [byte[]]$Modifiers = @()) {
+function Key([byte]$Code, [byte[]]$Modifiers = @(), [switch]$Extended) {
     Assert-Focus
     try {
         foreach ($modifier in $Modifiers) { [ProbeDesktop]::keybd_event($modifier, 0, 0, [UIntPtr]::Zero) }
-        [ProbeDesktop]::keybd_event($Code, 0, 0, [UIntPtr]::Zero)
-        [ProbeDesktop]::keybd_event($Code, 0, 2, [UIntPtr]::Zero)
+        $flags = if ($Extended) { 1 } else { 0 }
+        [ProbeDesktop]::keybd_event($Code, 0, $flags, [UIntPtr]::Zero)
+        [ProbeDesktop]::keybd_event($Code, 0, ($flags -bor 2), [UIntPtr]::Zero)
     } finally {
         foreach ($modifier in $Modifiers) { [ProbeDesktop]::keybd_event($modifier, 0, 2, [UIntPtr]::Zero) }
     }
@@ -96,6 +122,20 @@ function Drag($Start, $End) {
         Mouse 1 ($Start[0] + ($End[0] - $Start[0]) * $step / 8) ($Start[1] + ($End[1] - $Start[1]) * $step / 8)
     }
     Mouse 4 $End[0] $End[1]
+}
+function Open-Settings([string]$Query) {
+    Fixture-Command 'editor'
+    Assert-Focus
+    [System.Windows.Forms.SendKeys]::SendWait('/settings')
+    Key 13
+    if (-not (Wait-For { @((State).painted | Where-Object { $_.Contains('Auto-compact') }).Count -gt 0 })) { throw 'Real settings selector did not open' }
+    Assert-Focus
+    [System.Windows.Forms.SendKeys]::SendWait($Query)
+    if (-not (Wait-For { @((State).painted | Where-Object { $_.ToLower().Contains($Query) }).Count -gt 0 })) { throw 'Settings search did not render' }
+}
+function Close-Settings {
+    Key 27
+    if (-not (Wait-For { (State).editorActive -eq $true -and (State).frameFlushed -eq $true })) { throw 'Settings selector did not release focus after Escape' }
 }
 function Screenshot([string]$Name) {
     Assert-Focus
@@ -129,6 +169,8 @@ try {
     $rect = $textElement.Current.BoundingRectangle
     $columns = (State).columns
     $rows = (State).rows
+    [void](Check 'checkoutProvenanceMatches' { (State).sourceRevision -ceq $SourceRevision -and (State).sourceDirty -eq $false })
+    [void](Check 'defaultDockKeepsInputVisible' { (State).dockEditor -eq $true -and (State).height -lt (State).rows -and @((State).painted | Where-Object { $_.Contains('Synthetic editor') }).Count -gt 0 })
     [void](Check 'productionCompositionConfigured' { (State).production -eq $true -and (State).journey -eq $true -and (State).totalRows -gt 240 })
     $cellWidth = [Math]::Floor($rect.Width / $columns)
     $first = @(($rect.X + ($rect.Width % $columns) / 2), ($rect.Y + ($rect.Height % $rows) / 2), 0, ([Math]::Floor($rect.Height / $rows)))
@@ -151,7 +193,7 @@ try {
     Mouse 2048 $point[0] $point[1] -360
     [void](Check 'desktopWheelScrollsDocument' { (State).wheel -gt 0 -and (State).offset -gt 0 })
     Screenshot 'wheel'
-    Drag (Cell $columns 1) (Cell $columns $rows)
+    Drag (Cell $columns 1) (Cell $columns (State).height)
     [void](Check 'desktopThumbDragReachesEnd' { (State).thumbDrag -gt 0 -and (State).followingTail -eq $true -and (State).offset -eq ((State).totalRows - (State).height) })
     $point = Cell $columns 1
     Mouse 2 $point[0] $point[1]
@@ -180,8 +222,55 @@ try {
     foreach ($code in @(65, 66, 67, 37, 8)) { Key $code }
     [void](Check 'keyboardEditingCoexists' { (State).editor -ceq 'ac' })
     Screenshot 'keyboard'
+    Fixture-Command 'editor'
+    $point = Cell $columns 1
+    Mouse 2 $point[0] $point[1]
+    Mouse 4 $point[0] $point[1]
+    $readingOffset = (State).offset
+    Key 65
+    [void](Check 'dockedTypingPreservesReading' { (State).editor -ceq 'a' -and (State).offset -eq $readingOffset -and (State).painted[0].StartsWith('ROW-001') })
+    Fixture-Command 'tail'
+    $tail = State
+    Key 33 @(18) -Extended
+    [void](Check 'keyboardOnlyBrowsingFromTail' { (State).followingTail -eq $false -and (State).offset -eq ($tail.offset - $tail.height) })
+    Key 34 @(18) -Extended
+    [void](Check 'keyboardBrowsingReturnsToTail' { (State).followingTail -eq $true -and (State).offset -eq $tail.offset })
+    $point = Cell $columns 1
+    Mouse 2 $point[0] $point[1]
+    Mouse 4 $point[0] $point[1]
+    $anchor = (State).painted[0]
+    $expanded = (State).toolsExpanded
+    Key 79 @(17)
+    [void](Check 'nativePresentationTogglePreservesReading' { (State).toolsExpanded -ne $expanded -and (State).painted[0] -ceq $anchor -and (State).followingTail -eq $false })
+    Open-Settings 'dock'
+    Key 13
+    [void](Check 'settingsUndocksLive' { (State).dockEditor -eq $false -and (State).height -eq (State).rows })
+    Close-Settings
+    Open-Settings 'dock'
+    Key 13
+    [void](Check 'settingsRedocksLive' { (State).dockEditor -eq $true -and (State).height -lt (State).rows })
+    Close-Settings
+    Open-Settings 'wheel'
+    Key 13
+    [void](Check 'settingsWheelChangeApplies' { (State).wheelStep -eq 4 })
+    Close-Settings
+    $point = Cell $columns ([int]((State).height / 2))
+    Mouse 2 $point[0] $point[1]
+    Mouse 4 $point[0] $point[1]
+    $beforeWheel = State
+    $point = Cell 10 3
+    Mouse 2048 $point[0] $point[1] 120
+    [void](Check 'configuredWheelDistance' { (State).wheel -gt $beforeWheel.wheel -and (State).offset -eq ($beforeWheel.offset - 4 * ((State).wheel - $beforeWheel.wheel)) } 350)
+    Open-Settings 'height'
+    Key 13
+    [void](Check 'settingsEditorHeightChangeApplies' { (State).editorHeightPercent -eq 35 })
+    Close-Settings
+    Fixture-Command 'long-editor'
+    [void](Check 'nativeInputHeightCeiling' { @((State).painted | Where-Object { $_.Trim().StartsWith('INPUT-') }).Count -eq [Math]::Floor((State).rows * 0.35) })
+    Screenshot 'docked-settings'
+    Fixture-Command 'editor'
     Fixture-Command 'expand'
-    $point = Cell $columns ([int]($rows / 2))
+    $point = Cell $columns ([int]((State).height / 2))
     Mouse 2 $point[0] $point[1]
     Mouse 4 $point[0] $point[1]
     [void](Check 'longSessionMiddleReachable' { $ratio = (State).offset / ((State).totalRows - (State).height); $ratio -gt 0.3 -and $ratio -lt 0.7 })
@@ -190,12 +279,12 @@ try {
     Mouse 4 $point[0] $point[1]
     $point = Cell 1 3
     Mouse 2 $point[0] $point[1]
-    $point = Cell 60 ($rows - 1)
+    $point = Cell 60 (State).height
     Mouse 1 $point[0] $point[1]
     Start-Sleep -Milliseconds 500
     Mouse 4 $point[0] $point[1]
     [void](Check 'selectionAutoscrolls' { (State).offset -gt 0 -and (State).notice })
-    $lastSelected = (State).painted[$rows - 2]
+    $lastSelected = (State).painted[(State).height - 1]
     if (-not $lastSelected.StartsWith('ROW-')) { throw 'Selection escaped synthetic history' }
     $lastNumber = [int]$lastSelected.Substring(4, 3)
     $suffix = $expected.Substring(7)
@@ -207,7 +296,7 @@ try {
     [void](Check 'scrolledSelectionClipboardExact' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expectedMultiline, [StringComparison]::Ordinal) -and -not (State).notice })
     function Browse-Cards([int]$Count) {
         $seen = New-Object 'System.Collections.Generic.HashSet[int]'
-        $point = Cell $columns $rows
+        $point = Cell $columns (State).height
         Mouse 2 $point[0] $point[1]
         Mouse 4 $point[0] $point[1]
         for ($step = 0; $step -lt 180; $step++) {
@@ -225,7 +314,7 @@ try {
     for ($i = 0; $i -lt 4; $i++) { Fixture-Command 'advance' }
     $seen = Browse-Cards 8
     [void](Check 'allEightCardsReachableBeforeCompletion' { $seen -eq 8 -and (State).completed -eq 4 })
-    $point = Cell $columns $rows
+    $point = Cell $columns (State).height
     Mouse 2 $point[0] $point[1]
     Mouse 4 $point[0] $point[1]
     for ($step = 0; $step -lt 160; $step++) {
@@ -249,7 +338,7 @@ try {
     for ($i = 0; $i -lt 4; $i++) { Fixture-Command 'advance' }
     Fixture-Command 'approval'
     $payloadSeen = New-Object 'System.Collections.Generic.HashSet[int]'
-    $point = Cell $columns $rows
+    $point = Cell $columns (State).height
     Mouse 2 $point[0] $point[1]
     Mouse 4 $point[0] $point[1]
     for ($step = 0; $step -lt 100; $step++) {
@@ -264,8 +353,9 @@ try {
     $point = Cell $columns 1
     Mouse 2 $point[0] $point[1]
     Mouse 4 $point[0] $point[1]
+    $enterCount = (State).enterPresses
     Key 13
-    [void](Check 'hiddenApprovalActivationOnlyReveals' { (State).approved -eq 0 -and @((State).painted | Where-Object { $_.Contains('SYNTHETIC APPROVAL') }).Count -eq 1 })
+    [void](Check 'hiddenApprovalActivationOnlyReveals' { (State).enterPresses -gt $enterCount -and (State).frameFlushed -eq $true -and (State).approved -eq 0 -and @((State).painted | Where-Object { $_.Contains('SYNTHETIC APPROVAL') }).Count -eq 1 } 350)
     Key 13
     [void](Check 'subsequentApprovalActivation' { (State).approved -eq 1 })
     Fixture-Command 'external'
@@ -294,7 +384,7 @@ try {
     }
     [void][ProbeDesktop]::SetCursorPos($previousPointer.X, $previousPointer.Y)
     [void][ProbeDesktop]::SetForegroundWindow($previousWindow)
-    $report.passed = $report.checks.Count -eq 32 -and @($report.checks.Values | Where-Object { -not $_.passed }).Count -eq 0 -and -not $report.Contains('error') -and -not $report.Contains('cleanupError')
+    $report.passed = $report.checks.Count -eq $requiredChecks.Count -and @($requiredChecks | Where-Object { -not $report.checks.Contains($_) }).Count -eq 0 -and @($report.checks.Values | Where-Object { -not $_.passed }).Count -eq 0 -and -not $report.Contains('error') -and -not $report.Contains('cleanupError')
     [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'report.json'), ($report | ConvertTo-Json -Depth 10))
     $report | ConvertTo-Json -Depth 10
 }

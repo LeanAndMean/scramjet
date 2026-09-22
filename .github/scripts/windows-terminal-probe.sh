@@ -24,7 +24,8 @@ export SCRAMJET_PROBE_SOURCE=$(wslpath -w "$root/.github/scripts/windows-termina
 export SCRAMJET_PROBE_OUTPUT=$(wslpath -w "$out")
 export SCRAMJET_PROBE_LAUNCH="$out/launch.sh"
 export SCRAMJET_PROBE_DISTRO="$WSL_DISTRO_NAME"
-export WSLENV="${WSLENV:+$WSLENV:}SCRAMJET_PROBE_SOURCE:SCRAMJET_PROBE_OUTPUT:SCRAMJET_PROBE_LAUNCH:SCRAMJET_PROBE_DISTRO"
+export SCRAMJET_PROBE_REVISION=$(git rev-parse HEAD)
+export WSLENV="${WSLENV:+$WSLENV:}SCRAMJET_PROBE_SOURCE:SCRAMJET_PROBE_OUTPUT:SCRAMJET_PROBE_LAUNCH:SCRAMJET_PROBE_DISTRO:SCRAMJET_PROBE_REVISION"
 printf 'Evidence: %s\n' "$out"
 
 # A local temporary copy avoids treating this host-owned WSL file as an unsigned network script.
@@ -33,7 +34,7 @@ powershell.exe -NoProfile -NonInteractive -Command '
   $target = Join-Path $env:TEMP ("scramjet-probe-" + [guid]::NewGuid().ToString() + ".ps1")
   Copy-Item -LiteralPath $env:SCRAMJET_PROBE_SOURCE -Destination $target
   try {
-    & $target -Distro $env:SCRAMJET_PROBE_DISTRO -LaunchScript $env:SCRAMJET_PROBE_LAUNCH -OutputDirectory $env:SCRAMJET_PROBE_OUTPUT -AllowDesktopInteraction
+    & $target -Distro $env:SCRAMJET_PROBE_DISTRO -LaunchScript $env:SCRAMJET_PROBE_LAUNCH -OutputDirectory $env:SCRAMJET_PROBE_OUTPUT -SourceRevision $env:SCRAMJET_PROBE_REVISION -AllowDesktopInteraction
     $status = $LASTEXITCODE
   } finally {
     Remove-Item -LiteralPath $target
