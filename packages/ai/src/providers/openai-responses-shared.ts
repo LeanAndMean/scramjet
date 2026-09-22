@@ -84,6 +84,629 @@ export interface ConvertResponsesToolsOptions {
 	strict?: boolean | null;
 }
 
+// SCRAMJET-DIVERGENCE: Shared Responses failures use closed privacy-safe diagnostics and fixed text (#553).
+export type ResponsesFailureCategory =
+	| "rate_limit"
+	| "quota_exhausted"
+	| "overloaded"
+	| "server"
+	| "timeout"
+	| "transport"
+	| "context_overflow"
+	| "authentication"
+	| "permission"
+	| "invalid_request"
+	| "not_found"
+	| "conflict"
+	| "content_rejection"
+	| "provider_error"
+	| "malformed_event"
+	| "unknown";
+
+export type ResponsesRetryDisposition = "transient" | "non_transient" | "unknown";
+
+type ResponsesFailureKind = "http" | "provider_event" | "transport" | "malformed_event";
+type ResponsesFailureDetailSource = "provider_code" | "provider_type" | "http_status" | "message_category" | "none";
+
+type ResponsesProviderCode =
+	| "rate_limit_exceeded"
+	| "insufficient_quota"
+	| "billing_hard_limit_reached"
+	| "overloaded_error"
+	| "server_error"
+	| "timeout"
+	| "context_length_exceeded"
+	| "authentication_error"
+	| "permission_denied"
+	| "invalid_request_error"
+	| "not_found"
+	| "conflict"
+	| "content_filter"
+	| "content_policy_violation";
+
+export interface ResponsesProviderFailureV1 {
+	schemaVersion: 1;
+	layer: "openai_responses";
+	phase: "request" | "stream";
+	kind: ResponsesFailureKind;
+	category: ResponsesFailureCategory;
+	retryDisposition: ResponsesRetryDisposition;
+	detailSource: ResponsesFailureDetailSource;
+	httpStatus?: number;
+	providerCode?: ResponsesProviderCode;
+}
+
+export type ResponsesProviderFailureValidation =
+	| { status: "absent" }
+	| {
+			status: "valid";
+			category: ResponsesFailureCategory;
+			retryDisposition: ResponsesRetryDisposition;
+	  }
+	| { status: "malformed" }
+	| { status: "duplicate" };
+
+const PROVIDER_CODE_CATEGORIES = {
+	rate_limit_exceeded: "rate_limit",
+	insufficient_quota: "quota_exhausted",
+	billing_hard_limit_reached: "quota_exhausted",
+	overloaded_error: "overloaded",
+	server_error: "server",
+	timeout: "timeout",
+	context_length_exceeded: "context_overflow",
+	authentication_error: "authentication",
+	permission_denied: "permission",
+	invalid_request_error: "invalid_request",
+	not_found: "not_found",
+	conflict: "conflict",
+	content_filter: "content_rejection",
+	content_policy_violation: "content_rejection",
+} as const satisfies Record<ResponsesProviderCode, ResponsesFailureCategory>;
+
+const CATEGORY_DISPOSITIONS: Record<ResponsesFailureCategory, ResponsesRetryDisposition> = {
+	rate_limit: "transient",
+	quota_exhausted: "non_transient",
+	overloaded: "transient",
+	server: "transient",
+	timeout: "transient",
+	transport: "transient",
+	context_overflow: "non_transient",
+	authentication: "non_transient",
+	permission: "non_transient",
+	invalid_request: "non_transient",
+	not_found: "non_transient",
+	conflict: "non_transient",
+	content_rejection: "non_transient",
+	provider_error: "unknown",
+	malformed_event: "unknown",
+	unknown: "unknown",
+};
+
+const CATEGORY_MESSAGES: Record<ResponsesFailureCategory, string> = {
+	rate_limit: "OpenAI Responses request was rate limited.",
+	quota_exhausted: "OpenAI Responses quota was exhausted.",
+	overloaded: "OpenAI Responses service was overloaded.",
+	server: "OpenAI Responses service returned a server error.",
+	timeout: "OpenAI Responses request timed out.",
+	transport: "OpenAI Responses request failed during transport.",
+	context_overflow: "OpenAI Responses input exceeds the context window.",
+	authentication: "OpenAI Responses authentication failed.",
+	permission: "OpenAI Responses request was not permitted.",
+	invalid_request: "OpenAI Responses request was invalid.",
+	not_found: "OpenAI Responses resource was not found.",
+	conflict: "OpenAI Responses request conflicted with the current resource state.",
+	content_rejection: "OpenAI Responses rejected the content.",
+	provider_error: "OpenAI Responses returned a provider error.",
+	malformed_event: "OpenAI Responses returned a malformed error event.",
+	unknown: "OpenAI Responses request failed without recognized details.",
+};
+
+const PROVIDER_MESSAGE_MAX_LENGTH = 4096;
+const PROVIDER_DETAIL_MAX_LENGTH = 200;
+const PROVIDER_DETAIL_REDACTIONS: RegExp[] = [
+	/\b[a-z][a-z0-9+.-]*:\/\/[^\s'"`<>]+/gi,
+	/[^\s@'"`<>]+@[^\s@'"`<>]+\.[a-z]{2,}/gi,
+	/\bbearer\s+[^\s'"`]+/gi,
+	/\bsk-[a-z0-9_-]{8,}/gi,
+	/\b(?:resp|req|chatcmpl|msg|rs|fc|call|sess|proj|org)[_-](?=[a-z0-9_-]*\d)[a-z0-9_-]{6,}\b/gi,
+	/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g,
+	// All-digit labels are dotted paths (`input.0.content`) or versions, not hostnames; IPv4 has its own rule.
+	/\b(?:(?!\d+\.)[a-z0-9-]+\.){2,}(?!\d+\b)[a-z0-9-]+(?::\d{1,5})?\b/gi,
+	/(?<=^|[\s'"`(])(?:~|\/)[^\s'"`)]+/g,
+	/\b[A-Za-z0-9_-]{32,}\b/g,
+];
+
+const GATEWAY_OBSERVABILITY: GatewayObservabilityV1 = {
+	schemaVersion: 1,
+	layer: "gateway_service_internal",
+	outcome: "unobservable",
+	reason: "no_structured_evidence",
+};
+
+const PROVIDER_CODES = new Set<string>(Object.keys(PROVIDER_CODE_CATEGORIES));
+const FAILURE_DETAIL_KEYS = new Set([
+	"schemaVersion",
+	"layer",
+	"phase",
+	"kind",
+	"category",
+	"retryDisposition",
+	"detailSource",
+	"httpStatus",
+	"providerCode",
+]);
+
+interface FailureScalars {
+	code?: string;
+	type?: string;
+	message?: string;
+	status?: number;
+}
+
+export interface SafeResponsesFailure {
+	message: string;
+	diagnostic: ResponsesProviderFailureV1;
+}
+
+type ResponsesSdkRetryAttempt =
+	| { ordinal: number; result: "response"; status?: number }
+	| { ordinal: number; result: "transport"; category: "timeout" | "connection" | "other" };
+
+type ResponsesSdkRetryReason =
+	| "accepted_after_retry"
+	| "configured_limit_reached"
+	| "terminal_after_retry"
+	| "configured_zero"
+	| "non_retryable_request"
+	| "stream_already_accepted"
+	| "insufficient_evidence";
+
+export interface GatewayObservabilityV1 {
+	schemaVersion: 1;
+	layer: "gateway_service_internal";
+	outcome: "unobservable";
+	reason: "no_structured_evidence";
+}
+
+export interface ResponsesSdkRetryV1 {
+	schemaVersion: 1;
+	layer: "openai_sdk_request";
+	outcome: "recovered" | "exhausted" | "not_attempted";
+	reason: ResponsesSdkRetryReason;
+	observedAttemptCount: number;
+	attempts: ResponsesSdkRetryAttempt[];
+	truncated: boolean;
+}
+
+export interface ResponsesSdkRequestObserver {
+	fetch: typeof fetch;
+	markAccepted(): void;
+	diagnosticForSuccess(): ResponsesSdkRetryV1 | undefined;
+	diagnosticForFailure(maxRetries: number | undefined): ResponsesSdkRetryV1;
+}
+
+class SafeResponsesFailureError extends Error {
+	constructor(readonly failure: SafeResponsesFailure) {
+		super(failure.message);
+	}
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined;
+}
+
+function finiteString(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : undefined;
+}
+
+function boundedMessage(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value.slice(0, PROVIDER_MESSAGE_MAX_LENGTH) : undefined;
+}
+
+function finiteStatus(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599 ? value : undefined;
+}
+
+function readFailureScalars(value: unknown): { top: FailureScalars; nested: FailureScalars } {
+	const topRecord = recordOf(value);
+	const nestedRecord = recordOf(topRecord?.error);
+	const read = (record: Record<string, unknown> | undefined): FailureScalars => ({
+		code: finiteString(record?.code),
+		type: finiteString(record?.type),
+		message: boundedMessage(record?.message),
+		status: finiteStatus(record?.status),
+	});
+	return { top: read(topRecord), nested: read(nestedRecord) };
+}
+
+function sanitizeProviderDetail(message: string | undefined): string | undefined {
+	if (!message) return undefined;
+	let detail = message;
+	for (const pattern of PROVIDER_DETAIL_REDACTIONS) detail = detail.replace(pattern, "[redacted]");
+	detail = detail
+		.replace(/[\u0000-\u001f\u007f]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (detail.length === 0 || /^(?:undefined|null)$/i.test(detail)) return undefined;
+	if (detail.length > PROVIDER_DETAIL_MAX_LENGTH) detail = `${detail.slice(0, PROVIDER_DETAIL_MAX_LENGTH - 1)}…`;
+	return detail;
+}
+
+function composeFailureMessage(category: ResponsesFailureCategory, detail: string | undefined): string {
+	const base = CATEGORY_MESSAGES[category];
+	if (!detail) return base;
+	return `${base.slice(0, -1)}: ${detail}${/[.!?…]$/.test(detail) ? "" : "."}`;
+}
+
+// SCRAMJET-DIVERGENCE: a user abort keeps the abort reason, stripped and capped like provider detail (#553).
+export function abortedResponsesFailureMessage(error: unknown): string {
+	return (
+		sanitizeProviderDetail(error instanceof Error ? error.message : undefined) ??
+		"OpenAI Responses request was aborted."
+	);
+}
+
+function categoryFromMessage(message: string | undefined): ResponsesFailureCategory | undefined {
+	if (!message) return undefined;
+	const normalized = message.toLowerCase();
+	if (/context (length|window)|maximum context|too many tokens/.test(normalized)) return "context_overflow";
+	if (/insufficient.quota|quota.*(exhaust|exceed)|billing.*limit/.test(normalized)) return "quota_exhausted";
+	if (/rate.?limit|too many requests/.test(normalized)) return "rate_limit";
+	if (/overload|capacity/.test(normalized)) return "overloaded";
+	if (/timed? ?out|timeout/.test(normalized)) return "timeout";
+	if (/connection error|network error/.test(normalized)) return "transport";
+	if (/authenticat|invalid api key/.test(normalized)) return "authentication";
+	if (/permission|forbidden|not authorized/.test(normalized)) return "permission";
+	if (/not found/.test(normalized)) return "not_found";
+	if (/conflict/.test(normalized)) return "conflict";
+	if (/content.filter|content.policy|safety policy/.test(normalized)) return "content_rejection";
+	if (/invalid request|bad request/.test(normalized)) return "invalid_request";
+	if (/server error|internal error|internal server/.test(normalized)) return "server";
+	if (
+		/\bupstream (?:error|unavailable|connect(?:ion)?|request failed)\b|(?:status|http|error|code|returned|received|upstream)\s*:?\s*50[0234]\b|service unavailable|bad gateway|gateway time-?out/.test(
+			normalized,
+		)
+	) {
+		return "server";
+	}
+	if (/fetch failed|socket hang up|econnreset|stream ended/.test(normalized)) return "transport";
+	return undefined;
+}
+
+function categoryFromStatus(status: number | undefined): ResponsesFailureCategory | undefined {
+	if (status === 400 || status === 422) return "invalid_request";
+	if (status === 401) return "authentication";
+	if (status === 403) return "permission";
+	if (status === 404) return "not_found";
+	if (status === 409) return "conflict";
+	if (status === 408 || status === 504) return "timeout";
+	if (status === 429) return "rate_limit";
+	if (status !== undefined && status >= 500) return "server";
+	return undefined;
+}
+
+function allowlistedProviderCode(value: string | undefined): ResponsesProviderCode | undefined {
+	return value && PROVIDER_CODES.has(value) ? (value as ResponsesProviderCode) : undefined;
+}
+
+function makeFailure(
+	value: unknown,
+	phase: "request" | "stream",
+	kindHint?: ResponsesFailureKind,
+): SafeResponsesFailure {
+	if (value instanceof SafeResponsesFailureError) return value.failure;
+	const { top, nested } = readFailureScalars(value);
+	const codeCandidates = [
+		[top.code, "provider_code"],
+		[top.type, "provider_type"],
+		[nested.code, "provider_code"],
+		[nested.type, "provider_type"],
+	] as const;
+	const matchedCode = codeCandidates.find(([value]) => allowlistedProviderCode(value) !== undefined);
+	const providerCode = allowlistedProviderCode(matchedCode?.[0]);
+	const contextOverflow = [top.code, top.type, nested.code, nested.type, top.message, nested.message].some(
+		(field) => field === "context_length_exceeded" || categoryFromMessage(field) === "context_overflow",
+	);
+	const status = top.status ?? nested.status;
+	const statusCategory = categoryFromStatus(status);
+	const messageCategory = categoryFromMessage(top.message) ?? categoryFromMessage(nested.message);
+	let category: ResponsesFailureCategory;
+	let detailSource: ResponsesFailureDetailSource;
+	if (contextOverflow) {
+		category = "context_overflow";
+		detailSource = providerCode === "context_length_exceeded" ? "provider_code" : "message_category";
+	} else if (providerCode) {
+		category = PROVIDER_CODE_CATEGORIES[providerCode];
+		detailSource = matchedCode?.[1] ?? "provider_code";
+	} else if (statusCategory) {
+		category = statusCategory;
+		detailSource = "http_status";
+	} else {
+		category = messageCategory ?? (kindHint === "malformed_event" ? "malformed_event" : "unknown");
+		detailSource = messageCategory ? "message_category" : "none";
+	}
+	const hasEvidence = Boolean(
+		top.code ||
+			(top.type !== "error" && top.type !== "response.failed" && top.type) ||
+			top.message ||
+			top.status ||
+			nested.code ||
+			nested.type ||
+			nested.message ||
+			nested.status,
+	);
+	const errorName = value instanceof Error ? value.name.toLowerCase() : "";
+	const inferredTransport =
+		phase === "request" &&
+		status === undefined &&
+		providerCode === undefined &&
+		messageCategory === undefined &&
+		(errorName.includes("connection") || errorName.includes("timeout") || errorName === "typeerror");
+	if (inferredTransport && !contextOverflow) {
+		category = errorName.includes("timeout") ? "timeout" : "transport";
+		detailSource = "none";
+	}
+	const kind =
+		kindHint ??
+		(status
+			? "http"
+			: (inferredTransport && !contextOverflow) || (phase === "request" && category === "transport")
+				? "transport"
+				: hasEvidence
+					? "provider_event"
+					: "malformed_event");
+	if (kind === "malformed_event") {
+		category = "malformed_event";
+		detailSource = "none";
+	}
+	const diagnostic: ResponsesProviderFailureV1 = {
+		schemaVersion: 1,
+		layer: "openai_responses",
+		phase,
+		kind,
+		category,
+		retryDisposition: CATEGORY_DISPOSITIONS[category],
+		detailSource,
+	};
+	if (status !== undefined) diagnostic.httpStatus = status;
+	if (providerCode !== undefined) diagnostic.providerCode = providerCode;
+	// Overflow text stays exact so `isContextOverflow` keys on it deterministically.
+	const detail =
+		kind === "malformed_event" || category === "context_overflow"
+			? undefined
+			: sanitizeProviderDetail(top.message ?? nested.message);
+	return { message: composeFailureMessage(category, detail), diagnostic };
+}
+
+export function normalizeResponsesFailure(value: unknown, phase: "request" | "stream"): SafeResponsesFailure {
+	return makeFailure(value, phase);
+}
+
+function sdkRetryOrdinal(input: string | URL | Request, init: RequestInit | undefined, fallback: number): number {
+	try {
+		const headers = init?.headers ? new Headers(init.headers) : input instanceof Request ? input.headers : undefined;
+		const value = headers?.get("x-stainless-retry-count");
+		if (value && /^\d+$/.test(value)) {
+			const ordinal = Number(value);
+			if (Number.isSafeInteger(ordinal) && ordinal <= 65_535) return ordinal;
+		}
+	} catch {
+		// Observation must not affect the request.
+	}
+	return Math.min(fallback, 65_535);
+}
+
+function transportCategory(value: unknown): "timeout" | "connection" | "other" {
+	if (!(value instanceof Error)) return "other";
+	const name = value.name.toLowerCase();
+	if (name.includes("timeout") || name.includes("abort")) return "timeout";
+	if (name === "typeerror" || name.includes("connection")) return "connection";
+	return "other";
+}
+
+function isSdkRetryableStatus(status: number | undefined): boolean {
+	return status === 408 || status === 409 || status === 429 || (status !== undefined && status >= 500);
+}
+
+const OPENAI_SDK_DEFAULT_MAX_RETRIES = 2;
+
+// SCRAMJET-DIVERGENCE: Observe bounded SDK request attempts without changing fetch behavior or retry policy (#553).
+export function createResponsesSdkRequestObserver(fetchImplementation: typeof fetch): ResponsesSdkRequestObserver {
+	let observedAttemptCount = 0;
+	let accepted = false;
+	const firstAttempts: ResponsesSdkRetryAttempt[] = [];
+	const latestAttempts: ResponsesSdkRetryAttempt[] = [];
+
+	const record = (attempt: ResponsesSdkRetryAttempt): void => {
+		observedAttemptCount = Math.min(observedAttemptCount + 1, 65_535);
+		if (firstAttempts.length < 4) {
+			firstAttempts.push(attempt);
+			return;
+		}
+		latestAttempts.push(attempt);
+		if (latestAttempts.length > 4) latestAttempts.shift();
+	};
+	const attempts = (): ResponsesSdkRetryAttempt[] => [...firstAttempts, ...latestAttempts];
+	const diagnostic = (
+		outcome: ResponsesSdkRetryV1["outcome"],
+		reason: ResponsesSdkRetryReason,
+	): ResponsesSdkRetryV1 => ({
+		schemaVersion: 1,
+		layer: "openai_sdk_request",
+		outcome,
+		reason,
+		observedAttemptCount,
+		attempts: attempts(),
+		truncated: observedAttemptCount > 8,
+	});
+
+	return {
+		fetch: async (input, init) => {
+			const fallbackOrdinal = observedAttemptCount;
+			let response: Response;
+			try {
+				response = await fetchImplementation(input, init);
+			} catch (error) {
+				try {
+					record({
+						ordinal: sdkRetryOrdinal(input, init, fallbackOrdinal),
+						result: "transport",
+						category: transportCategory(error),
+					});
+				} catch {
+					// Observation must not replace the transport failure.
+				}
+				throw error;
+			}
+			try {
+				const attempt: ResponsesSdkRetryAttempt = {
+					ordinal: sdkRetryOrdinal(input, init, fallbackOrdinal),
+					result: "response",
+				};
+				if (finiteStatus(response.status) !== undefined) attempt.status = response.status;
+				record(attempt);
+			} catch {
+				// Observation must not replace or alter the response.
+			}
+			return response;
+		},
+		markAccepted: () => {
+			accepted = true;
+		},
+		diagnosticForSuccess: () =>
+			observedAttemptCount > 1 ? diagnostic("recovered", "accepted_after_retry") : undefined,
+		diagnosticForFailure: (maxRetries) => {
+			if (accepted) {
+				return observedAttemptCount > 1
+					? diagnostic("recovered", "accepted_after_retry")
+					: diagnostic("not_attempted", "stream_already_accepted");
+			}
+			if (observedAttemptCount > 1) {
+				const effectiveMaxRetries = maxRetries ?? OPENAI_SDK_DEFAULT_MAX_RETRIES;
+				const reachedConfiguredLimit = observedAttemptCount >= Math.min(effectiveMaxRetries + 1, 65_535);
+				return diagnostic(
+					"exhausted",
+					reachedConfiguredLimit ? "configured_limit_reached" : "terminal_after_retry",
+				);
+			}
+			if (observedAttemptCount === 1) {
+				if (maxRetries === 0) return diagnostic("not_attempted", "configured_zero");
+				const [attempt] = attempts();
+				if (attempt?.result === "response" && !isSdkRetryableStatus(attempt.status)) {
+					return diagnostic("not_attempted", "non_retryable_request");
+				}
+			}
+			return diagnostic("not_attempted", "insufficient_evidence");
+		},
+	};
+}
+
+export function appendResponsesSdkRetryDiagnostic(
+	output: AssistantMessage,
+	diagnostic: ResponsesSdkRetryV1 | undefined,
+): void {
+	if (!diagnostic) return;
+	output.diagnostics = [
+		...(output.diagnostics ?? []),
+		{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...diagnostic } },
+	];
+}
+
+export function appendResponsesFailureDiagnostics(
+	output: AssistantMessage,
+	failure: SafeResponsesFailure,
+	sdkRetry?: ResponsesSdkRetryV1,
+): void {
+	output.errorMessage = failure.message;
+	output.diagnostics = [
+		...(output.diagnostics ?? []),
+		{ type: "provider_failure", timestamp: Date.now(), details: { ...failure.diagnostic } },
+		...(sdkRetry ? [{ type: "sdk_request_retry", timestamp: Date.now(), details: { ...sdkRetry } }] : []),
+		{ type: "gateway_observability", timestamp: Date.now(), details: { ...GATEWAY_OBSERVABILITY } },
+	];
+}
+
+function isProviderFailureDetails(value: unknown): value is ResponsesProviderFailureV1 {
+	const details = recordOf(value);
+	if (!details || Object.keys(details).some((key) => !FAILURE_DETAIL_KEYS.has(key))) return false;
+	const category = details.category;
+	const kind = details.kind;
+	const source = details.detailSource;
+	const status = details.httpStatus;
+	const providerCode = details.providerCode;
+	if (
+		details.schemaVersion !== 1 ||
+		details.layer !== "openai_responses" ||
+		(details.phase !== "request" && details.phase !== "stream") ||
+		typeof kind !== "string" ||
+		!["http", "provider_event", "transport", "malformed_event"].includes(kind) ||
+		typeof category !== "string" ||
+		!(category in CATEGORY_DISPOSITIONS) ||
+		details.retryDisposition !== CATEGORY_DISPOSITIONS[category as ResponsesFailureCategory] ||
+		typeof source !== "string" ||
+		!["provider_code", "provider_type", "http_status", "message_category", "none"].includes(source) ||
+		(status !== undefined && finiteStatus(status) === undefined) ||
+		(providerCode !== undefined &&
+			(typeof providerCode !== "string" || allowlistedProviderCode(providerCode) === undefined))
+	) {
+		return false;
+	}
+	if (kind === "malformed_event") {
+		return category === "malformed_event" && source === "none" && status === undefined && providerCode === undefined;
+	}
+	if (kind === "transport") {
+		if (details.phase !== "request" || status !== undefined || providerCode !== undefined) return false;
+		if (source === "none") return category === "transport" || category === "timeout";
+		return source === "message_category" && category === "transport";
+	}
+	if (kind === "http" && status === undefined) return false;
+	if (kind === "provider_event" && details.phase === "request" && status !== undefined) return false;
+	if (kind === "provider_event" && details.phase === "request" && category === "transport") return false;
+	if (source === "provider_code" || source === "provider_type") {
+		return (
+			typeof providerCode === "string" &&
+			PROVIDER_CODE_CATEGORIES[providerCode as ResponsesProviderCode] === category
+		);
+	}
+	if (source === "http_status") {
+		return providerCode === undefined && categoryFromStatus(status as number | undefined) === category;
+	}
+	if (source === "message_category") {
+		if (category === "provider_error" || category === "malformed_event" || category === "unknown") return false;
+		if (
+			providerCode !== undefined &&
+			(category !== "context_overflow" || providerCode === "context_length_exceeded")
+		) {
+			return false;
+		}
+		const statusCategory = categoryFromStatus(status as number | undefined);
+		return statusCategory === undefined || category === "context_overflow";
+	}
+	if (providerCode !== undefined) return false;
+	if (kind === "http") return category === "unknown" && categoryFromStatus(status as number | undefined) === undefined;
+	if (status !== undefined) return false;
+	return kind === "provider_event" && (category === "provider_error" || category === "unknown");
+}
+
+export function validateResponsesProviderFailure(diagnostics: unknown): ResponsesProviderFailureValidation {
+	if (diagnostics === undefined) return { status: "absent" };
+	if (!Array.isArray(diagnostics)) return { status: "malformed" };
+	const matches: Record<string, unknown>[] = [];
+	for (const diagnostic of diagnostics) {
+		const candidate = recordOf(diagnostic);
+		if (candidate?.type === "provider_failure") matches.push(candidate);
+	}
+	if (matches.length === 0) return { status: "absent" };
+	if (matches.length > 1) return { status: "duplicate" };
+	const details = matches[0].details;
+	if (!isProviderFailureDetails(details)) return { status: "malformed" };
+	return { status: "valid", category: details.category, retryDisposition: details.retryDisposition };
+}
+
+function providerEventFailure(value: unknown, kindHint?: ResponsesFailureKind): SafeResponsesFailureError {
+	return new SafeResponsesFailureError(makeFailure(value, "stream", kindHint));
+}
+
 // =============================================================================
 // Message conversion
 // =============================================================================
@@ -517,16 +1140,13 @@ export async function processResponsesStream<TApi extends Api>(
 				output.stopReason = "toolUse";
 			}
 		} else if (event.type === "error") {
-			throw new Error(`Error Code ${event.code}: ${event.message}` || "Unknown error");
+			throw providerEventFailure(event);
 		} else if (event.type === "response.failed") {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
-			const msg = error
-				? `${error.code || "unknown"}: ${error.message || "no message"}`
-				: details?.reason
-					? `incomplete: ${details.reason}`
-					: "Unknown error (no error details in response)";
-			throw new Error(msg);
+			if (error) throw providerEventFailure(error, "provider_event");
+			if (details?.reason) throw providerEventFailure({ message: details.reason }, "provider_event");
+			throw providerEventFailure(event, "malformed_event");
 		}
 	}
 }

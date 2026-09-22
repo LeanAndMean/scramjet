@@ -29,7 +29,7 @@ import { Agent } from "@leanandmean/agent";
 import type { AssistantMessage, Context, Model } from "@leanandmean/ai";
 import { createAssistantMessageEventStream } from "@leanandmean/ai";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentSession } from "../src/core/agent-session.js";
 import { AuthStorage } from "../src/core/auth-storage.js";
 import { defineTool, type ToolDefinition } from "../src/core/extensions/index.js";
@@ -408,6 +408,63 @@ describe("AgentSession harness-tool invocation", () => {
 		// rejects via the assistant branch of _harnessAckIdForEvent (the tool-result test only gates the
 		// result append).
 		await expect(session.invokeHarnessTool("harness_notice", { note: "boom" })).rejects.toBe(persistError);
+
+		await expect(session.prompt("after failed harness persistence")).resolves.toBeUndefined();
+	});
+
+	it("retains invocation attribution through later persistence failures", async () => {
+		const { tool: notice } = makeNoticeTool();
+		const { session, sessionManager } = await createFixture([notice]);
+		await session.prompt("hi");
+
+		let releaseResult: () => void = () => {};
+		const resultGate = new Promise<void>((resolve) => {
+			releaseResult = resolve;
+		});
+		let signalResult: () => void = () => {};
+		const resultReached = new Promise<void>((resolve) => {
+			signalResult = resolve;
+		});
+		const internal = session as unknown as {
+			_processAgentEvent(event: { type: string; message?: unknown }, ...rest: unknown[]): Promise<void>;
+		};
+		const originalProcess = internal._processAgentEvent.bind(session);
+		internal._processAgentEvent = async (event, ...rest) => {
+			const message = event.message as { role?: string } | undefined;
+			if (event.type === "message_end" && message?.role === "toolResult") {
+				signalResult();
+				await resultGate;
+			}
+			return originalProcess(event, ...rest);
+		};
+
+		const assistantError = new Error("assistant persistence failed");
+		const resultError = new Error("result persistence failed");
+		const appendMessage = sessionManager.appendMessage.bind(sessionManager);
+		vi.spyOn(sessionManager, "appendMessage").mockImplementation((message) => {
+			if (message.role === "assistant" && message.origin === "harness") throw assistantError;
+			if (message.role === "toolResult" && message.toolName === "harness_notice") throw resultError;
+			return appendMessage(message);
+		});
+
+		let settled = false;
+		const outcome = session.invokeHarnessTool("harness_notice", { note: "twice" }).then(
+			() => ({ error: undefined }),
+			(error: unknown) => ({ error }),
+		);
+		outcome.then(() => {
+			settled = true;
+		});
+
+		await resultReached;
+		await flushMicrotasks();
+		expect(settled).toBe(false);
+
+		releaseResult();
+		expect((await outcome).error).toBe(assistantError);
+
+		vi.restoreAllMocks();
+		await expect(session.prompt("after two harness persistence failures")).resolves.toBeUndefined();
 	});
 
 	it("rejects a pending invocation on dispose and refuses post-dispose invocations", async () => {

@@ -18,7 +18,24 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.js";
+import {
+	abortedResponsesFailureMessage,
+	appendResponsesFailureDiagnostics,
+	appendResponsesSdkRetryDiagnostic,
+	convertResponsesMessages,
+	convertResponsesTools,
+	createResponsesSdkRequestObserver,
+	normalizeResponsesFailure,
+	processResponsesStream,
+} from "./openai-responses-shared.js";
+
+export type {
+	ResponsesFailureCategory,
+	ResponsesProviderFailureValidation,
+	ResponsesRetryDisposition,
+} from "./openai-responses-shared.js";
+export { validateResponsesProviderFailure } from "./openai-responses-shared.js";
+
 import { buildBaseOptions } from "./simple-options.js";
 
 // SCRAMJET-DIVERGENCE: Copilot uses Responses compound tool-call IDs, including switched history (#522).
@@ -89,16 +106,33 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 			timestamp: Date.now(),
 		};
 
+		// SCRAMJET-DIVERGENCE: classify failures and observe SDK attempts at the request/stream boundary (#553).
+		let failurePhase: "request" | "stream" = "request";
+		let payloadCallbackFailed = false;
+		let responseCallbackFailed = false;
+		const sdkRequestObserver = createResponsesSdkRequestObserver(fetch);
 		try {
 			// Create OpenAI client
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId);
+			const client = createClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				cacheSessionId,
+				sdkRequestObserver.fetch,
+			);
 			let params = buildParams(model, context, options);
-			const nextParams = await options?.onPayload?.(params, model);
-			if (nextParams !== undefined) {
-				params = nextParams as ResponseCreateParamsStreaming;
+			try {
+				const nextParams = await options?.onPayload?.(params, model);
+				if (nextParams !== undefined) {
+					params = nextParams as ResponseCreateParamsStreaming;
+				}
+			} catch (error) {
+				payloadCallbackFailed = true;
+				throw error;
 			}
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
@@ -106,9 +140,16 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
 			};
 			const { data: openaiStream, response } = await client.responses.create(params, requestOptions).withResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			sdkRequestObserver.markAccepted();
+			try {
+				await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			} catch (error) {
+				responseCallbackFailed = true;
+				throw error;
+			}
 			stream.push({ type: "start", partial: output });
 
+			failurePhase = "stream";
 			await processResponsesStream(openaiStream, output, stream, model, {
 				serviceTier: options?.serviceTier,
 				applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
@@ -122,6 +163,7 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				throw new Error("An unknown error occurred");
 			}
 
+			appendResponsesSdkRetryDiagnostic(output, sdkRequestObserver.diagnosticForSuccess());
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -131,7 +173,19 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			if (payloadCallbackFailed) {
+				output.errorMessage = "OpenAI Responses payload callback failed.";
+			} else if (responseCallbackFailed) {
+				output.errorMessage = "OpenAI Responses response callback failed.";
+			} else if (output.stopReason === "aborted") {
+				output.errorMessage = abortedResponsesFailureMessage(error);
+			} else {
+				appendResponsesFailureDiagnostics(
+					output,
+					normalizeResponsesFailure(error, failurePhase),
+					sdkRequestObserver.diagnosticForFailure(options?.maxRetries),
+				);
+			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -166,6 +220,7 @@ function createClient(
 	apiKey?: string,
 	optionsHeaders?: Record<string, string>,
 	sessionId?: string,
+	fetchImplementation?: typeof fetch,
 ) {
 	if (!apiKey) {
 		if (!process.env.OPENAI_API_KEY) {
@@ -213,6 +268,7 @@ function createClient(
 		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders,
+		fetch: fetchImplementation,
 	});
 }
 

@@ -29,6 +29,7 @@ import {
 	modelsAreEqual,
 	resetApiProviders,
 } from "@leanandmean/ai";
+import { validateResponsesProviderFailure } from "@leanandmean/ai/openai-responses";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
@@ -265,17 +266,126 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 // AgentSession Class
 // ============================================================================
 
-// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement acknowledgement (#341). One deferred
-// promise per in-flight harness-tool invocation, resolved after the matching tool-result message_end
-// is persisted and rejected if that processing fails or the session is disposed first. resolve/reject
-// are called directly at several sites with no explicit settled-once guard (unlike the Agent-side
-// settleHarnessInvocation choke point): that is safe because native Promise settlement is
-// first-settlement-wins, so a later resolve/reject on an already-settled ack is a no-op.
-type HarnessPersistenceAck = {
-	promise: Promise<void>;
-	resolve: () => void;
+type Deferred<T = void> = {
+	promise: Promise<T>;
+	resolve: (value: T) => void;
 	reject: (reason: Error) => void;
+	settled: boolean;
 };
+
+function createDeferred<T = void>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: Error) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	promise.catch(() => {});
+	return { promise, resolve, reject, settled: false };
+}
+
+function resolveDeferred<T>(deferred: Deferred<T>, value: T): boolean {
+	if (deferred.settled) return false;
+	deferred.settled = true;
+	deferred.resolve(value);
+	return true;
+}
+
+function rejectDeferred(deferred: Pick<Deferred<unknown>, "reject" | "settled">, error: Error): boolean {
+	if (deferred.settled) return false;
+	deferred.settled = true;
+	deferred.reject(error);
+	return true;
+}
+
+function settleDeferred(deferred: Deferred, error: Error | undefined): boolean {
+	return error ? rejectDeferred(deferred, error) : resolveDeferred(deferred, undefined);
+}
+
+// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement acknowledgement (#341). Each invocation
+// retains synchronous event attribution and its queue tail until Agent execution and persistence both
+// settle, so an early write failure cannot leak later invocation failures into ordinary run state.
+type HarnessPersistenceAck = Deferred & {
+	persistenceTail: Promise<void>;
+	firstPersistenceError?: Error;
+};
+
+type RetryChainSettlement = Deferred;
+
+type AgentRunSettlement = Deferred & {
+	chain: RetryChainSettlement;
+	persistedAssistantSnapshot?: AssistantMessage;
+	assistantPersistenceError?: Error;
+};
+
+type AgentRunStartReservation = Deferred<AgentRunSettlement> & { run?: AgentRunSettlement };
+
+// SCRAMJET-DIVERGENCE: one retry-phase value owns "retry is active" (#553). Every finish flows through
+// `_finishRetry`, so a stranded controller, attempt counter, or handoff cannot exist independently.
+type RetryPhase =
+	| { phase: "backoff"; attempt: number; controller: AbortController; run: AgentRunSettlement }
+	| { phase: "continuing"; attempt: number; chain: RetryChainSettlement };
+
+type AutoRetryEvidence = "provider_failure" | "legacy_text" | "context_overflow" | "none";
+type NotAttemptedCause =
+	| { reason: "structured_non_transient" | "structured_unknown"; evidence: "provider_failure" }
+	| {
+			reason: "malformed_provider_diagnostic" | "duplicate_provider_diagnostic" | "missing_error_evidence";
+			evidence: "none";
+	  }
+	| { reason: "legacy_non_retryable"; evidence: "legacy_text" };
+// SCRAMJET-DIVERGENCE: closed, replay-inert retry decisions and outcomes preserve #553 evidence invariants.
+type AutoRetryRecord =
+	| {
+			schemaVersion: 1;
+			outcome: "not_attempted";
+			reason: "retry_disabled" | "session_disposed";
+			evidence: AutoRetryEvidence;
+	  }
+	| {
+			schemaVersion: 1;
+			outcome: "not_attempted";
+			reason: "context_overflow_compaction";
+			evidence: "context_overflow";
+	  }
+	| ({ schemaVersion: 1; outcome: "not_attempted" } & NotAttemptedCause)
+	| {
+			schemaVersion: 1;
+			outcome: "scheduled";
+			evidence: "provider_failure" | "legacy_text";
+			attempt: number;
+			maxAttempts: number;
+			cumulativeErrors: number;
+			delayMs: number;
+	  }
+	| { schemaVersion: 1; outcome: "succeeded"; attemptsCompleted: number; cumulativeErrors: number }
+	| {
+			schemaVersion: 1;
+			outcome: "failed";
+			reason: "continuation_rejected" | "run_failed";
+			attempt: number;
+			cumulativeErrors: number;
+	  }
+	| {
+			schemaVersion: 1;
+			outcome: "cancelled";
+			reason: "cancelled_during_backoff" | "cancelled_during_continuation" | "session_disposed";
+			attempt: number;
+			cumulativeErrors: number;
+	  }
+	| {
+			schemaVersion: 1;
+			outcome: "exhausted";
+			reason: "attempt_limit" | "cumulative_limit";
+			attemptsCompleted: number;
+			maxAttempts: number;
+			cumulativeErrors: number;
+	  };
+
+type RetryClassification =
+	| { kind: "retry"; evidence: "provider_failure" | "legacy_text" }
+	| { kind: "context_overflow" }
+	| ({ kind: "do_not_retry" } & NotAttemptedCause);
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -317,11 +427,12 @@ export class AgentSession {
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
 
 	// Retry state
-	private _retryAbortController: AbortController | undefined = undefined;
-	private _retryAttempt = 0;
+	private _retry: RetryPhase | undefined = undefined;
 	private _runRetryCount = 0;
-	private _retryPromise: Promise<void> | undefined = undefined;
-	private _retryResolve: (() => void) | undefined = undefined;
+	private _activeAgentRunSettlement: AgentRunSettlement | undefined = undefined;
+	private _pendingAgentRunStart: AgentRunStartReservation | undefined = undefined;
+	private readonly _unsettledAgentRuns = new Set<AgentRunSettlement>();
+	private readonly _unsettledRetryChains = new Set<RetryChainSettlement>();
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
@@ -525,27 +636,21 @@ export class AgentSession {
 		});
 	}
 
-	// Track last assistant message for auto-compaction check
-	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
-
 	/** Internal handler for agent events - shared by subscribe and reconnect */
 	private _handleAgentEvent = (event: AgentEvent): Promise<void> | void => {
 		this._captureOutputThroughput(event);
 
-		// Create retry promise synchronously before queueing async processing.
-		// Agent.emit() calls this handler synchronously, and prompt() calls waitForRetry()
-		// as soon as agent.prompt() resolves. If _retryPromise is created only inside
-		// _processAgentEvent, slow earlier queued events can delay agent_end processing
-		// and waitForRetry() can miss the in-flight retry.
-		this._createRetryPromiseForAgentEnd(event);
-
-		this._agentEventQueue = this._agentEventQueue.then(
-			() => this._processAgentEventTracked(event),
-			() => this._processAgentEventTracked(event),
+		const runSettlement = this._captureAgentRunSettlement(event);
+		const harnessAck = this._harnessPersistenceAckForEvent(event);
+		const processing = this._agentEventQueue.then(
+			() => this._processAgentEventTracked(event, runSettlement, harnessAck),
+			() => this._processAgentEventTracked(event, runSettlement, harnessAck),
 		);
+		this._agentEventQueue = processing;
+		if (harnessAck) harnessAck.persistenceTail = processing;
 
 		// Keep queue alive if an event handler fails
-		this._agentEventQueue.catch(() => {});
+		processing.catch(() => {});
 
 		// SCRAMJET-DIVERGENCE: turn_end tool/prompt changes must settle before Agent snapshots
 		// live state for the next provider request (#524).
@@ -580,101 +685,113 @@ export class AgentSession {
 		this._outputThroughputGeneration = undefined;
 	}
 
-	private _createRetryPromiseForAgentEnd(event: AgentEvent): void {
-		if (event.type !== "agent_end" || this._retryPromise) {
-			return;
-		}
-
-		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled) {
-			return;
-		}
-
-		const lastAssistant = this._findLastAssistantInMessages(event.messages);
-		if (!lastAssistant || !this._isRetryableError(lastAssistant)) {
-			return;
-		}
-
-		this._retryPromise = new Promise((resolve) => {
-			this._retryResolve = resolve;
-		});
-	}
-
-	private _findLastAssistantInMessages(messages: AgentMessage[]): AssistantMessage | undefined {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-			if (message.role === "assistant") {
-				return message as AssistantMessage;
+	// SCRAMJET-DIVERGENCE: every Agent run owns persistence state and a one-shot settlement token (#553).
+	private _captureAgentRunSettlement(event: AgentEvent): AgentRunSettlement | undefined {
+		if (event.type === "agent_start") {
+			// A retry continuation's run adopts the chain its originating prompt awaits; the chain stays
+			// bound to the retry phase until this start consumes it, however late Agent emits it.
+			const chain = this._retry?.phase === "continuing" ? this._retry.chain : createDeferred();
+			this._unsettledRetryChains.add(chain);
+			const run: AgentRunSettlement = { ...createDeferred(), chain };
+			this._activeAgentRunSettlement = run;
+			this._unsettledAgentRuns.add(run);
+			const reservation = this._pendingAgentRunStart;
+			if (reservation) {
+				this._pendingAgentRunStart = undefined;
+				reservation.run = run;
+				resolveDeferred(reservation, run);
 			}
+			return run;
 		}
-		return undefined;
+
+		const run = this._activeAgentRunSettlement;
+		if (event.type === "agent_end" && this._activeAgentRunSettlement === run) {
+			this._activeAgentRunSettlement = undefined;
+		}
+		return run;
 	}
 
-	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Wraps queue-side event processing
-	// so a harness-tool invocation's persistence acknowledgement resolves only after the matching
-	// tool-result message_end has been fully processed and persisted, and rejects if processing any of
-	// that invocation's events throws. Rethrows to preserve the queue's existing keep-processing
-	// behavior (the caller attaches `.catch(() => {})`).
-	private async _processAgentEventTracked(event: AgentEvent): Promise<void> {
-		const ackId = this._harnessAckIdForEvent(event);
-		const ack = ackId !== undefined ? this._harnessPersistenceAcks.get(ackId) : undefined;
-		// Decide from the ORIGINAL event, before _processAgentEvent runs, whether this is the
-		// ack-resolving tool-result: a message_end hook can replace event.message in place
-		// (_replaceMessageInPlace), so re-reading role/toolCallId after the await could miss the match
-		// and strand the acknowledgement.
-		const resolvesAck =
-			ack !== undefined &&
-			event.type === "message_end" &&
-			event.message.role === "toolResult" &&
-			event.message.toolCallId === ackId;
+	private _settleAgentRun(run: AgentRunSettlement, error?: Error): void {
+		if (settleDeferred(run, error)) this._unsettledAgentRuns.delete(run);
+	}
+
+	private _settleRetryChain(chain: RetryChainSettlement, error?: Error): void {
+		if (settleDeferred(chain, error)) this._unsettledRetryChains.delete(chain);
+	}
+
+	private _completeAgentRun(run: AgentRunSettlement, error?: Error): void {
+		this._settleAgentRun(run, error);
+		this._settleRetryChain(run.chain, error);
+	}
+
+	private _reserveAgentRunStart(): AgentRunStartReservation {
+		if (this._pendingAgentRunStart) throw new Error("An Agent prompt is already waiting to start.");
+		const reservation: AgentRunStartReservation = createDeferred<AgentRunSettlement>();
+		this._pendingAgentRunStart = reservation;
+		return reservation;
+	}
+
+	private _rejectAgentRunStart(reservation: AgentRunStartReservation, error: Error): void {
+		if (this._pendingAgentRunStart === reservation) this._pendingAgentRunStart = undefined;
+		rejectDeferred(reservation, error);
+	}
+
+	// SCRAMJET-DIVERGENCE: harness-tool persisted settlement (#341). Synchronous ownership keeps queued
+	// invocation events attributed after early failures; public settlement awaits execution and the final persistence tail.
+	private async _processAgentEventTracked(
+		event: AgentEvent,
+		run: AgentRunSettlement | undefined,
+		harnessAck?: HarnessPersistenceAck,
+	): Promise<void> {
 		try {
-			await this._processAgentEvent(event);
+			await this._processAgentEvent(event, run, harnessAck !== undefined);
 		} catch (err) {
-			if (ack) {
-				ack.reject(err instanceof Error ? err : new Error(String(err)));
+			const error = err instanceof Error ? err : new Error(String(err));
+			if (harnessAck) {
+				harnessAck.firstPersistenceError ??= error;
+			} else if (run) {
+				if (event.type === "message_end" && event.message.role === "assistant") {
+					run.assistantPersistenceError = error;
+				}
+				this._releaseRetryForFailedRun(error);
+				this._completeAgentRun(run, error);
 			}
 			throw err;
 		}
-		// Resolving here counts as "persisted" only because SessionManager persistence is synchronous
-		// (appendFileSync): _processAgentEvent has already written the tool-result row by the time it
-		// returns. If _persist ever becomes async, this would resolve before persistence completes.
-		if (resolvesAck) {
-			ack?.resolve();
-		}
 	}
 
-	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). The tool-call id an event belongs
-	// to for acknowledgement tracking — the synthetic assistant tool-call, the `tool_execution_*`
-	// events, or the tool-result message. Returns undefined for events unrelated to a pending harness
-	// invocation; a returned id that has no pending acknowledgement (an ordinary model tool call)
-	// resolves to no-op at the call site.
-	private _harnessAckIdForEvent(event: AgentEvent): string | undefined {
+	private _harnessPersistenceAckForEvent(event: AgentEvent): HarnessPersistenceAck | undefined {
+		let toolCallId: string | undefined;
 		switch (event.type) {
 			case "tool_execution_start":
 			case "tool_execution_update":
 			case "tool_execution_end":
-				return event.toolCallId;
+				toolCallId = event.toolCallId;
+				break;
 			case "message_start":
 			case "message_end": {
 				const message = event.message;
 				if (message.role === "toolResult") {
-					return message.toolCallId;
-				}
-				if (message.role === "assistant") {
+					toolCallId = message.toolCallId;
+				} else if (message.role === "assistant") {
 					for (const block of message.content) {
 						if (block.type === "toolCall" && this._harnessPersistenceAcks.has(block.id)) {
-							return block.id;
+							toolCallId = block.id;
+							break;
 						}
 					}
 				}
-				return undefined;
+				break;
 			}
-			default:
-				return undefined;
 		}
+		return toolCallId === undefined ? undefined : this._harnessPersistenceAcks.get(toolCallId);
 	}
 
-	private async _processAgentEvent(event: AgentEvent): Promise<void> {
+	private async _processAgentEvent(
+		event: AgentEvent,
+		run: AgentRunSettlement | undefined,
+		fromHarnessInvocation = false,
+	): Promise<void> {
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
@@ -702,6 +819,7 @@ export class AgentSession {
 
 		// Notify all listeners
 		this._emit(event);
+		if (this._disposed) return;
 
 		// Handle session persistence
 		if (event.type === "message_end") {
@@ -719,8 +837,16 @@ export class AgentSession {
 				event.message.role === "assistant" ||
 				event.message.role === "toolResult"
 			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				const messageEntryId = this.sessionManager.appendMessage(event.message);
+				// SCRAMJET-DIVERGENCE: retry settlement classifies the exact JSON-safe assistant snapshot
+				// that crossed the persistence boundary, never a later-mutated live Agent message (#553).
+				const persistedMessage =
+					event.message.role === "assistant"
+						? (JSON.parse(JSON.stringify(event.message)) as AssistantMessage)
+						: event.message;
+				const messageEntryId = this.sessionManager.appendMessage(persistedMessage);
+				if (persistedMessage.role === "assistant" && !fromHarnessInvocation && run) {
+					run.persistedAssistantSnapshot = persistedMessage;
+				}
 				if (event.message.role === "user") {
 					const sessionEntries = this._inputSessionEntries.get(event.message);
 					this._inputSessionEntries.delete(event.message);
@@ -747,50 +873,101 @@ export class AgentSession {
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			// Track assistant message for auto-compaction (checked on agent_end)
-			if (event.message.role === "assistant") {
-				this._lastAssistantMessage = event.message;
-
-				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "error") {
-					this._overflowRecoveryAttempted = false;
-				}
-
-				// Reset retry counter immediately on successful assistant response
-				// This prevents accumulation across multiple LLM calls within a turn
-				if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
-					this._emit({
-						type: "auto_retry_end",
-						success: true,
-						attempt: this._retryAttempt,
-					});
-					this._retryAttempt = 0;
-				}
+			if (
+				event.message.role === "assistant" &&
+				event.message.stopReason !== "error" &&
+				event.message.stopReason !== "aborted" &&
+				!fromHarnessInvocation
+			) {
+				this._overflowRecoveryAttempted = false;
+				if (this._retry) this._retry = { ...this._retry, attempt: 0 };
 			}
 		}
 
-		// Check auto-retry and auto-compaction after agent completes
-		if (event.type === "agent_end" && this._lastAssistantMessage) {
-			const msg = this._lastAssistantMessage;
-			this._lastAssistantMessage = undefined;
-
-			// Check for retryable errors first (overloaded, rate limit, server errors)
-			if (this._isRetryableError(msg)) {
-				const didRetry = await this._handleRetryableError(msg);
-				if (didRetry) return; // Retry was initiated, don't proceed to compaction
+		if (event.type === "agent_end") {
+			if (this._disposed || !run) return;
+			if (run.assistantPersistenceError) {
+				const error = run.assistantPersistenceError;
+				run.assistantPersistenceError = undefined;
+				run.persistedAssistantSnapshot = undefined;
+				this._completeAgentRun(run, error);
+				return;
 			}
 
-			this._resolveRetry();
+			const msg = run.persistedAssistantSnapshot;
+			run.persistedAssistantSnapshot = undefined;
+			if (!msg) {
+				this._releaseRetryForFailedRun(new Error("Retry continuation ended without an assistant message."));
+				this._completeAgentRun(run);
+				return;
+			}
+
+			if (msg.stopReason === "aborted" && this._retry) {
+				this._finishCancelledRetry("cancelled_during_continuation");
+				this._completeAgentRun(run);
+				return;
+			}
+
+			if (msg.stopReason !== "error") {
+				if (this._retry) {
+					const attempt = this._runRetryCount;
+					this._finishRetry(
+						{
+							schemaVersion: 1,
+							outcome: "succeeded",
+							attemptsCompleted: this._bounded(attempt),
+							cumulativeErrors: this._bounded(attempt),
+						},
+						{ type: "auto_retry_end", success: true, attempt },
+					);
+				}
+				this._completeAgentRun(run);
+				await this._checkCompaction(msg);
+				return;
+			}
+
+			const classification = this._classifyRetry(msg);
+			if (classification.kind === "context_overflow") {
+				this._finishRetryWithoutSuccess(
+					{
+						schemaVersion: 1,
+						outcome: "not_attempted",
+						reason: "context_overflow_compaction",
+						evidence: "context_overflow",
+					},
+					msg,
+				);
+				this._completeAgentRun(run);
+				await this._checkCompaction(msg);
+				return;
+			}
+
+			const settings = this.settingsManager.getRetrySettings();
+			if (!settings.enabled) {
+				this._finishRetryWithoutSuccess(
+					{
+						schemaVersion: 1,
+						outcome: "not_attempted",
+						reason: "retry_disabled",
+						evidence: classification.evidence,
+					},
+					msg,
+				);
+				this._completeAgentRun(run);
+				await this._checkCompaction(msg);
+				return;
+			}
+
+			if (classification.kind === "retry") {
+				const didRetry = await this._handleRetryableError(msg, classification.evidence, run);
+				if (didRetry) return;
+			} else {
+				const { kind: _kind, ...cause } = classification;
+				this._finishRetryWithoutSuccess({ schemaVersion: 1, outcome: "not_attempted", ...cause }, msg);
+			}
+
+			this._completeAgentRun(run);
 			await this._checkCompaction(msg);
-		}
-	}
-
-	/** Resolve the pending retry promise */
-	private _resolveRetry(): void {
-		if (this._retryResolve) {
-			this._retryResolve();
-			this._retryResolve = undefined;
-			this._retryPromise = undefined;
 		}
 	}
 
@@ -948,11 +1125,45 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
-		// SCRAMJET-DIVERGENCE: idempotent disposal that revokes in-flight harness-tool invocations (#341).
+		// SCRAMJET-DIVERGENCE: idempotent disposal revokes harness invocations and closes retry settlement (#341, #553).
 		// A second call must not re-reject already-settled acknowledgements or re-run teardown.
 		if (this._disposed) return;
 		this._disposed = true;
 		this._resetOutputThroughput();
+		const retryDisposeError = new Error("AgentSession disposed before retry settlement completed.");
+		const unsettledRuns = [...this._unsettledAgentRuns];
+		const retry = this._retry;
+		const unclassifiedError = unsettledRuns.find(
+			(run) => run.persistedAssistantSnapshot?.stopReason === "error",
+		)?.persistedAssistantSnapshot;
+		if (retry) this.agent.abort();
+		try {
+			if (retry) {
+				this._appendAutoRetryRecord({
+					schemaVersion: 1,
+					outcome: "cancelled",
+					reason: "session_disposed",
+					attempt: this._bounded(retry.attempt),
+					cumulativeErrors: this._bounded(this._runRetryCount),
+				});
+			} else if (unclassifiedError) {
+				const classification = this._classifyRetry(unclassifiedError);
+				this._appendAutoRetryRecord({
+					schemaVersion: 1,
+					outcome: "not_attempted",
+					reason: "session_disposed",
+					evidence: classification.kind === "context_overflow" ? "context_overflow" : classification.evidence,
+				});
+			}
+		} catch (error) {
+			this._reportRetryFailure(error);
+		}
+		if (retry?.phase === "backoff") retry.controller.abort();
+		this._retry = undefined;
+		this._activeAgentRunSettlement = undefined;
+		const pendingAgentRunStart = this._pendingAgentRunStart;
+		if (pendingAgentRunStart) this._rejectAgentRunStart(pendingAgentRunStart, retryDisposeError);
+		const pendingRetryContinuation = retry?.phase === "continuing" ? retry.chain : undefined;
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
@@ -962,10 +1173,14 @@ export class AgentSession {
 		// roll back arbitrary side effects.
 		const disposeError = new Error("AgentSession disposed before the harness tool invocation settled.");
 		for (const ack of this._harnessPersistenceAcks.values()) {
-			ack.reject(disposeError);
+			this._settleHarnessPersistenceAck(ack, disposeError);
 		}
 		this._harnessPersistenceAcks.clear();
 		this.agent.rejectUnsettledHarnessTools(disposeError);
+		const retryChains = new Set(this._unsettledRetryChains);
+		if (pendingRetryContinuation) retryChains.add(pendingRetryContinuation);
+		for (const run of unsettledRuns) this._settleAgentRun(run, retryDisposeError);
+		for (const chain of retryChains) this._settleRetryChain(chain, retryDisposeError);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
 		cleanupSessionResources(this.sessionId);
@@ -1054,7 +1269,7 @@ export class AgentSession {
 
 	/** Current retry attempt (0 if not retrying) */
 	get retryAttempt(): number {
-		return this._retryAttempt;
+		return this._retry?.attempt ?? 0;
 	}
 
 	/**
@@ -1149,13 +1364,12 @@ export class AgentSession {
 			throw new Error(`Cannot invoke harness tool "${name}": no tool with that name is registered.`);
 		}
 		const toolCallId = this._allocateHarnessToolCallId(options?.toolCallId);
-		// Register the acknowledgement before Agent execution can emit events, so the queue-side handler
-		// always finds it. Await Agent execution and persistence concurrently: Agent-core failure or a
-		// persistence failure rejects, and the tool-call-id-keyed handler resolves after the matching
-		// tool-result is persisted.
+		// Register before Agent execution can emit events. The coordinator retains attribution until Agent
+		// execution and the invocation's final queued persistence task both settle.
 		const ack = this._registerHarnessPersistenceAck(toolCallId);
+		void this._completeHarnessToolInvocation(this.agent.runHarnessTool(tool, args, { toolCallId }), ack);
 		try {
-			await Promise.all([this.agent.runHarnessTool(tool, args, { toolCallId }), ack.promise]);
+			await ack.promise;
 		} finally {
 			// Identity-checked cleanup: only drop the entry if it is still this invocation's ack (disposal
 			// may have cleared the map, and a later same-id invocation must not have its entry removed).
@@ -1193,17 +1407,27 @@ export class AgentSession {
 		return id;
 	}
 
+	private async _completeHarnessToolInvocation(execution: Promise<void>, ack: HarnessPersistenceAck): Promise<void> {
+		let executionError: Error | undefined;
+		try {
+			await execution;
+		} catch (error) {
+			executionError = error instanceof Error ? error : new Error(String(error));
+		}
+		try {
+			await ack.persistenceTail;
+		} catch {}
+		this._settleHarnessPersistenceAck(ack, ack.firstPersistenceError ?? executionError);
+	}
+
+	private _settleHarnessPersistenceAck(ack: HarnessPersistenceAck, error?: Error): void {
+		settleDeferred(ack, error);
+	}
+
 	// SCRAMJET-DIVERGENCE: harness-tool persisted-settlement (#341). Register a deferred acknowledgement
-	// keyed by tool-call id. The caller awaits `ack.promise` inside the same synchronous frame that
-	// registers it, so a synchronous disposal rejection can never strand it as an unhandled rejection.
+	// keyed by tool-call id before any invocation event can be emitted.
 	private _registerHarnessPersistenceAck(toolCallId: string): HarnessPersistenceAck {
-		let resolve!: () => void;
-		let reject!: (reason: Error) => void;
-		const promise = new Promise<void>((res, rej) => {
-			resolve = res;
-			reject = rej;
-		});
-		const ack: HarnessPersistenceAck = { promise, resolve, reject };
+		const ack: HarnessPersistenceAck = { ...createDeferred(), persistenceTail: Promise.resolve() };
 		this._harnessPersistenceAcks.set(toolCallId, ack);
 		return ack;
 	}
@@ -1375,6 +1599,8 @@ export class AgentSession {
 				}
 			}
 
+			this._assertRetryNotOwningIdleAgent();
+
 			// Emit input event for extension interception (before skill/template expansion)
 			let currentText = text;
 			let currentImages = options?.images;
@@ -1519,9 +1745,7 @@ export class AgentSession {
 
 		acceptInput?.();
 		preflightResult?.(true);
-		this._runRetryCount = 0;
-		await this.agent.prompt(messages);
-		await this.waitForRetry();
+		await this._runAgentPrompt(messages);
 	}
 
 	/**
@@ -1723,7 +1947,7 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
-			await this.agent.prompt(appMessage);
+			await this._runAgentPrompt(appMessage);
 		} else {
 			this.agent.state.messages.push(appMessage);
 			this.sessionManager.appendCustomMessageEntry(
@@ -2878,145 +3102,354 @@ export class AgentSession {
 	// Auto-Retry
 	// =========================================================================
 
-	/**
-	 * Check if an error is retryable (overloaded, rate limit, server errors).
-	 * Context overflow errors are NOT retryable (handled by compaction instead).
-	 */
-	private _isRetryableError(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error" || !message.errorMessage) return false;
-
-		// Context overflow is handled by compaction, not retry
+	// SCRAMJET-DIVERGENCE: persisted post-extension snapshots authoritatively classify and settle retries (#553).
+	private _classifyRetry(message: AssistantMessage): RetryClassification {
 		const contextWindow = this.model?.contextWindow ?? 0;
-		if (isContextOverflow(message, Math.min(contextWindow, this.model?.maxInputTokens ?? Infinity))) return false;
+		if (isContextOverflow(message, Math.min(contextWindow, this.model?.maxInputTokens ?? Infinity))) {
+			return { kind: "context_overflow" };
+		}
 
-		const err = message.errorMessage;
-		// Match: overloaded_error, provider returned error, rate limit, 429, 500, 502, 503, 504, service unavailable, network/connection errors (including connection lost), WebSocket transport closes/errors, fetch failed, premature stream endings, HTTP/2 closed before response, terminated, retry delay exceeded
+		const structured = validateResponsesProviderFailure(message.diagnostics);
+		if (structured.status === "valid") {
+			if (structured.retryDisposition === "transient") return { kind: "retry", evidence: "provider_failure" };
+			return {
+				kind: "do_not_retry",
+				reason: structured.retryDisposition === "non_transient" ? "structured_non_transient" : "structured_unknown",
+				evidence: "provider_failure",
+			};
+		}
+		if (structured.status === "malformed") {
+			return { kind: "do_not_retry", reason: "malformed_provider_diagnostic", evidence: "none" };
+		}
+		if (structured.status === "duplicate") {
+			return { kind: "do_not_retry", reason: "duplicate_provider_diagnostic", evidence: "none" };
+		}
+		if (!message.errorMessage) {
+			return { kind: "do_not_retry", reason: "missing_error_evidence", evidence: "none" };
+		}
+		if (this._isLegacyRetryableError(message.errorMessage)) return { kind: "retry", evidence: "legacy_text" };
+		return { kind: "do_not_retry", reason: "legacy_non_retryable", evidence: "legacy_text" };
+	}
+
+	private _isLegacyRetryableError(errorMessage: string): boolean {
 		return /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|stream ended before message_stop|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i.test(
-			err,
+			errorMessage,
 		);
 	}
 
+	private _bounded(value: number): number {
+		return Math.min(65_535, Math.max(0, Number.isFinite(value) ? Math.trunc(value) : 65_535));
+	}
+
+	private _appendAutoRetryRecord(record: AutoRetryRecord): void {
+		this.sessionManager.appendCustomEntry("coding-agent:auto-retry", record);
+	}
+
 	/**
-	 * Handle retryable errors with exponential backoff.
-	 * @returns true if retry was initiated, false if max retries exceeded or disabled
+	 * Persist a terminal record, emit `auto_retry_end` when a retry phase was active, and clear the phase.
+	 * The phase is released before persistence is attempted so a persistence failure can never strand it.
 	 */
-	private async _handleRetryableError(message: AssistantMessage): Promise<boolean> {
+	private _finishRetry(record: AutoRetryRecord, end?: Extract<AgentSessionEvent, { type: "auto_retry_end" }>): void {
+		const retry = this._retry;
+		this._retry = undefined;
+		try {
+			this._appendAutoRetryRecord(record);
+		} catch (error) {
+			if (retry) {
+				this._emit({
+					type: "auto_retry_end",
+					success: false,
+					attempt: end?.attempt ?? retry.attempt,
+					finalError: "Retry outcome persistence failed",
+				});
+			}
+			throw this._reportRetryFailure(error);
+		}
+		if (retry && end) this._emit(end);
+	}
+
+	private _finishRetryWithoutSuccess(record: AutoRetryRecord, message: AssistantMessage): void {
+		const retry = this._retry;
+		if (retry?.attempt === 0) {
+			// The continuation already produced a successful message, so the retry recovered and this
+			// later failure is a fresh, non-retried error; close the retry as succeeded first.
+			const attempt = this._runRetryCount;
+			this._finishRetry(
+				{
+					schemaVersion: 1,
+					outcome: "succeeded",
+					attemptsCompleted: this._bounded(attempt),
+					cumulativeErrors: this._bounded(attempt),
+				},
+				{ type: "auto_retry_end", success: true, attempt },
+			);
+			this._finishRetry(record);
+			return;
+		}
+		this._finishRetry(
+			record,
+			retry
+				? { type: "auto_retry_end", success: false, attempt: retry.attempt, finalError: message.errorMessage }
+				: undefined,
+		);
+	}
+
+	/** A run that ends without a classifiable snapshot cannot continue the retry; close it so nothing stays wedged. */
+	private _releaseRetryForFailedRun(error: Error): void {
+		const retry = this._retry;
+		if (!retry) return;
+		try {
+			this._finishRetry(
+				{
+					schemaVersion: 1,
+					outcome: "failed",
+					reason: "run_failed",
+					attempt: this._bounded(retry.attempt),
+					cumulativeErrors: this._bounded(this._runRetryCount),
+				},
+				{ type: "auto_retry_end", success: false, attempt: retry.attempt, finalError: error.message },
+			);
+		} catch {
+			// Already reported and the phase is released; the run settles with its own error.
+		}
+	}
+
+	private _reportRetryFailure(error: unknown): Error {
+		const normalized = error instanceof Error ? error : new Error(String(error));
+		this._extensionRunner.emitError({
+			extensionPath: "agent-session:auto-retry",
+			event: "retry_settlement",
+			error: normalized.message,
+			stack: normalized.stack,
+		});
+		return normalized;
+	}
+
+	private async _handleRetryableError(
+		message: AssistantMessage,
+		evidence: "provider_failure" | "legacy_text",
+		run: AgentRunSettlement,
+	): Promise<boolean> {
 		const settings = this.settingsManager.getRetrySettings();
-		if (!settings.enabled) {
-			this._resolveRetry();
-			return false;
-		}
-
-		// Retry promise is created synchronously in _handleAgentEvent for agent_end.
-		// Keep a defensive fallback here in case a future refactor bypasses that path.
-		if (!this._retryPromise) {
-			this._retryPromise = new Promise((resolve) => {
-				this._retryResolve = resolve;
-			});
-		}
-
-		this._retryAttempt++;
+		const attempt = (this._retry?.attempt ?? 0) + 1;
 		this._runRetryCount++;
 
 		const cumulativeCap = settings.maxRetries * 2;
+		if (attempt > settings.maxRetries) {
+			const attemptsCompleted = attempt - 1;
+			this._finishRetry(
+				{
+					schemaVersion: 1,
+					outcome: "exhausted",
+					reason: "attempt_limit",
+					attemptsCompleted: this._bounded(attemptsCompleted),
+					maxAttempts: this._bounded(settings.maxRetries),
+					cumulativeErrors: this._bounded(this._runRetryCount),
+				},
+				{ type: "auto_retry_end", success: false, attempt: attemptsCompleted, finalError: message.errorMessage },
+			);
+			return false;
+		}
+
 		if (this._runRetryCount > cumulativeCap) {
-			this._emit({
-				type: "auto_retry_end",
-				success: false,
-				attempt: this._runRetryCount - 1,
-				finalError:
-					`Repeated retry failures (${this._runRetryCount - 1} total attempts this prompt). ${message.errorMessage ?? ""}`.trim(),
-			});
-			this._retryAttempt = 0;
-			this._resolveRetry();
+			const attemptsCompleted = this._runRetryCount - 1;
+			this._finishRetry(
+				{
+					schemaVersion: 1,
+					outcome: "exhausted",
+					reason: "cumulative_limit",
+					attemptsCompleted: this._bounded(attemptsCompleted),
+					maxAttempts: this._bounded(settings.maxRetries),
+					cumulativeErrors: this._bounded(this._runRetryCount),
+				},
+				{
+					type: "auto_retry_end",
+					success: false,
+					attempt: attemptsCompleted,
+					finalError:
+						`Repeated retry failures (${attemptsCompleted} total attempts this prompt). ${message.errorMessage ?? ""}`.trim(),
+				},
+			);
 			return false;
 		}
 
-		if (this._retryAttempt > settings.maxRetries) {
-			// Max retries exceeded, emit final failure and reset
-			this._emit({
-				type: "auto_retry_end",
-				success: false,
-				attempt: this._retryAttempt - 1,
-				finalError: message.errorMessage,
+		const delayMs = settings.baseDelayMs * 2 ** (attempt - 1);
+		const previous = this._retry;
+		this._retry = undefined;
+		try {
+			this._appendAutoRetryRecord({
+				schemaVersion: 1,
+				outcome: "scheduled",
+				evidence,
+				attempt: this._bounded(attempt),
+				maxAttempts: this._bounded(settings.maxRetries),
+				cumulativeErrors: this._bounded(this._runRetryCount),
+				delayMs: this._bounded(delayMs),
 			});
-			this._retryAttempt = 0;
-			this._resolveRetry(); // Resolve so waitForRetry() completes
-			return false;
+		} catch (error) {
+			if (previous) {
+				this._emit({
+					type: "auto_retry_end",
+					success: false,
+					attempt: previous.attempt,
+					finalError: "Retry outcome persistence failed",
+				});
+			}
+			throw this._reportRetryFailure(error);
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
-
+		const controller = new AbortController();
+		const backoff: RetryPhase = { phase: "backoff", attempt, controller, run };
+		this._retry = backoff;
 		this._emit({
 			type: "auto_retry_start",
-			attempt: this._retryAttempt,
+			attempt,
 			maxAttempts: settings.maxRetries,
 			delayMs,
 			errorMessage: message.errorMessage || "Unknown error",
 			cumulativeErrors: this._runRetryCount,
 		});
+		if (controller.signal.aborted || this._disposed) {
+			return this._finishCancelledRetry("cancelled_during_backoff", backoff);
+		}
 
-		// Remove error message from agent state (keep in session for history)
 		const messages = this.agent.state.messages;
 		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
 			this.agent.state.messages = messages.slice(0, -1);
 		}
 
-		// Wait with exponential backoff (abortable)
-		this._retryAbortController = new AbortController();
 		try {
-			await sleep(delayMs, this._retryAbortController.signal);
+			await sleep(delayMs, controller.signal);
+			await sleep(0, controller.signal);
 		} catch {
-			// Aborted during sleep - emit end event so UI can clean up
-			const attempt = this._retryAttempt;
-			this._retryAttempt = 0;
-			this._retryAbortController = undefined;
-			this._emit({
-				type: "auto_retry_end",
-				success: false,
-				attempt,
-				finalError: "Retry cancelled",
-			});
-			this._resolveRetry();
-			return false;
+			return this._finishCancelledRetry("cancelled_during_backoff", backoff);
 		}
-		this._retryAbortController = undefined;
+		if (controller.signal.aborted || this._disposed) {
+			return this._finishCancelledRetry("cancelled_during_backoff", backoff);
+		}
 
-		// Retry via continue() - use setTimeout to break out of event handler chain
-		setTimeout(() => {
-			this.agent.continue().catch(() => {
-				// Retry failed - will be caught by next agent_end
-			});
-		}, 0);
+		// Hand the chain to the continuation before `continue()`; the run that eventually emits
+		// `agent_start` adopts it (see `_captureAgentRunSettlement`), however long Agent defers that start.
+		const continuing: RetryPhase = { phase: "continuing", attempt, chain: run.chain };
+		this._retry = continuing;
+		const continuation = this.agent.continue();
+		this._settleAgentRun(run);
+		continuation.catch((error) => {
+			if (this._disposed || this._retry !== continuing) return;
+			const continuationError = this._reportRetryFailure(error);
+			let settlementError = continuationError;
+			try {
+				this._finishRetry(
+					{
+						schemaVersion: 1,
+						outcome: "failed",
+						reason: "continuation_rejected",
+						attempt: this._bounded(attempt),
+						cumulativeErrors: this._bounded(this._runRetryCount),
+					},
+					{ type: "auto_retry_end", success: false, attempt, finalError: continuationError.message },
+				);
+			} catch (persistenceError) {
+				settlementError = new AggregateError(
+					[continuationError, persistenceError],
+					"Retry continuation and outcome persistence both failed.",
+					{ cause: continuationError },
+				);
+			}
+			this._settleRetryChain(run.chain, settlementError);
+		});
 
 		return true;
+	}
+
+	private _finishCancelledRetry(
+		reason: "cancelled_during_backoff" | "cancelled_during_continuation",
+		expected?: RetryPhase,
+	): false {
+		if (this._disposed) {
+			this._retry = undefined;
+			throw new Error("AgentSession disposed before retry settlement completed.");
+		}
+		const retry = this._retry;
+		if (expected && retry !== expected) return false;
+		const attempt = retry?.attempt ?? 0;
+		this._finishRetry(
+			{
+				schemaVersion: 1,
+				outcome: "cancelled",
+				reason,
+				attempt: this._bounded(attempt),
+				cumulativeErrors: this._bounded(this._runRetryCount),
+			},
+			{ type: "auto_retry_end", success: false, attempt, finalError: "Retry cancelled" },
+		);
+		return false;
 	}
 
 	/**
 	 * Cancel in-progress retry.
 	 */
 	abortRetry(): void {
-		this._retryAbortController?.abort();
-		// Note: _retryAttempt is reset in the catch block of _autoRetry
-		this._resolveRetry();
+		const retry = this._retry;
+		if (!retry) return;
+		if (retry.phase === "backoff") retry.controller.abort();
+		this.agent.abort();
 	}
 
-	/**
-	 * Wait for any in-progress retry to complete.
-	 * Returns immediately if no retry is in progress.
-	 */
-	private async waitForRetry(): Promise<void> {
-		if (!this._retryPromise) {
-			return;
+	/** Agent's own `activeRun` guard is false during backoff; the retry phase owns the idle Agent then. */
+	private _assertRetryNotOwningIdleAgent(): void {
+		if (this._retry && !this.isStreaming) {
+			throw new Error("Automatic retry is in progress. Cancel the retry before starting another prompt.");
 		}
+	}
 
-		await this._retryPromise;
+	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+		this._assertRetryNotOwningIdleAgent();
+		const start = this._reserveAgentRunStart();
+		this._runRetryCount = 0;
+		let promptFailure: { error: unknown } | undefined;
+		try {
+			await this.agent.prompt(messages);
+		} catch (error) {
+			promptFailure = { error };
+		}
+		if (!start.run && this._pendingAgentRunStart === start) {
+			const startError = promptFailure
+				? promptFailure.error instanceof Error
+					? promptFailure.error
+					: new Error(String(promptFailure.error))
+				: new Error("Agent prompt completed before agent_start.");
+			this._rejectAgentRunStart(start, startError);
+			if (promptFailure) throw promptFailure.error;
+		}
+		let settlementFailure: { error: unknown } | undefined;
+		try {
+			const settlement = await start.promise;
+			await this.waitForRetry(settlement);
+		} catch (error) {
+			settlementFailure = { error };
+		}
+		if (promptFailure && settlementFailure) {
+			throw new AggregateError(
+				[promptFailure.error, settlementFailure.error],
+				"Agent prompt and retry settlement both failed.",
+				{ cause: promptFailure.error },
+			);
+		}
+		if (promptFailure) throw promptFailure.error;
+		if (settlementFailure) throw settlementFailure.error;
+	}
+
+	private async waitForRetry(settlement: AgentRunSettlement | undefined): Promise<void> {
+		if (!settlement) return;
+		await settlement.promise;
+		await settlement.chain.promise;
 		await this.agent.waitForIdle();
 	}
 
 	/** Whether auto-retry is currently in progress */
 	get isRetrying(): boolean {
-		return this._retryPromise !== undefined;
+		return this._retry !== undefined;
 	}
 
 	/** Whether auto-retry is enabled */
