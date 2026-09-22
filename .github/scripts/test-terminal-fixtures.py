@@ -488,5 +488,177 @@ class PasteEvidenceTests(unittest.TestCase):
                             os.close(slave)
 
 
+class MacSafetyOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name)
+        (self.output / "shell-pid").write_text("12345\n")
+        self.child = Mock(pid=42)
+        self.child.poll.return_value = None
+        self.child.wait.side_effect = lambda **_kwargs: setattr(self.child.poll, "return_value", 0)
+        self.opener = Mock(pid=41)
+        self.opener.wait.return_value = 0
+        self.process = Mock()
+        def popen(argv, **_kwargs):
+            if argv[0] == "open":
+                return self.opener
+            self.assertEqual(argv[0], "/Applications/iTerm.app/Contents/MacOS/iTerm2")
+            return self.child
+        self.process.Popen.side_effect = popen
+        self.process.run.return_value.stdout = ""
+        self.process.CalledProcessError = subprocess.CalledProcessError
+        self.process.TimeoutExpired = subprocess.TimeoutExpired
+        self.windows = []
+        self.existing_apps = []
+        self.shell_alive = False
+        self.os = Mock()
+        self.os.getpgrp.return_value = 10
+        def check_shell(pid, sig):
+            self.assertEqual((pid, sig), (12345, 0))
+            if not self.shell_alive:
+                raise ProcessLookupError()
+        self.os.kill.side_effect = check_shell
+        self.current = Mock(return_value={"stopped": True})
+        def run(*args, **_kwargs):
+            if args[0] == "/usr/libexec/PlistBuddy":
+                return "iTerm2" if "CFBundleExecutable" in args[2] else "3.6.11"
+            if args[0] == str(self.output / "events"):
+                if args[1] in ("geometry", "geometry-pid"):
+                    if args[1] == "geometry-pid":
+                        self.assertEqual(args[2], "42")
+                    return json.dumps([{"role": "AXWindow"}, {"role": "AXTextArea"}])
+                if args[1] == "frontmost":
+                    return json.dumps({"bundle": "com.googlecode.iterm2", "pid": 42})
+                if args[1] == "windows-pid":
+                    self.assertEqual(args[2], "42")
+                    return json.dumps(self.windows)
+                if args[1] == "running":
+                    return json.dumps(self.existing_apps)
+                return json.dumps({"pressed": True})
+            return ""
+        self.context = {"mac": True, "root": ROOT, "output": self.output,
+                        "launcher": self.output / "launch.sh", "driver": self.output / "events",
+                        "child": None, "report": {"checks": {name: {"passed": True} for name in EXPECTED_SAFETY_CHECKS}},
+                        "run": Mock(side_effect=run), "subprocess": self.process, "json": json, "Path": Path,
+                        "time": Mock(), "wait": lambda predicate, **_kwargs: bool(predicate()),
+                        "state": self.current, "key": Mock(), "shlex": shlex, "os": self.os, "signal": signal}
+        source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
+        self.outer = next(node for node in source.body if isinstance(node, ast.Try))
+        startup = next(node for node in self.outer.body if isinstance(node, ast.If)
+                       and isinstance(node.test, ast.Name) and node.test.id == "mac")
+        helpers = {node.name for node in source.body if isinstance(node, ast.FunctionDef)} - {"run", "state", "wait", "key", "pixels", "check"}
+        load_safety_functions(helpers, self.context)
+        self.startup = compile(ast.Module(body=startup.body, type_ignores=[]), "terminal-safety.py", "exec")
+
+    def cleanup(self):
+        exec(self.startup, self.context)
+        with patch("builtins.print"):
+            exec(compile(ast.Module(body=self.outer.finalbody, type_ignores=[]), "terminal-safety.py", "exec"), self.context)
+        self.opener.terminate.assert_not_called()
+        self.opener.kill.assert_not_called()
+        return self.context["report"]["passed"]
+
+    def test_existing_iterm_is_not_adopted(self):
+        self.existing_apps = [84]
+        with self.assertRaises(RuntimeError):
+            exec(self.startup, self.context)
+        self.process.Popen.assert_not_called()
+
+    def test_stopped_fixture_still_closes_owned_terminal(self):
+        self.assertTrue(self.cleanup())
+        self.child.terminate.assert_called_once()
+        self.child.wait.assert_called_once_with(timeout=10)
+        self.assertNotEqual(self.process.Popen.call_args.args[0][0], "open")
+
+    def test_missing_fixture_state_still_closes_owned_terminal(self):
+        self.current.return_value = {}
+        self.assertTrue(self.cleanup())
+        self.child.terminate.assert_called_once()
+
+    def test_unreadable_fixture_state_does_not_skip_owned_terminal(self):
+        self.current.side_effect = ValueError("unreadable fixture")
+        self.assertFalse(self.cleanup())
+        self.child.terminate.assert_called_once()
+        self.child.wait.assert_called_once_with(timeout=10)
+
+    def test_terminal_close_failure_cannot_pass(self):
+        self.child.terminate.side_effect = PermissionError("owned close denied")
+        self.assertFalse(self.cleanup())
+        self.child.wait.assert_called_once_with(timeout=10)
+
+    def test_terminal_wait_timeout_cannot_pass(self):
+        self.child.wait.side_effect = subprocess.TimeoutExpired("owned terminal", 10)
+        self.assertFalse(self.cleanup())
+
+    def test_owned_window_surviving_process_close_cannot_pass(self):
+        self.windows = [{"pid": 42}]
+        self.assertFalse(self.cleanup())
+
+    def test_owned_shell_surviving_window_close_cannot_pass(self):
+        self.shell_alive = True
+        self.assertFalse(self.cleanup())
+
+
+class NativeImageConfinementTests(unittest.TestCase):
+    def test_source_predicate_requires_confinement_not_just_upward_movement(self):
+        source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
+        predicate = next(node.args[1] for node in ast.walk(source) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Name) and node.func.id == "check"
+                         and node.args and isinstance(node.args[0], ast.Constant)
+                         and node.args[0].value == "nativeImageFitsReducedTranscript")
+        for bottom, expected in ((399, True), (400, False), (450, False)):
+            with self.subTest(bottom=bottom):
+                sample = {"count": 600, "left": 10, "right": 29, "top": 100, "bottom": bottom,
+                          "width": 900, "height": 700,
+                          "calibration": {
+                              "dock": {"count": 8000, "left": 0, "right": 799, "top": 410, "bottom": 419},
+                              "bottom": {"count": 8000, "left": 0, "right": 799, "top": 590, "bottom": 599}}}
+                report = {"pixels": {"dock-grown": sample}}
+                context = {"original_bottom": 500, "report": report, "pixels": Mock(return_value=600),
+                           "state": lambda: {"columns": 81, "rows": 60, "height": 40}, "math": __import__("math")}
+                helpers = {node.name for node in source.body if isinstance(node, ast.FunctionDef)} - {"run", "state", "wait", "key", "pixels", "check", "cleanup_owned_resources"}
+                load_safety_functions(helpers, context)
+                actual = eval(compile(ast.Expression(body=predicate), "terminal-safety.py", "eval"), context)()
+                self.assertEqual(actual, expected)
+                context["pixels"].assert_called_once_with("dock-grown")
+
+
+class NoSelectionPasteTests(unittest.TestCase):
+    def test_delayed_paste_cannot_pass_the_source_native_check(self):
+        source = interaction_source()
+        call = next(node for node in ast.walk(source) if isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name) and node.func.id in ("check", "stable_check")
+                    and node.args and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "rightWithoutSelectionDoesNotCopyOrPaste")
+        declarations = [node for node in source.body if isinstance(node, ast.FunctionDef)
+                        and node.name in ("check", "stable_check", "right_click_unchanged")]
+        for counter in (None, "pasteMatches", "pasteMismatches", "copyErrors", "keyCopy", "rightCopy", "editor"):
+            with self.subTest(counter=counter):
+                baseline = {"rightWithoutSelection": 0, "rightCopy": 1, "keyCopy": 0, "copyErrors": 0,
+                            "pasteMatches": 0, "pasteMismatches": 0, "editor": "Synthetic editor", "frameFlushed": True}
+                clock = [0.0]
+                def state():
+                    current = {**baseline, "rightWithoutSelection": 1}
+                    if clock[0] >= 0.15 and counter:
+                        current[counter] = "changed" if counter == "editor" else current[counter] + 1
+                    return current
+                fake_time = Mock()
+                fake_time.monotonic.side_effect = lambda: clock[0]
+                fake_time.sleep.side_effect = lambda duration: clock.__setitem__(0, clock[0] + duration)
+                context = {"report": {"checks": {}}, "state": state, "before_right": baseline,
+                           "required_checks": lambda: {"rightWithoutSelectionDoesNotCopyOrPaste"},
+                           "wait_for": lambda predicate: bool(predicate()), "time": fake_time}
+                exec(compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec"), context)
+                with patch("builtins.print"):
+                    try:
+                        eval(compile(ast.Expression(body=call), "terminal-probe.py", "eval"), context)
+                    except RuntimeError:
+                        pass
+                recorded = context["report"]["checks"]["rightWithoutSelectionDoesNotCopyOrPaste"]
+                self.assertEqual(recorded["passed"], counter is None)
+                self.assertGreaterEqual(recorded["stableSeconds"], 0.35)
+
+
 if __name__ == "__main__":
     unittest.main()
