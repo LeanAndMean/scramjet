@@ -11,7 +11,13 @@ import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js"
 import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
-import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.js";
+import {
+	deleteKittyImage,
+	getCapabilities,
+	getCellDimensions,
+	isImageLine,
+	setCellDimensions,
+} from "./terminal-image.js";
 import {
 	extractSegments,
 	normalizeTerminalOutput,
@@ -911,6 +917,9 @@ export class TUI extends Container {
 			return true;
 		}
 
+		// SCRAMJET-DIVERGENCE: repeated measurements must not rebuild graphics and disturb reading anchors.
+		const current = getCellDimensions();
+		if (current.widthPx === widthPx && current.heightPx === heightPx) return true;
 		setCellDimensions({ widthPx, heightPx });
 		// Invalidate all components so images re-render with correct dimensions.
 		this.invalidate();

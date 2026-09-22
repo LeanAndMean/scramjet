@@ -682,6 +682,35 @@ class OwnedWindowClosureTests(unittest.TestCase):
         self.assertIn("owned AX close denied", context["report"]["cleanupError"])
 
 
+class MacHiddenWindowBookkeepingTests(unittest.TestCase):
+    def test_hidden_records_are_allowed_only_until_owned_process_termination(self):
+        for leftover in (False, True):
+            with self.subTest(leftover=leftover), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                (output / "shell-pid").write_text("12345")
+                child = Mock(pid=42)
+                child.poll.return_value = None
+                child.wait.side_effect = lambda **_kwargs: setattr(child.poll, "return_value", 0)
+                def run(*args):
+                    self.assertEqual(args[2], "42")
+                    if args[1] == "close-windows-pid":
+                        return json.dumps({"closed": 1, "pid": 42})
+                    if args[1] == "windows-pid":
+                        return json.dumps([{"pid": 42, "onScreen": False}] if child.poll() is None or leftover else [])
+                    return "[]"
+                system = Mock()
+                system.kill.side_effect = ProcessLookupError()
+                context = {"child": child, "state": lambda: {"stopped": True}, "report": {"checks": {}},
+                           "run": run, "wait": lambda predicate, **_kwargs: predicate(), "json": json,
+                           "os": system, "driver": "events", "output": output}
+                load_safety_functions({"cleanup_owned_resources", "close_mac_windows", "verify_mac_cleanup"}, context)
+                context["cleanup_owned_resources"](context["close_mac_windows"])
+                context["verify_mac_cleanup"]()
+                self.assertEqual("cleanupError" in context["report"], leftover)
+                child.terminate.assert_called_once()
+                child.wait.assert_called_once_with(timeout=10)
+
+
 class NativePixelCalibrationTests(unittest.TestCase):
     def test_actual_inspector_and_predicate_use_scaled_independent_markers(self):
         for scale in (1, 2):
