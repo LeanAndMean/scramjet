@@ -12,7 +12,7 @@ import tempfile
 import termios
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_SAFETY_CHECKS = {
@@ -24,6 +24,7 @@ EXPECTED_SAFETY_CHECKS = {
     "nativeProtocolDetected", "orderlyExit", "overlayClearsNativeImage", "partialOverlayPlacementWithheld",
     "partialPlacementRequested", "partialPlacementWithheld", "processActuallySuspended",
     "productionFixtureStarted", "resumedCandidate", "subsequentActivationAuthorizes", "suspendRequested",
+    "checkoutProvenanceMatches", "dockGrowthReducesTranscript", "nativeImageFitsReducedTranscript", "dockShrinkRestoresImage",
 }
 
 
@@ -87,6 +88,7 @@ class SafetyVerdictTests(unittest.TestCase):
             "report": {"checks": {name: {"passed": True} for name in EXPECTED_SAFETY_CHECKS}},
             "wait": Mock(return_value=True),
             "state": Mock(return_value={}),
+            "time": time,
         }
         load_safety_functions({"check", "report_passed"}, self.context)
 
@@ -122,7 +124,11 @@ EXPECTED_INTERACTION_CHECKS = {
     "readingAnchorSurvivesOtherChildUpdate", "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack",
     "readingInsideRunningBatch", "rightClickClipboardExactUnicode", "rightClickRequestsCopy",
     "rightWithoutSelectionDoesNotCopyOrPaste", "scrolledSelectionClipboardExact", "selectionAutoscrolls",
-    "selectionHoldsDuringUpdates", "subsequentApprovalActivation", "termiosRestored",
+    "selectionHoldsDuringUpdates", "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
+    "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail",
+    "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
+    "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies", "nativeInputHeightCeiling",
+    "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored",
 }
 
 
@@ -139,7 +145,7 @@ class InteractionVerdictTests(unittest.TestCase):
         self.context = {"report": {"checks": {name: {"passed": True} for name in EXPECTED_INTERACTION_CHECKS},
                                   "screenshots": {"complete": {"exit": 0}}},
                         "is_mac": False, "terminal_kind": "vte", "with_tmux": False,
-                        "wait_for": Mock(return_value=True), "state": Mock(return_value={})}
+                        "wait_for": Mock(return_value=True), "state": Mock(return_value={}), "time": time}
         exec(compile(ast.Module(body=declarations, type_ignores=[]), "terminal-probe.py", "exec"), self.context)
 
     def passed(self):
@@ -149,8 +155,19 @@ class InteractionVerdictTests(unittest.TestCase):
         self.assertTrue(self.passed())
         self.context["is_mac"] = True
         self.context["terminal_kind"] = "apple"
-        del self.context["report"]["checks"]["desktopCellTargetVerified"]
+        for name in ("desktopCellTargetVerified", "narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored"):
+            del self.context["report"]["checks"][name]
         self.assertTrue(self.passed())
+
+    def test_focus_profile_requires_focus_checks(self):
+        self.context["terminal_kind"] = "kitty"
+        for name in ("narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored"):
+            del self.context["report"]["checks"][name]
+        for name in ("nativeFocusDragActive", "nativeFocusOutReceived", "focusLossStopsSelectionScroll", "nativeFocusReturned"):
+            self.context["report"]["checks"][name] = {"passed": True}
+        self.assertTrue(self.passed())
+        del self.context["report"]["checks"]["focusLossStopsSelectionScroll"]
+        self.assertFalse(self.passed())
 
     def test_startup_and_a_screenshot_are_not_a_complete_journey(self):
         self.context["report"]["checks"] = {"productionCompositionConfigured": {"passed": True}}
@@ -169,6 +186,71 @@ class InteractionVerdictTests(unittest.TestCase):
         except RuntimeError as error:
             self.context["report"]["error"] = str(error)
         self.assertFalse(self.passed())
+
+
+class InteractionCleanupTests(unittest.TestCase):
+    def setUp(self):
+        source = ast.parse((ROOT / ".github/scripts/terminal-probe.py").read_text())
+        cleanup = next((node for node in source.body if isinstance(node, ast.FunctionDef) and node.name == "cleanup_owned_resources"), None)
+        if cleanup is None:
+            outer = next(node for node in source.body if isinstance(node, ast.Try))
+            cleanup = next(node for node in outer.finalbody if isinstance(node, ast.If))
+        self.child = Mock()
+        self.child.poll.return_value = None
+        self.process = Mock()
+        self.os = Mock()
+        self.os.getpgrp.return_value = 10
+        self.context = {"terminal_started": True, "terminal_process": self.child, "with_tmux": True,
+                        "key": Mock(), "subprocess": self.process, "os": self.os, "signal": signal,
+                        "state": Mock(return_value={"pgid": 20}), "report": {}}
+        self.code = compile(ast.Module(body=[cleanup], type_ignores=[]), "terminal-probe.py", "exec")
+        self.is_function = isinstance(cleanup, ast.FunctionDef)
+
+    def cleanup(self):
+        exec(self.code, self.context)
+        if self.is_function:
+            self.context["cleanup_owned_resources"]()
+
+    def test_key_failure_does_not_skip_owned_process_cleanup(self):
+        self.context["key"].side_effect = RuntimeError("key failed")
+        self.cleanup()
+        self.child.terminate.assert_called_once()
+        self.child.wait.assert_called_once_with(timeout=10)
+        self.assertIn("key failed", self.context["report"]["cleanupError"])
+
+    def test_tmux_failure_does_not_skip_owned_process_cleanup(self):
+        self.process.run.side_effect = subprocess.TimeoutExpired("tmux", 10)
+        self.cleanup()
+        self.child.terminate.assert_called_once()
+        self.child.wait.assert_called_once_with(timeout=10)
+        self.assertIn("tmux", self.context["report"]["cleanupError"])
+
+    def test_suspended_fixture_is_resumed_before_exit_input(self):
+        events = []
+        self.os.killpg.side_effect = lambda *_: events.append("resume")
+        self.context["key"].side_effect = lambda key: events.append(key)
+        self.cleanup()
+        self.os.killpg.assert_called_once_with(20, signal.SIGCONT)
+        self.assertEqual(events[0:2], ["resume", "exit"])
+
+    def test_nonzero_tmux_exit_is_not_silently_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = Path(directory) / "tmux"
+            command.write_text("#!/bin/sh\nexit 7\n")
+            command.chmod(0o700)
+            self.context["subprocess"] = subprocess
+            with patch.dict(os.environ, {"PATH": directory}):
+                self.cleanup()
+            self.assertIn("cleanupError", self.context["report"])
+            self.assertIn("tmux", self.context["report"]["cleanupError"])
+            self.child.terminate.assert_called_once()
+            self.child.wait.assert_called_once_with(timeout=10)
+
+    def test_termination_failure_does_not_skip_wait(self):
+        self.child.terminate.side_effect = PermissionError("cannot terminate")
+        self.cleanup()
+        self.child.wait.assert_called_once_with(timeout=10)
+        self.assertIn("cannot terminate", self.context["report"]["cleanupError"])
 
 
 class TerminalReadinessTests(unittest.TestCase):
@@ -206,6 +288,49 @@ class TerminalReadinessTests(unittest.TestCase):
 
 
 class PasteEvidenceTests(unittest.TestCase):
+    def test_committed_startup_finalization_and_exit_restore_the_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "fixture.json"
+            env = {**os.environ, "HOME": directory, "SCRAMJET_TUI_PROBE_EVIDENCE": str(target), "TERM": "xterm-256color"}
+            for key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "TERMUX_VERSION", "SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION", "TMUX", "TERM_PROGRAM"):
+                env.pop(key, None)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            before = termios.tcgetattr(slave)
+            with (Path(directory) / "stderr").open("w+") as stderr:
+                child = subprocess.Popen(["node", str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"), "--production", "--committed"], cwd=ROOT, env=env, stdin=slave, stdout=slave, stderr=stderr, start_new_session=True)
+                output = bytearray()
+                try:
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.02)[0]:
+                            output.extend(os.read(master, 65536))
+                        elif child.poll() is not None:
+                            break
+                    stderr.seek(0)
+                    self.assertEqual(child.poll(), 0, stderr.read())
+                    state = json.loads(target.read_text())
+                    self.assertEqual(state["mode"], "committed")
+                    self.assertEqual(state["completed"], 8)
+                    self.assertTrue(state["stopped"])
+                    self.assertIn(b"Production candidate", output)
+                    self.assertNotIn(b"\x1b[?1049h", output)
+                    self.assertNotIn(b"\x1b[?1002h", output)
+                    self.assertEqual(termios.tcgetattr(slave), before)
+                finally:
+                    try:
+                        if child.poll() is None:
+                            child.terminate()
+                            try:
+                                child.wait(timeout=10)
+                            except subprocess.TimeoutExpired:
+                                child.kill()
+                                child.wait(timeout=5)
+                                raise
+                    finally:
+                        os.close(master)
+                        os.close(slave)
+
     def test_production_paste_is_payload_free(self):
         for args in (["--production", "--journey"], ["--safety"]):
             with self.subTest(args=args), tempfile.TemporaryDirectory() as directory:
@@ -254,16 +379,22 @@ class PasteEvidenceTests(unittest.TestCase):
                         self.assertNotIn(sentinel.encode(), output)
                         os.write(master, b"\x11")
                         wait_for(lambda state: state.get("stopped"))
-                        while child.poll() is None:
-                            drain()
+                        wait_for(lambda _state: child.poll() is not None)
                         self.assertEqual(child.returncode, 0)
                         self.assertEqual(termios.tcgetattr(slave), before)
                     finally:
-                        if child.poll() is None:
-                            child.terminate()
-                            child.wait(timeout=10)
-                        os.close(master)
-                        os.close(slave)
+                        try:
+                            if child.poll() is None:
+                                child.terminate()
+                                try:
+                                    child.wait(timeout=10)
+                                except subprocess.TimeoutExpired:
+                                    child.kill()
+                                    child.wait(timeout=5)
+                                    raise
+                        finally:
+                            os.close(master)
+                            os.close(slave)
 
 
 if __name__ == "__main__":

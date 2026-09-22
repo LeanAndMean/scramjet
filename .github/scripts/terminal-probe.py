@@ -25,6 +25,37 @@ command_id = 0
 terminal_started = False
 window_id = None
 terminal_process = None
+REQUIRED_CHECKS = {
+    "allEightCardsReachableBeforeCompletion", "completeApprovalContextReachable", "controlCCopiesSelection",
+    "desktopPasteRoundTrip", "desktopThumbDragReachesEnd", "desktopTrackClickReachesStart",
+    "desktopWheelScrollsDocument", "externalProgramRoundTrip", "firstFourRunningCardsReachable",
+    "hiddenApprovalActivationOnlyReveals", "jobControlResumed", "jobControlSuspended", "keyboardEditingCoexists",
+    "longSessionMiddleReachable", "nativeSizeRestored", "nativeWidthAndHeightChanged", "orderlyExit",
+    "ordinaryDesktopDragSelects", "productionCompositionConfigured", "readingAnchorSurvivesOtherChildUpdate",
+    "readingAnchorSurvivesResize", "readingAnchorSurvivesResizeBack", "readingInsideRunningBatch",
+    "rightClickClipboardExactUnicode", "rightClickRequestsCopy", "rightWithoutSelectionDoesNotCopyOrPaste",
+    "scrolledSelectionClipboardExact", "selectionAutoscrolls", "selectionHoldsDuringUpdates",
+    "subsequentApprovalActivation", "termiosRestored", "checkoutProvenanceMatches",
+    "defaultDockKeepsInputVisible", "dockedTypingPreservesReading", "keyboardOnlyBrowsingFromTail",
+    "nativePresentationTogglePreservesReading", "settingsUndocksLive", "settingsRedocksLive",
+    "settingsWheelChangeApplies", "configuredWheelDistance", "settingsEditorHeightChangeApplies",
+    "nativeInputHeightCeiling",
+}
+
+
+def required_checks():
+    expected = REQUIRED_CHECKS | ({"desktopCellTargetVerified"} if not is_mac else set())
+    if terminal_kind in ("kitty", "iterm2"):
+        expected |= {"nativeFocusDragActive", "nativeFocusOutReceived", "focusLossStopsSelectionScroll", "nativeFocusReturned"}
+    if terminal_kind == "vte" and not with_tmux:
+        expected |= {"narrowSettingsVisible", "narrowSettingsRemainsUsable", "narrowEditorSizeRestored"}
+    return expected
+
+
+def report_passed():
+    return (set(report["checks"]) == required_checks() and all(item["passed"] for item in report["checks"].values())
+            and bool(report.get("screenshots")) and all(item["exit"] == 0 for item in report["screenshots"].values())
+            and "error" not in report and "cleanupError" not in report)
 
 
 def run(*args, **kwargs):
@@ -58,10 +89,17 @@ def events(*args):
         raise RuntimeError(f"Unsupported Linux event: {action}")
 
 
+def type_text(text):
+    if is_mac:
+        events("text", text)
+    else:
+        run("xdotool", "type", "--clearmodifiers", "--delay", "20", text)
+
+
 def key(name):
-    mac = {"paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
+    mac = {"viewportUp": (116, 524288), "toggleTools": (31, 262144), "paste": (9, 1048576), "enter": (36, 0), "escape": (53, 0), "copy": (8, 262144),
            "a": (0, 0), "b": (11, 0), "c": (8, 0), "left": (123, 0), "backspace": (51, 0), "exit": (12, 262144), "close": (13, 1048576), "f": (3, 0), "g": (5, 0)}
-    linux = {"paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
+    linux = {"viewportUp": "alt+Prior", "toggleTools": "ctrl+o", "paste": "ctrl+shift+v", "enter": "Return", "escape": "Escape", "copy": "ctrl+c",
              "left": "Left", "backspace": "BackSpace", "exit": "ctrl+q", "close": "alt+F4"}
     if is_mac:
         events("key", *mac[name])
@@ -84,9 +122,15 @@ def wait_for(predicate, timeout=4):
     return False
 
 
-def check(name, predicate):
+def check(name, predicate, stable_seconds=0):
+    if name not in required_checks() or name in report["checks"]:
+        raise RuntimeError(f"Unexpected or duplicate native check: {name}")
     passed = wait_for(predicate)
-    report["checks"][name] = {"passed": passed, "fixture": state()}
+    deadline = time.monotonic() + stable_seconds
+    while passed and time.monotonic() < deadline:
+        time.sleep(0.05)
+        passed = bool(predicate())
+    report["checks"][name] = {"passed": passed, "fixture": state(), "stableSeconds": stable_seconds}
     print(f"{name}: {'PASS' if passed else 'FAIL'}", flush=True)
     if not passed:
         raise RuntimeError(name)
@@ -104,6 +148,59 @@ def fixture_command(action):
         raise RuntimeError(f"Fixture command did not settle: {action}")
     if state().get("error"):
         raise RuntimeError(state()["error"])
+
+
+def open_settings(query):
+    fixture_command("editor")
+    type_text("/settings")
+    key("enter")
+    if not wait_for(lambda: any("Auto-compact" in row for row in state().get("painted", []))):
+        raise RuntimeError("Real settings selector did not open")
+    type_text(query)
+    if not wait_for(lambda: any(query.lower() in row.lower() for row in state().get("painted", []))):
+        raise RuntimeError("Settings search did not render")
+
+
+def stable_check(name, predicate, seconds=0.35):
+    return check(name, predicate, seconds)
+
+
+def check_focus_loss(cell, columns):
+    auxiliary = None
+    before_in = state()["focusIn"]
+    before_out = state()["focusOut"]
+    try:
+        mouse("down", *cell(columns, 1))
+        mouse("up", *cell(columns, 1))
+        mouse("down", *cell(1, 3))
+        mouse("drag", *cell(20, state()["height"]))
+        check("nativeFocusDragActive", lambda: state()["offset"] > 0 and state().get("notice") is not None)
+        if is_mac:
+            events("activate", "com.apple.finder")
+        else:
+            title = f"ScramjetFocusProbe-{os.getpid()}"
+            auxiliary = subprocess.Popen(["xterm", "-T", title, "-geometry", "20x4", "-e", "sh", "-c", "sleep 30"])
+            if not wait_for(lambda: subprocess.run(["xdotool", "search", "--onlyvisible", "--name", title], capture_output=True, timeout=5).returncode == 0):
+                raise RuntimeError("Owned focus-test window did not appear")
+            other = run("xdotool", "search", "--onlyvisible", "--name", title).splitlines()[-1]
+            run("xdotool", "windowactivate", "--sync", other)
+        check("nativeFocusOutReceived", lambda: state()["focusOut"] > before_out)
+        offset = state()["offset"]
+        stable_check("focusLossStopsSelectionScroll", lambda: state()["offset"] == offset and state().get("notice") is None and not state()["followingTail"])
+    finally:
+        try:
+            if is_mac:
+                events("activate", bundle)
+            else:
+                run("xdotool", "windowactivate", "--sync", window_id)
+        finally:
+            try:
+                mouse("up", *cell(20, max(1, state().get("height", 1))))
+            finally:
+                if auxiliary and auxiliary.poll() is None:
+                    auxiliary.terminate()
+                    auxiliary.wait(timeout=10)
+    check("nativeFocusReturned", lambda: state()["focusIn"] > before_in)
 
 
 def screenshot(name):
@@ -130,6 +227,12 @@ def drag(start, end):
 try:
     report["os"] = run("sw_vers") if is_mac else Path("/etc/os-release").read_text()
     report["image"] = {key: os.environ.get(key) for key in ("ImageOS", "ImageVersion", "RUNNER_ARCH", "GITHUB_SHA")}
+    report["commit"] = run("git", "rev-parse", "HEAD")
+    report["run"] = {key: os.environ.get(key) for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME")}
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()) if os.environ.get("GITHUB_EVENT_PATH") else {}
+    report["pullRequest"] = {key: event.get("pull_request", {}).get(key, {}).get("sha") for key in ("head", "base")}
+    report["nodeVersion"] = run("node", "--version")
+    report["pythonVersion"] = sys.version.split()[0]
     if is_mac:
         plist = "/Applications/iTerm.app/Contents/Info.plist" if terminal_kind == "iterm2" else "/System/Applications/Utilities/Terminal.app/Contents/Info.plist"
         report["terminalVersion"] = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", plist)
@@ -166,10 +269,18 @@ try:
             time.sleep(1)
             for pid in subprocess.run(["pgrep", "-x", "CoreServicesUIAgent"], text=True, capture_output=True, timeout=5).stdout.split():
                 report["launchConsent"] = json.loads(events("press-pid", pid, "Open"))
-            if opener.poll() is not None:
-                break
+            try:
+                roles = {item["role"] for item in json.loads(events("geometry", bundle))}
+                if {"AXWindow", "AXTextArea"} <= roles:
+                    break
+            except subprocess.CalledProcessError:
+                pass
+        else:
+            raise RuntimeError("Owned terminal window and text surface did not become ready")
         opener.wait(timeout=10)
-        time.sleep(2)
+        events("activate", bundle)
+        if not wait_for(lambda: json.loads(events("frontmost")).get("bundle", "").lower() == bundle.lower()):
+            raise RuntimeError("Owned terminal did not acquire focus")
         if terminal_kind == "iterm2":
             report["updatePrompt"] = json.loads(events("press", bundle, "Don't Check"))
         seed_clipboard(launch_command)
@@ -209,7 +320,9 @@ try:
         raise RuntimeError("Terminal did not start the fixture in a TTY")
     time.sleep(1)
     columns, rows = state()["columns"], state()["rows"]
+    check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
     check("productionCompositionConfigured", lambda: state().get("production") is True and state().get("journey") is True and state().get("totalRows", 0) > 240)
+    check("defaultDockKeepsInputVisible", lambda: state().get("dockEditor") is True and state()["height"] < state()["rows"] and any("Synthetic editor" in row for row in state()["painted"]))
     if is_mac:
         geometry = json.loads(events("geometry", bundle))
         areas = [item for item in geometry if item["role"] == "AXTextArea"]
@@ -248,7 +361,7 @@ try:
     events("wheel", -3)
     check("desktopWheelScrollsDocument", lambda: state().get("wheel", 0) > 0 and state().get("offset", 0) > 0)
     screenshot("wheel")
-    drag(cell(columns, 1), cell(columns, rows))
+    drag(cell(columns, 1), cell(columns, state()["height"]))
     check("desktopThumbDragReachesEnd", lambda: state().get("thumbDrag", 0) > 0 and state().get("followingTail") is True and state().get("offset") == state().get("totalRows") - state().get("height"))
     mouse("down", *cell(columns, 1))
     mouse("up", *cell(columns, 1))
@@ -279,18 +392,76 @@ try:
         key(name)
     check("keyboardEditingCoexists", lambda: state().get("editor") == "ac")
     screenshot("keyboard")
+    fixture_command("editor")
+    mouse("down", *cell(columns, 1))
+    mouse("up", *cell(columns, 1))
+    check_offset = state()["offset"]
+    key("a")
+    check("dockedTypingPreservesReading", lambda: state()["editor"] == "a" and state()["offset"] == check_offset and state()["painted"][0].startswith("ROW-001"))
+    fixture_command("tail")
+    tail = state()
+    key("viewportUp")
+    check("keyboardOnlyBrowsingFromTail", lambda: not state()["followingTail"] and state()["offset"] == tail["offset"] - tail["height"])
+    mouse("down", *cell(columns, 1))
+    mouse("up", *cell(columns, 1))
+    anchor = state()["painted"][0]
+    expanded = state()["toolsExpanded"]
+    key("toggleTools")
+    check("nativePresentationTogglePreservesReading", lambda: state()["toolsExpanded"] != expanded and state()["painted"][0] == anchor and not state()["followingTail"])
+
+    open_settings("dock")
+    key("enter")
+    check("settingsUndocksLive", lambda: state()["dockEditor"] is False and state()["height"] == state()["rows"])
+    key("escape")
+    open_settings("dock")
+    key("enter")
+    check("settingsRedocksLive", lambda: state()["dockEditor"] is True and state()["height"] < state()["rows"])
+    key("escape")
+    open_settings("wheel")
+    key("enter")
+    check("settingsWheelChangeApplies", lambda: state()["wheelStep"] == 4)
+    key("escape")
+    mouse("down", *cell(columns, state()["height"] // 2))
+    mouse("up", *cell(columns, state()["height"] // 2))
+    before_wheel = state()
+    mouse("move", *cell(10, 3))
+    events("wheel", 1)
+    stable_check("configuredWheelDistance", lambda: state()["wheel"] > before_wheel["wheel"] and state()["offset"] == before_wheel["offset"] - 4 * (state()["wheel"] - before_wheel["wheel"]))
+    open_settings("height")
+    key("enter")
+    check("settingsEditorHeightChangeApplies", lambda: state()["editorHeightPercent"] == 35)
+    key("escape")
+    fixture_command("long-editor")
+    check("nativeInputHeightCeiling", lambda: sum(row.strip().startswith("INPUT-") for row in state()["painted"]) == state()["rows"] * 35 // 100)
+    screenshot("docked-settings")
+    fixture_command("editor")
+    if terminal_kind in ("kitty", "iterm2"):
+        check_focus_loss(cell, columns)
+    if terminal_kind == "vte" and not with_tmux:
+        run("xdotool", "windowsize", window_id, str(first["width"] * 26), str(first["height"] * 14))
+        if not wait_for(lambda: state()["columns"] < columns and state()["rows"] < rows):
+            raise RuntimeError("Narrow settings resize did not reach the terminal")
+        open_settings("wheel")
+        check("narrowSettingsVisible", lambda: any("Wheel scroll lines" in row for row in state()["painted"]))
+        key("enter")
+        check("narrowSettingsRemainsUsable", lambda: state()["wheelStep"] == 5 and any("Wheel scroll lines" in row for row in state()["painted"]))
+        screenshot("narrow-settings")
+        key("escape")
+        run("xdotool", "windowsize", window_id, str(width), str(height))
+        check("narrowEditorSizeRestored", lambda: (state()["columns"], state()["rows"]) == (columns, rows))
     fixture_command("expand")
-    mouse("down", *cell(columns, rows // 2))
-    mouse("up", *cell(columns, rows // 2))
+    mouse("down", *cell(columns, state()["height"] // 2))
+    mouse("up", *cell(columns, state()["height"] // 2))
     check("longSessionMiddleReachable", lambda: 0.3 < state()["offset"] / (state()["totalRows"] - state()["height"]) < 0.7)
     mouse("down", *cell(columns, 1))
     mouse("up", *cell(columns, 1))
     mouse("down", *cell(1, 3))
-    mouse("drag", *cell(60, rows - 1))
+    selection_edge = state()["height"]
+    mouse("drag", *cell(60, selection_edge))
     time.sleep(0.5)
-    mouse("up", *cell(60, rows - 1))
+    mouse("up", *cell(60, selection_edge))
     check("selectionAutoscrolls", lambda: state()["offset"] > 0 and state().get("notice") is not None)
-    last_selected = state()["painted"][rows - 2]
+    last_selected = state()["painted"][state()["height"] - 1]
     if not last_selected.startswith("ROW-"):
         raise RuntimeError(f"Selection escaped synthetic history: {last_selected}")
     last_number = int(last_selected[4:7])
@@ -303,8 +474,8 @@ try:
 
     def browse_cards(count):
         seen = set()
-        mouse("down", *cell(columns, rows))
-        mouse("up", *cell(columns, rows))
+        mouse("down", *cell(columns, state()["height"]))
+        mouse("up", *cell(columns, state()["height"]))
         for _ in range(180):
             for line in state()["painted"]:
                 for i in range(1, count + 1):
@@ -323,8 +494,8 @@ try:
         fixture_command("advance")
     seen = browse_cards(8)
     check("allEightCardsReachableBeforeCompletion", lambda: seen == set(range(1, 9)) and state()["completed"] == 4)
-    mouse("down", *cell(columns, rows))
-    mouse("up", *cell(columns, rows))
+    mouse("down", *cell(columns, state()["height"]))
+    mouse("up", *cell(columns, state()["height"]))
     for _ in range(160):
         if state()["painted"][0].startswith(" child-3 detail-"):
             break
@@ -353,8 +524,8 @@ try:
         fixture_command("advance")
     fixture_command("approval")
     payload_seen = set()
-    mouse("down", *cell(columns, rows))
-    mouse("up", *cell(columns, rows))
+    mouse("down", *cell(columns, state()["height"]))
+    mouse("up", *cell(columns, state()["height"]))
     for _ in range(100):
         for line in state()["painted"]:
             if line.startswith("IMMUTABLE-SYNTHETIC-PAYLOAD-"):
@@ -366,8 +537,9 @@ try:
     check("completeApprovalContextReachable", lambda: payload_seen == set(range(60)))
     mouse("down", *cell(columns, 1))
     mouse("up", *cell(columns, 1))
+    enter_count = state()["enterPresses"]
     key("enter")
-    check("hiddenApprovalActivationOnlyReveals", lambda: state()["approved"] == 0 and any("SYNTHETIC APPROVAL" in line for line in state()["painted"]))
+    stable_check("hiddenApprovalActivationOnlyReveals", lambda: state()["enterPresses"] > enter_count and state()["frameFlushed"] and state()["approved"] == 0 and any("SYNTHETIC APPROVAL" in line for line in state()["painted"]))
     key("enter")
     check("subsequentApprovalActivation", lambda: state()["approved"] == 1)
     fixture_command("external")
@@ -401,9 +573,7 @@ finally:
                 terminal_process.wait(timeout=10)
         except Exception as error:
             report["cleanupError"] = str(error)
-    report["passed"] = (bool(report["checks"]) and all(item["passed"] for item in report["checks"].values())
-                        and bool(report.get("screenshots")) and all(item["exit"] == 0 for item in report["screenshots"].values())
-                        and "error" not in report and "cleanupError" not in report)
+    report["passed"] = report_passed()
     (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 

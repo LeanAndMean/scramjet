@@ -29,6 +29,7 @@ REQUIRED_CHECKS = {
     "nativeProtocolDetected", "orderlyExit", "overlayClearsNativeImage", "partialOverlayPlacementWithheld",
     "partialPlacementRequested", "partialPlacementWithheld", "processActuallySuspended",
     "productionFixtureStarted", "resumedCandidate", "subsequentActivationAuthorizes", "suspendRequested",
+    "checkoutProvenanceMatches", "dockGrowthReducesTranscript", "nativeImageFitsReducedTranscript", "dockShrinkRestoresImage",
 }
 
 
@@ -49,11 +50,15 @@ def wait(predicate, seconds=10):
     return False
 
 
-def check(name, predicate):
+def check(name, predicate, stable_seconds=0):
     if name not in REQUIRED_CHECKS or name in report["checks"]:
         raise RuntimeError(f"Unexpected or duplicate native check: {name}")
     passed = wait(predicate)
-    report["checks"][name] = {"passed": passed, "fixture": state()}
+    deadline = time.monotonic() + stable_seconds
+    while passed and time.monotonic() < deadline:
+        time.sleep(0.05)
+        passed = bool(predicate())
+    report["checks"][name] = {"passed": passed, "fixture": state(), "stableSeconds": stable_seconds}
     print(f"{name}: {passed}", flush=True)
     if not passed:
         raise RuntimeError(name)
@@ -61,7 +66,7 @@ def check(name, predicate):
 
 def key(name):
     if mac:
-        codes = {"1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25, "g": 5, "h": 4, "enter": 36, "exit": 29}
+        codes = {"1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25, "g": 5, "h": 4, "i": 34, "j": 38, "enter": 36, "exit": 29}
         run(str(driver), "key", str(codes[name]), "0")
     elif name == "enter":
         run("xdotool", "keydown", "Return")
@@ -117,6 +122,11 @@ def report_passed():
 try:
     report["os"] = run("sw_vers") if mac else Path("/etc/os-release").read_text()
     report["commit"] = run("git", "rev-parse", "HEAD")
+    report["run"] = {key: os.environ.get(key) for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME")}
+    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()) if os.environ.get("GITHUB_EVENT_PATH") else {}
+    report["pullRequest"] = {key: event.get("pull_request", {}).get(key, {}).get("sha") for key in ("head", "base")}
+    report["nodeVersion"] = run("node", "--version")
+    report["pythonVersion"] = sys.version.split()[0]
     report["image"] = {k: os.environ.get(k) for k in ("ImageVersion", "RUNNER_ARCH")}
     launcher = output / "launch.sh"
     launcher.write_text("#!/bin/bash\n" + "\n".join([
@@ -136,13 +146,18 @@ try:
             report["gatekeeperAgents"] = agents
             for pid in agents:
                 report["gatekeeperOpen"] = json.loads(run(str(driver), "press-pid", pid, "Open"))
-                if report["gatekeeperOpen"]["pressed"]:
-                    return True
-            return opener.poll() is not None
+            try:
+                roles = {item["role"] for item in json.loads(run(str(driver), "geometry", "com.googlecode.iterm2"))}
+                return {"AXWindow", "AXTextArea"} <= roles
+            except subprocess.CalledProcessError:
+                return False
         if not wait(opened, seconds=20):
             raise RuntimeError("iTerm opening prompt could not be confirmed")
         opener.wait(timeout=30)
-        time.sleep(3)
+        run(str(driver), "activate", "com.googlecode.iterm2")
+        if not wait(lambda: json.loads(run(str(driver), "frontmost")).get("bundle", "").lower() == "com.googlecode.iterm2"):
+            raise RuntimeError("Owned iTerm window did not acquire focus")
+        time.sleep(1)
         report["updatePrompt"] = json.loads(run(str(driver), "press", "com.googlecode.iterm2", "Don't Check"))
         command = f"/bin/bash {shlex.quote(str(launcher))}"
         run("pbcopy", input=command)
@@ -168,46 +183,47 @@ try:
         run("xdotool", "type", "--clearmodifiers", "--delay", "1", f"/bin/bash {shlex.quote(str(launcher))}")
         run("xdotool", "key", "Return")
     check("productionFixtureStarted", lambda: state().get("phase") == "image")
+    check("checkoutProvenanceMatches", lambda: state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
     check("nativeProtocolDetected", lambda: state().get("protocol") == ("iterm2" if mac else "kitty"))
     if not mac:
         window = run("xdotool", "search", "--onlyvisible", "--class", "kitty").splitlines()[-1]
         run("xdotool", "windowactivate", "--sync", window)
     key("1")
-    count = pixels("fitted-image")
-    check("nativeOversizedImageVisible", lambda: count > 400)
+    check("nativeOversizedImageVisible", lambda: pixels("fitted-image") > 400)
+    original_height = state()["height"]
+    original_bottom = report["pixels"]["fitted-image"]["bottom"]
+    key("i")
+    check("dockGrowthReducesTranscript", lambda: state().get("phase") == "dock-grown" and state()["height"] < original_height)
+    check("nativeImageFitsReducedTranscript", lambda: pixels("dock-grown") > 400 and report["pixels"]["dock-grown"]["bottom"] < original_bottom)
+    key("j")
+    check("dockShrinkRestoresImage", lambda: state()["height"] == original_height and pixels("dock-restored") > 400 and report["pixels"]["dock-restored"]["bottom"] == original_bottom)
     key("2")
     check("partialPlacementRequested", lambda: state().get("phase") == "clipped")
-    count = pixels("clipped-image")
-    check("partialPlacementWithheld", lambda: count == 0)
+    check("partialPlacementWithheld", lambda: pixels("clipped-image") == 0)
     key("1")
     key("3")
-    count = pixels("overlay")
-    check("overlayClearsNativeImage", lambda: count == 0)
+    check("overlayClearsNativeImage", lambda: pixels("overlay") == 0)
     key("3")
-    count = pixels("overlay-closed")
-    check("imageRestoredAfterOverlay", lambda: count > 400)
+    check("imageRestoredAfterOverlay", lambda: pixels("overlay-closed") > 400)
     key("g")
     check("boundedOverlayRequested", lambda: state().get("phase") == "overlay-image")
-    count = pixels("bounded-overlay-image")
-    check("boundedOverlayImageVisible", lambda: count > 400)
+    check("boundedOverlayImageVisible", lambda: pixels("bounded-overlay-image") > 400)
     key("h")
     check("clippedOverlayRequested", lambda: state().get("phase") == "overlay-image-clipped")
-    count = pixels("clipped-overlay-image")
-    check("partialOverlayPlacementWithheld", lambda: count == 0 and any("[Image clipped; scroll to view]" in row for row in state().get("painted", [])))
+    check("partialOverlayPlacementWithheld", lambda: pixels("clipped-overlay-image") == 0 and any("[Image clipped; scroll to view]" in row for row in state().get("painted", [])))
     key("3")
     key("8")
     check("imageConversionSettled", lambda: state().get("phase") == "converted")
-    count = pixels("converted-image")
-    check("nativeImageVisibleAfterConversion", lambda: count > 400)
+    check("nativeImageVisibleAfterConversion", lambda: pixels("converted-image") > 400)
     key("9")
-    count = pixels("invalidated-image")
-    check("nativeImageVisibleAfterInvalidation", lambda: count > 400)
+    check("nativeImageVisibleAfterInvalidation", lambda: pixels("invalidated-image") > 400)
     key("4")
     check("approvalInstalled", lambda: state().get("phase") == "approval" and not state().get("error"))
     key("5")
     pixels("approval-context")
+    enter_count = state()["enterPresses"]
     key("enter")
-    check("hiddenControlsDoNotAuthorize", lambda: state().get("approved") == 0)
+    check("hiddenControlsDoNotAuthorize", lambda: state()["enterPresses"] > enter_count and state()["frameFlushed"] and state().get("approved") == 0 and any("SYNTHETIC APPROVAL" in row for row in state().get("painted", [])), stable_seconds=0.35)
     pixels("approval-revealed")
     key("enter")
     check("subsequentActivationAuthorizes", lambda: state().get("approved") == 1)
@@ -231,13 +247,11 @@ try:
         run("xdotool", "key", "Return")
     check("resumedCandidate", lambda: state().get("phase") == "resumed")
     key("1")
-    count = pixels("resumed-image")
-    check("nativeImageRestoredAfterResume", lambda: count > 400)
+    check("nativeImageRestoredAfterResume", lambda: pixels("resumed-image") > 400)
     key("exit")
     check("orderlyExit", lambda: (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
     check("finalTermiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
-    count = pixels("final-transcript")
-    check("nativePlacementsCleanedUp", lambda: count == 0)
+    check("nativePlacementsCleanedUp", lambda: pixels("final-transcript") == 0)
 except Exception as error:
     report["error"] = str(error)
     if isinstance(error, subprocess.CalledProcessError):

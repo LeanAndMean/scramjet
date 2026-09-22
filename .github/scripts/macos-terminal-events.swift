@@ -60,33 +60,9 @@ func pressButton(_ element: AXUIElement, title: String, depth: Int = 0) -> Bool 
     return false
 }
 
-let args = CommandLine.arguments
-switch args[1] {
-case "capabilities":
-    emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
-          "screenCapture": CGPreflightScreenCaptureAccess()])
-case "geometry", "resize":
-    guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier?.lowercased() == (args.count > 2 ? args[2].lowercased() : "com.apple.terminal") }) else {
-        fatalError("Terminal is not running")
-    }
-    let application = AXUIElementCreateApplication(app.processIdentifier)
-    if args[1] == "resize" {
-        guard let window = (attribute(application, kAXWindowsAttribute) as? [AXUIElement])?.first else { fatalError("No window") }
-        var size = CGSize(width: Double(args[3])!, height: Double(args[4])!)
-        let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &size)!)
-        emit(["result": result.rawValue])
-    } else {
-        emit(geometry(application))
-    }
-case "press-pid":
-    emit(["pressed": pressButton(AXUIElementCreateApplication(pid_t(args[2])!), title: args[3])])
-case "press":
-    let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
-    emit(["applications": apps.map { $0.localizedName ?? "unknown" }, "pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
-case "key":
-    let code = CGKeyCode(args[2])!
-    var flags = CGEventFlags(rawValue: UInt64(args[3])!)
-    // iTerm2's Kitty encoder requires the left/right device bits present on physical modifier events.
+func sendKey(_ code: CGKeyCode, _ rawFlags: UInt64) {
+    var flags = CGEventFlags(rawValue: rawFlags)
+    // iTerm2's Kitty encoder requires device bits on physical modifier events.
     let modifiers: [(CGEventFlags, CGKeyCode)] = [(.maskControl.union(CGEventFlags(rawValue: 0x1)), 59), (.maskShift.union(CGEventFlags(rawValue: 0x2)), 56), (.maskAlternate.union(CGEventFlags(rawValue: 0x20)), 58), (.maskCommand.union(CGEventFlags(rawValue: 0x8)), 55)]
     for (flag, _) in modifiers where !flags.intersection(flag).isEmpty { flags.formUnion(flag) }
     var active = CGEventFlags()
@@ -112,6 +88,45 @@ case "key":
         event.post(tap: .cghidEventTap)
         usleep(20_000)
     }
+}
+
+let args = CommandLine.arguments
+switch args[1] {
+case "capabilities":
+    emit(["accessibility": AXIsProcessTrusted(), "postEvents": CGPreflightPostEventAccess(),
+          "screenCapture": CGPreflightScreenCaptureAccess()])
+case "geometry", "resize":
+    guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier?.lowercased() == (args.count > 2 ? args[2].lowercased() : "com.apple.terminal") }) else {
+        fatalError("Terminal is not running")
+    }
+    let application = AXUIElementCreateApplication(app.processIdentifier)
+    if args[1] == "resize" {
+        guard let window = (attribute(application, kAXWindowsAttribute) as? [AXUIElement])?.first else { fatalError("No window") }
+        var size = CGSize(width: Double(args[3])!, height: Double(args[4])!)
+        let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &size)!)
+        emit(["result": result.rawValue])
+    } else {
+        emit(geometry(application))
+    }
+case "press-pid":
+    emit(["pressed": pressButton(AXUIElementCreateApplication(pid_t(args[2])!), title: args[3])])
+case "press":
+    let apps = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
+    emit(["applications": apps.map { $0.localizedName ?? "unknown" }, "pressed": apps.contains { pressButton(AXUIElementCreateApplication($0.processIdentifier), title: args[3]) }])
+case "key":
+    sendKey(CGKeyCode(args[2])!, UInt64(args[3])!)
+case "text":
+    // Hosted fixtures use the runner's US keyboard layout and synthetic lowercase commands.
+    let codes: [Character: CGKeyCode] = ["a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5, "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35, "q": 12, "r": 15, "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6, "/": 44, " ": 49]
+    for character in args[2] {
+        guard let code = codes[character] else { fatalError("Unsupported synthetic character") }
+        sendKey(code, 0)
+    }
+case "activate":
+    let app = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier?.lowercased() == args[2].lowercased() }
+    emit(["activated": app?.activate(options: [.activateIgnoringOtherApps]) ?? false])
+case "frontmost":
+    emit(["bundle": NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""])
 case "mouse":
     let point = CGPoint(x: Double(args[3])!, y: Double(args[4])!)
     let actions: [String: (CGEventType, CGMouseButton)] = [
