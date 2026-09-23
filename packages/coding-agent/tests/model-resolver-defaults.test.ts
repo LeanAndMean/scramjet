@@ -13,6 +13,11 @@ function createRegistry(authProviders: string[]): ModelRegistry {
 }
 
 describe("defaultModelPerProvider - catalog existence", () => {
+	it("cerebras default remains in the catalog after removal", () => {
+		expect(defaultModelPerProvider.cerebras).toBe("gpt-oss-120b");
+		expect(getModel("cerebras", defaultModelPerProvider.cerebras)).toBeDefined();
+	});
+
 	it("anthropic default exists in generated catalog", () => {
 		expect(defaultModelPerProvider.anthropic).toBe("claude-opus-4-8");
 		const model = getModel("anthropic", "claude-opus-4-8");

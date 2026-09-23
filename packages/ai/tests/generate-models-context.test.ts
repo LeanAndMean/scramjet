@@ -254,7 +254,7 @@ async function generate(
 				together: { models: { "zai-org/GLM-5.2": feedModel("zai-org/GLM-5.2", 262144) } },
 				xai: { models: present ? { "grok-code-fast-1": feedModel("grok-code-fast-1", 32768) } : {} },
 				anthropic: { models },
-				openai: { models: present ? models : {} },
+				openai: { models: present ? models : { "other-supported": feedModel("other-supported", 128000) } },
 				opencode: { models },
 				"opencode-go": { models },
 				"github-copilot": {
@@ -366,6 +366,7 @@ async function generate(
 	const output = writeFileSync.mock.calls[0][1] as string;
 	if (options.candidatePath) {
 		expect(writeFileSync.mock.calls[0][0]).toBe(options.candidatePath);
+		expect(writeFileSync.mock.calls[0][2]).toEqual({ flag: "wx" });
 		return JSON.parse(output);
 	}
 	const compiled = ts.transpileModule(output, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
@@ -604,6 +605,33 @@ describe("real generator context corrections", () => {
 		});
 	});
 
+	it("reports missing previously supported optional models.dev sections in the candidate", async () => {
+		const candidate = await generate(true, {
+			candidatePath: "/tmp/scramjet-569-missing-section.json",
+			modelsDevChange: (data) => {
+				delete data["kimi-for-coding"];
+				delete data["zai-coding-plan"];
+				delete data.together;
+			},
+		});
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "models.dev/kimi-for-coding",
+			id: "*",
+			reason: "Previously supported source section missing",
+		});
+		expect(candidate.unresolvedSources).toContainEqual({
+			source: "models.dev/zai-coding-plan",
+			id: "*",
+			reason: "Previously supported source section missing",
+		});
+		const togetherGaps = candidate.unresolvedSources.filter((entry: { source: string }) =>
+			entry.source.startsWith("models.dev/together"),
+		);
+		expect(togetherGaps).toEqual([
+			{ source: "models.dev/together", id: "*", reason: "Previously supported source section missing" },
+		]);
+	});
+
 	it("rejects loss of required models.dev sections and malformed optional sections", async () => {
 		await generate(true, {
 			modelsDevChange: (data) => {
@@ -611,6 +639,13 @@ describe("real generator context corrections", () => {
 			},
 			expectFailure: true,
 			expectedError: "models.dev/anthropic",
+		});
+		await generate(true, {
+			modelsDevChange: (data) => {
+				data.google.models = {};
+			},
+			expectFailure: true,
+			expectedError: "models.dev/google: no usable models",
 		});
 		await generate(true, {
 			modelsDevChange: (data) => {
@@ -748,6 +783,7 @@ describe("real generator context corrections", () => {
 			},
 		}))!;
 		expect(models.openai["gpt-realtime-2.1"]).toBeUndefined();
+		expect(models["azure-openai-responses"]["gpt-realtime-2.1"]).toBeUndefined();
 	});
 
 	it("preserves provider-documented OpenCode Go Qwen 3.7 Messages routing", async () => {

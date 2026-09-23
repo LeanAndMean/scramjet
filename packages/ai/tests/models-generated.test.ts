@@ -45,6 +45,7 @@ describe("generated catalog - reviewed provider additions and retentions", () =>
 
 	it("excludes proposals with unsupported API routing or no same-route price estimate", () => {
 		expect(getModels("openai").find((model) => model.id === "gpt-realtime-2.1")).toBeUndefined();
+		expect(getModels("azure-openai-responses").find((model) => model.id === "gpt-realtime-2.1")).toBeUndefined();
 		expect(getModels("opencode").find((model) => model.id === "grok-4.7")).toBeUndefined();
 		expect(getModels("fireworks").find((model) => model.id === "accounts/fireworks/models/kimi-k3")).toBeUndefined();
 	});

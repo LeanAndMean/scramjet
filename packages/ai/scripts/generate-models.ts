@@ -4,6 +4,7 @@ import { writeFileSync } from "fs";
 import { join, dirname, isAbsolute, resolve } from "path";
 import { fileURLToPath } from "url";
 import { validateModelRequestLimits } from "../src/models.js";
+import { MODELS } from "../src/models.generated.js";
 import {
 	CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL,
 	CLOUDFLARE_AI_GATEWAY_COMPAT_BASE_URL,
@@ -694,11 +695,21 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		const sections = [...required, "amazon-bedrock", "cloudflare-workers-ai", "cloudflare-ai-gateway", "xai", "zai-coding-plan", "mistral", "huggingface", "fireworks-ai", "github-copilot", "minimax", "minimax-cn", "kimi-for-coding", "xiaomi", "opencode", "opencode-go", "together", "togetherai", "together-ai", "moonshotai", "moonshotai-cn"];
 		for (const key of sections) {
 			const section = data[key];
-			if (section === undefined && !required.includes(key)) continue;
+			if (section === undefined && !required.includes(key)) {
+				const provider = key === "kimi-for-coding" ? "kimi-coding" : key === "zai-coding-plan" ? "zai" :
+					key === "fireworks-ai" ? "fireworks" : key.startsWith("together") ? "together" : key;
+				if (candidatePath && provider in MODELS &&
+					(!key.startsWith("together") ||
+						(key === "together" && !["togetherai", "together-ai"].some((alias) => data[alias])))) {
+					unresolvedSources.push({ source: `models.dev/${key}`, id: "*", reason: "Previously supported source section missing" });
+				}
+				continue;
+			}
 			if (!section || typeof section !== "object" || !section.models ||
 				typeof section.models !== "object" || Array.isArray(section.models)) {
 				throw new Error(`models.dev/${key}: missing or invalid models section`);
 			}
+			let usableModels = 0;
 			for (const [id, model] of Object.entries(section.models)) {
 				if (!model || typeof model !== "object") throw new Error(`models.dev/${key}/${id}: invalid model`);
 				const m = model as ModelsDevModel;
@@ -710,6 +721,7 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					(key === "cloudflare-ai-gateway" && !/^(openai|anthropic|workers-ai)\/.+/.test(id)) ||
 					(key === "kimi-for-coding" && ["k2p5", "k2p6"].includes(id) &&
 						Object.hasOwn(section.models, "kimi-for-coding"))) continue;
+				usableModels++;
 				if (!Number.isFinite(m.limit?.context) || !Number.isFinite(m.limit?.output) ||
 					(m.limit?.context ?? 0) <= 0 || (m.limit?.output ?? 0) <= 0) {
 					throw new Error(`models.dev/${key}/${id}: invalid context or output limit`);
@@ -718,6 +730,9 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 				price(m.cost?.output, `models.dev/${key}/${id} output`);
 				price(m.cost?.cache_read, `models.dev/${key}/${id} cache read`);
 				price(m.cost?.cache_write, `models.dev/${key}/${id} cache write`);
+			}
+			if (required.includes(key) && key in MODELS && usableModels === 0) {
+				throw new Error(`models.dev/${key}: no usable models for a supported provider`);
 			}
 		}
 
