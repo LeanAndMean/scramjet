@@ -21,7 +21,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@leanandmean/coding-agent";
 import type { Component, OverlayAnchor, OverlayHandle, OverlayOptions, TUI } from "@leanandmean/tui";
-import { matchesKey, truncateToWidth, visibleWidth } from "@leanandmean/tui";
+import { decodeKittyPrintable, matchesKey, truncateToWidth, visibleWidth } from "@leanandmean/tui";
 import { spawn } from "child_process";
 
 // Global handle for toggle demo (in real code, use a more elegant pattern)
@@ -950,6 +950,8 @@ class PassiveDemoController extends BaseOverlay {
 	}
 
 	handleInput(data: string): void {
+		// SCRAMJET-DIVERGENCE: retained terminals encode printable input explicitly.
+		data = decodeKittyPrintable(data) ?? data;
 		this.inputCount++;
 		this.lastInputDebug = `len=${data.length} c0=${data.charCodeAt(0)}`;
 		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
@@ -1301,6 +1303,7 @@ class StreamingInputPanel implements Component {
 	}
 
 	handleInput(data: string): void {
+		data = decodeKittyPrintable(data) ?? data;
 		if (matchesKey(data, "tab")) {
 			this.onTab();
 		} else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {

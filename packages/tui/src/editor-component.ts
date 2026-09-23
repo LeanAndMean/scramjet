@@ -59,6 +59,9 @@ export interface EditorComponent extends Component {
 	/** Set the autocomplete provider */
 	setAutocompleteProvider?(provider: AutocompleteProvider): void;
 
+	// SCRAMJET-DIVERGENCE: completion gating cannot depend on hardware-cursor visibility.
+	isShowingAutocomplete?(): boolean;
+
 	// =========================================================================
 	// Appearance (optional)
 	// =========================================================================

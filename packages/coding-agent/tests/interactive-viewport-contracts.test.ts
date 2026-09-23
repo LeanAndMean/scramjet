@@ -1228,6 +1228,51 @@ describe("retained interactive contracts", () => {
 		expect(h.extensionUI.getEditorText()).toBe("x");
 	});
 
+	it.each(["typing", "capturing overlay", "passive overlay"])(
+		"preserves %s while hidden autocomplete waits for revelation",
+		async (kind) => {
+			const h = await setup();
+			for (const character of "/hot") h.terminal.sendInput(character);
+			await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("→ hotkeys"));
+			h.extensionUI.setWidget("trailing", () => new Text(Array(40).fill("TRAILING").join("\n"), 0, 0), {
+				placement: "belowEditor",
+			});
+			expect((await h.frame()).join("\n")).not.toContain("hotkeys");
+			if (kind === "typing") {
+				h.terminal.sendInput("x");
+				expect(h.extensionUI.getEditorText()).toBe("/hotx");
+				expect((await h.frame()).join("\n")).toContain("/hotx");
+				return;
+			}
+			const editor = h.internals.editorContainer.children[0];
+			const input = vi.fn();
+			const overlay = h.internals.ui.showOverlay(
+				{ render: () => Array(24).fill("OVERLAY"), invalidate() {}, handleInput: input },
+				{ nonCapturing: kind === "passive overlay", row: 0, col: 0, width: 59, maxHeight: 24 },
+			);
+			try {
+				await h.frame();
+				h.terminal.sendInput("\t");
+				await h.frame();
+				expect(h.extensionUI.getEditorText()).toBe("/hot");
+				expect(h.internals.ui.hasOverlay()).toBe(true);
+				if (kind === "capturing overlay") expect(input).toHaveBeenCalledExactlyOnceWith("\t");
+				else {
+					expect(input).not.toHaveBeenCalled();
+					expect(h.internals.ui.isComponentFocused(editor)).toBe(true);
+				}
+			} finally {
+				overlay.hide();
+			}
+			await h.frame();
+			h.terminal.sendInput("\t");
+			expect(h.extensionUI.getEditorText()).toBe("/hot");
+			expect((await h.frame()).join("\n")).toContain("→ hotkeys");
+			h.terminal.sendInput("\t");
+			expect(h.extensionUI.getEditorText()).toBe("/hotkeys ");
+		},
+	);
+
 	it("preserves invalid settings files while exposing their load error", async () => {
 		const directory = mkdtempSync(join(tmpdir(), "scramjet-invalid-layout-"));
 		directories.push(directory);

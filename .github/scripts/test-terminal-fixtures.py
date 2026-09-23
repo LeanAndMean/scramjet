@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import re
 import shlex
 import shutil
 import signal
@@ -893,6 +894,28 @@ class MacInteractionOwnershipTests(unittest.TestCase):
 
 
 class StableGraphicsAbsenceTests(unittest.TestCase):
+    def test_repeated_linux_pixel_inspection_reads_the_new_capture(self):
+        for values in ([0, 0], [0, 1000]):
+            with self.subTest(values=values), tempfile.TemporaryDirectory() as directory:
+                captures = iter(values)
+                paths = []
+                def run(*args):
+                    path = Path(args[-1])
+                    if args[0] == "scrot":
+                        if path.exists() and not any(flag in args for flag in ("--overwrite", "-o")):
+                            path = path.with_name(path.stem + "_000" + path.suffix)
+                        path.write_text(json.dumps({"count": next(captures)}))
+                        paths.append(path)
+                        return ""
+                    self.assertIn("--inspect-screenshot", args)
+                    return path.read_text()
+                context = {"time": Mock(), "output": Path(directory), "mac": False, "run": run,
+                           "shutil": shutil, "fixture": "fixture.mjs", "json": json, "report": {}}
+                load_safety_functions({"pixels"}, context)
+                observed = [context["pixels"]("same-negative") for _ in values]
+                self.assertEqual(len(paths), 2)
+                self.assertEqual(observed, values)
+
     def test_actual_graphics_negatives_require_acknowledged_stable_fresh_samples(self):
         source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
         phases = {"partialPlacementWithheld": ("2", "clipped"), "overlayClearsNativeImage": ("3", "overlay"),
@@ -927,6 +950,172 @@ class StableGraphicsAbsenceTests(unittest.TestCase):
                     if result["passed"]:
                         self.assertGreaterEqual(result["stableSeconds"], 0.35)
                         self.assertGreaterEqual(len(observations), 2)
+
+
+class CommittedHandoffEvidenceTests(unittest.TestCase):
+    def test_stop_receipt_is_persisted_before_committed_suspension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "fixture.json"
+            receipt = Path(directory) / "before-stop.json"
+            hook = Path(directory) / "stop-hook.mjs"
+            hook.write_text('''import { readFileSync, writeFileSync } from "node:fs";
+const kill = process.kill.bind(process);
+process.kill = (pid, signal) => {
+    if (signal === "SIGTSTP") {
+        writeFileSync(process.env.STOP_RECEIPT, readFileSync(process.env.SCRAMJET_TUI_PROBE_EVIDENCE));
+        return kill(pid, "SIGSTOP");
+    }
+    return kill(pid, signal);
+};
+''')
+            env = {**os.environ, "HOME": directory, "SCRAMJET_TUI_PROBE_EVIDENCE": str(target),
+                   "STOP_RECEIPT": str(receipt), "TERM": "xterm-256color"}
+            for key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "TERMUX_VERSION", "SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION", "TMUX", "TERM_PROGRAM"):
+                env.pop(key, None)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            before = termios.tcgetattr(slave)
+            with (Path(directory) / "stderr").open("w+") as stderr:
+                child = subprocess.Popen(["node", "--import", str(hook), str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"), "--production", "--committed", "--committed-handoffs"], cwd=ROOT, env=env, stdin=slave, stdout=slave, stderr=stderr, start_new_session=True)
+                def wait_for(predicate):
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.02)[0]: os.read(master, 65536)
+                        if target.exists() and predicate(json.loads(target.read_text())): return
+                        if child.poll() is not None: break
+                    stderr.seek(0)
+                    self.fail(f"Committed suspension did not settle: {stderr.read()}")
+                try:
+                    wait_for(lambda state: state.get("completed") == 8)
+                    Path(str(target) + ".command").write_text(json.dumps({"id": 1, "action": "suspend"}))
+                    wait_for(lambda state: receipt.exists() and "T" in subprocess.check_output(["ps", "-o", "stat=", "-p", str(child.pid)], text=True))
+                    stopped = json.loads(receipt.read_text())
+                    self.assertEqual(termios.tcgetattr(slave), before)
+                    self.assertEqual(stopped["terminalStates"][-1], {"stop": stopped["termiosBefore"]})
+                    self.assertEqual(stopped["suspends"], 1)
+                    os.killpg(child.pid, signal.SIGCONT)
+                    wait_for(lambda state: state.get("phase") == "resumed" and state.get("editorActive"))
+                    os.write(master, b"x")
+                    wait_for(lambda state: state.get("editor") == "Synthetic editorx")
+                    os.write(master, b"\x11")
+                    wait_for(lambda state: state.get("stopped"))
+                    child.wait(timeout=10)
+                    self.assertEqual(child.returncode, 0)
+                    self.assertEqual(termios.tcgetattr(slave), before)
+                finally:
+                    if child.poll() is None:
+                        os.killpg(child.pid, signal.SIGCONT)
+                        child.terminate()
+                        try: child.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            child.kill(); child.wait(timeout=5)
+                    os.close(master); os.close(slave)
+
+    def test_committed_restoration_requires_every_handoff_observation(self):
+        complete = {"termiosBefore": "saved", "termiosAfter": "saved", "handoffTermios": "saved",
+                    "approved": 1, "editorHandoffs": 1, "suspends": 1, "editor": "edited by synthetic external editorx"}
+        evidence = {"contextMarkers": 60, "suspended": True, "resumed": True}
+        current, observations = dict(complete), dict(evidence)
+        context = {"state": lambda: current, "report": {"committedHandoffs": observations}}
+        predicate = interaction_check("nativeCommittedRestoration", context)
+        self.assertTrue(predicate())
+        for key in complete:
+            with self.subTest(missing_state=key):
+                current.pop(key)
+                self.assertFalse(predicate())
+                current[key] = complete[key]
+        for key in evidence:
+            with self.subTest(missing_observation=key):
+                observations.pop(key)
+                self.assertFalse(predicate())
+                observations[key] = evidence[key]
+
+    def test_committed_context_requires_exact_markers_and_focused_controls(self):
+        source = interaction_source()
+        function = next(node for node in ast.walk(source) if isinstance(node, ast.FunctionDef) and node.name == "committed_context_ready")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            focused = [True]
+            context = {"output": output, "state": lambda: {"approvalFocused": focused[0]}, "re": re}
+            exec(compile(ast.Module(body=[function], type_ignores=[]), "terminal-probe.py", "exec"), context)
+            ready = context["committed_context_ready"]
+            self.assertFalse(ready())
+            log = output / "committed-ansi.log"
+            markers = [f"IMMUTABLE-SYNTHETIC-PAYLOAD-{i}" for i in range(60)]
+            log.write_text("\n".join(markers))
+            self.assertTrue(ready())
+            log.write_text("\n".join(marker for marker in markers if marker != "IMMUTABLE-SYNTHETIC-PAYLOAD-1"))
+            self.assertFalse(ready())
+            log.write_text("\n".join(markers))
+            focused[0] = False
+            self.assertFalse(ready())
+
+    def test_committed_production_approval_external_editor_and_paste_privacy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "fixture.json"
+            env = {**os.environ, "HOME": directory, "SCRAMJET_TUI_PROBE_EVIDENCE": str(target), "TERM": "xterm-256color"}
+            for key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "TERMUX_VERSION", "SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION", "TMUX", "TERM_PROGRAM"):
+                env.pop(key, None)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            before = termios.tcgetattr(slave)
+            with (Path(directory) / "stderr").open("w+") as stderr:
+                child = subprocess.Popen(["node", str(ROOT / "packages/scramjet/tests/fixtures/interactive-viewport.mjs"), "--production", "--committed", "--committed-handoffs"], cwd=ROOT, env=env, stdin=slave, stdout=slave, stderr=stderr, start_new_session=True)
+                output = bytearray()
+                def wait_for(predicate):
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        if select.select([master], [], [], 0.02)[0]: output.extend(os.read(master, 65536))
+                        if target.exists():
+                            current = json.loads(target.read_text())
+                            if predicate(current): return current
+                        if child.poll() is not None: break
+                    stderr.seek(0)
+                    self.fail(f"Committed fixture did not settle: {stderr.read()}")
+                def command(identifier, action):
+                    pending = Path(str(target) + ".command.tmp")
+                    pending.write_text(json.dumps({"id": identifier, "action": action}))
+                    pending.replace(str(target) + ".command")
+                    return wait_for(lambda state: state.get("commandDone") == identifier)
+                try:
+                    state = wait_for(lambda state: state.get("completed") == 8)
+                    self.assertEqual(state["mode"], "committed")
+                    self.assertIsNone(state.get("viewport"))
+                    self.assertFalse(state["stopped"])
+                    command(1, "approval")
+                    wait_for(lambda state: state.get("approvalFocused") and b"IMMUTABLE-SYNTHETIC-PAYLOAD-59" in output and b"SYNTHETIC APPROVAL" in output)
+                    rendered = output.decode(errors="replace")
+                    markers = [rendered.index(f"IMMUTABLE-SYNTHETIC-PAYLOAD-{i} ") for i in range(60)]
+                    self.assertEqual(markers, sorted(markers))
+                    self.assertGreater(rendered.rindex("SYNTHETIC APPROVAL"), markers[-1])
+                    os.write(master, b"\r")
+                    wait_for(lambda state: state.get("approved") == 1 and state.get("editorActive"))
+                    sentinel = "COMMITTED-PRIVATE-PASTE-SENTINEL"
+                    os.write(master, f"\x1b[200~{sentinel}\x1b[201~".encode())
+                    state = wait_for(lambda state: state.get("pasteMismatches") == 1)
+                    self.assertNotIn(sentinel, json.dumps(state))
+                    self.assertNotIn(sentinel.encode(), output)
+                    self.assertEqual(state["editor"], "Synthetic editor")
+                    state = command(2, "external")
+                    self.assertEqual(state["editorHandoffs"], 1)
+                    self.assertEqual(state["editor"], "edited by synthetic external editor")
+                    self.assertEqual(state["handoffTermios"], state["termiosBefore"])
+                    self.assertTrue(state["editorActive"])
+                    os.write(master, b"\x11")
+                    state = wait_for(lambda state: state.get("stopped"))
+                    child.wait(timeout=10)
+                    self.assertEqual(child.returncode, 0)
+                    self.assertEqual(state["termiosAfter"], state["termiosBefore"])
+                    self.assertEqual(termios.tcgetattr(slave), before)
+                    self.assertNotIn(b"\x1b[?1049h", output)
+                    self.assertNotIn(b"\x1b[?1002h", output)
+                finally:
+                    if child.poll() is None:
+                        child.terminate()
+                        try: child.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            child.kill(); child.wait(timeout=5)
+                    os.close(master); os.close(slave)
 
 
 if __name__ == "__main__":

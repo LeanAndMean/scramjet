@@ -287,6 +287,7 @@ export class InteractiveMode {
 	private agentRunGeneration = 0;
 	private selectorOpenGeneration = 0;
 	private pendingSelectorOpenGeneration: number | undefined;
+	private layoutSettingsSettlementGeneration = 0;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -505,6 +506,26 @@ export class InteractiveMode {
 				this.editor.handleInput(data);
 				return true;
 			},
+		});
+		// SCRAMJET-DIVERGENCE: completion needs a painted slot even when its hardware cursor is hidden.
+		this.ui.addInputListener((data) => {
+			if (
+				!this.ui.isComponentFocused(this.editor) ||
+				!this.editor.isShowingAutocomplete?.() ||
+				isKeyRelease(data) ||
+				/^\x1b\[\d+;\d+;\d+t$/.test(data) ||
+				this.keybindings.matches(data, "app.tools.expand") ||
+				this.keybindings.matches(data, "app.thinking.toggle")
+			)
+				return undefined;
+			const visible = this.ui.isComponentVisible(this.editorContainer);
+			if (!visible && !this.ui.hasOverlay()) this.ui.revealComponent(this.editorContainer);
+			if (
+				(this.keybindings.matches(data, "tui.input.tab") || this.keybindings.matches(data, "tui.select.confirm")) &&
+				(!visible || !this.ui.isViewportFrameFlushed())
+			)
+				return { consume: true };
+			return undefined;
 		});
 	}
 
@@ -4262,8 +4283,11 @@ export class InteractiveMode {
 	}
 
 	private async settleLayoutSettings(selector: SettingsSelectorComponent): Promise<void> {
+		const generation = ++this.layoutSettingsSettlementGeneration;
 		const settings = this.settingsManager;
 		await settings.flush();
+		// SCRAMJET-DIVERGENCE: only the latest settlement may drain a shared batch of save errors.
+		if (generation !== this.layoutSettingsSettlementGeneration) return;
 		const errors = settings.drainErrors();
 		selector.setSaveError(errors.length ? "Changes not saved; see warning" : undefined);
 		if (errors.length) {

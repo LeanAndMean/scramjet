@@ -50,15 +50,28 @@ def wait(predicate, seconds=10):
     return False
 
 
+def action_settled(previous, action):
+    current = state()
+    return current.get("safetyActionReceipt", 0) > previous and current.get("safetyAction") == action
+
+
 def check(name, predicate, stable_seconds=0):
     if name not in REQUIRED_CHECKS or name in report["checks"]:
         raise RuntimeError(f"Unexpected or duplicate native check: {name}")
-    passed = wait(predicate)
+    samples = 0
+    successful = 0
+    def sample():
+        nonlocal samples, successful
+        samples += 1
+        value = bool(predicate())
+        successful = successful + 1 if value else 0
+        return value
+    passed = wait(sample)
     deadline = time.monotonic() + stable_seconds
-    while passed and time.monotonic() < deadline:
+    while passed and (time.monotonic() < deadline or (stable_seconds > 0 and successful < 2)):
         time.sleep(0.05)
-        passed = bool(predicate())
-    report["checks"][name] = {"passed": passed, "fixture": state(), "stableSeconds": stable_seconds}
+        passed = sample()
+    report["checks"][name] = {"passed": passed, "fixture": state(), "stableSeconds": stable_seconds, "samples": samples}
     print(f"{name}: {passed}", flush=True)
     if not passed:
         raise RuntimeError(name)
@@ -288,20 +301,23 @@ try:
     check("nativeImageFitsReducedTranscript", lambda: pixels("dock-grown") > 400 and image_confined("dock-grown") and report["pixels"]["dock-grown"]["bottom"] < original_bottom)
     key("j")
     check("dockShrinkRestoresImage", lambda: state()["height"] == original_height and pixels("dock-restored") > 400 and image_confined("dock-restored") and report["pixels"]["dock-restored"]["bottom"] == original_bottom)
+    before_action = state().get("safetyActionReceipt", 0)
     key("2")
     check("partialPlacementRequested", lambda: state().get("phase") == "clipped")
-    check("partialPlacementWithheld", lambda: pixels("clipped-image") == 0)
+    check("partialPlacementWithheld", lambda: action_settled(before_action, "2") and pixels("clipped-image") == 0, stable_seconds=0.35)
     key("1")
+    before_action = state().get("safetyActionReceipt", 0)
     key("3")
-    check("overlayClearsNativeImage", lambda: pixels("overlay") == 0)
+    check("overlayClearsNativeImage", lambda: action_settled(before_action, "3") and pixels("overlay") == 0, stable_seconds=0.35)
     key("3")
     check("imageRestoredAfterOverlay", lambda: pixels("overlay-closed") > 400)
     key("g")
     check("boundedOverlayRequested", lambda: state().get("phase") == "overlay-image")
     check("boundedOverlayImageVisible", lambda: pixels("bounded-overlay-image") > 400)
+    before_action = state().get("safetyActionReceipt", 0)
     key("h")
     check("clippedOverlayRequested", lambda: state().get("phase") == "overlay-image-clipped")
-    check("partialOverlayPlacementWithheld", lambda: pixels("clipped-overlay-image") == 0 and any("[Image clipped; scroll to view]" in row for row in state().get("painted", [])))
+    check("partialOverlayPlacementWithheld", lambda: action_settled(before_action, "h") and pixels("clipped-overlay-image") == 0 and any("[Image clipped; scroll to view]" in row for row in state().get("painted", [])), stable_seconds=0.35)
     key("3")
     key("8")
     check("imageConversionSettled", lambda: state().get("phase") == "converted")
@@ -342,7 +358,7 @@ try:
     key("exit")
     check("orderlyExit", lambda: (output / "exit-code").exists() and (output / "exit-code").read_text().strip() == "0")
     check("finalTermiosRestored", lambda: state().get("termiosBefore") == state().get("termiosAfter"))
-    check("nativePlacementsCleanedUp", lambda: pixels("final-transcript") == 0)
+    check("nativePlacementsCleanedUp", lambda: state().get("stopped") is True and pixels("final-transcript") == 0, stable_seconds=0.35)
 except Exception as error:
     report["error"] = str(error)
     if isinstance(error, subprocess.CalledProcessError):

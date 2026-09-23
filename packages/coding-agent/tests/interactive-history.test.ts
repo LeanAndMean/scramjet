@@ -199,6 +199,27 @@ function createInteractiveHarness(): {
 }
 
 describe("shipped printable-key consumers", () => {
+	it.each(["\r", "\x1b[13u", "\x1b[57414u"])("confirms overlay search with Enter %j", async (input) => {
+		const h = await createProductionInteractiveHarness(100, 36, overlayExample);
+		const work = h.session.prompt("/overlay-test").catch((error: Error) => error);
+		try {
+			await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("Overlay Test"));
+			h.terminal.sendInput("a");
+			h.terminal.sendInput("\x1b[57414;1:3u");
+			expect((await h.frame()).join("\n")).toContain("Search: a");
+			expect(h.internals.ui.hasOverlay()).toBe(true);
+			h.terminal.sendInput(input);
+			await h.frame();
+			expect(h.internals.ui.hasOverlay()).toBe(false);
+			expect(await work).toBeUndefined();
+			expect(h.extensionUI.getEditorText()).toBe("");
+		} finally {
+			h.terminal.sendInput("\x1b");
+			await work;
+			await h.dispose();
+		}
+	});
+
 	it.each([
 		{ command: "overlay-test", extension: overlayExample, title: "Overlay Test", typed: "Search: aZ", panel: false },
 		{

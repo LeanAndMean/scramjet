@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
@@ -55,7 +56,7 @@ def required_checks():
     return expected
 
 
-def cleanup_owned_resources():
+def cleanup_owned_resources(close_windows=None, exit_input=None):
     if not terminal_started:
         return
     errors = []
@@ -68,10 +69,10 @@ def cleanup_owned_resources():
         pass
     except Exception as error:
         errors.append(f"resume: {error}")
-    operations = [("exit", lambda: key("exit"))]
+    operations = [("exit", exit_input or (lambda: key("exit")))]
     if with_tmux:
         operations.append(("tmux", lambda: subprocess.run(["tmux", "-L", "scramjet-probe", "kill-server"], capture_output=True, timeout=10, check=True)))
-    operations.append(("close", lambda: key("close")))
+    operations.append(("close", close_windows or (lambda: key("close"))))
     for label, operation in operations:
         try:
             operation()
@@ -89,6 +90,48 @@ def cleanup_owned_resources():
                 errors.append(f"{label}: {error}")
     if errors:
         report["cleanupError"] = "; ".join(errors)
+
+
+def shell_exited(pid):
+    try:
+        os.kill(pid, 0)
+        return False
+    except ProcessLookupError:
+        return True
+
+
+def owned_exit():
+    if terminal_process.poll() is None and json.loads(events("frontmost")).get("pid") == terminal_process.pid:
+        key("exit")
+
+
+def close_mac_windows():
+    report["windowCloseRequest"] = json.loads(events("close-windows-pid", str(terminal_process.pid)))
+    if not wait_for(lambda: json.loads(events("windows-pid", str(terminal_process.pid), "--on-screen")) == [], timeout=5):
+        raise RuntimeError("Owned terminal windows did not close")
+    receipt = output / "shell-pid"
+    if receipt.exists() and not wait_for(lambda: shell_exited(int(receipt.read_text())), timeout=10):
+        raise RuntimeError("Owned terminal shell did not exit")
+
+
+def verify_mac_cleanup():
+    if not terminal_process:
+        return
+    try:
+        if terminal_process.poll() is None:
+            terminal_process.kill()
+            terminal_process.wait(timeout=10)
+        if not wait_for(lambda: json.loads(events("windows-pid", str(terminal_process.pid))) == [], timeout=5):
+            raise RuntimeError("Owned terminal window records remain")
+        receipt = output / "shell-pid"
+        if "productionCompositionConfigured" in report["checks"] and not receipt.exists():
+            raise RuntimeError("Owned shell receipt is missing")
+        pid = int(receipt.read_text()) if receipt.exists() else None
+        if pid and not wait_for(lambda: shell_exited(pid), timeout=5):
+            raise RuntimeError("Owned terminal shell remains")
+        report["ownedTerminalClosed"] = {"pid": terminal_process.pid, "shellPid": pid}
+    except Exception as error:
+        report["cleanupError"] = "; ".join(filter(None, [report.get("cleanupError"), str(error)]))
 
 
 def report_passed():
@@ -307,6 +350,7 @@ try:
     launcher.write_text("#!/bin/bash\n" + "\n".join([
         f"rm -f {shlex.quote(str(output / 'exit-code'))} {shlex.quote(str(output / 'stty-after.txt'))}",
         f"stty -g > {shlex.quote(str(output / 'stty-before.txt'))}",
+        f'printf "%s\\n" "$PPID" > {shlex.quote(str(output / "shell-pid"))}',
         "printf 'SCRAMJET NORMAL BUFFER SENTINEL\\n'",
         f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --journey{key_profile}",
         "fixture_status=$?",
@@ -324,10 +368,14 @@ try:
         report["tmuxConfiguration"] = config.read_text()
         tmux_command = f"tmux -L scramjet-probe -f {shlex.quote(str(config))} new-session"
     if is_mac:
+        if json.loads(events("running", bundle)):
+            raise RuntimeError("Refusing to adopt an existing terminal application")
         if terminal_kind == "iterm2":
             run("defaults", "write", bundle, "ReportRightClick", "-bool", "true")
             report["terminalConfiguration"] = {"ReportRightClick": True, "qualification": "Explicitly approved configuration; default-profile right-click opens the native menu"}
-        opener = subprocess.Popen(["open", "-a", "iTerm" if terminal_kind == "iterm2" else "Terminal"])
+        executable = run("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleExecutable", plist)
+        terminal_process = subprocess.Popen([str(Path(plist).parent / "MacOS" / executable)])
+        report["ownedTerminalPid"] = terminal_process.pid
         terminal_started = True
         for _ in range(20):
             time.sleep(1)
@@ -341,9 +389,13 @@ try:
                 pass
         else:
             raise RuntimeError("Owned terminal window and text surface did not become ready")
-        opener.wait(timeout=10)
-        events("activate", bundle)
-        if not wait_for(lambda: json.loads(events("frontmost")).get("bundle", "").lower() == bundle.lower()):
+        if terminal_process.poll() is not None:
+            raise RuntimeError("Owned terminal process exited during startup")
+        roles = {item["role"] for item in json.loads(events("geometry-pid", str(terminal_process.pid)))}
+        if not {"AXWindow", "AXTextArea"} <= roles:
+            raise RuntimeError("Owned process has no usable window")
+        events("activate-pid", str(terminal_process.pid))
+        if not wait_for(lambda: json.loads(events("frontmost")).get("pid") == terminal_process.pid):
             raise RuntimeError("Owned terminal did not acquire focus")
         if terminal_kind == "iterm2":
             report["updatePrompt"] = json.loads(events("press", bundle, "Don't Check"))
@@ -648,7 +700,7 @@ try:
         state_path = output / "committed.json"
         committed_launcher = output / "committed.sh"
         committed_launcher.write_text("#!/bin/bash\n" + "\n".join([
-            f"SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --committed",
+            f"PI_TUI_WRITE_LOG={shlex.quote(str(output / 'committed-ansi.log'))} SCRAMJET_TUI_PROBE_EVIDENCE={shlex.quote(str(state_path))} {shlex.quote(shutil.which('node'))} {shlex.quote(str(root / 'packages/scramjet/tests/fixtures/interactive-viewport.mjs'))} --production --committed --committed-handoffs",
             "fixture_status=$?",
             f'printf "%s\\n" "$fixture_status" > {shlex.quote(str(output / "committed-exit-code"))}',
             "printf 'COMMITTED RESTORED SHELL\\n'",
@@ -658,9 +710,50 @@ try:
         key("enter")
         check("nativeCommittedMode", lambda: state().get("production") is True and state().get("mode") == "committed"
               and state().get("viewport") is None and state().get("sourceRevision") == report["commit"] and state().get("sourceDirty") is False)
+        if not wait_for(lambda: state().get("completed") == 8):
+            raise RuntimeError("Committed batch did not finalize")
+        fixture_command("approval")
+        def committed_context_ready():
+            path = output / "committed-ansi.log"
+            if not path.exists() or state().get("approvalFocused") is not True:
+                return False
+            markers = {int(value) for value in re.findall(r"IMMUTABLE-SYNTHETIC-PAYLOAD-(\d+)\b", path.read_text())}
+            return markers == set(range(60))
+        if not wait_for(committed_context_ready):
+            raise RuntimeError("Committed approval context and controls did not settle")
+        report["committedHandoffs"] = {"contextMarkers": 60}
+        screenshot("committed-approval")
+        key("enter")
+        if not wait_for(lambda: state().get("approved") == 1 and state().get("editorActive") is True and state().get("editor") == "Synthetic editor"):
+            raise RuntimeError("Committed approval did not restore editing")
+        fixture_command("external")
+        if not wait_for(lambda: state().get("editorHandoffs") == 1 and state().get("handoffTermios") == state().get("termiosBefore")
+                        and state().get("editorActive") is True and state().get("editor") == "edited by synthetic external editor"):
+            raise RuntimeError("Committed external editor did not restore terminal state and draft")
+        starts = sum("start" in entry for entry in state()["terminalStates"])
+        fixture_command("suspend")
+        if not wait_for(lambda: "T" in run("ps", "-o", "stat=", "-p", str(state()["pid"]))
+                        and state()["terminalStates"][-1].get("stop") == state().get("termiosBefore")):
+            raise RuntimeError("Committed suspension did not restore the shell")
+        report["committedHandoffs"]["suspended"] = True
+        screenshot("committed-suspended")
+        type_text("fg")
+        key("enter")
+        if not wait_for(lambda: state().get("phase") == "resumed" and state().get("editorActive") is True
+                        and sum("start" in entry for entry in state()["terminalStates"]) > starts):
+            raise RuntimeError("Committed terminal did not restart after fg")
+        report["committedHandoffs"]["resumed"] = True
+        key("x")
+        if not wait_for(lambda: state().get("editor") == "edited by synthetic external editorx"):
+            raise RuntimeError("Committed editing did not survive resume")
+        key("exit")
         check("nativeCommittedBatchCompletes", lambda: state().get("completed") == 8 and state().get("stopped") is True
               and (output / "committed-exit-code").exists() and (output / "committed-exit-code").read_text().strip() == "0")
-        check("nativeCommittedRestoration", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter"))
+        check("nativeCommittedRestoration", lambda: bool(state().get("termiosBefore")) and state().get("termiosBefore") == state().get("termiosAfter")
+              and state().get("approved") == 1 and state().get("editorHandoffs") == 1 and state().get("suspends") == 1
+              and state().get("handoffTermios") == state().get("termiosBefore") and state().get("editor") == "edited by synthetic external editorx"
+              and report.get("committedHandoffs", {}).get("contextMarkers") == 60
+              and report.get("committedHandoffs", {}).get("suspended") is True and report.get("committedHandoffs", {}).get("resumed") is True)
         screenshot("committed-restored")
 except Exception as error:
     report["error"] = str(error)
@@ -668,7 +761,9 @@ except Exception as error:
         report["stderr"] = error.stderr
     screenshot("failure")
 finally:
-    cleanup_owned_resources()
+    cleanup_owned_resources(close_mac_windows if is_mac and terminal_process else None, owned_exit if is_mac and terminal_process else None)
+    if is_mac:
+        verify_mac_cleanup()
     report["passed"] = report_passed()
     (output / "report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))

@@ -46,6 +46,8 @@ Safety mode colors the existing above-editor row and last footer row to calibrat
 cell and dock bounds in screenshot pixels without changing their heights.
 0 exits the safety fixture through the same drain/stop path as Ctrl+Q.
 --production --committed runs a short startup/finalization/exit smoke in committed mode.
+Add --committed-handoffs to keep that smoke alive for approval, external-editor
+and suspend commands through the existing command file, then Ctrl+Q to exit.
 --inspect-screenshot <png> counts synthetic magenta pixels using installed Photon.`;
 if (process.argv.includes("--help")) {
 	console.log(help);
@@ -93,6 +95,7 @@ if (process.argv.includes("--inspect-screenshot")) {
 	console.log(JSON.stringify({ ...magenta, width, height, calibration }));
 	process.exit(0);
 }
+if (process.argv.includes("--committed-handoffs") && (!process.argv.includes("--production") || !process.argv.includes("--committed"))) throw new Error("Committed handoffs require --production --committed");
 if (!process.stdin.isTTY || !process.stdout.isTTY) throw new Error("Run in an interactive terminal; use --help");
 if (process.stdout.columns < 60 || process.stdout.rows < 12) throw new Error("Resize to at least 60 columns and 12 rows");
 
@@ -250,6 +253,7 @@ async function runProduction() {
 	const journey = process.argv.includes("--journey");
 	const interactions = { wheel: 0, thumbDrag: 0, selectionDrag: 0, rightCopy: 0, keyCopy: 0, rightWithoutSelection: 0, copyErrors: 0, pasteMatches: 0, pasteMismatches: 0, focusIn: 0, focusOut: 0, enterPresses: 0 };
 	const committed = process.argv.includes("--committed");
+	const committedHandoffs = process.argv.includes("--committed-handoffs");
 	if (committed && (journey || safety)) throw new Error("Committed smoke is separate from retained native journeys");
 	let copyKind;
 	let copied;
@@ -269,7 +273,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => stripAnsi(line).slice(0, -1).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
@@ -290,11 +294,12 @@ async function runProduction() {
 	const timer = setInterval(() => {
 		record();
 		const path = process.env.SCRAMJET_TUI_PROBE_EVIDENCE && `${process.env.SCRAMJET_TUI_PROBE_EVIDENCE}.command`;
-		if (!journey || !path || !existsSync(path)) return;
+		if ((!journey && !committedHandoffs) || !path || !existsSync(path)) return;
 		const command = JSON.parse(readFileSync(path, "utf8"));
 		if (command.id <= commandId) return;
 		commandId = command.id;
 		sequence = sequence.then(async () => {
+			if (committedHandoffs && !["approval", "external", "suspend"].includes(command.action)) throw new Error("Unsupported committed handoff action");
 			if (command.action === "advance") { completed = Math.min(8, completed + 1); await update(); }
 			else if (command.action === "update") { updates++; await update(); }
 			else if (command.action === "expand") mode.setToolsExpanded(true);
@@ -428,6 +433,8 @@ async function runProduction() {
 			return;
 		}
 		await mode.ui.renderNow({ requireFlush: true });
+		safetyState.safetyAction = key;
+		safetyState.safetyActionReceipt = (safetyState.safetyActionReceipt ?? 0) + 1;
 		record();
 	}
 	try {
@@ -500,8 +507,10 @@ async function runProduction() {
 		if (committed) {
 			completed = 8;
 			await update();
-			await terminal.drainInput();
-			stop();
+			if (!committedHandoffs) {
+				await terminal.drainInput();
+				stop();
+			}
 		}
 		await lifetime;
 	} finally {
