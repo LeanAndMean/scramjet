@@ -96,7 +96,7 @@ def key(name):
 def pixels(name):
     time.sleep(0.5)
     path = output / f"{name}.png"
-    run(*(["screencapture", "-x", str(path)] if mac else ["scrot", str(path)]))
+    run(*(["screencapture", "-x", str(path)] if mac else ["scrot", "--overwrite", str(path)]))
     result = json.loads(run(shutil.which("node"), str(fixture), "--inspect-screenshot", str(path)))
     report.setdefault("pixels", {})[name] = result
     return result["count"]

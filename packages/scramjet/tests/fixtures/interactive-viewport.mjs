@@ -241,7 +241,7 @@ async function runProduction() {
 	const startTerminal = terminal.start.bind(terminal);
 	const stopTerminal = terminal.stop.bind(terminal);
 	terminal.start = (...args) => { terminalStates.push({ start: ttyState() }); startTerminal(...args); };
-	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); };
+	terminal.stop = () => { stopTerminal(); terminalStates.push({ stop: ttyState() }); record(); };
 	const mode = new InteractiveMode(runtime, { terminal });
 	let stopped = false;
 	let finish;

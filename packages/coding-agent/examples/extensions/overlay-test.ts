@@ -49,7 +49,7 @@ class OverlayTestComponent implements Focusable {
 
 	handleInput(data: string): void {
 		// SCRAMJET-DIVERGENCE: retained terminals encode printable input explicitly.
-		data = decodeKittyPrintable(data) ?? data;
+		const printable = decodeKittyPrintable(data) ?? data;
 		if (matchesKey(data, "escape")) {
 			this.done(undefined);
 			return;
@@ -76,8 +76,8 @@ class OverlayTestComponent implements Focusable {
 				current.cursor = Math.max(0, current.cursor - 1);
 			} else if (matchesKey(data, "right")) {
 				current.cursor = Math.min(current.text.length, current.cursor + 1);
-			} else if (data.length === 1 && data.charCodeAt(0) >= 32) {
-				current.text = current.text.slice(0, current.cursor) + data + current.text.slice(current.cursor);
+			} else if (printable.length === 1 && printable.charCodeAt(0) >= 32) {
+				current.text = current.text.slice(0, current.cursor) + printable + current.text.slice(current.cursor);
 				current.cursor++;
 			}
 		}
