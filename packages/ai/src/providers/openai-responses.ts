@@ -71,7 +71,7 @@ function getPromptCacheRetention(
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 }
@@ -206,7 +206,9 @@ export const streamSimpleOpenAIResponses: StreamFunction<"openai-responses", Sim
 
 	const base = buildBaseOptions(model, options, apiKey);
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+	// SCRAMJET-DIVERGENCE: Preserve an explicit supported off mapping without inventing one for omission (#567).
+	const reasoningEffort =
+		clampedReasoning === "off" ? (model.thinkingLevelMap?.off === "none" ? "none" : undefined) : clampedReasoning;
 
 	return streamOpenAIResponses(model, context, {
 		...base,
@@ -305,7 +307,9 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
 			const effort = options?.reasoningEffort
-				? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
+				? options.reasoningEffort === "none"
+					? "none"
+					: (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
 				: "medium";
 			params.reasoning = {
 				effort: effort as NonNullable<typeof params.reasoning>["effort"],

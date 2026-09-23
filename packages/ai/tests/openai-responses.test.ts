@@ -60,6 +60,12 @@ const maiModel = copilotResponsesModel("mai-code-1.1-flash", {
 	xhigh: null,
 	max: null,
 });
+const gpt6SolModel = copilotResponsesModel("gpt-6-sol", {
+	off: "none",
+	minimal: null,
+	xhigh: "xhigh",
+	max: "max",
+});
 const apiKey = "test-key";
 
 const context: Context = {
@@ -1064,6 +1070,13 @@ describe("OpenAI Responses failure normalization", () => {
 });
 
 describe("GitHub Copilot exact Responses model contracts", () => {
+	it("serializes explicit off through the declared none mapping", async () => {
+		const requests = stubFetch([completedResponse()]);
+		await streamSimpleOpenAIResponses(gpt6SolModel, context, { apiKey, reasoning: "off" }).result();
+
+		expect((await requestBody(requests[0])).reasoning).toEqual(expect.objectContaining({ effort: "none" }));
+	});
+
 	it.each([
 		[grok46Model, "xhigh", "xhigh"],
 		[grok46Model, "minimal", "low"],
