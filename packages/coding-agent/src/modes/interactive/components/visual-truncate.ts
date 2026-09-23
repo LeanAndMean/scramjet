@@ -3,7 +3,7 @@
  * Used by both tool-execution.ts and bash-execution.ts for consistent behavior.
  */
 
-import { Text } from "@leanandmean/tui";
+import { getRenderedCopy, setRenderedCopy, Text } from "@leanandmean/tui";
 
 export interface VisualTruncateResult {
 	/** The visual lines to display */
@@ -43,7 +43,10 @@ export function truncateToVisualLines(
 	}
 
 	// Take the last N visual lines
-	const truncatedLines = allVisualLines.slice(-maxVisualLines);
+	const truncatedLines = setRenderedCopy(
+		allVisualLines.slice(-maxVisualLines),
+		getRenderedCopy(allVisualLines).slice(-maxVisualLines),
+	);
 	const skippedCount = allVisualLines.length - maxVisualLines;
 
 	return { visualLines: truncatedLines, skippedCount };

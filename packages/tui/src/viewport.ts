@@ -3,6 +3,7 @@ import { diffArrays } from "diff";
 import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js";
 import { getKeybindings, type KeybindingsManager } from "./keybindings.js";
 import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
+import { getRenderedCopy, hasRenderedCopy, type RenderedCopyRow } from "./render-copy.js";
 import { isImageLine } from "./terminal-image.js";
 import type { Component } from "./tui.js";
 import {
@@ -44,6 +45,9 @@ export interface ViewportState {
 
 interface RenderedBlock extends ViewportBlock {
 	lines: string[];
+	copyRows: readonly RenderedCopyRow[];
+	rawRows: string[];
+	sourceCopy: readonly RenderedCopyRow[] | undefined;
 	complete: boolean;
 	start: number;
 	width: number;
@@ -166,12 +170,14 @@ export class RetainedViewport {
 	private height = 0;
 	private paintedOffset = 0;
 	private paintedHeight = 0;
+	private paintedCopyErrorRow: number | undefined;
 	private totalRows = 0;
 	private followingTail = true;
 	private width = 0;
 	private terminalColumns = 0;
 	private screenHeight = 0;
 	private logical: string[] = [];
+	private logicalCopy: readonly RenderedCopyRow[] = [];
 	private dockHeight = 0;
 	private paintedDockTop = 0;
 	private paintedDockStart = 0;
@@ -179,12 +185,11 @@ export class RetainedViewport {
 	private selectionInDock = false;
 	private visibleComponents = new Set<Component>();
 	private selection: { start: SelectionPoint; end: SelectionPoint } | undefined;
-	private pendingUpdates = false;
 	private copyError: string | undefined;
 	private copying = false;
 	private gesture:
 		| { kind: "thumb"; grab: number; travel: number; maximum: number }
-		| { kind: "selection" }
+		| { kind: "selection"; dragged: boolean; scrolled: boolean }
 		| undefined;
 	private edgeTimer: ReturnType<typeof setInterval> | undefined;
 	private edgeDirection = 0;
@@ -204,10 +209,8 @@ export class RetainedViewport {
 
 	get notice(): string | undefined {
 		if (this.isTooSmall()) return "Resize";
-		if (!this.selection) return this.dockSuspended ? "Dock suspended: insufficient space" : undefined;
 		if (this.copyError) return `Copy failed: ${this.copyError}; selection retained`;
-		if (this.copying) return "Copying selection…";
-		return this.pendingUpdates ? "updates pending; Esc clears" : "Selection held; Esc clears";
+		return this.dockSuspended ? "Dock suspended: insufficient space" : undefined;
 	}
 
 	cancelInteraction(): void {
@@ -215,7 +218,6 @@ export class RetainedViewport {
 		this.selection = undefined;
 		this.copyError = undefined;
 		this.copying = false;
-		this.pendingUpdates = false;
 	}
 
 	private endGesture(): void {
@@ -252,15 +254,20 @@ export class RetainedViewport {
 		const range = this.selectionRange();
 		if (!range) return "";
 		const [start, end] = range;
-		return this.logical
-			.slice(start.row, end.row + 1)
-			.map((line, index) => {
-				if (isImageLine(line)) return "";
-				const left = index === 0 ? start.column : 0;
-				const right = start.row + index === end.row ? end.column : visibleWidth(line);
-				return plainText(sliceByColumn(line, left, Math.max(0, right - left), true));
-			})
-			.join("\n");
+		let result = "";
+		let previous: Exclude<RenderedCopyRow, null> | undefined;
+		for (let index = start.row; index <= end.row; index++) {
+			const line = this.logical[index];
+			const source = this.logicalCopy[index];
+			if (!source || isImageLine(line)) continue;
+			const left = Math.max(source.start, index === start.row ? start.column : 0);
+			const right = Math.min(source.end, index === end.row ? end.column : source.end);
+			if (right < left || (right === left && source.start !== source.end)) continue;
+			if (previous) result += previous.after ?? "\n";
+			result += sliceByColumn(plainText(line), left, right - left, true);
+			previous = source;
+		}
+		return result;
 	}
 
 	private async copySelection(): Promise<void> {
@@ -302,13 +309,32 @@ export class RetainedViewport {
 				const wasThumb = this.gesture?.kind === "thumb";
 				this.endGesture();
 				if (wasThumb) this.scrollTo(this.offset);
-				if (this.selection && !this.selectedText()) this.cancelInteraction();
+				if (
+					this.selection &&
+					this.selection.start.row === this.selection.end.row &&
+					this.selection.start.column === this.selection.end.column
+				)
+					this.cancelInteraction();
 				this.requestRender();
 				return true;
 			}
 			if (x < 1 || x > this.width + 1 || y < 1 || y > this.screenHeight) return true;
+			if (y - 1 === this.paintedCopyErrorRow && button !== 2) {
+				if (button === 0) this.copyError = undefined;
+				this.endGesture();
+				this.requestRender();
+				return true;
+			}
 			if (button === 64 || button === 65) {
 				this.scrollTo(this.offset + (button === 64 ? -1 : 1) * (this.options.getScrollWheelStep?.() ?? 3));
+				if (this.gesture?.kind === "selection" && this.selection && !this.selectionInDock) {
+					this.gesture.scrolled = true;
+					if (this.gesture.dragged) {
+						this.pointerColumn = Math.min(x - 1, this.width);
+						this.edgeDirection = y >= this.height ? 1 : y === 1 ? -1 : 0;
+						this.selection.end = this.point(this.pointerColumn, y - 1, this.offset, this.height);
+					}
+				}
 			} else if (button === 2) {
 				void this.copySelection();
 			} else if (button === 0) {
@@ -332,19 +358,23 @@ export class RetainedViewport {
 					this.selection = { start: point, end: point };
 					this.followingTail = false;
 					this.anchor = this.anchorAt(this.offset, 0);
-					this.height = Math.max(1, this.screenHeight - this.dockHeight - 1);
-					if (!this.selectionInDock && point.row >= this.offset + this.height) this.scrollTo(this.offset + 1);
-					this.gesture = { kind: "selection" };
+					this.gesture = { kind: "selection", dragged: false, scrolled: false };
 				}
 			} else if (button === 32) {
 				if (this.gesture?.kind === "thumb") this.dragThumb(y - 1);
 				else if (this.gesture?.kind === "selection" && this.selection) {
+					this.gesture.dragged = true;
 					this.pointerColumn = Math.min(x - 1, this.width);
-					this.selection.end = this.point(this.pointerColumn, y - 1);
+					this.selection.end = this.point(
+						this.pointerColumn,
+						y - 1,
+						this.gesture.scrolled ? this.offset : this.paintedOffset,
+						this.gesture.scrolled ? this.height : this.paintedHeight,
+					);
 					this.edgeDirection = this.selectionInDock ? 0 : y >= this.height ? 1 : y === 1 ? -1 : 0;
 					if (!this.edgeTimer)
 						this.edgeTimer = setInterval(() => {
-							if (!this.selection || !this.edgeDirection) return;
+							if (!this.selection || !this.edgeDirection || this.gesture?.kind !== "selection") return;
 							const previousOffset = this.offset;
 							this.scrollTo(this.offset + this.edgeDirection);
 							if (this.offset === previousOffset) {
@@ -352,6 +382,7 @@ export class RetainedViewport {
 								this.edgeTimer = undefined;
 								return;
 							}
+							this.gesture.scrolled = true;
 							this.selection.end = this.point(
 								this.pointerColumn,
 								this.edgeDirection > 0 ? this.height - 1 : 0,
@@ -366,7 +397,7 @@ export class RetainedViewport {
 			return true;
 		}
 		if (overlayFocused || isKeyRelease(data) || /^\x1b\[\d+;\d+;\d+t$/.test(data)) return false;
-		if (this.selectedText() && (this.options.keybindings ?? getKeybindings()).matches(data, "tui.input.copy")) {
+		if (this.selection && (this.options.keybindings ?? getKeybindings()).matches(data, "tui.input.copy")) {
 			void this.copySelection();
 			this.requestRender();
 			return true;
@@ -379,6 +410,12 @@ export class RetainedViewport {
 		) {
 			const direction = keybindings.matches(data, "tui.viewport.pageUp") ? -1 : 1;
 			this.scrollTo(this.offset + direction * this.height);
+			this.requestRender();
+			return true;
+		}
+		if (allowNavigation && (matchesKey(data, "ctrl+home") || matchesKey(data, "ctrl+end"))) {
+			this.cancelInteraction();
+			this.scrollTo(matchesKey(data, "ctrl+end") ? this.maxOffset : 0);
 			this.requestRender();
 			return true;
 		}
@@ -401,10 +438,9 @@ export class RetainedViewport {
 			}
 			if (matchesKey(data, "pageUp")) this.scrollTo(this.offset - this.height);
 			else if (matchesKey(data, "pageDown")) this.scrollTo(this.offset + this.height);
-			else if (matchesKey(data, "home")) this.scrollTo(0);
 			else {
 				this.cancelInteraction();
-				const returnToTail = matchesKey(data, "end") || matchesKey(data, "escape");
+				const returnToTail = matchesKey(data, "escape");
 				if (returnToTail || !this.dockHeight || !this.options.keepReadingOnInput?.()) this.scrollTo(this.maxOffset);
 				this.requestRender();
 				return returnToTail;
@@ -450,6 +486,7 @@ export class RetainedViewport {
 	reset(): void {
 		this.cancelInteraction();
 		this.logical = [];
+		this.logicalCopy = [];
 		this.blocks = [];
 		this.visibleComponents.clear();
 		this.dockHeight = 0;
@@ -506,7 +543,7 @@ export class RetainedViewport {
 	}
 
 	get noticeRow(): number {
-		return this.isTooSmall() ? 0 : this.height;
+		return this.isTooSmall() ? 0 : this.copyError ? this.screenHeight - 1 : this.height;
 	}
 
 	update(width: number, height: number, terminalColumns = width + 1): string[] {
@@ -535,20 +572,68 @@ export class RetainedViewport {
 				old.generation === this.generation &&
 				old.revision === block.revision;
 			block.component.setViewportHeight?.(availableHeight);
-			let complete = reusable ? old.complete : true;
-			let lines = reusable
-				? old.lines
-				: block.component.render(width).map((line) => {
-						if (isImageLine(line)) return line;
-						const normalized = normalizeTerminalOutput(line).replaceAll("\t", "   ");
-						if (visibleWidth(normalized) <= width) return normalized;
-						complete = false;
-						return sliceByColumn(normalized, 0, width, true);
-					});
-			if (!reusable && !complete) lines.push(truncateToWidth("Clipped output: component exceeded width", width, ""));
+			const rendered = reusable ? old.rawRows : block.component.render(width);
+			const sourceCopy = reusable
+				? old.sourceCopy
+				: hasRenderedCopy(rendered)
+					? getRenderedCopy(rendered)
+					: undefined;
+			if (
+				reusable ||
+				(old &&
+					old.width === width &&
+					old.height === availableHeight &&
+					sourceCopy === old.sourceCopy &&
+					old.rawRows.length === rendered.length &&
+					old.rawRows.every((line, index) => line === rendered[index]))
+			)
+				return {
+					...block,
+					lines: old.lines,
+					copyRows: old.copyRows,
+					rawRows: old.rawRows,
+					sourceCopy,
+					complete: old.complete,
+					start: 0,
+					width,
+					height: availableHeight,
+					generation: this.generation,
+				};
+			let complete = true;
+			let lines = rendered.map((line) => {
+				if (isImageLine(line)) return line;
+				const normalized = normalizeTerminalOutput(line).replaceAll("\t", "   ");
+				if (visibleWidth(normalized) <= width) return normalized;
+				complete = false;
+				return sliceByColumn(normalized, 0, width, true);
+			});
+			if (!complete) lines.push(truncateToWidth("Clipped output: component exceeded width", width, ""));
+			const copyRows = lines.map((line, index) => {
+				const row = sourceCopy?.[index];
+				const size = visibleWidth(line);
+				if (row === undefined || rendered[index]?.includes("\t")) return { start: 0, end: size };
+				return row === null
+					? null
+					: {
+							start: Math.min(row.start, size),
+							end: Math.min(row.end, size),
+							after: visibleWidth(rendered[index]) > width ? undefined : row.after,
+						};
+			});
 			if (old && lines.length === old.lines.length && lines.every((line, i) => line === old.lines[i]))
 				lines = old.lines;
-			return { ...block, lines, complete, start: 0, width, height: availableHeight, generation: this.generation };
+			return {
+				...block,
+				lines,
+				copyRows,
+				rawRows: [...rendered],
+				sourceCopy,
+				complete,
+				start: 0,
+				width,
+				height: availableHeight,
+				generation: this.generation,
+			};
 		};
 		const firstDock = projected.findIndex((block) => block.dock);
 		if (firstDock !== -1 && projected.slice(firstDock).some((block) => !block.dock))
@@ -566,7 +651,6 @@ export class RetainedViewport {
 		const suspended = proposedDockHeight > 0 && proposedDockHeight + 2 > height;
 		const dockHeight = suspended ? 0 : proposedDockHeight;
 		const renderHeight = Math.max(1, height - dockHeight - (suspended ? 1 : 0));
-		const transcriptHeight = Math.max(1, renderHeight - (this.selection ? 1 : 0));
 		let start = 0;
 		for (const block of projected) {
 			const rendered = block.dock
@@ -578,15 +662,10 @@ export class RetainedViewport {
 			next.set(block.component, rendered);
 			start += rendered.lines.length;
 		}
-		if (this.selection) {
-			const latest = [...next.values()].flatMap((block) => block.lines);
-			this.pendingUpdates =
-				latest.length !== this.logical.length || latest.some((line, i) => line !== this.logical[i]);
-			return this.logical;
-		}
+		if (this.selection) return this.logical;
 		this.dockHeight = dockHeight;
 		this.dockSuspended = suspended;
-		this.height = transcriptHeight;
+		this.height = renderHeight;
 		this.totalRows = start - dockHeight;
 		if (this.gesture?.kind !== "thumb" && !this.followingTail && this.anchor) {
 			const anchor = this.anchor;
@@ -626,6 +705,7 @@ export class RetainedViewport {
 		const lines: string[] = [];
 		for (const block of this.blocks) for (const line of block.lines) lines.push(line);
 		this.logical = lines;
+		this.logicalCopy = this.blocks.flatMap((block) => block.copyRows);
 		return lines;
 	}
 
@@ -674,7 +754,7 @@ export class RetainedViewport {
 				if (row < start.row || row > end.row) continue;
 				const left = row === start.row ? start.column : 0;
 				const right = row === end.row ? end.column : visibleWidth(lines[i]);
-				const selected = plainText(sliceByColumn(lines[i], left, Math.max(0, right - left), true));
+				const selected = sliceByColumn(plainText(lines[i]), left, Math.max(0, right - left), true);
 				lines[i] =
 					`${sliceByColumn(lines[i], 0, left, true)}\x1b[0m\x1b[7m${selected}\x1b[0m${sliceByColumn(lines[i], right, Math.max(0, width - right), true)}`;
 			}
@@ -685,6 +765,7 @@ export class RetainedViewport {
 	markPainted(): void {
 		this.paintedOffset = this.offset;
 		this.paintedHeight = this.height;
+		this.paintedCopyErrorRow = this.copyError ? this.noticeRow : undefined;
 		this.paintedDockTop = this.screenHeight - this.dockHeight;
 		this.paintedDockStart = this.totalRows;
 	}

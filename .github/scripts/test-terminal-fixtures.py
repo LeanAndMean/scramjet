@@ -1,4 +1,5 @@
 import ast
+import base64
 import fcntl
 import json
 import os
@@ -380,6 +381,94 @@ class InteractionCleanupTests(unittest.TestCase):
         self.cleanup()
         self.child.wait.assert_called_once_with(timeout=10)
         self.assertIn("cannot terminate", self.context["report"]["cleanupError"])
+
+
+class WindowsCleanupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        runner = shutil.which("powershell.exe") or shutil.which("pwsh")
+        if not runner:
+            raise unittest.SkipTest("PowerShell is unavailable for the Windows cleanup test doubles")
+        source = (ROOT / ".github/scripts/windows-terminal-probe.ps1").read_text()
+        function = re.search(r"(?ms)^function Cleanup-OwnedResources \{.*?^\}", source)
+        if function:
+            cleanup = function.group()
+        else:
+            start = source.rindex("} finally {") + len("} finally {")
+            end = source.index("    $report.passed =", start)
+            cleanup = "function Cleanup-OwnedResources {" + source[start:end] + "\n}"
+        cleanup = cleanup.replace("[System.Windows.Automation.WindowPattern]::Pattern", "$null")
+        script = r'''
+$ErrorActionPreference = 'Stop'
+Add-Type @'
+using System;
+public static class ProbeDesktop {
+    public struct Point { public int X; public int Y; }
+    public static int X, Y;
+    public static IntPtr Foreground;
+    public static bool WindowExists, PointerFailure, FocusFailure, ReadFailure;
+    public static IntPtr GetForegroundWindow() { return Foreground; }
+    public static bool IsWindow(IntPtr window) { return WindowExists; }
+    public static bool SetForegroundWindow(IntPtr window) { if (FocusFailure) return false; Foreground = window; return true; }
+    public static bool SetCursorPos(int x, int y) { if (PointerFailure) return false; X = x; Y = y; return true; }
+    public static bool GetCursorPos(out Point point) { point = new Point { X = X, Y = Y }; return !ReadFailure; }
+    public static void mouse_event(uint flags, int x, int y, int data, UIntPtr extra) {}
+}
+'@
+function Wait-For([scriptblock]$Predicate) { return [bool](& $Predicate) }
+function Key { if ($failExit) { throw 'synthetic exit failure' } }
+''' + cleanup + r'''
+$results = @()
+foreach ($name in @('success', 'exit', 'pointer', 'focus', 'window', 'read')) {
+    [ProbeDesktop]::X = 90; [ProbeDesktop]::Y = 90
+    [ProbeDesktop]::Foreground = [IntPtr]2
+    [ProbeDesktop]::WindowExists = $true
+    [ProbeDesktop]::PointerFailure = $name -eq 'pointer'
+    [ProbeDesktop]::FocusFailure = $name -eq 'focus'
+    [ProbeDesktop]::ReadFailure = $name -eq 'read'
+    $failExit = $name -eq 'exit'; $leaveOpen = $name -eq 'window'
+    $script:closeCount = 0
+    $pattern = [pscustomobject]@{}
+    $pattern | Add-Member ScriptMethod Close { $script:closeCount++; if (-not $leaveOpen) { [ProbeDesktop]::WindowExists = $false } }
+    $window = [pscustomobject]@{}
+    $window | Add-Member ScriptMethod GetCurrentPattern { return $pattern }
+    $handle = [IntPtr]2; $previousWindow = [IntPtr]1; $heldButtons = 0
+    $previousPointer = New-Object ProbeDesktop+Point
+    $previousPointer.X = 10; $previousPointer.Y = 20
+    $report = [ordered]@{}
+    Cleanup-OwnedResources
+    $results += [pscustomobject]@{ name = $name; closeCount = $closeCount; error = $report.cleanupError; verified = $report.desktopCleanup }
+}
+$results | ConvertTo-Json -Depth 6 -Compress
+'''
+        result = subprocess.run(
+            [runner, "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.b64encode(script.encode("utf-16le")).decode()],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode:
+            raise AssertionError(result.stderr)
+        cls.results = {item["name"]: item for item in json.loads(result.stdout.lstrip("\ufeff"))}
+
+    def test_success_is_verified(self):
+        self.assertIsNone(self.results["success"]["error"])
+        self.assertEqual(self.results["success"]["verified"], {
+            "windowClosed": True, "pointerRestored": True, "focusRestored": True,
+        })
+
+    def test_exit_key_failure_does_not_skip_window_close(self):
+        self.assertEqual(self.results["exit"]["closeCount"], 1)
+        self.assertIn("exit", self.results["exit"]["error"].lower())
+
+    def test_failed_restoration_is_not_certified(self):
+        for name, field in [("pointer", "pointerRestored"), ("focus", "focusRestored"), ("read", "pointerRestored")]:
+            with self.subTest(name=name):
+                self.assertTrue(self.results[name]["error"])
+                self.assertFalse(self.results[name]["verified"][field])
+
+    def test_surviving_window_is_not_certified(self):
+        self.assertEqual(self.results["window"]["closeCount"], 1)
+        self.assertTrue(self.results["window"]["error"])
+        self.assertFalse(self.results["window"]["verified"]["windowClosed"])
 
 
 class TerminalReadinessTests(unittest.TestCase):

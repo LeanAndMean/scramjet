@@ -9,6 +9,7 @@ import { performance } from "node:perf_hooks";
 import { stripVTControlCharacters } from "node:util";
 import { type ImagePlacement, sliceImagePlacements } from "./image-placement.js";
 import { isKeyModifier, isKeyRelease, matchesKey } from "./keys.js";
+import { getRenderedCopy, type RenderedCopyRow, setRenderedCopy } from "./render-copy.js";
 import type { Terminal } from "./terminal.js";
 import { isOsc11Response, OSC_11_QUERY, parseOsc11Response, type TerminalRgb } from "./terminal-colors.js";
 import {
@@ -220,6 +221,7 @@ export interface OverlayHandle {
 export class Container implements Component {
 	children: Component[] = [];
 	private viewportHeight?: number;
+	private copyRenderCache?: string[];
 
 	setViewportHeight(height: number | undefined): void {
 		this.viewportHeight = height;
@@ -227,20 +229,24 @@ export class Container implements Component {
 
 	addChild(component: Component): void {
 		this.children.push(component);
+		this.copyRenderCache = undefined;
 	}
 
 	removeChild(component: Component): void {
 		const index = this.children.indexOf(component);
 		if (index !== -1) {
 			this.children.splice(index, 1);
+			this.copyRenderCache = undefined;
 		}
 	}
 
 	clear(): void {
 		this.children = [];
+		this.copyRenderCache = undefined;
 	}
 
 	invalidate(): void {
+		this.copyRenderCache = undefined;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
@@ -248,14 +254,22 @@ export class Container implements Component {
 
 	render(width: number): string[] {
 		const lines: string[] = [];
+		const copyRows: RenderedCopyRow[] = [];
 		for (const child of this.children) {
 			child.setViewportHeight?.(this.viewportHeight);
 			const childLines = child.render(width);
+			for (const row of getRenderedCopy(childLines)) copyRows.push(row);
 			for (const line of childLines) {
 				lines.push(line);
 			}
 		}
-		return lines;
+		const cached = this.copyRenderCache;
+		const result =
+			cached && cached.length === lines.length && lines.every((line, index) => line === cached[index])
+				? cached
+				: lines;
+		this.copyRenderCache = setRenderedCopy(result, copyRows);
+		return this.copyRenderCache;
 	}
 }
 
@@ -427,6 +441,12 @@ export class TUI extends Container {
 		this.viewportRevealFocus = false;
 		this.viewport?.scrollTo(offset, anchorScreenRow);
 		this.requestRender();
+	}
+
+	followViewport(): void {
+		if (!this.viewport) return;
+		this.viewport.cancelInteraction();
+		this.scrollViewportTo(this.viewport.state.totalRows);
 	}
 
 	refreshViewportLayout(): void {
@@ -1294,7 +1314,7 @@ export class TUI extends Container {
 
 	private renderChildren(children: Component[], width: number): string[] {
 		const lines: string[] = [];
-		for (const child of children) lines.push(...child.render(width));
+		for (const child of children) for (const line of child.render(width)) lines.push(line);
 		return lines;
 	}
 

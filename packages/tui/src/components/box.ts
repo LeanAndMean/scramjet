@@ -1,3 +1,4 @@
+import { getRenderedCopy, hasRenderedCopy, type RenderedCopyRow, setRenderedCopy } from "../render-copy.js";
 import type { Component } from "../tui.js";
 import { applyBackgroundToLine, visibleWidth } from "../utils.js";
 
@@ -6,6 +7,7 @@ type RenderCache = {
 	width: number;
 	bgSample: string | undefined;
 	lines: string[];
+	copyRows: readonly RenderedCopyRow[];
 };
 
 /**
@@ -87,9 +89,14 @@ export class Box implements Component {
 
 		// Render all children
 		const childLines: string[] = [];
+		const copyRows: RenderedCopyRow[] = Array.from({ length: this.paddingY }, () => null);
 		for (const child of this.children) {
 			child.setViewportHeight?.(this.viewportHeight);
 			const lines = child.render(contentWidth);
+			for (const row of getRenderedCopy(lines))
+				copyRows.push(
+					row === null ? null : { ...row, start: row.start + this.paddingX, end: row.end + this.paddingX },
+				);
 			for (const line of lines) {
 				childLines.push(leftPad + line);
 			}
@@ -99,12 +106,20 @@ export class Box implements Component {
 			return [];
 		}
 
+		for (let i = 0; i < this.paddingY; i++) copyRows.push(null);
+
 		// Check if bgFn output changed by sampling
 		const bgSample = this.bgFn ? this.bgFn("test") : undefined;
 
 		// Check cache validity
-		if (this.matchCache(width, childLines, bgSample)) {
-			return this.cache!.lines;
+		if (
+			this.matchCache(width, childLines, bgSample) &&
+			hasRenderedCopy(this.cache!.lines) &&
+			getRenderedCopy(this.cache!.lines) === this.cache!.copyRows
+		) {
+			const result = setRenderedCopy(this.cache!.lines, copyRows);
+			this.cache!.copyRows = getRenderedCopy(result);
+			return result;
 		}
 
 		// Apply background and padding
@@ -126,7 +141,8 @@ export class Box implements Component {
 		}
 
 		// Update cache
-		this.cache = { childLines, width, bgSample, lines: result };
+		setRenderedCopy(result, copyRows);
+		this.cache = { childLines, width, bgSample, lines: result, copyRows: getRenderedCopy(result) };
 
 		return result;
 	}

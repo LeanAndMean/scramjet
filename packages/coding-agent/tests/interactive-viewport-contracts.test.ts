@@ -81,6 +81,154 @@ describe("retained interactive contracts", () => {
 		expect(h.internals.ui.getViewportState()!.followingTail).toBe(false);
 	});
 
+	it.each([0, 40, Number.MAX_SAFE_INTEGER])(
+		"keeps Home/End in the editor and Ctrl+Home/End in the transcript from offset %s",
+		async (offset) => {
+			const h = await setup();
+			await history(h);
+			h.extensionUI.setEditorText("abcd");
+			h.internals.ui.scrollViewportTo(offset);
+			await h.frame();
+			const before = h.internals.ui.getViewportState();
+			h.terminal.sendInput("\x1b[H");
+			h.terminal.sendInput("X");
+			h.terminal.sendInput("\x1b[F");
+			h.terminal.sendInput("Y");
+			await h.frame();
+			expect.soft(h.extensionUI.getEditorText()).toBe("XabcdY");
+			expect.soft(h.internals.ui.getViewportState()).toEqual(before);
+			h.terminal.sendInput("\x1b[1;5H");
+			await h.frame();
+			expect.soft(h.internals.ui.getViewportState()).toMatchObject({ offset: 0, followingTail: false });
+			h.terminal.sendInput("\x1b[1;5F");
+			await h.frame();
+			expect.soft(h.internals.ui.getViewportState()?.followingTail).toBe(true);
+			expect.soft(h.extensionUI.getEditorText()).toBe("XabcdY");
+
+			const input = vi.fn();
+			const overlay = h.internals.ui.showOverlay({ render: () => ["MENU"], invalidate() {}, handleInput: input });
+			await h.frame();
+			const overlayPosition = h.internals.ui.getViewportState();
+			for (const key of ["\x1b[H", "\x1b[F", "\x1b[1;5H", "\x1b[1;5F"]) h.terminal.sendInput(key);
+			expect(input).toHaveBeenCalledTimes(4);
+			expect(h.internals.ui.getViewportState()).toEqual(overlayPosition);
+			overlay.hide();
+		},
+	);
+
+	it.each([true, false])(
+		"selects the bottom painted row without changing layout when docked=%s",
+		async (dockEditor) => {
+			const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+			const h = await setup(24, settings({ dockEditor }));
+			await history(h);
+			h.internals.ui.scrollViewportTo(40);
+			const before = await h.frame();
+			const state = h.internals.ui.getViewportState()!;
+			h.terminal.sendInput(mouse(0, 1, state.height));
+			h.terminal.sendInput(mouse(32, 9, state.height));
+			h.terminal.sendInput(`\x1b[<0;9;${state.height}m`);
+			expect.soft(await h.frame()).toEqual(before);
+			expect.soft(h.internals.ui.getViewportState()).toEqual(state);
+			h.terminal.sendInput("\x03");
+			await h.frame();
+			expect(copy).toHaveBeenCalledExactlyOnceWith(before[state.height - 1].slice(0, 8));
+			expect(await h.frame()).toEqual(before);
+		},
+	);
+
+	it("reattaches to the tail for a new user message but not passive output", async () => {
+		const h = await setup();
+		await history(h);
+		h.internals.ui.scrollViewportTo(20);
+		await h.frame();
+		for (const event of [mouse(0, 1, 2), mouse(32, 8, 2), "\x1b[<0;8;2m"]) h.terminal.sendInput(event);
+		await h.frame();
+		expect(h.terminal.cell(1, 1).inverse).toBe(true);
+		await h.emit({ type: "message_start", message: { role: "user", content: "new request", timestamp: 0 } });
+		expect((await h.frame()).join("\n")).toContain("new request");
+		expect(h.internals.ui.isComponentRenderComplete(h.internals.committedChatContainer.children.at(-1)!)).toBe(true);
+		expect.soft(h.internals.ui.getViewportState()?.followingTail).toBe(true);
+		await h.emit({ type: "tool_execution_start", toolCallId: "progress", toolName: "unknown", args: {} });
+		await h.frame();
+		expect.soft(h.internals.ui.getViewportState()?.followingTail).toBe(true);
+		h.internals.ui.scrollViewportTo(20);
+		await h.frame();
+		await h.emit({
+			type: "tool_execution_update",
+			toolCallId: "progress",
+			toolName: "unknown",
+			args: {},
+			partialResult: { content: [{ type: "text", text: "more progress" }] },
+		});
+		await h.frame();
+		expect(h.internals.ui.getViewportState()).toMatchObject({ offset: 20, followingTail: false });
+	});
+
+	it("copies wrapped finalized assistant prose and code through its OSC wrapper", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+		const h = await setup(24, settings(), 34);
+		const text = `ASSISTANT-COPY ${"alpha beta gamma ".repeat(5).trimEnd()}\n\n\`\`\`ts\n    const x = 1;\n\`\`\``;
+		const message: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "synthetic",
+			stopReason: "stop",
+			timestamp: 0,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+		};
+		await h.emit({ type: "message_start", message });
+		await h.emit({ type: "message_end", message });
+		await h.frame();
+		const frame = await h.frame();
+		const start = frame.findIndex((line) => line.includes("ASSISTANT-COPY"));
+		const end = frame.findLastIndex((line) => line.slice(0, 33).trim() === "```");
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(end).toBeGreaterThan(start);
+		for (const event of [mouse(0, 1, start + 1), mouse(32, 34, end + 1), `\x1b[<0;34;${end + 1}m`, "\x03"])
+			h.terminal.sendInput(event);
+		await h.frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith(text);
+	});
+
+	it("copies a collapsed bash excerpt without padding, wrap breaks or its hidden prefix", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+		const h = await setup(24, settings(), 34);
+		h.internals.setToolsExpanded(false);
+		const visible = `  VISIBLE-${"abcdefghij".repeat(8)}\n    LAST`;
+		await h.emit({
+			type: "tool_execution_start",
+			toolCallId: "copy-bash",
+			toolName: "bash",
+			args: { command: "synthetic" },
+		});
+		await h.emit({
+			type: "tool_execution_end",
+			toolCallId: "copy-bash",
+			isError: false,
+			result: { content: [{ type: "text", text: `${Array(10).fill("HIDDEN-PREFIX").join("\n")}\n${visible}` }] },
+		});
+		const frame = await h.frame();
+		expect(frame.join("\n")).not.toContain("HIDDEN-PREFIX");
+		const start = frame.findIndex((line) => line.includes("VISIBLE-")) - 1;
+		const end = frame.findIndex((line) => line.includes("LAST"));
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(end).toBeGreaterThan(start);
+		for (const event of [mouse(0, 1, start + 1), mouse(32, 34, end + 1), `\x1b[<0;34;${end + 1}m`, "\x03"])
+			h.terminal.sendInput(event);
+		await h.frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith(visible);
+	});
+
 	it("keeps a transcript selection from crossing into the dock", async () => {
 		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
 		const h = await setup();
@@ -101,7 +249,7 @@ describe("retained interactive contracts", () => {
 		expect(text).toBe(
 			frame
 				.slice(0, height)
-				.map((line, index) => line.slice(0, index === height - 1 ? 19 : h.terminal.columns - 1))
+				.map((line, index) => line.slice(0, index === height - 1 ? 19 : h.terminal.columns - 1).trimEnd())
 				.join("\n"),
 		);
 		expect(text).not.toContain("DRAFT");
@@ -160,6 +308,29 @@ describe("retained interactive contracts", () => {
 		},
 	);
 
+	it("keeps a held dock selection unchanged when the wheel moves the transcript", async () => {
+		const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue();
+		const h = await setup();
+		await history(h);
+		h.extensionUI.setWidget("above", () => new Text("DOCK-A", 0, 0));
+		h.internals.ui.scrollViewportTo(10);
+		const initial = await h.frame();
+		const row = initial.findIndex((line) => line.trimEnd() === "DOCK-A");
+		expect(row).toBeGreaterThan(0);
+		h.terminal.sendInput(mouse(0, 1, row + 1));
+		h.terminal.sendInput(mouse(32, 7, row + 1));
+		for (let i = 0; i < 8; i++) h.terminal.sendInput(mouse(65, 7, row + 1));
+		await h.frame();
+		expect(h.internals.ui.getViewportState()?.offset).toBe(34);
+		expect(Array.from({ length: 6 }, (_, column) => h.terminal.cell(row, column).inverse)).toEqual(
+			Array(6).fill(true),
+		);
+		h.terminal.sendInput(`\x1b[<0;7;${row + 1}m`);
+		h.terminal.sendInput(mouse(2, 7, row + 1));
+		await h.frame();
+		expect(copy).toHaveBeenCalledExactlyOnceWith("DOCK-A");
+	});
+
 	it.each(["transcript", "dock"])(
 		"holds both regions through passive geometry changes during %s selection",
 		async (origin) => {
@@ -181,24 +352,24 @@ describe("retained interactive contracts", () => {
 			h.terminal.sendInput(mouse(32, expected.length + 1, selectedRow + 1));
 			h.terminal.sendInput(`\x1b[<0;${expected.length + 1};${selectedRow + 1}m`);
 			const selected = await h.frame();
-			expect(h.internals.ui.getViewportState()!.height).toBe(16);
-			expect(selected[16]).toContain("Selection held");
+			expect(h.internals.ui.getViewportState()!.height).toBe(17);
+			expect(selected).toEqual(initial);
 			const inverse = () =>
 				Array.from({ length: 24 }, (_, row) =>
 					Array.from({ length: 59 }, (_, column) => h.terminal.cell(row, column).inverse),
 				);
 			const heldInverse = inverse();
 			expect(heldInverse[selectedRow].slice(0, expected.length)).toEqual(Array(expected.length).fill(true));
-			const withoutNotice = <T>(rows: T[]) => rows.filter((_, row) => row !== 16);
-			const assertHeld = async () => {
+			const assertHeld = async (copyFailed = false) => {
 				const frame = await h.frame();
-				expect(withoutNotice(frame)).toEqual(withoutNotice(selected));
-				expect(withoutNotice(inverse())).toEqual(withoutNotice(heldInverse));
-				expect(h.internals.ui.getViewportState()).toMatchObject({ offset: 0, height: 16, followingTail: false });
+				const visibleRows = copyFailed ? 23 : 24;
+				expect(frame.slice(0, visibleRows)).toEqual(selected.slice(0, visibleRows));
+				expect(inverse().slice(0, visibleRows)).toEqual(heldInverse.slice(0, visibleRows));
+				expect(h.internals.ui.getViewportState()).toMatchObject({ offset: 0, height: 17, followingTail: false });
 				return frame;
 			};
 			h.extensionUI.setWidget("above", () => new Text("GROW-1\nGROW-2\nGROW-3", 0, 0));
-			expect((await assertHeld())[16]).toContain("updates pending");
+			await assertHeld();
 			h.extensionUI.setFooter(() => new Text("FOOTER-B\nFOOTER-C", 0, 0));
 			await assertHeld();
 			h.extensionUI.setWidget("above", () => new Text(Array(40).fill("OVERSIZED").join("\n"), 0, 0));
@@ -209,8 +380,8 @@ describe("retained interactive contracts", () => {
 			if (origin === "dock") {
 				copy.mockRejectedValueOnce(new Error("synthetic clipboard failure"));
 				h.terminal.sendInput("\x03");
-				await vi.waitFor(async () => expect((await h.frame())[16]).toContain("Copy failed"));
-				await assertHeld();
+				await vi.waitFor(async () => expect((await h.frame())[23]).toContain("Copy failed"));
+				await assertHeld(true);
 				expect(copy).toHaveBeenCalledExactlyOnceWith(expected);
 			}
 			h.terminal.sendInput("\x03");

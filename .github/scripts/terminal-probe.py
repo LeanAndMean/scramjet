@@ -276,7 +276,7 @@ def check_focus_loss(cell, columns):
         mouse("up", *cell(columns, 1))
         mouse("down", *cell(1, 3))
         mouse("drag", *cell(20, state()["height"]))
-        check("nativeFocusDragActive", lambda: state()["offset"] > 0 and state().get("notice") is not None)
+        check("nativeFocusDragActive", lambda: state()["offset"] > 0 and state().get("selectionActive") is True)
         if is_mac:
             events("activate", "com.apple.finder")
         else:
@@ -288,7 +288,7 @@ def check_focus_loss(cell, columns):
             run("xdotool", "windowactivate", "--sync", other)
         check("nativeFocusOutReceived", lambda: state()["focusOut"] > before_out)
         offset = state()["offset"]
-        stable_check("focusLossStopsSelectionScroll", lambda: state()["offset"] == offset and state().get("notice") is None and not state()["followingTail"])
+        stable_check("focusLossStopsSelectionScroll", lambda: state()["offset"] == offset and not state().get("selectionActive") and not state()["followingTail"])
     finally:
         try:
             if is_mac:
@@ -605,17 +605,18 @@ try:
     mouse("drag", *cell(60, selection_edge))
     time.sleep(0.5)
     mouse("up", *cell(60, selection_edge))
-    check("selectionAutoscrolls", lambda: state()["offset"] > 0 and state().get("notice") is not None)
+    check("selectionAutoscrolls", lambda: state()["offset"] > 0 and state().get("selectionActive") is True)
     last_selected = state()["painted"][state()["height"] - 1]
     if not last_selected.startswith("ROW-"):
         raise RuntimeError(f"Selection escaped synthetic history: {last_selected}")
     last_number = int(last_selected[4:7])
     expected_multiline = "\n".join(f"ROW-{i:03d} synthetic café 界 e\u0301 text" for i in range(2, last_number + 1))
+    held_frame = state()
     fixture_command("update")
-    check("selectionHoldsDuringUpdates", lambda: state()["notice"] == "updates pending; Esc clears")
+    check("selectionHoldsDuringUpdates", lambda: state().get("selectionActive") and state()["updates"] > held_frame["updates"] and state()["painted"] == held_frame["painted"])
     screenshot("selection-across-scroll")
     key("copy")
-    check("scrolledSelectionClipboardExact", lambda: clipboard() == expected_multiline and state().get("notice") is None)
+    check("scrolledSelectionClipboardExact", lambda: clipboard() == expected_multiline and not state().get("selectionActive"))
 
     def browse_cards(count):
         seen = set()

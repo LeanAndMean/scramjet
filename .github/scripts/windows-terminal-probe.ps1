@@ -15,6 +15,7 @@ public static class ProbeDesktop {
     [StructLayout(LayoutKind.Sequential)] public struct Point { public int X; public int Y; }
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr window, int x, int y, int width, int height, bool repaint);
@@ -27,7 +28,7 @@ public static class ProbeDesktop {
 [void][ProbeDesktop]::SetProcessDPIAware()
 $previousWindow = [ProbeDesktop]::GetForegroundWindow()
 $previousPointer = New-Object ProbeDesktop+Point
-[void][ProbeDesktop]::GetCursorPos([ref]$previousPointer)
+if ($previousWindow -eq [IntPtr]::Zero -or -not [ProbeDesktop]::GetCursorPos([ref]$previousPointer)) { throw 'Cannot capture desktop state for later restoration.' }
 $title = "ScramjetProbe-$PID"
 $window = $null
 $handle = [IntPtr]::Zero
@@ -49,7 +50,11 @@ $requiredChecks = @(
     'defaultDockKeepsInputVisible', 'dockedTypingPreservesReading', 'keyboardOnlyBrowsingFromTail',
     'keyboardBrowsingReturnsToTail', 'nativePresentationTogglePreservesReading', 'settingsUndocksLive',
     'settingsRedocksLive', 'settingsWheelChangeApplies', 'configuredWheelDistance',
-    'settingsEditorHeightChangeApplies', 'nativeInputHeightCeiling'
+    'settingsEditorHeightChangeApplies', 'nativeInputHeightCeiling',
+    'heldWheelDownCopiesExact', 'heldWheelUpCopiesExact', 'heldWheelReversalCopiesExact',
+    'mixedWheelDownCopiesExact', 'mixedWheelUpCopiesExact', 'mixedWheelReversalCopiesExact',
+    'editorHomeEndStable', 'transcriptControlHomeEnd', 'selectionKeepsLayout',
+    'newUserMessageFollowsTail', 'copyOmitsPaddingAndSoftWraps'
 )
 $report.sourceRevision = $SourceRevision
 $report.viewportKeys = 'Alt+PageUp/Alt+PageDown'
@@ -110,7 +115,7 @@ function Key([byte]$Code, [byte[]]$Modifiers = @(), [switch]$Extended) {
     }
     Start-Sleep -Milliseconds 150
 }
-function Mouse([uint32]$Flags, [double]$X, [double]$Y, [int]$Data = 0) {
+function Mouse([uint32]$Flags, [double]$X, [double]$Y, [int]$Data = 0, [int]$PauseMilliseconds = 150) {
     Assert-Focus
     $normalizedX = [int](($X - [ProbeDesktop]::GetSystemMetrics(76)) * 65535 / ([ProbeDesktop]::GetSystemMetrics(78) - 1))
     $normalizedY = [int](($Y - [ProbeDesktop]::GetSystemMetrics(77)) * 65535 / ([ProbeDesktop]::GetSystemMetrics(79) - 1))
@@ -119,7 +124,7 @@ function Mouse([uint32]$Flags, [double]$X, [double]$Y, [int]$Data = 0) {
     if ($Flags -band 8) { $script:heldButtons = $script:heldButtons -bor 16 }
     if ($Flags -band 4) { $script:heldButtons = $script:heldButtons -band (-bnot 4) }
     if ($Flags -band 16) { $script:heldButtons = $script:heldButtons -band (-bnot 16) }
-    Start-Sleep -Milliseconds 150
+    if ($PauseMilliseconds -gt 0) { Start-Sleep -Milliseconds $PauseMilliseconds }
 }
 function Cell([int]$Column, [int]$Row) {
     return @(($first[0] + ($Column - 0.5) * $cellWidth), ($first[1] + ($Row - 0.5) * $first[3]))
@@ -130,6 +135,82 @@ function Drag($Start, $End) {
         Mouse 1 ($Start[0] + ($End[0] - $Start[0]) * $step / 8) ($Start[1] + ($End[1] - $Start[1]) * $step / 8)
     }
     Mouse 4 $End[0] $End[1]
+}
+function Stationary-Wheel([int]$Delta, [int]$PauseMilliseconds = 150) {
+    Assert-Focus
+    [ProbeDesktop]::mouse_event(2048, 0, 0, $Delta, [UIntPtr]::Zero)
+    if ($PauseMilliseconds -gt 0) { Start-Sleep -Milliseconds $PauseMilliseconds }
+}
+function Check-HeldWheelSelections([string]$Suffix) {
+    foreach ($scenario in @(
+        @{ name = 'heldWheelDownCopiesExact'; steps = @(1,1,1,1,1,1,1,1) },
+        @{ name = 'heldWheelUpCopiesExact'; steps = @(-1,-1,-1,-1,-1,-1,-1,-1) },
+        @{ name = 'heldWheelReversalCopiesExact'; steps = @(1,1,1,1,-1,-1,-1,-1,-1,-1) },
+        @{ name = 'mixedWheelDownCopiesExact'; steps = @(1,1,1,1,1,1,1,1); mixed = $true; wheelFirst = $false },
+        @{ name = 'mixedWheelUpCopiesExact'; steps = @(-1,-1,-1,-1,-1,-1,-1,-1); mixed = $true; wheelFirst = $true },
+        @{ name = 'mixedWheelReversalCopiesExact'; steps = @(1,1,1,1,-1,-1,-1,-1,-1,-1); mixed = $true; wheelFirst = $true }
+    )) {
+        $point = Cell $columns 1
+        Mouse 2 $point[0] $point[1]
+        Mouse 4 $point[0] $point[1]
+        $point = Cell 4 3
+        Mouse 1 $point[0] $point[1]
+        $beforeReading = State
+        for ($i = 0; $i -lt 12; $i++) { Stationary-Wheel -120 }
+        if (-not (Wait-For { (State).wheel -eq ($beforeReading.wheel + 12) -and (State).frameFlushed -eq $true -and (State).offset -gt 0 })) { throw 'Held-wheel starting frame did not flush' }
+        $origin = State
+        if ($origin.painted[2] -notmatch '^ROW-(\d{3}) ') { throw 'Held-wheel selection must begin in synthetic history' }
+        $startNumber = [int]$Matches[1]
+        Mouse 2 $point[0] $point[1]
+        $point = Cell 5 3
+        Mouse 1 $point[0] $point[1]
+        if (-not (Wait-For { (State).selectionDrag -gt $origin.selectionDrag -and (State).frameFlushed -eq $true })) { throw 'Initial selection drag did not settle' }
+        $drag = State
+        $delta = ($scenario.steps | Measure-Object -Sum).Sum * $drag.wheelStep
+        for ($index = 0; $index -lt $scenario.steps.Count; $index++) {
+            $step = $scenario.steps[$index]
+            if ($scenario.mixed) {
+                $point = Cell (5 + $index % 4) (2 + $index % 3)
+                if ($scenario.wheelFirst) {
+                    Stationary-Wheel (-120 * $step) 0
+                    Mouse 1 $point[0] $point[1]
+                } else {
+                    Mouse 1 $point[0] $point[1] 0 0
+                    Stationary-Wheel (-120 * $step)
+                }
+            } else { Stationary-Wheel (-120 * $step) }
+        }
+        if (-not (Wait-For { (State).wheel -eq ($drag.wheel + $scenario.steps.Count) -and (State).offset -eq ($drag.offset + $delta) -and (State).frameFlushed -eq $true })) { throw 'Held wheel did not reach its expected position' }
+        if ($scenario.mixed) {
+            if ((State).selectionDrag -le $drag.selectionDrag) { throw 'Mixed-input selection received no drag motion' }
+        } elseif ((State).selectionDrag -ne $drag.selectionDrag) { throw 'Pointer motion contaminated the stationary-wheel interval' }
+        Screenshot "$($scenario.name)-held"
+        if ($scenario.mixed) {
+            $point = Cell 7 4
+            Mouse 1 $point[0] $point[1] 0 0
+        }
+        Mouse 4 $point[0] $point[1]
+        if (-not (Wait-For { (State).lastMouse.action -ceq 'm' -and (State).frameFlushed -eq $true })) { throw 'Selection release did not settle' }
+        Screenshot "$($scenario.name)-released"
+        $released = State
+        for ($i = 0; $i -lt 4; $i++) { Stationary-Wheel -120 }
+        if (-not (Wait-For { (State).offset -eq ($released.offset + 4 * $drag.wheelStep) -and (State).frameFlushed -eq $true })) { throw 'Released-selection wheel did not settle' }
+        Screenshot "$($scenario.name)-released-scroll"
+        $endNumber = $startNumber + $delta + $(if ($scenario.mixed) { 1 } else { 0 })
+        $endColumn = if ($scenario.mixed) { 6 } else { 4 }
+        $firstNumber = [Math]::Min($startNumber, $endNumber)
+        $lastNumber = [Math]::Max($startNumber, $endNumber)
+        $firstColumn = if ($endNumber -gt $startNumber) { 3 } else { $endColumn }
+        $lastColumn = if ($endNumber -gt $startNumber) { $endColumn } else { 3 }
+        $parts = @((('ROW-' + $firstNumber.ToString('000') + $Suffix).Substring($firstColumn)))
+        for ($i = $firstNumber + 1; $i -lt $lastNumber; $i++) { $parts += 'ROW-' + $i.ToString('000') + $Suffix }
+        $parts += ('ROW-' + $lastNumber.ToString('000') + $Suffix).Substring(0, $lastColumn)
+        $expectedSelection = $parts -join "`n"
+        [System.Windows.Forms.Clipboard]::SetText('SCRAMJET-PROBE-SENTINEL')
+        Mouse 8 $point[0] $point[1]
+        Mouse 16 $point[0] $point[1]
+        [void](Check $scenario.name { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expectedSelection, [StringComparison]::Ordinal) -and -not (State).selectionActive })
+    }
 }
 function Open-Settings([string]$Query) {
     Fixture-Command 'editor'
@@ -154,6 +235,38 @@ function Screenshot([string]$Name) {
         $graphics.CopyFromScreen(([int]$rect.X + 12), ([int]$rect.Y + 12), 0, 0, $bitmap.Size)
         $bitmap.Save((Join-Path $OutputDirectory "$Name.png"))
     } finally { $graphics.Dispose(); $bitmap.Dispose() }
+}
+function Cleanup-OwnedResources {
+    $errors = New-Object 'System.Collections.Generic.List[string]'
+    $cleanup = [ordered]@{ windowClosed = ($null -eq $window); pointerRestored = $false; focusRestored = $false }
+    try {
+        if ($heldButtons) { [ProbeDesktop]::mouse_event($heldButtons, 0, 0, 0, [UIntPtr]::Zero) }
+    } catch { $errors.Add("Mouse release: $($_.Exception.Message)") }
+    if ($null -ne $window) {
+        try {
+            if ([ProbeDesktop]::GetForegroundWindow() -eq $handle) { Key 81 @(17) }
+        } catch { $errors.Add("Exit key: $($_.Exception.Message)") }
+        try {
+            $window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
+        } catch { $errors.Add("Window close: $($_.Exception.Message)") }
+        try {
+            $cleanup.windowClosed = Wait-For { -not [ProbeDesktop]::IsWindow($handle) }
+            if (-not $cleanup.windowClosed) { $errors.Add('Owned terminal window remains open') }
+        } catch { $errors.Add("Window verification: $($_.Exception.Message)") }
+    }
+    try {
+        if (-not [ProbeDesktop]::SetCursorPos($previousPointer.X, $previousPointer.Y)) { $errors.Add('Pointer restoration request failed') }
+        $actualPointer = New-Object ProbeDesktop+Point
+        $cleanup.pointerRestored = [ProbeDesktop]::GetCursorPos([ref]$actualPointer) -and $actualPointer.X -eq $previousPointer.X -and $actualPointer.Y -eq $previousPointer.Y
+        if (-not $cleanup.pointerRestored) { $errors.Add('Pointer restoration was not verified') }
+    } catch { $errors.Add("Pointer restoration: $($_.Exception.Message)") }
+    try {
+        [void][ProbeDesktop]::SetForegroundWindow($previousWindow)
+        $cleanup.focusRestored = Wait-For { [ProbeDesktop]::GetForegroundWindow() -eq $previousWindow }
+        if (-not $cleanup.focusRestored) { $errors.Add('Foreground restoration was not verified') }
+    } catch { $errors.Add("Foreground restoration: $($_.Exception.Message)") }
+    $report.desktopCleanup = $cleanup
+    if ($errors.Count) { $report.cleanupError = $errors -join '; ' }
 }
 try {
     $report.os = [Environment]::OSVersion.VersionString
@@ -228,9 +341,25 @@ try {
     [void](Check 'controlCCopiesSelection' { (State).keyCopy -gt 0 -and [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expected, [StringComparison]::Ordinal) })
     Key 86 @(17, 16)
     [void](Check 'desktopPasteRoundTrip' { (State).pasteMatches -gt 0 })
+    Check-HeldWheelSelections $expected.Substring(7)
     Fixture-Command 'editor'
     foreach ($code in @(65, 66, 67, 37, 8)) { Key $code }
     [void](Check 'keyboardEditingCoexists' { (State).editor -ceq 'ac' })
+    $beforeEditing = State
+    Key 36 @() -Extended
+    Key 88
+    Key 35 @() -Extended
+    Key 89
+    [void](Check 'editorHomeEndStable' { (State).editor -ceq 'xacy' -and (State).offset -eq $beforeEditing.offset })
+    Key 36 @(17) -Extended
+    if (-not (Wait-For { (State).offset -eq 0 -and (State).followingTail -eq $false -and (State).frameFlushed -eq $true })) { throw 'Ctrl+Home did not reach the transcript beginning' }
+    Key 35 @(17) -Extended
+    [void](Check 'transcriptControlHomeEnd' { (State).followingTail -eq $true -and (State).offset -eq ((State).totalRows - (State).height) })
+    Key 36 @(17) -Extended
+    $beforeSelection = State
+    Drag (Cell 1 3) (Cell 60 3)
+    [void](Check 'selectionKeepsLayout' { (State).selectionActive -and (State).height -eq $beforeSelection.height -and (State).offset -eq $beforeSelection.offset -and ((State).painted -join "`n") -ceq ($beforeSelection.painted -join "`n") })
+    Key 67 @(17)
     Screenshot 'keyboard'
     Fixture-Command 'editor'
     $point = Cell $columns 1
@@ -293,17 +422,18 @@ try {
     Mouse 1 $point[0] $point[1]
     Start-Sleep -Milliseconds 500
     Mouse 4 $point[0] $point[1]
-    [void](Check 'selectionAutoscrolls' { (State).offset -gt 0 -and (State).notice })
+    [void](Check 'selectionAutoscrolls' { (State).offset -gt 0 -and (State).selectionActive })
     $lastSelected = (State).painted[(State).height - 1]
     if (-not $lastSelected.StartsWith('ROW-')) { throw 'Selection escaped synthetic history' }
     $lastNumber = [int]$lastSelected.Substring(4, 3)
     $suffix = $expected.Substring(7)
     $expectedMultiline = ((2..$lastNumber | ForEach-Object { 'ROW-' + $_.ToString('000') + $suffix }) -join "`n")
+    $heldFrame = State
     Fixture-Command 'update'
-    [void](Check 'selectionHoldsDuringUpdates' { (State).notice -ceq 'updates pending; Esc clears' })
+    [void](Check 'selectionHoldsDuringUpdates' { (State).selectionActive -and (State).updates -gt $heldFrame.updates -and ((State).painted -join "`n") -ceq ($heldFrame.painted -join "`n") })
     Screenshot 'selection-across-scroll'
     Key 67 @(17)
-    [void](Check 'scrolledSelectionClipboardExact' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expectedMultiline, [StringComparison]::Ordinal) -and -not (State).notice })
+    [void](Check 'scrolledSelectionClipboardExact' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $expectedMultiline, [StringComparison]::Ordinal) -and -not (State).selectionActive })
     function Browse-Cards([int]$Count) {
         $seen = New-Object 'System.Collections.Generic.HashSet[int]'
         $point = Cell $columns (State).height
@@ -377,6 +507,19 @@ try {
     Key 71
     Key 13
     [void](Check 'jobControlResumed' { (State).phase -eq 'resumed' })
+    Key 36 @(17) -Extended
+    Fixture-Command 'copy-prose'
+    [void](Check 'newUserMessageFollowsTail' { (State).followingTail -eq $true -and @((State).painted | Where-Object { $_.Contains('COPY-PROSE') }).Count -eq 1 })
+    $copyFrame = State
+    $startRow = @(0..($copyFrame.painted.Count - 1) | Where-Object { $copyFrame.painted[$_].Contains('COPY-PROSE') })[0]
+    $endRow = @(0..($copyFrame.painted.Count - 1) | Where-Object { $copyFrame.painted[$_].Trim() -ceq '```' })[-1]
+    if ($null -eq $startRow -or $null -eq $endRow -or $endRow -le $startRow) { throw 'Copy prose and code were not fully visible' }
+    [System.Windows.Forms.Clipboard]::SetText('SCRAMJET-PROBE-SENTINEL')
+    Drag (Cell 1 ($startRow + 1)) (Cell ($columns - 1) ($endRow + 1))
+    Key 67 @(17)
+    $copyExpected = ('COPY-PROSE ' + ('alpha beta gamma ' * 18)).TrimEnd() + "`n`n" + '```ts' + "`n    const value = 1;`n" + '```'
+    [void](Check 'copyOmitsPaddingAndSoftWraps' { [String]::Equals([System.Windows.Forms.Clipboard]::GetText(), $copyExpected, [StringComparison]::Ordinal) -and -not (State).selectionActive })
+    Screenshot 'copy-prose'
     Key 81 @(17)
     [void](Check 'orderlyExit' { (State).stopped -eq $true -and (Test-Path (Join-Path $OutputDirectory 'stty-after.txt')) })
     [void](Check 'termiosRestored' { (State).termiosBefore -and (State).termiosBefore -ceq (State).termiosAfter })
@@ -385,15 +528,7 @@ try {
     $report.error = $_.ToString()
     if ($handle -ne [IntPtr]::Zero -and [ProbeDesktop]::GetForegroundWindow() -eq $handle) { Screenshot 'failure' }
 } finally {
-    if ($heldButtons) { [ProbeDesktop]::mouse_event($heldButtons, 0, 0, 0, [UIntPtr]::Zero) }
-    if ($null -ne $window) {
-        try {
-            if ([ProbeDesktop]::GetForegroundWindow() -eq $handle) { Key 81 @(17) }
-            $window.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close()
-        } catch { $report.cleanupError = $_.ToString() }
-    }
-    [void][ProbeDesktop]::SetCursorPos($previousPointer.X, $previousPointer.Y)
-    [void][ProbeDesktop]::SetForegroundWindow($previousWindow)
+    Cleanup-OwnedResources
     $report.passed = $report.checks.Count -eq $requiredChecks.Count -and @($requiredChecks | Where-Object { -not $report.checks.Contains($_) }).Count -eq 0 -and @($report.checks.Values | Where-Object { -not $_.passed }).Count -eq 0 -and -not $report.Contains('error') -and -not $report.Contains('cleanupError')
     [System.IO.File]::WriteAllText((Join-Path $OutputDirectory 'report.json'), ($report | ConvertTo-Json -Depth 10))
     $report | ConvertTo-Json -Depth 10

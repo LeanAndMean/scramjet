@@ -20,12 +20,12 @@ Uses actual TUI/RetainedViewport/ProcessTerminal input, selection and rendering.
 4. Right-click selection; independently compare exact desktop clipboard text.
 5. Select again and Ctrl+C; successful copying clears the selection.
 6. Paste back here: only equality is recorded, never pasted content.
-7. Detached PageUp/PageDown/Home/End/Escape browse; other keys reveal the editor.
+7. Ctrl+Home/Ctrl+End browse the transcript; use --production to test Home/End editing.
 8. Type and use arrows/backspace; at-tail PageUp belongs to the focused component.
 9. Right-click without selection does nothing in the application; terminal menus
    are emulator-owned and cannot see application selection.
-10. Ctrl+U changes a synthetic row while selecting: held text/highlight remain,
-    pending updates are indicated; clear/copy reconciles. Resize cancels selection.
+10. Ctrl+U changes a synthetic row while selecting: held text/highlight remain
+    without a status row; clear/copy reconciles. Resize cancels selection.
 11. Ctrl+Q restores the original shell buffer and terminal modes.
 Record emulator/OS/multiplexer versions and configuration with observed results.
 Counters prove receipt only, not desktop interaction or clipboard acceptance.
@@ -273,7 +273,7 @@ async function runProduction() {
 	function record() {
 		const target = process.env.SCRAMJET_TUI_PROBE_EVIDENCE;
 		if (!target) return;
-		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, editor: extensionUI?.getEditorText() }));
+		writeFileSync(`${target}.tmp`, JSON.stringify({ production: true, journey, committedHandoffs, sourceRevision, sourceDirty, nodeVersion: process.version, completed, updates, commandId, stopped, terminalStates, pid: process.pid, pgid, platform: platform(), release: release(), term: process.env.TERM, terminal: process.env.TERM_PROGRAM, terminalVersion: process.env.TERM_PROGRAM_VERSION, tmux: Boolean(process.env.TMUX), columns: terminal.columns, rows: terminal.rows, termiosBefore: before, termiosAfter: stopped ? execFileSync("stty", ["-g"], { stdio: ["inherit", "pipe", "pipe"], encoding: "utf8" }).trim() : undefined, ...safetyState, ...interactions, lastMouse, mode: services.settingsManager.getTuiMode(), dockEditor: services.settingsManager.getDockEditor(), viewportKeyProfile: functionKeyBrowsing ? "f8-f9" : "alt-page", editorActive: mode.ui.isComponentFocused(mode.editor), toolsExpanded: mode.toolOutputExpanded, wheelStep: services.settingsManager.getScrollWheelStep(), editorHeightPercent: services.settingsManager.getEditorMaxHeightPercent(), approvalFocused: Boolean(approvalTool && mode.ui.isComponentFocused(approvalTool)), frameFlushed: mode.ui.isViewportFrameFlushed(), ...mode.ui.getViewportState(), viewport: mode.ui.getViewportState(), painted: mode.ui.previousLines.map((line) => (committed ? stripAnsi(line) : stripAnsi(line).slice(0, -1)).trimEnd()), notice: mode.ui.viewport?.notice, selectionActive: Boolean(mode.ui.viewport?.selection), editor: extensionUI?.getEditorText() }));
 		renameSync(`${target}.tmp`, target);
 	}
 	async function update() {
@@ -307,6 +307,7 @@ async function runProduction() {
 			else if (command.action === "long-editor") extensionUI.setEditorText(Array.from({ length: 50 }, (_, i) => `INPUT-${i}`).join("\n"));
 			else if (command.action === "narrow-editor") extensionUI.setEditorText("012345678901234567890123".repeat(4) + "\nTAIL");
 			else if (command.action === "tail") mode.ui.scrollViewport(Number.MAX_SAFE_INTEGER);
+			else if (command.action === "copy-prose") await mode.handleEvent({ type: "message_start", message: { role: "user", content: ("COPY-PROSE " + "alpha beta gamma ".repeat(18)).trimEnd() + "\n\n```ts\n    const value = 1;\n```", timestamp: 0 } });
 			else if (command.action === "approval") await safetyAction("4");
 			else if (command.action === "external") await safetyAction("6");
 			else if (command.action === "suspend") { await safetyAction("7"); return; }

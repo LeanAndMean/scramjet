@@ -110,11 +110,13 @@ describe("clipboard backend settlement", () => {
 		viewport.markPainted();
 		for (const data of ["\x1b[<0;1;1M", "\x1b[<32;10;1M", "\x1b[<0;10;1m", "\x03"])
 			viewport.handleInput(data, false, false);
-		expect(viewport.notice).toBe("Copying selection…");
+		expect(viewport.notice).toBeUndefined();
+		expect(viewport.state.height).toBe(4);
 		child.emit("exit", 7, null);
 		await vi.waitFor(() =>
 			expect(viewport.notice).toBe(accepted ? undefined : "Copy failed: terminal closed; selection retained"),
 		);
 		expect(output).toHaveBeenCalledOnce();
+		if (accepted) await vi.waitFor(() => expect(viewport.handleInput("\x03", false, false)).toBe(false));
 	});
 });

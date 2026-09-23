@@ -2092,16 +2092,18 @@ describe("production retained viewport", () => {
 			await h.frame();
 			h.terminal.sendInput("\x1b[<0;2;2M");
 			h.terminal.sendInput("\x1b[<32;8;3M");
-			expect((await h.frame()).join("\n")).toContain("Selection held");
+			await h.frame();
+			expect(h.terminal.cell(1, 2).inverse).toBe(true);
 			if (replacement === "new session") await h.internals.handleExtensionNewSession();
 			else if (replacement === "tree") h.internals.renderCurrentSessionState();
 			else if (replacement === "reload") await h.internals.handleReloadCommand();
 			else h.internals.clearTranscript();
 			const rows = await h.frame();
-			expect(rows.join("\n")).not.toMatch(/OLD-CONTENT|Selection held|updates pending/);
+			expect(rows.join("\n")).not.toContain("OLD-CONTENT");
 			expect(h.internals.ui.getViewportState()!.followingTail).toBe(true);
 			h.terminal.sendInput("\x1b[<32;8;1M");
-			expect((await h.frame()).join("\n")).not.toContain("Selection held");
+			await h.frame();
+			expect(h.terminal.cell(1, 2).inverse).toBe(false);
 		},
 	);
 });

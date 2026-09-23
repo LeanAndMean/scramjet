@@ -104,7 +104,7 @@ describe("viewport focus contracts", () => {
 				downstreamInput: f.downstream.mock.calls.flat(),
 				copies: f.copy.mock.calls,
 				intervals: vi.getTimerCount(),
-				selectionHeld: f.text().some((line) => line.includes("Selection held")),
+				selectionHeld: Array.from({ length: 5 }, (_, row) => f.terminal.cell(row, 0).inverse).some(Boolean),
 			}).toEqual({
 				offset,
 				followingTail: false,
@@ -158,13 +158,251 @@ describe("viewport focus contracts", () => {
 		const f = gestureFixture(20);
 		vi.advanceTimersByTime(640);
 		f.paint();
-		expect(f.viewport.state.offset).toBe(16);
+		expect(f.viewport.state.offset).toBe(15);
 		f.render.mockClear();
 		vi.advanceTimersByTime(320);
 		expect.soft(f.render).not.toHaveBeenCalled();
 		f.input(mouse(32, 6, 1));
 		vi.advanceTimersByTime(160);
-		expect(f.viewport.state.offset).toBe(14);
+		expect(f.viewport.state.offset).toBe(13);
+	});
+});
+
+describe("held-button wheel selection", () => {
+	it.each([
+		{ direction: "down", buttons: Array(8).fill(65), endRow: 66 },
+		{ direction: "up", buttons: Array(8).fill(64), endRow: 18 },
+		{ direction: "down then past the origin", buttons: [...Array(8).fill(65), ...Array(10).fill(64)], endRow: 36 },
+		{ direction: "up then past the origin", buttons: [...Array(8).fill(64), ...Array(10).fill(65)], endRow: 48 },
+	])("extends $direction with a stationary pointer, then freezes on release", async ({ buttons, endRow }) => {
+		for (const paintEachEvent of [false, true]) {
+			const lines = Array.from({ length: 100 }, (_, i) => `row-${i}`);
+			const f = await mount(lines, 31, 7);
+			f.tui.scrollViewportTo(40);
+			await f.frame();
+			f.terminal.sendInput(mouse(0, 4, 3));
+			f.terminal.sendInput(mouse(32, 5, 3));
+			for (const button of buttons) {
+				f.terminal.sendInput(mouse(button, 5, 3));
+				if (paintEachEvent) await f.frame();
+			}
+			await f.frame();
+			expect(f.tui.getViewportState()?.offset).toBe(endRow - 2);
+			expect(f.terminal.cell(2, 3).inverse).toBe(endRow > 42);
+			expect(f.terminal.cell(2, 4).inverse).toBe(endRow < 42);
+			f.terminal.sendInput(mouse(0, 5, 3, "m"));
+			await f.frame();
+			const released = f.terminal.visibleLines();
+			for (const button of [...Array(4).fill(65), ...Array(4).fill(64)]) {
+				f.terminal.sendInput(mouse(button, 5, 3));
+				await f.frame();
+			}
+			expect(f.terminal.visibleLines()).toEqual(released);
+			expect(f.terminal.cell(2, 3).inverse).toBe(endRow > 42);
+			expect(f.terminal.cell(2, 4).inverse).toBe(endRow < 42);
+			expect(f.copy).not.toHaveBeenCalled();
+			f.terminal.sendInput(mouse(2, 4, 3));
+			await f.frame();
+			const first = Math.min(42, endRow);
+			const last = Math.max(42, endRow);
+			expect(f.copy).toHaveBeenCalledExactlyOnceWith(
+				[
+					lines[first].slice(endRow > 42 ? 3 : 4),
+					...lines.slice(first + 1, last),
+					lines[last].slice(0, endRow > 42 ? 4 : 3),
+				].join("\n"),
+			);
+			expect(f.downstream).not.toHaveBeenCalled();
+			expect(f.card.handleInput).not.toHaveBeenCalled();
+		}
+	});
+
+	it.each([
+		{ direction: "down", buttons: Array(8).fill(65), endRow: 67 },
+		{ direction: "up", buttons: Array(8).fill(64), endRow: 19 },
+		{ direction: "reversing past the origin", buttons: [...Array(8).fill(65), ...Array(10).fill(64)], endRow: 37 },
+	])("tracks mixed motion and wheel input $direction through immediate release", async ({ buttons, endRow }) => {
+		for (const paintEachEvent of [false, true]) {
+			for (const wheelFirst of [false, true]) {
+				const lines = Array.from({ length: 100 }, (_, i) => `row-${i} abcdefghijklmnop`);
+				const f = await mount(lines, 31, 7);
+				f.tui.scrollViewportTo(40);
+				await f.frame();
+				f.terminal.sendInput(mouse(0, 2, 3));
+				f.terminal.sendInput(mouse(32, 4, 3));
+				for (const [index, button] of buttons.entries()) {
+					const x = 5 + (index % 4);
+					const y = 2 + (index % 3);
+					for (const event of wheelFirst ? [button, 32] : [32, button]) {
+						f.terminal.sendInput(mouse(event, x, y));
+						if (paintEachEvent) await f.frame();
+					}
+				}
+				f.terminal.sendInput(mouse(32, 9, 4));
+				f.terminal.sendInput(mouse(0, 9, 4, "m"));
+				await f.frame();
+				expect.soft(f.tui.getViewportState()?.offset).toBe(endRow - 3);
+				expect.soft(f.terminal.cell(3, 7).inverse).toBe(endRow > 42);
+				expect.soft(f.terminal.cell(3, 8).inverse).toBe(endRow < 42);
+				f.terminal.sendInput(mouse(32, 15, 2));
+				f.terminal.sendInput(mouse(65, 15, 2));
+				f.terminal.sendInput(mouse(2, 15, 2));
+				await f.frame();
+				const first = Math.min(42, endRow);
+				const last = Math.max(42, endRow);
+				expect
+					.soft(f.copy)
+					.toHaveBeenCalledExactlyOnceWith(
+						[
+							lines[first].slice(endRow > 42 ? 1 : 8),
+							...lines.slice(first + 1, last),
+							lines[last].slice(0, endRow > 42 ? 8 : 1),
+						].join("\n"),
+					);
+			}
+		}
+	});
+
+	it("applies a final column adjustment to the scrolled row's displayed graphemes", async () => {
+		const lines = Array.from({ length: 100 }, (_, i) => `row-${i}`);
+		lines[45] = "\x1b[31mA界e\u0301Z\x1b[0m";
+		const f = await mount(lines, 31, 7);
+		f.tui.scrollViewportTo(40);
+		await f.frame();
+		for (const data of [mouse(0, 1, 3), mouse(32, 2, 3), mouse(65, 2, 3), mouse(32, 5, 3), mouse(0, 5, 3, "m")])
+			f.terminal.sendInput(data);
+		await f.frame();
+		expect(f.terminal.cell(2, 3).inverse).toBe(true);
+		expect(f.terminal.cell(2, 4).inverse).toBe(false);
+		f.terminal.sendInput(mouse(2, 5, 3));
+		await f.frame();
+		expect(f.copy).toHaveBeenCalledExactlyOnceWith("row-42\nrow-43\nrow-44\nA界e\u0301");
+	});
+
+	it("starts dragging after wheel input against the resulting view", async () => {
+		const lines = Array.from({ length: 100 }, (_, i) => `row-${i} abcdefghijklmnop`);
+		const f = await mount(lines, 31, 7);
+		f.tui.scrollViewportTo(40);
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 2, 3));
+		f.terminal.sendInput(mouse(65, 2, 3));
+		f.terminal.sendInput(mouse(32, 9, 4));
+		f.terminal.sendInput(mouse(0, 9, 4, "m"));
+		f.terminal.sendInput(mouse(2, 9, 4));
+		await f.frame();
+		expect(f.copy).toHaveBeenCalledExactlyOnceWith(
+			[lines[42].slice(1), ...lines.slice(43, 46), lines[46].slice(0, 8)].join("\n"),
+		);
+	});
+
+	it("keeps mixed input coherent while entering and leaving edge autoscroll", async () => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const lines = Array.from({ length: 100 }, (_, i) => `row-${i} abcdefghijklmnop`);
+		const f = await mount(lines, 31, 7);
+		f.tui.scrollViewportTo(40);
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 2, 2));
+		f.terminal.sendInput(mouse(32, 6, 7));
+		f.terminal.sendInput(mouse(65, 6, 7));
+		f.terminal.sendInput(mouse(32, 10, 7));
+		await f.frame();
+		expect.soft(f.terminal.cell(6, 8).inverse).toBe(true);
+		expect.soft(f.terminal.cell(6, 9).inverse).toBe(false);
+		vi.advanceTimersByTime(80);
+		f.terminal.sendInput(mouse(32, 12, 3));
+		f.terminal.sendInput(mouse(0, 12, 3, "m"));
+		vi.advanceTimersByTime(800);
+		await f.frame();
+		expect(f.tui.getViewportState()?.offset).toBe(44);
+		f.terminal.sendInput(mouse(2, 12, 3));
+		await f.frame();
+		expect
+			.soft(f.copy)
+			.toHaveBeenCalledExactlyOnceWith(
+				[lines[41].slice(1), ...lines.slice(42, 46), lines[46].slice(0, 11)].join("\n"),
+			);
+	});
+
+	it.each([
+		{ y: 3, offset: 43, endRow: 45 },
+		{ y: 7, offset: 45, endRow: 51 },
+	])("uses wheel pointer row $y when an edge tick precedes the next motion", async ({ y, offset, endRow }) => {
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const lines = Array.from({ length: 100 }, (_, i) => `row-${i} abcdefghijklmnop`);
+		const f = await mount(lines, 31, 7);
+		f.tui.scrollViewportTo(40);
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 2, 2));
+		f.terminal.sendInput(mouse(32, 6, 7));
+		f.terminal.sendInput(mouse(65, 12, y));
+		vi.advanceTimersByTime(160);
+		await f.frame();
+		expect.soft(f.tui.getViewportState()?.offset).toBe(offset);
+		f.terminal.sendInput(mouse(0, 12, y, "m"));
+		f.terminal.sendInput(mouse(2, 12, y));
+		await f.frame();
+		expect
+			.soft(f.copy)
+			.toHaveBeenCalledExactlyOnceWith(
+				[lines[41].slice(1), ...lines.slice(42, endRow), lines[endRow].slice(0, 11)].join("\n"),
+			);
+	});
+
+	it("does not turn a click without a drag into a wheel selection", async () => {
+		const f = await mount(
+			Array.from({ length: 100 }, (_, i) => `row-${i}`),
+			31,
+			7,
+		);
+		f.tui.scrollViewportTo(40);
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 4, 3));
+		for (let i = 0; i < 8; i++) f.terminal.sendInput(mouse(65, 4, 3));
+		f.terminal.sendInput(mouse(0, 4, 3, "m"));
+		await f.frame();
+		f.terminal.sendInput(mouse(2, 4, 3));
+		await f.frame();
+		expect(f.copy).not.toHaveBeenCalled();
+	});
+
+	it("keeps an already completed selection unchanged while wheeling", async () => {
+		const f = await mount(
+			Array.from({ length: 100 }, (_, i) => `row-${i}`),
+			31,
+			7,
+		);
+		f.tui.scrollViewportTo(40);
+		await f.frame();
+		for (const data of [mouse(0, 1, 3), mouse(32, 7, 3), mouse(0, 7, 3, "m")]) f.terminal.sendInput(data);
+		for (let i = 0; i < 8; i++) f.terminal.sendInput(mouse(65, 7, 3));
+		await f.frame();
+		expect(f.tui.getViewportState()?.offset).toBe(64);
+		f.terminal.sendInput(mouse(2, 7, 3));
+		await f.frame();
+		expect(f.copy).toHaveBeenCalledExactlyOnceWith("row-42");
+	});
+
+	it("clamps a held selection at both document boundaries", async () => {
+		const f = await mount(
+			Array.from({ length: 20 }, (_, i) => `row-${i}`),
+			31,
+			7,
+		);
+		f.tui.scrollViewportTo(10);
+		await f.frame();
+		f.terminal.sendInput(mouse(0, 4, 3));
+		f.terminal.sendInput(mouse(32, 5, 3));
+		for (let i = 0; i < 10; i++) f.terminal.sendInput(mouse(64, 5, 3));
+		await f.frame();
+		expect(f.tui.getViewportState()?.offset).toBe(0);
+		expect(f.terminal.cell(2, 4).inverse).toBe(true);
+		for (let i = 0; i < 20; i++) f.terminal.sendInput(mouse(65, 5, 3));
+		await f.frame();
+		expect(f.tui.getViewportState()?.offset).toBe(13);
+		f.terminal.sendInput(mouse(0, 4, 3, "m"));
+		f.terminal.sendInput(mouse(2, 4, 3));
+		await f.frame();
+		expect(f.copy).toHaveBeenCalledExactlyOnceWith("-12\nrow-13\nrow-14\nrow-");
 	});
 });
 

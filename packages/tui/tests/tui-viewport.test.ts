@@ -198,9 +198,9 @@ describe("viewport interactions", () => {
 		terminal.sendInput(mouse(64, 2, 2));
 		expect(overlayInput).toHaveBeenCalledTimes(1);
 		overlay.hide();
-		terminal.sendInput("\x1b[H");
+		terminal.sendInput("\x1b[1;5H");
 		expect(tui.getViewportState()?.offset).toBe(0);
-		terminal.sendInput("\x1b[F");
+		terminal.sendInput("\x1b[1;5F");
 		expect(tui.getViewportState()?.followingTail).toBe(true);
 		terminal.sendInput(mouse(64, 2, 2));
 		terminal.sendInput("\x1b");
@@ -248,7 +248,7 @@ describe("viewport interactions", () => {
 			card.lines[0] = "changed";
 			await frame();
 			expect(terminal.visibleLines()[0]).toContain("café 界 e\u0301 text");
-			expect(terminal.visibleLines()[4]).toContain("updates pending");
+			expect(terminal.visibleLines()[4]).toContain("more");
 			expect(terminal.writes.join("")).toContain("\x1b[7m");
 			if (input === "keyboard") {
 				terminal.sendInput("\x1b[57442;5u");
@@ -300,6 +300,23 @@ describe("viewport interactions", () => {
 		expect(terminal.visibleLines().join("\n")).not.toContain("Copy failed");
 	});
 
+	it("does not select text covered by a painted copy failure before its dismissal repaints", async () => {
+		const copy = vi.fn().mockRejectedValueOnce(new Error("unavailable")).mockResolvedValue(undefined);
+		const { terminal, frame } = await setup([{ component: new Rows(["first", "middle", "covered row"]) }], 41, 3, {
+			copy,
+		});
+		for (const event of [mouse(0, 1, 1), mouse(32, 6, 1), mouse(0, 6, 1, "m"), "\x03"]) terminal.sendInput(event);
+		await frame();
+		await frame();
+		expect(terminal.visibleLines()[2]).toContain("Copy failed");
+		for (const event of [mouse(0, 1, 3), mouse(32, 8, 3), mouse(0, 8, 3, "m"), "\x03"]) terminal.sendInput(event);
+		await frame();
+		expect(copy.mock.calls.map(([text]) => text)).toEqual(["first", "first"]);
+		for (const event of [mouse(0, 1, 3), mouse(32, 8, 3), mouse(0, 8, 3, "m"), "\x03"]) terminal.sendInput(event);
+		await frame();
+		expect(copy.mock.calls[2][0]).toBe("covered");
+	});
+
 	it("selects across rows with edge autoscroll and cancels gestures on resize and stop", async () => {
 		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 		try {
@@ -320,7 +337,7 @@ describe("viewport interactions", () => {
 			const offset = tui.getViewportState()!.offset;
 			terminal.sendInput("\x03");
 			await frame();
-			expect(copy.mock.calls[0][0]).toBe(Array.from({ length: offset + 3 }, (_, i) => `row-${i + 1}`).join("\n"));
+			expect(copy.mock.calls[0][0]).toBe(Array.from({ length: offset + 4 }, (_, i) => `row-${i + 1}`).join("\n"));
 			terminal.sendInput(mouse(0, 1, 1));
 			terminal.sendInput(mouse(32, 6, 5));
 			terminal.resize(25, 5);
@@ -873,7 +890,7 @@ describe("retained viewport", () => {
 			mark = terminal.markWrites();
 			await frame();
 			expect(terminal.writesSince(mark)).not.toContain(prefix);
-			expect(text()).toEqual(["2", "[Image hidden by selection]", "", "", "Selection held; Esc clears"]);
+			expect(text()).toEqual(["2", "[Image hidden by selection]", "", "", "6"]);
 			expect(terminal.cell(0, 0).inverse).toBe(true);
 			expect(terminal.cell(1, 0).inverse).toBe(false);
 			terminal.sendInput("\x1b");
