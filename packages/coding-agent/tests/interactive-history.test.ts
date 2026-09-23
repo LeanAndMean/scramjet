@@ -252,6 +252,7 @@ describe("shipped printable-key consumers", () => {
 					h.terminal.sendInput(encoded ? "\x1b[90u" : "Z");
 					h.terminal.sendInput("\x1b[120;1:3u");
 					h.terminal.sendInput("\x1b[120;5u");
+					if (command !== "overlay-test") h.terminal.sendInput("\x1b[57414u");
 					expect((await h.frame()).join("\n")).toContain(typed);
 					expect(h.extensionUI.getEditorText()).toBe("");
 					h.terminal.sendInput("\x7f");
@@ -2201,6 +2202,12 @@ it("keeps the modal editor example usable with explicit Kitty printable keys", a
 		h.terminal.sendInput("\x1b[105u");
 		h.terminal.sendInput("\x1b[122u");
 		expect(h.extensionUI.getEditorText()).toBe("abz");
+		const editor = h.internals.editorContainer.children[0] as { onSubmit?: (text: string) => void };
+		const onSubmit = vi.fn();
+		editor.onSubmit = onSubmit;
+		h.terminal.sendInput("\x1b");
+		h.terminal.sendInput("\x1b[57414u");
+		expect(onSubmit).toHaveBeenCalledWith("abz");
 	} finally {
 		await h.dispose();
 	}

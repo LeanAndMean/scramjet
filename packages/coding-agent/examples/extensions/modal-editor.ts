@@ -46,6 +46,10 @@ class ModalEditor extends CustomEditor {
 		}
 
 		// SCRAMJET-DIVERGENCE: viewport terminals can encode ordinary printable keys explicitly.
+		if (matchesKey(data, "enter")) {
+			super.handleInput(data);
+			return;
+		}
 		const key = decodeKittyPrintable(data) ?? data;
 		if (key in NORMAL_KEYS) {
 			const seq = NORMAL_KEYS[key];
