@@ -41,6 +41,9 @@ describe("GitHub Copilot catalog visibility", () => {
 	const additionIds = [
 		"claude-fable-5.1",
 		"claude-opus-5",
+		"claude-opus-5.5",
+		"gpt-6-sol",
+		"gpt-6-luna",
 		"kimi-k3",
 		"gemini-3.6-flash",
 		"gemini-3.7-flash",

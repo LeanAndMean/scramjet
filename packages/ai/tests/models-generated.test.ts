@@ -256,6 +256,33 @@ describe("generated catalog - GitHub Copilot additions", () => {
 			["low", "medium", "high", "xhigh", "max"],
 		],
 		[
+			"claude-opus-5.5",
+			"openai-completions",
+			1000000,
+			872000,
+			128000,
+			{ input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+			["low", "medium", "high", "xhigh", "max"],
+		],
+		[
+			"gpt-6-sol",
+			"openai-responses",
+			1000000,
+			872000,
+			128000,
+			{ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+			["off", "low", "medium", "high", "xhigh", "max"],
+		],
+		[
+			"gpt-6-luna",
+			"openai-responses",
+			1000000,
+			872000,
+			128000,
+			{ input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+			["off", "low", "medium", "high", "xhigh", "max"],
+		],
+		[
 			"kimi-k3",
 			"openai-completions",
 			1048576,
@@ -350,9 +377,18 @@ describe("generated catalog - GitHub Copilot additions", () => {
 		},
 	);
 
-	it("adds each approved ID exactly once while retaining an existing model", () => {
+	it.each([
+		["claude-opus-5.5", { off: null, minimal: null, xhigh: "xhigh", max: "max" }],
+		["gpt-6-sol", { off: "none", minimal: null, xhigh: "xhigh", max: "max" }],
+		["gpt-6-luna", { off: "none", minimal: null, xhigh: "xhigh", max: "max" }],
+	] as const)("ships %s with its exact effort map", (id, thinkingLevelMap) => {
+		expect(getModel("github-copilot", id).thinkingLevelMap).toEqual(thinkingLevelMap);
+	});
+
+	it("adds each approved ID exactly once while retaining existing models", () => {
 		const ids = getModels("github-copilot").map((model) => model.id);
 		for (const [id] of additions) expect(ids.filter((candidate) => candidate === id)).toHaveLength(1);
+		expect(ids).toContain("claude-opus-5");
 		expect(ids).toContain("gpt-6-astra");
 	});
 });
