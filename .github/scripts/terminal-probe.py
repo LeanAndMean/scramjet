@@ -266,7 +266,10 @@ def screenshot(name):
 
 
 def mouse(kind, x, y):
-    events("mouse", kind, x, y)
+    receipt = events("mouse", kind, x, y)
+    if is_mac:
+        report.setdefault("desktopMouseEvents", []).append(json.loads(receipt))
+        report["desktopMouseEvents"] = report["desktopMouseEvents"][-64:]
     time.sleep(0.15)
 
 

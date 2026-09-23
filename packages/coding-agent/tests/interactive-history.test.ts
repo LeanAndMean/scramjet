@@ -31,6 +31,9 @@ vi.mock("../src/modes/interactive/components/settings-selector.js", () => ({
 
 import { HeadlessTerminal } from "../../tui/tests/helpers/headless-terminal.js";
 import modalEditor from "../examples/extensions/modal-editor.js";
+import overlayExamples from "../examples/extensions/overlay-qa-tests.js";
+import overlayExample from "../examples/extensions/overlay-test.js";
+import snakeExample from "../examples/extensions/snake.js";
 import { createToolHtmlRenderer } from "../src/core/export-html/tool-renderer.js";
 import { defineTool } from "../src/core/extensions/index.js";
 import { ArminComponent } from "../src/modes/interactive/components/armin.js";
@@ -194,6 +197,111 @@ function createInteractiveHarness(): {
 		emit: (event) => eventTarget.handleEvent(event),
 	};
 }
+
+describe("shipped printable-key consumers", () => {
+	it.each([
+		{ command: "overlay-test", extension: overlayExample, title: "Overlay Test", typed: "Search: aZ", panel: false },
+		{
+			command: "overlay-passive",
+			extension: overlayExamples,
+			title: "Non-Capturing Demo",
+			typed: "> aZ",
+			panel: false,
+		},
+		{
+			command: "overlay-streaming",
+			extension: overlayExamples,
+			title: "Streaming + Input Test",
+			typed: "> aZ",
+			panel: true,
+		},
+	])(
+		"accepts literal and encoded printable input in $command",
+		async ({ command, extension, title, typed, panel }) => {
+			for (const encoded of [false, true]) {
+				const h = await createProductionInteractiveHarness(100, 36, extension);
+				const work = h.session.prompt(`/${command}`).catch((error: Error) => error);
+				try {
+					await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain(title));
+					if (panel) {
+						h.terminal.sendInput("\t");
+						await h.frame();
+					}
+					h.terminal.sendInput(encoded ? "\x1b[97u" : "a");
+					h.terminal.sendInput(encoded ? "\x1b[90u" : "Z");
+					h.terminal.sendInput("\x1b[120;1:3u");
+					h.terminal.sendInput("\x1b[120;5u");
+					expect((await h.frame()).join("\n")).toContain(typed);
+					expect(h.extensionUI.getEditorText()).toBe("");
+					h.terminal.sendInput("\x7f");
+					const after = (await h.frame()).join("\n");
+					expect(after).toContain(typed.slice(0, -1));
+					expect(after).not.toContain(typed);
+					h.terminal.sendInput("\x1b");
+					expect(await work).toBeUndefined();
+					expect(h.internals.ui.hasOverlay()).toBe(false);
+				} finally {
+					h.terminal.sendInput("\x1b");
+					await work;
+					await h.dispose();
+				}
+			}
+		},
+	);
+
+	it.each(["literal", "encoded"])("supports snake movement, restart and quit with %s keys", async (encoding) => {
+		const h = await createProductionInteractiveHarness(100, 36, snakeExample);
+		const editor = h.internals.editorContainer.children[0];
+		const random = vi.spyOn(Math, "random").mockReturnValue(0.25);
+		vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+		const work = h.session.prompt("/snake").catch((error: Error) => error);
+		const key = (character: string) => (encoding === "literal" ? character : `\x1b[${character.codePointAt(0)}u`);
+		const head = () => {
+			const frame = h.terminal.visibleLines();
+			const row = frame.findIndex((line) => line.includes("██"));
+			expect(row).toBeGreaterThanOrEqual(0);
+			return { row, col: frame[row].indexOf("██") };
+		};
+		try {
+			await new Promise((resolve) => setImmediate(resolve));
+			expect((await h.frame()).join("\n")).toContain("SNAKE");
+			const start = head();
+			for (const [input, row, col] of [
+				[key("w"), -1, 0],
+				["\x1b[115;1:3u", -2, 0],
+				["\x1b[97;5u", -3, 0],
+				[key("A"), -3, -2],
+				[key("s"), -2, -2],
+				[key("D"), -2, 0],
+			] as const) {
+				h.terminal.sendInput(input);
+				vi.advanceTimersByTime(100);
+				await h.frame();
+				expect(head()).toEqual({ row: start.row + row, col: start.col + col });
+			}
+			vi.advanceTimersByTime(3000);
+			expect((await h.frame()).join("\n")).toContain("GAME OVER");
+			h.terminal.sendInput(key(" "));
+			expect((await h.frame()).join("\n")).not.toContain("GAME OVER");
+			expect(head()).toEqual(start);
+			vi.advanceTimersByTime(3000);
+			expect((await h.frame()).join("\n")).toContain("GAME OVER");
+			h.terminal.sendInput(key("R"));
+			expect((await h.frame()).join("\n")).not.toContain("GAME OVER");
+			expect(head()).toEqual(start);
+			h.terminal.sendInput(key("Q"));
+			await h.frame();
+			expect(h.internals.ui.isComponentFocused(editor)).toBe(true);
+			expect(await work).toBeUndefined();
+		} finally {
+			h.terminal.sendInput("\x1b");
+			await work;
+			vi.useRealTimers();
+			await h.dispose();
+			random.mockRestore();
+		}
+	});
+});
 
 describe("retained transcript selection", () => {
 	it("copies the painted row when wheel and selection input arrive before repaint", async () => {

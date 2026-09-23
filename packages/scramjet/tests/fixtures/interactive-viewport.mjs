@@ -433,6 +433,22 @@ async function runProduction() {
 	try {
 		await mode.init();
 		if (journey) {
+			const editorInput = mode.defaultEditor.handleInput.bind(mode.defaultEditor);
+			mode.defaultEditor.handleInput = (data) => {
+				editorInput(data);
+				safetyState.editorInputTrace ??= [];
+				const text = mode.defaultEditor.getText();
+				safetyState.editorInputTrace.push({ kind: matchesKey(data, "enter") ? "enter" : data.length === 1 ? "character" : "other", length: text.length, settingsPrefix: "/settings".startsWith(text), editorFocused: mode.ui.isComponentFocused(mode.editor) });
+				if (safetyState.editorInputTrace.length > 24) safetyState.editorInputTrace.shift();
+			};
+			const submit = mode.defaultEditor.onSubmit;
+			mode.defaultEditor.onSubmit = async (text) => {
+				safetyState.submissions = (safetyState.submissions ?? 0) + 1;
+				safetyState.lastSubmission = text.trim() === "/settings" ? "settings" : "other";
+				await submit?.(text);
+				safetyState.editorFocusedAfterSubmit = mode.ui.isComponentFocused(mode.editor);
+			};
+
 			const line = (i) => `ROW-${String(i).padStart(3, "0")} synthetic café 界 e\u0301 text`;
 			extensionUI.setHeader(() => ({ invalidate() {}, render: (width) => [truncateToWidth(line(1), width)] }));
 			mode.addMessageToChat({ role: "custom", customType: "fixture-history", content: Array.from({ length: 199 }, (_, i) => line(i + 2)).join("\n"), display: true, timestamp: 0 });

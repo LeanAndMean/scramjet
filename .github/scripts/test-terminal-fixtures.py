@@ -776,5 +776,158 @@ class NativePixelCalibrationTests(unittest.TestCase):
                                           "cellHeight": 3 * scale, "cellWidth": 2 * scale})
 
 
+class MacInteractionOwnershipTests(unittest.TestCase):
+    def exercise(self, terminal_kind, fixture_state=None, failure=None, existing=False):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            (output / "shell-pid").write_text("12345")
+            bundle = "com.apple.Terminal" if terminal_kind == "apple" else "com.googlecode.iterm2"
+            plist = "/System/Applications/Utilities/Terminal.app/Contents/Info.plist" if terminal_kind == "apple" else "/Applications/iTerm.app/Contents/Info.plist"
+            executable = "Terminal" if terminal_kind == "apple" else "iTerm2"
+            owned = Mock(pid=42)
+            owned.poll.return_value = None
+            owned.wait.side_effect = lambda **_kwargs: setattr(owned.poll, "return_value", 0)
+            if failure == "wait": owned.wait.side_effect = subprocess.TimeoutExpired("owned terminal", 10)
+            if failure == "terminate": owned.terminate.side_effect = PermissionError("owned terminate denied")
+            opener = Mock(pid=41)
+            process = Mock()
+            process.run.return_value.stdout = ""
+            process.CalledProcessError = subprocess.CalledProcessError
+            process.TimeoutExpired = subprocess.TimeoutExpired
+            def popen(argv, **_kwargs):
+                if argv[0] == "open": return opener
+                self.assertEqual(argv[0], str(Path(plist).parent / "MacOS" / executable))
+                return owned
+            process.Popen.side_effect = popen
+            windows = [{"pid": 42}] if failure == "window" else []
+            frontmost = [42]
+            def events(action, *args):
+                if action == "running": return json.dumps([84] if existing else [])
+                if action == "frontmost": return json.dumps({"bundle": bundle, "pid": frontmost[0]})
+                if action in ("geometry", "geometry-pid"):
+                    if action == "geometry-pid": self.assertEqual(str(args[0]), "42")
+                    return json.dumps([{"role": "AXWindow"}, {"role": "AXTextArea"}])
+                if action in ("windows-pid", "close-windows-pid", "activate-pid"):
+                    self.assertEqual(str(args[0]), "42")
+                    return json.dumps(windows if action == "windows-pid" else {"closed": 1})
+                return json.dumps({"pressed": True})
+            def run(*args, **_kwargs):
+                if args[0] == "/usr/libexec/PlistBuddy": return executable
+                if args[0] == str(output / "events"): return events(*args[1:])
+                return ""
+            system = Mock()
+            system.getpgrp.return_value = 10
+            def shell(pid, sig):
+                self.assertEqual((pid, sig), (12345, 0))
+                if failure != "shell": raise ProcessLookupError()
+            system.kill.side_effect = shell
+            current = Mock(return_value={} if fixture_state == "missing" else {"stopped": True})
+            key = Mock()
+            context = {"is_mac": True, "terminal_kind": terminal_kind, "bundle": bundle, "plist": plist,
+                       "output": output, "root": ROOT, "driver": output / "events", "launcher": output / "launch.sh",
+                       "launch_command": "synthetic launch", "tmux_command": None, "with_tmux": False,
+                       "terminal_started": False, "terminal_process": None, "window_id": None,
+                       "run": Mock(side_effect=run), "events": events, "subprocess": process, "json": json,
+                       "Path": Path, "time": Mock(), "wait_for": lambda predicate, **_kwargs: bool(predicate()),
+                       "state": current, "key": key, "seed_clipboard": Mock(), "shlex": shlex, "os": system, "signal": signal,
+                       "report": {"checks": {}, "screenshots": {"complete": {"exit": 0}}}}
+            source = interaction_source()
+            names = {"cleanup_owned_resources", "required_checks", "report_passed", "shell_exited", "close_mac_windows", "verify_mac_cleanup", "owned_exit"}
+            definitions = [node for node in source.body if isinstance(node, ast.FunctionDef) and node.name in names
+                           or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "REQUIRED_CHECKS" for target in node.targets)]
+            exec(compile(ast.Module(body=definitions, type_ignores=[]), "terminal-probe.py", "exec"), context)
+            context["report"]["checks"] = {name: {"passed": True} for name in context["required_checks"]()}
+            outer = next(node for node in source.body if isinstance(node, ast.Try))
+            startup = next(node for node in outer.body if isinstance(node, ast.If) and isinstance(node.test, ast.Name) and node.test.id == "is_mac"
+                           and any(isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr == "Popen" for body in node.body for child in ast.walk(body)))
+            if existing:
+                with self.assertRaises(RuntimeError):
+                    exec(compile(ast.Module(body=startup.body, type_ignores=[]), "terminal-probe.py", "exec"), context)
+                process.Popen.assert_not_called()
+                self.assertFalse(any(call.args and call.args[0] == "defaults" for call in context["run"].call_args_list))
+                return
+            exec(compile(ast.Module(body=startup.body, type_ignores=[]), "terminal-probe.py", "exec"), context)
+            key.reset_mock()
+            if fixture_state == "unreadable": current.side_effect = ValueError("unreadable fixture")
+            if failure == "focus": frontmost[0] = 84
+            if failure == "already-closed": owned.poll.return_value = 0
+            with patch("builtins.print"):
+                exec(compile(ast.Module(body=outer.finalbody, type_ignores=[]), "terminal-probe.py", "exec"), context)
+            if failure == "focus": key.assert_not_called()
+            elif failure == "already-closed":
+                self.assertTrue(context["report"]["passed"])
+                owned.terminate.assert_not_called()
+                return
+            elif failure or fixture_state == "unreadable": self.assertFalse(context["report"]["passed"])
+            else: self.assertTrue(context["report"]["passed"])
+            owned.terminate.assert_called_once()
+            self.assertGreaterEqual(owned.wait.call_count, 1)
+            opener.terminate.assert_not_called()
+            opener.kill.assert_not_called()
+
+    def test_closes_owned_mac_interaction_resources_after_stop_or_missing_state(self):
+        for kind in ("apple", "iterm2"):
+            for state in ("stopped", "missing"):
+                with self.subTest(kind=kind, state=state): self.exercise(kind, state)
+
+    def test_unreadable_mac_interaction_state_does_not_skip_cleanup(self):
+        for kind in ("apple", "iterm2"):
+            with self.subTest(kind=kind): self.exercise(kind, "unreadable")
+
+    def test_surviving_mac_interaction_resources_and_cleanup_errors_fail(self):
+        for kind in ("apple", "iterm2"):
+            for failure in ("window", "shell", "wait", "terminate"):
+                with self.subTest(kind=kind, failure=failure): self.exercise(kind, failure=failure)
+
+    def test_mac_interaction_refuses_existing_apps_before_preferences_or_launch(self):
+        for kind in ("apple", "iterm2"):
+            with self.subTest(kind=kind): self.exercise(kind, existing=True)
+
+    def test_mac_interaction_does_not_send_cleanup_keys_to_another_process(self):
+        for kind in ("apple", "iterm2"):
+            with self.subTest(kind=kind): self.exercise(kind, failure="focus")
+
+    def test_already_closed_mac_interaction_resources_are_harmless(self):
+        for kind in ("apple", "iterm2"):
+            with self.subTest(kind=kind): self.exercise(kind, failure="already-closed")
+
+
+class StableGraphicsAbsenceTests(unittest.TestCase):
+    def test_actual_graphics_negatives_require_acknowledged_stable_fresh_samples(self):
+        source = ast.parse((ROOT / ".github/scripts/terminal-safety.py").read_text())
+        phases = {"partialPlacementWithheld": ("2", "clipped"), "overlayClearsNativeImage": ("3", "overlay"),
+                  "partialOverlayPlacementWithheld": ("h", "overlay-image-clipped"), "nativePlacementsCleanedUp": (None, None)}
+        for name, (action, phase) in phases.items():
+            call = next(node for node in ast.walk(source) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "check" and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == name)
+            scenarios = ("absent", "slow-absent", "late-image") + (("stale-ack",) if action else ())
+            for scenario in scenarios:
+                with self.subTest(name=name, scenario=scenario):
+                    clock = [0.0]
+                    observations = []
+                    def pixels(_name):
+                        value = 1000 if scenario == "late-image" and observations else 0
+                        observations.append(value)
+                        clock[0] += 1 if scenario == "slow-absent" else 0.05
+                        return value
+                    fake_time = Mock()
+                    fake_time.monotonic.side_effect = lambda: clock[0]
+                    fake_time.sleep.side_effect = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+                    current = {"phase": phase or "image", "safetyAction": action or "1", "safetyActionReceipt": 7 if scenario == "stale-ack" else 8,
+                               "frameFlushed": action is not None, "stopped": action is None,
+                               "painted": ["[Image clipped; scroll to view]"]}
+                    context = {"report": {"checks": {}}, "state": lambda: current, "pixels": pixels, "before_action": 7,
+                               "wait": lambda predicate: bool(predicate()), "time": fake_time}
+                    load_safety_functions({"check", "action_settled"}, context)
+                    with patch("builtins.print"):
+                        try: eval(compile(ast.Expression(body=call), "terminal-safety.py", "eval"), context)
+                        except RuntimeError: pass
+                    result = context["report"]["checks"][name]
+                    self.assertEqual(result["passed"], scenario in ("absent", "slow-absent"))
+                    if result["passed"]:
+                        self.assertGreaterEqual(result["stableSeconds"], 0.35)
+                        self.assertGreaterEqual(len(observations), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

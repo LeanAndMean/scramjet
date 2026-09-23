@@ -234,6 +234,130 @@ it.each(["widget", "footer"])("requires the current approval paint after a same-
 	}
 });
 
+it.each(["success", "failure"])(
+	"gates production committed approval on flush %s and restores editing",
+	async (result) => {
+		const h = await createProductionInteractiveHarness(60, 16, undefined, false);
+		const write = h.terminal.write.bind(h.terminal);
+		const flush = h.terminal.flush.bind(h.terminal);
+		const buffered: string[] = [];
+		const gates: { settled: boolean; release(): Promise<void>; reject(): void }[] = [];
+		const activate = vi.fn();
+		const markers = Array.from({ length: 30 }, (_, index) => `COMMITTED-CONTEXT-${index}`);
+		let finish: ((value: string) => void) | undefined;
+		let outcome: Promise<unknown> | undefined;
+		let writeSpy: ReturnType<typeof vi.spyOn> | undefined;
+		let flushSpy: ReturnType<typeof vi.spyOn> | undefined;
+		try {
+			expect(h.internals.ui.getViewportState()).toBeUndefined();
+			expect(h.terminal.writes.join("")).not.toContain("\x1b[?1049h");
+			h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+			h.extensionUI.setEditorText("COMPAT-DRAFT");
+			const editor = h.internals.editorContainer.children[0];
+			await h.emit({ type: "tool_execution_start", toolCallId: "first", toolName: "unknown", args: {} });
+			const first = h.internals.chatContainer.children[0];
+			await h.emit({
+				type: "tool_execution_end",
+				toolCallId: "first",
+				isError: false,
+				result: { content: [{ type: "text", text: "FINALIZED-BEFORE-APPROVAL" }] },
+			});
+			await h.frame();
+			expect(h.internals.committedChatContainer.children).toContain(first);
+			expect(h.terminal.bufferLines().join("\n")).toContain("FINALIZED-BEFORE-APPROVAL");
+			await h.emit({ type: "tool_execution_start", toolCallId: "approval", toolName: "unknown", args: {} });
+			const tool = h.internals.chatContainer.children[0];
+			await h.frame();
+			writeSpy = vi.spyOn(h.terminal, "write").mockImplementation((data) => {
+				buffered.push(data);
+			});
+			flushSpy = vi.spyOn(h.terminal, "flush").mockImplementation(() => {
+				const batch = buffered.splice(0);
+				return new Promise<void>((resolve, reject) => {
+					const gate = {
+						settled: false,
+						async release() {
+							if (gate.settled) return;
+							gate.settled = true;
+							for (const data of batch) write(data);
+							await flush();
+							resolve();
+						},
+						reject() {
+							gate.settled = true;
+							reject(new Error("synthetic committed flush failure"));
+						},
+					};
+					gates.push(gate);
+				});
+			});
+			outcome = h.extensionUI
+				.custom<string>(
+					(_ui, _theme, _keys, done) => {
+						finish = done;
+						return {
+							render: () => ["APPROVE-COMPAT"],
+							invalidate() {},
+							handleInput(data) {
+								if (data === "\r") {
+									activate();
+									done("approved");
+								}
+							},
+						};
+					},
+					{ toolAttachedContext: { toolCallId: "approval", render: () => new Text(markers.join("\n"), 0, 0) } },
+				)
+				.catch((error: Error) => error);
+			await vi.waitFor(() => expect(gates.length).toBeGreaterThan(0));
+			expect(h.terminal.bufferLines().join("\n")).not.toContain("COMMITTED-CONTEXT-");
+			h.terminal.sendInput("\r");
+			expect(activate).not.toHaveBeenCalled();
+			expect(h.internals.ui.isComponentFocused(tool)).toBe(false);
+			if (result === "failure") {
+				gates[0].reject();
+				expect(await outcome).toEqual(new Error("synthetic committed flush failure"));
+			} else {
+				for (const gate of gates) await gate.release();
+				await vi.waitFor(() => expect(h.internals.ui.isComponentFocused(tool)).toBe(true));
+			}
+			for (const gate of gates) await gate.release();
+			flushSpy.mockRestore();
+			writeSpy.mockRestore();
+			for (const data of buffered.splice(0)) write(data);
+			await h.frame();
+			if (result === "success") {
+				const lines = h.terminal.bufferLines().map((line) => line.trim());
+				let previous = -1;
+				for (const marker of markers) {
+					expect(lines.filter((line) => line === marker)).toHaveLength(1);
+					const index = lines.indexOf(marker);
+					expect(index).toBeGreaterThan(previous);
+					previous = index;
+				}
+				expect(lines.lastIndexOf("APPROVE-COMPAT")).toBeGreaterThan(previous);
+				h.terminal.sendInput("\r");
+				expect(await outcome).toBe("approved");
+				expect(activate).toHaveBeenCalledOnce();
+			} else expect(activate).not.toHaveBeenCalled();
+			expect(h.internals.ui.isComponentFocused(editor)).toBe(true);
+			expect(h.extensionUI.getEditorText()).toBe("COMPAT-DRAFT");
+			h.terminal.sendInput("x");
+			expect((await h.frame()).join("\n")).toContain("COMPAT-DRAFTx");
+		} finally {
+			finish?.("cancelled");
+			for (const gate of gates) await gate.release();
+			flushSpy?.mockRestore();
+			writeSpy?.mockRestore();
+			for (const data of buffered) write(data);
+			await flush();
+			await outcome;
+			await h.dispose();
+			vi.restoreAllMocks();
+		}
+	},
+);
+
 async function attachedInput(handleInput: (data: string) => void, text: () => string) {
 	const h = await createProductionInteractiveHarness(
 		60,

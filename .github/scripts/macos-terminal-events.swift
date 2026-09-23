@@ -168,6 +168,10 @@ case "mouse":
     let event = CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: point, mouseButton: button)!
     event.setIntegerValueField(.mouseEventClickState, value: 1)
     event.post(tap: .cghidEventTap)
+    emit(["kind": args[2], "x": point.x, "y": point.y, "eventFlags": event.flags.rawValue,
+          "systemFlags": CGEventSource.flagsState(.combinedSessionState).rawValue,
+          "frontmostPid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
+          "leftPressed": CGEventSource.buttonState(.combinedSessionState, button: .left)])
 case "wheel":
     let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1,
                         wheel1: Int32(args[2])!, wheel2: 0, wheel3: 0)!

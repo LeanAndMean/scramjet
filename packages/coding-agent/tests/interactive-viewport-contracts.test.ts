@@ -13,7 +13,9 @@ import {
 	Text,
 } from "@leanandmean/tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import modalEditor from "../examples/extensions/modal-editor.js";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.js";
+import * as themeModule from "../src/modes/interactive/theme/theme.js";
 import * as clipboard from "../src/utils/clipboard.js";
 import { loadPhoton } from "../src/utils/photon.js";
 import { createProductionInteractiveHarness } from "./helpers/interactive-harness.js";
@@ -997,6 +999,233 @@ describe("retained interactive contracts", () => {
 			setCellDimensions(previousDimensions);
 			setCapabilities(previousCapabilities);
 		}
+	});
+
+	it.each([
+		{ name: "Tab", input: "\t", submit: false, remapped: false },
+		{ name: "encoded Enter", input: "\x1b[13u", submit: true, remapped: false },
+		{ name: "remapped acceptance", input: "\x1ba", submit: true, remapped: true },
+	])("reveals hidden completion before accepting $name", async ({ input, submit: submits, remapped }) => {
+		const h = await setup();
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const submit = vi.fn();
+		editor.onSubmit = submit;
+		if (remapped) getKeybindings().setUserBindings({ "tui.select.confirm": "alt+a", "tui.input.submit": "alt+a" });
+		try {
+			for (const character of "/hot") h.terminal.sendInput(character);
+			await vi.waitFor(async () => expect((await h.frame()).join("\n")).toContain("→ hotkeys"));
+			h.extensionUI.setWidget("trailing", () => new Text(Array(40).fill("TRAILING").join("\n"), 0, 0), {
+				placement: "belowEditor",
+			});
+			const hidden = await h.frame();
+			expect(hidden.join("\n")).toContain("Dock suspended");
+			expect(hidden.join("\n")).not.toContain("hotkeys");
+			expect(h.internals.ui.isComponentVisible(h.internals.editorContainer)).toBe(false);
+			const offset = h.internals.ui.getViewportState()!.offset;
+			h.terminal.sendInput("\x1b[13;1:3u");
+			await h.frame();
+			expect(h.internals.ui.getViewportState()!.offset).toBe(offset);
+			h.terminal.sendInput(input);
+			h.terminal.sendInput(input);
+			expect(submit).not.toHaveBeenCalled();
+			expect(h.extensionUI.getEditorText()).toBe("/hot");
+			expect((await h.frame()).join("\n")).toContain("→ hotkeys");
+			expect(h.internals.ui.isComponentVisible(h.internals.editorContainer)).toBe(true);
+			h.terminal.sendInput(input);
+			await h.frame();
+			if (submits) expect(submit).toHaveBeenCalledExactlyOnceWith("/hotkeys");
+			else {
+				expect(submit).not.toHaveBeenCalled();
+				expect(h.extensionUI.getEditorText()).toBe("/hotkeys ");
+			}
+		} finally {
+			getKeybindings().setUserBindings({});
+		}
+	});
+
+	it("retains overlapping blocked-save warnings and clears them after a successful save", async () => {
+		const directory = mkdtempSync(join(tmpdir(), "scramjet-overlapping-save-"));
+		directories.push(directory);
+		const agentDir = join(directory, "agent");
+		mkdirSync(agentDir);
+		const file = join(agentDir, "settings.json");
+		writeFileSync(file, "{broken-json");
+		const manager = SettingsManager.create(directory, agentDir);
+		manager.drainErrors();
+		const h = await setup(24, manager);
+		manager.drainErrors();
+		await openSettings(h, "wheel");
+		h.terminal.sendInput("\r");
+		h.terminal.sendInput("\r");
+		await manager.flush();
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(manager.getScrollWheelStep()).toBe(5);
+		expect(readFileSync(file, "utf8")).toBe("{broken-json");
+		expect((await h.frame()).join("\n")).toContain("Changes not saved");
+		writeFileSync(file, JSON.stringify({ theme: "pi-dark", quietStartup: true, scrollWheelStep: 5 }));
+		await manager.reload();
+		h.terminal.sendInput("\r");
+		await manager.flush();
+		await vi.waitFor(async () => expect((await h.frame()).join("\n")).not.toContain("Changes not saved"));
+		expect(JSON.parse(readFileSync(file, "utf8")).scrollWheelStep).toBe(6);
+		expect(manager.getScrollWheelStep()).toBe(6);
+	});
+
+	it.each([1, 2, 3])("preserves modal-editor text and cursor with a %i-row editor budget", async (budget) => {
+		const h = await createProductionInteractiveHarness(40, 12, modalEditor, true, settings());
+		harnesses.push(h);
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		h.extensionUI.setWidget(
+			"large",
+			() =>
+				new Text(
+					Array(8 - budget)
+						.fill("WIDGET")
+						.join("\n"),
+					0,
+					0,
+				),
+		);
+		const draft = "01234567890123456789012345678901234567";
+		h.extensionUI.setEditorText(draft);
+		const frame = await h.frame();
+		const inputRow = budget < 3 ? 10 : 9;
+		expect(h.extensionUI.getEditorText()).toBe(draft);
+		expect(frame[inputRow].slice(0, 38)).toBe(draft);
+		expect(h.terminal.cursorPosition()).toEqual({ row: inputRow, col: 38 });
+		if (budget < 3) expect(frame.join("\n")).not.toContain("INSERT");
+		else expect(frame[10]).toContain("INSERT");
+	});
+
+	it.each(["tools", "thinking"])("preserves custom-editor budgets, draft and detached %s dispatch", async (toggle) => {
+		const manager = settings({ editorMaxHeightPercent: 10 });
+		const h = await createProductionInteractiveHarness(60, 40, modalEditor, true, manager);
+		harnesses.push(h);
+		h.extensionUI.setFooter(() => new Text("FOOTER", 0, 0));
+		await history(h);
+		const editor = h.internals.editorContainer.children[0] as EditorComponent;
+		const draft = Array(20).fill("0123456789".repeat(6)).join("\n");
+		h.extensionUI.setEditorText(draft);
+		const content = (line: string) => line.slice(0, 59).trimEnd();
+		let frame = await h.frame();
+		expect(frame.filter((line) => /^\d+$/.test(content(line)))).toHaveLength(4);
+		const showSettings = h.mode as unknown as { showSettingsSelector(): void };
+		for (const query of ["height", "dock"]) {
+			showSettings.showSettingsSelector();
+			await h.frame();
+			for (const character of query) h.terminal.sendInput(character);
+			await h.frame();
+			h.terminal.sendInput("\r");
+			await manager.flush();
+			await h.frame();
+			h.terminal.sendInput("\x1b");
+			frame = await h.frame();
+			expect(h.internals.editorContainer.children[0]).toBe(editor);
+			expect(h.extensionUI.getEditorText()).toBe(draft);
+			expect(frame.filter((line) => /^\d+$/.test(content(line)))).toHaveLength(6);
+			expect(h.terminal.cursorPosition()).toEqual({
+				row: frame.findLastIndex((line) => /^\d+$/.test(content(line))),
+				col: 2,
+			});
+		}
+		expect(manager.getEditorMaxHeightPercent()).toBe(15);
+		expect(manager.getDockEditor()).toBe(false);
+		if (toggle === "tools") {
+			await h.emit({
+				type: "tool_execution_start",
+				toolCallId: "expand",
+				toolName: "bash",
+				args: { command: "synthetic" },
+			});
+			await h.emit({
+				type: "tool_execution_end",
+				toolCallId: "expand",
+				isError: false,
+				result: {
+					content: [
+						{ type: "text", text: Array.from({ length: 40 }, (_, index) => `DETAIL-${index}`).join("\n") },
+					],
+				},
+			});
+		} else {
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "THINKING-CONTENT" },
+					{ type: "text", text: "ANSWER" },
+				],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "synthetic",
+				stopReason: "stop",
+				timestamp: 0,
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			};
+			await h.emit({ type: "message_start", message });
+			await h.emit({ type: "message_end", message });
+		}
+		const component = h.internals.committedChatContainer.children.at(-1)!;
+		const before = component.render(59);
+		h.internals.ui.scrollViewportTo(10);
+		expect(content((await h.frame())[0])).toBe("HISTORY-010");
+		const input = vi.spyOn(editor, "handleInput");
+		const key = toggle === "tools" ? "\x0f" : "\x14";
+		h.terminal.sendInput(key);
+		frame = await h.frame();
+		expect(input).toHaveBeenCalledExactlyOnceWith(key);
+		expect(component.render(59)).not.toEqual(before);
+		expect(content(frame[0])).toBe("HISTORY-010");
+		expect(h.internals.ui.getViewportState()!.followingTail).toBe(false);
+		expect(h.internals.editorContainer.children[0]).toBe(editor);
+		expect(h.extensionUI.getEditorText()).toBe(draft);
+	});
+
+	it("keeps the real narrow theme submenu visible and blocks hidden selection through recovery", async () => {
+		vi.spyOn(themeModule, "getAvailableThemes").mockReturnValue(["pi-dark", "pi-light"]);
+		const manager = settings();
+		const h = await setup(10, manager, 24);
+		await openSettings(h, "theme");
+		h.terminal.sendInput("\r");
+		let frame = await h.frame();
+		expect(frame.join("\n")).toContain("→ pi-dark");
+		expect(frame.join("\n")).toContain("pi-light");
+		expect(frame.join("\n")).not.toContain("Select color theme");
+		h.terminal.sendInput("\x1b[B");
+		frame = await h.frame();
+		expect(frame.join("\n")).toContain("→ pi-light");
+		expect(manager.getTheme()).toBe("pi-dark");
+		h.terminal.resize(24, 2);
+		expect((await h.frame()).join("\n")).toContain("Resize");
+		h.terminal.sendInput("\r");
+		await h.frame();
+		expect(manager.getTheme()).toBe("pi-dark");
+		h.terminal.resize(24, 10);
+		expect((await h.frame()).join("\n")).toContain("→ pi-light");
+		h.terminal.sendInput("\r");
+		await manager.flush();
+		frame = await h.frame();
+		expect(manager.getTheme()).toBe("pi-light");
+		expect(frame.join("\n")).toContain("→ Theme");
+		h.terminal.sendInput("\r");
+		expect((await h.frame()).join("\n")).toContain("→ pi-light");
+		h.terminal.sendInput("\x1b[A");
+		await h.frame();
+		h.terminal.sendInput("\x1b");
+		frame = await h.frame();
+		expect(frame.join("\n")).toContain("→ Theme");
+		expect(manager.getTheme()).toBe("pi-light");
+		expect(themeModule.getCurrentThemeName()).toBe("pi-light");
+		h.terminal.sendInput("\x1b");
+		await h.frame();
+		h.terminal.sendInput("x");
+		expect(h.extensionUI.getEditorText()).toBe("x");
 	});
 
 	it("preserves invalid settings files while exposing their load error", async () => {
