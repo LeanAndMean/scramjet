@@ -151,6 +151,7 @@ interface AgentHarnessTurnState<
 	systemPrompt: string;
 	model: Model<any>;
 	thinkingLevel: ThinkingLevel;
+	explicitReasoningOff: boolean;
 	tools: TTool[];
 	activeTools: TTool[];
 }
@@ -168,6 +169,7 @@ export class AgentHarness<
 	private pendingSessionWrites: PendingSessionWrite[] = [];
 	private model: Model<any>;
 	private thinkingLevel: ThinkingLevel;
+	private explicitReasoningOff: boolean;
 	private systemPrompt: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>["systemPrompt"];
 	private streamOptions: AgentHarnessStreamOptions;
 	private getApiKeyAndHeaders?: AgentHarnessOptions["getApiKeyAndHeaders"];
@@ -193,6 +195,8 @@ export class AgentHarness<
 		}
 		this.model = options.model;
 		this.thinkingLevel = options.thinkingLevel ?? "off";
+		// SCRAMJET-DIVERGENCE: Retain whether off was selected or merely defaulted (#567).
+		this.explicitReasoningOff = options.thinkingLevel === "off";
 		this.activeToolNames = options.activeToolNames ?? (options.tools ?? []).map((tool) => tool.name);
 		this.steeringQueueMode = options.steeringMode ?? "one-at-a-time";
 		this.followUpQueueMode = options.followUpMode ?? "one-at-a-time";
@@ -333,6 +337,7 @@ export class AgentHarness<
 			systemPrompt,
 			model: this.model,
 			thinkingLevel: this.thinkingLevel,
+			explicitReasoningOff: this.explicitReasoningOff,
 			tools,
 			activeTools,
 		};
@@ -373,6 +378,8 @@ export class AgentHarness<
 					);
 				},
 				reasoning: streamOptions?.reasoning,
+				// SCRAMJET-DIVERGENCE: Forward explicit-off provenance through harness option reconstruction (#567).
+				explicitReasoningOff: streamOptions?.explicitReasoningOff,
 				signal: streamOptions?.signal,
 				sessionId: turnState.sessionId,
 				timeoutMs: requestOptions.timeoutMs,
@@ -402,6 +409,8 @@ export class AgentHarness<
 		return {
 			model: turnState.model,
 			reasoning: turnState.thinkingLevel === "off" ? undefined : turnState.thinkingLevel,
+			// SCRAMJET-DIVERGENCE: Keep explicit off distinct from omitted reasoning (#567).
+			explicitReasoningOff: turnState.explicitReasoningOff ? true : undefined,
 			convertToLlm,
 			transformContext: async (messages) => {
 				const result = await this.emitHook({ type: "context", messages: [...messages] });
@@ -438,6 +447,7 @@ export class AgentHarness<
 					context: this.createContext(nextTurnState),
 					model: nextTurnState.model,
 					thinkingLevel: nextTurnState.thinkingLevel,
+					explicitReasoningOff: nextTurnState.explicitReasoningOff,
 				};
 			},
 			getSteeringMessages: async () => this.drainQueuedMessages(this.steerQueue, this.steeringQueueMode),
@@ -860,6 +870,7 @@ export class AgentHarness<
 				this.pendingSessionWrites.push({ type: "thinking_level_change", thinkingLevel: level });
 			}
 			this.thinkingLevel = level;
+			this.explicitReasoningOff = level === "off";
 			await this.emitOwn({ type: "thinking_level_select", level, previousLevel });
 		} catch (error) {
 			throw normalizeHarnessError(error, "session");

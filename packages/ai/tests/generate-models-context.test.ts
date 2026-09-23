@@ -124,6 +124,7 @@ async function generate(
 	options: {
 		invalidContext?: number;
 		omittedCopilotCorrection?: string;
+		correctedCopilotOverride?: Record<string, unknown>;
 		endpointError?: boolean;
 		failedCatalog?: string;
 		expectFailure?: boolean;
@@ -246,7 +247,14 @@ async function generate(
 							...Object.fromEntries(
 								Object.keys(copilotAdditions)
 									.filter((id) => id !== options.omittedCopilotCorrection)
-									.map((id) => [id, feedModel(id, id === "gemini-3.8-flash" ? 1000000 : 200000)]),
+									.map((id) => [
+										id,
+										feedModel(
+											id,
+											id === "gemini-3.8-flash" ? 1000000 : 200000,
+											id === "gpt-6-sol" ? options.correctedCopilotOverride : undefined,
+										),
+									]),
 							),
 							"deprecated-copilot-candidate": feedModel("deprecated-copilot-candidate", 200000, {
 								status: "deprecated",
@@ -367,6 +375,17 @@ describe("real generator context corrections", () => {
 			omittedCopilotCorrection: "kimi-k3",
 			expectFailure: true,
 			expectedError: "Missing corrected GitHub Copilot candidates: kimi-k3",
+		});
+	});
+
+	it.each([
+		["deprecated", { status: "deprecated" }],
+		["without tool calls", { tool_call: false }],
+	])("rejects corrected GitHub Copilot candidates that are %s before writing", async (_label, override) => {
+		await generate(true, {
+			correctedCopilotOverride: override,
+			expectFailure: true,
+			expectedError: "Missing corrected GitHub Copilot candidates: gpt-6-sol",
 		});
 	});
 

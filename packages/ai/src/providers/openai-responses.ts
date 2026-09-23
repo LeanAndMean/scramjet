@@ -206,9 +206,10 @@ export const streamSimpleOpenAIResponses: StreamFunction<"openai-responses", Sim
 
 	const base = buildBaseOptions(model, options, apiKey);
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-	// SCRAMJET-DIVERGENCE: Preserve an explicit supported off mapping without inventing one for omission (#567).
+	// SCRAMJET-DIVERGENCE: Serialize explicit Copilot GPT-6 off as none only when declared (#567).
 	const reasoningEffort =
-		clampedReasoning === "off" ? (model.thinkingLevelMap?.off === "none" ? "none" : undefined) : clampedReasoning;
+		(clampedReasoning === "off" ? undefined : clampedReasoning) ??
+		(options?.explicitReasoningOff && model.thinkingLevelMap?.off === "none" ? "none" : undefined);
 
 	return streamOpenAIResponses(model, context, {
 		...base,

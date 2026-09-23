@@ -1072,7 +1072,7 @@ describe("OpenAI Responses failure normalization", () => {
 describe("GitHub Copilot exact Responses model contracts", () => {
 	it("serializes explicit off through the declared none mapping", async () => {
 		const requests = stubFetch([completedResponse()]);
-		await streamSimpleOpenAIResponses(gpt6SolModel, context, { apiKey, reasoning: "off" }).result();
+		await streamSimpleOpenAIResponses(gpt6SolModel, context, { apiKey, explicitReasoningOff: true }).result();
 
 		expect((await requestBody(requests[0])).reasoning).toEqual(expect.objectContaining({ effort: "none" }));
 	});

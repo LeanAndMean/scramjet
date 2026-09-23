@@ -59,6 +59,7 @@ function makeTextAssistantMessage(text: string): AssistantMessage {
 type StreamCall = {
 	model: Model<any>;
 	reasoning: string | undefined;
+	explicitReasoningOff: true | undefined;
 	systemPrompt: unknown;
 	toolNames: string[];
 	messageRoles: string[];
@@ -73,11 +74,12 @@ function createRecordingStreamFn(messages: AssistantMessage[], order?: string[])
 	const fn = ((
 		model: Model<any>,
 		context: { systemPrompt: unknown; messages: any[]; tools?: AgentTool[] },
-		options: { reasoning?: string },
+		options: { reasoning?: string; explicitReasoningOff?: true },
 	) => {
 		calls.push({
 			model,
 			reasoning: options.reasoning,
+			explicitReasoningOff: options.explicitReasoningOff,
 			systemPrompt: Array.isArray(context.systemPrompt)
 				? context.systemPrompt.map((section) => ({ ...section }))
 				: context.systemPrompt,
@@ -386,6 +388,32 @@ describe("Agent.runHarnessTool", () => {
 		expect(calls.map((call) => call.model.id)).toEqual([testModel.id, testModel.id]);
 	});
 
+	it("does not invent explicit off from the default thinking level", async () => {
+		const { fn, calls } = createRecordingStreamFn([makeTextAssistantMessage("done")]);
+		const agent = new Agent({
+			initialState: { model: reasoningModel },
+			streamFn: fn,
+			getApiKey: async () => "key",
+		});
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls.map((call) => [call.reasoning, call.explicitReasoningOff])).toEqual([[undefined, undefined]]);
+	});
+
+	it("preserves explicit off for the initial provider request", async () => {
+		const { fn, calls } = createRecordingStreamFn([makeTextAssistantMessage("done")]);
+		const agent = new Agent({
+			initialState: { model: reasoningModel, thinkingLevel: "off" },
+			streamFn: fn,
+			getApiKey: async () => "key",
+		});
+
+		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
+
+		expect(calls.map((call) => [call.reasoning, call.explicitReasoningOff])).toEqual([[undefined, true]]);
+	});
+
 	it("refreshes effort for the next intra-run provider request", async () => {
 		const { fn, calls } = createRecordingStreamFn([
 			makeAssistantMessage(
@@ -409,7 +437,10 @@ describe("Agent.runHarnessTool", () => {
 
 		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
 
-		expect(calls.map((call) => call.reasoning)).toEqual(["high", undefined]);
+		expect(calls.map((call) => [call.reasoning, call.explicitReasoningOff])).toEqual([
+			["high", undefined],
+			[undefined, true],
+		]);
 	});
 
 	it("preserves an explicit prepareNextTurn effort update", async () => {
@@ -425,7 +456,7 @@ describe("Agent.runHarnessTool", () => {
 			details: undefined,
 		}));
 		const agent = new Agent({
-			initialState: { model: reasoningModel, thinkingLevel: "low", tools: [readTool] },
+			initialState: { model: reasoningModel, thinkingLevel: "off", tools: [readTool] },
 			streamFn: fn,
 			getApiKey: async () => "key",
 			prepareNextTurn: async () => ({ thinkingLevel: "high" }),
@@ -433,7 +464,10 @@ describe("Agent.runHarnessTool", () => {
 
 		await agent.prompt({ role: "user", content: "go", timestamp: Date.now() });
 
-		expect(calls.map((call) => call.reasoning)).toEqual(["low", "high"]);
+		expect(calls.map((call) => [call.reasoning, call.explicitReasoningOff])).toEqual([
+			[undefined, true],
+			["high", undefined],
+		]);
 	});
 
 	it("flushes a harness tool queued during the run's final turn", async () => {
