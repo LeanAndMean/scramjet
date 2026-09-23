@@ -135,6 +135,8 @@ export interface AgentLoopTurnUpdate {
 	model?: Model<any>;
 	/** Thinking level for the next provider request. */
 	thinkingLevel?: ThinkingLevel;
+	// SCRAMJET-DIVERGENCE: Distinguish explicit off from the default off state during refresh (#567).
+	explicitReasoningOff?: boolean;
 }
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}

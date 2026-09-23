@@ -27,6 +27,7 @@ import type {
 	PrepareNextTurnContext,
 	QueueMode,
 	StreamFn,
+	ThinkingLevel,
 	ToolExecutionMode,
 } from "./types.js";
 
@@ -73,6 +74,7 @@ export function generateHarnessToolCallId(): string {
 }
 
 type MutableAgentState = Omit<AgentState, "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"> & {
+	explicitReasoningOff: boolean;
 	isStreaming: boolean;
 	streamingMessage?: AgentMessage;
 	pendingToolCalls: Set<string>;
@@ -84,11 +86,23 @@ function createMutableAgentState(
 ): MutableAgentState {
 	let tools = initialState?.tools?.slice() ?? [];
 	let messages = initialState?.messages?.slice() ?? [];
+	let thinkingLevel = initialState?.thinkingLevel ?? "off";
+	// SCRAMJET-DIVERGENCE: Retain whether off was selected or merely defaulted (#567).
+	let explicitReasoningOff = initialState?.thinkingLevel === "off";
 
 	return {
 		systemPrompt: initialState?.systemPrompt ?? "",
 		model: initialState?.model ?? DEFAULT_MODEL,
-		thinkingLevel: initialState?.thinkingLevel ?? "off",
+		get thinkingLevel() {
+			return thinkingLevel;
+		},
+		set thinkingLevel(level: ThinkingLevel) {
+			thinkingLevel = level;
+			explicitReasoningOff = level === "off";
+		},
+		get explicitReasoningOff() {
+			return explicitReasoningOff;
+		},
 		get tools() {
 			return tools;
 		},
@@ -494,6 +508,8 @@ export class Agent {
 		return {
 			model: this._state.model,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
+			// SCRAMJET-DIVERGENCE: Keep explicit off distinct from omitted reasoning (#567).
+			explicitReasoningOff: this._state.explicitReasoningOff ? true : undefined,
 			sessionId: this.sessionId,
 			onPayload: this.onPayload,
 			onResponse: this.onResponse,
@@ -521,6 +537,10 @@ export class Agent {
 					context: update?.context ?? refreshedContext,
 					model: update?.model ?? this._state.model,
 					thinkingLevel: update?.thinkingLevel ?? this._state.thinkingLevel,
+					explicitReasoningOff:
+						update?.thinkingLevel === undefined
+							? this._state.explicitReasoningOff
+							: update.thinkingLevel === "off",
 				};
 			},
 			convertToLlm: this.convertToLlm,

@@ -37,6 +37,30 @@ const copilotAdditions = {
 		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
 	},
+	"claude-opus-5.5": {
+		api: "openai-completions",
+		contextWindow: 1000000,
+		maxInputTokens: 872000,
+		maxTokens: 128000,
+		cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	},
+	"gpt-6-sol": {
+		api: "openai-responses",
+		contextWindow: 1000000,
+		maxInputTokens: 872000,
+		maxTokens: 128000,
+		cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+		thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh", max: "max" },
+	},
+	"gpt-6-luna": {
+		api: "openai-responses",
+		contextWindow: 1000000,
+		maxInputTokens: 872000,
+		maxTokens: 128000,
+		cost: { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+		thinkingLevelMap: { off: "none", minimal: null, xhigh: "xhigh", max: "max" },
+	},
 	"kimi-k3": {
 		api: "openai-completions",
 		contextWindow: 1048576,
@@ -100,6 +124,7 @@ async function generate(
 	options: {
 		invalidContext?: number;
 		omittedCopilotCorrection?: string;
+		correctedCopilotOverride?: Record<string, unknown>;
 		endpointError?: boolean;
 		failedCatalog?: string;
 		expectFailure?: boolean;
@@ -222,7 +247,14 @@ async function generate(
 							...Object.fromEntries(
 								Object.keys(copilotAdditions)
 									.filter((id) => id !== options.omittedCopilotCorrection)
-									.map((id) => [id, feedModel(id, id === "gemini-3.8-flash" ? 1000000 : 200000)]),
+									.map((id) => [
+										id,
+										feedModel(
+											id,
+											id === "gemini-3.8-flash" ? 1000000 : 200000,
+											id === "gpt-6-sol" ? options.correctedCopilotOverride : undefined,
+										),
+									]),
 							),
 							"deprecated-copilot-candidate": feedModel("deprecated-copilot-candidate", 200000, {
 								status: "deprecated",
@@ -343,6 +375,17 @@ describe("real generator context corrections", () => {
 			omittedCopilotCorrection: "kimi-k3",
 			expectFailure: true,
 			expectedError: "Missing corrected GitHub Copilot candidates: kimi-k3",
+		});
+	});
+
+	it.each([
+		["deprecated", { status: "deprecated" }],
+		["without tool calls", { tool_call: false }],
+	])("rejects corrected GitHub Copilot candidates that are %s before writing", async (_label, override) => {
+		await generate(true, {
+			correctedCopilotOverride: override,
+			expectFailure: true,
+			expectedError: "Missing corrected GitHub Copilot candidates: gpt-6-sol",
 		});
 	});
 

@@ -71,7 +71,7 @@ function getPromptCacheRetention(
 
 // OpenAI Responses-specific options
 export interface OpenAIResponsesOptions extends StreamOptions {
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	reasoningSummary?: "auto" | "detailed" | "concise" | null;
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 }
@@ -206,7 +206,10 @@ export const streamSimpleOpenAIResponses: StreamFunction<"openai-responses", Sim
 
 	const base = buildBaseOptions(model, options, apiKey);
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+	// SCRAMJET-DIVERGENCE: Serialize explicit Copilot GPT-6 off as none only when declared (#567).
+	const reasoningEffort =
+		(clampedReasoning === "off" ? undefined : clampedReasoning) ??
+		(options?.explicitReasoningOff && model.thinkingLevelMap?.off === "none" ? "none" : undefined);
 
 	return streamOpenAIResponses(model, context, {
 		...base,
@@ -305,13 +308,19 @@ function buildParams(model: Model<"openai-responses">, context: Context, options
 	if (model.reasoning) {
 		if (options?.reasoningEffort || options?.reasoningSummary) {
 			const effort = options?.reasoningEffort
-				? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
+				? options.reasoningEffort === "none"
+					? "none"
+					: (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
 				: "medium";
-			params.reasoning = {
-				effort: effort as NonNullable<typeof params.reasoning>["effort"],
-				summary: options?.reasoningSummary || "auto",
-			};
-			params.include = ["reasoning.encrypted_content"];
+			if (effort === "none") {
+				params.reasoning = { effort };
+			} else {
+				params.reasoning = {
+					effort: effort as NonNullable<typeof params.reasoning>["effort"],
+					summary: options?.reasoningSummary || "auto",
+				};
+				params.include = ["reasoning.encrypted_content"];
+			}
 		} else if (model.provider !== "github-copilot" && model.thinkingLevelMap?.off !== null) {
 			params.reasoning = {
 				effort: (model.thinkingLevelMap?.off ?? "none") as NonNullable<typeof params.reasoning>["effort"],

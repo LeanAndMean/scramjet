@@ -32,6 +32,7 @@ function assistantShell(): AssistantMessage {
 
 const efforts = ["low", "medium", "high", "xhigh", "max"] as const;
 const openaiModel = getModel("openai", "gpt-6-astra");
+const openaiNoneModel = getModel("openai", "gpt-5.1");
 const copilotModel = getModel("github-copilot", "gpt-6-astra");
 const azureModel = getModel("azure-openai-responses", "gpt-4");
 const copilotHeaders = copilotModel.headers;
@@ -59,6 +60,12 @@ const maiModel = copilotResponsesModel("mai-code-1.1-flash", {
 	minimal: null,
 	xhigh: null,
 	max: null,
+});
+const gpt6SolModel = copilotResponsesModel("gpt-6-sol", {
+	off: "none",
+	minimal: null,
+	xhigh: "xhigh",
+	max: "max",
 });
 const apiKey = "test-key";
 
@@ -1060,6 +1067,20 @@ describe("OpenAI Responses failure normalization", () => {
 		expect(validateResponsesProviderFailure([result.diagnostics![0], result.diagnostics![0]])).toEqual({
 			status: "duplicate",
 		});
+	});
+});
+
+describe("Explicit none Responses request contract", () => {
+	it.each([
+		["OpenAI", openaiNoneModel],
+		["GitHub Copilot", gpt6SolModel],
+	])("serializes explicit off for %s without reasoning artifacts", async (_provider, model) => {
+		const requests = stubFetch([completedResponse()]);
+		await streamSimpleOpenAIResponses(model, context, { apiKey, explicitReasoningOff: true }).result();
+
+		const body = await requestBody(requests[0]);
+		expect(body.reasoning).toEqual({ effort: "none" });
+		expect(body.include).toBeUndefined();
 	});
 });
 
